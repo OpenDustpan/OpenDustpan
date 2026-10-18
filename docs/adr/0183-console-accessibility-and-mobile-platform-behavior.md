@@ -59,7 +59,8 @@ Facts:
    | Screen reader on the desktop | NVDA with Firefox on Windows, VoiceOver with Safari on macOS |
    | Screen reader on a phone | VoiceOver with Safari on iOS, TalkBack with Chrome on Android |
    | Keyboard only | each flow from start to end, with a visible focus at each step |
-   | Zoom and reflow | 200% text zoom, and 400% zoom at a width of 320 CSS pixels with no horizontal scroll |
+   | Zoom and reflow | 200% text zoom. Content reflows at a width of 320 CSS pixels (1280 px at 400% zoom) with no horizontal scroll |
+   | Text spacing | The text spacing values of WCAG 1.4.12 cause no loss of content or function |
    | System settings | reduced motion, forced colors (Windows contrast themes) |
 
    The pull request of the change records each check and its result. A

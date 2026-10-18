@@ -29,11 +29,16 @@ Facts:
 ## Decision
 
 1. **A stable machine code for each error (owner).** Each error that an API
-   answers has a machine code. A code is a contract: it never changes its
-   meaning, and a release never removes it. A new kind of error gets a new
-   code. A code is 3 to 64 characters of `a-z`, `0-9`, `.` and `-`, in the
-   form `<area>.<reason>`, for example `workspace.locked`,
-   `stack.not-found` or `request.field-invalid`.
+   answers has a machine code. A code is a contract: a code that a tag
+   shipped is never removed or given another meaning. A new kind of error
+   gets a new code. A code is 3 to 64 characters and matches the regular
+   expression `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$`. It has the form
+   `<area>.<reason>`, for example `workspace.locked`, `stack.not-found` or
+   `request.field-invalid`.
+
+   The OpenTofu HTTP backend API (`internal/api/tofuhttp`) is out of scope.
+   OpenTofu fixes its error shapes: plain text, and a fixed body for the
+   lock answer (status 423). This ADR adds no field to them.
 2. **The console never parses English text (owner).** The console selects
    its message from the code. It never reads the meaning of an error from
    the `message`, the `title` or the `detail`. A message in the message file
@@ -52,11 +57,28 @@ Facts:
    each supported CLI version accepts the added fields.
 4. **Arguments, not text.** A value that the English text holds, for
    example the name of a stack or of a field, is also in the arguments, as
-   a JSON object of strings and numbers. The keys are camelCase and part of
-   the contract of the code. An argument is a machine-made value, so the
-   console shows it as it is, in monospace (ADR 181 decision 13). Arguments
-   never hold a secret, a token or state. The rules of ADR 32 for error
-   text apply to them too.
+   a JSON object. The registry of decision 7 declares the argument keys of
+   each code and the type of each key. The keys are camelCase and part of
+   the contract of the code. A test rejects an error that has a key that its
+   code does not declare. These limits apply:
+
+   - An error has at most 8 keys.
+   - A string is at most 256 characters.
+   - A number is an integer within ±2^53.
+   - An ID is a string.
+
+   An argument names a field or an object. It never echoes a value from the
+   request body. Arguments never hold a secret, a token or state. The rules
+   of ADR 32 for error text apply to them too.
+
+   An argument has one of two kinds, and the registry declares the kind:
+
+   - An identifier is a string, for example the name of a stack or of a
+     field. The console shows it as it is, in monospace, with
+     `translate="no"` (ADR 181 decision 13).
+   - A quantity is an integer, for example a count or a limit. The console
+     formats it with `Intl.NumberFormat`, in the text font. A message can
+     use it with ICU `plural` (ADR 181 decision 10).
 5. **The server text stays English.** The server never translates. It
    ignores `Accept-Language`. The `message`, the `title` and the `detail`
    stay in English STE, because the CLIs show them and operators search for
@@ -64,13 +86,27 @@ Facts:
 6. **An unknown code.** The console shows the English text of the server
    for a code that it does not know, with `lang="en"` on its element. An
    error with no code, from a proxy or from an older server, is the same
-   case. A 500 answer has the code `internal`, and its text says nothing
-   more than ADR 32 allows.
-7. **One list of codes.** Each adapter declares its codes in one place, next
-   to its `classify` function. A test fails on a classified error without a
-   code, on two meanings for one code, and on a code that the list of a
-   released version has and the current list does not have. `docs/reference/`
-   gets the list of codes, with the meaning and the arguments of each code.
+   case. A 500 answer has the code `server.internal`, and its text says
+   nothing more than ADR 32 allows.
+7. **One registry of codes.** One registry in `internal/` (not in a shared
+   domain package) declares each code, its meaning and its arguments with
+   their kinds. Each adapter declares the subset of codes that it uses, next
+   to its `classify` function. Tests fail on:
+
+   - a classified error without a code,
+   - two meanings for one code, in a test that runs across all APIs of this
+     ADR,
+   - an argument key that the code does not declare,
+   - a code that a tag shipped and the registry does not have, or has with
+     another meaning, checked against the frozen list of shipped codes.
+
+   The frozen list holds the codes of each tag, in the way that
+   `TestFrozenMigrations` holds the SHA-256 of each migration file. It is in
+   `internal/errcode/shipped/`, with one file for each tag. The tests
+   cover the tool-neutral APIs, the Pulumi Cloud-compatible API and the
+   TFE-compatible API. They do not cover the OpenTofu HTTP backend API
+   (decision 1). `docs/reference/` gets the list of codes, with the meaning
+   and the arguments of each code.
 
 ## Consequences
 

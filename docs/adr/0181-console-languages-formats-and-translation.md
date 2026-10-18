@@ -47,12 +47,18 @@ Facts:
    set writes from right to left.
 2. **The default is the browser (owner).** With no setting, the console
    shows the first language in `navigator.languages` that it has. A match
-   uses the language and the script, and the region only for Portuguese:
+   uses the language and the script, and the region only for Portuguese.
+   The console calls `Intl.Locale.prototype.maximize()` on each tag to get
+   the script:
 
-   - `pt-BR` gives `pt-BR`. Every other `pt` tag gives `pt-PT`.
-   - `zh`, `zh-CN`, `zh-SG` and `zh-Hans` give `zh-Hans`. `zh-TW`, `zh-HK`
-     and `zh-Hant` give no match, because the console has no Traditional
-     Chinese. The console then tries the next language in the list.
+   - `pt-BR` gives `pt-BR`. A bare `pt` follows the CLDR likely subtags and
+     gives `pt-BR`. Every other `pt` tag, for example `pt-AO`, gives
+     `pt-PT`.
+   - A `zh` tag matches when its maximized script is `Hans`: `zh`, `zh-CN`,
+     `zh-SG` and `zh-Hans` give `zh-Hans`. A `zh` tag with another script
+     gives no match, because the console has no Traditional Chinese. For
+     example `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` maximize to `Hant`.
+     The console then tries the next language in the list.
    - Any other tag matches on its language subtag, for example `de-AT`
      gives `de`.
 
@@ -82,14 +88,19 @@ Facts:
    | First day of the week | Monday to Sunday | the formatting locale decides |
    | Time zone | an IANA time zone name, for example `Europe/Amsterdam` or `UTC` | the browser's time zone |
 
-   The clock maps to the Unicode extension `hc` (`h12`, `h23`), so `Intl`
-   applies it. The ISO 8601 style shows `2026-10-18` and `2026-10-18 15:33`.
-   DMY and MDY keep the separators of the formatting locale and change only
-   the order of the parts. The console builds them from
-   `Intl.DateTimeFormat.prototype.formatToParts`, not from its own
-   format strings. The first day of the week sets the calendar controls of
-   the console. UTC is one choice away in the time zone list, because
-   operators often compare times with logs in UTC.
+   The clock maps to the `hourCycle` option of `Intl` (`h12`, `h23`), not to
+   a Unicode extension in the locale tag. The ISO 8601 style shows
+   `2026-10-18` and `2026-10-18 15:33`. It always uses the 24-hour clock,
+   whatever the clock override says. DMY and MDY use numeric parts only,
+   for example 18/10/2026 or 10/18/2026. They keep the separators of the
+   formatting locale and change only the order of the parts. The console
+   builds them from `Intl.DateTimeFormat.prototype.formatToParts`, not from
+   its own format strings. The first day of the week sets the calendar
+   controls of the console. If `Intl.Locale.prototype.getWeekInfo` is not
+   available, the default is Monday. UTC is one choice away in the time
+   zone list, because operators often compare times with logs in UTC. If
+   `Intl` rejects a stored time zone, the console falls back to the
+   browser's time zone and says so in settings.
 6. **A live example.** Settings shows an example next to each choice, for
    example "Sunday 18 October 2026, 15:33 · 1.234,56". The person sees the
    result before they save.
@@ -105,8 +116,8 @@ Facts:
 
    | Field | Values | Default |
    | --- | --- | --- |
-   | `language` | a tag from the table of decision 1, or `null` | `null`: the browser (decision 2) |
-   | `formattingLocale` | a BCP 47 tag of 2 to 35 characters, or `null` | `null`: `navigator.language` |
+   | `language` | a BCP 47 tag of 2 to 35 characters, or `null` | `null`: the browser (decision 2) |
+   | `formattingLocale` | a BCP 47 tag of 2 to 35 characters with no `-u-` or `-x-` extension, or `null` | `null`: `navigator.language` |
    | `hourCycle` | `h12`, `h23` or `null` | `null`: the formatting locale |
    | `dateStyle` | `locale`, `iso8601`, `dmy`, `mdy` | `locale` |
    | `firstDayOfWeek` | `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun` or `null` | `null`: the formatting locale |
@@ -114,11 +125,17 @@ Facts:
 
    The rules of ADR 180 apply: a JSON merge patch, `null` sets a field back
    to its default, and a value that the table does not allow answers 400.
-   The server checks `language` against the list of decision 1, so a new
-   language needs a server release with its tag. The server checks the
-   shape of `formattingLocale` and that `timeZone` is a zone in the time zone
-   database of the server. The console uses `en` for a `language` that it
-   does not know, and says so in settings.
+   The server checks only the shape of `language`: a BCP 47 tag of at most
+   35 characters, as ADR 180 does for the IDs of schemes. The console owns
+   the list of decision 1, so a new language needs no server release. The
+   server checks the shape of `formattingLocale`. It rejects a Unicode
+   `-u-` extension and a private `-x-` extension, because `hourCycle` and
+   `firstDayOfWeek` are the only overrides. The server checks that
+   `timeZone` is a zone in its time zone database. The server binary embeds
+   that database (`time/tzdata`), so the check does not depend on the host.
+   For a `language` that is unknown or not supported, the console falls back
+   to the browser match of decision 2, then to `en`, and says so in
+   settings.
 9. **Before the first paint.** The inline script of ADR 180 also sets the
    `lang` attribute of the root element from the copy in local storage, and
    loads the message file of that language. With no copy, the console uses
@@ -166,7 +183,10 @@ Facts:
     it, split with `unicode-range`. Before a CJK language ships, the console
     checks the license and the size of the IBM Plex family for its script.
     If no IBM Plex family fits, the console uses the system font of that
-    script. Machine-made values stay in IBM Plex Mono.
+    script. Machine-made values stay in IBM Plex Mono. IBM Plex Mono has no
+    CJK glyphs, so the monospace stack names a system monospace font as the
+    fallback after it, for example `ui-monospace, monospace`. This adds no
+    font dependency.
 
 ### Terms that stay in English
 

@@ -811,12 +811,16 @@ _Avoid_: Suppression, filter, allowlist
 ### Languages and accessibility
 
 **Language** (of a person):
-The language of the words that the console shows to a person, one of the 28 tags of ADR 181. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+The language of the words that the console shows to a person, one of the 28 tags of ADR 181. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
 _Avoid_: Locale (for the language)
 
 **Formatting locale**:
-The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock, the date style, the first day of the week and the time zone.
+The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock (`hourCycle`), the date style, the first day of the week and the time zone.
 _Avoid_: Language (for formats), region
+
+**Preferences**:
+The settings of one person, kept as one document on the server (ADR 180). ADR 181 adds the language and the formatting locale. It also adds the overrides: the clock, the date style, the first day of the week and the time zone.
+_Avoid_: Profile, user settings
 
 **Message file**:
 The file of the console that holds the messages of one language in ICU MessageFormat (ADR 181). It marks each high-stakes message, which needs native review before it ships.
