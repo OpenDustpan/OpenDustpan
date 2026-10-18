@@ -104,7 +104,7 @@ or that the competitors share where these sources say nothing:
    state of its own unit only when one of these is true:
    - the principal that started the job has `unit:read-secrets` on the
      unit.
-   - the server resolved the commit of the job at the start. From the head of a branch that the source policy of the namespace lists in `protectedBranches`. A commit that the start request names by its hash never passes, and a file set (ADR 199) never passes. `protectedBranches` extends the source policy of ADR 135 decision 6. It is empty by default, and a change of it needs `namespace:manage-runners`.
+   - the server resolved the commit of the job at the start. The commit came from the head of a branch that the source policy of the namespace lists in `protectedBranches`. A commit that the start request names by its hash never passes, and a file set (ADR 199) never passes. `protectedBranches` extends the source policy of ADR 135 decision 6. It is empty by default, and a change of it needs `namespace:manage-runners`.
 
    Else the plan runs with masked secrets and no decrypt. A plan that needs
    a secret then fails with `job.ErrSecretsWithheld`. The server checks the condition at each decrypt and at each unmasked read of the state.
