@@ -23,8 +23,11 @@ no quantifier over a set.
    before a decision point. A fact never decides. Only a gate, an approval
    default, an ownership rule or a fixed control decides.
 2. **One schema for each decision point.** Each decision point has a fact
-   schema with a version, for example `change.planned/1`. The schema is a
-   Cedar schema. The decision record names the schema version. A new field
+   schema with a version. The version has the form
+   `<decision point>/<major>.<minor>`, for example `change.planned/1.0`. The
+   schema is a Cedar schema. The decision record names the schema version.
+   The record also holds the ID and the version of each path set that the
+   schema of the unit held. A new field
    is a new minor version. A removed or changed field is a new major
    version, and the server type-checks each stored gate against it before
    it uses it. An access schema holds the facts of an access limit (ADR
@@ -40,7 +43,7 @@ no quantifier over a set.
    approval default or an ownership rule, that reads a field of a group
    with an `available` flag and does not read that flag, with
    `gate.ErrInvalid`.
-4. **Facts of `change.planned`.** Version 1 holds these groups:
+4. **Facts of `change.planned`.** Version 1.0 holds these groups:
 
    | Group | Fields |
    | --- | --- |
@@ -56,7 +59,7 @@ no quantifier over a set.
    | `resourcePolicy` | `available`, `mandatoryFailed`, `advisoryFailed`, `unreadable` |
    | `externalChecks` | `passed`, `failed`, `pending`, `timedOut` as sets of check names |
    | `quota` | `available`, `maxPercentUsed`, `exceeded` as a set of rule names |
-      | `dependents` | `available`, `count`, `units` as a set of unit references |
+   | `dependents` | `available`, `count`, `units` as a set of unit references |
    | `paths` | `available`, `touches` and `only`, each a record with one boolean for each path set (decision 13) |
    | `document` | `truncated` as a set of fact paths (decision 14) |
 
@@ -64,17 +67,17 @@ no quantifier over a set.
    trust rule issued (ADR 54) is `trust-token`, so a gate can tell CI with
    workload identity from a person's access token.
 
-      `change.propose` holds the groups that exist before a plan: `principal`,
+   `change.propose` holds the groups that exist before a plan: `principal`,
    `source`, `unit`, `operation`, `change`, `quota`, `paths` and `document`. `change.apply` holds
    the groups of `change.planned`, with the values of that moment. An agent
-      is a subject of gates through `source.kind == "agent"` and
+   is a subject of gates through `source.kind == "agent"` and
    `principal.kind == "agent"`.
 
    `state.write` (ADR 224 decision 16) holds `principal`, `source`, `unit`,
    `operation`, `plan` (always `available == false`), `document` and a group
    of its own, `state`: `available`, `resources` and `removed`. Its
    `operation.kind` adds `lock`, `rollback`, `force-write`, `state-import`,
-   `delete` and `unlock` to the kinds above.
+   `rename`, `delete`, `unlock` and `unlocked-write` to the kinds above.
 5. **Facts of a profile.** `profile.save` and `profile.open` hold the profile
    name, `access` (`read`, `open` or `write`), `refProtected`, `jobOpen`,
    `routingChange` and `importsAdded`. These are the typed context facts of
@@ -88,7 +91,7 @@ no quantifier over a set.
    installation scope keep the behavior of ADR 194 in `enforce` mode:
    `builtin/plan-readable` denies when `plan.available` is `false` for a
    change that applies, and `builtin/mandatory-resource-policy` denies when
-      `resourcePolicy.mandatoryFailed > 0` or `resourcePolicy.unreadable > 0`.
+   `resourcePolicy.mandatoryFailed > 0` or `resourcePolicy.unreadable > 0`.
    The prefix `builtin/` is reserved for gate IDs. An administrator of the
    installation can switch each to `evaluate` mode, with a fresh
    authentication and an audit entry.
@@ -125,12 +128,15 @@ no quantifier over a set.
     `available == false`, never a guessed value.
 13. **Named path sets (owner, 2026-10-18).** A path set is a stored object
     of a scope (the installation, a namespace, a collection or a unit) with
-    an ID and 1 to 64 glob patterns. The server matches the globs in Go
+    an ID and 1 to 64 glob patterns. The ID matches the gate ID grammar
+    (ADR 224 decision 1). A narrower scope cannot save a path set with the
+    ID of a path set of a wider scope that holds it (`gate.ErrInvalid`), so
+    each name means one set for a unit. The server matches the globs in Go
     against `change.paths`. For each path set that holds for the unit:
-    - `paths.touches.<set>` is `true` when at least one changed path
+    - `paths.touches["<set>"]` is `true` when at least one changed path
       matches a glob of the set.
-    - `paths.only.<set>` is `true` when at least one path changed and each
-      changed path matches a glob of the set.
+    - `paths.only["<set>"]` is `true` when at least one path changed and
+      each changed path matches a glob of the set.
 
     `paths.available` is `false` when the server does not know the changed
     paths, for example for a change with no commit. The fact schema of a
@@ -158,4 +164,4 @@ no quantifier over a set.
 - A cost estimate can reach a decision for the first time: a gate at
   `change.planned` reads it.
 - Cedar cannot say "every changed path is under `modules/`". A gate reads
-  `paths.only.<set>` instead, and Go matches the globs of the set.
+  `paths.only["<set>"]` instead, and Go matches the globs of the set.

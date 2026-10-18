@@ -20,14 +20,20 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
 ## Decision
 
 1. **A gate (owner).** A gate is a stored object with these fields:
-      - `id`: unique in its scope. The Cedar policy ID is
+   - `id`: unique in its scope. The Cedar policy ID is
      `<scope key>/<id>`. The scope key is `installation`,
      `namespace/<namespace>`, `collection/<namespace>/<collection>`,
      `unit/<namespace>/<tool>/<name>`, `blueprint/<blueprint>/<version>` or
-     `profile/<namespace>/<profile>`. So two scopes can each hold a gate
-     with the same ID, and the record names each gate by its policy ID.
-   - `scope`: the installation, a namespace, a collection or a unit. A
-     blueprint version or a profile can also hold gates (decision 5).
+     `profile/<namespace>/<profile>`. Each variable segment is
+     percent-encoded (RFC 3986), so a segment never holds `/`. For example,
+     the Pulumi stack `web/prod` of `acme` has the scope key
+     `unit/acme/pulumi/web%2Fprod`. A gate ID matches
+     `[a-z0-9][a-z0-9-]{0,62}`, and only the server makes the IDs with the
+     reserved prefix `builtin/`. So two scopes can each hold a gate with the
+     same ID, and the record names each gate by its policy ID.
+   - `scope`: the installation, a namespace, a collection or a unit. The
+     route path names it (ADR 230 decision 3). A blueprint version or a
+     profile can also hold gates (decision 5).
    - `decisionPoint`: one of decision 2.
    - `condition`: the body of the `when` clause of one Cedar policy over the
      fact document of the decision point. Empty means true.
@@ -36,7 +42,7 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
    - `message`: the text that the record and the client show. It can name
      facts as `{{fact.path}}` (decision 11).
    - `mode`: `enforce` or `evaluate` (decision 7).
-      - `onError`: `fail` (the default) or `skip` (decision 13).
+   - `onError`: `fail` (the default) or `skip` (decision 13).
    - `final`: a flag (decision 12).
 2. **Six decision points (owner).**
 
@@ -46,7 +52,7 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
    | `change.planned` | after the plan is stored and its facts are ready | `changeorder.review`, the request of ADR 144 decision 14 |
    | `change.apply` | before the dispatch of each phase that changes | `catalog.request` at `apply` |
    | `profile.save` | before a save, a rollback, a tag move or a draft apply of a profile | the change rule of ADR 202 decision 6 |
-      | `profile.open` | before each open of a profile, direct or by a job | `checks` at open, the open rule of ADR 202 decision 7 |
+   | `profile.open` | before each open of a profile, direct or by a job | `checks` at open, the open rule of ADR 202 decision 7 |
    | `state.write` | before a write of state that no job of OpenDustpan makes (decision 16) | no earlier check |
 
    Each decision point has its own fact schema (ADR 226). A new decision
@@ -54,8 +60,9 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
 3. **The recheck at `change.apply`.** `change.apply` evaluates the gates
    again with the facts of that moment. A recheck only adds. A new `deny`
    refuses the dispatch. A new requirement puts the change back into the
-      approval wait. A signature that meets a requirement of the new result
-   still counts. A gate that matched before and does not match now removes
+   approval wait. A signature that meets a requirement of the new result
+   still counts when its signer is still an eligible approver (ADR 225
+   decision 7), is not disabled and has no revoked credential. A gate that matched before and does not match now removes
    nothing that a person already gave. The plan staleness check of ADR 191
    decision 7 runs at `change.apply` before the gates, with the maximum plan
    age of ADR 102. A stale plan stops the dispatch before any gate runs.
@@ -82,18 +89,21 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
    A new gate starts in `evaluate` mode unless the request names `enforce`.
 8. **Check at save (PM).** The server parses and type-checks each gate at
    save against the fact schema of its decision point, with the schema
-      validator of `cedar-go`. The server parses `condition` and `unless` as
+   validator of `cedar-go`. The server parses `condition` and `unless` as
    one Cedar expression each, and builds the policy from the parsed form,
    never by a splice of text. It refuses a gate that does not parse, that
    holds a second policy, that names an unknown fact or attribute, or that
    has a type error, with `gate.ErrInvalid`. The message names the gate and
-      the Cedar diagnostic. CI also runs the validator of the Rust Cedar
+   the Cedar diagnostic. CI also runs the validator of the Rust Cedar
    implementation through the image of the external Cedar service, on
    every fact schema and every built-in gate and starter pack.
 
    When the external adapter is configured (decision 9), the save also
    calls the check operation of the service, and a refusal there
-   refuses the save. After an upgrade of `cedar-go` or of a fact schema,
+   refuses the save. When the service does not answer, a save that
+   switches a gate to `evaluate`, removes it or sets `onError: skip` goes
+   on with the linked validator only, and the audit entry says so. Every
+   other save fails with `gate.ErrUnavailable`. After an upgrade of `cedar-go` or of a fact schema,
    the server checks each stored gate again at start. A gate that fails
    this check has the state `invalid`. An `invalid` gate in `enforce` mode
    gives `gate.ErrRuleFailed` at each evaluation, as decision 13 says,
@@ -106,7 +116,7 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
    takes the compiled policy set of a decision point, the entities and one
    request for each unit. It gives, for each unit, the matched policy IDs and
    the diagnostics. The server links `cedar-go` as the default adapter. A
-      second adapter calls an external Cedar service over HTTP. An
+   second adapter calls an external Cedar service over HTTP. An
    installation names one adapter for gates.
 
    The external adapter authenticates the service (TLS with a configured
@@ -118,7 +128,7 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
    `pkg/gate/gatetest`, that each adapter runs. A later engine is a new
    adapter of the same port and a new ADR.
 10. **The action is pinned (PM).** Every gate policy carries
-       `action == OpenDustpan::Action::"<decision point>"`. The server adds the
+    `action == OpenDustpan::Action::"<decision point>"`. The server adds the
     pin to the parsed policy. A condition never names an action.
 
     Benchmark: the spike found that a policy with no action is checked
@@ -148,10 +158,12 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
        passes it.
     4. A change at the gate's own scope that makes a final gate weaker, with
        no `reason` in the request. Weaker means: a switch to `evaluate`, a
-       removal, or a change of `condition`, `unless`, `outcome` or
-       `onError`.
+       removal, a clear of `final`, or a change of `decisionPoint`,
+       `condition`, `unless`, `outcome` or `onError`. A change of the
+       approval rule that a final gate names, or of a path set that it
+       reads, counts as a change of the gate.
 
-    The owner of the gate's own scope MAY make a final gate weaker. This is
+    The owner of the gate's own scope can make a final gate weaker. This is
     a change-controlled edit: it needs the manage action of that scope, a
     `reason`, a fresh authentication (ADR 227) in each mode, and it writes an
     audit entry of the kind `change` that names the gate as final, the old
@@ -187,9 +199,10 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
     pass the gates whose result is `error` or `gate.ErrUnavailable` for one
     change, at one evaluation:
     - It needs the action `namespace:break-gate-error` on the namespace of
-      the change, or `installation:break-gate-error` for a gate of the
-      installation (ADR 230 decision 2). A final gate needs the action of
-      its own scope (decision 12).
+      the change. That action passes each gate in error that holds for the
+      change, except a final gate of the installation. A final gate of the
+      installation needs `installation:break-gate-error` (decision 12, ADR
+      230 decision 2).
     - It needs a reason, a person in a session (never an agent, a service
       principal or a token) and a fresh authentication (ADR 227).
     - It passes only the gates in error. It never passes a `deny`, a
@@ -200,6 +213,14 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
     - The change still meets `change.apply`. A gate that is still in error
       there needs a new break-glass.
 
+    A change that a gate error stops waits in the approval wait with the
+    cause `gate-error` (the job state value stays `awaiting-approval`), for
+    at most its timeout. A break-glass on its record evaluates the decision
+    point again and passes the gates that are still in error. For
+    `state.write`, a break-glass gives the person a pass of the same
+    principal, unit and `operation.kind` for 15 minutes, used at most once.
+    The record of the next write names the break-glass.
+
     Benchmark: the Kubernetes admission webhook `failurePolicy` (`Fail` or
     `Ignore`) and the GitLab `fallback_behavior` of a policy are set by the
     author in advance. A freeze has a break-glass (ADR 103 decision 6) with
@@ -208,7 +229,7 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
     1. Any `deny` gives `deny`, with the message of each `deny`.
     2. Else each named approval rule gives one requirement, and the change
        waits for all of them, from distinct people (ADR 225).
-        3. Else each `warn` gives `warn`.
+    3. Else each `warn` gives `warn`.
     4. Else the result is `allow`.
 
     A change of several units takes the strictest result of its units.
@@ -229,14 +250,36 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
     | Write | When the point runs | `operation.kind` |
     | --- | --- | --- |
     | a Pulumi update that a person's own Pulumi CLI creates | at the create of the update, before the CLI starts it | `apply`, `destroy`, `refresh` or `import` |
+    | a Pulumi stack import, restore or rename, or a `pulumi stack rm`, from a person's own Pulumi CLI | before its transaction | `state-import`, `rollback`, `rename` or `delete` |
+    | a Pulumi update cancel from a person's own Pulumi CLI, which ends the update of another holder | before its transaction | `unlock` |
     | an OpenTofu write from a person's own CLI or CI, through the TFE-compatible API or the HTTP backend | at the lock of the workspace or of the state | `lock` |
+    | an OpenTofu restore or force-unlock through the TFE-compatible API or the HTTP backend | before its transaction | `rollback` or `unlock` |
+    | an OpenTofu workspace removal (a `DELETE` of the workspace) through the TFE-compatible API | before its transaction | `delete` |
+    | an OpenTofu state version with no lock through the HTTP backend (the unlocked override, ADR 44) | before its transaction | `unlocked-write` |
     | a tool-neutral state operation | before its transaction | `rollback`, `force-write`, `state-import`, `delete` or `unlock` |
 
-    A Pulumi preview writes no state and meets no gate. A write with the job
-    token of a job of OpenDustpan meets no `state.write` evaluation, because
-    its change meets `change.propose`, `change.planned` and `change.apply`.
+    The Pulumi import route carries `pulumi stack import`, `pulumi state
+    delete`, `pulumi state unprotect`, `pulumi state move` and `pulumi state
+    rename`. An UNLOCK of the HTTP backend by a principal that does not hold
+    the lock is a force-unlock.
 
-    **Facts with no plan.** The fact schema `state.write/1` holds the
+    Every route of a tool-compatible API that writes state, ends a lock of
+    another holder or removes a unit meets `state.write`. The route test
+    fails for a write route with no decision point. A Pulumi preview writes
+    no state and meets no gate. A create of a unit with no state, a change
+    of the override switches and a label change write no state. So
+    `PATCH .../tags` of the Pulumi Cloud-compatible API meets no
+    `state.write` (ADR 223 decision 10). The route test lists these routes
+    as routes that write no state.
+
+    A write with the job token of a phase that passed `change.apply`, to a
+    unit of that job, meets no `state.write` evaluation, because its change
+    met `change.propose`, `change.planned` and `change.apply`. The job token
+    of any other phase gets no state write except the lock or the update
+    lease of its plan (ADR 213 decision 2 holds for each plan phase). Any
+    other write with it fails with `identity.ErrDenied`.
+
+    **Facts with no plan.** The fact schema `state.write/1.0` holds the
     groups `principal`, `source`, `unit`, `operation` and `state`
     (ADR 226 decision 4). `plan.available` is always `false`. The `state`
     group has facts only for a tool-neutral operation, where the server
@@ -250,7 +293,13 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
     resources that no stored state records. So the point runs at the lock,
     before a plan or an apply. The lock request does not say whether a plan
     or an apply follows, so a gate at `state.write` stops both. The server
-    never refuses a state version for a gate.
+    never refuses a state version that holds a lock which passed
+    `state.write`. A forced write with a lock (the forced override, ADR 44)
+    still meets `state.write` at that lock. A state version with no lock
+    (the unlocked override, ADR 44) meets `state.write` before its
+    transaction, with `operation.kind` `unlocked-write`, and a refusal
+    refuses the write. The refusal can leave resources that no stored state
+    records. The record and the error say so.
 
     **Outcomes.** A `deny` refuses the write. A CLI cannot wait for people,
     so an approval outcome also refuses the write. Its message names the
@@ -268,7 +317,7 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
     | Pulumi Cloud-compatible API | `{"code": 403, "message": "..."}`. The Pulumi CLI prints the message and creates no update. |
     | TFE-compatible API | a JSON:API errors document with `status` `"403"`, a `title` and the message as `detail`. OpenTofu stops and holds no lock. |
     | OpenTofu HTTP backend | `403` with the message as a plain-text body. OpenTofu stops and holds no lock. |
-        | tool-neutral API | the error of ADR 230 decision 4 |
+    | tool-neutral API | the error of ADR 230 decision 4 |
 
     A CLI might show only the status code and not the message. The e2e
     step records the text that each supported CLI version shows, and the

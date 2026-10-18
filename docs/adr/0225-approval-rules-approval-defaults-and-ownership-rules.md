@@ -20,17 +20,21 @@ A change order matches approvers to requirements with bipartite matching
 ## Decision
 
 1. **An approval rule is data (owner).** An approval rule has these fields:
-      - `id`: unique in its scope. A gate names it as `approval:<id>`. The
+   - `id`: unique in its scope. A gate names it as `approval:<id>`. The
      server resolves `<id>` at the scope of the gate, then at each wider
      scope, and never at a narrower scope. A narrower scope cannot save a
      rule with the ID of a rule of a wider scope that holds it
-     (`gate.ErrFinal`). The prefixes `default` and `owners/` are reserved.
-   - `scope`: the installation, a namespace, a collection or a unit.
+     (`gate.ErrFinal`). An ID matches the gate ID grammar of ADR 224
+     decision 1, `[a-z0-9][a-z0-9-]{0,62}`. The IDs `default`,
+     `default/<scope>` and `owners/<id>` are reserved for the requirements
+     of decisions 4 and 9.
+   - `scope`: the installation, a namespace, a collection or a unit. The
+     route path names it (ADR 230 decision 3).
    - `approvers`: groups, users and `unitOwners` (the owners of the unit in
      its context, ADR 161). At least one entry.
    - `count`: 1 to 10.
    - `authorMayApprove`: default `false`.
-      - `freshAuthSeconds`: none, 0 or a window of 60 to 900 seconds (ADR
+   - `freshAuthSeconds`: none, 0 or a window of 60 to 900 seconds (ADR
      227). None (the field is absent) means that the rule asks for no fresh
      authentication of its own. Decision 5 can still ask for one. 0 asks
      for one at each approval.
@@ -38,6 +42,24 @@ A change order matches approvers to requirements with bipartite matching
 
    A new plan voids every signature, unless the carry-over setting of
    decision 12 is on.
+
+   The removal of an approval rule that a stored gate names fails with
+   `gate.ErrInvalid` and names each gate. A gate save that names a rule
+   which does not resolve fails with `gate.ErrInvalid`.
+
+   **`unitOwners` reads only the context of the rule's scope or wider
+   (PM).** `unitOwners` resolves only from the context layers (ADR 160
+   decision 11, ADR 161) at the scope of the rule or at a wider scope. A
+   rule of a namespace reads the owners from the context of the namespace,
+   never from the context of a collection or of the unit. A rule of a
+   collection reads the collection and the namespace. The installation has
+   no context layer, so a rule of the installation that names
+   `unitOwners` is refused at save with `gate.ErrInvalid`. So the holder of
+   the context of a unit cannot name the approvers of a rule of a wider
+   scope.
+
+   Benchmark: GitHub reads the `CODEOWNERS` file of the base branch of a
+   pull request, not of its head, so a change cannot name its own owners.
 2. **Sources of requirements (owner, 2026-10-18).** A requirement comes
    from one of three sources: a gate whose outcome names an approval rule
    (ADR 224 decision 14), an approval default (decision 4), or an ownership
@@ -83,7 +105,7 @@ A change order matches approvers to requirements with bipartite matching
    approver" with this meaning.
 8. **Where requirements live.** When a job runs under a change order, its
    requirements live on the change order (ADR 190 decision 6 stays). Else
-      they live on the job, and the job waits in the approval wait. A profile
+   they live on the job, and the job waits in the approval wait. A profile
    save waits as a draft, and an open waits as an access request.
 
    A change in the approval wait expires after 7 days. An approval rule can
@@ -96,11 +118,10 @@ A change order matches approvers to requirements with bipartite matching
    configured through the API. It is inspired by a code owners file, with
    more than a team and a count:
 
-      ```json
+   ```json
    {
      "id": "net-cidr",
      "mode": "evaluate",
-     "scope": {"level": "collection", "name": "acme/prod"},
      "paths": ["modules/network/**"],
      "when": "context.change.inputKeys.contains(\"cidr\") && context.plan.replace == 0",
      "groups": ["netops"], "users": [], "count": 2,
@@ -108,13 +129,18 @@ A change order matches approvers to requirements with bipartite matching
    }
    ```
 
+   This body is the `PUT` of
+   `.../namespaces/acme/collections/prod/ownership-rules/net-cidr`. The
+   route path names the scope (ADR 230 decision 3).
+
+   - `id` matches the gate ID grammar (ADR 224 decision 1).
    - `paths` holds glob patterns that the server matches in Go against the
      changed paths, because Cedar has no quantifier over a set. Empty means
      any change.
    - `when` is a Cedar condition over the facts of `change.planned`. It is
      type-checked at save with the same schema as the gates. Empty means
      true.
-      - Each rule that applies is one requirement named `owners/<id>`. The
+   - Each rule that applies is one requirement named `owners/<id>`. The
      record shows its count, the signatures so far and who may approve.
    - A rule applies when its `paths` and its `when` match. It needs no gate
      (owner, 2026-10-18). `owners` is not an approval rule, and a gate
@@ -131,7 +157,7 @@ A change order matches approvers to requirements with bipartite matching
     approval wait. It does not fail with `profile.ErrOpenRule`. This answers
     the question that ADR 203 decision 5 leaves to RFC 5.
 11. **Changes in git.** A Catalog request that a team applies in its own CI
-       gets no OpenDustpan approval (ADR 116 decision 9 stays). The render
+    gets no OpenDustpan approval (ADR 116 decision 9 stays). The render
    records the requirements in the decision record. A `deny` gate in
    `enforce` mode at the render of such a request fails the render, with
    `gate.ErrDenied` and the record ID.
@@ -161,13 +187,16 @@ A change order matches approvers to requirements with bipartite matching
       - The signer is not disabled, has not lost access, and the credential
         of the signature is not revoked. A revoked signer never carries
         over.
-    - **Three levels.** The setting is on a namespace, a collection or a
-      unit, with the values `off` (the default), `on` and `forbidden`. A
-      signature carries over only when the narrowest level that sets `on`
-      or `off` sets `on`, and no level that holds the unit sets
-      `forbidden`. So a parent can forbid it for each scope below it.
-    - **Who changes it.** `namespace:manage-gates` on the namespace, for each
-      of the three levels. A change to `on` is a weaker setting, so it needs
+    - **Levels.** The setting is on a namespace, a collection or a unit,
+      with the values `off` (the default), `on` and `forbidden`. The
+      installation also holds the setting, with the values `off` (the
+      default) or `forbidden` only. A signature carries over only when the
+      narrowest level that sets `on` or `off` sets `on`, and no level that
+      holds the unit sets `forbidden`. So a parent, also the installation,
+      can forbid it for each scope below it.
+    - **Who changes it.** `namespace:manage-gates` on the namespace, for the
+      namespace, collection and unit levels. `installation:manage-gates`,
+      for the installation level (ADR 230 decision 3). A change to `on` is a weaker setting, so it needs
       a fresh authentication (ADR 212 decision 3, ADR 227). Each change
       writes an audit entry of the kind `change`, with the old and the new
       value.

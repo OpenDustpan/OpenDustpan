@@ -53,7 +53,7 @@ A rule of a namespace that matches a Pulumi project and a stack-name pattern. It
 _Avoid_: Routing rule, assignment rule
 
 **Label**:
-A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51).
+A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11).
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
 **Unit lock**:
@@ -677,7 +677,7 @@ The facts of one decision point for one unit, in the shape of the fact schema of
 _Avoid_: Policy input
 
 **Approval rule**:
-Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `unitOwners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `timeoutSeconds`. A gate names it in its outcome as `approval:<rule>`. The server resolves the rule ID at the scope of the gate, then at each wider scope, never at a narrower one. One rule gives one requirement. Only a person in a session approves: never an agent, a service principal or a token.
+Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `unitOwners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `timeoutSeconds`. A gate names it in its outcome as `approval:<rule>`. The server resolves the rule ID at the scope of the gate, then at each wider scope, never at a narrower one. One rule gives one requirement. `unitOwners` reads only the context at the scope of the rule or at a wider scope. Only a person in a session approves: never an agent, a service principal or a token.
 _Avoid_: Approval policy, quorum
 
 **Approval default**:
@@ -709,7 +709,7 @@ A gate with `final: true` (ADR 224 decision 12). A narrower scope cannot save a 
 _Avoid_: Locked gate, mandatory gate
 
 **Path set**:
-A stored set of glob patterns of a scope, with an ID (ADR 226 decision 13). Go matches the globs against the changed paths, and gives the facts `paths.touches.<set>` (at least one changed path matches) and `paths.only.<set>` (each changed path matches). Cedar reads the booleans.
+A stored set of glob patterns of a scope, with an ID (ADR 226 decision 13). Go matches the globs against the changed paths, and gives the facts `paths.touches["<set>"]` (at least one changed path matches) and `paths.only["<set>"]` (each changed path matches). Cedar reads the booleans.
 _Avoid_: Path filter, path prefix
 
 **Signature carry-over**:

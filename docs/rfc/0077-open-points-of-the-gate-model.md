@@ -198,7 +198,7 @@ The owner decided each point on 2026-10-18.
    approve action who is not the author. A default can also name its
    approvers, and is then its own requirement (ADR 225 decision 4).
 3. **Not B.** A narrower scope can never weaken a final gate. The owner of
-   the gate's own scope MAY switch it to `evaluate`, as a change-controlled
+   the gate's own scope can switch it to `evaluate`, as a change-controlled
    edit with a reason, a fresh authentication and an audit entry. `final`
    stops a narrower scope from saving a gate with its ID or an approval rule
    with the ID that it names, and from a break-glass of it.
@@ -213,8 +213,8 @@ The owner decided each point on 2026-10-18.
    or CI, and for the tool-neutral state operations (ADR 224 decision 16).
    The credential kinds are `session`, `access-token`, `job-token` and
    `trust-token` (ADR 226 decision 4).
-6. **C.** Named path sets, with the facts `paths.touches.<set>` and
-   `paths.only.<set>` (ADR 226 decision 13).
+6. **C.** Named path sets, with the facts `paths.touches["<set>"]` and
+   `paths.only["<set>"]` (ADR 226 decision 13).
 7. **A** (ADR 227 decision 3).
 8. **A** (ADR 222 decision 8, ADR 225 decision 8).
 9. **B** (ADR 222 decision 8, `GLOSSARY.md`).

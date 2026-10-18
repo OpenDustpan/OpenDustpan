@@ -73,6 +73,33 @@ the limit set. A `permit` in a limit set was refused at save.
     with it the limit. So a limit for a set of units names
     `unit.collection`, which only a holder of the collection action can
     change. The console shows this advice when a limit reads a label.
+11. **Labels that limits and gates read (PM).** A label change is not a
+    state write and meets no `state.write` (ADR 224 decision 16). Holders
+    of the label-edit action of a unit can change each label of it, also a
+    label that an access limit or a gate reads. The label-edit action is
+    `unit:edit-labels`. Each route that changes labels needs it, also
+    `PATCH .../tags` of the Pulumi Cloud-compatible API, which needs
+    `unit:write` today. Each built-in role that holds `unit:write` also
+    holds `unit:edit-labels`. A scope that wants to protect its labels
+    saves an access limit that forbids the label-edit action for everyone
+    except a named group:
+
+    ```cedar
+    forbid (
+      principal,
+      action == OpenDustpan::Action::"unit:edit-labels",
+      resource
+    )
+    unless { principal in OpenDustpan::Group::"platform" };
+    ```
+
+    Decision 10 holds for this limit, because it has a condition on the
+    principal and does not match a manage action of the gates.
+
+    Benchmark: AWS service control policies protect the tags that
+    attribute-based access control reads. A policy denies
+    `ec2:CreateTags` and `ec2:DeleteTags` on the tag keys of the access
+    rules, except for one administrator role.
 
 Benchmark: AWS Organizations service control policies and Google Cloud deny
 policies are ceilings that only take away access. They never give it.

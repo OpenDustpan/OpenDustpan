@@ -1,6 +1,6 @@
 # 222. One model for access, gates, approvals and facts
 
-Status: accepted · 2026-10-18. ADRs 223 to 230 give the parts. Supersedes parts of ADRs 17, 52, 56, 71, 103, 110 and 112 to 117. Supersedes parts of ADRs 128, 135, 142, 144, 190 to 194, 196, 197 and 200 to 203. Amends ADR 191 decision 6. Extends ADR 54 decision 5 and ADR 70 decisions 16, 17 and 23. See "What this ADR set replaces". Accepts RFC 77
+Status: accepted · 2026-10-18. ADRs 223 to 230 give the parts. Supersedes parts of ADRs 17, 52, 56, 71, 103, 110 and 112 to 117. Supersedes parts of ADRs 128, 135, 142, 144, 190 to 194, 196, 197 and 200 to 203. Amends ADR 191 decision 6. Extends ADR 54 decision 5 and ADR 70 decisions 16, 17 and 23. See "What this ADR set replaces". Accepts RFC 77.
 
 ## Context
 
@@ -14,7 +14,7 @@ The project owner gave the model and decided its main points on
 2026-10-18. Each decision of the owner has the label "(owner)". The project
 manager decided the points that the spike found under the owner's decision rule. Each of them has a "Benchmark:" line. The owner then decided
 the open points of RFC 77 and the carry-over of signatures. Each of those
-decisions has the label "(owner, 2026-10-18)" or names that date. This pull request holds design
+decisions has the label "(owner, 2026-10-18)" or names that date. This ADR set holds design
 only: ADRs, RFC outcomes and glossary entries, and no code.
 
 ### The inventory before this ADR set
@@ -191,11 +191,11 @@ documentation page (ADR 214):
 
 1. **The thin slice.** `pkg/gate` with the fact schema of `change.planned`,
    gates, access limits, approval rules, decision records and the `cedar-go`
-      engine adapter. The end-to-end steps of the spike run through `make e2e`
+   engine adapter. The end-to-end steps of the spike run through `make e2e`
    on an OpenTofu job. `state.write` at the OpenTofu lock and at the
    tool-neutral state operations, with their e2e steps.
 2. **Pulumi jobs.** The same decision points on a Pulumi job: `change.propose`
-      at the start, `change.planned` after the preview, `change.apply` before
+   at the start, `change.planned` after the preview, `change.apply` before
    the update phase. `state.write` at the create of an update from the
    Pulumi CLI, with its e2e step.
 3. **Change orders.** Approval requirements of a change order come from

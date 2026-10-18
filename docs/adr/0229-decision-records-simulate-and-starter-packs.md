@@ -20,17 +20,18 @@ limit and for an error, and read it through one route.
    `gdr-`. It holds:
    - the decision point, the change (job, change order, Catalog revision or
      profile), the namespace and the time.
-   - the fact schema version, the fact document and its SHA-256.
+   - the fact schema version, the fact document and its SHA-256, and the
+     ID and the version of each path set of the schema (ADR 226 decision 2).
    - for each unit: each gate evaluated, with its version, mode, match and
      outcome, and each Cedar diagnostic.
-      - the requirements, with the eligible approvers, the count and the
+   - the requirements, with the eligible approvers, the count and the
      signatures so far. A carried signature shows `carriedFrom` (ADR 225
      decision 12).
    - each gate passed by a break-glass, with the audit entry of the
      break-glass (ADR 224 decision 13).
    - the warnings and `autoApply` (decision 3).
    - the state of each fixed control (decision 4).
-   - the result: `allow`, `warn`, `approval-wait`, `deny` or `error`.
+   - the result: `allow`, `warn`, `awaiting-approval`, `deny` or `error`.
 2. **Every block is explained.** Each refusal, each approval wait and each
    warning of a change names the ID of its record. The API error, the
    console and the CLI link to it.
@@ -40,20 +41,25 @@ limit and for an error, and read it through one route.
    not change it.
 4. **Fixed controls in the record (owner).** The record shows the state of
    each fixed control that the server checked for the change: the workspace
-      lock, a manual lock, an active freeze and its break-glass, the override
-   switches, the agent mode, the confirmation step, the secret consent, the
-   quota reservation and the quota counts, the safe delete check of ADR 153
-   decision 5, and the plan staleness check with the maximum plan age (ADR
-   102, ADR 191 decision 7). A fixed control does not change the combining of ADR 224
+   lock, a manual lock, an active freeze and its break-glass, the override
+   switches, the module switches, the quota reservation and the quota
+   counts, the source filter, the safe delete check of ADR 153 decision 5,
+   the plan staleness check with the maximum plan age (ADR 102, ADR 191
+   decision 7), and the agent controls: the agent mode, the confirmation
+   step and the secret consent. These are the fixed controls of ADR 222
+   decision 4. A fixed control does not change the combining of ADR 224
    decision 14. It refuses on its own, as its ADR says.
 5. **Storage.** A record is namespace data. The store checks the fence and
    writes it in the same transaction as the step that it explains. A record
    lives as long as the job or the change order that it explains (ADR 198).
    A backup holds the records (ADR 42). The audit entry of the step names the
-   record ID.
+   record ID. A record of a refusal is written in its own transaction. A
+   record of `state.write` or of an access limit lives for the audit
+   retention (ADR 68). A record of an access limit on an installation
+   object is installation data, and `installation:manage-gates` reads it.
 6. **The simulate route (owner).** `POST .../namespaces/{namespace}/gates/simulate`
    takes draft gates, draft approval rules and a filter of stored records:
-      a decision point, a time range and at most 1,000 records. It replays
+   a decision point, a time range and at most 1,000 records. It replays
    only the records whose change the caller can read, and skips the others
    with no trace of them in the answer. It evaluates the drafts against the
    stored fact documents, and gives for each record

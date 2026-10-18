@@ -23,41 +23,68 @@ gate.
 
    | Action | Object | Allows |
    | --- | --- | --- |
-      | `installation:manage-gates` | the installation | gates, access limits, approval rules, ownership rules and path sets of the installation |
-   | `installation:break-gate-error` | the installation | the break-glass for a gate of the installation in error (ADR 224 decision 13) |
+   | `installation:manage-gates` | the installation | gates, access limits, approval rules, ownership rules, path sets and the signature carry-over setting of the installation |
+   | `installation:read-gates` | the installation | read the gates, limits, approval rules, ownership rules and path sets of the installation |
+   | `installation:break-gate-error` | the installation | the break-glass for a final gate of the installation in error (ADR 224 decision 13) |
    | `namespace:manage-gates` | namespace | gates, access limits, approval rules, approval defaults, ownership rules, path sets and the signature carry-over setting of the namespace, its collections and its units |
-   | `namespace:break-gate-error` | namespace | the break-glass for gates in error of a change in the namespace, except a final gate of a wider scope |
+   | `namespace:break-gate-error` | namespace | the break-glass for gates in error of a change in the namespace, except a final gate of the installation |
    | `namespace:read-gates` | namespace | read them, and read the decision records |
    | `namespace:simulate-gates` | namespace | the simulate route |
 
    `namespace:manage-gates` replaces `namespace:manage-policy`. It is in no
-      built-in role except the namespace administrator. The two break-glass
+   built-in role except the namespace administrator. The two break-glass
    actions are in no built-in role. A change or a delete of a gate in
    `enforce` mode, of an ownership rule in `enforce` mode, of an access
-   limit or of an approval default needs a fresh authentication (ADR 227).
-   So does a change of a final gate in each mode, and a change of the
-   signature carry-over setting to `on`. A reader of a decision record also needs
-   the read action of the change that it explains.
-3. **Routes.** Under the prefix of ADR 210:
+   limit, of an approval rule, of a path set or of an approval default
+   needs a fresh authentication (ADR 227). So does a change of a final gate
+   in each mode, and a change of the signature carry-over setting to `on`.
+   A reader of a decision record also needs the read action of the change
+   that it explains.
+
+   A gate of a blueprint version is part of the blueprint version and needs
+   its Catalog action. A gate of a profile is part of the profile revision
+   and meets `profile.save`. Neither has a route of decision 3.
+3. **Routes (PM).** Under the prefix of ADR 210, the scope is part of the
+   path. `{scope}` stands for each of these three prefixes:
+   - `.../namespaces/{namespace}`
+   - `.../namespaces/{namespace}/collections/{collection}`
+   - `.../namespaces/{namespace}/units/{tool}/{name}`
+
+   Each variable segment is percent-encoded (ADR 224 decision 1). So the
+   Pulumi stack `web/prod` of `acme` is
+   `.../namespaces/acme/units/pulumi/web%2Fprod`.
 
    | Route | Action |
    | --- | --- |
-   | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/gates/{id}` | read, manage |
-   | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/access-limits/{id}` | read, manage |
-   | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/approval-rules/{id}` | read, manage |
-   | `GET`, `PUT .../namespaces/{namespace}/approval-defaults/{scope}` | read, manage |
-      | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/ownership-rules/{id}` | read, manage |
-   | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/path-sets/{id}` | read, manage |
-   | `GET`, `PUT .../namespaces/{namespace}/signature-carry-over/{scope}` | read, manage |
-   | `POST .../namespaces/{namespace}/decision-records/{id}/break-glass` | `namespace:break-gate-error` or `installation:break-gate-error` |
-   | `POST .../namespaces/{namespace}/gates/check` | read |
+   | `GET {scope}/gates`, `GET`, `PUT`, `DELETE {scope}/gates/{id}` | read, manage |
+   | `GET {scope}/access-limits`, `GET`, `PUT`, `DELETE {scope}/access-limits/{id}` | read, manage |
+   | `GET {scope}/approval-rules`, `GET`, `PUT`, `DELETE {scope}/approval-rules/{id}` | read, manage |
+   | `GET {scope}/ownership-rules`, `GET`, `PUT`, `DELETE {scope}/ownership-rules/{id}` | read, manage |
+   | `GET {scope}/path-sets`, `GET`, `PUT`, `DELETE {scope}/path-sets/{id}` | read, manage |
+   | `GET`, `PUT {scope}/approval-default` | read, manage |
+   | `GET`, `PUT {scope}/signature-carry-over` | read, manage |
+   | `POST {scope}/gates/check` | read |
    | `POST .../namespaces/{namespace}/gates/simulate` | simulate |
+   | `GET .../namespaces/{namespace}/decision-records?change=<change ID>` | read |
    | `GET .../namespaces/{namespace}/decision-records/{id}` | read |
-      | `GET`, `PUT`, `DELETE .../gates/{id}`, `.../access-limits/{id}`, `.../approval-rules/{id}`, `.../ownership-rules/{id}` and `.../path-sets/{id}` | `installation:manage-gates` |
+   | `POST .../namespaces/{namespace}/decision-records/{id}/break-glass` | `namespace:break-gate-error`, and `installation:break-gate-error` for a final gate of the installation |
+   | `GET .../gates`, `GET .../gates/{id}`, and the same for `.../access-limits`, `.../approval-rules`, `.../ownership-rules` and `.../path-sets` | `installation:read-gates` |
+   | `PUT`, `DELETE .../gates/{id}`, and the same for `.../access-limits/{id}`, `.../approval-rules/{id}`, `.../ownership-rules/{id}` and `.../path-sets/{id}` | `installation:manage-gates` |
+   | `GET`, `PUT .../signature-carry-over` | `installation:read-gates`, `installation:manage-gates` |
+   | `POST .../gates/check` | `installation:read-gates` |
 
-   A gate, a limit or a rule of a collection or a unit names its scope in the
-   body. `PUT` refuses an unknown field. The `check` route type-checks a
-   draft and stores nothing.
+   A list route gives the objects stored at that scope, not the objects of
+   wider scopes. A `PUT` names no scope in its body, and refuses an unknown
+   field. The `check` route type-checks a draft at the scope of its path
+   and stores nothing. The installation `PUT .../signature-carry-over`
+   takes `off` or `forbidden` only (ADR 225 decision 12).
+
+   Benchmark: GitHub keeps repository rulesets and organization rulesets on
+   separate paths (`/repos/{owner}/{repo}/rulesets` and
+   `/orgs/{org}/rulesets`). The grant routes of OpenDustpan also name the
+   scope in the path: `/api/server/grants`,
+   `/api/server/namespaces/{namespace}/grants` and
+   `/api/server/namespaces/{namespace}/collections/{collection}/grants`.
 4. **Errors.** `pkg/gate` holds the sentinels, with these status codes and
    stable error codes (ADR 182):
 
@@ -79,14 +106,14 @@ gate.
    shape of that tool.
 5. **Audit entries.** A create, a change and a delete of a gate, a limit or
    a rule write an audit entry of the kind `change`, with the old and the
-      new version. A change that makes a final gate weaker also holds the
+   new version. A change that makes a final gate weaker also holds the
    reason (ADR 224 decision 12). A break-glass for gates in error writes an
    audit entry of the kind `override`, with the reason, the record ID and
    each gate that it passed. An evaluation writes no audit entry of its own. The audit
    entry of the step that it explains names the record ID. A switch of a
    gate between `enforce` and `evaluate` has its own entry.
 6. **Limits.** A scope holds at most 256 gates, 64 access limits, 64 approval
-      rules, 256 ownership rules and 64 path sets. A condition holds at most 4 KiB. Above a
+   rules, 256 ownership rules and 64 path sets. A condition holds at most 4 KiB. Above a
    limit, the save fails with `gate.ErrLimit`.
 7. **Backups.** A backup holds gates, access limits, approval rules,
    approval defaults, ownership rules, path sets, the signature carry-over
