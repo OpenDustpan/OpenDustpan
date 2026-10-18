@@ -101,7 +101,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "namespaces",
 			columns: []string{
 				pgColName, "home_region", "failover_version", pgColCreatedAtMs,
-				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist",
+				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist", "id",
 			},
 			orderBy: []string{pgColName},
 		},

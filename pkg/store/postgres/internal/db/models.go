@@ -236,6 +236,7 @@ type Namespace struct {
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
 	IpAllowlist         string
+	ID                  string
 }
 
 type OidcProvider struct {

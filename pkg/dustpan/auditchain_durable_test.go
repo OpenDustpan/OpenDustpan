@@ -283,6 +283,7 @@ func createPostgresNamespace(t *testing.T, st *postgres.Store) namespace.Namespa
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      region,

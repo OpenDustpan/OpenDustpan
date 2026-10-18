@@ -81,6 +81,7 @@ func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) 
 
 func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Time{},
 		Name:            "acme",
 		HomeRegion:      "test-region",

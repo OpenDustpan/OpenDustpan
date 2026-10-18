@@ -71,6 +71,7 @@ func makeNamespace(t *testing.T, s Store) namespace.Fence {
 	t.Helper()
 
 	err := s.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: suiteTime(), Name: "acme", HomeRegion: "local", FailoverVersion: fenceVersion,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	})

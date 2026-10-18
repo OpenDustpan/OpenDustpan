@@ -99,6 +99,7 @@ func newRole(id, name string, actions ...identity.Action) access.Role {
 
 func newNamespace(name namespace.Name) namespace.Namespace {
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       at(0),
 		Name:            name,
 		HomeRegion:      "",

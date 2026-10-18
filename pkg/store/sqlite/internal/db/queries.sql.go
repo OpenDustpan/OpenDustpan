@@ -1094,8 +1094,8 @@ func (q *Queries) CreateInstallationSecretKey(ctx context.Context, arg CreateIns
 }
 
 const createNamespace = `-- name: CreateNamespace :execrows
-INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-VALUES (?, ?, ?, ?)
+INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -1104,6 +1104,7 @@ type CreateNamespaceParams struct {
 	HomeRegion      string
 	FailoverVersion int64
 	CreatedAtMs     int64
+	ID              string
 }
 
 func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams) (int64, error) {
@@ -1112,6 +1113,7 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		arg.HomeRegion,
 		arg.FailoverVersion,
 		arg.CreatedAtMs,
+		arg.ID,
 	)
 	if err != nil {
 		return 0, err
@@ -2998,7 +3000,7 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Chec
 }
 
 const getNamespace = `-- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = ?
 `
@@ -3010,6 +3012,7 @@ type GetNamespaceRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRow, error) {
@@ -3022,6 +3025,38 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRo
 		&i.CreatedAtMs,
 		&i.AllowForcedWrites,
 		&i.AllowUnlockedWrites,
+		&i.ID,
+	)
+	return i, err
+}
+
+const getNamespaceByID = `-- name: GetNamespaceByID :one
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
+FROM namespaces
+WHERE id = ?
+`
+
+type GetNamespaceByIDRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+	ID                  string
+}
+
+func (q *Queries) GetNamespaceByID(ctx context.Context, id string) (GetNamespaceByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getNamespaceByID, id)
+	var i GetNamespaceByIDRow
+	err := row.Scan(
+		&i.Name,
+		&i.HomeRegion,
+		&i.FailoverVersion,
+		&i.CreatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
+		&i.ID,
 	)
 	return i, err
 }
@@ -5747,7 +5782,7 @@ func (q *Queries) ListJournalSequences(ctx context.Context, arg ListJournalSeque
 }
 
 const listNamespaces = `-- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 ORDER BY name
 `
@@ -5759,6 +5794,7 @@ type ListNamespacesRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, error) {
@@ -5777,6 +5813,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+			&i.ID,
 		); err != nil {
 			return nil, err
 		}
@@ -6458,7 +6495,7 @@ func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrival
 }
 
 const pageNamespaces = `-- name: PageNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > ?1
 ORDER BY name
@@ -6477,6 +6514,7 @@ type PageNamespacesRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) ([]PageNamespacesRow, error) {
@@ -6495,6 +6533,7 @@ func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) 
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+			&i.ID,
 		); err != nil {
 			return nil, err
 		}
@@ -6510,7 +6549,7 @@ func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) 
 }
 
 const pageNamespacesByNames = `-- name: PageNamespacesByNames :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > ?1 AND name IN (SELECT value FROM json_each(?2))
 ORDER BY name
@@ -6530,6 +6569,7 @@ type PageNamespacesByNamesRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesByNamesParams) ([]PageNamespacesByNamesRow, error) {
@@ -6548,6 +6588,7 @@ func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesB
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+			&i.ID,
 		); err != nil {
 			return nil, err
 		}

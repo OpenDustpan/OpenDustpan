@@ -53,6 +53,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "duplicate namespace is ErrAlreadyExists", test: testDuplicateNamespace},
 		{name: "missing namespace is ErrNotFound", test: testMissingNamespace},
 		{name: "list namespaces orders by name", test: testListNamespaces},
+		{name: "namespace ID is kept and finds the namespace", test: testNamespaceByID},
+		{name: "missing namespace ID is ErrNotFound", test: testMissingNamespaceID},
+		{name: "namespace with an invalid ID is ErrInvalidID", test: testInvalidNamespaceID},
+		{name: "a taken namespace ID or name is ErrAlreadyExists", test: testNamespaceIDTaken},
 		{name: "ping answers on an open store and fails after close", test: testPing},
 		{name: "stack round trip", test: testStackRoundTrip},
 		{name: "duplicate stack is ErrAlreadyExists", test: testDuplicateStack},
@@ -112,6 +116,7 @@ func newNamespace(t *testing.T, s namespace.Store, name string) namespace.Namesp
 
 	ns := namespace.Namespace{
 		CreatedAt:       now(),
+		ID:              namespace.NewID(),
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,

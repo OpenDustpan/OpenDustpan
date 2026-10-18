@@ -207,6 +207,10 @@ func checkListFirstPage(t *testing.T, f accessFixture) {
 	if len(first.Namespaces) != 2 || first.Namespaces[0].HomeRegion == "" || first.Namespaces[0].CreatedAt == "" {
 		t.Fatalf("first page = %+v, want two namespaces with region and time", first)
 	}
+
+	if first.Namespaces[0].ID == "" || first.Namespaces[0].ID == first.Namespaces[1].ID {
+		t.Fatalf("first page = %+v, want two namespaces with distinct IDs", first)
+	}
 }
 
 // TestNamespaceListPagesAll proves a caller with a grant on the

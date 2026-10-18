@@ -898,6 +898,7 @@ func (stubNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (
 	}
 
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Time{},
 		Name:            name,
 		HomeRegion:      "test-region",

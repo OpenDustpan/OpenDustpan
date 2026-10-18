@@ -169,23 +169,7 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
-	row := codec.ToNamespaceRow(ns)
-
-	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
-		Name:            row.Name,
-		HomeRegion:      row.HomeRegion,
-		FailoverVersion: row.FailoverVersion,
-		CreatedAtMs:     row.CreatedAtMs,
-	})
-	if err != nil {
-		return fmt.Errorf("insert namespace: %w", err)
-	}
-
-	if n == 0 {
-		return namespace.ErrAlreadyExists
-	}
-
-	return nil
+	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
 }
 
 // GetNamespace implements namespace.Store.
@@ -197,6 +181,20 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 
 	if err != nil {
 		return namespace.Namespace{}, fmt.Errorf("select namespace: %w", err)
+	}
+
+	return codec.FromNamespaceRow(codec.NamespaceRow(row)), nil
+}
+
+// GetNamespaceByID implements namespace.IDReader.
+func (s *Store) GetNamespaceByID(ctx context.Context, id namespace.ID) (namespace.Namespace, error) {
+	row, err := s.queries.GetNamespaceByID(ctx, id.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return namespace.Namespace{}, fmt.Errorf("select namespace by ID: %w", err)
 	}
 
 	return codec.FromNamespaceRow(codec.NamespaceRow(row)), nil
