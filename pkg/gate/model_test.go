@@ -97,7 +97,8 @@ func TestCombining(t *testing.T) {
 
 	sub := subject
 	who := gate.Principal{ID: "alice"}
-	rule := gate.ApprovalRule{Name: "sec", Groups: []string{"security"}, Count: 2, FreshAuth: true}
+	zero := int64(0)
+	rule := gate.ApprovalRule{Name: "sec", Groups: []string{"security"}, Count: 2, FreshAuthSeconds: &zero}
 
 	run := func(gates ...gate.Gate) gate.Record {
 		eng := gate.NewEngine()
@@ -162,14 +163,14 @@ func TestCombining(t *testing.T) {
 		t.Fatalf("no fresh auth: err = %v, want ErrFreshAuth", err)
 	}
 
-	if _, err = eng.Approve(t.Context(), rec.ID, gate.Approver{Principal: p1, FreshAuth: true}); err != nil {
+	if _, err = eng.Approve(t.Context(), rec.ID, gate.Approver{Principal: p1, ReauthenticatedNow: true}); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err = eng.Approve(
 		t.Context(),
 		rec.ID,
-		gate.Approver{Principal: p1, FreshAuth: true},
+		gate.Approver{Principal: p1, ReauthenticatedNow: true},
 	); !errors.Is(
 		err,
 		gate.ErrNotApprover,
@@ -182,7 +183,7 @@ func TestCombining(t *testing.T) {
 	}
 
 	p2 := gate.Principal{ID: "p2", Groups: []string{"security"}}
-	if _, err = eng.Approve(t.Context(), rec.ID, gate.Approver{Principal: p2, FreshAuth: true}); err != nil {
+	if _, err = eng.Approve(t.Context(), rec.ID, gate.Approver{Principal: p2, ReauthenticatedNow: true}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -85,9 +85,12 @@ func parseOwnerLine(text string) (OwnerSection, error) {
 }
 
 // Matches reports whether one of the paths is in a glob of the section.
-func (s OwnerSection) Matches(paths []string) bool {
+func (s OwnerSection) Matches(paths []string) bool { return matchGlobs(s.Globs, paths) }
+
+// matchGlobs reports whether one of the paths is in one of the globs.
+func matchGlobs(globs, paths []string) bool {
 	for _, p := range paths {
-		for _, g := range s.Globs {
+		for _, g := range globs {
 			if globMatch(strings.Split(g, "/"), strings.Split(p, "/")) {
 				return true
 			}

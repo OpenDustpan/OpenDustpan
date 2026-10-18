@@ -32,11 +32,13 @@ type Match struct {
 
 // Approval is one open or closed approval requirement of a record.
 type Approval struct {
-	Rule      string   `json:"rule"`
-	Need      int      `json:"need"`
-	Have      int      `json:"have"`
-	FreshAuth bool     `json:"freshAuth"`
-	From      []string `json:"from"`
+	Rule string `json:"rule"`
+	Need int    `json:"need"`
+	Have int    `json:"have"`
+	// FreshAuthSeconds is the window of the fresh authentication. Nil asks
+	// for none and 0 asks for a new authentication at each approval.
+	FreshAuthSeconds *int64   `json:"freshAuthSeconds"`
+	From             []string `json:"from"`
 	// By holds the people who approved.
 	By []string `json:"by,omitempty"`
 }
@@ -61,6 +63,9 @@ type Record struct {
 	Blockers       []string          `json:"blockers"`
 	Approvals      []Approval        `json:"approvals"`
 	Errors         []string          `json:"errors"`
+	// AutoApply says that the change may apply with no person: the result
+	// is allow and no enforced gate warns.
+	AutoApply bool `json:"autoApply"`
 }
 
 // Cleared reports whether the record lets the change go on: the result is

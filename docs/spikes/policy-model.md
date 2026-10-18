@@ -38,9 +38,69 @@ v1.8.0 (released 2026-06-01) to `go.mod`.
   not wired, so "state version names the record ID" is not shown.
 - Records, gates, limits, rules and approvals are in memory. Group
   membership of a person is an input of the call.
-- The route is not mounted in the server and has no authorization action. The
-  handler takes an `Authorize` function and answers 404 on a refusal.
+- The routes are not mounted in the server and have no authorization action.
+  The read handler takes an `Authorize` function and answers 404 on a
+  refusal. The configuration handlers take an `AuthorizeConfig` function.
 - The cost fact comes from a file and not from `pkg/cost`.
+
+## Owner decisions applied after the first push
+
+1. **Approval defaults.** `ApprovalDefault` is set at a namespace, a collection
+   or a unit (the installation is refused). The strictest wins: the highest
+   count and the smallest fresh window. With none set, the default is off and
+   nothing adds a minimum of one approval (`TestApprovalDefaults`). A default
+   is one requirement named `default` that any person other than the author
+   can meet; who may approve a default is not decided.
+2. **Exemptions.** A gate and an approval default have an optional `unless`
+   Cedar body. The wider rule carves out its own exemptions. No outcome
+   relaxes another (`TestUnlessExemption`, and the `unless` of the collection
+   default in `TestApprovalDefaults`).
+3. **Stored in the server.** Gates, approval rules, approval defaults and owner
+   rules are objects with `PUT` routes in `internal/api/gate/config.go`. The
+   body is parsed and type-checked at save, with an unknown field refused,
+   a scope check, and 422 for an invalid object, 409 for a final gate.
+4. **Ownership rules take conditions** (shape below).
+5. **Fresh authentication.** `freshAuthSeconds` is nil (none), 0 (a new
+   authentication at each approval) or a window. The approver gives
+   `reauthenticatedNow` and `authAgeSeconds` (`TestFreshAuthWindow`).
+6. **A warn blocks auto-apply.** The record has `autoApply`: it is true when the
+   result is `allow` and no enforced gate warns. A warn in `evaluate` mode
+   does not block (`TestWarnBlocksAutoApply`).
+
+### Proposed shape of an ownership rule
+
+The spike keeps `OWNERS.dustpan` minimal (`[name] @group:<g> <count> <globs>`),
+and the server stores the full rule. The file is one source of rules, in the
+form of the stored rule, so the file can move behind the API with no change
+to the engine.
+
+```json
+{
+  "id": "net-cidr",
+  "scope": {"level": "collection", "name": "acme/prod"},
+  "paths": ["modules/network/**"],
+  "when": "context.change.inputKeys.contains(\"cidr\") && context.plan.replace == 0",
+  "groups": ["netops"], "users": [], "count": 2,
+  "freshAuthSeconds": 0
+}
+```
+
+- `paths` is matched in Go, because Cedar has no quantifier over a set. Empty
+  means any change.
+- `when` is a Cedar condition over the typed facts: operation kind, plan
+  counts, changed input keys, cost, labels and the principal. It is one
+  policy in the same Cedar request as the gates, so it is type-checked at
+  save with the same schema. Empty means true.
+- A rule applies when the gate with the outcome `approval:owners` matches, the
+  paths match and `when` is true. Each applying rule is one requirement named
+  `owners/<id>`; the record shows its need, its count so far and who may
+  approve.
+- Open: today a rule does nothing when no gate names `owners`. If a rule must
+  apply alone, give it its own `enforce` outcome instead of a gate.
+- Open: richer approvers (a group, or the owners of a path in a tool-neutral
+  inventory) and a rule that needs approvals from two named groups
+  (`all of`) are not in the spike. A list of requirements per rule covers
+  `all of`.
 
 ## Results of the plan steps
 
@@ -110,14 +170,15 @@ final benchmark:
 
 | Gates | Time for one `Planned` call | Allocations |
 | ----- | --------------------------- | ----------- |
-| 0     | 65 µs                       | 325         |
-| 1     | 71 µs                       | 404         |
-| 3     | 95 µs                       | 569         |
+| 0     | 61 µs                       | 331         |
+| 1     | 78 µs                       | 412         |
+| 3     | 98 µs                       | 577         |
 
 A call includes: the parse of each gate (it is not cached), the fact document,
 the entities, the Cedar request, the combine and the digest of the input. The
 call with no gate is the fixed cost. In this benchmark each gate adds 6 to
-15 µs. The benchmark does not cover a store read of the gates, the write of
+17 µs; two runs of the same code gave 65 and 61 µs for 0 gates, so a single
+run has a spread of a few µs. The benchmark does not cover a store read of the gates, the write of
 the record, or a plan with many resources.
 
 ## What the design must change
@@ -134,9 +195,9 @@ the record, or a plan with many resources.
    installation scope with a runtime error stops all units. Save-time type
    check and `gates test` are required, not optional. Consider a break-glass
    action for `ErrRuleFailed`; this spike does not decide it.
-5. **Ownership file needs a gate.** The spike makes `approval:owners` the way
-   in. A file section does nothing when no gate names `owners`. Decide if a
-   section alone must add a requirement.
+5. **Owner rules need a gate.** The spike makes `approval:owners` the way in.
+   A rule or a file section does nothing when no gate names `owners`. See the
+   open points of the proposed shape.
 6. **Approval assignment is greedy.** A person counts for the first open
    requirement they can meet. A fair assignment of people to requirements is a
    matching problem. It matters only for overlapping groups.
@@ -157,9 +218,8 @@ the record, or a plan with many resources.
 - `go test -race ./pkg/gate ./internal/api/gate`: pass.
 - `make nilaway` equivalent on the two packages: no finding.
 - `govulncheck` on the two packages: no vulnerability.
-- `golangci-lint run` on the two packages: **64 findings remain**. They are
-  41 `exhaustruct_v5` on literals of test fixtures and value types, 3 `cyclop`
-  and 2 `gocognit` and 1 `maintidx` on the scenario tests, 5 `funcorder`, 5
-  `gocritic` `rangeValCopy`, 2 `gochecknoglobals` in tests, and 5 smaller
-  ones. The spike does not fix them, so it does not meet the definition of
+- `golangci-lint run` on the two packages: **89 findings remain**. They are
+  54 `exhaustruct_v5` on literals of test fixtures and value types, `cyclop`,
+  `gocognit` and `maintidx` on the scenario tests, 8 `funcorder`, 7 `gocritic`
+  `rangeValCopy`, 2 `gochecknoglobals` in tests, and smaller ones. The spike does not fix them, so it does not meet the definition of
   done. The full `make check` was not run.

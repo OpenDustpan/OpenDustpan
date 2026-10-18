@@ -136,10 +136,13 @@ type Gate struct {
 	Scope         Scope         `json:"scope"`
 	DecisionPoint DecisionPoint `json:"decisionPoint"`
 	// Condition is the body of the when clause of one Cedar permit policy.
-	Condition string  `json:"condition"`
-	Outcome   Outcome `json:"outcome"`
-	Message   string  `json:"message"`
-	Mode      Mode    `json:"mode"`
+	Condition string `json:"condition"`
+	// Unless is the optional body of the unless clause. The gate carves its
+	// own exemptions out with it: no outcome relaxes another outcome.
+	Unless  string  `json:"unless,omitempty"`
+	Outcome Outcome `json:"outcome"`
+	Message string  `json:"message"`
+	Mode    Mode    `json:"mode"`
 	// Final stops a narrower scope from replacing the gate with a gate of
 	// the same ID.
 	Final bool `json:"final,omitempty"`
@@ -147,14 +150,23 @@ type Gate struct {
 
 // Version returns a short digest of the stored fields of g.
 func (g Gate) Version() string {
-	return digest(g.ID, g.Scope.String(), string(g.DecisionPoint), g.Condition,
+	return digest(g.ID, g.Scope.String(), string(g.DecisionPoint), g.Condition, g.Unless,
 		string(g.Outcome), g.Message, string(g.Mode), strconv.FormatBool(g.Final))[:12]
 }
 
 func (g Gate) policyText() string {
-	return "permit (principal, action == Action::\"" + string(
-		g.DecisionPoint,
-	) + "\", resource) when { " + g.Condition + " };"
+	return permitText(string(g.DecisionPoint), g.Condition, g.Unless)
+}
+
+// permitText returns one Cedar permit policy for action, with a when and an
+// optional unless clause.
+func permitText(action, when, unless string) string {
+	text := "permit (principal, action == Action::\"" + action + "\", resource) when { " + when + " }"
+	if unless != "" {
+		text += " unless { " + unless + " }"
+	}
+
+	return text + ";"
 }
 
 // Validate parses the gate. A condition that holds more than one policy,
@@ -163,6 +175,8 @@ func (g Gate) Validate() error {
 	switch {
 	case g.ID == "":
 		return fmt.Errorf("%w: missing ID", ErrInvalid)
+	case strings.HasPrefix(g.ID, defaultPrefix) || strings.HasPrefix(g.ID, ownerPrefix):
+		return fmt.Errorf("%w: gate ID %q starts with a reserved prefix", ErrInvalid, g.ID)
 	case g.DecisionPoint != PointChangePlanned:
 		return fmt.Errorf("%w: gate %s: decision point %q", ErrInvalid, g.ID, g.DecisionPoint)
 	case !g.Outcome.valid():

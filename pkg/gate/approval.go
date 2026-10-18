@@ -11,8 +11,11 @@ import (
 type Approver struct {
 	Principal
 
-	// FreshAuth says that the person authenticated again for this approval.
-	FreshAuth bool
+	// ReauthenticatedNow says that the person authenticated again for this
+	// approval.
+	ReauthenticatedNow bool
+	// AuthAgeSeconds is the age of the last authentication of the person.
+	AuthAgeSeconds int64
 }
 
 // Approve records an approval on the record of id and returns the record.
@@ -56,7 +59,7 @@ func (e *Engine) Approve(_ context.Context, id string, who Approver) (Record, er
 			continue
 		}
 
-		if a.FreshAuth && !who.FreshAuth {
+		if !who.fresh(a.FreshAuthSeconds) {
 			return Record{}, fmt.Errorf("%w: rule %s", ErrFreshAuth, a.Rule)
 		}
 
@@ -75,6 +78,18 @@ func (e *Engine) Approve(_ context.Context, id string, who Approver) (Record, er
 		return Record{}, fmt.Errorf("%w: %s authored %s", ErrAuthorApproval, who.ID, id)
 	default:
 		return Record{}, fmt.Errorf("%w: %s is not an approver of %s", ErrNotApprover, who.ID, strings.Join(open, ", "))
+	}
+}
+
+// fresh reports whether the authentication of the person meets the window of
+// the rule. A nil window asks for nothing. A window of 0 asks for a new
+// authentication at each approval.
+func (a Approver) fresh(window *int64) bool {
+	switch {
+	case window == nil, a.ReauthenticatedNow:
+		return true
+	default:
+		return *window > 0 && a.AuthAgeSeconds <= *window
 	}
 }
 
@@ -97,6 +112,8 @@ func eligibleFor(a Approval, p Principal) bool {
 			if p.ID == name {
 				return true
 			}
+		case "anyone":
+			return true
 		default:
 		}
 	}

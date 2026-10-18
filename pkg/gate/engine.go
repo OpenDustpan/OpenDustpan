@@ -27,17 +27,23 @@ type PlannedRequest struct {
 	Principal Principal
 	Facts     Facts
 	// Owners is the content of the ownership file at the commit of the
-	// plan, or nil.
+	// plan, or nil. The file is a minimal source of owner rules.
 	Owners []byte
 }
 
-// Planned evaluates the gates of the scope chain of the unit at
-// PointChangePlanned. It stores the record and returns it. When a gate
-// fails to run, the result is ResultError and the error wraps
-// ErrRuleFailed.
-func (e *Engine) Planned(_ context.Context, req PlannedRequest) (Record, error) {
-	gates := e.Registry.Gates(req.Subject, PointChangePlanned)
+// evaluated holds what one Cedar run found for the stored rules.
+type evaluated struct {
+	gates    map[string]Gate
+	defaults map[string]ApprovalDefault
+	owners   map[string]OwnerRule
+	matched  map[string]bool
+}
 
+// Planned evaluates the gates, the approval defaults and the owner rules of
+// the scope chain of the unit at PointChangePlanned in one Cedar request.
+// It stores the record and returns it. When a rule fails to run, the result
+// is ResultError and the error wraps ErrRuleFailed.
+func (e *Engine) Planned(_ context.Context, req PlannedRequest) (Record, error) {
 	rec := Record{
 		ID: newRecordID(), Point: PointChangePlanned, Schema: SchemaVersion,
 		Subject:        RecordSubject{Unit: req.Subject.Ref(), Principal: req.Principal.ID},
@@ -46,18 +52,9 @@ func (e *Engine) Planned(_ context.Context, req PlannedRequest) (Record, error) 
 		Matched:        []Match{}, Blockers: []string{}, Approvals: []Approval{}, Errors: []string{},
 	}
 
-	set := cedar.NewPolicySet()
-	byID := map[string]Gate{}
-
-	for _, g := range gates {
-		p, err := parseOne(g.policyText(), cedar.Permit)
-		if err != nil {
-			return e.fail(rec, fmt.Errorf("gate %s: %w", g.ID, err))
-		}
-
-		set.Add(cedar.PolicyID(g.ID), p)
-		byID[g.ID] = g
-		rec.PolicyVersions[g.ID] = g.Version()
+	set, ev, err := e.policySet(req.Subject, &rec)
+	if err != nil {
+		return e.fail(rec, err)
 	}
 
 	ctxRec, err := contextRecord(req.Facts)
@@ -70,22 +67,27 @@ func (e *Engine) Planned(_ context.Context, req PlannedRequest) (Record, error) 
 
 	if len(diag.Errors) > 0 {
 		for _, de := range diag.Errors {
-			rec.Errors = append(rec.Errors, fmt.Sprintf("gate %s: %s", de.PolicyID, de.Message))
+			rec.Errors = append(rec.Errors, fmt.Sprintf("%s: %s", de.PolicyID, de.Message))
 		}
 
 		return e.fail(rec, nil)
 	}
 
 	for _, reason := range diag.Reasons {
-		g := byID[string(reason.PolicyID)]
-		rec.Matched = append(rec.Matched, Match{
-			Gate: g.ID, Scope: g.Scope.String(), Outcome: g.Outcome, Mode: g.Mode, Message: g.Message,
-		})
+		ev.matched[string(reason.PolicyID)] = true
+	}
+
+	for id := range ev.gates {
+		if g := ev.gates[id]; ev.matched[id] {
+			rec.Matched = append(rec.Matched, Match{
+				Gate: g.ID, Scope: g.Scope.String(), Outcome: g.Outcome, Mode: g.Mode, Message: g.Message,
+			})
+		}
 	}
 
 	slices.SortFunc(rec.Matched, func(a, b Match) int { return compareStrings(a.Gate, b.Gate) })
 
-	err = e.combine(&rec, req)
+	err = e.combine(&rec, req, ev)
 	if err != nil {
 		return e.fail(rec, err)
 	}
@@ -95,18 +97,79 @@ func (e *Engine) Planned(_ context.Context, req PlannedRequest) (Record, error) 
 	return rec, nil
 }
 
+// policySet puts the stored rules of the scope chain in one Cedar policy
+// set and notes their versions in rec.
+func (e *Engine) policySet(sub Subject, rec *Record) (*cedar.PolicySet, *evaluated, error) {
+	set := cedar.NewPolicySet()
+	ev := &evaluated{
+		gates: map[string]Gate{}, defaults: map[string]ApprovalDefault{},
+		owners: map[string]OwnerRule{}, matched: map[string]bool{},
+	}
+
+	add := func(id, text, version string) error {
+		p, err := parseOne(text, cedar.Permit)
+		if err != nil {
+			return fmt.Errorf("%s: %w", id, err)
+		}
+
+		set.Add(cedar.PolicyID(id), p)
+
+		rec.PolicyVersions[id] = version
+
+		return nil
+	}
+
+	for _, g := range e.Registry.Gates(sub, PointChangePlanned) {
+		ev.gates[g.ID] = g
+
+		err := add(g.ID, g.policyText(), g.Version())
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for _, d := range e.Registry.Defaults(sub) {
+		ev.defaults[defaultPrefix+d.ID] = d
+
+		err := add(defaultPrefix+d.ID, d.policyText(), digest(d.ID, d.Scope.String(), d.Unless)[:12])
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for _, o := range e.Registry.OwnerRules(sub) {
+		ev.owners[ownerPrefix+o.ID] = o
+
+		err := add(
+			ownerPrefix+o.ID,
+			o.policyText(),
+			digest(o.ID, o.Scope.String(), o.When, strings.Join(o.Paths, ","))[:12],
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return set, ev, nil
+}
+
 // combine joins the enforce matches: any deny wins; else every named
-// approval rule is required; else the result is allow. An evaluate match
-// changes nothing.
-func (e *Engine) combine(rec *Record, req PlannedRequest) error {
+// approval rule is required, with the approval defaults; else the result
+// is allow. An evaluate match changes nothing. A warn that is enforced
+// blocks auto-apply.
+func (e *Engine) combine(rec *Record, req PlannedRequest, ev *evaluated) error {
 	rec.Result = ResultAllow
 
 	var rules []string
+
+	warned := false
 
 	for _, m := range rec.Matched {
 		if m.Mode != ModeEnforce {
 			continue
 		}
+
+		warned = warned || m.Outcome == OutcomeWarn
 
 		if m.Outcome == OutcomeDeny {
 			rec.Blockers = append(rec.Blockers, m.Gate)
@@ -124,7 +187,7 @@ func (e *Engine) combine(rec *Record, req PlannedRequest) error {
 	}
 
 	for _, rule := range rules {
-		reqs, err := e.requirements(rule, req)
+		reqs, err := e.requirements(rule, req, ev)
 		if err != nil {
 			return err
 		}
@@ -132,35 +195,65 @@ func (e *Engine) combine(rec *Record, req PlannedRequest) error {
 		rec.Approvals = append(rec.Approvals, reqs...)
 	}
 
+	if d, ok := strictestDefault(ev); ok {
+		rec.Approvals = append(rec.Approvals, d)
+	}
+
 	if len(rec.Approvals) > 0 {
 		rec.Result = ResultRequireApproval
 	}
 
+	rec.AutoApply = rec.Result == ResultAllow && !warned
+
 	return nil
 }
 
+// strictestDefault joins the approval defaults that matched: the highest
+// count and the smallest fresh window. No default gives no requirement.
+func strictestDefault(ev *evaluated) (Approval, bool) {
+	var out Approval
+
+	found := false
+
+	for id, d := range ev.defaults {
+		if !ev.matched[id] {
+			continue
+		}
+
+		if !found || d.Count > out.Need {
+			out.Need = d.Count
+		}
+
+		out.FreshAuthSeconds = strictestWindow(out.FreshAuthSeconds, d.FreshAuthSeconds)
+		found = true
+	}
+
+	out.Rule = "default"
+	out.From = []string{"anyone"}
+
+	return out, found
+}
+
+func strictestWindow(a, b *int64) *int64 {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case *b < *a:
+		return b
+	default:
+		return a
+	}
+}
+
 // ownersRule is the name of the approval outcome that takes its
-// requirements from the ownership file.
+// requirements from the owner rules and from the ownership file.
 const ownersRule = "owners"
 
-func (e *Engine) requirements(rule string, req PlannedRequest) ([]Approval, error) {
+func (e *Engine) requirements(rule string, req PlannedRequest, ev *evaluated) ([]Approval, error) {
 	if rule == ownersRule {
-		secs, err := ParseOwners(req.Owners)
-		if err != nil {
-			return nil, err
-		}
-
-		var out []Approval
-
-		for _, s := range secs {
-			if s.Matches(req.Facts.Change.Paths) {
-				out = append(out, Approval{
-					Rule: ownersRule + "/" + s.Name, Need: s.Count, From: []string{"group:" + s.Group},
-				})
-			}
-		}
-
-		return out, nil
+		return ownerRequirements(req, ev)
 	}
 
 	r, ok := e.Registry.Rule(rule)
@@ -168,22 +261,68 @@ func (e *Engine) requirements(rule string, req PlannedRequest) ([]Approval, erro
 		return nil, fmt.Errorf("%w: approval rule %q is not stored", ErrInvalid, rule)
 	}
 
-	from := make([]string, 0, len(r.Groups)+len(r.Users))
-	for _, g := range r.Groups {
+	return []Approval{{
+		Rule: r.Name, Need: r.Count, FreshAuthSeconds: r.FreshAuthSeconds, From: approvers(r.Groups, r.Users),
+	}}, nil
+}
+
+func ownerRequirements(req PlannedRequest, ev *evaluated) ([]Approval, error) {
+	var out []Approval
+
+	ids := make([]string, 0, len(ev.owners))
+	for id := range ev.owners {
+		ids = append(ids, id)
+	}
+
+	slices.Sort(ids)
+
+	for _, id := range ids {
+		o := ev.owners[id]
+		if !ev.matched[id] || (len(o.Paths) > 0 && !matchGlobs(o.Paths, req.Facts.Change.Paths)) {
+			continue
+		}
+
+		out = append(out, Approval{
+			Rule: ownersRule + "/" + o.ID, Need: o.Count, FreshAuthSeconds: o.FreshAuthSeconds,
+			From: approvers(o.Groups, o.Users),
+		})
+	}
+
+	secs, err := ParseOwners(req.Owners)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, s := range secs {
+		if s.Matches(req.Facts.Change.Paths) {
+			out = append(out, Approval{
+				Rule: ownersRule + "/" + s.Name, Need: s.Count, From: []string{"group:" + s.Group},
+			})
+		}
+	}
+
+	return out, nil
+}
+
+func approvers(groups, users []string) []string {
+	from := make([]string, 0, len(groups)+len(users))
+	for _, g := range groups {
 		from = append(from, "group:"+g)
 	}
 
-	for _, u := range r.Users {
+	for _, u := range users {
 		from = append(from, "user:"+u)
 	}
 
-	return []Approval{{Rule: r.Name, Need: r.Count, FreshAuth: r.FreshAuth, From: from}}, nil
+	return from
 }
 
 // fail stores a record with the result error and returns it with an error
 // that wraps ErrRuleFailed.
 func (e *Engine) fail(rec Record, cause error) (Record, error) {
 	rec.Result = ResultError
+	rec.AutoApply = false
+
 	if cause != nil {
 		rec.Errors = append(rec.Errors, cause.Error())
 	}
