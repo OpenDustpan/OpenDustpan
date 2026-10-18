@@ -2,6 +2,14 @@
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true
   },
+  "permissions": {
+    "allow": [
+      "mcp__github__merge_pull_request",
+      "mcp__github__add_issue_comment",
+      "mcp__github__update_pull_request",
+      "mcp__claude-code-remote__send_message"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
