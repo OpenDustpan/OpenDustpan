@@ -487,11 +487,19 @@ A condition in front of a phase that must open before the phase dispatches (ADR 
 _Avoid_: Approval (alone: an approval passes an approval gate), check
 
 **Confirmation gate**:
-The gate in front of each phase that changes, for a job that an agent started in approve-first mode (ADR 103 decision 2). Only the person who asked the agent can pass it. That person gives one confirmation, in a request of their own with no agent, with a fresh authentication. The fresh authentication is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. It is at most 15 minutes old (`job.ConfirmFreshness`). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
+The gate in front of each phase that changes, for a job that an agent started in approve-first mode (ADR 103 decision 2). A write-back job of an agent has it in front of its deliver phase in every mode (ADR 128 decision 4). Only the person who asked the agent can pass it. That person gives one confirmation in a request of their own with no agent. The request comes from an interactive console session, never from an access token (ADR 128 decision 5). It has a fresh authentication. That is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. Its maximum age is the lower of 15 minutes and the token freshness window of the session policy (`job.ConfirmMaxAge`, ADR 128 decision 7). With a window of 0, the maximum age is 15 minutes. A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
 _Avoid_: Approval (an approval passes an approval gate), consent
 
+**Request-changes thread**:
+A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on the own job. While a thread is open, no approve verdict and no confirmation of the job is accepted (`job.ErrChangesRequested`). The person who opened the thread, or another holder of `job:approve`, resolves it, each in a request with no agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one.
+_Avoid_: Change order, rejection (a rejection ends the job), review (alone: that is the review request of the forge)
+
+**Dismissal**:
+The resolve of a request-changes thread by a person other than the person who opened it (ADR 128 decision 14). A dismissal needs a reason, and writes an audit entry with that reason.
+_Avoid_: Override (that is a break-glass or a forced write)
+
 **Agent mode**:
-The mode that a user sets for the agent that acts for them: approve-first, review-request or direct (ADR 103 decision 12). `job.CheckAgent` holds the rule at start. Approve-first is the default: each phase that changes gets a confirmation gate. In review-request mode, the agent changes a unit only through a write-back job that delivers as a review request, with no confirmation gate. In direct mode, the agent changes a unit with no confirmation. Direct mode needs three switches, each off by default: one of the installation, one of the namespace of the unit and one of the user. A runner job that only plans needs no mode, and it starts in every mode.
+The mode that a user sets for the agent that acts for them: approve-first, review-request or direct (ADR 103 decision 12). `job.CheckAgent` holds the rule at start. Approve-first is the default: each phase that changes gets a confirmation gate. In review-request mode, the agent changes a unit only through a write-back job that delivers as a review request. Its deliver phase still has a confirmation gate (ADR 128 decision 4). In direct mode, a runner job of the agent changes a unit with no confirmation. A write-back job pushes after the confirmation of its delivery. Direct mode needs three switches, each off by default: one of the installation, one of the namespace of the unit and one of the user. A runner job that only plans needs no mode, and it starts in every mode.
 _Avoid_: Autonomy level, agent permission
 
 **Freeze**:
@@ -617,7 +625,7 @@ One of the 12 task-shaped tools that an agent can call (ADR 122). The ADRs call 
 _Avoid_: Tool (alone, that is an infrastructure-as-code CLI), function, command, skill
 
 **Agent ref**:
-The reference to the agent that acts for a person (`agent.Ref`, ADR 125 decision 9). It holds the channel, and the run ID or the MCP session ID. `Ref.Validate` refuses a ref with no ID or with the ID of the other channel. The job model records it on the job, on each approval and on the decision input (ADR 125 decision 13).
+The reference to the agent that acts for a person (`agent.Ref`, ADR 125 decision 9). It holds the channel, and the run ID or the MCP session ID. `Ref.Validate` refuses a ref with no ID or with the ID of the other channel. The job model holds the same fields in `job.AgentRef` (ADR 128 decision 1). It records the reference on the job, on each approval and on the decision input. Each audit entry of the job holds it in the agent block (ADR 128 decision 17). A job never names an agent by a name only.
 _Avoid_: Agent ID, agent name, agent string
 
 **Channel**:
