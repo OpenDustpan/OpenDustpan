@@ -193,7 +193,7 @@ cookie jar for each host. A person with principals in two namespaces
 
 - **Option A. A session cookie for each principal home**, with the name of
   the cookie bound to the namespace ID, for example one cookie for each
-  namespace ID. The console sends the cookie of the namespace of the path.
+  namespace ID. The console sends the cookie of the namespace of the path. A browser sends every cookie of the host. The server reads only the cookie of the namespace in the path, and the session cookie of the installation for a route with no namespace.
 - **Option B. One active namespace for each browser session.** A change of
   namespace signs the person in again.
 

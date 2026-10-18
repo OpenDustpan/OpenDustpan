@@ -176,8 +176,7 @@ What exists:
     - Then, in one transaction, it writes the new wrap of each namespace
       key version. The old wraps stay until the new ones commit.
     - The first set of a customer key, and each change to another key, also
-      rotates the namespace key (decision 18). So no version that the new
-      customer key wraps was ever wrapped without it.
+      rotates the namespace key (decision 18). So the version that wraps new data keys and item keys under the new customer key was never wrapped without it. Older versions stay readable from an earlier copy until the server destroys them (decision 15).
 11. **The probe runs again at each rewrap.** The daily rewrap of decision
     17 runs the probe of decision 10 again. When the probe now passes for
     the random ID, the server keeps the key in use, writes an audit entry
@@ -262,11 +261,7 @@ What exists:
     version and data keys under the key-encryption key only, or under the
     earlier customer key. It also does not reach a backup that holds such a
     version, until the server destroys that version (decision 18). A data key of a Pulumi stack
-    never changes, so such a copy opens its secret values. The docs of the
-    customer key list these cases.
-
-    The docs of the customer key list these, so that no customer reads
-    "crypto-shred" as a delete of all data.
+    never changes, so such a copy opens its secret values. The docs of the customer key list these cases, so that no customer reads "crypto-shred" as a delete of all data.
 16. **Errors in the tool-compatible APIs.** The Pulumi Cloud-compatible API
     and the TFE-compatible API answer the same statuses, in the error shape
     of each API. `make e2e` shows what each CLI prints for 503 and 403
@@ -296,13 +291,10 @@ What exists:
       write, the rewrap reads the key record and stops if the record has a
       shred time. After the write, it reads the record again. If a shred
       committed in between, it deletes the new blob. The next backup to each
-      target copies the new blob. The old blob stays in the live store and
-      in each target until the server destroys its namespace key version. A
+      target copies the new blob. The server deletes the old blob from the live store when the key record names the new blob. It deletes the old blob from a target when no backup in that target names its namespace key version in its manifest (ADR 42). A
       shred deletes every blob under `item-keys/<item key ID>/` in the live
       store and in each target.
-    - The server destroys an old version when no wrapped key in the live
-      store uses it, and no object in a backup target that the `backups`
-      table names uses it. Until then the version only unwraps.
+    - The server destroys an old version when no wrapped key in the live store uses it. It also waits until no backup that the `backups` table holds names it in its manifest. Until then the version only unwraps.
     - The operation records its progress (keys done, keys left). The API
       answers it, and the audit scope of the namespace gets an entry at the
       start and at the end.

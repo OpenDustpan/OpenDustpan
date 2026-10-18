@@ -1,6 +1,6 @@
 # 23. Secrets and the built-in key-encryption key
 
-Status: accepted · 2026-10-10. Decision 8 decided by ADR 217, which also makes the namespace key the wrapper of the data keys of a namespace. Decision 4: the rewrap command wraps namespace key versions (ADR 217 decision 21)
+Status: accepted · 2026-10-10. Decision 8 superseded in part by ADR 217, which also makes the namespace key the wrapper of the data keys of a namespace. Decision 4: the rewrap command wraps namespace key versions (ADR 217 decision 21)
 
 ## Context
 

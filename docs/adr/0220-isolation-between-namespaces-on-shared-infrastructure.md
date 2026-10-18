@@ -145,8 +145,7 @@ account, so this ADR isolates namespaces.
       the catalog of ADR 115 uses "quota" for another concept. RFC 68
       "Storage quota" keeps its other rules.
 
-    At a share limit, a new request waits up to 5 seconds, then answers 429
-    with `Retry-After`.
+    At a share limit, a new request waits up to 5 seconds, then answers 429 with `Retry-After`. At the storage limit, the server refuses the start of new work at once, with no wait.
 14. **Work in progress is exempt from shares.** The calls of an update, a
     run or a job phase in progress (lease renewal, checkpoints, events, log
     chunks, the final state write) never wait for a share and never get 429

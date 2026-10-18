@@ -124,8 +124,7 @@ record, and the docs tell a customer to use a multi-Region key.
    federation, because it is the first path segment of the console (ADR 215
    decision 5). A new namespace takes its name in the directory at the
    control home, in one synchronous call. A creation fails when the control
-   home cannot answer. This is the only synchronous call across regions,
-   and namespace creation is rare. A claim ends after 10 minutes unless
+   home cannot answer. Namespace creation is rare. The other calls across regions that must get an answer are the home lease of section 5 and the check of rule 5. A claim ends after 10 minutes unless
    the namespace row replicates. A unit name is unique in its namespace,
    and only the home region writes it.
 5. **Revocation lag.** A revocation of a row of a namespace is current at
@@ -247,6 +246,8 @@ Designed against these, as a comparison only, never a compliance claim:
    the first federation, or later?
 5. What replication lag does OpenDustpan Cloud measure and publish before
    it turns federation on?
+6. A home refuses writes when it cannot renew its lease at the control home (section 5). So a partition from the control home stops the writes of each namespace in the cut-off regions. Is that acceptable, or does each region need its own lease authority? Recommendation: accept it for the first federation, and publish the lease time with the lag.
+
 
 ## Outcome
 

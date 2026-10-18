@@ -187,7 +187,7 @@ The installation actions in the code and in accepted ADRs are: `backup`,
 15. **The route test covers every route.** The route test of ADR 17 checks
     each route of the mux, also the routes outside `/api/dustpan/v1`: the
     issuer routes `/oidc/...`, the runner protocol `/runner/v1/...`, `/mcp`,
-    the webhook and chat routes, and `/sign-in/{id}/callback`. Each route
+    the webhook routes under `/webhooks/...`, the chat routes under `/chat/...`, and `/sign-in/{id}/callback`. Each route
     declares its actions and the scope of each object, or is on the public
     list. A route without a declaration fails the test.
 16. **Audit entries in the scope of the namespace.** Each sign-in through
