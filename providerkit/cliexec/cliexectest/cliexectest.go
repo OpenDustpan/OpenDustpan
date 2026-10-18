@@ -1,4 +1,4 @@
-// Package cliexectest is the conformance suite for cliexec.Runner adapters.
+// Package cliexectest is the conformance suite for cliexec.Starter adapters.
 // The suite needs a helper program. The test binary of the adapter is the
 // helper: its TestMain calls RunHelper first.
 //
@@ -11,8 +11,8 @@
 //
 //	func TestConformance(t *testing.T) {
 //		t.Parallel()
-//		cliexectest.Run(t, func(t *testing.T, maxOutput int64) cliexec.Runner {
-//			return newRunner(maxOutput)
+//		cliexectest.Run(t, func(t *testing.T, maxOutput int64) cliexec.Starter {
+//			return newStarter(maxOutput)
 //		})
 //	}
 package cliexectest
@@ -40,13 +40,13 @@ import (
 // program.
 const HelperArg = "-cliexectest.helper"
 
-// Factory returns a runner for one subtest, with a limit for the output of
+// Factory returns a starter for one subtest, with a limit for the output of
 // one command.
-type Factory func(t *testing.T, maxOutput int64) cliexec.Runner
+type Factory func(t *testing.T, maxOutput int64) cliexec.Starter
 
 // The limits of the suite.
 const (
-	// maxOutput is the output limit of a runner under test.
+	// maxOutput is the output limit of a starter under test.
 	maxOutput = 64 << 10
 	// floodBytes is the output of the mode "flood": more than the limit.
 	floodBytes = 4 * maxOutput
@@ -61,8 +61,8 @@ const (
 	pollEvery = 10 * time.Millisecond
 )
 
-// Run executes the conformance suite against runners from newRunner.
-func Run(t *testing.T, newRunner Factory) {
+// Run executes the conformance suite against starters from newStarter.
+func Run(t *testing.T, newStarter Factory) {
 	t.Helper()
 
 	helper, err := os.Executable()
@@ -72,7 +72,7 @@ func Run(t *testing.T, newRunner Factory) {
 
 	cases := []struct {
 		name string
-		test func(t *testing.T, r cliexec.Runner, helper string)
+		test func(t *testing.T, r cliexec.Starter, helper string)
 	}{
 		{name: "arguments arrive as they are, with no shell", test: testLiteralArgs},
 		{name: "the program gets only the declared environment", test: testEnvironment},
@@ -90,7 +90,7 @@ func Run(t *testing.T, newRunner Factory) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			c.test(t, newRunner(t, maxOutput), helper)
+			c.test(t, newStarter(t, maxOutput), helper)
 		})
 	}
 }
@@ -185,7 +185,7 @@ func flood(w io.Writer) int {
 // spawn starts the helper as a grandchild in the mode "sleep", in the process
 // group of the helper, and writes its process ID to pidFile.
 func spawn(helper, pidFile string) error {
-	c := exec.Command(helper, HelperArg, "sleep") //nolint:noctx // The test binary itself; the runner stops it.
+	c := exec.Command(helper, HelperArg, "sleep") //nolint:noctx // The test binary itself; the starter stops it.
 	if err := c.Start(); err != nil {
 		return fmt.Errorf("start the grandchild: %w", err)
 	}
@@ -203,7 +203,7 @@ func helperCommand(helper string, timeout time.Duration, args ...string) cliexec
 	}
 }
 
-func runEcho(t *testing.T, r cliexec.Runner, cmd cliexec.Command) echo {
+func runEcho(t *testing.T, r cliexec.Starter, cmd cliexec.Command) echo {
 	t.Helper()
 
 	res, err := r.Run(t.Context(), cmd)
@@ -219,7 +219,7 @@ func runEcho(t *testing.T, r cliexec.Runner, cmd cliexec.Command) echo {
 	return e
 }
 
-func testLiteralArgs(t *testing.T, r cliexec.Runner, helper string) {
+func testLiteralArgs(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	args := []string{"$(id)", "a b", "*", "'q'", "; true", "", "--x=$HOME", "\"", "\\"}
@@ -230,7 +230,7 @@ func testLiteralArgs(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testEnvironment(t *testing.T, r cliexec.Runner, helper string) {
+func testEnvironment(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	cmd := helperCommand(helper, time.Minute, "echo")
@@ -260,11 +260,11 @@ func testEnvironment(t *testing.T, r cliexec.Runner, helper string) {
 	}
 
 	if home, err := os.UserHomeDir(); err == nil && names["HOME"] == home {
-		t.Error("program got the runner's own HOME, want a private directory of the run")
+		t.Error("program got the starter's own HOME, want a private directory of the run")
 	}
 }
 
-func testStdin(t *testing.T, r cliexec.Runner, helper string) {
+func testStdin(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	cmd := helperCommand(helper, time.Minute, "echo")
@@ -275,7 +275,7 @@ func testStdin(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testExitCode(t *testing.T, r cliexec.Runner, helper string) {
+func testExitCode(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	res, err := r.Run(t.Context(), helperCommand(helper, time.Minute, "exit", "4"))
@@ -284,7 +284,7 @@ func testExitCode(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testTimeout(t *testing.T, r cliexec.Runner, helper string) {
+func testTimeout(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	start := time.Now()
@@ -299,7 +299,7 @@ func testTimeout(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testProcessGroup(t *testing.T, r cliexec.Runner, helper string) {
+func testProcessGroup(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
@@ -330,7 +330,7 @@ func testProcessGroup(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testCanceled(t *testing.T, r cliexec.Runner, helper string) {
+func testCanceled(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -350,7 +350,7 @@ func testCanceled(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testStderrTooLarge(t *testing.T, r cliexec.Runner, helper string) {
+func testStderrTooLarge(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	_, err := r.Run(t.Context(), helperCommand(helper, time.Minute, "flood-stderr"))
@@ -359,7 +359,7 @@ func testStderrTooLarge(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testTooLarge(t *testing.T, r cliexec.Runner, helper string) {
+func testTooLarge(t *testing.T, r cliexec.Starter, helper string) {
 	t.Helper()
 
 	if _, err := r.Run(t.Context(), helperCommand(helper, time.Minute, "flood")); !errors.Is(err, cliexec.ErrTooLarge) {
@@ -367,7 +367,7 @@ func testTooLarge(t *testing.T, r cliexec.Runner, helper string) {
 	}
 }
 
-func testInvalid(t *testing.T, r cliexec.Runner, _ string) {
+func testInvalid(t *testing.T, r cliexec.Starter, _ string) {
 	t.Helper()
 
 	cmd := cliexec.Command{Program: "bin/x", Args: nil, Env: nil, Stdin: nil, Timeout: time.Minute}
@@ -376,7 +376,7 @@ func testInvalid(t *testing.T, r cliexec.Runner, _ string) {
 	}
 }
 
-func testMissing(t *testing.T, r cliexec.Runner, _ string) {
+func testMissing(t *testing.T, r cliexec.Starter, _ string) {
 	t.Helper()
 
 	cmd := cliexec.Command{

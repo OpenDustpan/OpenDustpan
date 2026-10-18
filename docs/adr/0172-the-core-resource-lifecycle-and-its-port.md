@@ -24,9 +24,10 @@ The port and the planner are in the package `lifecycle` of
 ## Decision
 
 1. **One port, `lifecycle.Provider`.** It returns the name, the version and
-   the schemas, and `Configure` returns a `lifecycle.Session`. A session
-   holds the resource and data source types bound to one provider
-   configuration. Both protocol adapters consume only this port (ADR 176).
+   the schemas, and `Configure` returns a provider session
+   (`lifecycle.Session`). A provider session holds the resource and data
+   source types bound to one provider configuration. Both protocol adapters
+   consume only this port (ADR 176).
 2. **The operations of a resource.** `Create`, `Read`, `Update` and
    `Delete`. Each returns the values that the remote system now has: every
    attribute of the schema, with no unknown value.
@@ -83,26 +84,35 @@ The port and the planner are in the package `lifecycle` of
 10. **No call to the remote system during a resource plan.** `Plan` is a pure
     function. Only a data source read and a refresh call the remote system
     before an apply.
-11. **Concurrent use.** Both tools apply objects in parallel. The types of a
-    session are safe for concurrent use.
+11. **Concurrent use.** Both tools apply objects in parallel. The types of
+    a provider session are safe for concurrent use.
 12. **A failed create or update keeps the object (PM, for the project
     owner).** When the remote system made the object and a later step
     failed, for example a second call or a read, `Create` returns the values
     that it has, with at least the `id`, together with the error. `Update`
     does the same when it applied a part of a change. `lifecycle.Created`
-    reports whether such values hold an `id`. The adapters then:
-    - OpenTofu: the adapter returns the values, through `ForTool`, as the
-      new state together with the error diagnostic. OpenTofu keeps the
-      object of a failed create as tainted, and replaces it in the next
-      apply. After a failed update it keeps the returned values.
-    - Pulumi: the adapter returns a partial failure, with the `id` and the
+    reports whether the values of a failed `Create` hold an `id`. The
+    adapter gives its tool `lifecycle.Partial` of the values: each value
+    that they leave null or missing comes from a base, and the result goes
+    through `ForTool`. The base is the known planned values for a create,
+    and the prior state for an update. Without it, a failed update that
+    returns only the `id` would give null for each other attribute, and the
+    next plan would show a replace. The adapters then:
+    - OpenTofu: the adapter returns those values as the new state together
+      with the error diagnostic. OpenTofu keeps the object of a failed
+      create as tainted, and replaces it in the next apply. After a failed
+      update it keeps those values.
+    - Pulumi: the adapter returns a partial failure, with the `id` and those
       values as properties, together with the reason. The Pulumi CLI keeps
       the object in state and applies the configuration again in the next
       update.
 
-    Without an `id`, the adapter reports the error alone. The object is
-    then not in state, so an engine returns an `id` as soon as the remote
-    system gives one.
+    A failed `Create` without an `id` made no object that the adapter can
+    name: the adapter reports the error alone, so an engine returns an `id`
+    as soon as the remote system gives one. A failed `Update` always has an
+    object. Without an `id`, or with no values at all, the adapter returns
+    `ForTool(prior)` with the error, never null: OpenTofu drops an object
+    with null state, and the next plan would create a second object.
 13. **No unknown value after an apply.** When the reply of `create` does not
     give every value that the remote system sets, the engine runs `Read`
     after `Create`. After an update it does the same for each value that the

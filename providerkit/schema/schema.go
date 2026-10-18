@@ -15,7 +15,8 @@ import (
 var ErrInvalid = errors.New("invalid schema")
 
 // IDAttribute is the name of the attribute that identifies a resource. Every
-// resource schema has it, as a computed string or a required string.
+// resource schema has it, as a computed string, or as a required string that
+// forces a replace.
 const IDAttribute = "id"
 
 // Mode says who sets an attribute.
@@ -75,7 +76,8 @@ type Attribute struct {
 	Sensitive bool
 	// WriteOnly sends the value to the API and never stores it in state. A
 	// change to it alone does not show in a plan. Only a user-set attribute
-	// can be write-only.
+	// can be write-only. The engines mask a write-only value in diagnostics
+	// and logs as they mask a sensitive value.
 	WriteOnly bool
 	// Replace makes a change to the value replace the resource, not update
 	// it in place.
@@ -151,7 +153,8 @@ func (s Schema) Validate() error {
 }
 
 // ValidateResource checks Validate and the rules of a resource schema: it has
-// an "id" string that the provider computes or the user sets.
+// an "id" string that the provider computes, or that the user sets and that
+// forces a replace. An object cannot change its id in place.
 func (s Schema) ValidateResource() error {
 	if err := s.Validate(); err != nil {
 		return err
@@ -168,6 +171,28 @@ func (s Schema) ValidateResource() error {
 
 	if id.Sensitive || id.WriteOnly {
 		return fmt.Errorf("%w: attribute %q cannot be sensitive or write-only", ErrInvalid, IDAttribute)
+	}
+
+	if id.Mode != ModeComputed && (id.Mode != ModeRequired || !id.Replace) {
+		return fmt.Errorf("%w: attribute %q must be computed, or required with replace", ErrInvalid, IDAttribute)
+	}
+
+	return nil
+}
+
+// ValidateDataSource checks Validate and the rules of a data source schema:
+// no attribute is write-only, forces a replace or is stable. A data source
+// has no state to keep a value from, and no object to replace.
+func (s Schema) ValidateDataSource() error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+
+	for _, a := range s.Attributes {
+		if a.WriteOnly || a.Replace || a.Stable {
+			return fmt.Errorf("%w: data source attribute %q cannot be write-only, replace or stable",
+				ErrInvalid, a.Name)
+		}
 	}
 
 	return nil

@@ -2,8 +2,10 @@ package schema
 
 import (
 	"maps"
+	"math"
 	"math/big"
 	"slices"
+	"strconv"
 )
 
 // Value is one typed value. It can be known, null, or unknown. A value is
@@ -70,6 +72,31 @@ func NumberValue(n *big.Float) Value {
 	v.num = newNumber().Set(n)
 
 	return v
+}
+
+// decimalBase is the base of the text that FloatValue parses.
+const decimalBase = 10
+
+// FloatValue returns a known number with the decimal value that x shows: the
+// shortest decimal that reads back as x in a float of bits, 32 or 64. The
+// float64 0.1 then gives the decimal 0.1, not the binary value nearest to
+// it, so a number from a float equals the same number from a configuration.
+// It returns false when x is not a number or is infinite, or when bits is
+// not 32 or 64.
+func FloatValue(x float64, bits int) (Value, bool) {
+	if math.IsNaN(x) || math.IsInf(x, 0) || bits != 32 && bits != 64 {
+		return NullOf(Number()), false
+	}
+
+	n, _, err := newNumber().Parse(strconv.FormatFloat(x, 'g', -1, bits), decimalBase)
+	if err != nil {
+		return NullOf(Number()), false
+	}
+
+	v := known(Number())
+	v.num = n
+
+	return v, true
 }
 
 // IntValue returns a known number with the value of i.

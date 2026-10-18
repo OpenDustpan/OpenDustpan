@@ -17,20 +17,20 @@ import (
 	"opendustpan.org/providerkit/cliexec/cliexectest"
 )
 
-// TestSuiteAgainstReferenceRunner runs the suite against a minimal runner on
+// TestSuiteAgainstReferenceStarter runs the suite against a minimal starter on
 // os/exec, so the suite itself has a test. The CLI engine brings its own
 // adapter, which runs the same suite.
-func TestSuiteAgainstReferenceRunner(t *testing.T) {
+func TestSuiteAgainstReferenceStarter(t *testing.T) {
 	t.Parallel()
 
-	cliexectest.Run(t, func(t *testing.T, maxOutput int64) cliexec.Runner {
+	cliexectest.Run(t, func(t *testing.T, maxOutput int64) cliexec.Starter {
 		t.Helper()
 
-		return referenceRunner{max: maxOutput, path: os.Getenv("PATH")}
+		return referenceStarter{max: maxOutput, path: os.Getenv("PATH")}
 	})
 }
 
-type referenceRunner struct {
+type referenceStarter struct {
 	max  int64
 	path string
 }
@@ -66,7 +66,7 @@ func (b *limitBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (r referenceRunner) Run(ctx context.Context, cmd cliexec.Command) (cliexec.Result, error) {
+func (r referenceStarter) Run(ctx context.Context, cmd cliexec.Command) (cliexec.Result, error) {
 	none := cliexec.Result{ExitCode: 0, Stdout: nil, Stderr: nil}
 	if err := cmd.Validate(); err != nil {
 		return none, fmt.Errorf("check the command: %w", err)

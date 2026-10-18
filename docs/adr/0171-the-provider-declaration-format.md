@@ -53,12 +53,18 @@ The rules are in the package `declaration` of `opendustpan/providerkit`
      the project owner). The plan of an update keeps its value. Every other
      computed value is unknown in the plan of an update (ADR 172
      decision 7).
-   - Each resource has an `id` string.
+   - Each resource has an `id` string. It is `computed`, or `required`
+     with `replace`, because an object cannot change its id in place.
+   - A data source attribute is not `writeOnly`, `replace` or `stable`. A
+     data source has no state to keep a value from, and no object to
+     replace.
    - A resource without `update` must mark each attribute that the user
      sets as `replace`.
-   - Provider configuration attributes are `required` or `optional`. The
-     name of a sensitive one is at most 59 characters, so that its file
-     form `<name>_file` (ADR 175) fits in the limit of 64.
+   - Provider configuration attributes are `required` or `optional`. A
+     sensitive one is a `string`, because its file holds text. Its name is
+     at most 59 characters, so that its file form `<name>_file` (ADR 175)
+     fits in the limit of 64. The SDK applies the same rules
+     (`lifecycle.WithFileForms`).
 8. **References, and no expressions.** A string in a request or a command
    can hold `{name}`, `{config.name}` and `{file:config.name}` (ADR 175).
    There are no functions, no conditions and no escape for a brace. The
@@ -68,14 +74,28 @@ The rules are in the package `declaration` of `opendustpan/providerkit`
    and a query. A reference in one of these places cannot name a sensitive
    attribute. A sensitive value goes in a request body, on the standard
    input, through authentication, or as a file. `Validate` enforces this.
+   - A reference cannot be a part of the name of an option: in a command
+     argument that starts with a literal `-`, `Validate` refuses a
+     reference before the first `=` (ADR 174 decision 3).
+   - The `delete` operation of a resource cannot reference a `writeOnly`
+     attribute, because state does not hold its value.
 10. **The values that the remote system sets (PM, for the project
-    owner).** `create` or `read` must give each `computed` and
-    `optionalComputed` attribute. When the reply or output of `create` does
-    not give all of them, the engine runs `read` after `create`
-    (`Resource.ReadsAfterCreate`). The same holds for `update` and each such
-    attribute that is not `stable` and not the `id`
-    (`Resource.ReadsAfterUpdate`). The values of an apply then have no
-    unknown value.
+    owner).** `Validate` checks that the operations give the values of the
+    remote system:
+    - `create` gives a `computed` `id`.
+    - `read` gives each `computed` attribute other than the `id`, because
+      an import has only the `id` and `read`.
+    - `create` or `read` gives each `computed` and `optionalComputed`
+      attribute.
+    - When the resource has `update`, `update` or `read` gives each
+      `computed` and `optionalComputed` attribute that is not `stable` and
+      not the `id`. The plan of an update makes these values unknown.
+
+    When the reply or output of `create` does not give all of them, the
+    engine runs `read` after `create` (`Resource.ReadsAfterCreate`). The
+    same holds for `update` and each such attribute that is not `stable` and
+    not the `id` (`Resource.ReadsAfterUpdate`). The values of an apply then
+    have no unknown value.
 11. **The read of a resource needs only the id (PM, for the project
     owner).** An import gives only the `id` (ADR 172 decision 4). The `read`
     operation of a resource can therefore reference only `{id}` and the
@@ -91,14 +111,14 @@ The rules are in the package `declaration` of `opendustpan/providerkit`
 
     The built provider never reads the OpenAPI document. A provider of a
     few resources does not carry a document of thousands of operations.
-13. **State versions.** Version 1 of the format has no key for the version of
-    the stored shape of a resource. A built provider reports version 0 for
-    every type.
+13. **State versions.** Version 1 of the format has no key for the version
+    of the stored shape of a resource. A built provider reports version 0
+    for every type.
 
 ## Consequences
 
-- Each rule of `Validate` has a row in a table test that changes one thing in
-  an example and expects `ErrInvalid`.
+- Each rule of `Validate` has a row in a table test that changes one thing
+  in an example and expects `ErrInvalid`.
 - A declaration in version control is a review surface. It holds no
   credential, because a credential field must be a reference to a sensitive
   configuration attribute.

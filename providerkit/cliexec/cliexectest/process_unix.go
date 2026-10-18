@@ -29,7 +29,7 @@ func alive(pid int) bool {
 	return i < 0 || len(stat) <= i+2 || stat[i+2] != 'Z'
 }
 
-// stop ends a process that a runner left, so that a failed test does not
+// stop ends a process that a starter left, so that a failed test does not
 // leave it running.
 func stop(pid int) {
 	_ = syscall.Kill(pid, syscall.SIGKILL) //nolint:errcheck // The test fails anyway; the process can be gone.

@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"opendustpan.org/providerkit/cliexec"
@@ -36,8 +37,10 @@ import (
 // ConfigSchemaOf returns the configuration schema that an SDK provider
 // serves for the struct C: SchemaOf, with the file form of each sensitive
 // field from lifecycle.WithFileForms, as a declared provider serves it.
-// When the user sets the file form, the SDK reads the file into the field
-// before it calls Configure. Errors: ErrInvalidModel.
+// When the user sets the file form, or the variable of lifecycle.FileEnv
+// names a file, the SDK reads the file into the field
+// before it calls Configure. As in a declaration, each field is required or
+// optional, and each sensitive field is a string. Errors: ErrInvalidModel.
 func ConfigSchemaOf[C any]() (schema.Schema, error) {
 	base, err := SchemaOf[C]()
 	if err != nil {
@@ -47,6 +50,22 @@ func ConfigSchemaOf[C any]() (schema.Schema, error) {
 	s, err := lifecycle.WithFileForms(base)
 	if err != nil {
 		return base, fmt.Errorf("%w: %w", ErrInvalidModel, err)
+	}
+
+	return s, nil
+}
+
+// DataSourceSchemaOf returns the schema of a data source for the struct M:
+// SchemaOf, with the rules of schema.ValidateDataSource. Errors:
+// ErrInvalidModel.
+func DataSourceSchemaOf[M any]() (schema.Schema, error) {
+	s, err := SchemaOf[M]()
+	if err != nil {
+		return s, err
+	}
+
+	if err := s.ValidateDataSource(); err != nil {
+		return s, fmt.Errorf("%w: %w", ErrInvalidModel, err)
 	}
 
 	return s, nil
@@ -69,58 +88,92 @@ type Provider[C any] struct {
 	DataSources []DataSourceType[C]
 }
 
-// Call is what an operation gets: the configuration, a runner for the
-// program of the tool, and the private directory of the session. The runner
-// is the same adapter that the CLI engine uses, so a written provider and a
-// declared one start programs by one set of rules. The runner does not check
-// arguments or variables for secrets: an operation gives a secret to a
-// program on the standard input, or as a file from SecretFile.
+// Call is what an operation gets: the configuration, a command starter for
+// the program of the tool, and the private directory of the provider
+// session. The starter is the same adapter that the CLI engine uses, so a
+// written provider and a declared one start programs by one set of rules.
+// The starter does not check arguments or variables for secrets: an
+// operation gives a secret to a program on the standard input, or as a file
+// from SecretFile.
 type Call[C any] struct {
 	// Config is the provider configuration.
 	Config C
-	// Runner runs commands as argument lists, with no shell.
-	Runner cliexec.Runner
-	// dir is the private directory of the session, of mode 0700. The
-	// session removes it when it closes.
+	// Starter starts commands as argument lists, with no shell.
+	Starter cliexec.Starter
+	// dir is the private directory of the provider session, of mode 0700.
+	// The session removes it when it closes.
 	dir string
 }
 
-// NewCall returns the Call of a session with the private directory dir. The
-// SDK makes one for each session. A test of an operation makes one with a
-// directory of the test.
-func NewCall[C any](config C, runner cliexec.Runner, dir string) Call[C] {
-	return Call[C]{Config: config, Runner: runner, dir: dir}
+// The errors of a Call.
+var (
+	// ErrNoSessionDir reports a Call without the private directory of a
+	// provider session.
+	ErrNoSessionDir = errors.New("call has no session directory")
+	// ErrSessionDirMode reports a session directory that is not a directory
+	// of mode 0700. Another user could then read a secret file in it.
+	ErrSessionDirMode = errors.New("session directory is not a directory of mode 0700")
+)
+
+// NewCall returns the Call of a provider session with the private directory
+// dir. The SDK makes one for each session. A test of an operation makes one
+// with a directory of the test. An empty dir gives a Call whose SecretFile
+// returns ErrNoSessionDir. Errors: ErrSessionDirMode, or a failure to read
+// the mode of dir, wrapped.
+func NewCall[C any](config C, starter cliexec.Starter, dir string) (Call[C], error) {
+	c := Call[C]{Config: config, Starter: starter, dir: dir}
+	if dir == "" {
+		return c, nil
+	}
+
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return c, fmt.Errorf("session directory: %w", err)
+	}
+
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return c, fmt.Errorf("%w: %s has mode %s", ErrSessionDirMode, dir, info.Mode())
+	}
+
+	return c, nil
 }
 
-// ErrNoSessionDir reports a Call without the private directory of a session.
-var ErrNoSessionDir = errors.New("call has no session directory")
-
 // SecretFile writes value to a new file of mode 0600 in the private directory
-// of the session, and returns its path. An operation passes the path to a
-// program, for example as "--token-file=<path>", so the secret goes in no
-// argument and no variable. The session removes the file when it closes.
-// Errors: ErrNoSessionDir, or a failure to write the file, wrapped.
-func (c Call[C]) SecretFile(value string) (string, error) {
+// of the provider session, and returns its path and a function that removes
+// the file. An operation passes the path to a program, for example as
+// "--token-file=<path>", so the secret goes in no argument and no variable.
+// It calls remove when the program has ended, before the operation returns.
+// The session also removes the directory with each file left in it when it
+// closes. Errors: ErrNoSessionDir, or a failure to write the file, wrapped.
+func (c Call[C]) SecretFile(value string) (string, func() error, error) {
 	if c.dir == "" {
-		return "", ErrNoSessionDir
+		return "", nil, ErrNoSessionDir
 	}
 
 	f, err := os.CreateTemp(c.dir, "secret-*")
 	if err != nil {
-		return "", fmt.Errorf("make a secret file: %w", err)
+		return "", nil, fmt.Errorf("make a secret file: %w", err)
 	}
 
 	// CreateTemp makes the file with mode 0600.
 	path := f.Name()
 	if _, err := f.WriteString(value); err != nil {
-		return "", errors.Join(fmt.Errorf("write the secret file: %w", err), f.Close(), os.Remove(path))
+		return "", nil, errors.Join(fmt.Errorf("write the secret file: %w", err), f.Close(), os.Remove(path))
 	}
 
 	if err := f.Close(); err != nil {
-		return "", errors.Join(fmt.Errorf("close the secret file: %w", err), os.Remove(path))
+		return "", nil, errors.Join(fmt.Errorf("close the secret file: %w", err), os.Remove(path))
 	}
 
-	return path, nil
+	remove := func() error {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove the secret file: %w", err)
+		}
+
+		return nil
+	}
+
+	return path, remove, nil
 }
 
 // ResourceType is a Resource of any model type. Only Resource implements it.

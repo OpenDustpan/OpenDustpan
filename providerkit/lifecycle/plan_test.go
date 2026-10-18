@@ -256,6 +256,97 @@ func TestCreated(t *testing.T) {
 	}
 }
 
+// TestPlanStableOptionalComputed checks that an update keeps the prior value
+// of a stable optional computed attribute that the configuration leaves
+// null, and makes a value that is not stable unknown.
+func TestPlanStableOptionalComputed(t *testing.T) {
+	t.Parallel()
+
+	region := attr("region", schema.ModeOptionalComputed)
+	region.Stable = true
+
+	s := schema.Schema{Version: 0, Attributes: []schema.Attribute{
+		attr("id", schema.ModeComputed), attr("value", schema.ModeRequired), region,
+		attr("ttl", schema.ModeOptionalComputed),
+	}}
+	prior := schema.Values{"id": str("r1"), "value": str("a"), "region": str("eu"), "ttl": str("300")}
+
+	got, err := lifecycle.Plan(s, prior, schema.Values{"value": str("b"), "region": schema.NullOf(schema.String())})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+
+	checkChange(t, got, want{
+		action: lifecycle.ActionUpdate, changed: []string{"value"}, replacedBy: nil, unknown: []string{"ttl"},
+	})
+
+	if !got.Planned["region"].Equal(str("eu")) {
+		t.Fatalf("Planned[region] = %v, want the prior value", got.Planned["region"])
+	}
+}
+
+func TestPartial(t *testing.T) {
+	t.Parallel()
+
+	planned, err := lifecycle.Plan(recordSchema(), nil, config(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		base schema.Values
+		got  schema.Values
+		want schema.Values
+	}{
+		{
+			name: "update that returned only the id keeps the prior state",
+			base: state(), got: schema.Values{"id": str("r1")}, want: state(),
+		},
+		{name: "update that returned nothing keeps the prior state", base: state(), got: nil, want: state()},
+		{
+			name: "update keeps what it returned",
+			base: state(), got: schema.Values{"id": str("r1"), "value": str("10.0.0.2"), "version": str("2")},
+			want: func() schema.Values {
+				w := state()
+				w["value"], w["version"] = str("10.0.0.2"), str("2")
+
+				return w
+			}(),
+		},
+		{
+			name: "create takes the known planned values, and null for the unknown ones",
+			base: planned.Planned, got: schema.Values{"id": str("r2")},
+			want: schema.Values{
+				"id": str("r2"), "zone": str("example.org"), "value": str("10.0.0.1"),
+				"ttl": schema.NullOf(schema.String()), "token": schema.NullOf(schema.String()),
+				"fqdn": schema.NullOf(schema.String()), "created_at": schema.NullOf(schema.String()),
+				"version": schema.NullOf(schema.String()),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := lifecycle.Partial(recordSchema(), tt.base, tt.got)
+			if !maps.EqualFunc(got, tt.want, schema.Value.Equal) {
+				t.Fatalf("Partial() = %v, want %v", got, tt.want)
+			}
+
+			change, err := lifecycle.Plan(recordSchema(), got, config(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if change.Action == lifecycle.ActionReplace || change.Action == lifecycle.ActionCreate {
+				t.Fatalf("Plan() after a failed apply = %v, want no new object", change.Action)
+			}
+		})
+	}
+}
+
 func TestPlanRefusesInvalidConfig(t *testing.T) {
 	t.Parallel()
 

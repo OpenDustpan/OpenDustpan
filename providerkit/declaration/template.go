@@ -173,8 +173,13 @@ func (t Template) Expand(lookup func(Ref) (string, error)) (string, error) {
 // holds when the first value is empty and a later value or literal gives the
 // "-", as in "{a}{b}" or "{a}-x". A literal "-" at the start of the
 // declaration, as in "--name={name}", is the author's own option and is
-// allowed.
+// allowed. A reference in the name of such an option, as in "--{name}" or
+// "-{name}", is ErrInvalid: Validate refuses it, see OptionNameRef.
 func (t Template) ExpandArg(lookup func(Ref) (string, error)) (string, error) {
+	if ref, ok := t.OptionNameRef(); ok {
+		return "", fmt.Errorf("%w: %s is in the name of an option", ErrInvalid, ref)
+	}
+
 	arg, err := t.Expand(lookup)
 	if err != nil {
 		return "", err
@@ -185,4 +190,27 @@ func (t Template) ExpandArg(lookup func(Ref) (string, error)) (string, error) {
 	}
 
 	return arg, nil
+}
+
+// OptionNameRef returns the first reference and true when the template starts
+// with a literal "-" and the reference comes before the first "=". The value
+// would then be a part of the option name: "--{name}" with the value
+// "output=/etc/cron.d/x" gives the option "--output=/etc/cron.d/x". In
+// "--name={name}" the reference comes after the "=", so it is only the value.
+func (t Template) OptionNameRef() (Ref, bool) {
+	if len(t) == 0 || t[0].Ref.Kind != RefNone || !strings.HasPrefix(t[0].Literal, "-") {
+		return Ref{Kind: RefNone, Name: ""}, false
+	}
+
+	for _, p := range t {
+		if p.Ref.Kind != RefNone {
+			return p.Ref, true
+		}
+
+		if strings.Contains(p.Literal, "=") {
+			break
+		}
+	}
+
+	return Ref{Kind: RefNone, Name: ""}, false
 }

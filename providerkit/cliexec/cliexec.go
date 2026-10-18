@@ -25,19 +25,19 @@ var (
 	// ErrTimeout reports a command that ran longer than its timeout. The
 	// adapter stopped its whole process group.
 	ErrTimeout = errors.New("command timed out")
-	// ErrTooLarge reports an output larger than the limit of the runner. The
+	// ErrTooLarge reports an output larger than the limit of the starter. The
 	// adapter stopped the process group.
 	ErrTooLarge = errors.New("command output too large")
 )
 
 // Command is one run of a program.
 type Command struct {
-	// Program is a bare name that the runner finds on its PATH, or a clean
+	// Program is a bare name that the starter finds on its PATH, or a clean
 	// absolute path.
 	Program string
 	// Args are the arguments after the program, one element each.
 	Args []string
-	// Env holds the variables of the program. The runner adds PATH, and
+	// Env holds the variables of the program. The starter adds PATH, and
 	// HOME and TMPDIR in a private directory of the run, and nothing else.
 	Env map[string]string
 	// Stdin is the standard input, or nil for an empty one.
@@ -57,11 +57,12 @@ type Result struct {
 	Stderr []byte
 }
 
-// Runner is the port of the CLI engine.
-type Runner interface {
+// Starter is the command starter: the port of the CLI engine. It starts one
+// command and waits for it.
+type Starter interface {
 	// Run starts the program with the arguments and no shell, waits for it,
 	// and returns its result. A non-zero exit code is a result, not an
-	// error. The program runs in its own process group, and the runner
+	// error. The program runs in its own process group, and the starter
 	// stops the whole group at the timeout, at the output limit and when
 	// ctx ends. Errors: ErrInvalidCommand, ErrTimeout, ErrTooLarge, the
 	// error of ctx, or a failure to start the program, wrapped.
@@ -84,7 +85,7 @@ func ValidProgram(p string) bool {
 }
 
 // ReservedEnv reports whether a command cannot set the variable: PATH, HOME
-// and TMPDIR belong to the runner, and a name that starts with DUSTPAN_
+// and TMPDIR belong to the starter, and a name that starts with DUSTPAN_
 // belongs to the job launcher. A name that is not upper-case letters, digits
 // and underscores is also reserved.
 func ReservedEnv(name string) bool {

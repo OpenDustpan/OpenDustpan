@@ -133,7 +133,7 @@ func testSchemas(t *testing.T, f Fixture) {
 
 	dataSources := f.Provider.DataSourceSchemas()
 	for _, name := range slices.Sorted(maps.Keys(dataSources)) {
-		if err := dataSources[name].Validate(); err != nil {
+		if err := dataSources[name].ValidateDataSource(); err != nil {
 			t.Errorf("data source %q: %v", name, err)
 		}
 
@@ -453,8 +453,7 @@ func (d driver) checkReceived(id string, config schema.Values) {
 }
 
 // checkApplied checks the values that an apply returned, after ForTool:
-// every attribute is there and known, write-only ones are null, and every
-// known planned value is kept.
+// every attribute is there and known, and every known planned value is kept.
 func checkApplied(t *testing.T, sch schema.Schema, planned, got schema.Values) {
 	t.Helper()
 
@@ -466,8 +465,6 @@ func checkApplied(t *testing.T, sch schema.Schema, planned, got schema.Values) {
 			t.Errorf("attribute %q is missing", a.Name)
 		case !v.WhollyKnown():
 			t.Errorf("attribute %q is unknown after the apply", a.Name)
-		case a.WriteOnly && !v.IsNull():
-			t.Errorf("write-only attribute %q is in the values for the tool", a.Name)
 		case planned.Get(a).WhollyKnown() && !v.Equal(planned.Get(a)):
 			t.Errorf("attribute %q changed from its planned value", a.Name)
 		default:

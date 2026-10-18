@@ -15,7 +15,7 @@ import (
 // with an unknown element, is an error. A number becomes an integer field only when it is a
 // whole number in the range of the field: 1.5 or 300 for an int8 would lose
 // a part of the value. A number becomes a float field rounded to the nearest
-// float. Errors: lifecycle.ErrInvalidConfig for a value that the field cannot
+// float of the field. Errors: lifecycle.ErrInvalidConfig for a value that the field cannot
 // hold, or a null required value; ErrInvalidModel for a struct that SchemaOf
 // refuses.
 func Decode[M any](vs schema.Values) (M, error) {
@@ -85,14 +85,7 @@ func decodeValue(v schema.Value, f reflect.Value) error {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return decodeUint(v, f)
 	case reflect.Float32, reflect.Float64:
-		n, _ := v.AsNumber()
-
-		x, _ := n.Float64()
-		if f.OverflowFloat(x) || math.IsInf(x, 0) {
-			return fmt.Errorf("%w: %s is out of the range of %s", lifecycle.ErrInvalidConfig, n, f.Type())
-		}
-
-		f.SetFloat(x)
+		return decodeFloat(v, f)
 	case reflect.Slice:
 		return decodeSlice(v, f)
 	case reflect.Map:
@@ -107,12 +100,35 @@ func decodeValue(v schema.Value, f reflect.Value) error {
 	return nil
 }
 
+// decodeFloat rounds the number to the nearest value of the float field f.
+// A float32 field rounds once, from the number, not through a float64.
+func decodeFloat(v schema.Value, f reflect.Value) error {
+	n, _ := v.AsNumber()
+
+	var x float64
+	if f.Kind() == reflect.Float32 {
+		x32, _ := n.Float32()
+		x = float64(x32)
+	} else {
+		x, _ = n.Float64()
+	}
+
+	if math.IsInf(x, 0) || f.OverflowFloat(x) {
+		return fmt.Errorf("%w: %s is out of the range of %s", lifecycle.ErrInvalidConfig, n.Text('g', -1), f.Type())
+	}
+
+	f.SetFloat(x)
+
+	return nil
+}
+
 func decodeInt(v schema.Value, f reflect.Value) error {
 	n, _ := v.AsNumber()
 
 	i, acc := n.Int64()
 	if !n.IsInt() || acc != big.Exact || f.OverflowInt(i) {
-		return fmt.Errorf("%w: %s is not a whole number in the range of %s", lifecycle.ErrInvalidConfig, n, f.Type())
+		return fmt.Errorf("%w: %s is not a whole number in the range of %s",
+			lifecycle.ErrInvalidConfig, n.Text('g', -1), f.Type())
 	}
 
 	f.SetInt(i)
@@ -125,7 +141,8 @@ func decodeUint(v schema.Value, f reflect.Value) error {
 
 	u, acc := n.Uint64()
 	if !n.IsInt() || acc != big.Exact || f.OverflowUint(u) {
-		return fmt.Errorf("%w: %s is not a whole number in the range of %s", lifecycle.ErrInvalidConfig, n, f.Type())
+		return fmt.Errorf("%w: %s is not a whole number in the range of %s",
+			lifecycle.ErrInvalidConfig, n.Text('g', -1), f.Type())
 	}
 
 	f.SetUint(u)
@@ -223,12 +240,12 @@ func encodeValue(t schema.Type, f reflect.Value) (schema.Value, error) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return schema.NumberValue(new(big.Float).SetUint64(f.Uint())), nil
 	case reflect.Float32, reflect.Float64:
-		x := f.Float()
-		if math.IsNaN(x) || math.IsInf(x, 0) {
-			return schema.NullOf(t), fmt.Errorf("%w: %v is not a number value", ErrInvalidModel, x)
+		v, ok := schema.FloatValue(f.Float(), f.Type().Bits())
+		if !ok {
+			return schema.NullOf(t), fmt.Errorf("%w: %v is not a number value", ErrInvalidModel, f.Float())
 		}
 
-		return schema.NumberValue(big.NewFloat(x)), nil
+		return v, nil
 	case reflect.Slice:
 		return encodeSlice(t, f)
 	case reflect.Map:

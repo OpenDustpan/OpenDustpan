@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"strconv"
 	"testing"
 
 	"opendustpan.org/providerkit/schema"
@@ -27,6 +28,9 @@ func TestValidateResource(t *testing.T) {
 	replaceComputed := attr("zone", schema.String(), schema.ModeComputed)
 	replaceComputed.Replace = true
 
+	replaceID := attr("id", schema.String(), schema.ModeRequired)
+	replaceID.Replace = true
+
 	sensitiveID := id
 	sensitiveID.Sensitive = true
 
@@ -49,7 +53,18 @@ func TestValidateResource(t *testing.T) {
 			attrs: []schema.Attribute{id, attr("name", schema.String(), schema.ModeRequired)},
 			ok:    true,
 		},
-		{name: "required id", attrs: []schema.Attribute{attr("id", schema.String(), schema.ModeRequired)}, ok: true},
+		{name: "required id with replace", attrs: []schema.Attribute{replaceID}, ok: true},
+		{
+			name:  "required id without replace",
+			attrs: []schema.Attribute{attr("id", schema.String(), schema.ModeRequired)},
+			ok:    false,
+		},
+		{name: "optional id", attrs: []schema.Attribute{attr("id", schema.String(), schema.ModeOptional)}, ok: false},
+		{
+			name:  "optional computed id",
+			attrs: []schema.Attribute{attr("id", schema.String(), schema.ModeOptionalComputed)},
+			ok:    false,
+		},
 		{name: "no id", attrs: []schema.Attribute{attr("name", schema.String(), schema.ModeRequired)}, ok: false},
 		{name: "numeric id", attrs: []schema.Attribute{attr("id", schema.Number(), schema.ModeComputed)}, ok: false},
 		{name: "sensitive id", attrs: []schema.Attribute{sensitiveID}, ok: false},
@@ -207,5 +222,71 @@ func TestNumberPrecision(t *testing.T) {
 
 	if !schema.IntValue(math.MaxInt64).Equal(schema.NumberValue(new(big.Float).SetInt64(math.MaxInt64))) {
 		t.Fatal("IntValue and NumberValue of one int64 are not equal")
+	}
+
+	high, _, err := new(big.Float).SetPrec(2048).Parse("0.1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	low, _, err := new(big.Float).SetPrec(schema.NumberPrecision).Parse("0.1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !schema.NumberValue(high).Equal(schema.NumberValue(low)) {
+		t.Fatal("NumberValue of 0.1 at 2048 bits and at 512 bits are not equal, want one rounding rule")
+	}
+}
+
+func TestFloatValue(t *testing.T) {
+	t.Parallel()
+
+	decimal := func(s string) schema.Value {
+		n, _, err := new(big.Float).SetPrec(schema.NumberPrecision).Parse(s, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return schema.NumberValue(n)
+	}
+
+	tests := []struct {
+		name string
+		x    float64
+		bits int
+		want string
+	}{
+		{name: "float64 0.1", x: 0.1, bits: 64, want: "0.1"},
+		{name: "float32 0.1", x: float64(float32(0.1)), bits: 32, want: "0.1"},
+		{name: "float64 1e-300", x: 1e-300, bits: 64, want: "1e-300"},
+		{name: "float64 whole number", x: 3, bits: 64, want: "3"},
+		{
+			name: "float64 largest",
+			x:    math.MaxFloat64,
+			bits: 64,
+			want: strconv.FormatFloat(math.MaxFloat64, 'g', -1, 64),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := schema.FloatValue(tt.x, tt.bits)
+			if !ok || !got.Equal(decimal(tt.want)) {
+				t.Fatalf("FloatValue(%v, %d) = %v, %v, want the decimal %s", tt.x, tt.bits, got, ok, tt.want)
+			}
+		})
+	}
+
+	for _, x := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if _, ok := schema.FloatValue(x, 64); ok {
+			t.Errorf("FloatValue(%v) ok, want false", x)
+		}
+	}
+
+	if _, ok := schema.FloatValue(1, 16); ok {
+		t.Error("FloatValue(1, 16) ok, want false")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"opendustpan.org/providerkit/lifecycle"
@@ -92,6 +93,97 @@ func TestDecodeNumbers(t *testing.T) {
 				t.Fatalf("Decode() error = %v, want ErrInvalidConfig", err)
 			}
 		})
+	}
+}
+
+type wide struct {
+	Signed   *int64   `provider:"signed,optional"`
+	Unsigned *uint64  `provider:"unsigned,optional"`
+	Single   *float32 `provider:"single,optional"`
+	Double   *float64 `provider:"double,optional"`
+}
+
+func TestDecodeWideIntegers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		attr string
+		v    string
+		ok   bool
+	}{
+		{name: "2^53+1 to int64", attr: "signed", v: "9007199254740993", ok: true},
+		{name: "2^63-1 to int64", attr: "signed", v: "9223372036854775807", ok: true},
+		{name: "2^63 to int64", attr: "signed", v: "9223372036854775808", ok: false},
+		{name: "-2^63 to int64", attr: "signed", v: "-9223372036854775808", ok: true},
+		{name: "-2^63-1 to int64", attr: "signed", v: "-9223372036854775809", ok: false},
+		{name: "2^64-1 to int64", attr: "signed", v: "18446744073709551615", ok: false},
+		{name: "2^53+1 to uint64", attr: "unsigned", v: "9007199254740993", ok: true},
+		{name: "2^64-1 to uint64", attr: "unsigned", v: "18446744073709551615", ok: true},
+		{name: "2^64 to uint64", attr: "unsigned", v: "18446744073709551616", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := sdk.Decode[wide](schema.Values{tt.attr: num(tt.v)})
+			if !tt.ok {
+				if !errors.Is(err, lifecycle.ErrInvalidConfig) {
+					t.Fatalf("Decode() error = %v, want ErrInvalidConfig", err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+
+			if text := wideText(got); text != tt.v {
+				t.Fatalf("Decode() = %s, want exactly %s", text, tt.v)
+			}
+		})
+	}
+}
+
+// wideText returns the integer that w holds, in decimal.
+func wideText(w wide) string {
+	switch {
+	case w.Signed != nil:
+		return strconv.FormatInt(*w.Signed, 10)
+	case w.Unsigned != nil:
+		return strconv.FormatUint(*w.Unsigned, 10)
+	default:
+		return ""
+	}
+}
+
+// TestFloatRoundTrip checks that a float from a model equals the decimal of
+// the configuration: else the plan after an apply shows a change.
+func TestFloatRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	single, double := float32(0.1), 0.1
+
+	vs, err := sdk.Encode(wide{Signed: nil, Unsigned: nil, Single: &single, Double: &double})
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+
+	for _, name := range []string{"single", "double"} {
+		if !vs[name].Equal(num("0.1")) {
+			t.Errorf("Encode() of the %s float 0.1 is not equal to the decimal 0.1", name)
+		}
+	}
+
+	got, err := sdk.Decode[wide](schema.Values{"single": num("0.1"), "double": num("0.1")})
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+
+	if got.Single == nil || *got.Single != single || got.Double == nil || *got.Double != double {
+		t.Fatal("Decode() of the decimal 0.1 is not the float 0.1")
 	}
 }
 
@@ -194,37 +286,172 @@ func TestConfigSchemaOf(t *testing.T) {
 func TestSecretFile(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	c := sdk.NewCall(config{Endpoint: "", Token: ""}, nil, dir)
+	dir := filepath.Join(t.TempDir(), "session")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 
-	tests := []string{"t0ken", "", "line one\nline two"}
+	c, err := sdk.NewCall(config{Endpoint: "", Token: ""}, nil, dir)
+	if err != nil {
+		t.Fatalf("NewCall() error = %v", err)
+	}
+
 	seen := map[string]bool{}
 
-	for _, value := range tests {
-		path, err := c.SecretFile(value)
-		if err != nil {
-			t.Fatalf("SecretFile() error = %v", err)
-		}
-
-		if filepath.Dir(path) != dir || seen[path] {
-			t.Fatalf("SecretFile() = %q, want a new file in %q", path, dir)
+	for _, value := range []string{"t0ken", "", "line one\nline two"} {
+		path := checkSecretFile(t, c, dir, value)
+		if seen[path] {
+			t.Fatalf("SecretFile() = %q twice, want a new file", path)
 		}
 
 		seen[path] = true
-
-		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Fatalf("secret file mode = %v, %v, want 0600", info.Mode().Perm(), err)
-		}
-
-		got, err := os.ReadFile(path) //nolint:gosec // A file of this test.
-		if err != nil || string(got) != value {
-			t.Fatalf("secret file holds %q, %v, want the value", got, err)
-		}
 	}
 
-	none := sdk.NewCall(config{Endpoint: "", Token: ""}, nil, "")
-	if _, err := none.SecretFile("x"); !errors.Is(err, sdk.ErrNoSessionDir) {
+	none, err := sdk.NewCall(config{Endpoint: "", Token: ""}, nil, "")
+	if err != nil {
+		t.Fatalf("NewCall() without a directory error = %v", err)
+	}
+
+	if _, _, err := none.SecretFile("x"); !errors.Is(err, sdk.ErrNoSessionDir) {
 		t.Fatalf("SecretFile() without a directory error = %v, want ErrNoSessionDir", err)
 	}
+}
+
+// checkSecretFile writes value with SecretFile, checks the file, and removes
+// it. It returns the path.
+func checkSecretFile(t *testing.T, c sdk.Call[config], dir, value string) string {
+	t.Helper()
+
+	path, remove, err := c.SecretFile(value)
+	if err != nil {
+		t.Fatalf("SecretFile() error = %v", err)
+	}
+
+	if filepath.Dir(path) != dir {
+		t.Fatalf("SecretFile() = %q, want a file in %q", path, dir)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("secret file mode = %v, %v, want 0600", info.Mode().Perm(), err)
+	}
+
+	got, err := os.ReadFile(path) //nolint:gosec // A file of this test.
+	if err != nil || string(got) != value {
+		t.Fatalf("secret file holds %q, %v, want the value", got, err)
+	}
+
+	if err := remove(); err != nil {
+		t.Fatalf("remove() error = %v", err)
+	}
+
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("secret file after remove() = %v, want it gone", err)
+	}
+
+	if err := remove(); err != nil {
+		t.Fatalf("second remove() error = %v, want nil", err)
+	}
+
+	return path
+}
+
+func TestNewCallRefusesOpenDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	//nolint:gosec // The test needs a directory that other users can read.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := sdk.NewCall(config{Endpoint: "", Token: ""}, nil, dir); !errors.Is(err, sdk.ErrSessionDirMode) {
+		t.Fatalf("NewCall() with a directory of mode 0755 error = %v, want ErrSessionDirMode", err)
+	}
+
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := sdk.NewCall(config{Endpoint: "", Token: ""}, nil, file); !errors.Is(err, sdk.ErrSessionDirMode) {
+		t.Fatalf("NewCall() with a file error = %v, want ErrSessionDirMode", err)
+	}
+}
+
+type computedConfig struct {
+	Region *string `provider:"region,computed"`
+}
+
+type numberSecretConfig struct {
+	Pin int `provider:"pin,required,sensitive"`
+}
+
+type writeOnlyResult struct {
+	Name string  `provider:"name,required"`
+	Key  *string `provider:"key,optional,writeonly"`
+}
+
+type stableResult struct {
+	Name    string  `provider:"name,required"`
+	Created *string `provider:"created,computed,stable"`
+}
+
+type replaceInput struct {
+	Name string `provider:"name,required,replace"`
+}
+
+func TestSchemaRulesOfConfigAndDataSources(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		f    func() error
+	}{
+		{name: "computed configuration field", f: func() error {
+			_, err := sdk.ConfigSchemaOf[computedConfig]()
+
+			return err
+		}},
+		{name: "sensitive configuration number", f: func() error {
+			_, err := sdk.ConfigSchemaOf[numberSecretConfig]()
+
+			return err
+		}},
+		{name: "write-only data source field", f: func() error {
+			_, err := sdk.DataSourceSchemaOf[writeOnlyResult]()
+
+			return err
+		}},
+		{name: "stable data source field", f: func() error {
+			_, err := sdk.DataSourceSchemaOf[stableResult]()
+
+			return err
+		}},
+		{name: "replace data source field", f: func() error {
+			_, err := sdk.DataSourceSchemaOf[replaceInput]()
+
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tt.f(); !errors.Is(err, sdk.ErrInvalidModel) {
+				t.Fatalf("error = %v, want ErrInvalidModel", err)
+			}
+		})
+	}
+
+	if _, err := sdk.DataSourceSchemaOf[record](); err != nil {
+		t.Fatalf("DataSourceSchemaOf() of a plain model error = %v", err)
+	}
+
+	_ = computedConfig{Region: nil}
+	_ = numberSecretConfig{Pin: 0}
+	_ = writeOnlyResult{Name: "", Key: nil}
+	_ = stableResult{Name: "", Created: nil}
+	_ = replaceInput{Name: ""}
 }

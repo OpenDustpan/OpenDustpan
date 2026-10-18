@@ -59,7 +59,7 @@ ADR 176 makes one binary that serves both tools under two names.
   build tool. It needs no service of OpenDustpan.
 - A team that already runs a private provider registry or a network mirror
   for OpenTofu puts the archives there. A team with neither uses a
-  filesystem mirror in its runner image.
+  filesystem mirror in the image of the team that its runner jobs use.
 - Teams that use both tools release both archive sets from one build.
 
 ## Open questions
@@ -67,8 +67,8 @@ ADR 176 makes one binary that serves both tools under two names.
 - Signing. OpenTofu checks a signature of the checksums file when a registry
   gives a signing key. Signing in Go needs an OpenPGP library, for example
   `github.com/ProtonMail/go-crypto` (BSD-3-Clause), which is a new
-  dependency. The other way is to call `gpg` in the CI of the team. The project
-  owner decides.
+  dependency. The other way is to call `gpg` in the CI of the team. The
+  project owner decides.
 - Whether OpenDustpan serves the provider registry protocol of OpenTofu and
   a plugin download URL for the Pulumi CLI, for the providers that teams
   build. RFC 10 (artifact registry) is the place for that question.

@@ -20,15 +20,11 @@ The types are in the package `sdk` of `opendustpan/providerkit`.
    provider configuration and for each resource and data source. A tag
    maps a field to an attribute:
 
-   ```go
-   type Override struct {
-   	ID        *string `provider:"id,computed"`
-   	Schedule  string  `provider:"schedule,required,replace"`
-   	Person    string  `provider:"person,required"`
-   	Token     *string `provider:"token,optional,sensitive,writeonly"`
-   	CreatedAt *string `provider:"created_at,computed,stable"`
-   }
-   ```
+   ```go type Override struct { ID        *string `provider:"id,computed"`
+   Schedule  string  `provider:"schedule,required,replace"` Person    string
+   `provider:"person,required"` Token     *string
+   `provider:"token,optional,sensitive,writeonly"` CreatedAt *string
+   `provider:"created_at,computed,stable"` } ```
 
    The tag is `name,option,...`. The options are one mode (`required`,
    `optional`, `computed`, or `optional,computed`) and any of `sensitive`,
@@ -50,9 +46,16 @@ The types are in the package `sdk` of `opendustpan/providerkit`.
      values of the core and the struct. A number becomes an integer field
      only when it is a whole number in the range of the field. Any other
      number, for example 1.5 or 300 for an `int8`, is `ErrInvalidConfig`,
-     because a conversion would lose a part of it. A number becomes a float
-     field rounded to the nearest float. A number of the core has a fixed
-     precision of 512 bits (`schema.NumberPrecision`).
+     because a conversion would lose a part of it. An `int64` or a
+     `uint64` never goes through a `float64`, so 2^53 + 1 stays exact. A
+     number becomes a float field rounded once to the nearest float of the
+     field. A number of the core has a fixed precision of 512 bits
+     (`schema.NumberPrecision`).
+   - **Floats are decimals.** `Encode` gives a float field as the shortest
+     decimal that reads back as the same float (`schema.FloatValue`). The
+     `float64` 0.1 then gives the decimal 0.1 of the configuration, not the
+     binary value nearest to it, so the plan after an apply shows no
+     change.
 3. **One function for each operation.** `sdk.Resource[C, M]` has `Create`,
    `Read`, `Update` and `Delete`, each on the model struct `M`.
    `sdk.DataSource[C, M]` has `Read`. A nil `Update` means that each field
@@ -65,19 +68,28 @@ The types are in the package `sdk` of `opendustpan/providerkit`.
      diff.
    - Each sensitive configuration field gets the file form (ADR 175), from
      the same function as a declared provider (`sdk.ConfigSchemaOf`, which
-     calls `lifecycle.WithFileForms`).
-5. **Commands through the same runner.** `sdk.Call` gives each operation the
-   configuration and a `cliexec.Runner`. An SDK provider starts its tool by
-   the rules of the CLI engine: an argument list, no shell, a private
-   environment, and process groups (ADR 174).
-   - The runner does not check arguments or variables for secrets. The
-     declaration rules of ADR 171 decision 9 do not reach Go code, so the
-     author keeps a secret out of arguments and variables.
+     calls `lifecycle.WithFileForms`). As in a declaration, each
+     configuration field is required or optional, and each sensitive one is
+     a string (ADR 171 decision 7).
+   - A data source model has no `writeonly`, `replace` or `stable` field
+     (`sdk.DataSourceSchemaOf`, ADR 171 decision 7).
+5. **Commands through the same command starter.** `sdk.Call` gives each
+   operation the configuration and a command starter (`cliexec.Starter`).
+   An SDK provider starts its tool by the rules of the CLI engine: an
+   argument list, no shell, a private environment, and process groups (ADR
+   174).
+   - The command starter does not check arguments or variables for
+     secrets. The declaration rules of ADR 171 decision 9 do not reach Go
+     code, so the author keeps a secret out of arguments and variables.
    - `Call.SecretFile` writes a secret to a new file of mode 0600 in the
-     private directory of the session, and returns the path. The operation
-     gives the path to its tool, for example as `--token-file=<path>`. The
-     session deletes the directory when it closes (ADR 175 decision 9). The
+     provider session directory, and returns the path and a function that
+     deletes the file. The operation gives the path to its tool, for
+     example as `--token-file=<path>`, and calls the function when the
+     program has ended. The provider session also deletes the directory
+     with each file left in it when it closes (ADR 175 decision 9). The
      other way is the standard input of the command.
+   - `sdk.NewCall` refuses a provider session directory that is not a
+     directory of mode 0700 (`sdk.ErrSessionDirMode`).
 6. **Serving.** The SDK turns a `sdk.Provider[C]` into a
    `lifecycle.Provider`, and serves it through both protocol adapters (ADR
    176). The `main` function of the author calls one serve function, which
@@ -87,8 +99,7 @@ The types are in the package `sdk` of `opendustpan/providerkit`.
    a declared one (ADR 177).
 8. **Versions of the SDK.** The SDK has the version of the `providerkit`
    module. Until `v1.0.0` of `opendustpan/providerkit`, a minor version can
-   break the SDK. The
-   release notes name each break, and the migration.
+   break the SDK. The release notes name each break, and the migration.
 
 ## Consequences
 

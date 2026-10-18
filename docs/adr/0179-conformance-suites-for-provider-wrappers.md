@@ -19,13 +19,14 @@ port (ADR 173) and the CLI execution port (ADR 174).
    `lifecycletest.Run` with a fixture: the provider, its configuration, and
    for each type the configuration of one object. The suite drives each
    resource type through the core port and the shared planner:
-   - The schemas are valid, and each type has a case in the fixture.
+   - The schemas are valid, and each type has a case in the fixture. A
+     data source schema also meets `schema.ValidateDataSource`.
    - Each sensitive configuration attribute has its file form (ADR 175
      decision 2). The provider configures with the file form of each secret
      of the fixture, and refuses a secret together with its file form.
    - Create returns an ID, every attribute, no unknown value, and the known
-     planned values unchanged. `lifecycle.ForTool` then makes each
-     write-only value null.
+     planned values unchanged, after `lifecycle.ForTool`. The suite keeps
+     only what `ForTool` gives as state, as an adapter does.
    - When the fixture gives `Received`, each write-only value of the
      configuration reached the fake of the remote system, in create and in
      update.
@@ -40,23 +41,30 @@ port (ADR 173) and the CLI execution port (ADR 174).
    - Read after delete is `ErrNotFound`, an import of the deleted ID is
      `ErrNotFound`, and a second delete returns nil.
    - A second object of the type goes through create, read and delete at
-     the same time as the first, through one session (ADR 172 decision 11).
+     the same time as the first, through one provider session (ADR 172
+     decision 11).
    - A data source returns known values, and two reads agree. When the
      fixture gives `NotFound`, a read of that configuration is
      `ErrNotFound`.
+   - The suite tests itself: it passes an in-memory provider, and it fails
+     two faulty ones, in a child process, with the message of the step that
+     must find the fault. One keeps another value than the planned one,
+     which the no-op plan after create finds. One does not send the
+     write-only value, which the `Received` step finds.
 2. **`httpexectest` for callers.** An HTTP caller adapter runs the suite
-   against local servers (ADR 173). It also checks that the caller refuses
-   a request to another origin and gives it no credential (ADR 173
-   decision 13).
-   The suite tests itself against a small reference caller on `net/http`.
-3. **`cliexectest` for runners.** A runner adapter runs the suite with a
-   helper program (ADR 174). The test binary of the adapter is the helper:
-   its `TestMain` calls `cliexectest.RunHelper` first. In the mode `spawn`,
-   the helper starts a grandchild that sleeps and writes its process ID to
-   a file. After `ErrTimeout`, the suite checks that the grandchild no
-   longer runs, so a runner that stops only its child fails. The suite also checks a
+   against local servers (ADR 173). It also checks that the caller refuses a
+   request to another origin and gives it no credential (ADR 173 decision
+   13). The suite tests itself against a small reference caller on
+   `net/http`.
+3. **`cliexectest` for command starters.** A command starter adapter
+   (`cliexec.Starter`) runs the suite with a helper program (ADR 174). The
+   test binary of the adapter is the helper: its `TestMain` calls
+   `cliexectest.RunHelper` first. In the mode `spawn`, the helper starts a
+   grandchild that sleeps and writes its process ID to a file. After
+   `ErrTimeout`, the suite checks that the grandchild no longer runs, so a
+   command starter that stops only its child fails. The suite also checks a
    canceled context, and standard error over the limit. The suite tests
-   itself against a small reference runner on `os/exec`.
+   itself against a small reference command starter on `os/exec`.
 4. **Declared providers run the provider suite too.** The HTTP engine runs
    `lifecycletest` against each example declaration with a fake API on a
    local server. The CLI engine does the same with a fake command. A team

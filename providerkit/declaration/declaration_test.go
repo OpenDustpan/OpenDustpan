@@ -179,6 +179,32 @@ func TestValidateHTTP(t *testing.T) {
 			delete(d.Resources[0].Create.Request.Response, "address")
 			delete(d.Resources[0].Read.Request.Response, "address")
 		}},
+		{name: "read gives no computed attribute, which an import needs", change: func(d *declaration.Document) {
+			delete(d.Resources[0].Read.Request.Response, "address")
+		}},
+		{name: "update and read give no optional computed attribute", change: func(d *declaration.Document) {
+			addTTL(d, false)
+		}},
+		{name: "delete references a write-only attribute", change: func(d *declaration.Document) {
+			addAttribute(d, declaration.Attribute{
+				Name: "key", Type: "string", Mode: "optional",
+				Sensitive: false, WriteOnly: true, Replace: false, Stable: false, Description: "",
+			})
+			d.Resources[0].Create.Request.Body["/key"] = "{key}"
+			d.Resources[0].Delete.Request.Query = map[string]string{"key": "{key}"}
+		}},
+		{name: "write-only data source attribute", change: func(d *declaration.Document) {
+			d.DataSources[0].Attributes[0].WriteOnly = true
+		}},
+		{name: "data source attribute with replace", change: func(d *declaration.Document) {
+			d.DataSources[0].Attributes[0].Replace = true
+		}},
+		{name: "stable data source attribute", change: func(d *declaration.Document) {
+			d.DataSources[0].Attributes[1].Stable = true
+		}},
+		{name: "required id without replace", change: func(d *declaration.Document) {
+			d.Resources[0].Attributes[0].Mode = "required"
+		}},
 		{name: "stable on a required attribute", change: func(d *declaration.Document) {
 			d.Resources[0].Attributes[1].Stable = true
 		}},
@@ -211,6 +237,22 @@ func oauth2(tokenURL string) declaration.Auth {
 	}
 }
 
+// addAttribute adds the attribute a to the resource of the IPAM example.
+func addAttribute(d *declaration.Document, a declaration.Attribute) {
+	d.Resources[0].Attributes = append(d.Resources[0].Attributes, a)
+}
+
+// addTTL adds an optional computed "ttl" to the resource of the IPAM example,
+// which create gives and read does not.
+func addTTL(d *declaration.Document, stable bool) {
+	addAttribute(d, declaration.Attribute{
+		Name: "ttl", Type: "number", Mode: "optionalComputed",
+		Sensitive: false, WriteOnly: false, Replace: false, Stable: stable, Description: "",
+	})
+	d.Resources[0].Create.Request.Body["/ttl"] = "{ttl}"
+	d.Resources[0].Create.Request.Response["ttl"] = "/ttl"
+}
+
 // TestValidateAccepts changes one thing in the IPAM example and expects no
 // error.
 func TestValidateAccepts(t *testing.T) {
@@ -234,6 +276,13 @@ func TestValidateAccepts(t *testing.T) {
 		}},
 		{name: "computed attribute that only read gives", change: func(d *declaration.Document) {
 			delete(d.Resources[0].Create.Request.Response, "address")
+		}},
+		{name: "stable optional computed attribute that update does not give", change: func(d *declaration.Document) {
+			addTTL(d, true)
+		}},
+		{name: "optional computed attribute that update gives", change: func(d *declaration.Document) {
+			addTTL(d, false)
+			d.Resources[0].Update.Request.Response["ttl"] = "/ttl"
 		}},
 		{name: "secret whose file form has 64 characters", change: func(d *declaration.Document) {
 			d.Provider.Config[1].Name = strings.Repeat("t", 59)
@@ -425,6 +474,12 @@ func TestValidateCLI(t *testing.T) {
 		{name: "read argument references more than the id", change: func(d *declaration.Document) {
 			d.Resources[0].Read.Command.Args = []string{"override", "show", "{id}", "--schedule={schedule}"}
 		}},
+		{name: "reference in the name of a long option", change: func(d *declaration.Document) {
+			d.Resources[0].Create.Command.Args = append(d.Resources[0].Create.Command.Args, "--{schedule}")
+		}},
+		{name: "reference in the name of a short option", change: func(d *declaration.Document) {
+			d.Resources[0].Create.Command.Args = append(d.Resources[0].Create.Command.Args, "-{schedule}")
+		}},
 		{name: "read input references more than the id", change: func(d *declaration.Document) {
 			d.Resources[0].Read.Command.Stdin = map[string]string{"/person": "{person}"}
 		}},
@@ -531,6 +586,10 @@ func TestExpandArg(t *testing.T) {
 		{arg: "{empty}{team}", want: "ops", err: nil},
 		{arg: "{empty}", want: "", err: nil},
 		{arg: "{team}{name}", want: "ops-rf", err: nil},
+		{arg: "--{team}", want: "", err: declaration.ErrInvalid},
+		{arg: "-{team}", want: "", err: declaration.ErrInvalid},
+		{arg: "--x{team}=y", want: "", err: declaration.ErrInvalid},
+		{arg: "--x=y{team}", want: "--x=yops", err: nil},
 	}
 
 	for _, tt := range tests {

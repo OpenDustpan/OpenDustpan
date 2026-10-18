@@ -102,8 +102,8 @@ type Resource interface {
 	// When the remote system made the object and a later step failed, for
 	// example a second call or a read, Create returns the values that it
 	// has, with at least the id, together with the error. The adapter
-	// keeps that object in state (see Created), so that it is not
-	// orphaned. Errors: ErrRejected, ErrUnavailable.
+	// keeps that object in state (see Created and Partial), so that it is
+	// not orphaned. Errors: ErrRejected, ErrUnavailable.
 	Create(ctx context.Context, planned schema.Values) (schema.Values, error)
 	// Read returns the current values of the object. Prior holds at least
 	// the id. An import calls Read with only the id. Errors: ErrNotFound,
@@ -113,7 +113,8 @@ type Resource interface {
 	// no changed attribute forces a replace. Planned holds the write-only
 	// values, as for Create. When the change was partly applied, Update
 	// returns the values that the object now has, with at least the id,
-	// together with the error, as Create does. Errors: ErrNotFound,
+	// together with the error. The adapter keeps Partial of them, and of
+	// prior when they are nil, in state. Errors: ErrNotFound,
 	// ErrRejected, ErrUnavailable.
 	Update(ctx context.Context, prior, planned schema.Values) (schema.Values, error)
 	// Delete removes the object. It returns nil when the object is already
@@ -122,21 +123,55 @@ type Resource interface {
 	Delete(ctx context.Context, prior schema.Values) error
 }
 
-// Created reports whether a Create or an Update that returned an error left
-// an object: got holds a known id that is not empty. The adapter then gives
-// its tool got, passed through ForTool, together with the error:
-//   - The OpenTofu adapter returns got as the new state with the error.
-//     OpenTofu keeps an object of a failed create as tainted and replaces it
-//     in the next apply. After a failed update it keeps got.
-//   - The Pulumi adapter returns a partial failure with the id and got. The
-//     Pulumi CLI keeps the object in state and applies the configuration
-//     again in the next update.
+// Created reports whether a Create that returned an error left an object:
+// got holds a known id that is not empty. The adapter then gives its tool
+// Partial(s, Change.Planned, got) together with the error:
+//   - The OpenTofu adapter returns those values as the new state with the
+//     error. OpenTofu keeps an object of a failed create as tainted and
+//     replaces it in the next apply.
+//   - The Pulumi adapter returns a partial failure with the id and those
+//     values. The Pulumi CLI keeps the object in state and applies the
+//     configuration again in the next update.
 //
-// Without an id, the adapter reports the error alone, as for any failure.
+// Without an id, a failed Create made no object that the adapter can name,
+// and the adapter reports the error alone.
+//
+// A failed Update always has an object: the adapter gives its tool
+// Partial(s, prior, got) with the error, also when got is nil or has no id.
+// It never gives null for a failed update, because OpenTofu then removes
+// the object from state, and the next plan creates a second object.
 func Created(got schema.Values) bool {
 	id, ok := got[schema.IDAttribute].AsString()
 
 	return ok && id != ""
+}
+
+// Partial returns the values that an adapter gives its tool after a failed
+// Create or Update: got, with each attribute that got leaves null or missing
+// taken from base, and passed through ForTool. Base is the prior state for
+// an Update, and Change.Planned for a Create. An unknown value of base gives
+// null.
+//
+// Without it, a failed update that returns only the id would give the tool
+// null for every other attribute. The next plan would then show a change of
+// each required attribute, and a replace when one of them forces a replace.
+func Partial(s schema.Schema, base, got schema.Values) schema.Values {
+	out := make(schema.Values, len(s.Attributes))
+
+	for _, a := range s.Attributes {
+		v, ok := got[a.Name]
+		if !ok || v.IsNull() || !v.WhollyKnown() {
+			v = base.Get(a)
+		}
+
+		if !v.WhollyKnown() {
+			v = schema.NullOf(a.Type)
+		}
+
+		out[a.Name] = v
+	}
+
+	return ForTool(s, out)
 }
 
 // DataSource reads values from the remote system. A fact, for example the

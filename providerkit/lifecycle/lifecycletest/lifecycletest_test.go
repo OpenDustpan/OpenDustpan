@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,7 +20,62 @@ import (
 func TestSuiteAgainstMemoryProvider(t *testing.T) {
 	t.Parallel()
 
-	n := newNotes(t)
+	runSuite(t, newNotes(t, ""))
+}
+
+// faultEnv names the fault of the provider that TestFaultyProvider runs the
+// suite against, in a child process of TestSuiteFindsFaults.
+const faultEnv = "LIFECYCLETEST_FAULT"
+
+// TestSuiteFindsFaults runs the suite against a provider with one fault, in
+// a child process, and checks that the suite fails with the message of the
+// step that finds the fault.
+func TestSuiteFindsFaults(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		fault string
+		want  string
+	}{
+		{fault: "text", want: "want no-op: the provider does not keep what it applied"},
+		{fault: "key", want: `the remote system did not get the write-only attribute "key"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.fault, func(t *testing.T) {
+			t.Parallel()
+
+			//nolint:gosec // The test binary itself, with fixed arguments.
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestFaultyProvider$", "-test.v")
+			cmd.Env = append(os.Environ(), faultEnv+"="+tt.fault)
+
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("the suite passed a provider with the fault %q, want a failure", tt.fault)
+			}
+
+			if !strings.Contains(string(out), tt.want) {
+				t.Fatalf("the suite output does not have %q:\n%s", tt.want, out)
+			}
+		})
+	}
+}
+
+// TestFaultyProvider runs the suite against a provider with the fault that
+// faultEnv names. It runs only as a child process of TestSuiteFindsFaults.
+func TestFaultyProvider(t *testing.T) {
+	t.Parallel()
+
+	fault := os.Getenv(faultEnv)
+	if fault == "" {
+		t.Skip("runs only in a child process of TestSuiteFindsFaults")
+	}
+
+	runSuite(t, newNotes(t, fault))
+}
+
+func runSuite(t *testing.T, n *notes) {
+	t.Helper()
 
 	lifecycletest.Run(t, lifecycletest.Fixture{
 		Provider: n,
@@ -50,7 +108,10 @@ func attr(name string, mode schema.Mode) schema.Attribute {
 // notes is a provider with one resource type, "note", and one data source
 // type, "owner". It keeps notes in a map. The write-only key of a note goes
 // to the map of received values, and never back into the values of a note.
+// A fault makes it break the contract: "text" keeps another text than the
+// planned one, and "key" does not send the write-only key.
 type notes struct {
+	fault  string
 	config schema.Schema
 	mu     sync.Mutex
 	next   int
@@ -58,7 +119,7 @@ type notes struct {
 	got    map[string]schema.Values
 }
 
-func newNotes(t *testing.T) *notes {
+func newNotes(t *testing.T, fault string) *notes {
 	t.Helper()
 
 	config, err := lifecycle.WithFileForms(baseConfig())
@@ -67,7 +128,12 @@ func newNotes(t *testing.T) *notes {
 	}
 
 	return &notes{
-		config: config, mu: sync.Mutex{}, next: 0, notes: map[string]schema.Values{}, got: map[string]schema.Values{},
+		fault:  fault,
+		config: config,
+		mu:     sync.Mutex{},
+		next:   0,
+		notes:  map[string]schema.Values{},
+		got:    map[string]schema.Values{},
 	}
 }
 
@@ -113,7 +179,7 @@ func (n *notes) Configure(_ context.Context, config schema.Values) (lifecycle.Se
 		return none, fmt.Errorf("configure notes: %w", err)
 	}
 
-	if err := lifecycle.CheckFileForms(baseConfig(), config); err != nil {
+	if err := lifecycle.CheckFileForms(baseConfig(), config, func(string) bool { return false }); err != nil {
 		return none, fmt.Errorf("configure notes: %w", err)
 	}
 
@@ -132,6 +198,10 @@ func (n *notes) Create(_ context.Context, planned schema.Values) (schema.Values,
 	id := fmt.Sprintf("n%d", n.next)
 	planned = maps.Clone(planned)
 	planned["created"] = str(fmt.Sprintf("t%d", n.next))
+
+	if n.fault == "text" {
+		planned["text"] = str(mustString(planned["text"]) + " (edited)")
+	}
 
 	return n.store(id, planned, 1), nil
 }
@@ -201,6 +271,9 @@ func (n *notes) received(id string) schema.Values {
 // goes only to the received values.
 func (n *notes) store(id string, planned schema.Values, r int) schema.Values {
 	n.got[id] = maps.Clone(planned)
+	if n.fault == "key" {
+		n.got[id]["key"] = schema.NullOf(schema.String())
+	}
 
 	note := maps.Clone(planned)
 	note["id"] = str(id)

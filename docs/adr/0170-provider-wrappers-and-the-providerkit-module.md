@@ -7,8 +7,10 @@ Status: accepted · 2026-10-18 · ADRs 171 to 179 give the parts
 Units often need facts from systems that no IaC tool manages: the person on
 call, a cost center, a free address from an IPAM API. RFC 47 asks if the
 backend finds or scans such things itself, and its first idea is "the backend
-never scans clouds itself". RFC 15 shares outputs between units, but a fact
-from outside comes from no unit.
+never scans clouds itself". ADR 164 applies the same decision of the owner
+to the cloud: a sweep reads the cloud in a job on the team's runner, not in
+the server. RFC 15 shares outputs between units, but a fact from outside
+comes from no unit.
 
 The project owner decided on 17 October 2026 (owner):
 
@@ -33,7 +35,7 @@ The owner left open where the code lives and how one description serves
 both tools. The owner later decided where the code lives (decision 3). ADR
 176 decides how one description serves both tools.
 
-The label "(owner)" names a decision that the text of the owner of 17
+The label "(owner)" names a decision that a text of the owner of 17 or 18
 October 2026 states. The label "(PM, for the project owner)" names a decision
 that the PM made for the project owner. The project owner did not approve the
 other decisions of ADRs 170 to 179 one by one. They are the design of these
@@ -94,7 +96,7 @@ ADRs, and the project owner accepts or refuses them with the pull request.
      httpexec/                the HTTP execution port (ADR 173)
        httpexectest/          conformance suite for a caller
      cliexec/                 the CLI execution port (ADR 174)
-       cliexectest/           conformance suite for a runner
+       cliexectest/           conformance suite for a command starter
      sdk/                     the SDK for authors (ADR 178)
      engine/http/, engine/cli/    later: the two declared engines
      protocol/tofu/, protocol/pulumi/  later: the two adapters (ADR 176)
@@ -117,8 +119,8 @@ ADRs, and the project owner accepts or refuses them with the pull request.
   them.
 - A change to the rule "an argument list, no shell" needs a pull request in
   each repository.
-- RFC 47 keeps its question about scanning. This ADR answers only how facts
-  come in: through providers that a team owns.
+- ADRs 163 to 165 answer RFC 47 in part. This ADR answers only how facts
+  enter a unit.
 - A team that wants a fact from OpenDustpan itself, for example the outputs
   of another unit, still uses RFC 15. A provider wrapper is for systems
   outside OpenDustpan.

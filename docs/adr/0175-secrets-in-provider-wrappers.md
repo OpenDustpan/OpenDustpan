@@ -21,8 +21,14 @@ The two tools keep values in different places:
   also those of the provider resource. It encrypts a value that the schema
   or the program marks as a secret.
 
-ADR 101 and ADR 134 decide that a runner passes credentials as files on a
-memory-backed volume, never in environment variables.
+ADR 101 decision 10, ADR 133 decision 13 and ADR 134 decide that the
+launcher passes credentials to a tool step as files on a memory-backed
+volume, never in environment variables. ADR 133 decision 13 supersedes ADR
+101 decision 10 in part. The launcher writes the files of each step in a new
+directory of that step, and deletes the directory when the step ends (ADR
+134 decision 7). So the path of a credential file differs from step to step:
+the plan phase and the apply phase of a job see different paths. The server
+stores the plan of a plan phase, and the apply phase applies it (ADR 102).
 
 ## Decision
 
@@ -31,31 +37,50 @@ memory-backed volume, never in environment variables.
    credential: each credential field of `auth` must be one reference to a
    sensitive configuration attribute (ADR 171). The built provider holds no
    credential either.
-2. **A file form for each secret.** For each sensitive configuration
-   attribute `token`, a built provider also accepts `token_file`, the path
-   of a file that holds the value. The path goes into a plan, and the
-   credential does not.
+2. **A file form for each secret, for local use.** For each sensitive
+   configuration attribute `token`, a built provider also accepts
+   `token_file`, the path of a file that holds the value. The path goes
+   into a plan, and the credential does not. A saved plan of OpenTofu, and
+   the state of the Pulumi CLI, hold the path, so they depend on it: the
+   apply of a saved plan, and the next update of a Pulumi stack, read the
+   file at the same path. This fits a workstation, where the path stays.
+   It does not fit a runner, where the path changes with each step
+   (decision 3).
    - One function, `lifecycle.WithFileForms`, adds the file forms for a
      declared provider and for an SDK provider. `lifecycle.CheckFileForms`
      checks a configuration. A required sensitive attribute becomes
      optional, and the configuration must set exactly one of `token` and
-     `token_file`. For an optional one, it can set at most one.
+     `token_file`, or neither when the variable of decision 3 names a file.
+     For an optional one, it can set at most one.
    - `WithFileForms` refuses a name whose file form is longer than 64
      characters, so a sensitive name has at most 59 characters. It also
      refuses an attribute whose name is the file form of another one.
    - `lifecycletest` checks the file forms of each provider, and configures
      it with the file form of each secret of the fixture.
-3. **The file form on a runner.** The launcher writes each credential of the
-   profile as a file on its memory-backed volume (ADR 134 decisions 4 and
-   7), and gives the program of the step only the path, in a variable that
-   the profile names. The credential then never passes through OpenTofu or
-   the Pulumi CLI at all:
-   - OpenTofu: the profile sets a variable of the root module, for example
-     `TF_VAR_ipam_token_file`, to the path. The code of the unit passes
-     `var.ipam_token_file` to the `token_file` attribute of the provider.
-   - Pulumi: the profile sets a variable whose name ends in `_FILE`, for
-     example `IPAM_TOKEN_FILE`, to the path. The Pulumi program reads it and
-     passes it to the `tokenFile` input of the provider.
+3. **A fixed variable for each secret, on a runner (PM, for the project
+   owner).** On a runner, the path of a credential file is never in a plan
+   or in state. The provider reads the path from an environment variable
+   with a fixed name, one for each sensitive configuration attribute, not
+   from an attribute:
+   - The name is the provider name, an underscore, the attribute name and
+     `_FILE`, in upper case. For the attribute `token` of the provider
+     `ipam`, it is `IPAM_TOKEN_FILE` (`lifecycle.FileEnv`). The generated
+     documentation of the provider names the variable of each sensitive
+     attribute.
+   - The launcher writes each credential of the profile as a file on its
+     memory-backed volume (ADR 133 decision 12, ADR 134 decision 4 step 2
+     and decision 7). The profile names the variable of the file, as it
+     does for a shared credentials file of a cloud. OpenTofu and the
+     Pulumi CLI start the provider with the environment of the step, so
+     the provider gets the variable. The code of the unit sets neither the
+     credential nor its path.
+   - The provider uses the attribute `token` when the configuration sets
+     it, else `token_file`, else the file that the variable names.
+     `lifecycle.CheckFileForms` accepts a required sensitive attribute that
+     only the variable gives.
+   - The plan and the state hold neither the credential nor the path. So
+     the plan of the plan phase applies in the apply phase, with another
+     path in the variable.
 
    The variable holds a path, not a credential, so this keeps the rule
    that no credential passes through an environment variable.
@@ -84,32 +109,37 @@ memory-backed volume, never in environment variables.
    decision 9). The HTTP engine adds a credential after it logs the request,
    never follows a redirect, and needs HTTPS (ADR 173).
 9. **Files of the CLI engine.** For each `{file:config.name}`, the engine
-   writes the value to a file of mode 0600 in a directory of mode 0700 of
-   the session. It writes it once for each session and deletes it when the
-   session closes. The SDK writes the files of `Call.SecretFile` (ADR 178)
-   in the same directory.
-   - When the user gives the file form, the engine passes that path and
-     writes nothing. On a runner, this is the way to avoid a write to disk:
-     the launcher already wrote the file on its memory-backed volume.
-   - `TMPDIR` on a runner is often on disk. The engine makes the session
-     directory in a memory-backed directory when one exists and is writable
-     by the user, for example `$XDG_RUNTIME_DIR` or `/dev/shm` on Linux.
-     Else it uses `TMPDIR`, and the documentation says that the file form
-     avoids the write.
+   writes the value to a file of mode 0600 in the provider session
+   directory, of mode 0700. A provider session is what `Configure` returns
+   (`lifecycle.Session`, ADR 172). The engine writes the file once for each
+   provider session and deletes it when the provider session closes. The
+   SDK writes the files of `Call.SecretFile` (ADR 178) in the same
+   directory, and the operation deletes each one when its program ends.
+   - When the user gives the file form, or the variable of decision 3
+     names a file, the engine passes that path and writes nothing. On a
+     runner, this is the way to avoid a write to disk: the launcher already
+     wrote the file on its memory-backed volume.
+   - On a runner, `TMPDIR` is in the work directory on disk and
+     `XDG_RUNTIME_DIR` is not set (ADR 134 decision 6). The engine makes
+     the provider session directory in a memory-backed directory when one
+     exists and the user can write to it, for example `$XDG_RUNTIME_DIR` on
+     a workstation or `/dev/shm` on Linux. Else it uses `TMPDIR`, and the
+     documentation says that the variable of decision 3 avoids the write.
    - A process that gets `SIGKILL` cannot delete its files. The name of a
-     session directory holds the process ID of the provider. At its next
-     start, the engine deletes each session directory of the same user
-     whose process no longer runs.
-10. **Masking.** The engines replace each sensitive value with `(sensitive)`
-    in diagnostics, in logs, and in the parts of reply bodies and standard
-    error that they report.
+     provider session directory holds the process ID of the provider. At its
+     next start, the engine deletes each provider session directory of the
+     same user whose process no longer runs.
+10. **Masking.** The engines replace each sensitive value and each
+    write-only value with `(sensitive)` in diagnostics, in logs, and in the
+    parts of reply bodies and standard error that they report. A write-only
+    attribute needs no `sensitive` flag for this.
 
 ## Consequences
 
 - A team on runners keeps its API tokens in an OpenDustpan profile (RFC 5).
-  The launcher writes them as files, and the provider configuration names
-  the paths. The token is in no plan, in no state, and in no environment
-  variable.
+  The launcher writes them as files, and the fixed variables name the
+  paths. The token and its path are in no plan and in no state, and the
+  token is in no environment variable.
 - On a workstation, the file form also keeps a token out of shell history and
   out of `*.tfvars` files.
 - A provider cannot protect a sensitive resource attribute in OpenTofu state
