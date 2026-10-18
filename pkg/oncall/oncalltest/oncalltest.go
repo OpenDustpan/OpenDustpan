@@ -69,6 +69,11 @@ func Run(t *testing.T, newHarness Factory) {
 		{"update to another namespace is ErrInvalid", testUpdateMove},
 		{"handoff notes list newest first", testHandoffs},
 		{"the time of an add is the time of the store", testOverrideTime},
+		{"create with overrides is ErrInvalid", testCreateWithOverrides},
+		{"update keeps the stored overrides", testUpdateKeepsOverrides},
+		{"get gives the overrides in the order of their adds", testOverrideOrder},
+		{"overrides added at one time keep the order of their adds", testConcurrentOverrideOrder},
+		{"handoff notes of another namespace are ErrNotFound", testHandoffScope},
 	}
 
 	for _, tc := range cases {
@@ -371,7 +376,7 @@ func testHandoffs(t *testing.T, h Harness) {
 		t.Fatalf("AddHandoff with no note: err = %v, want ErrInvalid", err)
 	}
 
-	got, err := h.Handoffs.Handoffs(t.Context(), "ocs-1", now(), now().Add(2*time.Hour))
+	got, err := h.Handoffs.Handoffs(t.Context(), shop, "ocs-1", now(), now().Add(2*time.Hour))
 	if err != nil || len(got) != 2 || got[0].Note != "Disk alert on db-2 is known" {
 		t.Fatalf("Handoffs = %+v (%v), want two, newest first", got, err)
 	}
@@ -683,7 +688,7 @@ func checkNoEntryWrite(t *testing.T, h Harness, name string, before oncall.Sched
 		t.Fatalf("%s changed the schedule: version %d, want %d", name, after.Version, before.Version)
 	}
 
-	got, err := h.Handoffs.Handoffs(t.Context(), "ocs-1", now().Add(-time.Hour), now().Add(time.Hour))
+	got, err := h.Handoffs.Handoffs(t.Context(), shop, "ocs-1", now().Add(-time.Hour), now().Add(time.Hour))
 	if err != nil || len(got) != 0 {
 		t.Fatalf("%s: handoffs = %d (%v), want none", name, len(got), err)
 	}
@@ -750,5 +755,37 @@ func testOverrideTime(t *testing.T, h Harness) {
 
 	if got := getNetwork(t, h); len(got.Overrides) != 1 {
 		t.Fatalf("Get = %d overrides, want only the one that did not end", len(got.Overrides))
+	}
+}
+
+// testHandoffScope checks that the notes of a schedule do not show
+// through another namespace: a read that names the schedule ID with
+// another namespace is ErrNotFound, as for an unknown schedule.
+func testHandoffScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h, shop)
+	setup(t, h, platform)
+	create(t, h, fence, sample("ocs-1", shop, "network", "alice", "bob"))
+
+	hd := oncall.Handoff{Schedule: "ocs-1", At: now(), From: "alice", To: "bob", Note: "Quiet", By: "alice"}
+	if err := h.Handoffs.AddHandoff(t.Context(), hd, fence, entry(shop)); err != nil {
+		t.Fatalf("AddHandoff: %v", err)
+	}
+
+	from, to := now().Add(-time.Hour), now().Add(time.Hour)
+
+	if got, err := h.Handoffs.Handoffs(t.Context(), shop, "ocs-1", from, to); err != nil || len(got) != 1 {
+		t.Fatalf("Handoffs of %s = %d (%v), want 1", shop, len(got), err)
+	}
+
+	for _, tc := range []struct {
+		ns namespace.Name
+		id string
+	}{{platform, "ocs-1"}, {shop, "ocs-none"}} {
+		got, err := h.Handoffs.Handoffs(t.Context(), tc.ns, tc.id, from, to)
+		if !errors.Is(err, oncall.ErrNotFound) || len(got) != 0 {
+			t.Fatalf("Handoffs of %s/%s = %d (%v), want ErrNotFound", tc.ns, tc.id, len(got), err)
+		}
 	}
 }

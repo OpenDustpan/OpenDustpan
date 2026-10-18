@@ -34,7 +34,8 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
 
 1. **A schedule is an object of a namespace.** `oncall.Schedule` has an ID
    with the prefix `ocs-`, a name that is unique in its namespace (the form
-   of a namespace name), a time zone and a source:
+   of a namespace name), a time zone and a source. The server makes the
+   ID. A request cannot set it. The sources are:
    - `local`: on-call layers and on-call overrides give the shifts,
    - `external`: a schedule of an external on-call tool gives the shifts,
      through the `oncall.Provider` port.
@@ -70,8 +71,17 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
    one where both cover a time.
 3. **On-call overrides.** An on-call override puts one principal on call
    from a start to an end, over every on-call layer, with a reason, the
-   principal that added it and the time of the add. The last on-call
-   override wins over an earlier one. Two people can add on-call overrides
+   principal that added it and the time of the add. `Store.AddOverride`
+   is the only write of on-call overrides: a create with on-call
+   overrides is `ErrInvalid`, and an update keeps the stored on-call
+   overrides and ignores those of the request. So a caller with
+   `namespace:manage-on-call` and not `namespace:override-on-call` cannot
+   write an on-call override, its creator or its time, and a `PUT` with no
+   on-call overrides does not delete the live ones. `Store.Get` gives the
+   on-call overrides in the order of their adds, by a sequence number that
+   the store gives each add in its transaction. Where two on-call
+   overrides cover one time, the last add wins, also when two adds have
+   the same time. Two people can add on-call overrides
    at one time: `AddOverride` does not check the version of the schedule.
    A schedule holds at most 200 on-call overrides. The time of the add is
    the time of the transaction of the store, never a time from the
@@ -196,6 +206,13 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
     | `POST /api/namespaces/{ns}/on-call/{name}/overrides` | `namespace:override-on-call` | namespace |
     | `POST`, `GET /api/namespaces/{ns}/on-call/{name}/handoffs` | `namespace:override-on-call`, `namespace:read` | namespace |
     | `GET /api/me/on-call` | `caller:read` | caller |
+
+    A route that names a schedule reads it by `{ns}` and its name, and
+    answers 404 when `{ns}` has no schedule of that name, also when
+    another namespace has one. The handoffs route reads the notes with
+    `{ns}` and the schedule ID (`Handoffs.Handoffs`), and the store
+    answers `ErrNotFound` for a schedule of another namespace, so the
+    route answers 404 when the namespace of the row is not `{ns}`.
 
     `namespace:override-on-call` is apart from `namespace:manage-on-call`,
     so a member of a rotation can swap a shift with no right to change the

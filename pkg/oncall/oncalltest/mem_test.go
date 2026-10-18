@@ -78,6 +78,10 @@ func (m *memStore) Create(_ context.Context, s oncall.Schedule, fence namespace.
 		return fmt.Errorf("create %s: %w: only a copy sets the copied shifts", s.ID, oncall.ErrInvalid)
 	}
 
+	if len(s.Overrides) > 0 {
+		return fmt.Errorf("create %s: %w: only an add of an override writes overrides", s.ID, oncall.ErrInvalid)
+	}
+
 	return translate(m.Write(fence, entryIn(e, opsmem.Scope(s.Namespace)), []audit.Entry{e}, func() error {
 		if _, ok := m.schedules[s.ID]; ok {
 			return fmt.Errorf("create %s: %w", s.ID, oncall.ErrExists)
@@ -110,6 +114,9 @@ func (m *memStore) Get(_ context.Context, ref oncall.Ref) (oncall.Schedule, erro
 }
 
 func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.Fence, e audit.Entry) error {
+	// The update keeps the stored overrides, so it ignores those of s,
+	// also for the check of the bounds.
+	s.Overrides = nil
 	if err := s.Validate(); err != nil {
 		return err
 	}
@@ -138,7 +145,7 @@ func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.
 			return fmt.Errorf("update %s: %w", s.Name, oncall.ErrExists)
 		}
 
-		s.Copied, s.Synced = old.Copied, old.Synced
+		s.Copied, s.Synced, s.Overrides = old.Copied, old.Synced, old.Overrides
 		s.Version++
 		m.schedules[s.ID] = s
 
@@ -240,16 +247,30 @@ func (m *memStore) AddHandoff(_ context.Context, h oncall.Handoff, fence namespa
 	}), oncall.ErrNotFound)
 }
 
-func (m *memStore) Handoffs(_ context.Context, schedule string, from, to time.Time) ([]oncall.Handoff, error) {
-	var out []oncall.Handoff
+func (m *memStore) Handoffs(
+	_ context.Context, ns namespace.Name, schedule string, from, to time.Time,
+) ([]oncall.Handoff, error) {
+	var (
+		out   []oncall.Handoff
+		found bool
+	)
 
 	m.Read(func() {
+		s, ok := m.schedules[schedule]
+		if found = ok && s.Namespace == ns; !found {
+			return
+		}
+
 		for _, h := range m.handoffs {
 			if h.Schedule == schedule && !h.At.Before(from) && h.At.Before(to) {
 				out = append(out, h)
 			}
 		}
 	})
+
+	if !found {
+		return nil, fmt.Errorf("handoffs of %s/%s: %w", ns, schedule, oncall.ErrNotFound)
+	}
 
 	slices.SortFunc(out, func(a, b oncall.Handoff) int { return b.At.Compare(a.At) })
 

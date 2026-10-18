@@ -116,6 +116,8 @@ type Layer struct {
 // Override is an on-call override: it puts Principal on call from Start
 // to End, over every layer. CreatedBy is the principal that added it, at
 // CreatedAt. The store sets CreatedAt from the time of its transaction.
+// The overrides of a schedule are in the order of their adds, and the
+// last one that covers a time wins.
 type Override struct {
 	ID        string
 	Principal string
