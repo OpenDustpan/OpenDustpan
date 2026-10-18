@@ -31,7 +31,7 @@ repeated tokens that a person pasted into a prompt.
 
 The research note
 [`docs/research/model-providers.md`](../research/model-providers.md)
-records the request rules of 19 providers, gateways and model servers. It
+records the request rules of 16 providers, gateways and model servers. It
 marks each claim as verified, with its source, or as unverified. These
 rules from the note shaped the design:
 
@@ -53,8 +53,10 @@ rules from the note shaped the design:
   tool calls.
 - Prompt caching is automatic at OpenAI, Gemini, vLLM and llama.cpp, and
   explicit (`cache_control`) at Anthropic and for Anthropic models through
-  OpenRouter and Bedrock. OpenAI routes the cache with
-  `prompt_cache_key`.
+  OpenRouter and Bedrock. OpenAI, DeepInfra, Together and Mistral route
+  the cache with `prompt_cache_key`. OpenRouter routes requests of one
+  conversation to one provider by `session_id` or the header
+  `x-session-id`.
 - OpenCode Go answers 400 to a request with no `x-opencode-session`
   header. Its docs ask for a stable identifier for each conversation, for
   routing and prompt caching. They also ask a client to send its own user
@@ -230,6 +232,8 @@ rules from the note shaped the design:
     stream helps when a gateway or a provider closes an idle connection
     on a long answer. With `stream` on Chat Completions, the adapter sets
     `stream_options.include_usage`, so the last event holds the token use.
+    A provider that refuses that field fails the `transport` check of the
+    probe, and the operator then sets `whole`.
     The adapter ignores SSE comment lines, for example the keep-alive
     lines of OpenRouter. An error event in a stream with the status 200 is
     an error of the call, with the mapping of decision 21.
@@ -545,13 +549,17 @@ rules from the note shaped the design:
       "baseURL": "https://openrouter.ai/api/v1",
       "model": "anthropic/claude-sonnet-5.5",
       "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-..." },
-      "headers": { "X-Title": { "value": "OpenDustpan" } },
-      "outputTokens": { "field": "max_tokens", "max": 16000 },
+      "headers": {
+        "HTTP-Referer": { "value": "https://opendustpan.example.com/" },
+        "X-OpenRouter-Title": { "value": "OpenDustpan" }
+      },
+      "outputTokens": { "field": "max_completion_tokens", "max": 16000 },
       "contextTokens": 200000,
       "tools": { "choice": "auto", "parallel": "omit" },
       "transport": "stream",
       "reasoning": "keep",
       "cache": { "mode": "breakpoints", "ttl": "5m" },
+      "conversationKey": { "headers": ["x-session-id"] },
       "providerFields": {
         "provider": { "only": ["anthropic"], "allow_fallbacks": false, "zdr": true }
       }
