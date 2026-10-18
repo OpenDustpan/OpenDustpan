@@ -213,20 +213,37 @@ links.
      the user of the coordinator owns it.
    - The coordinator writes only regular files, directories, symbolic
      links and hard links. It skips character devices, block devices,
-     FIFOs and each other entry type. It clears the setuid and setgid
-     bits of each file and directory that it writes.
-   - `os.Root` does not refuse to create a symbolic link with an absolute
-     target or a target that leaves the directory: `Root.Symlink` does
-     not check its target. So the coordinator writes each symbolic link
-     as it is, with `Root.Symlink`, and never follows a link: each access
-     goes through the `os.Root`, and it changes an owner with
-     `Root.Lchown`, not `Root.Chown`. The sandbox resolves the links
-     inside its own root ([ADR 137](0137-the-machine-coordinator.md)
-     decision 4).
-   - The coordinator makes the hard links with `Root.Link` after it wrote
-     all regular files. It skips a hard link whose target is missing.
-   - It changes the owner of a file only when it runs as root. It applies
-     the unpack limits of decision 7.
+     FIFOs and each other entry type.
+   - `os.Root` refuses a path that leaves the root, but it follows a
+     symbolic link that stays inside the root. It follows such a link in
+     each parent component of a path, and in the last component for
+     `OpenFile`, `Chmod` and `Chtimes`. On Unix, `Root.Chmod`,
+     `Root.Chown` and `Root.Chtimes` can race with a change of the path.
+     So the coordinator obeys these rules:
+     - It creates each regular file with `Root.OpenFile` and the flags
+       `O_CREATE|O_EXCL|O_NOFOLLOW`. The create mode already has the
+       setuid and setgid bits cleared. It creates each directory with
+       `Root.Mkdir` and a mode without those bits. It calls no
+       `Root.Chmod`, `Root.Chown` or `Root.Chtimes` after the create.
+     - It writes each symbolic link as it is, with `Root.Symlink`.
+       `Root.Symlink` does not check its target, so a link can have an
+       absolute target or a target that leaves the root. The coordinator
+       never resolves such a target. The sandbox resolves the links
+       inside its own root
+       ([ADR 137](0137-the-machine-coordinator.md) decision 4).
+     - `mutate.Extract` emits an entry of a lower layer under a path
+       that a higher layer replaced. For example, a higher layer has the
+       symbolic link `d -> sub` and a lower layer has `d/x`. Docker hides
+       `d/x`, but a write through the `os.Root` makes `sub/x`. So the
+       coordinator drops each entry with a parent path that it already
+       wrote as a symbolic link or as an entry that is not a directory.
+     - It makes the hard links with `Root.Link` after it wrote all
+       regular files. It skips a hard link whose target is missing. A
+       hard link whose target is absolute or leaves the root, which
+       `Root.Link` refuses with an error, fails the phase.
+     - It changes an owner only at the create, with `Root.Lchown` on the
+       new entry, and only when it runs as root.
+   - It applies the unpack limits of decision 7.
    - Any error of the pull or of the stream fails the phase before its
      first step, not only a limit: for example a read error, a digest
      that does not match, or a path that leaves the directory. The
@@ -272,10 +289,15 @@ links.
    it at lint time with the reason. The rule also covers the launcher,
    which stays on the standard library. depguard checks direct imports
    only. So `make lint` also runs `scripts/runner-deps-guard.py`, which
-   fails when `go list -m all` in the root module lists a module of
+   fails when the module list of the root module has a module of
    `k8s.io`, of `sigs.k8s.io` or of
-   `github.com/google/go-containerregistry`. That check also finds such
-   a module when another dependency of the server brings it in.
+   `github.com/google/go-containerregistry`. It reads
+   `go list -m -f '{{.Path}} {{with .Replace}}{{.Path}}{{end}}' all`
+   and checks the path of each module and the path of its replacement,
+   so a `replace` directive cannot hide such a module. It runs go with
+   `GOWORK=off`, so a `go.work` file cannot change the list. That check
+   also finds such a module when another dependency of the server
+   brings it in.
 6. **Images are digests in the runner protocol.** The runner protocol
    carries the image of a phase only as a reference with a digest
    (`<repository>@sha256:<hex>`), never as a tag. When a unit or a pool
@@ -289,6 +311,11 @@ links.
      standard library (`HEAD`, and the token challenge of the registry
      protocol). It does not link go-containerregistry: the depguard rule
      of decision 5 still applies to the server.
+   - The `Accept` header of the `HEAD` and of the `GET` lists four media
+     types: `application/vnd.oci.image.index.v1+json`,
+     `application/vnd.oci.image.manifest.v1+json`,
+     `application/vnd.docker.distribution.manifest.list.v2+json` and
+     `application/vnd.docker.distribution.manifest.v2+json`.
    - The tag can name an image index. The server then records the digest
      of the index. The machine coordinator selects the image for its
      platform (decision 2), and the Kubernetes node selects the image for
@@ -305,9 +332,14 @@ links.
      - An installation administrator can list the hosts of private
        registries, for example a registry in the network of the
        installation. Only for a host on that list, the rules accept a
-       private address. Loopback, link-local and other addresses that
-       are not unicast stay refused. With no list, which is the
-       default, the server refuses each private address.
+       private address. The dial guard takes the host name from the
+       `addr` argument of `DialContext`, before it resolves the name.
+       It accepts a private address only when that host name is on the
+       list. The dial guard accepts a private address of a token realm
+       only when the host of the realm is on the list and the registry
+       host is on the list too. Loopback, link-local and other addresses that are
+       not unicast stay refused. With no list, which is the default,
+       the server refuses each private address.
      - The client follows no redirect. A redirect answer fails the
        resolution.
      - The server reads at most `egress.MaxBodyBytes` of a token answer
@@ -317,7 +349,7 @@ links.
        `sha256:<64 hex digits>`. Else the resolution fails. When the
        answer has no such header, the server sends a `GET` for the
        manifest, reads at most `egress.MaxBodyBytes`, and uses the
-       SHA-256 of the body.
+       SHA-256 of the exact bytes of the body, before any parse.
      - A failed resolution fails the plan. The plan error and the job
        store keep only the class of the error, for example `refused`,
        `unauthorized`, `not-found`, `permanent` or `temporary`. They
@@ -360,6 +392,16 @@ links.
    `pkg/secret`, as it keeps other secret items.
    - Each credential item names one registry host (a host name and an
      optional port), and holds a user name and a password or a token.
+   - A credential host matches the host of an image only when the two
+     are equal. The server stores and compares the host in lowercase,
+     with no trailing dot, as `host` or `host:port`. A credential host
+     has no wildcard.
+   - The images of `docker.io` are on `registry-1.docker.io`, and its
+     token realm is on `auth.docker.io`. A credential for these images
+     names `docker.io`. The server maps `docker.io` to
+     `registry-1.docker.io` for the requests, and accepts
+     `auth.docker.io` as its token realm. The documentation names this
+     fixed pair. The server maps no other host.
    - A credential of a namespace applies only to the images of the units
      and pools of that namespace. A credential of the scope `@server`
      applies only to the namespaces that an installation administrator
@@ -369,11 +411,21 @@ links.
      uses the credential of `N` for `H`. If `N` has none, it uses the
      `@server` credential for `H` when that credential lists `N`. Else
      it sends no credential.
-   - The server sends the Basic credentials only to the token realm of
-     the challenge that host `H` answers, and only when the realm is
-     `https` and passes the outbound rules of decision 6. It sends the
-     bearer token only to host `H`. It never sends a credential after a
-     redirect or to another host.
+   - The server parses the `WWW-Authenticate` challenges of host `H` as
+     RFC 9110 says. It uses exactly one challenge: the `Bearer`
+     challenge if there is one, else the `Basic` challenge. It refuses
+     an answer with two `Bearer` challenges, and a `Bearer` challenge
+     whose `realm` is not an absolute `https` URL. It takes `service`
+     and `scope` only from the challenge that it uses.
+   - For a `Basic` challenge, the server sends the Basic credentials
+     only to host `H`, on the same URL as the request that host `H`
+     answered.
+   - For a `Bearer` challenge, the server sends the Basic credentials
+     only to the token realm, and only when the realm passes the
+     outbound rules of decision 6. It sends the bearer token only to
+     host `H`.
+   - The server never sends a credential after a redirect or to another
+     host.
    - A new action, `namespace:manage-registries` (object: a namespace),
      allows a principal to set, replace and delete the registry
      credentials of a namespace. It is in the namespace administration
@@ -435,20 +487,25 @@ links.
   6. The machine coordinator writes each unpacked entry through an
      `os.Root` on a bundle directory with mode `0700`, as decision 2
      says. `mutate.Extract` keeps links with absolute targets, and
-     `Root.Symlink` does not check a target. So the coordinator writes
-     each symbolic link as it is, never follows a link (each access
-     goes through the `os.Root`, with `Root.Lchown`, not `Root.Chown`),
-     and the sandbox resolves the links inside its own root. It makes
-     the hard links with `Root.Link` after all regular files, and skips
-     a hard link whose target is missing. It writes only regular files,
-     directories, symbolic links and hard links, and clears the setuid
-     and setgid bits.
+     `Root.Symlink` does not check a target, and `os.Root` follows a
+     link that stays inside the root. So the coordinator writes each
+     symbolic link as it is, creates each file with
+     `O_CREATE|O_EXCL|O_NOFOLLOW` and a create mode without the setuid
+     and setgid bits, and calls no `Root.Chmod` or `Root.Chtimes` after
+     the create. It drops each entry with a parent path that a higher
+     layer made a symbolic link or an entry that is not a directory. It
+     makes the hard links with `Root.Link` after all regular files,
+     skips a hard link whose target is missing, and fails the phase on a
+     hard link whose target is absolute or leaves the root. The sandbox
+     resolves the symbolic links inside its own root. It writes only
+     regular files, directories, symbolic links and hard links.
   7. The release builds `dustpan-runner` from the same tag as the
      server, and ships the license files of the runner modules with the
      runner archive and image.
-  8. `make lint` fails when `go list -m all` in the root module lists
+  8. `make lint` fails when the module list of the root module has
      `k8s.io/*`, `sigs.k8s.io/*` or
-     `github.com/google/go-containerregistry`. This change already adds
+     `github.com/google/go-containerregistry`, as the path of a module
+     or of its replacement. This change already adds
      the check (`scripts/runner-deps-guard.py`) and its self-test.
 - If the image size of the Kubernetes coordinator becomes a problem, the
   third row of the first table (`k8s.io/api` types and a transport of our
@@ -470,7 +527,10 @@ links.
 - **Outbound rules ([ADR 145](0145-one-event-model-and-sinks.md)
   decision 20).** `pkg/egress` and `pkg/egress/egresshttp` get the list
   of private registry hosts of decision 6. Only for a host on the list,
-  the check and the dial guard accept a private address.
+  the check and the dial guard accept a private address. The dial guard
+  takes the host name from the `addr` of `DialContext` before it
+  resolves the name. For a token realm, both the realm host and the
+  registry host must be on the list.
 - **The Kubernetes coordinator
   ([ADR 136](0136-the-kubernetes-coordinator.md)).** Decision 4 answers
   the first open question of ADR 136: the coordinator is a separate
