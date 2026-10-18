@@ -1,6 +1,6 @@
 # 149. Hardening of the operations ADRs
 
-Status: accepted · 2026-10-18 · supersedes part of ADRs 140 to 147 (see "What this ADR replaces")
+Status: accepted · 2026-10-18. Supersedes part of ADRs 140 to 147 (see "What this ADR replaces"). Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 

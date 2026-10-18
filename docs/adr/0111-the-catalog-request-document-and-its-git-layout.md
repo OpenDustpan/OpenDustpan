@@ -1,6 +1,6 @@
 # 111. The Catalog request document, its schema version and its git layout
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17. Extended by ADR 213 decisions 7 and 8
 
 ## Context
 

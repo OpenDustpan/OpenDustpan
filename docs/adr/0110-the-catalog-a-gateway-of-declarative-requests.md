@@ -1,6 +1,6 @@
 # 110. The Catalog: a gateway of declarative requests on the job model
 
-Status: accepted · 2026-10-17 · supersedes parts of RFC 14 and RFC 13 (see "Superseded proposals")
+Status: accepted · 2026-10-17. Supersedes parts of RFC 14 and RFC 13 (see "Superseded proposals"). Route paths superseded in part by ADR 210
 
 ## Context
 

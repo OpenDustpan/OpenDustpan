@@ -1,6 +1,6 @@
 # 65. Reading the installation audit log is an operator action
 
-Status: accepted · 2026-10-14
+Status: accepted · 2026-10-14. The `server:` action names superseded in part by ADR 210
 
 ## Context
 

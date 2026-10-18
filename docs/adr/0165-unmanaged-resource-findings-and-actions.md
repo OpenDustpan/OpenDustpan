@@ -1,6 +1,6 @@
 # 165. Unmanaged-resource findings and the actions on them
 
-Status: accepted · 2026-10-17 · decision 15 superseded in part by ADR 166
+Status: accepted · 2026-10-17. Decision 15 superseded in part by ADR 166. Route paths superseded in part by ADR 210
 
 ## Context
 
