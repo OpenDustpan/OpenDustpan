@@ -21,7 +21,8 @@ Two facts frame this ADR:
   exists, the context chain has no blueprint layer (ADR 160 decision 12),
   and the blueprint routes of context are not in the route table. This ADR
   decides nothing for blueprints beyond their place in the route form of
-  decision 13.
+  decision 13. The actions `blueprint:read` and `blueprint:set-context`
+  stay with no family until the Catalog code lands.
 
 The facts on `main` that the decisions build on:
 
@@ -205,7 +206,9 @@ The facts on `main` that the decisions build on:
      the index entries (`unmanaged.Index.ReplaceUnit`) and the deleted
      marks of decision 23, each with the fence of the namespace and with
      the order of the item. The run reads the fence when it reads the
-     item. For a soft-deleted unit, it writes the index entries with the
+     item. A retry of a run reads the item and the fence again. A run never
+     reuses a fence from a step result across attempts, unlike the rebuild
+     of decision 9, whose first step fixes the fence on purpose. For a soft-deleted unit, it writes the index entries with the
      deleted mark (`Index.SetDeleted`), so a rebuild keeps the findings of
      the kind left behind.
    - **A unit with more than 100,000 resources.** The run indexes the
@@ -301,12 +304,18 @@ The facts on `main` that the decisions build on:
      the old rebuild writes no row in `resource_index_ready` from the old
      data. The conformance suite holds the case "restore during rebuild:
      the old rebuild writes no ready row".
-   - **A unit that fails in a rebuild.** A unit projection that fails 3
-     times in a row in its step, with an error that is not
-     `namespace.ErrFenced`, fails permanently. The step then writes the
-     mark "not fully indexed" of the unit with
+   - **A unit that fails in a rebuild.** A failed projection of a unit
+     never fails the durable attempt of the rebuild. The step tries the unit
+     up to 3 times inside the step, and records the number of attempts of
+     each unit in its step result. After 3 failures, with an error that is
+     not `namespace.ErrFenced`, the step writes the mark "not fully
+     indexed" of the unit with
      `unmanaged.Index.MarkIncompleteFromRebuild(unit, seq, fence)`, records
-     itself as done, and the rebuild goes on with the next unit. The method
+     itself as done, and the rebuild goes on with the next unit. Only
+     `namespace.ErrFenced`, a read error of a page, or a write error of the
+     ready row can fail the attempt of the rebuild. The conformance suite
+     holds the case "two permanently failing units: the rebuild still
+     writes the ready row". The method
      writes the mark only when the index of the unit holds no write of the
      order `seq` or higher, so a live run that succeeded keeps its result.
      The rebuild has no head row, so `MarkIncomplete` does not apply. So
@@ -450,17 +459,15 @@ The facts on `main` that the decisions build on:
       namespace, a purged object and an object that the caller cannot read
       all answer the same 404, with the same body. The answer never tells
       that the object exists.
-    - **A resource that the state does not hold.** The `PATCH` of the
+    - **The order of the checks for a resource key.** The `PATCH` of the
       context of a resource checks the key against the index entries of
-      the unit, not against the state item. A key that the index does not
-      hold, with no mark of decision 23, answers 404. A person can add
-      context only to a resource that exists.
-    - **The index lags a new item.** When the order of the index of the
-      unit is lower than the order of its latest state item, a projection
-      run waits. Then a key that the index does not hold answers 409
-      (`objectcontext.ErrIndexBehind`), and the message tells the client to
-      try again after the projection. So a key from an item that is not
-      projected yet never answers 404.
+      the unit, not against the state item, in this order:
+      1. Client-encrypted state and the mark "not fully indexed", as below.
+         They answer `objectcontext.ErrResourcesUnreadable`.
+      2. The lag check, as below.
+      3. The index entries. A key that the index does not hold, with no
+         mark of decision 23, answers 404. A person can add context only to
+         a resource that exists.
     - **A unit that is not fully indexed.** For a unit with the mark "not
       fully indexed", a key that the index does not hold answers 409
       (`objectcontext.ErrResourcesUnreadable`), because the server cannot
@@ -470,6 +477,14 @@ The facts on `main` that the decisions build on:
       of the context of a resource of such a unit answers 409
       (`objectcontext.ErrResourcesUnreadable`). The context of the unit
       itself still works.
+    - **The index lags a new item.** When the order of the index of the
+      unit is lower than the order of its latest state item, and the head
+      row of the unit has a pending or running run, a key that the index
+      does not hold answers 409 (`objectcontext.ErrIndexBehind`), and the
+      message tells the client to try again after the projection. So a key
+      from an item that is not projected yet never answers 404. When the
+      head row has no pending or running run, the handler answers as the
+      index says, which is 404 for a key that the index does not hold.
     - For a path, the handler applies the rule to the `from` unit and to the
       `to` unit, and answers the same 404 for either.
     - For a `PATCH` or a `DELETE`, the handler checks the read action
