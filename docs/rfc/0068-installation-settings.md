@@ -690,7 +690,7 @@ infrastructure. So a limit refuses the start of new work, never its end.
   - a blob that a running backup can still copy (ADR 28 decision 8, ADR
     30).
 
-  The rows go first. The blobs become orphans for the orphan sweep. Each
+  The rows go first. The blobs become orphans for the orphan cleanup. Each
   prune writes one audit entry for each unit in the scope `@server` or the
   namespace (ADR 60). The job runs on one instance at a time. Open: how it
   chooses that instance (RFC 36).

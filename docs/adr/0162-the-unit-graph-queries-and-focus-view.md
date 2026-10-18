@@ -16,7 +16,7 @@ On 17 October 2026 the project owner decided:
 - The history design records the dependency edges from output reads. This
   design reads them and does not record them a second time.
 
-ADR 153 (draft, with the history design) defines the edges: the package
+ADR 153 (accepted, with the history design) defines the edges: the package
 `dependency`, an edge from a source unit to a dependent, its kind
 (`output-read` first), its evidence (`job`, `lock`, `principal`,
 `declared`), its first and last time seen, and the dependents window of 90
@@ -43,7 +43,7 @@ owners and ADR 51 its collection.
    follows: a walk over "same owner" would reach every unit of a large team
    in one hop.
 3. **Resources.** The server cannot map an output to the resource that
-   makes it (ADR 153 decision 15). So the graph links units, and a resource
+   makes it (ADR 153 decision 16). So the graph links units, and a resource
    is a node only inside its unit. The `managed twice` finding of ADR 165
    links two units through one cloud resource. The console draws it on the
    graph as a marked link between the two units. A walk does not follow

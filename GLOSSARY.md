@@ -645,7 +645,7 @@ The list of stages that the server checks before an agent reads secret values (`
 _Avoid_: Secret switch, secrets toggle
 
 **Maintenance window**:
-The record that groups the instances that start with the secret flag, so that one acceptance covers them all (ADR 124 decision 4). The first instance opens it and puts the installation in maintenance mode, in one transaction. Later instances join it. In code it is `agent.SecretWindow`, in `agent.WindowStore`. The window table is a control table.
+The record that groups the instances that start with the secret flag, so that one acceptance covers them all (ADR 124 decision 4). The first instance opens it and puts the installation in maintenance mode, in one transaction. Later instances join it. In code it is `agent.SecretWindow`, in `agent.WindowStore`. The window table is a control table. Maintenance mode is a state of the installation, and the window is the record that puts the installation in that state.
 _Avoid_: Maintenance mode (that is the installation state that a window starts)
 
 **Sealed reveal**:
@@ -722,7 +722,7 @@ _Avoid_: Grace period, undo window
 
 **Sweep**:
 The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `pkg/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
-_Avoid_: Scan (except in the Go names of `pkg/unmanaged`), discovery, crawl, retention sweep
+_Avoid_: Scan (except in the Go names of `pkg/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
 
 **Cloud sweep**:
 A sweep that reads the cloud on a runner of the team, never in the server (ADR 164). A runner of a pool of the purpose `sweeps` claims the sweep and runs the command of its sweep target. The command runs with the workload identity of the runner host. The runner uploads a sweep report, and the server matches it against the resource index. Only a cloud sweep can find a resource that is not in any unit. A sweep is not a job, and the server holds no cloud credential for it.
@@ -821,7 +821,7 @@ _Avoid_: Suppression, filter, allowlist
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
 - **Break-glass** has three meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. A break-glass of a job starts a job during an active freeze (ADR 103). Name which one.
-- **Sweep** names the Sweep feature only: a cloud sweep or a state check. The task that purges deleted units is the retention expiry. ADR 151 still says "orphan sweep" for the delete of key blobs with no record, and code says `inventory.Sweeper`.
+- **Sweep** names the Sweep feature only: a cloud sweep or a state check. The task that purges deleted units is the retention expiry. The delete of key blobs with no record is the orphan cleanup (ADR 151). The Go name `inventory.Sweeper` is older than this rule.
 - **Source** has two meanings. The term **Source** is the backend of a unit before an import. A source snapshot and the source policy name the code of a commit for a runner job (ADR 135). The unit setting that names that code is the code location (ADR 100). Never write "source" alone for the code.
 - **Snapshot** is the source snapshot only (ADR 135). Do not use it for state, a backup, a checkpoint or a state version.
 - **Session** has three meanings: the console session of a person, a job session of a launcher (ADR 133), and an MCP session (ADR 123). Name which one.
@@ -830,7 +830,6 @@ _Avoid_: Suppression, filter, allowlist
 - **Plan** has four meanings: the operation `plan` of a job, the phase kind `plan`, a stored plan, and the OpenTofu plan. Name which one.
 - **Claim** has two meanings. The durable claim of a phase gives one executor the right to run it. The job-ID claim is a field of a principal that a job token authenticates (ADR 100). Name which one.
 - **Approval**, **confirmation** and **consent** are different. An approval passes an approval gate (ADR 103). A confirmation passes a confirmation gate. A consent allows one secret read of an outside agent (ADR 124).
-- **Maintenance window** and **maintenance mode** are different. The maintenance window of the escape hatch groups the instances that start with the secret flag (ADR 124). It puts the installation in maintenance mode.
 - **Tool** is an infrastructure-as-code CLI. An agent tool is one of the tools of an agent (ADR 122). Write "agent tool" for the second.
 - **Key** has many meanings: a data key, an item key, a resource key, a runner key, a blob key and a tag key. Name which one.
 - **Scope** has three meanings: the namespace and unit of a data key, an audit scope, and an account scope of a sweep target. Write "account scope" for the third.
