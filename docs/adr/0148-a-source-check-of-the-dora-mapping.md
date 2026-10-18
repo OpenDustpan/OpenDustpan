@@ -32,9 +32,9 @@ The check found these problems in ADR 147:
 - The Article 11 row is too wide. Only some paragraphs touch runbooks, the
   timeline and on-call.
 - Articles 17, 18 and 19 ask for more facts than the records hold: the time
-  of occurrence, significant cyber threats, all six criteria of Article
-  18(1), recurring incidents, more report kinds, client notices and notices
-  to the management body.
+  of occurrence, significant cyber threats, the criteria of Article 18(1)
+  and of RTS 2024/1772, recurring incidents, more report kinds, client
+  notices and notices to the senior management and the management body.
 - Articles 6(5), 8, 9(4)(c) to (d), 11(10) and 12 need rows. Articles 10,
   24 to 27 and 28 to 30 need a note that they are out of scope.
 
@@ -69,12 +69,12 @@ support" for each interpretation. A user document keeps that hedge.
    | DORA Article 13(2) | a review "after a major ICT-related incident disrupts their core activities" that checks the response, the forensic analysis, the escalation and the communication | supports: the review after a major incident (decision 9) |
    | DORA Article 17(1), 17(2) | a process to detect, manage and notify ICT-related incidents, a record of each incident and each significant cyber threat, and the root cause | supports: incident records (ADR 147 decision 1), the root cause at each close (decision 7) and cyber threat records (decision 13) |
    | DORA Article 17(3)(c), 17(3)(d) and RTS 2024/1774 Article 23(1), 23(2)(c) | roles for incident response, and the plans to communicate and to escalate | may support: on-call schedules and paging (ADR 143, ADR 147 decision 7) |
-   | DORA Article 17(3)(e) | a report of at least each major incident to the management body | supports: the record of a notice to the management body (decision 12) |
-   | RTS 2024/1774 Article 22 and Article 23(4) | the incident management policy: evidence kept safe for a limited period, and the time of occurrence next to the time of detection | may support: the time of occurrence (decision 6) and the retention period of incidents (decision 14). Article 23(4) names the fields. The ordering rule of decision 6 is ours |
-   | DORA Article 18(1)(a) to (f) and RTS 2024/1772 Articles 1 to 9 | classify each incident by six criteria, and find a major incident by thresholds | supports: the default criteria (decision 10) and the record of the classification of a person. The server never decides |
+   | DORA Article 17(3)(e) | a report of at least each major incident to the senior management and the management body | supports: the record of a notice to the management body (decision 12) |
+   | RTS 2024/1774 Article 22, RTS 2024/1774 Article 23(4), RTS 2024/1772 Article 3(1) and ITS 2025/302 fields 2.2 and 3.2 | the incident management policy: evidence kept safe for a limited period. The time of detection (field 2.2) and the time of occurrence (field 3.2) of an incident | may support: the retention period of incidents (decision 14) and the time of occurrence (decision 6). Article 23(4) may support the times, for anomalous activities |
+   | DORA Article 18(1)(a) to (f) and RTS 2024/1772 Articles 1 to 9 | classify each incident by criteria, and find a major incident by thresholds | supports: the default criteria (decision 10), which follow RTS 2024/1772 Articles 1 to 7, and the record of the classification of a person. The server never decides |
    | DORA Article 19(1), 19(4), RTS 2025/301 and ITS 2025/302 | reports of a major incident to the authority, with their content and time limits | supports: records of the reports that a person made (decision 11). The server never sends a report |
    | DORA Article 19(2) | a voluntary notice of a significant cyber threat | supports: the notice records of a cyber threat (decision 13) |
-   | DORA Article 19(3) | a notice to clients of a major incident | supports: the record of a client notice (decision 12) |
+   | DORA Article 19(3), first subparagraph, and second subparagraph | a notice to clients of a major incident, and, for a significant cyber threat, a notice to the clients that the threat may affect | supports: the record of a client notice of an incident (decision 12) and the client notice step of a cyber threat record (decision 13) |
 
    **Out of scope.** OpenDustpan does not help with these parts, and the
    docs do not name them as features:
@@ -130,9 +130,13 @@ support" for each interpretation. A user document keeps that hedge.
 ### Incident records
 
 6. **The time of occurrence.** An incident gets an optional time of
-   occurrence. It cannot be after the time of detection (RTS 2024/1774
-   Article 23(4)). An incident also gets an optional time of recovery of
-   the services, which ITS 2025/302 asks for in the reports.
+   occurrence, next to the time of detection (RTS 2024/1772 Article 3(1)).
+   ITS 2025/302 asks for the time of detection in field 2.2 and for the
+   time of occurrence in field 3.2. RTS 2024/1774 Article 23(4) may support the two times, for
+   anomalous activities. The time of occurrence cannot be after the time of
+   detection. This ordering rule is ours. An incident also gets an optional
+   time of recovery of the services, which ITS 2025/302 asks for in the
+   reports.
 7. **A root cause at each close, with a category.** An incident still
    closes only with a root cause and lessons. We design this against DORA
    Article 17(2), not Article 13. The close also needs a root-cause category
@@ -159,22 +163,27 @@ support" for each interpretation. A user document keeps that hedge.
    are, and the close of the incident does not change.
 10. **Default classification criteria.** The list of criteria of an
     installation starts with a default list. An administrator can change
-    it. The default list holds the six criteria of DORA Article 18(1)(a) to
-    (f):
-    - the clients, financial counterparts and transactions affected, and
-      the reputational impact,
-    - the duration and the service downtime, as two values (RTS 2024/1772
-      Article 3),
-    - the geographical spread,
-    - the data losses,
-    - the criticality of the services affected,
-    - the economic impact.
+    it. The default list holds the seven criteria of RTS 2024/1772
+    Articles 1 to 7. DORA Article 18(1) is the context of these criteria.
+    - the clients, financial counterparts and transactions affected
+      (Article 1),
+    - the reputational impact (Article 2),
+    - the duration and the service downtime, as two values (Article 3),
+    - the geographical spread (Article 4),
+    - the data losses (Article 5),
+    - the criticality of the services affected (Article 6). This is a
+      condition, not a threshold of Article 9,
+    - the economic impact (Article 7).
 
-    A classification also records whether the person found malicious
-    unauthorized access. The console shows the rule of RTS 2024/1772
-    Article 8(1) as help text: critical services affected, and malicious
-    unauthorized access or two or more other thresholds met. The person decides.
-    The server stores the time of the first classification as major.
+    A classification also records the field `article95b`: whether the
+    person found that the threshold of RTS 2024/1772 Article 9(5)(b) is
+    met. That threshold is met when "any successful, malicious and
+    unauthorised access not covered by point (a) occurs to network and
+    information systems, where such access may result in data losses". The
+    console shows the rule of Article 8(1) as help text: "critical services
+    affected (Article 6), and the threshold of Article 9(5)(b) met or two or
+    more of the other thresholds of Article 9(1) to (6) met". The person
+    decides. The server stores the time of the first classification as major.
     This answers an open question of ADR 147.
 11. **Report records.** A report record has one of these kinds: `initial`,
     `intermediate`, `updated-intermediate`, `final` and `reclassification`
@@ -189,17 +198,18 @@ support" for each interpretation. A user document keeps that hedge.
     For a late classification, the initial notice is due 4 hours from the
     classification (RTS 2025/301 Article 5(2)). A time limit that ends on a
     weekend or a bank holiday moves to noon of the next working day, with
-    some exceptions (RTS 2025/301 Article 5(4) and 5(5)). The page cannot
+    some exceptions (RTS 2025/301 Article 5(5) and 5(6)). The page cannot
     compute the bank holidays of each entity. So it labels each time that
-    it shows "Article 5(1) only", and a person applies Article 5(2), 5(4)
-    and 5(5).
+    it shows "Article 5(1) only", and a person applies Article 5(2) and
+    5(4) to 5(6).
 
     The page labels these times "information only". The server never
     marks a report as late, and never says that a report meets a time
     limit. The installation keeps the hours in a table that an
     administrator can change, because the texts can change.
 12. **Notice records.** A person records a notice to clients (DORA Article
-    19(3)) and a notice to the management body (DORA Article 17(3)(e)).
+    19(3), first subparagraph) and a notice to the senior management and the
+    management body (DORA Article 17(3)(e)).
     Each one has a time, the audience, the channel and a reference. The
     records are append-only, as reports are. The server never sends a
     notice.
@@ -208,7 +218,9 @@ support" for each interpretation. A user document keeps that hedge.
     the time of detection, links to units and notes. A person records
     whether the threat is significant, with a reason. A person also records
     each voluntary notice of the threat to an authority (DORA Article
-    19(2)). A person closes a threat record with a note on the outcome. The close is
+    19(2)), and each notice of a significant threat to the clients that it
+    may affect (DORA Article 19(3), second subparagraph). Each notice has an
+    audience: an authority or clients. A person closes a threat record with a note on the outcome. The close is
     a step of a person with `namespace:respond-incidents`. The server never
     decides that a threat is significant. The
     package `incident` holds it, with the same fence and audit rules as an
@@ -242,7 +254,9 @@ support" for each interpretation. A user document keeps that hedge.
     | `POST /api/namespaces/{ns}/incidents/{id}/notices` | `namespace:classify-incidents` | namespace |
     | `POST /api/namespaces/{ns}/incidents/{id}/costs` | `namespace:classify-incidents` | namespace |
     | `GET /api/namespaces/{ns}/incidents/costs?year=` | `namespace:read-audit` | namespace |
+    | `GET /api/namespaces/{ns}/incidents/{id}/costs`, `.../notices` | `namespace:read-audit` | namespace |
     | `GET /api/namespaces/{ns}/cyber-threats[/{id}]`, `.../notes` | `namespace:read` | namespace |
+    | `GET /api/namespaces/{ns}/cyber-threats/{id}/notices` | `namespace:read-audit` | namespace |
     | `POST /api/namespaces/{ns}/cyber-threats`, `PUT .../{id}`, `POST .../{id}/notes` | `namespace:respond-incidents` | namespace |
     | `POST /api/namespaces/{ns}/incidents/{id}/reviews` | `namespace:respond-incidents` | namespace |
     | `POST /api/namespaces/{ns}/cyber-threats/{id}/steps` | `namespace:respond-incidents` | namespace |
@@ -250,9 +264,9 @@ support" for each interpretation. A user document keeps that hedge.
     | `GET /api/server/restore-tests` | `server:read-audit` | server |
     | `POST /api/server/restore-tests` | `server:backup` | server |
 
-    The reads of the cost entries and of the notices of an incident need
-    `namespace:read-audit`, not `namespace:read`, because they are an
-    extract of the audit trail. The other incident reads keep `namespace:read`.
+    The reads of the cost entries and of the notices of an incident, and of
+    the notices of a cyber threat, need `namespace:read-audit`, not
+    `namespace:read`, because they are an extract of the audit trail. The other incident reads keep `namespace:read`.
 
     The change records export of ADR 147 decision 11 adds the change
     fields, the `verify` phase and its result, whether each approver is the
@@ -288,8 +302,10 @@ support" for each interpretation. A user document keeps that hedge.
 - The package `incident` gets cyber threat records, notices, costs, links
   between incidents and the root-cause categories. Each port change gets
   conformance tests first.
-- `GLOSSARY.md` gets the term Cyber threat record. The term Phase gets the
-  kind `verify`. The ambiguity Retention gets the retention of incidents.
+- `GLOSSARY.md` gets a section Operations with the terms Incident,
+  Classification, Commander and Cyber threat record. The term Phase gets
+  the kind `verify`. The ambiguity Retention gets the retention of
+  incidents.
 - The texts can change. A source check of this table is due when the
   Commission changes one of the five texts.
 

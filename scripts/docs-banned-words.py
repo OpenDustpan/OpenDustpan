@@ -70,10 +70,17 @@ EMOJI_RE = re.compile(
 
 # An accepted ADR changes only in its status line, so a phrase that it
 # already holds, in a sentence that denies the claim, stays. Each key is a
-# file name. Each value lists the phrases (lower case) that the file may keep.
+# path relative to the repository root, with "/" as separator. Each value
+# lists the phrases (lower case) that the file may keep.
 EXEMPT = {
-    "0147-incident-and-change-records-designed-against-dora.md": {"complies with dora"},
+    "docs/adr/0147-incident-and-change-records-designed-against-dora.md": {"complies with dora"},
 }
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# A line that starts a list item, a table row, a heading or a quote starts a
+# new block, so it ends the paragraph before it.
+BLOCK_START_RE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|\||#{1,6}\s|>)")
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
@@ -84,6 +91,17 @@ def advice_for(word):
         if re.fullmatch(pattern, word, re.IGNORECASE):
             return advice
     return "delete it"
+
+
+def repo_path(path):
+    """Return the path relative to the repository root, with "/" as separator."""
+    return os.path.relpath(os.path.abspath(path), ROOT).replace(os.sep, "/")
+
+
+def drop_exempt(path, findings):
+    """Remove the findings that EXEMPT allows for the file at path."""
+    allowed = EXEMPT.get(repo_path(path), ())
+    return [f for f in findings if f[2].lower() not in allowed]
 
 
 def check_text(text):
@@ -135,6 +153,8 @@ def check_text(text):
         if not line.strip():
             flush()
             continue
+        if BLOCK_START_RE.match(line):
+            flush()
         prose = CODE_SPAN_RE.sub(lambda m: " " * len(m.group(0)), line)
         block.append((number, prose))
     flush()
@@ -182,12 +202,31 @@ def selftest():
         ("It satisfies Article 9.", ["satisfies Article"]),
         ("It fulfils DORA. It fulfills dora.", ["fulfils DORA", "fulfills dora"]),
         ("A DORA certified server.", ["DORA certified"]),
+        ("- It complies\n- with DORA.", []),
+        ("It complies\n- with DORA.", []),
+        ("It complies\n| with DORA |", []),
+        ("It complies\n# with DORA", []),
+        ("It complies\n> with DORA", []),
+        ("It complies\n1. with DORA", []),
+        ("- It complies\n  with DORA.", ["complies with DORA"]),
     ]
     failed = 0
     wrapped = check_text("a\nb\nIt complies\nwith DORA.")
     if wrapped != [(3, 4, "complies with DORA", advice_for("complies with DORA"))]:
         failed += 1
         print(f"selftest: wrapped position: got {wrapped}", file=sys.stderr)
+    root_path = os.path.join(ROOT, "docs", "adr", "0147-incident-and-change-records-designed-against-dora.md")
+    other_path = os.path.join(ROOT, "docs", "other", "0147-incident-and-change-records-designed-against-dora.md")
+    kept = [(1, 1, "complies with DORA", "")]
+    if drop_exempt(root_path, kept) != []:
+        failed += 1
+        print("selftest: exempt path was not exempt", file=sys.stderr)
+    if drop_exempt(other_path, kept) != kept:
+        failed += 1
+        print("selftest: same file name in another directory was exempt", file=sys.stderr)
+    if drop_exempt(os.path.join(ROOT, "0147-incident-and-change-records-designed-against-dora.md"), kept) != kept:
+        failed += 1
+        print("selftest: bare file name was exempt", file=sys.stderr)
     for text, want in cases:
         got = [f[2] for f in check_text(text)]
         if got != want:
@@ -210,8 +249,7 @@ def main(argv):
     for path in argv:
         with open(path, encoding="utf-8") as handle:
             findings = check_text(handle.read())
-        name = os.path.basename(path)
-        findings = [f for f in findings if f[2].lower() not in EXEMPT.get(name, ())]
+        findings = drop_exempt(path, findings)
         for line, column, found, advice in findings:
             print(f"{path}:{line}:{column} banned word {found!r}: {advice}")
         total += len(findings)
