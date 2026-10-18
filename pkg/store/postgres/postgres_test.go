@@ -642,6 +642,21 @@ func TestStateAtConformance(t *testing.T) {
 	})
 }
 
+func TestWorkspaceStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunWorkspaceStateAt(t, func(t *testing.T) storetest.WorkspaceStateAtStore {
+		t.Helper()
+
+		return openAuditedWorkspaces(t, base)
+	})
+}
+
 func TestWorkspaceConformance(t *testing.T) {
 	t.Parallel()
 

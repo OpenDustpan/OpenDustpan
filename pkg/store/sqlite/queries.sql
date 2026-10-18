@@ -485,6 +485,40 @@ WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
 LIMIT ? OFFSET ?;
 
+-- name: WorkspaceExistsByID :one
+-- A workspace by its ID, a soft-deleted one included.
+SELECT id FROM workspaces WHERE id = ?;
+
+-- name: WorkspaceStateAt :one
+-- The finalized state version with the latest finalize time at or before a
+-- time. A finalize stamps a time after every earlier finalize of the
+-- workspace, so the version that became current last has the latest finalize
+-- time, and a read at the present agrees with the current pointer. Ties break
+-- by ID, as in the state version list; only rows that the stamp did not write
+-- can tie. The index on (workspace_id, finalized_at_ms DESC) serves the order.
+SELECT id, finalized_at_ms, holder
+FROM state_versions
+WHERE workspace_id = ? AND status = 'finalized' AND finalized_at_ms <= ?
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT 1;
+
+-- name: LatestWorkspaceStateFinalize :one
+-- The latest finalize time of the finalized state versions of a workspace. A
+-- finalize stamps a later time than this one, in the same transaction.
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = ? AND status = 'finalized'
+ORDER BY finalized_at_ms DESC
+LIMIT 1;
+
+-- name: FirstWorkspaceStateFinalize :one
+-- The finalize time of the first finalized state version of a workspace.
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = ? AND status = 'finalized'
+ORDER BY finalized_at_ms ASC, id ASC
+LIMIT 1;
+
 -- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions

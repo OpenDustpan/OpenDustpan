@@ -649,6 +649,11 @@ func fenceAndUnlockInTx(
 		return workspace.ErrConcurrentModification
 	}
 
+	row, err = stampAfterLatest(ctx, q, row)
+	if err != nil {
+		return err
+	}
+
 	if finalizeErr := finalizeFenceRow(ctx, q, row); finalizeErr != nil {
 		return finalizeErr
 	}
@@ -662,7 +667,7 @@ func fenceAndUnlockInTx(
 		return fmt.Errorf("set current state: %w", setErr)
 	}
 
-	if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, released.ID, released.UpdatedAtMs); pubErr != nil {
+	if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, released.ID, row.FinalizedAtMs); pubErr != nil {
 		return pubErr
 	}
 
@@ -779,6 +784,29 @@ func checkFinalizeForced(
 	return checkForcedSwitches(ctx, q, wrow)
 }
 
+// stampAfterLatest returns row with a finalize time after the latest finalize
+// time of its workspace: the requested time, or one millisecond after the
+// latest one when the requested time is not later. The caller runs it in the
+// finalize transaction, after the workspace row is locked, so the version
+// that becomes current always has the latest finalize time of its workspace,
+// also when two finalizes share a millisecond or a clock steps back.
+func stampAfterLatest(
+	ctx context.Context, q *db.Queries, row codec.StateVersionRow,
+) (codec.StateVersionRow, error) {
+	latest, err := q.LatestWorkspaceStateFinalize(ctx, row.WorkspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return row, nil
+	}
+
+	if err != nil {
+		return codec.StateVersionRow{}, fmt.Errorf("select latest finalize time: %w", err)
+	}
+
+	row.FinalizedAtMs = max(row.FinalizedAtMs, latest+1)
+
+	return row, nil
+}
+
 // writeFinalize marks the version finalized, moves the workspace pointer and
 // publishes the inventory entry. The write matches only the recorded attempt
 // key, so a superseded attempt reports ErrUploadDenied instead of
@@ -786,6 +814,11 @@ func checkFinalizeForced(
 func writeFinalize(
 	ctx context.Context, q *db.Queries, wrow db.Workspace, row codec.StateVersionRow,
 ) error {
+	row, err := stampAfterLatest(ctx, q, row)
+	if err != nil {
+		return err
+	}
+
 	n, err := q.FinalizeStateVersion(ctx, db.FinalizeStateVersionParams{
 		Serial:        row.Serial,
 		Lineage:       row.Lineage,

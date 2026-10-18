@@ -99,6 +99,7 @@ type Inner interface {
 	stack.JournalStore
 	stack.BuiltCheckpointStore
 	stack.StateAtReader
+	workspace.StateAtReader
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
@@ -398,6 +399,16 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 	}
 
 	return s.inner.StateAt(ctx, id, at)
+}
+
+// WorkspaceStateAt returns the state version that was current in a workspace
+// at a time, unless a fault fires first.
+func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.Time) (workspace.StateAt, error) {
+	if err := s.before(ctx, "WorkspaceStateAt"); err != nil {
+		return workspace.StateAt{}, err
+	}
+
+	return s.inner.WorkspaceStateAt(ctx, id, at)
 }
 
 // AppendEvents stores the batch's events, unless a fault fires first.
