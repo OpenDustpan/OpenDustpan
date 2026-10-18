@@ -1,6 +1,6 @@
 # 165. Unmanaged-resource findings and the actions on them
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -16,7 +16,7 @@ the audit entries and what the console needs.
 Facts:
 
 - The server never deletes a cloud resource and never edits state (ADR 28
-  decision 3, ADR 153 decision 14). The tool does it, and the server sees a
+  decision 3, ADR 153 decision 15). The tool does it, and the server sees a
   new state item.
 - A change to a unit goes through a job (ADR 100). A job has four
   operations: `plan`, `apply`, `destroy` and `refresh`. Write-back edits only
@@ -269,4 +269,4 @@ Facts:
    both units (RFC 23)?
 4. **Retention.** How long does the server keep a resolved finding? The audit
    log keeps its actions. This ADR proposes 400 days, the retention of plans
-   and logs in ADR 102.
+   and logs in ADR 152.

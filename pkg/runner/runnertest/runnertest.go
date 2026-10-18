@@ -234,7 +234,7 @@ func joinRequest(t *testing.T, secret, name string) runner.JoinRequest {
 
 // release is the release of the runners of the cases.
 //
-//nolint:gochecknoglobals,mnd // A fixed value of the cases, read only.
+//nolint:gochecknoglobals // A fixed value of the cases, read only.
 var release = runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""}
 
 // newKey makes a new Ed25519 public key.

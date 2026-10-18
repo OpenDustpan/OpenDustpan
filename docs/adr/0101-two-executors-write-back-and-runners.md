@@ -1,6 +1,6 @@
 # 101. Two executors: write-back and runners
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · decision 10 superseded in part by ADR 133
 
 ## Context
 

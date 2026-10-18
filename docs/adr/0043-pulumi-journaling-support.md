@@ -1,6 +1,6 @@
 # 43. Pulumi journaling support
 
-Status: accepted · 2026-10-12
+Status: accepted · 2026-10-12 · decisions 6.1 and 10.3 superseded in part by ADR 151
 
 ## Context
 

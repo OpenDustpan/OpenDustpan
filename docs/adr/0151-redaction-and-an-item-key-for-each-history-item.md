@@ -93,7 +93,7 @@ The facts that the design must meet:
    tables of each tool and of the job model, so the key record and the item
    row commit in one transaction. The same is true for the shred and the
    redaction (decision 15). A failed transaction leaves an orphan key blob.
-   The orphan sweep deletes it after a grace period (decision 22).
+   The orphan cleanup deletes it after a grace period (decision 22).
 4. **Open.** To open content, the server reads the key record in SQL first.
    A shredded record answers `secret.ErrShredded` before any blob read. So
    every instance (ADR 72) sees a shred at once. The server may keep wrapped
@@ -333,7 +333,7 @@ The facts that the design must meet:
 
     A restore from a backup made before a redaction or a purge so stays
     redacted or purged.
-22. **`backup check`, the scrub, and the orphan sweep.**
+22. **`backup check`, the scrub, and the orphan cleanup.**
     - `backup check` reads the ledger objects of the target, of redactions
       and of tombstones. A missing object that a ledger object names is not
       an error: a blob that a redaction names, a key blob that a tombstone
@@ -347,9 +347,9 @@ The facts that the design must meet:
       shredded and has no key blob: the content of that item cannot be opened.
       It deletes a key blob whose record is shredded, and counts each such
       delete in a metric.
-    - The orphan sweep (issue 203) deletes a key blob with no record only
+    - The orphan cleanup (issue 203) deletes a key blob with no record only
       after a grace period of 24 hours from the write of the blob. So the
-      sweep never deletes the key blob of an item whose transaction has not
+      cleanup never deletes the key blob of an item whose transaction has not
       committed yet.
     - A key blob that is missing with no ledger object and no shredded
       record stays an error in a restore, as ADR 30 decision 8 says for a
@@ -537,7 +537,7 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   5. The `Redactor` of each tool, with `historytest.RunRedactor` and the
      table of that tool, then the routes and the audit field `reason`.
   6. The shred operation, the ledger objects, the backup skip, `backup
-     check`, the scrub, the orphan sweep grace period and the restore rule.
+     check`, the scrub, the orphan cleanup grace period and the restore rule.
   7. Item key shredding and the tombstone in the purge, and the restore
      step that deletes a purged unit from the staged data.
   8. The cancel rule for a replay that fails for good (decision 13), with

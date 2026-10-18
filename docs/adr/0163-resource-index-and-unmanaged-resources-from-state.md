@@ -1,6 +1,6 @@
 # 163. The resource index and unmanaged resources found from state
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 130. Runner pools, runners and coordinators
 
-Status: accepted · 2026-10-18 · adds to ADR 101 decisions 12 and 14
+Status: accepted · 2026-10-18 · adds to ADR 101 decisions 12 and 14. Decision 5 superseded in part by ADR 164
 
 ## Context
 
