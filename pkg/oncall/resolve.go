@@ -3,14 +3,10 @@ package oncall
 import (
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/calendar"
-	"opendustpan.org/opendustpan/pkg/namespace"
 )
-
-const day = 24 * time.Hour
 
 // Timeline returns the shifts of s in the range that starts at from and
 // ends at to, ordered by start. It
@@ -137,8 +133,8 @@ func (s Schedule) pick(t time.Time, loc *time.Location) (Shift, bool) {
 
 // pickOverride returns the person of the last override that covers t.
 func (s Schedule) pickOverride(t time.Time) (Shift, bool) {
-	for _, o := range slices.Backward(s.Overrides) {
-		if !t.Before(o.Start) && t.Before(o.End) {
+	for i := len(s.Overrides) - 1; i >= 0; i-- {
+		if o := &s.Overrides[i]; !t.Before(o.Start) && t.Before(o.End) {
 			return s.shift(o.Principal, OriginOverride), true
 		}
 	}
@@ -200,9 +196,9 @@ func (s Schedule) boundaries(from, to time.Time, loc *time.Location) []time.Time
 		}
 	}
 
-	for _, o := range s.Overrides {
-		add(o.Start)
-		add(o.End)
+	for i := range s.Overrides {
+		add(s.Overrides[i].Start)
+		add(s.Overrides[i].End)
 	}
 
 	for _, c := range s.Copied {
@@ -213,7 +209,14 @@ func (s Schedule) boundaries(from, to time.Time, loc *time.Location) []time.Time
 	for _, l := range s.Layers {
 		add(l.Start)
 
-		for tn, ok := l.turnAt(from, loc); ok && tn.end.Before(to); tn, ok = l.turnAt(tn.end, loc) {
+		// Before the start of the layer there is no turn, so the walk
+		// starts at the later of from and the start of the layer.
+		first := from
+		if l.Start.After(first) {
+			first = l.Start
+		}
+
+		for tn, ok := l.turnAt(first, loc); ok && tn.end.Before(to); tn, ok = l.turnAt(tn.end, loc) {
 			add(tn.end)
 		}
 
@@ -258,92 +261,54 @@ type turn struct {
 }
 
 // turnAt returns the turn that covers t. It returns false before the start
-// of the layer.
+// of the layer. Turns follow the wall clock of loc: turn k starts at the
+// wall time of Start plus k turns. A turn that starts in the hour that a
+// change to summer time skips starts at the end of that hour, so a turn
+// that lies fully in that hour is empty. A turn that ends in the hour that
+// a change to winter time repeats ends at the second occurrence of its end.
 func (l Layer) turnAt(t time.Time, loc *time.Location) (turn, bool) {
 	if t.Before(l.Start) {
 		return turn{member: "", start: time.Time{}, end: time.Time{}}, false
 	}
 
-	var (
-		k          int
-		start, end time.Time
-	)
+	k := max(int(wall(t, loc).Sub(wall(l.Start, loc))/l.Turn), 0)
 
-	if l.Turn%day == 0 {
-		days := int(l.Turn / day)
-		s0 := l.Start.In(loc)
-		d0 := calendar.DateOf(s0, loc)
-		at := func(d calendar.Date) time.Time {
-			return time.Date(d.Year, d.Month, d.Day, s0.Hour(), s0.Minute(), s0.Second(), 0, loc)
-		}
+	start := l.turnStart(k, loc)
+	for k > 0 && start.After(t) {
+		k--
+		start = l.turnStart(k, loc)
+	}
 
-		dt := calendar.DateOf(t, loc)
-
-		n := daysBetween(d0, dt)
-		if t.Before(at(dt)) {
-			n--
-		}
-
-		k = n / days
-		start, end = at(d0.AddDays(k*days)), at(d0.AddDays((k+1)*days))
-	} else {
-		k = int(t.Sub(l.Start) / l.Turn)
-		start = l.Start.Add(time.Duration(k) * l.Turn)
-		end = start.Add(l.Turn)
+	end := l.turnStart(k+1, loc)
+	for !end.After(t) {
+		k++
+		start, end = end, l.turnStart(k+1, loc)
 	}
 
 	return turn{member: l.Members[k%len(l.Members)], start: start, end: end}, true
 }
 
-func daysBetween(a, b calendar.Date) int {
-	ta := time.Date(a.Year, a.Month, a.Day, 0, 0, 0, 0, time.UTC)
-	tb := time.Date(b.Year, b.Month, b.Day, 0, 0, 0, 0, time.UTC)
+// turnStart returns the start of turn k of l in loc.
+func (l Layer) turnStart(k int, loc *time.Location) time.Time {
+	if k == 0 {
+		return l.Start
+	}
 
-	return int(tb.Sub(ta) / day)
+	w := wall(l.Start, loc).Add(time.Duration(k) * l.Turn)
+
+	return time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), w.Minute(), w.Second(), w.Nanosecond(), loc)
+}
+
+// wall returns the wall clock of t in loc as a time in UTC, so that the
+// difference of two wall clocks has no daylight saving change in it.
+func wall(t time.Time, loc *time.Location) time.Time {
+	lt := t.In(loc)
+
+	return time.Date(lt.Year(), lt.Month(), lt.Day(), lt.Hour(), lt.Minute(), lt.Second(), lt.Nanosecond(), time.UTC)
 }
 
 func clockAt(d calendar.Date, c calendar.Clock, loc *time.Location) time.Time {
 	const minutesPerHour = 60
 
 	return time.Date(d.Year, d.Month, d.Day, int(c)/minutesPerHour, int(c)%minutesPerHour, 0, 0, loc)
-}
-
-// Ref names an on-call schedule from the on-call field of a context.
-type Ref struct {
-	Namespace namespace.Name
-	Name      string
-}
-
-// RefPrefix starts an on-call field that names a schedule.
-const RefPrefix = "schedule:"
-
-// ParseRef reads an on-call field. "schedule:<name>" names a schedule of
-// the namespace ns of the object, and "schedule:<namespace>/<name>" a
-// schedule of another namespace. Any other text is not a reference, and
-// the context shows it as it is: ParseRef then returns false.
-func ParseRef(field string, ns namespace.Name) (Ref, bool) {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(field), RefPrefix)
-	if !ok {
-		return noRef(), false
-	}
-
-	if n, name, found := strings.Cut(rest, "/"); found {
-		parsed, err := namespace.ParseName(n)
-		if err != nil || !validName(name) {
-			return noRef(), false
-		}
-
-		return Ref{Namespace: parsed, Name: name}, true
-	}
-
-	if ns == "" || !validName(rest) {
-		return noRef(), false
-	}
-
-	return Ref{Namespace: ns, Name: rest}, true
-}
-
-// noRef returns the Ref of a field that names no schedule.
-func noRef() Ref {
-	return Ref{Namespace: "", Name: ""}
 }

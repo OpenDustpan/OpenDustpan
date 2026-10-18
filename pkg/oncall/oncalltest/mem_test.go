@@ -3,6 +3,7 @@ package oncalltest_test
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -37,12 +38,27 @@ type memStore struct {
 	handoffs  []oncall.Handoff
 }
 
+// translate returns err with opsmem.ErrScope replaced by scoped, the
+// sentinel that the port gives for a fence that does not belong to the
+// row.
+func translate(err, scoped error) error {
+	if errors.Is(err, opsmem.ErrScope) {
+		return fmt.Errorf("%w: %w", scoped, err)
+	}
+
+	return err
+}
+
 func (m *memStore) Create(_ context.Context, s oncall.Schedule, fence namespace.Fence, e audit.Entry) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
+	if len(s.Copied) > 0 || !s.Synced.IsZero() {
+		return fmt.Errorf("create %s: %w: only a copy sets the copied shifts", s.ID, oncall.ErrInvalid)
+	}
+
+	return translate(m.Write(fence, opsmem.Scope(s.Namespace), []audit.Entry{e}, func() error {
 		if _, ok := m.schedules[s.ID]; ok {
 			return fmt.Errorf("create %s: %w", s.ID, oncall.ErrExists)
 		}
@@ -55,7 +71,7 @@ func (m *memStore) Create(_ context.Context, s oncall.Schedule, fence namespace.
 		m.schedules[s.ID] = s
 
 		return nil
-	})
+	}), oncall.ErrInvalid)
 }
 
 func (m *memStore) Get(_ context.Context, ref oncall.Ref) (oncall.Schedule, error) {
@@ -78,10 +94,20 @@ func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
+	scope := func() (namespace.Name, error) {
 		old, ok := m.schedules[s.ID]
 		if !ok {
-			return fmt.Errorf("update %s: %w", s.ID, oncall.ErrNotFound)
+			return "", fmt.Errorf("update %s: %w", s.ID, oncall.ErrNotFound)
+		}
+
+		return old.Namespace, nil
+	}
+
+	return translate(m.Write(fence, scope, []audit.Entry{e}, func() error {
+		old := m.schedules[s.ID]
+
+		if s.Namespace != old.Namespace {
+			return fmt.Errorf("update %s: %w: a schedule cannot move to another namespace", s.ID, oncall.ErrInvalid)
 		}
 
 		if old.Version != s.Version {
@@ -97,20 +123,16 @@ func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.
 		m.schedules[s.ID] = s
 
 		return nil
-	})
+	}), oncall.ErrNotFound)
 }
 
 func (m *memStore) Delete(_ context.Context, ref oncall.Ref, fence namespace.Fence, e audit.Entry) error {
-	return m.Write(fence, []audit.Entry{e}, func() error {
-		s, ok := m.byRef(ref)
-		if !ok {
-			return fmt.Errorf("delete %s/%s: %w", ref.Namespace, ref.Name, oncall.ErrNotFound)
-		}
-
+	return translate(m.Write(fence, m.refScope("delete", ref), []audit.Entry{e}, func() error {
+		s, _ := m.byRef(ref)
 		delete(m.schedules, s.ID)
 
 		return nil
-	})
+	}), oncall.ErrNotFound)
 }
 
 func (m *memStore) AddOverride(
@@ -120,32 +142,30 @@ func (m *memStore) AddOverride(
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
-		s, ok := m.byRef(ref)
-		if !ok {
-			return fmt.Errorf("add override to %s/%s: %w", ref.Namespace, ref.Name, oncall.ErrNotFound)
-		}
+	return translate(m.Write(fence, m.refScope("add override to", ref), []audit.Entry{e}, func() error {
+		s, _ := m.byRef(ref)
 
-		if len(s.Overrides) >= oncall.MaxOverrides {
+		live := slices.DeleteFunc(slices.Clone(s.Overrides), func(x oncall.Override) bool {
+			return !x.End.After(o.CreatedAt)
+		})
+		if len(live) >= oncall.MaxOverrides {
 			return fmt.Errorf("add override: %w: at most %d", oncall.ErrInvalid, oncall.MaxOverrides)
 		}
 
-		s.Overrides = append(slices.Clone(s.Overrides), o)
+		live = append(live, o)
+		s.Overrides = live
 		s.Version++
 		m.schedules[s.ID] = s
 
 		return nil
-	})
+	}), oncall.ErrNotFound)
 }
 
 func (m *memStore) ReplaceCopy(
 	_ context.Context, ref oncall.Ref, shifts []oncall.Shift, syncedAt time.Time, fence namespace.Fence,
 ) error {
-	return m.Write(fence, nil, func() error {
-		s, ok := m.byRef(ref)
-		if !ok {
-			return fmt.Errorf("copy %s/%s: %w", ref.Namespace, ref.Name, oncall.ErrNotFound)
-		}
+	return translate(m.Write(fence, m.refScope("copy", ref), nil, func() error {
+		s, _ := m.byRef(ref)
 
 		if s.Source != oncall.SourceExternal {
 			return fmt.Errorf("copy %s/%s: %w: the schedule is local", ref.Namespace, ref.Name, oncall.ErrInvalid)
@@ -155,7 +175,7 @@ func (m *memStore) ReplaceCopy(
 		m.schedules[s.ID] = s
 
 		return nil
-	})
+	}), oncall.ErrNotFound)
 }
 
 func (m *memStore) ForPrincipal(_ context.Context, principal string) ([]oncall.Schedule, error) {
@@ -181,15 +201,20 @@ func (m *memStore) AddHandoff(_ context.Context, h oncall.Handoff, fence namespa
 		return fmt.Errorf("add handoff: %w: a note has 1 to %d bytes", oncall.ErrInvalid, oncall.MaxHandoffNoteLen)
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
-		if _, ok := m.schedules[h.Schedule]; !ok {
-			return fmt.Errorf("add handoff to %s: %w", h.Schedule, oncall.ErrNotFound)
+	scope := func() (namespace.Name, error) {
+		s, ok := m.schedules[h.Schedule]
+		if !ok {
+			return "", fmt.Errorf("add handoff to %s: %w", h.Schedule, oncall.ErrNotFound)
 		}
 
+		return s.Namespace, nil
+	}
+
+	return translate(m.Write(fence, scope, []audit.Entry{e}, func() error {
 		m.handoffs = append(m.handoffs, h)
 
 		return nil
-	})
+	}), oncall.ErrNotFound)
 }
 
 func (m *memStore) Handoffs(_ context.Context, schedule string, from, to time.Time) ([]oncall.Handoff, error) {
@@ -231,8 +256,8 @@ func names(s oncall.Schedule, principal string) bool {
 		}
 	}
 
-	for _, o := range s.Overrides {
-		if o.Principal == principal {
+	for i := range s.Overrides {
+		if s.Overrides[i].Principal == principal {
 			return true
 		}
 	}
@@ -244,4 +269,17 @@ func names(s oncall.Schedule, principal string) bool {
 	}
 
 	return false
+}
+
+// refScope returns the scope function of a write to the schedule ref
+// names: its namespace, or ErrNotFound for an unknown schedule.
+func (m *memStore) refScope(op string, ref oncall.Ref) func() (namespace.Name, error) {
+	return func() (namespace.Name, error) {
+		s, ok := m.byRef(ref)
+		if !ok {
+			return "", fmt.Errorf("%s %s/%s: %w", op, ref.Namespace, ref.Name, oncall.ErrNotFound)
+		}
+
+		return s.Namespace, nil
+	}
 }

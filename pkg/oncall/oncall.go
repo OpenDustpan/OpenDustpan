@@ -53,7 +53,9 @@ const (
 	MaxLayers = 5
 	// MaxMembers caps the members of a layer.
 	MaxMembers = 50
-	// MaxOverrides caps the overrides of a schedule that did not end.
+	// MaxOverrides caps the overrides of a schedule. AddOverride deletes
+	// the overrides that ended before it counts, so the cap applies to
+	// the overrides that did not end.
 	MaxOverrides = 200
 	// MinTurn is the shortest turn of a rotation.
 	MinTurn = time.Hour
@@ -96,10 +98,13 @@ type Hours struct {
 }
 
 // Layer is a rotation: Members take turns of length Turn, in order, from
-// Start. A turn whose length is a whole number of days changes at the
-// local time of Start, also over a daylight saving change. When Hours is
-// set, the layer covers only those hours. A later layer of a schedule wins
-// over an earlier one where both cover a time.
+// Start. Turns follow the wall clock of the zone of the schedule: turn k
+// starts at the wall time of Start plus k turns, also over a daylight
+// saving change. So a turn of 12 hours from 08:00 changes at 08:00 and
+// 20:00 all year. A turn that starts in the hour that a change to summer
+// time skips starts at the end of that hour. When Hours is set, the layer
+// covers only those hours. A later layer of a schedule wins over an
+// earlier one where both cover a time.
 type Layer struct {
 	Name    string
 	Members []string
@@ -108,7 +113,9 @@ type Layer struct {
 	Hours   *Hours
 }
 
-// Override puts Principal on call from Start to End, over every layer.
+// Override is an on-call override: it puts Principal on call from Start
+// to End, over every layer. CreatedBy is the principal that added it, at
+// CreatedAt.
 type Override struct {
 	ID        string
 	Principal string
@@ -116,6 +123,7 @@ type Override struct {
 	End       time.Time
 	Reason    string
 	CreatedBy string
+	CreatedAt time.Time
 }
 
 // Schedule is an on-call schedule of a namespace. Name is unique in the
@@ -171,8 +179,8 @@ func (s Schedule) validateFields() error {
 	switch {
 	case !strings.HasPrefix(s.ID, IDPrefix):
 		return fmt.Errorf("%w: a schedule ID starts with %q", ErrInvalid, IDPrefix)
-	case s.Namespace == "":
-		return fmt.Errorf("%w: a schedule needs a namespace", ErrInvalid)
+	case !validNamespace(s.Namespace):
+		return fmt.Errorf("%w: a schedule needs the name of a namespace", ErrInvalid)
 	case !validName(s.Name):
 		return fmt.Errorf(
 			"%w: a schedule name has 1 to %d lowercase letters, digits and dashes",
@@ -201,8 +209,8 @@ func (s Schedule) validateParts() error {
 	default:
 	}
 
-	if _, err := time.LoadLocation(s.Zone); err != nil || s.Zone == "" {
-		return fmt.Errorf("%w: unknown zone %q", ErrInvalid, s.Zone)
+	if !ValidZone(s.Zone) {
+		return fmt.Errorf("%w: zone %q is not a name of the IANA time zone database", ErrInvalid, s.Zone)
 	}
 
 	for _, l := range s.Layers {
@@ -211,8 +219,8 @@ func (s Schedule) validateParts() error {
 		}
 	}
 
-	for _, o := range s.Overrides {
-		if err := o.Validate(); err != nil {
+	for i := range s.Overrides {
+		if err := s.Overrides[i].Validate(); err != nil {
 			return err
 		}
 	}
@@ -220,11 +228,15 @@ func (s Schedule) validateParts() error {
 	return nil
 }
 
-// Validate returns ErrInvalid for an override with no principal or no
-// reason, or with an end that is not after its start.
+// Validate returns ErrInvalid for an override with no principal, no
+// reason or no time of creation, or with an end that is not after its
+// start.
 func (o Override) Validate() error {
-	if o.Principal == "" || o.Reason == "" || !o.End.After(o.Start) {
-		return fmt.Errorf("%w: an override needs a principal, a reason, and an end after its start", ErrInvalid)
+	if o.Principal == "" || o.Reason == "" || o.CreatedAt.IsZero() || !o.End.After(o.Start) {
+		return fmt.Errorf(
+			"%w: an override needs a principal, a reason, a time of creation, and an end after its start",
+			ErrInvalid,
+		)
 	}
 
 	return nil
@@ -253,6 +265,40 @@ func (l Layer) validate() error {
 // before they end on one day.
 func (h Hours) valid() bool {
 	return !h.Days.Empty() && h.From >= 0 && h.From < h.To && h.To <= calendar.MinutesPerDay
+}
+
+// ValidZone reports whether zone is a name of the IANA time zone
+// database, for example "Europe/Berlin" or "UTC", that the server can
+// load. It refuses "Local", which names the zone of the host and so can
+// change with the host, and a path.
+func ValidZone(zone string) bool {
+	if zone == "" || zone == "Local" || zone[0] == '/' || strings.Contains(zone, "..") || !zoneChars(zone) {
+		return false
+	}
+
+	loc, err := time.LoadLocation(zone)
+
+	return err == nil && loc.String() == zone
+}
+
+// zoneChars reports whether zone has only the characters of the names of
+// the IANA time zone database.
+func zoneChars(zone string) bool {
+	for _, r := range zone {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("/_+-", r) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// validNamespace reports whether ns is the name of a namespace. The
+// server scope is not a namespace, so a schedule never belongs to it.
+func validNamespace(ns namespace.Name) bool {
+	_, err := namespace.ParseName(ns.String())
+
+	return err == nil
 }
 
 func validName(n string) bool {

@@ -9,36 +9,56 @@ import (
 )
 
 // Store is the persistence port for on-call schedules. A schedule is a
-// write in its namespace: each write carries the fence of the namespace,
-// and the store checks it in the transaction of the write. Every write of
-// a person appends the audit entry e in its transaction, and a failed
-// write appends nothing.
+// row of its namespace: each write carries the fence of that namespace,
+// and the store checks it in the transaction of the write. A fence of
+// another namespace, or a zero fence, does not belong to the row: Create
+// then returns ErrInvalid, and every write that names a stored schedule
+// returns ErrNotFound, so the write does not tell whether the schedule
+// exists. A schedule never belongs to the server scope. A fence of the
+// row's namespace at an older failover version returns
+// namespace.ErrFenced. Every write of a person appends the audit entry e
+// in its transaction, and a failed write changes nothing and appends
+// nothing.
 type Store interface {
 	// Create persists s with version 1. It returns ErrInvalid for a
-	// schedule that fails Validate, ErrExists for a used ID or a name that
-	// the namespace already has, and namespace.ErrFenced.
+	// schedule that fails Validate, that has copied shifts or a sync
+	// time, or whose namespace is not the namespace of fence. It returns
+	// ErrExists for a used ID or a name that the namespace already has,
+	// and namespace.ErrFenced.
 	Create(ctx context.Context, s Schedule, fence namespace.Fence, e audit.Entry) error
 	// Get returns the schedule ref names, or ErrNotFound.
 	Get(ctx context.Context, ref Ref) (Schedule, error)
-	// Update replaces the schedule s.ID, except its copied shifts, when
-	// s.Version is the stored version, and increments the version. It
-	// returns ErrNotFound, ErrInvalid, ErrExists for a new name that the
-	// namespace already has, ErrConflict, and namespace.ErrFenced.
+	// Update replaces the stored schedule s.ID when s.Version is the
+	// stored version, and increments the version. It keeps the stored
+	// copied shifts and sync time, and ignores those of s. It returns
+	// ErrNotFound for an unknown ID or a stored schedule of another
+	// namespace than fence, ErrInvalid for a schedule that fails Validate
+	// or that names another namespace than the stored one, ErrExists for
+	// a new name that the namespace already has, ErrConflict, and
+	// namespace.ErrFenced.
 	Update(ctx context.Context, s Schedule, fence namespace.Fence, e audit.Entry) error
-	// Delete deletes the schedule ref names. It returns ErrNotFound and
-	// namespace.ErrFenced. A context whose on-call field names the
+	// Delete deletes the schedule ref names. It returns ErrNotFound for
+	// an unknown schedule or a schedule of another namespace than fence,
+	// and namespace.ErrFenced. A context whose on-call field names the
 	// schedule then shows the field as it is, with a warning.
 	Delete(ctx context.Context, ref Ref, fence namespace.Fence, e audit.Entry) error
 	// AddOverride adds o to the schedule ref names, and increments the
 	// version, with no check of the version: two people can add overrides
-	// at one time. It returns ErrNotFound, ErrInvalid for an override that
-	// fails Validate or for MaxOverrides overrides that did not end, and
-	// namespace.ErrFenced.
+	// at one time. In the same transaction, it first deletes each
+	// override of the schedule whose end is not after o.CreatedAt, so
+	// the cap counts only the overrides that did not end. It returns
+	// ErrNotFound for an unknown schedule or a schedule of another
+	// namespace than fence, ErrInvalid for an override that fails
+	// Validate or when MaxOverrides overrides that did not end are
+	// stored, and namespace.ErrFenced.
 	AddOverride(ctx context.Context, ref Ref, o Override, fence namespace.Fence, e audit.Entry) error
 	// ReplaceCopy replaces the copied shifts of the external schedule ref
 	// names with shifts, and sets Synced to syncedAt. It returns
-	// ErrNotFound, and ErrInvalid for a local schedule. It writes no audit
-	// entry: a scheduled copy is not an action of a person.
+	// ErrNotFound for an unknown schedule or a schedule of another
+	// namespace than fence, ErrInvalid for a local schedule, and
+	// namespace.ErrFenced when a failover moved the namespace since the
+	// copy read the fence. It writes no audit entry: a scheduled copy is
+	// not an action of a person.
 	ReplaceCopy(ctx context.Context, ref Ref, shifts []Shift, syncedAt time.Time, fence namespace.Fence) error
 	// ForPrincipal returns the schedules of every namespace in which
 	// principal is a member of a layer, has an override, or has a copied
@@ -98,12 +118,14 @@ type Handoff struct {
 // MaxHandoffNoteLen caps the note of a handoff, in bytes.
 const MaxHandoffNoteLen = 8192
 
-// Handoffs is the persistence port for handoff notes. A note is a write in
-// the namespace of its schedule.
+// Handoffs is the persistence port for handoff notes. A note is a row of
+// the namespace of its schedule, and its write carries the fence of that
+// namespace, with the rules of Store.
 type Handoffs interface {
 	// AddHandoff persists h and appends e in one transaction. It returns
-	// ErrNotFound for an unknown schedule, ErrInvalid for an empty note or
-	// a note above MaxHandoffNoteLen, and namespace.ErrFenced.
+	// ErrNotFound for an unknown schedule or a schedule of another
+	// namespace than fence, ErrInvalid for an empty note or a note above
+	// MaxHandoffNoteLen, and namespace.ErrFenced.
 	AddHandoff(ctx context.Context, h Handoff, fence namespace.Fence, e audit.Entry) error
 	// Handoffs returns the notes of schedule in the range that starts at
 	// from and ends at to, newest first.

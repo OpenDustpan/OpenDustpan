@@ -13,10 +13,10 @@ package oncalltest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/opsmem"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/oncall"
@@ -60,6 +60,10 @@ func Run(t *testing.T, newHarness Factory) {
 		{"for a principal, schedules of every namespace", testForPrincipal},
 		{"delete makes the name free", testDelete},
 		{"a stale fence changes nothing", testStaleFence},
+		{"ended overrides do not count toward the cap", testEndedOverrides},
+		{"update keeps the copied shifts", testUpdateKeepsCopy},
+		{"create with copied shifts is ErrInvalid", testCreateWithCopy},
+		{"update to another namespace is ErrInvalid", testUpdateMove},
 		{"handoff notes list newest first", testHandoffs},
 	}
 
@@ -69,6 +73,11 @@ func Run(t *testing.T, newHarness Factory) {
 			tc.run(t, newHarness(t))
 		})
 	}
+
+	t.Run("each write refuses a fence that is not of the row", func(t *testing.T) {
+		t.Parallel()
+		testFenceScope(t, newHarness)
+	})
 }
 
 const (
@@ -79,8 +88,15 @@ const (
 
 func now() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
 
+// entry returns the audit entry of a write of alice in the namespace ns.
 func entry(ns namespace.Name) audit.Entry {
-	return opsmem.Entry(ns, "alice", action, ns.String(), now())
+	return audit.Entry{
+		At: now(), Namespace: ns, Subject: "alice", IDPSubject: "", TokenID: "",
+		Action: action, Object: ns.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "suite", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "req-suite", ObjectID: "", PrevHash: "", Hash: "",
+		Sequence: 0, FenceVersion: 0,
+	}
 }
 
 func setup(t *testing.T, h Harness, ns namespace.Name) namespace.Fence {
@@ -105,8 +121,8 @@ func sample(id string, ns namespace.Name, name string, members ...string) oncall
 	}
 }
 
-func external(id string, ns namespace.Name, name string) oncall.Schedule {
-	s := sample(id, ns, name)
+func external(id, name string) oncall.Schedule {
+	s := sample(id, shop, name)
 	s.Source, s.External, s.Layers = oncall.SourceExternal, oncall.External{Provider: "pager", Key: "P1"}, nil
 
 	return s
@@ -135,6 +151,7 @@ func getNetwork(t *testing.T, h Harness) oncall.Schedule {
 func override(id, who string) oncall.Override {
 	return oncall.Override{
 		ID: id, Principal: who, Start: now(), End: now().Add(time.Hour), Reason: "swap", CreatedBy: who,
+		CreatedAt: now(),
 	}
 }
 
@@ -194,7 +211,8 @@ func testOverrides(t *testing.T, h Harness) {
 	create(t, h, fence, sample("ocs-1", shop, "network", "alice"))
 	ref := oncall.Ref{Namespace: shop, Name: "network"}
 
-	for _, o := range []oncall.Override{override("ovr-1", "bob"), override("ovr-2", "carol")} {
+	for _, who := range []string{"bob", "carol"} {
+		o := override("ovr-"+who, who)
 		if err := h.Schedules.AddOverride(t.Context(), ref, o, fence, entry(shop)); err != nil {
 			t.Fatalf("AddOverride %s: %v", o.ID, err)
 		}
@@ -208,7 +226,8 @@ func testOverrides(t *testing.T, h Harness) {
 	bad := override("ovr-3", "dave")
 	bad.Reason = ""
 
-	if err := h.Schedules.AddOverride(t.Context(), ref, bad, fence, entry(shop)); !errors.Is(err, oncall.ErrInvalid) {
+	err := h.Schedules.AddOverride(t.Context(), ref, bad, fence, entry(shop))
+	if !errors.Is(err, oncall.ErrInvalid) {
 		t.Fatalf("AddOverride with no reason: err = %v, want ErrInvalid", err)
 	}
 }
@@ -229,7 +248,7 @@ func testCopyExternal(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := setup(t, h, shop)
-	create(t, h, fence, external("ocs-1", shop, "network"))
+	create(t, h, fence, external("ocs-1", "network"))
 
 	ref := oncall.Ref{Namespace: shop, Name: "network"}
 	shifts := []oncall.Shift{{
@@ -344,5 +363,250 @@ func testHandoffs(t *testing.T, h Harness) {
 	got, err := h.Handoffs.Handoffs(t.Context(), "ocs-1", now(), now().Add(2*time.Hour))
 	if err != nil || len(got) != 2 || got[0].Note != "Disk alert on db-2 is known" {
 		t.Fatalf("Handoffs = %+v (%v), want two, newest first", got, err)
+	}
+}
+
+// write is one write of the store with the fence fence.
+type write struct {
+	name string
+	// scoped is the error for a fence that does not belong to the row.
+	scoped error
+	run    func(t *testing.T, h Harness, fence namespace.Fence) error
+}
+
+func writes() []write {
+	network := oncall.Ref{Namespace: shop, Name: "network"}
+	feed := oncall.Ref{Namespace: shop, Name: "feed"}
+
+	return []write{
+		{"Create", oncall.ErrInvalid, func(t *testing.T, h Harness, fence namespace.Fence) error {
+			t.Helper()
+
+			return h.Schedules.Create(t.Context(), sample("ocs-9", shop, "edge", "alice"), fence, entry(shop))
+		}},
+		{"Update", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
+			t.Helper()
+
+			s := getNetwork(t, h)
+			s.Layers[0].Members = []string{"bob"}
+
+			return h.Schedules.Update(t.Context(), s, fence, entry(shop))
+		}},
+		{"Delete", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
+			t.Helper()
+
+			return h.Schedules.Delete(t.Context(), network, fence, entry(shop))
+		}},
+		{"AddOverride", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
+			t.Helper()
+
+			return h.Schedules.AddOverride(t.Context(), network, override("ovr-9", "bob"), fence, entry(shop))
+		}},
+		{"ReplaceCopy", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
+			t.Helper()
+
+			return h.Schedules.ReplaceCopy(t.Context(), feed, nil, now(), fence)
+		}},
+		{"AddHandoff", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
+			t.Helper()
+
+			hd := oncall.Handoff{Schedule: "ocs-1", At: now(), From: "alice", To: "bob", Note: "Quiet", By: "alice"}
+
+			return h.Handoffs.AddHandoff(t.Context(), hd, fence, entry(shop))
+		}},
+	}
+}
+
+func testFenceScope(t *testing.T, newHarness Factory) {
+	t.Helper()
+
+	fences := []struct {
+		name  string
+		fence func(t *testing.T, h Harness, own, other namespace.Fence) namespace.Fence
+		stale bool
+	}{
+		{"zero fence", func(*testing.T, Harness, namespace.Fence, namespace.Fence) namespace.Fence {
+			return namespace.Fence{Namespace: "", FailoverVersion: 0}
+		}, false},
+		{"fence of another namespace", func(_ *testing.T, _ Harness, _, other namespace.Fence) namespace.Fence {
+			return other
+		}, false},
+		{"stale fence", func(t *testing.T, h Harness, own, _ namespace.Fence) namespace.Fence {
+			t.Helper()
+
+			if _, err := h.Domain.BumpFence(t.Context(), own); err != nil {
+				t.Fatalf("BumpFence: %v", err)
+			}
+
+			return own
+		}, true},
+	}
+
+	for _, w := range writes() {
+		for _, f := range fences {
+			t.Run(w.name+" with a "+f.name, func(t *testing.T) {
+				t.Parallel()
+				want := w.scoped
+				if f.stale {
+					want = namespace.ErrFenced
+				}
+
+				checkFence(t, newHarness(t), w, f.fence, want)
+			})
+		}
+	}
+}
+
+// checkFence runs the write w with the fence that fence returns, and
+// checks that it fails with want and changes nothing.
+func checkFence(
+	t *testing.T,
+	h Harness,
+	w write,
+	fence func(t *testing.T, h Harness, own, other namespace.Fence) namespace.Fence,
+	want error,
+) {
+	t.Helper()
+
+	own := setup(t, h, shop)
+	other := setup(t, h, platform)
+
+	create(t, h, own, sample("ocs-1", shop, "network", "alice"))
+	create(t, h, own, external("ocs-2", "feed"))
+
+	before := getNetwork(t, h)
+
+	if err := w.run(t, h, fence(t, h, own, other)); !errors.Is(err, want) {
+		t.Fatalf("%s: err = %v, want %v", w.name, err, want)
+	}
+
+	after := getNetwork(t, h)
+	if after.Version != before.Version || len(after.Overrides) != len(before.Overrides) {
+		t.Fatalf("%s changed the schedule: version %d, want %d", w.name, after.Version, before.Version)
+	}
+
+	for ns, n := range map[namespace.Name]int{shop: 2, platform: 0} {
+		entries, err := h.Domain.AuditEntries(t.Context(), ns)
+		if err != nil || len(entries) != n {
+			t.Fatalf("%s: audit entries of %s = %d (%v), want %d", w.name, ns, len(entries), err, n)
+		}
+	}
+}
+
+func testEndedOverrides(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h, shop)
+	create(t, h, fence, sample("ocs-1", shop, "network", "alice"))
+	ref := oncall.Ref{Namespace: shop, Name: "network"}
+
+	for i := range oncall.MaxOverrides {
+		o := override(fmt.Sprintf("ovr-%d", i), "bob")
+		if err := h.Schedules.AddOverride(t.Context(), ref, o, fence, entry(shop)); err != nil {
+			t.Fatalf("AddOverride %d: %v", i, err)
+		}
+	}
+
+	err := h.Schedules.AddOverride(t.Context(), ref, override("ovr-full", "bob"), fence, entry(shop))
+	if !errors.Is(err, oncall.ErrInvalid) {
+		t.Fatalf("AddOverride above the cap: err = %v, want ErrInvalid", err)
+	}
+
+	// Every override so far ends one hour after now(). Two hours later
+	// they all ended, so they do not count.
+	later := now().Add(2 * time.Hour)
+	o := override("ovr-later", "carol")
+	o.Start, o.End, o.CreatedAt = later, later.Add(time.Hour), later
+
+	if err := h.Schedules.AddOverride(t.Context(), ref, o, fence, entry(shop)); err != nil {
+		t.Fatalf("AddOverride after the others ended: %v", err)
+	}
+
+	got := getNetwork(t, h)
+	if len(got.Overrides) != 1 {
+		t.Fatalf("Get = %d overrides, want only the one that did not end", len(got.Overrides))
+	}
+
+	if sh, err := got.At(later.Add(time.Minute)); err != nil || sh.Principal != "carol" {
+		t.Fatalf("At = %s (%v), want carol", sh.Principal, err)
+	}
+}
+
+func testUpdateKeepsCopy(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h, shop)
+	create(t, h, fence, external("ocs-1", "network"))
+
+	ref := oncall.Ref{Namespace: shop, Name: "network"}
+	shifts := []oncall.Shift{{
+		Schedule: "ocs-1", Principal: "alice", Display: "Alice", Start: now(), End: now().Add(time.Hour),
+		Layer: oncall.OriginExternal,
+	}}
+
+	if err := h.Schedules.ReplaceCopy(t.Context(), ref, shifts, now(), fence); err != nil {
+		t.Fatalf("ReplaceCopy: %v", err)
+	}
+
+	s := getNetwork(t, h)
+	s.External.Key = "P2"
+	s.Copied, s.Synced = nil, time.Time{}
+
+	if err := h.Schedules.Update(t.Context(), s, fence, entry(shop)); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got := getNetwork(t, h)
+	if got.External.Key != "P2" || len(got.Copied) != 1 || !got.Synced.Equal(now()) {
+		t.Fatalf("Get = key %q, %d copied shifts, synced %s; want P2, 1 and %s",
+			got.External.Key, len(got.Copied), got.Synced, now())
+	}
+}
+
+func testCreateWithCopy(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h, shop)
+
+	cases := []struct {
+		name   string
+		change func(s *oncall.Schedule)
+	}{
+		{"copied shifts", func(s *oncall.Schedule) {
+			s.Copied = []oncall.Shift{{
+				Schedule: s.ID, Principal: "alice", Display: "Alice", Start: now(), End: now().Add(time.Hour),
+				Layer: oncall.OriginExternal,
+			}}
+		}},
+		{"a sync time", func(s *oncall.Schedule) { s.Synced = now() }},
+	}
+
+	for _, tc := range cases {
+		s := external("ocs-1", "network")
+		tc.change(&s)
+
+		if err := h.Schedules.Create(t.Context(), s, fence, entry(shop)); !errors.Is(err, oncall.ErrInvalid) {
+			t.Fatalf("Create with %s: err = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+
+	_, err := h.Schedules.Get(t.Context(), oncall.Ref{Namespace: shop, Name: "network"})
+	if !errors.Is(err, oncall.ErrNotFound) {
+		t.Fatalf("Get after the refused creates: err = %v, want ErrNotFound", err)
+	}
+}
+
+func testUpdateMove(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h, shop)
+	setup(t, h, platform)
+	create(t, h, fence, sample("ocs-1", shop, "network", "alice"))
+
+	s := getNetwork(t, h)
+	s.Namespace = platform
+
+	if err := h.Schedules.Update(t.Context(), s, fence, entry(shop)); !errors.Is(err, oncall.ErrInvalid) {
+		t.Fatalf("Update to another namespace: err = %v, want ErrInvalid", err)
 	}
 }
