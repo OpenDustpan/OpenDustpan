@@ -213,7 +213,7 @@ func auditEntry(r *http.Request, p identity.Principal, t target) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		Changes:      nil,
-		ObjectID:     "",
+		ObjectID:     t.obj.UnitID(),
 		FenceVersion: 0,
 	}
 }

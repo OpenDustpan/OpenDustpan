@@ -4,6 +4,8 @@ package objectcontexttest
 import (
 	"errors"
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +47,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a patch keeps the other fields", testPatchKeeps},
 		{"the API cannot set a field from the code", testFieldFromCode},
 		{"a newer output replaces an older one", testOutputOrder},
+		{"replacements at the same time end with the newest item", testOutputConcurrent},
 		{"an empty output deletes the output entries", testOutputEmpty},
 		{"delete of a missing API entry", testDeleteMissing},
 		{"a purge drops the unit and its resources", testDropUnit},
@@ -249,6 +252,56 @@ func testOutputOrder(t *testing.T, h Harness) {
 	read := entries(t, h, ref)
 	if len(read) != 1 || read[0].Fields.Summary != "second" || read[0].Item != "second" {
 		t.Errorf("Entries = %+v, want the output of the newer item", read)
+	}
+}
+
+// testOutputConcurrent replaces the output of one unit from eight items at
+// the same time. Each replacement runs in its own transaction, so the store
+// must order them: the entries that remain come from the item with the
+// highest Seq, whatever the order of the commits.
+func testOutputConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	const items = 8
+
+	fence := h.Namespace(t, "acme")
+	u := unitOf("ws-1")
+	ref := objectcontext.UnitRef(u)
+
+	var (
+		wg   sync.WaitGroup
+		errs [items]error
+	)
+
+	for i := range items {
+		wg.Go(func() {
+			summary := "item " + strconv.Itoa(i+1)
+			out := objectcontext.Output{
+				SchemaVersion: 1,
+				Summary:       summary,
+				Resources:     nil,
+				Runbook:       "",
+				Owners:        nil,
+				OnCall:        "",
+				Links:         nil,
+			}
+			item := objectcontext.OutputItem{ID: summary, Seq: int64(i + 1)}
+
+			errs[i] = h.Store.ReplaceOutput(t.Context(), ref, item, out.Entries(u, "", summary, at()), fence)
+		})
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("ReplaceOutput %d: %v", i+1, err)
+		}
+	}
+
+	read := entries(t, h, ref)
+	if len(read) != 1 || read[0].Item != "item 8" || read[0].Fields.Summary != "item 8" {
+		t.Errorf("Entries = %+v, want the output of the item with the highest Seq", read)
 	}
 }
 

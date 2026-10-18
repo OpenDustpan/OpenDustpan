@@ -35,8 +35,9 @@ type Store interface {
 	// after the write (ChangesOf), because only the transaction knows the
 	// fields before. It returns the new entry. It returns ErrInvalidObject,
 	// ErrInvalidContext, ErrFieldFromCode, and namespace.ErrFenced when the
-	// fence is stale. An object that does not exist, for example a
-	// collection that the namespace does not hold, is ErrInvalidObject.
+	// fence is stale. A namespace or a collection that the store does not
+	// hold is ErrInvalidObject. The store does not check that a unit exists:
+	// the caller does.
 	SetAPI(ctx context.Context, object Ref, p Patch, by string, fence namespace.Fence, e audit.Entry) (Entry, error)
 	// DeleteAPI deletes the API entry of object and appends e, with the
 	// Changes of e set to the fields that the delete cleared (ChangesOf). It

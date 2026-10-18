@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -28,7 +30,11 @@ const (
 	ctxViewerToken = "ctx-viewer-token-0123456789abcdef0"
 	ctxOtherToken  = "ctx-other-token-0123456789abcdef01"
 	ctxNobodyToken = "ctx-nobody-token-0123456789abcdef0"
+	ctxNsOnlyToken = "ctx-nsonly-token-0123456789abcdef"
 )
+
+// ctxNsOnlyRole is a custom role that holds namespace:read and no unit action.
+const ctxNsOnlyRole = "rol-ns-only"
 
 // contextWorld is a server with the namespaces acme and other, and the units
 // that the context tests read: the OpenTofu workspace net and the Pulumi
@@ -79,6 +85,17 @@ func newContextWorld(t *testing.T) contextWorld {
 		}
 	}
 
+	at := time.Unix(0, 0)
+	nsOnly := access.Role{
+		CreatedAt: at, UpdatedAt: at, ID: ctxNsOnlyRole, Name: "namespace reader", Description: "", BuiltIn: false,
+		Actions: []identity.Action{identity.ActionNamespaceRead},
+	}
+
+	roleEntry := storetest.ServerChange(at, "role:"+ctxNsOnlyRole)
+	if roleErr := st.CreateRole(t.Context(), nsOnly, roleEntry); roleErr != nil {
+		t.Fatalf("create role: %v", roleErr)
+	}
+
 	for _, who := range []struct {
 		subject, role, ns string
 	}{
@@ -87,6 +104,7 @@ func newContextWorld(t *testing.T) contextWorld {
 		{"vera", access.RoleViewer, "acme"},
 		{"olga", access.RoleViewer, "other"},
 		{"sam", "", ""},
+		{"nora", ctxNsOnlyRole, "acme"},
 	} {
 		storePrincipal(t, st, who.subject)
 
@@ -110,6 +128,7 @@ func newContextWorld(t *testing.T) contextWorld {
 		ctxViewerToken: person("vera"),
 		ctxOtherToken:  person("olga"),
 		ctxNobodyToken: person("sam"),
+		ctxNsOnlyToken: person("nora"),
 	}}
 
 	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
@@ -380,6 +399,61 @@ func TestContextUnitOverridesAndClears(t *testing.T) {
 	w.expectOwners(t, "after the namespace clear", path, nil, "")
 }
 
+// ctxIdentityDocWire is the identity section of a document.
+type ctxIdentityDocWire struct {
+	Sections ctxIdentitySectionsWire `json:"sections"`
+}
+
+// ctxIdentitySectionsWire holds the identity section.
+type ctxIdentitySectionsWire struct {
+	Identity ctxIdentitySectionWire `json:"identity"`
+}
+
+// ctxIdentitySectionWire is the identity section.
+type ctxIdentitySectionWire struct {
+	Data ctxIdentityDataWire `json:"data"`
+}
+
+// ctxIdentityDataWire is the data of the identity section.
+type ctxIdentityDataWire struct {
+	Name string `json:"name"`
+}
+
+// TestContextUnitSurvivesRename proves that the context of a stack stays with
+// the stable ID of the stack: after a rename through the Pulumi API, the same
+// context route answers the same owners and the new name.
+func TestContextUnitSurvivesRename(t *testing.T) {
+	t.Parallel()
+
+	w := newContextWorld(t)
+	path := ctxNamespacePath + "/units/pulumi/" + w.stack
+
+	w.expectPatch(t, http.StatusOK, path, ctxWriterToken, `{"owners":["group:web"]}`)
+
+	code, body := w.call(
+		t, http.MethodPost, "/api/stacks/acme/web/prod/rename", ctxAdminToken, `{"newName":"live","newProject":"web"}`,
+	)
+	if code != http.StatusNoContent && code != http.StatusOK {
+		t.Fatalf("rename stack = %d %s", code, body)
+	}
+
+	w.expectOwners(t, "after a rename", path, []string{"group:web"}, "unit")
+
+	code, body = w.call(t, http.MethodGet, path, ctxViewerToken, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET %s = %d %s, want 200", path, code, body)
+	}
+
+	var got ctxIdentityDocWire
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+
+	if name := got.Sections.Identity.Data.Name; !strings.HasSuffix(name, "live") {
+		t.Errorf("identity name after the rename = %q, want the new name live", name)
+	}
+}
+
 // contextCase is one request of the table of refusals, and the status that it
 // must answer.
 type contextCase struct {
@@ -502,9 +576,12 @@ func TestContextOneNotFound(t *testing.T) {
 	bodies := map[string]string{}
 
 	for name, c := range map[string]struct{ target, token string }{
-		"unknown unit":      {ctxNamespacePath + "/units/opentofu/ws-absent", ctxAdminToken},
-		"other namespace":   {ctxNamespacePath + "/units/pulumi/" + w.otherStack, ctxAdminToken},
-		"cannot read":       {ctxNamespacePath + "/units/opentofu/" + w.workspace, ctxNobodyToken},
+		"unknown unit":    {ctxNamespacePath + "/units/opentofu/ws-absent", ctxAdminToken},
+		"other namespace": {ctxNamespacePath + "/units/pulumi/" + w.otherStack, ctxAdminToken},
+		"cannot read":     {ctxNamespacePath + "/units/opentofu/" + w.workspace, ctxNobodyToken},
+		"namespace read only": {
+			ctxNamespacePath + "/units/opentofu/" + w.workspace, ctxNsOnlyToken,
+		},
 		"unknown namespace": {"/api/context/namespaces/absent/units/opentofu/" + w.workspace, ctxAdminToken},
 	} {
 		code, body := w.call(t, http.MethodGet, c.target, c.token, "")
@@ -553,9 +630,10 @@ type ctxChangeWire struct {
 
 // ctxAuditEntryWire is the part of an audit entry that the test reads.
 type ctxAuditEntryWire struct {
-	Action  string          `json:"action"`
-	Subject string          `json:"subject"`
-	Changes []ctxChangeWire `json:"changes"`
+	Action   string          `json:"action"`
+	ObjectID string          `json:"objectID"`
+	Subject  string          `json:"subject"`
+	Changes  []ctxChangeWire `json:"changes"`
 }
 
 // ctxAuditWire is the part of an audit list that the test reads.
@@ -571,6 +649,7 @@ func TestContextWritesAreAudited(t *testing.T) {
 	w := newContextWorld(t)
 
 	w.expectPatch(t, http.StatusOK, ctxNamespacePath, ctxOwnerToken, ctxOwnersPatch)
+	w.expectPatch(t, http.StatusOK, ctxNamespacePath+"/units/pulumi/"+w.stack, ctxWriterToken, `{"onCall":"x"}`)
 
 	code, body := w.call(t, http.MethodGet, "/api/audit/entries?organization=acme", ctxAdminToken, "")
 	if code != http.StatusOK {
@@ -581,6 +660,8 @@ func TestContextWritesAreAudited(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &got); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
+
+	checkUnitAuditObjectID(t, got, w.stack)
 
 	for i := range got.Entries {
 		e := &got.Entries[i]
@@ -595,6 +676,10 @@ func TestContextWritesAreAudited(t *testing.T) {
 
 		slices.Sort(keys)
 
+		if e.ObjectID != "" {
+			t.Errorf("audit entry of a namespace has objectID %q, want none", e.ObjectID)
+		}
+
 		if e.Subject != "owen" || !slices.Equal(keys, []string{"onCall", "owners"}) {
 			t.Errorf("audit entry = %+v, want owen and the changes onCall and owners", *e)
 		}
@@ -603,4 +688,25 @@ func TestContextWritesAreAudited(t *testing.T) {
 	}
 
 	t.Errorf("audit log lacks the namespace:set-context entry: %s", body)
+}
+
+// checkUnitAuditObjectID checks that the audit list holds the unit:set-context
+// entry, and that the entry names the unit by its stable ID.
+func checkUnitAuditObjectID(t *testing.T, list ctxAuditWire, unitID string) {
+	t.Helper()
+
+	for i := range list.Entries {
+		e := &list.Entries[i]
+		if e.Action != "unit:set-context" {
+			continue
+		}
+
+		if e.ObjectID != unitID {
+			t.Errorf("audit entry of a unit has objectID %q, want the stable ID %q", e.ObjectID, unitID)
+		}
+
+		return
+	}
+
+	t.Errorf("audit log lacks the unit:set-context entry: %+v", list)
 }

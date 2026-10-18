@@ -354,7 +354,9 @@ func (s *Store) DeleteAPI(
 // ReplaceOutput implements objectcontext.Store. A unit whose output is empty
 // keeps one row with no fields, which holds the order of the item. A reader
 // never sees that row. Without it, a late run of an older item would bring
-// back an output that a newer item cleared.
+// back an output that a newer item cleared. The transaction holds the
+// namespace row FOR UPDATE, so two replacements of one unit run one after
+// the other and the second reads the order that the first wrote.
 func (s *Store) ReplaceOutput(
 	ctx context.Context, unit objectcontext.Ref, item objectcontext.OutputItem,
 	entries []objectcontext.Entry, fence namespace.Fence,
@@ -367,7 +369,7 @@ func (s *Store) ReplaceOutput(
 		return fmt.Errorf("%w: the object is in another namespace than the fence", objectcontext.ErrInvalidObject)
 	}
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		target, found, err := resolveContext(ctx, q, unit)
 		if err != nil {
 			return err

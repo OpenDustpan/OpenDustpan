@@ -183,7 +183,7 @@ func purgeStackRows(ctx context.Context, q *db.Queries, ns namespace.Name, id st
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return nil
+	return purgeUnitContext(ctx, q, ns, id.String())
 }
 
 // RestoreWorkspace implements workspace.Store. In one fenced transaction
@@ -338,7 +338,7 @@ func purgeWorkspaceRows(
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return nil
+	return purgeUnitContext(ctx, q, ns, id.String())
 }
 
 // retentionEnded reports whether the retention period of the deleted unit
@@ -483,4 +483,19 @@ func restoredReference(tool string, ns namespace.Name, name, fallback string) st
 	}
 
 	return obj.String()
+}
+
+// purgeUnitContext deletes the context entries of the unit and of its
+// resources. The owner rows go with them by cascade.
+func purgeUnitContext(ctx context.Context, q *db.Queries, ns namespace.Name, unitID string) error {
+	nsID, err := q.GetNamespaceID(ctx, ns.String())
+	if err != nil {
+		return fmt.Errorf("select namespace ID: %w", err)
+	}
+
+	if err = q.DeleteUnitContext(ctx, db.DeleteUnitContextParams{NamespaceID: nsID, ObjectID: unitID}); err != nil {
+		return fmt.Errorf("delete unit context: %w", err)
+	}
+
+	return nil
 }
