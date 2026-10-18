@@ -2554,6 +2554,22 @@ func (q *Queries) FirstStateUpdateEnd(ctx context.Context, stackID string) (int6
 	return ended_at_ms, err
 }
 
+const firstWorkspaceStateFinalize = `-- name: FirstWorkspaceStateFinalize :one
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms ASC, id ASC
+LIMIT 1
+`
+
+// The finalize time of the first finalized state version of a workspace.
+func (q *Queries) FirstWorkspaceStateFinalize(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, firstWorkspaceStateFinalize, workspaceID)
+	var finalized_at_ms int64
+	err := row.Scan(&finalized_at_ms)
+	return finalized_at_ms, err
+}
+
 const getAccessToken = `-- name: GetAccessToken :one
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens WHERE id = $1
@@ -8739,4 +8755,45 @@ func (q *Queries) WorkspaceExists(ctx context.Context, id string) (bool, error) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const workspaceExistsByID = `-- name: WorkspaceExistsByID :one
+SELECT id FROM workspaces WHERE id = $1
+`
+
+// A workspace by its ID, a soft-deleted one included.
+func (q *Queries) WorkspaceExistsByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, workspaceExistsByID, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const workspaceStateAt = `-- name: WorkspaceStateAt :one
+SELECT id, finalized_at_ms, holder
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized' AND finalized_at_ms <= $2
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT 1
+`
+
+type WorkspaceStateAtParams struct {
+	WorkspaceID   string
+	FinalizedAtMs int64
+}
+
+type WorkspaceStateAtRow struct {
+	ID            string
+	FinalizedAtMs int64
+	Holder        string
+}
+
+// The finalized state version with the latest finalize time at or before a
+// time. Ties break by ID, as in the state version list. The index on
+// (workspace_id, finalized_at_ms DESC) serves the order.
+func (q *Queries) WorkspaceStateAt(ctx context.Context, arg WorkspaceStateAtParams) (WorkspaceStateAtRow, error) {
+	row := q.db.QueryRow(ctx, workspaceStateAt, arg.WorkspaceID, arg.FinalizedAtMs)
+	var i WorkspaceStateAtRow
+	err := row.Scan(&i.ID, &i.FinalizedAtMs, &i.Holder)
+	return i, err
 }

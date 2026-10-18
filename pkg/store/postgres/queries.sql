@@ -535,6 +535,28 @@ WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
 LIMIT $2 OFFSET $3;
 
+-- name: WorkspaceExistsByID :one
+-- A workspace by its ID, a soft-deleted one included.
+SELECT id FROM workspaces WHERE id = $1;
+
+-- name: WorkspaceStateAt :one
+-- The finalized state version with the latest finalize time at or before a
+-- time. Ties break by ID, as in the state version list. The index on
+-- (workspace_id, finalized_at_ms DESC) serves the order.
+SELECT id, finalized_at_ms, holder
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized' AND finalized_at_ms <= $2
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT 1;
+
+-- name: FirstWorkspaceStateFinalize :one
+-- The finalize time of the first finalized state version of a workspace.
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms ASC, id ASC
+LIMIT 1;
+
 -- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions

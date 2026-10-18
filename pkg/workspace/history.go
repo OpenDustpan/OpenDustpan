@@ -13,6 +13,24 @@ import (
 // a workspace.
 var ErrNoStateAt = errors.New("workspace has no state at that time")
 
+// NoStateAtError is the error that WorkspaceStateAt returns for a time before the
+// first finalized state version. First is the finalize time of the first
+// state version, or the zero time when the workspace has none yet. It matches
+// ErrNoStateAt with errors.Is.
+type NoStateAtError struct {
+	First time.Time
+}
+
+// Error implements error.
+func (e *NoStateAtError) Error() string {
+	return ErrNoStateAt.Error()
+}
+
+// Is reports whether target is ErrNoStateAt.
+func (e *NoStateAtError) Is(target error) bool {
+	return target == ErrNoStateAt
+}
+
 // ResourceChangeKind is what one state version did to one resource
 // instance, by address.
 type ResourceChangeKind string
@@ -101,17 +119,25 @@ type BlameStore interface {
 }
 
 // StateAt names the state version that was current in a workspace at a
-// time: the one with the latest finalize time at or before the time.
+// time: the one with the latest finalize time at or before the time. By is
+// the holder of the workspace lock when the client declared the state
+// version, as the state version lists it.
 type StateAt struct {
 	FinalizedAt  time.Time
+	By           string
 	StateVersion StateVersionID
 }
 
 // StateAtReader finds the state of a workspace at a time.
 type StateAtReader interface {
-	// StateAt returns the state version that was current in the workspace
-	// id at the time at. It returns ErrNoStateAt when no state version
-	// finalized at or before at, and ErrNotFound for an unknown workspace. A
-	// soft-deleted workspace answers as before its delete.
-	StateAt(ctx context.Context, id ID, at time.Time) (StateAt, error)
+	// WorkspaceStateAt returns the state version that was current in the
+	// workspace id at the time at. The name differs from the method of
+	// stack.StateAtReader, so that one store can hold both. It returns ErrNoStateAt when no state version
+	// finalized at or before at, and ErrNotFound for an unknown workspace.
+	// The ErrNoStateAt error is a *NoStateAtError, and its First holds the
+	// finalize time of the first state version, or the zero time when the
+	// workspace has none. A pending state version does not count. The result
+	// is the zero StateAt with each error. A soft-deleted workspace answers
+	// as before its delete.
+	WorkspaceStateAt(ctx context.Context, id ID, at time.Time) (StateAt, error)
 }

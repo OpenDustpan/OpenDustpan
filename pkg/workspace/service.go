@@ -266,6 +266,7 @@ type Service struct {
 	maxState   int64
 	maxPending int
 	retention  time.Duration
+	stateAt    StateAtReader
 	stripes    [lockStripes]sync.Mutex
 }
 
@@ -296,7 +297,13 @@ func NewService(cfg Config) (*Service, error) {
 		maxState:   cfg.MaxStateBytes,
 		maxPending: cfg.MaxPendingVersions,
 		retention:  cfg.Retention,
+		stateAt:    nil,
 		stripes:    [lockStripes]sync.Mutex{},
+	}
+
+	// A state store that also finds the state at a time enables ReadStateAt.
+	if reader, ok := cfg.States.(StateAtReader); ok {
+		s.stateAt = reader
 	}
 
 	if s.now == nil {
