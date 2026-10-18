@@ -479,7 +479,7 @@ The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.E
 _Avoid_: Launcher (that is the program of a runner that starts each step)
 
 **Phase**:
-The work that one executor does with one claim (ADR 100 decision 4). A phase has one of three kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
+The work that one executor does with one claim (ADR 100 decision 4). A phase has one of four kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. `verify` comes after the apply phase of a runner apply job and of a runner destroy job. It holds runner steps that change nothing and check the change (ADR 148 decision 3). A job has a `verify` phase only when the unit settings name its steps. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
 _Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
 
 **Gate**:
@@ -741,8 +741,12 @@ _Avoid_: Approval (that is a job gate), opt-in, permission
 ### History
 
 **History item**:
-One entry with content in the history of a unit (ADR 150). It is one Pulumi update with its checkpoints, events and journal entries, or one OpenTofu state version. It can also be one stored plan or one version of a job log, which the job model owns (ADR 152). Shared code names an item by its unit, its kind (`state`, `plan` or `job-log`) and the ID that the tool gives the item. The core never parses the item ID. A preview is not a history item.
+One entry with content in the history of a unit (ADR 150). It is one Pulumi update with its checkpoints, events and journal entries, or one OpenTofu state version. It can also be one stored plan or one version of a job log, which the job model owns (ADR 152). Shared code names an item by its item owner, its kind and the ID that the tool gives the item. The kinds are an open set that the server registers (ADR 154): `state`, `plan`, `job-log` and `comment` now. The core never parses the item ID. A preview is not a history item.
 _Avoid_: Revision, version (alone), history entry
+
+**Item owner**:
+The object that a history item belongs to (`history.Owner`, ADR 154). The owner kinds are an open set that the server registers: `unit` for state items, plans and job logs, and `change-order` for comments (ADR 198). The scope of an item key is the namespace and the owner ID. Each owner kind names the object of a read, the action of a redaction and the end of its items.
+_Avoid_: Parent, container, unit (alone, when the owner can be a change order)
 
 **Latest state item**:
 The state item of a unit that no redaction can target (ADR 150, ADR 151). For a stack, it is the update that holds the checkpoint that `stack export` answers. For a workspace, it is the current state version. It also holds the replay base of each update that has not ended or whose journal the server did not replay yet. A request to redact it answers 409 with `history.ErrLatest`.
@@ -785,7 +789,7 @@ A read of a unit, or of the inventory of a namespace, at a time `at` in Unix mil
 _Avoid_: Snapshot, time travel, historical state
 
 **Inventory change log**:
-The append-only log of each inventory write (ADR 150). Each tool appends one row in the transaction of each inventory write: `created`, `changed`, `renamed`, `deleted`, `restored` or `purged`. A row holds the fields of the inventory entry at that time, the time of the write and a sequence number. The store assigns the sequence number in the order of commits. A purge keeps the rows of the unit, which hold names and counts and never state. The server keeps the log forever, and no setting changes this. A rebuild of the inventory cannot rebuild the log in full.
+The append-only log of each inventory write (ADR 150). Each tool appends one row in the transaction of each inventory write: `created`, `changed`, `renamed`, `deleted`, `restored` or `purged`. A row holds the fields of the inventory entry at that time, the time of the write and a sequence number. The sequence is per namespace. A counter row of the namespace assigns it in the write transaction, so it follows the order of commits (ADR 154). A purge keeps the rows of the unit, which hold names and counts and never state. The server keeps the log forever, and no setting changes this. A rebuild of the inventory cannot rebuild the log in full.
 _Avoid_: Inventory history, audit log (that records actions)
 
 **Dependency edge**:
@@ -886,6 +890,75 @@ _Avoid_: Alert, issue, violation, scan result, orphan
 A rule of a namespace that ignores each new finding that it matches, with its reason (`unmanaged.IgnoreRule`, ADR 165). It selects by provider, account scope, type, a tag key with an optional value, and kinds. Only the provider is required. A type can be exact, or a prefix that ends with `*`. A rule can have an end. A rule never ignores a finding that existed before the rule, and its delete opens no finding. A finding names the rule that ignored it. A namespace has at most 500 rules.
 _Avoid_: Suppression, filter, allowlist
 
+### Console
+
+**Theme**:
+The look of the console that a person selects: `default` or `terminal` (ADR 180). A theme sets the font of the interface and the default of the keyboard settings. The colors come from the color mode and the color scheme.
+_Avoid_: Skin, style
+
+**Terminal theme**:
+The opt-in theme of the console: IBM Plex Mono for all text, dense, keyboard first, with color schemes. "Terminal" is its only name.
+_Avoid_: The name of a terminal emulator or of an editor for it
+
+**Color mode**:
+`system`, `light` or `dark`. `system` follows the color scheme of the operating system.
+_Avoid_: Theme (for light or dark)
+
+**Color scheme**:
+A palette of the Terminal theme, from the Gogh collection, mapped to the color tokens of the console (ADR 180). Its name is a label with credit to its authors, never our name. `opendustpan` is the built-in scheme: the palette of the default theme.
+_Avoid_: Theme (for a palette), skin
+
+**Preset**:
+Branding that an operator sets for the whole installation, for example the palette of OpenDustpan Cloud. A person never selects a preset, and a theme and a color scheme apply on top of it (ADR 180).
+_Avoid_: Scheme, theme (for branding)
+
+**Preferences**:
+The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+_Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
+
+
+**Language** (of a person):
+The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 28 languages of ADR 181. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+_Avoid_: Locale (for the language)
+
+**Formatting locale**:
+The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock (`hourCycle`), the date style, the first day of the week and the time zone.
+_Avoid_: Language (for formats), region
+
+**Message file**:
+The file of the console that holds the messages of one language in ICU MessageFormat (ADR 181). It marks each high-stakes message, which needs native review before it ships.
+_Avoid_: Catalog (that is the self-service gateway), translation table
+
+**Term list**:
+The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
+_Avoid_: Glossary (that is this file), do-not-translate list
+
+**Pseudo-locale**:
+`en-XA`, a test language of the console (ADR 181). It makes each message longer, adds accents and puts brackets around it. Tests use it to find clipped text and text outside a message file. Release builds do not list it.
+_Avoid_: Test language, fake locale
+
+**Error code**:
+The stable machine code of an API error, for example `workspace.locked` (ADR 182). It is `errorCode` in the camelCase APIs and the JSON:API `code` member in the TFE-compatible API. A code never changes its meaning. The console selects its message by the code and never parses the English text. Not the `code` field of the camelCase error shapes, which is the HTTP status.
+_Avoid_: Error type, error ID, status code (for the machine code)
+
+### Operations
+
+**Incident**:
+An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.
+_Avoid_: Ticket, outage, alert
+
+**Classification**:
+The record of a person that says whether an incident is major, with the criteria that the person found met (ADR 147 decision 5). Classifications are append-only. The last one is the current classification. The server never classifies an incident.
+_Avoid_: Triage, severity (a severity is a different field)
+
+**Commander**:
+The person who leads the response to an incident (ADR 147 decision 1).
+_Avoid_: Owner, lead
+
+**Cyber threat record**:
+A record of a cyber threat in a namespace, with an ID that has the prefix `thr-` (ADR 148 decision 13). It has a title, a description, the time of detection, links to units and notes. A person records whether the threat is significant, with a reason, and each voluntary notice of the threat to an authority. The server never decides that a threat is significant, and never sends a notice. A person closes the record with a note on the outcome. A cyber threat record is not an incident: the threat did not affect a service.
+_Avoid_: Threat (alone), alert, vulnerability
+
 ## Flagged ambiguities
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
@@ -922,4 +995,4 @@ _Avoid_: Suppression, filter, allowlist
 - **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
-- **Retention** has two meanings: the retention period of a deleted unit, and that of a stored plan or a job log (ADR 152). Name which one.
+- **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.

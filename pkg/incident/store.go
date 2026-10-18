@@ -52,8 +52,11 @@ type Store interface {
 	// for a zero fence or the fence of another namespace; ErrExists; and
 	// namespace.ErrFenced.
 	Create(ctx context.Context, in Incident, fence namespace.Fence, e audit.Entry) error
-	// Get returns the incident id, or ErrNotFound.
-	Get(ctx context.Context, id string) (Incident, error)
+	// Get returns the incident id of the namespace ns. It returns
+	// ErrNotFound for an unknown ID and for an incident of another
+	// namespace, so that a read in one namespace does not tell whether an
+	// incident of another namespace exists.
+	Get(ctx context.Context, ns namespace.Name, id string) (Incident, error)
 	// Update replaces the fields of in.ID that a person edits when
 	// in.Version is the stored version, and increments the version. It
 	// never changes the ID, the namespace, the state, the step times,
@@ -106,6 +109,8 @@ type Timeline interface {
 	// ErrInvalid for an empty note or a note above MaxNoteLen; and
 	// namespace.ErrFenced.
 	AddNote(ctx context.Context, n Note, fence namespace.Fence, e audit.Entry) error
-	// Notes returns the timeline of the incident id, oldest first.
-	Notes(ctx context.Context, id string) ([]Note, error)
+	// Notes returns the timeline of the incident id of the namespace ns,
+	// oldest first. It returns ErrNotFound for an unknown incident and for
+	// an incident of another namespace, with the rule of Store.Get.
+	Notes(ctx context.Context, ns namespace.Name, id string) ([]Note, error)
 }
