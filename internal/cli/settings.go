@@ -1,5 +1,11 @@
 package cli
 
+import "opendustpan.org/opendustpan/pkg/history"
+
+// retentionDefault is the default of the retention settings: 400 days. A
+// test proves it equals history.DefaultRetention.
+const retentionDefault = "9600h"
+
 // defaultFalse is the default of the bool declarations: no opt-in without
 // an explicit flag or variable.
 const defaultFalse = "false"
@@ -427,15 +433,15 @@ var Settings = []*Setting{
 	).WithSensitive(),
 
 	stringSetting(
-		"plan-retention", "DUSTPAN_PLAN_RETENTION", "9600h",
-		"how long a stored plan stays, at least 24h (DUSTPAN_PLAN_RETENTION)",
-		"`9600h` (400 days). A Go duration of at least `24h`",
-	).WithFile("plan-retention"),
+		history.PlanRetentionFlag, history.PlanRetentionEnv, retentionDefault,
+		"how long a stored plan stays ("+history.PlanRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration",
+	),
 	stringSetting(
-		"job-log-retention", "DUSTPAN_JOB_LOG_RETENTION", "9600h",
-		"how long a version of a job log stays, at least 24h (DUSTPAN_JOB_LOG_RETENTION)",
-		"`9600h` (400 days). A Go duration of at least `24h`",
-	).WithFile("job-log-retention"),
+		history.JobLogRetentionFlag, history.JobLogRetentionEnv, retentionDefault,
+		"how long a version of a job log stays ("+history.JobLogRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration",
+	),
 	stepInput("DUSTPAN_JOB_ID", "The ID of the job that the step belongs to."),
 	stepInput("DUSTPAN_PHASE", "The name of the phase of the job that the step belongs to."),
 	stepInput("DUSTPAN_STEP", "The name of the step."),

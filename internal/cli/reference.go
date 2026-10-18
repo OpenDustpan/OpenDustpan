@@ -244,7 +244,7 @@ func writeStepInputs(out *strings.Builder) {
 	out.WriteString("\n")
 	out.WriteString("The launcher sets these variables for the process of each step of a job. The\n")
 	out.WriteString("server does not read them, and no flag or file key sets them. A step cannot\n")
-	out.WriteString("set a variable with the prefix `DUSTPAN_`.\n")
+	out.WriteString("set a variable with the prefix `DUSTPAN_`: the launcher refuses it.\n")
 	out.WriteString("\n")
 	out.WriteString("| Environment | Value |\n")
 	out.WriteString("| --- | --- |\n")

@@ -184,7 +184,7 @@ next to the data does not protect a backup of that data.
 
 The launcher sets these variables for the process of each step of a job. The
 server does not read them, and no flag or file key sets them. A step cannot
-set a variable with the prefix `DUSTPAN_`.
+set a variable with the prefix `DUSTPAN_`: the launcher refuses it.
 
 | Environment | Value |
 | --- | --- |
