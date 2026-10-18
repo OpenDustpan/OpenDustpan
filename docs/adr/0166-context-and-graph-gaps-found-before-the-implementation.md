@@ -32,14 +32,24 @@ The facts on `main` that the decisions build on:
 - **Namespace names in the keys.** `objectcontext.Ref` and `graph.Unit`
   hold a `namespace.Name`. `Ref.Key` holds the name of the namespace and
   of a collection. `unmanaged.Links` already holds stable namespace IDs
-  (ADR 163 decision 9). `namespace.Namespace` has no stable ID yet. ADR 154
-  puts that ID first in its open work.
+  (ADR 163 decision 9), but the namespace store does not give these IDs
+  yet: `namespace.Namespace` holds a name and no stable ID. Item 1 of the
+  open work of ADR 154 adds that ID.
 - **Collections have IDs.** The table `collections` has the columns `id`,
   `namespace`, `name_key` and `name`.
 - **Durable start keys never expire.** `durable.Store.Start` returns the
   operation that a key already names, "whatever its input, version and
   state". So one fixed start key for each unit starts one operation for
   the life of the unit, and never a second.
+- **Each retry is a failure.** `durable.Store.Fail` increments `failures`
+  for each attempt that does not end, and the runner ends the operation
+  failed after `MaxAttempts` failures. `Release` returns an operation to
+  pending with no failure, but with `not_before_ms` at the current time, so
+  a claimer can take it again at once. No result says "not yet, try again at a time".
+- **A restore fences every namespace.** `backup.Applier.ApplyStaging` and
+  `ApplyStagingKeepingAccess` swap the data and increment the failover
+  version of every namespace in the apply step. A write that carries a fence
+  from before the swap then fails with `namespace.ErrFenced`.
 - **The backup has two table lists.** `backup.Tables` lists the tables that
   a backup holds. `backup.ControlTables` lists the tables that a backup
   leaves out and a restore keeps. The conformance suite fails while the
@@ -47,7 +57,9 @@ The facts on `main` that the decisions build on:
   `REPEATABLE READ` transaction, so a backup is one consistent snapshot.
 - **The new actions have no family.** `identity` declares
   `unit:set-context`, `namespace:set-context`, `collection:set-context`,
-  `namespace:read-unmanaged` and `namespace:triage-unmanaged`.
+  `namespace:read-unmanaged`, `namespace:triage-unmanaged`,
+  `namespace:start-sweep`, `namespace:manage-sweeps` and
+  `server:link-namespaces`.
   `access.FamilyOf` answers no family for them, and a test holds that
   "until its routes land". So no built-in role holds them.
 - **The retention expiry route.** `internal/api/server/deleted.go` serves
@@ -75,6 +87,7 @@ The facts on `main` that the decisions build on:
    | `warning` | text | the parse error of an output, else empty |
    | `item_id`, `item_seq` | text, bigint | the state item of an output entry, else empty and 0 |
    | `resource_deleted_at_ms` | bigint, nullable | decision 23 |
+   | `marks_seq` | bigint | the order of the state item that last set or cleared the mark, else 0 (decision 23) |
    | `updated_at_ms`, `updated_by` | bigint, text | the time and the principal of an API write |
 
    The primary key is (`namespace_id`, `object_kind`, `object_id`,
@@ -108,7 +121,8 @@ The facts on `main` that the decisions build on:
    restore then brings the output entries back with the state.
 5. **The backup class of the resource index: rebuildable.** The tables of
    the resource index are a third class, **projection tables**
-   (`backup.ProjectionTables`). A backup leaves them out. A restore empties
+   (`backup.ProjectionTables`). A backup leaves them out. Both appliers,
+   `ApplyStaging` and `ApplyStagingKeepingAccess`, in both dialects, empty
    them in the swap, and the server builds them again (decision 9). The
    conformance suite checks that every table is in exactly one of the
    three lists. The reasons:
@@ -132,12 +146,41 @@ The facts on `main` that the decisions build on:
    `projection.unit:<namespace ID>:<tool>:<unit ID>:<run ID>`. The run ID
    is a random ID that the server makes for each start.
    - **The start.** Each transaction that sets a new latest state item of
-     a unit also runs one statement on its head row. The statement writes
-     the row with a new run ID and `queued` true when the row does not
-     exist or `queued` is false. When the statement writes the row, the
+     a unit also runs one atomic upsert on its head row:
+
+     ```sql
+     INSERT INTO projection_heads (namespace_id, tool, unit_id, run_id, queued)
+     VALUES ($1, $2, $3, $4, true)
+     ON CONFLICT (namespace_id, tool, unit_id) DO UPDATE
+       SET run_id = excluded.run_id, queued = true
+       WHERE NOT projection_heads.queued
+          OR EXISTS (SELECT 1 FROM durable_operations o
+                     WHERE o.start_key = 'projection.unit:' || $1 || ':' || $2
+                                         || ':' || $3 || ':' || projection_heads.run_id
+                       AND o.state IN ('succeeded', 'failed', 'canceled'))
+     RETURNING run_id
+     ```
+
+     `$4` is a new run ID. The upsert takes the head when the row does not
+     exist, when `queued` is false, or when the durable operation of the
+     run ID in the row ended. It reads `durable_operations` by the
+     start key in the same transaction. When the upsert returns a row, the
      transaction starts the run with that run ID (`durable.StartRequest`).
-     When `queued` is already true, a run waits, and the transaction
-     starts nothing.
+     Both dialects support this form of upsert.
+     When it returns no row, a live run waits, and the transaction starts
+     nothing. Two concurrent transactions on one unit serialize on the row,
+     so only one of them takes the head.
+   - **Why the start also takes an ended head.** A run that ends before
+     its first step, for example with a final failure or a cancel, leaves
+     `queued` true. Without the ended check, no later item could start a
+     run for that unit.
+   - **The reconcile tick.** A durable schedule `projection.reconcile`
+     runs every 10 minutes. It reads the head rows with `queued` true, at
+     most 1,000 for each tick, and for each one whose operation ended,
+     it takes the head and starts a run with the same upsert. So a unit
+     with no new item also gets its last item projected.
+     The conformance suite holds the case "a run that fails before its
+     first step does not block the next start".
    - **Why a random run ID.** A durable start key names one operation for
      ever. A restore empties `projection_heads` and keeps the durable
      operations (decision 9). A counter in the head row would then start
@@ -147,14 +190,20 @@ The facts on `main` that the decisions build on:
      a Pulumi stack import, an OpenTofu state version that becomes the
      current one, and a forced state write of either tool.
    - **The run.** The first step of a run sets `queued` to false when the
-     head row holds its run ID, and records the step. Then the run reads the latest state
-     item, with secret values masked (ADR 41). Then it writes the output
-     entries of context (`objectcontext.Store.ReplaceOutput`), the index
-     entries (`unmanaged.Index.ReplaceUnit`) and the deleted marks of
-     decision 23, each with the fence of the namespace and with the order
-     of the item. For a soft-deleted unit, it writes the index entries
-     with the deleted mark (`Index.SetDeleted`), so a rebuild keeps the
-     findings of the kind left behind.
+     head row holds its run ID, and records the step, in one transaction.
+     After that transaction commits, the run reads the latest state item
+     in a new transaction, with secret values masked (ADR 41). Then it
+     writes the output entries of context (`objectcontext.Store.ReplaceOutput`),
+     the index entries (`unmanaged.Index.ReplaceUnit`) and the deleted
+     marks of decision 23, each with the fence of the namespace and with
+     the order of the item. The run reads the fence when it reads the
+     item. For a soft-deleted unit, it writes the index entries with the
+     deleted mark (`Index.SetDeleted`), so a rebuild keeps the findings of
+     the kind left behind.
+   - **A restore during a run.** The apply step of a restore fences every
+     namespace. So a run that read its item before the swap fails its
+     writes with `namespace.ErrFenced` and writes nothing from the old
+     data. The rebuild of decision 9 then projects the restored items.
    - **Why this coalesces and loses no item.** Items that arrive before the
      first step find `queued` true, and the run reads them all, because it
      reads the latest item after that step. An item that arrives after the
@@ -165,9 +214,20 @@ The facts on `main` that the decisions build on:
    - **A unit that no longer exists.** A run that finds no live or
      soft-deleted unit with its ID ends with success and writes nothing.
    - **Failure.** A run that fails retries with the backoff of ADR 72. A
-     run that fails for the last time marks the unit "not fully indexed"
-     in the inventory (ADR 163 decision 7). The next state item starts a
-     new run.
+     run that fails for the last time ends failed, and the next state item
+     or the reconcile tick starts a new run.
+   - **"Not fully indexed" is a store write by the reconcile.** The
+     reconcile tick reads the head rows whose operation ended failed, and
+     writes the mark "not fully indexed" of the unit (ADR 163 decision 7)
+     with `unmanaged.Index.MarkIncomplete(unit, runID, fence)`. The next
+     run that succeeds for the unit clears the mark in the transaction of
+     its index write. The failed run itself writes no mark, because its
+     last attempt can end before any of its writes.
+   - **A projection inside a rebuild.** A rebuild (decision 9) runs the
+     same projection of one unit in its own step, but it does not read or
+     write `projection_heads`. So a rebuild and a live run of one unit can
+     run at the same time. Each write keeps the entries of the highest
+     order, so the two give the same result.
 8. **Independent of blame.** The run does not wait for the blame operation
    of ADR 150, which is not built yet, and does not share its operation.
    The reasons:
@@ -181,10 +241,15 @@ The facts on `main` that the decisions build on:
    run. With coalescing, a unit that writes ten state items in a minute
    costs one or two reads, not ten. When blame lands, the two can share a
    read through a cache of the masked item. They stay two operations.
-9. **The rebuild after a restore.** After the swap, a restore starts one
-   operation `projection.rebuild`, version 1, for each namespace that the
-   backup holds, with the start key
-   `projection.rebuild:<namespace ID>:<restore ID>`. A rebuild reads the
+9. **The rebuild after a restore.** The apply transaction of a restore
+   (`ApplyStaging` and `ApplyStagingKeepingAccess`, in both dialects)
+   empties the projection tables in the swap, and in the same transaction
+   starts one operation `projection.rebuild`, version 1, for each
+   namespace that the backup holds, with the start key
+   `projection.rebuild:<namespace ID>:<restore ID>`. The restore ID is in
+   the key, so a second restore of the same backup starts new rebuilds. A
+   crash after the swap cannot leave a namespace with no row and no
+   rebuild. A rebuild reads the
    live and soft-deleted units of its namespace in pages of 100, by unit
    ID, and records a step for each page. So a takeover continues from the
    last page. For each unit, it runs the projection of decision 7 in its
@@ -193,19 +258,47 @@ The facts on `main` that the decisions build on:
    - **Fail closed while the index is not ready.** A namespace with no row
      in `resource_index_ready` has an index that is not complete. While it
      is not complete, the state check and the match of a cloud sweep in
-     that namespace do not run. Their durable operation fails the attempt
-     with a retry after 1 minute (ADR 72), and the sweep keeps its status.
-     They resolve no finding and open no finding. A link
-     (ADR 163 decision 9) to a namespace that is not ready also makes the
-     linked namespace wait. Else an empty index would resolve a
+     that namespace do not run. Their durable operation ends the attempt
+     with the result "not yet, try at T", with T 1 minute later, and the
+     sweep keeps its status. They resolve no finding and open no finding.
+     A link (ADR 163 decision 9) to a namespace that is not ready also
+     makes the linked namespace wait. Else an empty index would resolve a
      managed-twice finding, and classify a key as not in any unit.
+   - **A needed change of the durable package: "not yet" is not a
+     failure.** A failed attempt counts toward `MaxAttempts`, so a long
+     rebuild would make the state check and the match fail for good. The
+     durable package gets a step result `durable.NotYet(at time.Time)` and
+     a store method `Defer(ctx, c Claim, notBefore time.Time) error`.
+     `Defer` returns the operation to pending with `not_before_ms` at
+     `notBefore`, clears the claim, and keeps `attempt` and `failures`.
+     It returns `ErrClaimLost` when `c` is not the live claim, and ends
+     the operation canceled when a person asks for a cancel, as `Release`
+     does. The runner calls `Defer` for a step that returns `NotYet`. The
+     `durabletest` suite gets the cases: a deferred operation is not
+     claimable before `notBefore`, is claimable after it, and keeps its
+     failure count. This change lands before the state check and the
+     match.
+   - **The reconcile.** At each server start, and on the schedule
+     `projection.reconcile` of decision 7, the server reads the namespaces
+     with no row in `resource_index_ready`. For each one with no live
+     (pending or running) `projection.rebuild`, it starts a rebuild with
+     the start key `projection.rebuild:<namespace ID>:<random ID>`. So a
+     rebuild that failed for the last time, or a namespace that a lost
+     write left with no row, gets a new rebuild. The reconcile reads and
+     starts in one transaction that locks the row of the namespace, so two
+     servers that start at the same time start one rebuild, not two.
+   - **The API shows "index not ready".** The routes of findings, sweeps
+     and the inventory answer the field `indexReady: false` for a
+     namespace with no row in `resource_index_ready`, and the console shows
+     "Index not ready". The start of a sweep or a state check in such a
+     namespace succeeds, and the sweep waits as above.
    - **A new namespace.** The create of a namespace writes its row in
      `resource_index_ready` in its transaction, because an empty namespace
      has a complete index.
    - **The first start of a server with these tables.** The migration that
-     makes `resource_index_ready` writes no row. The first server start
-     after it starts one `projection.rebuild` for each namespace, with the
-     start key `projection.rebuild:<namespace ID>:initial`.
+     makes `resource_index_ready` writes no row. The reconcile at the
+     first server start after it starts one `projection.rebuild` for each
+     namespace.
    - **Output entries.** The rebuild also writes the output entries of
      context. A backup holds them, so this changes a row only when a run
      was pending at the time of the backup. The durable operations are
@@ -265,15 +358,32 @@ The facts on `main` that the decisions build on:
     (ADR 162 decision 13).
 14. **One 404 rule.** The rule of ADR 154 decision 9 and ADR 149
     decision 4 applies to each route of decision 13:
-    - The handler finds the object by its ID or name only in the namespace
-      that the route names for it: the namespace of the path, or for the
-      `to` unit of a path, the namespace in `to`. It finds the live object
-      or the soft-deleted object. When it finds none, it answers 404.
+    - **The namespace first.** The handler finds the namespace of the
+      path, live or soft-deleted. An unknown namespace answers 404. Then it
+      checks `namespace:read` on that namespace. When the caller does not
+      hold it, the handler answers the same 404.
+    - **Then the object.** The handler finds the object by its ID or name
+      only in the namespace that the route names for it: the namespace of
+      the path, or for the `to` unit of a path, the namespace in `to`. It
+      finds the live object or the soft-deleted object. When it finds none,
+      it answers 404.
     - Then it checks the read action of the object (ADR 160 decision 16).
       When the caller does not hold it, the handler answers the same 404.
-    - So an unknown object, an object of another namespace, a purged object
-      and an object that the caller cannot read all answer the same 404,
-      with the same body. The answer never tells that the object exists.
+      So a read by ID needs `namespace:read` on the namespace of the path
+      and the read action of the object, as ADR 154 decision 9 says.
+    - So an unknown namespace, an unknown object, an object of another
+      namespace, a purged object and an object that the caller cannot read
+      all answer the same 404, with the same body. The answer never tells
+      that the object exists.
+    - **A resource that the state does not hold.** A `PATCH` of the
+      context of a resource key that the latest state item of the unit does
+      not hold, with no mark of decision 23, answers 404. A person can add
+      context only to a resource that exists.
+    - **Client-encrypted state.** The server cannot read the resources of a
+      unit with client-encrypted state (ADR 163 decision 6). So a `PATCH`
+      of the context of a resource of such a unit answers 409
+      (`objectcontext.ErrResourcesUnreadable`). The context of the unit
+      itself still works.
     - For a path, the handler applies the rule to the `from` unit and to the
       `to` unit, and answers the same 404 for either.
     - For a `PATCH` or a `DELETE`, the handler checks the read action
@@ -315,9 +425,18 @@ The facts on `main` that the decisions build on:
       The graph adapter maps `graph.Direction` to it.
     - `MaxEdgeUnits` is 500 and `MaxEdgeLimit` is 5,000: the limits "units
       in one call to a port" and "edges read in one hop" of ADR 162
-      decision 9.
+      decision 9. `MaxEdgeUnits` equals `graph.MaxBatch` (500), so the
+      graph adapter never splits a batch. A test of the adapter holds the
+      two values equal.
     - `ErrInvalidQuery` is a new sentinel of `dependency`. It wraps the
-      error of `history.Unit.Validate` for an invalid unit.
+      error of `history.Unit.Validate` for an invalid unit. The graph
+      adapter translates `dependency.ErrInvalidQuery` into
+      `graph.ErrInvalidQuery`.
+    - **A purged dependent in another namespace.** An edge to a dependent
+      in another namespace stays until the window drops it, also after a
+      purge of that dependent. The graph shows such a dependent as an
+      unknown unit, because the access filter and the read of the unit find
+      no unit.
     - The order is newest first, as `Dependents` and `Sources`. So a cut at
       the limit keeps the newest edges, as the focus view needs (ADR 162
       decision 7). The ties have a full order, so two calls answer the same
@@ -339,26 +458,31 @@ The facts on `main` that the decisions build on:
 
 ### G7. The built-in roles of the new actions
 
-19. **The role-to-action table.** The five actions join the data family
-    (`access.FamilyData`), because each one acts inside a namespace. The
-    built-in roles get them as follows:
+19. **The role-to-action table.** Eight actions get a family and built-in
+    roles. The seven namespace actions join the data family
+    (`access.FamilyData`), because each one acts inside a namespace.
+    `server:link-namespaces` joins the administration family
+    (`access.FamilyAdministration`), because its object is the
+    installation and it joins the data of two namespaces. The built-in
+    roles get them as follows:
 
-    | Role | `unit:set-context` | `collection:set-context` | `namespace:set-context` | `namespace:read-unmanaged` | `namespace:triage-unmanaged` |
-    | --- | --- | --- | --- | --- | --- |
-    | `viewer` | no | no | no | no | no |
-    | `auditor` | no | no | no | yes | no |
-    | `secret-viewer` | no | no | no | no | no |
-    | `writer` | yes | no | no | yes | no |
-    | `maintainer` | yes | yes | no | yes | yes |
-    | `admin` | yes | yes | yes | yes | yes |
-    | `installation-operator` | no | no | no | no | no |
-    | `account-administrator` | yes | yes | yes | yes | yes |
-    | `site-administrator` | yes | yes | yes | yes | yes |
-    | `token-manager` | no | no | no | no | no |
+    | Action | Family | Built-in roles that hold it |
+    | --- | --- | --- |
+    | `unit:set-context` | data | `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
+    | `collection:set-context` | data | `maintainer`, `admin`, `account-administrator`, `site-administrator` |
+    | `namespace:set-context` | data | `admin`, `account-administrator`, `site-administrator` |
+    | `namespace:read-unmanaged` | data | `auditor`, `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
+    | `namespace:triage-unmanaged` | data | `maintainer`, `admin`, `account-administrator`, `site-administrator` |
+    | `namespace:start-sweep` | data | `maintainer`, `admin`, `account-administrator`, `site-administrator` |
+    | `namespace:manage-sweeps` | data | `admin`, `account-administrator`, `site-administrator` |
+    | `server:link-namespaces` | administration | `account-administrator`, `site-administrator` |
+
+    `viewer`, `secret-viewer`, `installation-operator` and `token-manager`
+    hold none of the eight.
 
     The reasons, with least privilege:
     - **Viewers never write.** A viewer and a secret viewer get no set
-      action and no triage action.
+      action, no triage action and no sweep action.
     - **`unit:set-context` goes with `unit:write`.** A writer can already
       change the reserved output of a unit with a state write. The API
       gives no more than that (ADR 160 decision 16).
@@ -380,10 +504,42 @@ The facts on `main` that the decisions build on:
       An ignore and an ignore rule hide findings for every person of the
       namespace. That is a decision for the namespace, as the delete and
       the restore of units are for the maintainer.
+    - **`namespace:start-sweep` is for the maintainer and the admin.** A
+      start runs a command that a target already holds, and a state check
+      reads only the state of the namespace. The maintainer operates the
+      units of a namespace, triages its findings, and must see the result
+      of a change soon. A writer does not triage, so a writer does not
+      start a sweep.
+    - **`namespace:manage-sweeps` is for the admin only.** The command of a
+      target decides what a runner starts, and its scopes decide what a
+      sweep can hide (ADR 164 decisions 17 and 19). So only the roles that
+      administer a namespace hold it.
+    - **`server:link-namespaces` is for the installation administrators
+      only.** A link lets the classification of one namespace read the
+      units of another (ADR 163). Only the roles that administer the
+      installation hold it. The installation operator manages no
+      namespace, so it does not hold it.
     - **No operator data.** The installation operator and the token
-      manager read no namespace data, so they get none of the five.
+      manager read no namespace data, so they get none of the eight.
 
-    A custom role can hold any of the five. The family, the role actions
+    These descriptions of built-in roles in `access` change:
+    - `auditor`: "Reads like a viewer, and reads the audit log, the access
+      review and the unmanaged resources."
+    - `writer`: "Reads, runs updates, plans and applies, sets the context
+      of units, and reads the unmanaged resources."
+    - `maintainer`: "Writes, and makes, renames, deletes, restores, unlocks
+      and moves units, manages collections and their context, triages
+      unmanaged resources and starts sweeps."
+    - `account-administrator`: "Manages principals, groups, roles, grants,
+      namespaces and the links between namespaces, makes the tokens of
+      every service principal, and holds every data action."
+
+    The descriptions of `viewer`, `secret-viewer`, `admin`,
+    `installation-operator`, `site-administrator` and `token-manager` do
+    not change. The doc comments of the role constants change with the
+    descriptions.
+
+    A custom role can hold any of the eight. The family, the role actions
     and the change of the test "no family until its routes land" land in
     the change that adds the first route of each action.
 
@@ -420,6 +576,22 @@ The facts on `main` that the decisions build on:
       closed: it never deletes context on a guess.
     - A soft-deleted unit gets no marks. The rules of the unit apply
       (ADR 160 decision 15).
+    - **The higher order wins.** Each entry stores `marks_seq`, the order
+      of the state item that last set or cleared its mark. A run changes
+      the mark of an entry only when the order of its item is higher than
+      `marks_seq`. So a late run of an older item, or a rebuild that runs
+      next to a live run, never sets or clears a mark against a newer item.
+    - **The store method.** The run calls
+      `objectcontext.Store.MarkResources(ctx, unit, seq, presentKeys, now, fence)`.
+      `presentKeys` holds the resource keys of the item, at most 100,000
+      (the limit of ADR 163 decision 7). In one transaction, the method
+      sets the mark at `now` on each resource entry of `unit` whose key is
+      not in `presentKeys` and that has no mark, and clears the mark of
+      each entry whose key is in it, each only when `seq` is higher than
+      `marks_seq`. It sets `marks_seq` to `seq` on each entry it changes.
+      It returns `ErrInvalidObject` for an invalid unit, the new sentinel
+      `ErrTooManyKeys` for more than 100,000 keys, `namespace.ErrFenced` for a stale fence,
+      and nil when it changes no row.
 24. **The read API shows the mark.** The `context` section of a resource
     answers `deleted: true` and `deletedAt`. `ByOwner` answers a marked
     entry with the same mark, so the console can show it apart. A `PATCH`
@@ -429,12 +601,19 @@ The facts on `main` that the decisions build on:
 25. **Retention.** A marked entry stays for the soft-delete retention
     period of the installation (ADR 47, `inventory.DeletedRetention` by
     default), the same window as a deleted unit. Then the retention expiry
-    deletes it, with the fence of its namespace. For each unit with deleted
-    API entries, the expiry appends one audit entry with the resource keys
-    and the fields it cleared, because people wrote those values. An
-    output entry needs no audit entry: the next output can bring it back.
-    The suite of `objectcontext.Store` gets the cases: the mark, the clear
-    of the mark, the 409 of a `PATCH`, and the delete at the end of the
+    deletes it with
+    `objectcontext.Store.ExpireMarked(ctx, before, fence, e)`. The method
+    deletes, in one namespace and one transaction, at most 1,000 marked
+    entries whose mark is older than `before`, with their owner rows. It
+    returns the number it deleted, so the expiry calls it again while the
+    number is 1,000. For each unit with deleted API entries, it appends one
+    audit entry `e` with the resource keys and the fields it cleared,
+    because people wrote those values. An output entry needs no audit
+    entry: the next output can bring it back. It returns
+    `namespace.ErrFenced` for a stale fence. The suite of
+    `objectcontext.Store` gets the cases: the mark, the clear of the mark,
+    an older `seq` that changes no mark after a newer one, the 409 of a
+    `PATCH`, the limit of 1,000, and the delete at the end of the
     retention period.
 
 ## What this ADR replaces
@@ -474,9 +653,14 @@ replaces:
 - **ADR 163, "Requests to other designs", first item:** the route is
   renamed, and the old path goes with no alias (decisions 20 to 22).
 - **ADR 164, decision 19, and ADR 165, decision 15:** the built-in roles
-  of `namespace:read-unmanaged` and `namespace:triage-unmanaged`
-  (decision 19). ADR 164 decisions 14 and 15: the match waits while the
-  index of its namespace is not ready (decision 9).
+  of `namespace:read-unmanaged`, `namespace:triage-unmanaged`,
+  `namespace:start-sweep` and `namespace:manage-sweeps` (decision 19).
+  ADR 164 decisions 14 and 15: the match waits with the result "not yet"
+  while the index of its namespace is not ready (decision 9).
+- **ADR 163, "Consequences", the item "Identity":** the family and the
+  built-in roles of `server:link-namespaces` (decision 19).
+- **ADR 72, in part:** the durable package gets the step result `NotYet`
+  and the store method `Defer`, which are not failures (decision 9).
 
 ## Consequences
 
@@ -486,7 +670,11 @@ replaces:
   resource index, which can be large. After a restore, findings do not
   change until the index of each namespace is complete again.
 - A unit that writes many state items costs at most one waiting
-  projection run. The projection ships before blame.
+  projection run. The projection ships before blame. A run that ends
+  before its first step does not block the unit: the next start or the
+  reconcile tick takes the head.
+- A namespace whose index is not ready shows "Index not ready", and its
+  state check and match wait without a failure.
 - A namespace created again under an old name starts empty, with no
   context, index, edges or links.
 - Each read by ID of context and of the graph answers one 404 for
@@ -499,8 +687,10 @@ replaces:
   2. `dependency.Store.Edges` with its cases, then the graph adapter.
   3. The context tables, the owner index and `ByOwner` with its cursor,
      with `objectcontexttest` cases for decisions 3, 12, 14 and 25.
-  4. `backup.ProjectionTables`, the resource index tables, the
-     projection heads, `projection.unit` and `projection.rebuild`.
-  5. The routes of decision 13, with the families and the roles of
+  4. `durable.NotYet` and `Store.Defer` with their `durabletest` cases.
+  5. `backup.ProjectionTables`, the resource index tables, the
+     projection heads, `projection.unit`, `projection.rebuild` and
+     `projection.reconcile`.
+  6. The routes of decision 13, with the families and the roles of
      decision 19.
-  6. The rename of decisions 20 to 22, with the console change.
+  7. The rename of decisions 20 to 22, with the console change.
