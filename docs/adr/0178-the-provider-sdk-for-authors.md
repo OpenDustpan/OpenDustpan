@@ -12,7 +12,7 @@ A declaration covers an API or a tool that maps one operation to one call.
 Some tools need logic: two calls for one create, a wait until an object is
 ready, a value that the tool prints as text. The SDK is for those.
 
-The types are in `providerkit/sdk`.
+The types are in the package `sdk` of `opendustpan/providerkit`.
 
 ## Decision
 
@@ -86,7 +86,8 @@ The types are in `providerkit/sdk`.
 7. **Building.** `dustpan-provider package` packs an SDK provider as it packs
    a declared one (ADR 177).
 8. **Versions of the SDK.** The SDK has the version of the `providerkit`
-   module. Until `providerkit/v1.0.0`, a minor version can break the SDK. The
+   module. Until `v1.0.0` of `opendustpan/providerkit`, a minor version can
+   break the SDK. The
    release notes name each break, and the migration.
 
 ## Consequences

@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/httpexec"
-	"opendustpan.org/opendustpan/providerkit/httpexec/httpexectest"
+	"opendustpan.org/providerkit/httpexec"
+	"opendustpan.org/providerkit/httpexec/httpexectest"
 )
 
 // TestSuiteAgainstReferenceCaller runs the suite against a minimal caller on
@@ -41,7 +41,7 @@ func (c referenceCaller) Call(ctx context.Context, req httpexec.Request) (httpex
 	var none httpexec.Reply
 
 	if err := c.origin.Check(req.URL); err != nil {
-		return none, err
+		return none, fmt.Errorf("check the origin: %w", err)
 	}
 
 	h := req.Header.Clone()

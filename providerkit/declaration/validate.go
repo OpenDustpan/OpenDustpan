@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"opendustpan.org/opendustpan/providerkit/cliexec"
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/cliexec"
+	"opendustpan.org/providerkit/schema"
 )
 
 // slot is where a template goes, which decides the references it may hold.

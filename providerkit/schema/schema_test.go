@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/schema"
 )
 
 func attr(name string, t schema.Type, mode schema.Mode) schema.Attribute {

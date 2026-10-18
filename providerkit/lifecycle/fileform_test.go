@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/lifecycle"
+	"opendustpan.org/providerkit/schema"
 )
 
 func secret(name string, mode schema.Mode) schema.Attribute {

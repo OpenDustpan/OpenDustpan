@@ -8,8 +8,8 @@ import (
 	"io"
 	"regexp"
 
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/lifecycle"
+	"opendustpan.org/providerkit/schema"
 )
 
 var (

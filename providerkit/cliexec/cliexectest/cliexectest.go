@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/providerkit/cliexec"
+	"opendustpan.org/providerkit/cliexec"
 )
 
 // HelperArg as the first argument makes a test binary act as the helper

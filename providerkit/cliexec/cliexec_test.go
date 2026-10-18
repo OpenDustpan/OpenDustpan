@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/providerkit/cliexec"
+	"opendustpan.org/providerkit/cliexec"
 )
 
 func TestCommandValidate(t *testing.T) {

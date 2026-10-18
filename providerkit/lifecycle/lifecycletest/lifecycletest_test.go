@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
-	"opendustpan.org/opendustpan/providerkit/lifecycle/lifecycletest"
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/lifecycle"
+	"opendustpan.org/providerkit/lifecycle/lifecycletest"
+	"opendustpan.org/providerkit/schema"
 )
 
 // TestSuiteAgainstMemoryProvider runs the suite against an in-memory
@@ -110,11 +110,11 @@ func (*notes) DataSourceSchemas() map[string]schema.Schema {
 func (n *notes) Configure(_ context.Context, config schema.Values) (lifecycle.Session, error) {
 	none := lifecycle.Session{Resources: nil, DataSources: nil, Close: nil}
 	if err := lifecycle.CheckConfig(n.ConfigSchema(), config); err != nil {
-		return none, err
+		return none, fmt.Errorf("configure notes: %w", err)
 	}
 
 	if err := lifecycle.CheckFileForms(baseConfig(), config); err != nil {
-		return none, err
+		return none, fmt.Errorf("configure notes: %w", err)
 	}
 
 	return lifecycle.Session{

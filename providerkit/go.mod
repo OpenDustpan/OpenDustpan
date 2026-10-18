@@ -1,4 +1,4 @@
-module opendustpan.org/opendustpan/providerkit
+module opendustpan.org/providerkit
 
 go 1.27.2
 

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/schema"
-	"opendustpan.org/opendustpan/providerkit/sdk"
+	"opendustpan.org/providerkit/schema"
+	"opendustpan.org/providerkit/sdk"
 )
 
 func TestParseTag(t *testing.T) {

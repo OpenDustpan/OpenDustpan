@@ -6,7 +6,7 @@ import (
 
 	"go.uber.org/goleak"
 
-	"opendustpan.org/opendustpan/providerkit/cliexec/cliexectest"
+	"opendustpan.org/providerkit/cliexec/cliexectest"
 )
 
 // TestMain runs the helper program of the suite when the suite starts this

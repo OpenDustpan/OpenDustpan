@@ -15,8 +15,8 @@ ID, which field forces a new object, or which value is secret. A mapping
 must say this. The mapping is also all that a CLI provider has, because a
 command-line tool has no OpenAPI document.
 
-The rules are in `providerkit/declaration`. The examples are in
-`providerkit/declaration/testdata`.
+The rules are in the package `declaration` of `opendustpan/providerkit`
+(ADR 170). The examples are in its `declaration/testdata`.
 
 ## Decision
 
@@ -107,7 +107,7 @@ The rules are in `providerkit/declaration`. The examples are in
 
 ## Open questions
 
-- YAML. The root module already uses `go.yaml.in/yaml/v3` (MIT and
+- YAML. The OpenDustpan module already uses `go.yaml.in/yaml/v3` (MIT and
   Apache-2.0). Adding it to `providerkit` is a new dependency of that
   module, so the project owner decides.
 - An object type, and the version key for stored shapes, which an upgrade of

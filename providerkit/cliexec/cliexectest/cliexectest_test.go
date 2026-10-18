@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/providerkit/cliexec"
-	"opendustpan.org/opendustpan/providerkit/cliexec/cliexectest"
+	"opendustpan.org/providerkit/cliexec"
+	"opendustpan.org/providerkit/cliexec/cliexectest"
 )
 
 // TestSuiteAgainstReferenceRunner runs the suite against a minimal runner on
@@ -69,7 +69,7 @@ func (b *limitBuffer) Write(p []byte) (int, error) {
 func (r referenceRunner) Run(ctx context.Context, cmd cliexec.Command) (cliexec.Result, error) {
 	none := cliexec.Result{ExitCode: 0, Stdout: nil, Stderr: nil}
 	if err := cmd.Validate(); err != nil {
-		return none, err
+		return none, fmt.Errorf("check the command: %w", err)
 	}
 
 	dir, err := os.MkdirTemp("", "cliexec-run-*")

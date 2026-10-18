@@ -30,8 +30,8 @@ import (
 	"slices"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/lifecycle"
+	"opendustpan.org/providerkit/schema"
 )
 
 // Fixture is the provider under test and the values that the suite uses.

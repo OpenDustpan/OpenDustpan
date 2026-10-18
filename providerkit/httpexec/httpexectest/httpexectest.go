@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/httpexec"
+	"opendustpan.org/providerkit/httpexec"
 )
 
 // Options configure the caller under test.

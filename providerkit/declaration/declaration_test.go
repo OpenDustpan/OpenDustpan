@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/declaration"
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
+	"opendustpan.org/providerkit/declaration"
+	"opendustpan.org/providerkit/lifecycle"
 )
 
 func load(t *testing.T, name string) declaration.Document {

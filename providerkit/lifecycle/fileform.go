@@ -3,7 +3,7 @@ package lifecycle
 import (
 	"fmt"
 
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/schema"
 )
 
 // FileSuffix names the file form of a sensitive configuration attribute. For
@@ -28,7 +28,7 @@ const maxNameLength = 64
 // attribute of that name.
 func WithFileForms(base schema.Schema) (schema.Schema, error) {
 	if err := base.Validate(); err != nil {
-		return base, err
+		return base, fmt.Errorf("configuration schema: %w", err)
 	}
 
 	out := schema.Schema{Version: base.Version, Attributes: make([]schema.Attribute, 0, len(base.Attributes))}

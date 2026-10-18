@@ -30,8 +30,8 @@ The project owner decided on 17 October 2026 (owner):
 - The code is pure Go, with no cgo.
 
 The owner left open where the code lives and how one description serves
-both tools. This ADR decides where the code lives. ADR 176 decides how one
-description serves both tools.
+both tools. The owner later decided where the code lives (decision 3). ADR
+176 decides how one description serves both tools.
 
 The label "(owner)" names a decision that the text of the owner of 17
 October 2026 states. The label "(PM, for the project owner)" names a decision
@@ -50,37 +50,43 @@ ADRs, and the project owner accepts or refuses them with the pull request.
    provider in Go with the SDK (ADR 178). All three implement one core
    port (ADR 172), and each gives one provider that works with OpenTofu
    and with the Pulumi CLI (ADR 176).
-3. **A separate Go module in this repository (PM, for the project
-   owner).** The code lives in
-   `providerkit/`, with the module path
-   `opendustpan.org/opendustpan/providerkit`. Its release tags are
-   `providerkit/vX.Y.Z`. The reasons:
+3. **A separate repository (owner).** The project owner decided on 18
+   October 2026 that the code lives in its own repository,
+   `opendustpan/providerkit`, with the module path
+   `opendustpan.org/providerkit`. Its release tags are `vX.Y.Z` of that
+   repository. The reasons:
    - A provider is a client program. OpenTofu or the Pulumi CLI starts it on
      a workstation or on a runner. It must not link the SQL drivers, the
-     key-encryption key code or any other part of the server. A module
-     boundary makes this a fact of the build, not only a rule of the
-     linter.
+     key-encryption key code or any other part of the server. A separate
+     module makes this a fact of the build, not only a rule of the linter.
    - Provider authors import the SDK. ADR 73 lets the server break its APIs
      before 1.0. The SDK needs a version line of its own, so that an author
      can pin it apart from the server.
    - The `go.mod` of the module lists only what providers need. An author
      who adds the SDK does not get the server's dependencies in the module
      graph of the provider.
-4. **Why not a separate repository, and why not `pkg/` (PM, for the
-   project owner).** One repository
-   keeps one review, one CI, one lint configuration and one set of rules.
-   The CLI engine and the launcher share the rule "an argument list, no
-   shell", and a change to that rule can change both in one pull request.
-   `pkg/` is the SDK of the server (ADR 35), and it has the version of the
-   server.
+4. **The gates of this repository, copied (owner).** The new repository has
+   its own CI, its own release line, and the lint and security gates of this
+   repository: the same `.golangci.yml`, `make check` with lint, `go mod
+   tidy -diff`, `go test -race`, `nilaway`, `govulncheck`, `semgrep`,
+   `trivy` with the license gate, `trufflehog` and `make licenses`, a
+   `leak_test.go` with `goleak` in each test package, and Dependabot. The
+   ADRs of the provider kit stay in this repository. `pkg/` is not the
+   place, because it is the SDK of the server (ADR 35) and has the version
+   of the server.
 5. **No import across the boundary.** `providerkit` imports no package of
-   the root module. The root module imports no package of `providerkit`. A
-   later need to share code between them is a new decision.
+   OpenDustpan. OpenDustpan imports no package of `providerkit`. The CLI
+   engine and the launcher share the rule "an argument list, no shell" as a
+   rule, not as code. A later need to share code between them is a new
+   decision.
 6. **The layout.** This ADR adds the first packages. The engines, the
    protocol adapters and the build tool come with their implementation.
+   The review of this design reads the packages in `providerkit/` of this
+   repository. After the review, the code moves to the new repository, and
+   this repository keeps no copy.
 
    ```
-   providerkit/
+   opendustpan/providerkit
      schema/                  types, attributes, values
      lifecycle/               the core port and the shared planner (ADR 172)
        lifecycletest/         conformance suite for a provider (ADR 179)
@@ -105,17 +111,19 @@ ADRs, and the project owner accepts or refuses them with the pull request.
 
 ## Consequences
 
-- `make check` does not yet cover `providerkit/`, because `go test ./...`
-  and `golangci-lint run ./...` at the root stop at a nested module. The
-  pull request of this ADR asks for a change of the shared `Makefile` and CI
-  workflow. Until then, the checks run by hand in `providerkit/`.
+- `make check` of this repository does not cover the provider kit, and does
+  not need to. Until the code moves, the checks run by hand in
+  `providerkit/`. After the move, the CI of `opendustpan/providerkit` runs
+  them.
+- A change to the rule "an argument list, no shell" needs a pull request in
+  each repository.
 - RFC 47 keeps its question about scanning. This ADR answers only how facts
   come in: through providers that a team owns.
 - A team that wants a fact from OpenDustpan itself, for example the outputs
   of another unit, still uses RFC 15. A provider wrapper is for systems
   outside OpenDustpan.
-- Dependabot, Trivy and the license check need the second `go.mod`. The pull
-  request lists this under its requested shared-file changes.
+- The new repository needs its own copy of the gates of decision 4. The
+  pull request of this ADR lists them.
 
 ## Open questions
 

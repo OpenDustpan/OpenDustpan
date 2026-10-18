@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
-	"opendustpan.org/opendustpan/providerkit/schema"
-	"opendustpan.org/opendustpan/providerkit/sdk"
+	"opendustpan.org/providerkit/lifecycle"
+	"opendustpan.org/providerkit/schema"
+	"opendustpan.org/providerkit/sdk"
 )
 
 type record struct {

@@ -13,7 +13,7 @@ or state in plain text where that can be avoided (owner).
 The HTTP engine implements the core port of ADR 172 from a declaration
 (ADR 171). It has two parts: the engine, which builds requests and reads
 replies, and a port that sends one request. The port is in
-`providerkit/httpexec`.
+the package `httpexec` of `opendustpan/providerkit`.
 
 ## Decision
 
@@ -126,6 +126,6 @@ replies, and a port that sends one request. The port is in
 - A CA file for an API with a private certificate authority. It can be an
   optional configuration attribute that every HTTP provider gets.
 - gRPC APIs (owner: "later gRPC").
-- `golang.org/x/oauth2` (BSD-3-Clause) is in the root module. If the
+- `golang.org/x/oauth2` (BSD-3-Clause) is in the OpenDustpan module. If the
   project owner prefers it to a small implementation, it is a new dependency
   of `providerkit`.

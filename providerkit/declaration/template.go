@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/schema"
 )
 
 // RefKind is the kind of a reference in a template.

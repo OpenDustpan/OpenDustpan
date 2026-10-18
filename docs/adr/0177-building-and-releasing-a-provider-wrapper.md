@@ -15,7 +15,8 @@ ADR 176 makes one binary that serves both tools under two names.
 ## Decision
 
 1. **A build tool, `dustpan-provider`.** It lives in
-   `providerkit/cmd/dustpan-provider`. It has these commands:
+   `cmd/dustpan-provider` of `opendustpan/providerkit`. It has these
+   commands:
    - `check <declaration>`: parse and check a declaration, and, when the
      declaration names an OpenAPI document, compare the two (ADR 171
      decision 12).

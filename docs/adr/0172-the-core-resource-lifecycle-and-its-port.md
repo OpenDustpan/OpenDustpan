@@ -18,7 +18,8 @@ Both reduce to the same five operations on one object, and one decision:
 create, update in place, replace or delete. If each adapter made that
 decision, the two tools could show different plans for one declaration.
 
-The port and the planner are in `providerkit/lifecycle`.
+The port and the planner are in the package `lifecycle` of
+`opendustpan/providerkit` (ADR 170).
 
 ## Decision
 

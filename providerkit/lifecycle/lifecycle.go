@@ -14,7 +14,7 @@ import (
 	"context"
 	"errors"
 
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/schema"
 )
 
 // The errors of the port. An engine wraps one of them with

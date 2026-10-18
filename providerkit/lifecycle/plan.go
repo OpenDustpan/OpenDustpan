@@ -5,7 +5,7 @@ import (
 	"maps"
 	"slices"
 
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/schema"
 )
 
 // Action is what a plan does to one object.

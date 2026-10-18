@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/schema"
 )
 
 // ErrInvalidModel reports a model struct that the SDK cannot map to a

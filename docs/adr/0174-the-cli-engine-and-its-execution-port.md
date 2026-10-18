@@ -13,7 +13,8 @@ environment variable.
 
 The CLI engine implements the core port of ADR 172 from a declaration. It
 has two parts: the engine, which builds commands and reads output, and a
-port that runs one command. The port is in `providerkit/cliexec`.
+port that runs one command. The port is in the package `cliexec` of
+`opendustpan/providerkit`.
 
 ## Decision
 

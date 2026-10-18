@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"opendustpan.org/opendustpan/providerkit/httpexec"
+	"opendustpan.org/providerkit/httpexec"
 )
 
 func origin(t *testing.T, raw string) httpexec.Origin {

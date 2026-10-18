@@ -86,9 +86,9 @@ The options:
      when the e2e step shows that OpenTofu needs them.
 7. **Each adapter lands with its e2e step.** An adapter is supported only
    once `make e2e` drives the real CLI through a provider that it serves
-   (AGENTS.md). The e2e suite builds the example declarations of
-   `providerkit/declaration/testdata` against a local fake API and a fake
-   command.
+   (AGENTS.md). The e2e suite of `opendustpan/providerkit` builds its
+   example declarations in `declaration/testdata` against a local fake API
+   and a fake command.
 
 ## Consequences
 
@@ -108,8 +108,8 @@ These are dependency questions for the project owner, with licenses.
   (BSD-3-Clause). Both adapters need them.
 - The protocol definition of OpenTofu, `tfplugin6.proto`, is in the OpenTofu
   repository under MPL-2.0. The adapter needs Go code generated from it.
-  Copying the file or its generated code into this repository brings an
-  MPL-2.0 file into an Apache-2.0 project. MPL-2.0 is file-level copyleft,
+  Copying the file or its generated code into `opendustpan/providerkit`
+  brings an MPL-2.0 file into an Apache-2.0 project. MPL-2.0 is file-level copyleft,
   and the license gate accepts it (`make trivy`), but the project owner
   decides.
 - The `go-plugin` protocol definitions (`grpc_controller.proto`,

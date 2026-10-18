@@ -67,17 +67,19 @@ port (ADR 173) and the CLI execution port (ADR 174).
 6. **Table tests where the behavior is a rule.** The planner, the
    declaration rules, the template rules, the retry rules, the command rules
    and the struct tags each have a table test.
-7. **The same gates as the root module.** Each test package has a
-   `leak_test.go` with `goleak`. `golangci-lint`, `go test -race` and
-   `nilaway` run on the module with the configuration of the repository.
+7. **The same gates as this repository.** Each test package has a
+   `leak_test.go` with `goleak`. `opendustpan/providerkit` runs
+   `golangci-lint` with a copy of the configuration of this repository,
+   `go test -race`, `nilaway` and the other gates of `make check` (ADR 170
+   decision 4).
 
 ## Consequences
 
 - A team that changes its declaration runs one Go test against a fake of its
   API, and sees a broken mapping before a user does.
 - The suites need no network and no tool CLI.
-- `make check` must run the suites of `providerkit`. The pull request of this
-  ADR asks for that change to the shared `Makefile` and CI workflow.
+- `make check` of `opendustpan/providerkit` must run the suites. Its CI runs
+  `make check` on each pull request.
 
 ## Open questions
 

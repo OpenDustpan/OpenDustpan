@@ -28,9 +28,9 @@ import (
 	"fmt"
 	"os"
 
-	"opendustpan.org/opendustpan/providerkit/cliexec"
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/cliexec"
+	"opendustpan.org/providerkit/lifecycle"
+	"opendustpan.org/providerkit/schema"
 )
 
 // ConfigSchemaOf returns the configuration schema that an SDK provider

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/providerkit/httpexec"
+	"opendustpan.org/providerkit/httpexec"
 )
 
 var errNet = errors.New("connection reset")

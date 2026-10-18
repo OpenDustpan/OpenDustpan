@@ -6,8 +6,8 @@ import (
 	"math/big"
 	"reflect"
 
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
-	"opendustpan.org/opendustpan/providerkit/schema"
+	"opendustpan.org/providerkit/lifecycle"
+	"opendustpan.org/providerkit/schema"
 )
 
 // Decode returns the model M that holds vs. A null or unknown value leaves

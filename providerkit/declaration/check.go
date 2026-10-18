@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"opendustpan.org/opendustpan/providerkit/lifecycle"
+	"opendustpan.org/providerkit/lifecycle"
 )
 
 // CheckEndpoint checks the base URL or the token URL of the HTTP engine after
