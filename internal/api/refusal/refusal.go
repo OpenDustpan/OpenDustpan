@@ -1,6 +1,6 @@
 // Package refusal writes the audit entry of a request that the Authorizer
 // refuses. The tool adapters check their routes through Recorder.Authorize, so
-// a refusal writes its entry the same way for every tool (ADR 60, decision 3).
+// a refusal writes its entry the same way for every tool.
 package refusal
 
 import (
@@ -170,7 +170,7 @@ func deniedEntry(
 	}
 }
 
-// kindOf returns the kind that ADR 60 gives the refused action.
+// kindOf returns the audit kind of the entry for the refused action.
 func kindOf(action identity.Action) audit.Kind {
 	switch {
 	case action == identity.ActionUnitReadSecrets:

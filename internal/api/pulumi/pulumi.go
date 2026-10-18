@@ -133,7 +133,7 @@ type Handler struct {
 	audit          audit.Store
 	onAuditFailure func()
 	// guard checks the declared actions of the routes and writes the entry of
-	// each refusal (ADR 60, decision 3).
+	// each refusal.
 	guard  *refusal.Recorder
 	mux    *patternMux
 	routes []Route

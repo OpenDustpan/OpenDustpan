@@ -93,7 +93,7 @@ type Handler struct {
 	namespaces NamespaceService
 	audit      audit.Store
 	// guard checks the declared actions of the routes and writes the entry of
-	// each refusal (ADR 60, decision 3).
+	// each refusal.
 	guard  *refusal.Recorder
 	gate   *bodygate.Gate
 	mux    *http.ServeMux
