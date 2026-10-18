@@ -136,7 +136,7 @@ func TestSensitiveSettingsAreMarked(t *testing.T) {
 	t.Parallel()
 
 	for _, s := range cli.Settings {
-		if s.Kind != cli.KindString {
+		if s.StepInput || s.Kind != cli.KindString {
 			continue
 		}
 
@@ -151,6 +151,20 @@ func TestSensitiveSettingsAreMarked(t *testing.T) {
 
 		if holdsSecret && !s.Sensitive {
 			t.Errorf("setting %s holds a secret or a credential and has no sensitive mark", s.Name())
+		}
+	}
+}
+
+// TestStepInputsAreNotSettings proves a variable that the launcher sets for a
+// step has no flag, no file key and no secret mark: the server does not read
+// it, and it holds no credential. The sensitive-mark test skips these
+// declarations, so this test keeps the skip narrow.
+func TestStepInputsAreNotSettings(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range cli.Settings {
+		if s.StepInput && (s.Flag != "" || s.File != "" || s.Sensitive) {
+			t.Errorf("step variable %s has a flag, a file key or a sensitive mark", s.Name())
 		}
 	}
 }
