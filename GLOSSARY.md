@@ -507,15 +507,19 @@ The work that one executor does with one claim (ADR 100 decision 4). A phase has
 _Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
 
 **Gate**:
-A condition in front of a phase that must open before the phase dispatches (ADR 103 decision 2). A phase can have more than one gate, and it dispatches only when every gate is open. Until then, the job waits in `awaiting-approval`. One rejection of any gate rejects the job. A job that waits longer than the timeout of a gate expires, and the default timeout is 7 days. A gate has one of two types: an approval gate, which comes from the policy decision, or a confirmation gate. For a write-back job, a gate on the deliver phase waits before the commit. The review request then still needs the approvals of the forge (ADR 103 decision 3).
-_Avoid_: Approval (alone: an approval passes an approval gate), check
+A stored rule at one decision point (ADR 224). Its condition is the body of one Cedar policy over the fact document of the decision point. Its outcome is data: `deny`, `approval:<rule>` or `warn`. Its mode is `enforce` or `evaluate`, and a `final` flag stops a narrower scope from saving a gate with the same ID. A gate has a scope: the installation, a namespace, a collection or a unit. A blueprint version or a profile can also hold gates. Any `deny` wins. Else the change waits for each named approval rule. Else each `warn` gives a warning, and a warning stops auto-apply. Else the change goes on. Any Cedar error of a gate in `enforce` mode stops the change with `gate.ErrRuleFailed`. A gate is stored in the server and configured through the API, never in a repository file. A lock, a freeze, a switch and the agent controls are fixed controls, not gates.
+_Avoid_: Policy (alone), check, approval gate (the requirements of a change come from approval rules), guardrail
+
+**Approval wait**:
+The state of a change that waits for the approvals of its requirements (ADR 225 decision 8). The change is a job, a change order, a profile draft or an access request. The job state value is `awaiting-approval`. A phase dispatches only when each requirement has its count of signatures. The signatures come from distinct people. One rejection rejects the job. A job that waits longer than 7 days expires. For a write-back job, the wait comes before the commit. The review request then still needs the approvals of the forge (ADR 103 decision 3).
+_Avoid_: Gate (that is the stored rule), pending approval
 
 **Confirmation gate**:
-The gate before each phase that changes, for a job of an agent in approve-first mode or with no mode (ADR 103 decision 2). A write-back job of an agent has it in front of its deliver phase in every mode (ADR 128 decision 4). Only the person who asked the agent can pass it. That person gives one confirmation in a request of their own with no agent. The request comes from an interactive console session, never from an access token (ADR 128 decision 5). It has a fresh authentication. That is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. Its maximum age is the lower of 15 minutes and W when W is above 0, else 15 minutes. W is the token freshness window of the session policy (`job.ConfirmMaxAge`, ADR 128 decision 7). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
+A fixed control before each phase that changes, for a job of an agent in approve-first mode or with no mode (ADR 103 decision 2). It is not a gate: no stored rule gives it or takes it away. A write-back job of an agent has it in front of its deliver phase in every mode (ADR 128 decision 4). Only the person who asked the agent can pass it. That person gives one confirmation in a request of their own with no agent. The request comes from an interactive console session, never from an access token (ADR 128 decision 5). It has a fresh authentication. That is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. Its maximum age is the fresh-authentication window (`freshAuthSeconds`, ADR 227). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
 _Avoid_: Approval (an approval passes an approval gate), consent
 
 **Request-changes thread**:
-A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on an approval gate of the job. The status of the gate does not matter. That needs `job:approve` and the groups of that gate. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A change order has its own request-changes threads (ADR 193). A job with a change order origin gets no job thread (ADR 190 decision 16).
+A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on a requirement of the job. The state of the requirement does not matter. That needs `job:approve` and the approvers of its approval rule. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A change order has its own request-changes threads (ADR 193). A job with a change order origin gets no job thread (ADR 190 decision 16).
 _Avoid_: rejection (a rejection ends the job), review (alone: that is the review request of the forge)
 
 **Dismissal**:
@@ -619,12 +623,58 @@ The session that the launcher of one claim opens with its handoff token (ADR 133
 _Avoid_: Session (alone: that is a console session), launcher session
 
 **Source snapshot**:
-The code of one commit of one repository in the blob store (ADR 135 decision 1). It holds the raw git pack with the commit and every tree and blob that the commit reaches. It also holds the allowed submodules and Git LFS objects. Its key is the namespace, the forge connection, the repository, the commit and the hash of the source policy. Two jobs on one commit with one policy share one snapshot. At the start of a runner job, the server gets the pack in a durable operation of the kind `source.fetch`. The launcher reads the snapshot through its job session and checks it before it writes a file. So a runner never connects to the forge for the code (ADR 135 decision 3). The server deletes its blobs 7 days after the end of the last job that names it. A backup does not hold them (ADR 135 decision 9).
+The code of one commit of one repository in the blob store (ADR 135 decision 1). It holds the raw git pack with the commit and every tree and blob that the commit reaches. It also holds the allowed submodules and Git LFS objects. Its key is the namespace, the forge connection, the repository, the commit and the hash of the source filter. Two jobs on one commit with one source filter share one snapshot. At the start of a runner job, the server gets the pack in a durable operation of the kind `source.fetch`. The launcher reads the snapshot through its job session and checks it before it writes a file. So a runner never connects to the forge for the code (ADR 135 decision 3). The server deletes its blobs 7 days after the end of the last job that names it. A backup does not hold them (ADR 135 decision 9).
 _Avoid_: Snapshot (alone), source (alone: that is the backend before an import), clone, checkout (the files that the launcher writes from a snapshot)
 
-**Source policy**:
-The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Policy`, ADR 135 decision 6). It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the policy does not allow. A change of the policy needs `namespace:manage-runners` and makes a new snapshot key. The routes are `GET` and `PUT /api/dustpan/v1/namespaces/{namespace}/source-policy` (ADR 138 decision 6).
-_Avoid_: Submodule allowlist
+**Source filter**:
+The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Filter`, ADR 135 decision 6). ADR 226 decision 9 gives the name. It is a fixed control, not a gate. It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the filter does not allow. Its `protectedBranches` give the fact `source.protected` (ADR 213 decision 2). A change of the filter needs `namespace:manage-runners` and makes a new snapshot key. The routes are `GET` and `PUT /api/dustpan/v1/namespaces/{namespace}/source-filter`.
+_Avoid_: Source policy, submodule allowlist
+
+### Gates and approvals
+
+**Decision point**:
+A fixed moment where the server evaluates the gates of a change (ADR 224 decision 2). There are five: `change.propose` before a plan, `change.planned` after the plan and its facts, `change.apply` before each phase that changes, `profile.save` and `profile.open`. Each has its own fact schema with a version. The decision point is the Cedar action of each gate policy. A new decision point needs a new ADR.
+_Avoid_: Hook, stage, policy point, recheck point
+
+**Fact**:
+A typed value that the server produces before a decision point (ADR 226). Examples are a plan count, a cost delta and the kind of the source. A fact never decides: a gate decides. A missing fact is a typed value: its group has `available` set to `false`, and each built-in gate fails closed on it. A fact never holds a secret value. An external check gives facts too.
+_Avoid_: Input (alone), signal, attribute (that is a Cedar term for a field)
+
+**Fact document**:
+The facts of one decision point for one unit, in the shape of the fact schema of that point (ADR 226 decision 2). It is the Cedar context of the request. The decision record holds it and its SHA-256.
+_Avoid_: Policy input
+
+**Approval rule**:
+Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `owners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `staleOnNewPlan`. A gate names it in its outcome as `approval:<rule>`. One rule gives one requirement. An agent never approves.
+_Avoid_: Approval policy, quorum
+
+**Approval default**:
+The approval rule that a namespace, a collection or a unit sets for each change below it, with no gate (ADR 225 decision 4). With none set, the default is off and no change needs an approval. When several hold, the strictest wins: the highest count and the shortest fresh window. A default can carve out its own exemptions with `unless`.
+_Avoid_: Minimum approvals, `MinApprovals`
+
+**Ownership rule**:
+A rule stored in the server that names who owns a part of a change (ADR 225 decision 9). It has a scope, path globs, a Cedar condition `when` over the facts, groups, users, a count and a fresh window. Each rule that applies gives one requirement `owners/<id>`. It is inspired by a code owners file, but it is never a repository file.
+_Avoid_: Code owners, CODEOWNERS, owner rule
+
+**Access limit**:
+One Cedar `forbid` policy on a scope, which the server evaluates after the grants allow an action (ADR 223). A limit only takes away what a grant gives. A `permit` in a limit set is refused at save. A refusal fails with `gate.ErrLimited` and writes a decision record. A session of a break-glass account is not subject to a limit.
+_Avoid_: Deny rule, guardrail, condition on a grant
+
+**Evaluate mode**:
+The mode of a gate that the server evaluates and records with no effect (ADR 224 decision 7). A new gate and each starter pack start in it. The simulate route replays draft gates over stored decision records before a switch to `enforce` mode.
+_Avoid_: Dry run, audit mode, advisory (that is a level of a resource policy report)
+
+**Decision record**:
+The record of one evaluation of one decision point for one change, with the ID prefix `gdr-` (ADR 229). It holds the fact document and each gate with its version, mode, match and outcome. It also holds the requirements, the warnings, `autoApply`, the state of each fixed control and the result. Each refusal, each approval wait and each warning names its record.
+_Avoid_: Decision log, policy result
+
+**Fixed control**:
+A control that refuses on its own, outside the gates (ADR 222 decision 4). The fixed controls are the workspace lock, the manual lock, a freeze with its break-glass and the override switches. They are also the module switches, the quota reservation, the source filter and the agent controls. The decision record shows the state of each fixed control that the server checked.
+_Avoid_: Gate, policy
+
+**Fresh authentication**:
+A built-in MFA step or a new authentication at the SSO identity provider, no older than the window `freshAuthSeconds` (ADR 227). The default window is 900 seconds. A window of 0 asks for a fresh authentication at each step. A namespace or an approval rule can only set a shorter window.
+_Avoid_: Token freshness, re-auth, step-up (alone)
 
 ### Change orders
 
@@ -657,11 +707,11 @@ The record that binds one approval to one plan revision of a change order (ADR 1
 _Avoid_: Sign-off, stamp, approval (alone: an approval is the verdict)
 
 **Approval requirement**:
-One `approve` decision of a policy for a change order: a number of approvals and the groups of the approvers (ADR 192). A change order needs each requirement, and one signature fills one slot of one requirement only. So the approvals across requirements come from distinct people. With no policy, a change order has one requirement of one approval with no groups. Each requirement needs at least 1 approval. A change order always needs at least 1 signature by a principal that is not an author (`MinApprovals`), also when a policy gives the requirements.
+The need of one approval rule for one change: a count of signatures by its eligible approvers (ADR 225 decision 3). A gate whose outcome names a rule gives one, and so does an approval default. A change needs each requirement, and one signature fills one slot of one requirement only, by bipartite matching. So the approvals across requirements come from distinct people. With no gate and no approval default, a change has no requirement.
 _Avoid_: Quorum, rule (alone)
 
 **Eligible approver**:
-A principal that can approve a change order (ADR 192 decision 5). It holds `changeorder:approve` on each unit, and it is a member of the groups of at least one requirement. It is not an author.
+A principal that can approve one requirement (ADR 225 decision 7). It holds the approve action of the object (`changeorder:approve`, `job:approve` or `profile:approve`) on each unit, and it is in the approvers of the approval rule. It is an author only when the rule has `authorMayApprove`. It is never an agent.
 _Avoid_: Reviewer (alone: any reader can comment)
 
 **Change order review**:
@@ -1156,17 +1206,19 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
 - **Break-glass** has three meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. A break-glass of a job starts a job during an active freeze (ADR 103). Name which one.
 - **Sweep** names the Sweep feature only: a cloud sweep or a state check. The task that purges deleted units is the retention expiry. The delete of key blobs with no record is the orphan cleanup (ADR 151). The Go name `inventory.Sweeper` is older than this rule.
-- **Source** has two meanings. The term **Source** is the backend of a unit before an import. A source snapshot and the source policy name the code of a commit for a runner job (ADR 135). The unit setting that names that code is the code location (ADR 100). Never write "source" alone for the code.
+- **Source** has two meanings. The term **Source** is the backend of a unit before an import. A source snapshot and the source filter name the code of a commit for a runner job (ADR 135). The unit setting that names that code is the code location (ADR 100). Never write "source" alone for the code.
 - **Snapshot** is the source snapshot only (ADR 135). Do not use it for state, a backup, a checkpoint or a state version.
 - **Session** has three meanings: the console session of a person, a job session of a launcher (ADR 133), and an MCP session (ADR 123). Name which one.
 - **Job token** and **handoff token** are different. A job token is the access token of a tool for the unit of a job (ADR 100). A handoff token opens one job session (ADR 133).
 - **Executor** and **launcher** are different. An executor is the way a job runs: write-back or runners (ADR 100). The launcher runs the steps of one claim (ADR 134).
 - **Plan** has six meanings. They are the operation `plan` of a job, the phase kind `plan` and a stored plan. They are also the OpenTofu plan, a plan revision and a unit plan (ADR 195). Name which one.
 - **Signature** has three meanings. A webhook delivery has one (ADR 145), a signed audit segment has one (RFC 71), and a change order has signatures (ADR 191). Name which one.
+- **Gate** names only the stored rule at a decision point (ADR 224). The confirmation gate and the secret gate of an agent are fixed controls with older names. A CI model check (ADR 70 decision 30) is a check, and "gates" as a verb is "needs".
+- **Policy** alone names no object. Say gate, access limit, approval rule, source filter, session policy, token policy or resource policy report.
 - **Review** has four meanings: a review request of the forge, a break-glass review, an incident review and a change order review (ADR 192). Name which one.
 - **Group** is a set of principals. A change group is a set of identical changes in a change order (ADR 194). Write "change group" for the second.
 - **Claim** has two meanings. The durable claim of a phase gives one executor the right to run it. The job-ID claim is a field of a principal that a job token authenticates (ADR 100). Name which one.
-- **Approval**, **confirmation** and **consent** are different. An approval passes an approval gate (ADR 103). A confirmation passes a confirmation gate. A consent allows one secret read of an outside agent (ADR 124).
+- **Approval**, **confirmation** and **consent** are different. An approval fills a requirement of an approval rule (ADR 225). A confirmation passes a confirmation gate. A consent allows one secret read of an outside agent (ADR 124).
 - **Tool** is an infrastructure-as-code CLI. An agent tool is one of the tools of an agent (ADR 122). Write "agent tool" for the second.
 - **Key** has many meanings: a data key, an item key, a resource key, a runner key, a blob key and a tag key. Name which one.
 - **Scope** has three meanings: the namespace and unit of a data key, an audit scope, and an account scope of a sweep target. Write "account scope" for the third.

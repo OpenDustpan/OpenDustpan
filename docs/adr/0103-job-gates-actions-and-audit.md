@@ -1,6 +1,6 @@
 # 103. Job gates, actions and audit entries
 
-Status: accepted · 2026-10-17. Decision 10 superseded in part by ADR 126. Decision 9 superseded in part by ADR 141. Gate counting extended by ADR 148. Decisions 2, 7, 9, 10 and 12 and the Consequences superseded in part by ADR 128. Decisions 1 and 2 superseded in part by ADR 190. Decisions 1 and 8 extended by ADR 213. Decision 2 extended by ADR 212 decision 3. An open question answered by ADR 213 decision 10
+Status: accepted · 2026-10-17. Decision 10 superseded in part by ADR 126. Decision 9 superseded in part by ADR 141. Gate counting extended by ADR 148. Decisions 2, 7, 9, 10 and 12 and the Consequences superseded in part by ADR 128. Decisions 1 and 2 superseded in part by ADR 190. Decisions 1 and 8 extended by ADR 213. Decision 2 extended by ADR 212 decision 3. An open question answered by ADR 213 decision 10. Decision 1 and the approval gate of decision 2 superseded by ADRs 224 and 225. The age of a confirmation superseded by ADR 227
 
 ## Context
 

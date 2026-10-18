@@ -1,6 +1,6 @@
 # 17. Every feature has a REST API, authorization and policy
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10. The policy check superseded in part by ADR 224
 
 ## Context
 

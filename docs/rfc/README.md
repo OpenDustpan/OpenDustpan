@@ -61,7 +61,7 @@ both together.
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
-| [13](0013-policy-and-approvals.md) | Policy and approvals | draft; the policy input of a job start accepted (ADR 213), fresh MFA for approvals (ADR 212) |
+| [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); open points in RFC 77 |
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | accepted |
 | [15](0015-output-sharing.md) | Output sharing between units | draft; output reads of a job, on two paths, accepted (ADR 213) |
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
@@ -97,8 +97,8 @@ both together.
 | [46](0046-insights.md) | Insights: dashboards and reports | draft |
 | [47](0047-discovery-and-codification.md) | Discovery and codification of unmanaged resources | draft |
 | [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
-| [49](0049-run-tasks.md) | Run tasks: external checks with callbacks | draft |
-| [50](0050-policy-authoring.md) | Policy authoring, testing and compliance packs | draft |
+| [49](0049-run-tasks.md) | Run tasks: external checks with callbacks | accepted (ADR 226) |
+| [50](0050-policy-authoring.md) | Policy authoring, testing and compliance packs | draft; decision records, simulate and starter packs accepted (ADR 229) |
 | [51](0051-change-management-integrations.md) | Change management and portal integrations | draft |
 | [52](0052-console-core.md) | Console core views and navigation | draft; the console reads the capabilities document (ADR 211) |
 | [53](0053-terraform-cli.md) | Terraform CLI support | draft |
@@ -124,3 +124,4 @@ both together.
 | [73](0073-ai-agent-for-infrastructure.md) | An AI agent for infrastructure across both tools | accepted |
 | [74](0074-snapshots-of-files-with-no-git-commit.md) | Snapshots of files that have no git commit | draft |
 | [75](0075-commands-by-intent.md) | Commands by intent: a dev server with no setup, and a serve command that needs decisions | draft |
+| [77](0077-open-points-of-the-gate-model.md) | Open points of the gate model | discussing |

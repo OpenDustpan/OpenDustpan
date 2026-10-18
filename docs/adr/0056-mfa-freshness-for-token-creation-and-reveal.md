@@ -1,6 +1,6 @@
 # 56. MFA freshness for token creation and secret reveal
 
-Status: accepted · 2026-10-13. Extended by ADR 212 decision 3
+Status: accepted · 2026-10-13. Extended by ADR 212 decision 3. Decisions 2 and 3 superseded by ADR 227
 
 ## Context
 

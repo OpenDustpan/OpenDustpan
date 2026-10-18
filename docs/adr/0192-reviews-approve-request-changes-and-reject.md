@@ -1,6 +1,6 @@
 # 192. Reviews: approve, request changes, and reject and close
 
-Status: accepted · 2026-10-18 · part of ADR 190
+Status: accepted · 2026-10-18 · part of ADR 190. Decisions 4 and 5 superseded by ADR 225. The open questions answered by ADRs 225 and 227
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 52. Groups, roles, grants and the access-review export
 
-Status: accepted · 2026-10-13. The built-in planner role added by ADR 212
+Status: accepted · 2026-10-13. The built-in planner role added by ADR 212. Decision 9 superseded by ADR 223
 
 ## Context
 
