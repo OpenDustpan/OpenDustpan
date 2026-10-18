@@ -4882,6 +4882,23 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 	return i, err
 }
 
+const latestWorkspaceStateFinalize = `-- name: LatestWorkspaceStateFinalize :one
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms DESC
+LIMIT 1
+`
+
+// The latest finalize time of the finalized state versions of a workspace. A
+// finalize stamps a later time than this one, in the same transaction.
+func (q *Queries) LatestWorkspaceStateFinalize(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, latestWorkspaceStateFinalize, workspaceID)
+	var finalized_at_ms int64
+	err := row.Scan(&finalized_at_ms)
+	return finalized_at_ms, err
+}
+
 const listAccessTokens = `-- name: ListAccessTokens :many
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens
@@ -8773,7 +8790,7 @@ const workspaceStateAt = `-- name: WorkspaceStateAt :one
 SELECT id, finalized_at_ms, holder
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized' AND finalized_at_ms <= $2
-ORDER BY finalized_at_ms DESC, created_at_ms DESC, id ASC
+ORDER BY finalized_at_ms DESC, id ASC
 LIMIT 1
 `
 
@@ -8789,10 +8806,11 @@ type WorkspaceStateAtRow struct {
 }
 
 // The finalized state version with the latest finalize time at or before a
-// time. Versions finalized in the same millisecond break the tie in the order
-// they became current: the latest creation time first, then the ID. A read at
-// the present agrees with the current pointer of the workspace. The index on
-// (workspace_id, finalized_at_ms DESC) serves the first key.
+// time. A finalize stamps a time after every earlier finalize of the
+// workspace, so the version that became current last has the latest finalize
+// time, and a read at the present agrees with the current pointer. Ties break
+// by ID, as in the state version list; only rows that the stamp did not write
+// can tie. The index on (workspace_id, finalized_at_ms DESC) serves the order.
 func (q *Queries) WorkspaceStateAt(ctx context.Context, arg WorkspaceStateAtParams) (WorkspaceStateAtRow, error) {
 	row := q.db.QueryRow(ctx, workspaceStateAt, arg.WorkspaceID, arg.FinalizedAtMs)
 	var i WorkspaceStateAtRow

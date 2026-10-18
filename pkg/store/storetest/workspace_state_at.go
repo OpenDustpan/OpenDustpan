@@ -30,7 +30,8 @@ func RunWorkspaceStateAt(t *testing.T, newStore WorkspaceStateAtFactory) {
 	}{
 		{name: "state at a time follows the finalize time", test: testWorkspaceStateAt},
 		{name: "state at a time ignores a pending state version", test: testWorkspaceStateAtPending},
-		{name: "state at a time breaks a tie of finalize times", test: testWorkspaceStateAtTie},
+		{name: "state at a time after finalizes that ask for one millisecond", test: testWorkspaceStateAtTie},
+		{name: "state at a time after a fence in the current millisecond", test: testWorkspaceStateAtFenceTie},
 		{name: "state at a time of a deleted and of an unknown workspace", test: testWorkspaceStateAtDeleted},
 	}
 
@@ -80,7 +81,20 @@ func (w stateAtWorkspace) finalizeCreatedAt(
 		t.Fatalf("finalize state version of serial %d: %v", serial, err)
 	}
 
-	return done
+	return storedStateVersion(t, s, done.ID)
+}
+
+// storedStateVersion reads the state version id back from the store, with
+// the finalize time that the store stamped.
+func storedStateVersion(t *testing.T, s WorkspaceStateAtStore, id workspace.StateVersionID) workspace.StateVersion {
+	t.Helper()
+
+	sv, err := s.GetStateVersion(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get state version %s: %v", id, err)
+	}
+
+	return sv
 }
 
 // stateAtQuestion is one question of the state-at cases and its answer. With
@@ -211,33 +225,107 @@ func testWorkspaceStateAtDeleted(t *testing.T, s WorkspaceStateAtStore) {
 	}
 }
 
-// testWorkspaceStateAtTie proves that state versions with the same finalize
-// time break the tie in the order in which they became current: the latest
-// creation time first, then the ID. A read at that time agrees with that
-// order.
+// testWorkspaceStateAtTie proves that a finalize stamps a time after every
+// earlier finalize of the workspace, so a read after the latest finalize
+// agrees with the current state version: when two finalizes ask for the same
+// millisecond, when an earlier-created forced version finalizes last in that
+// millisecond, and when a finalize asks for a time before the latest one.
 func testWorkspaceStateAtTie(t *testing.T, s WorkspaceStateAtStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	ws := turnOnSwitches(t, s, ns, createTestWorkspace(t, s, ns, "network"),
+		namespace.Overrides{Forced: true, Unlocked: false})
+	w := stateAtWorkspace{ns: ns, locked: lockTestWorkspace(t, s, ns, ws, "alice")}
+	tie := workspaceStateAtBase().Add(time.Minute)
+	created := now()
+
+	first := w.finalizeCreatedAt(t, s, 1, created, tie)
+	second := w.finalizeCreatedAt(t, s, 2, created.Add(time.Second), tie)
+
+	wantStamped(t, second, tie.Add(time.Millisecond))
+	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie, first: time.Time{}, want: stateAtAnswer(first)})
+	wantStateAtNowIsCurrent(t, s, ws.ID, second)
+
+	// The forced version is created before the version that finalizes first
+	// in the same millisecond, and it finalizes last.
+	tie2 := tie.Add(time.Minute)
+	early := createPendingVersion(t, s, ns, newPendingVersion(
+		t, w.locked, w.locked.Lock.ID, forcedInput("lin-1", "f", 1),
+	))
+	late := w.finalizeCreatedAt(t, s, 3, created.Add(2*time.Second), tie2)
+	if err := finalizeRecorded(t, s, ns.Fence(), finalizedVersion(early, tie2, "f")); err != nil {
+		t.Fatalf("finalize forced state version: %v", err)
+	}
+
+	forced := storedStateVersion(t, s, early.ID)
+
+	wantStamped(t, forced, tie2.Add(time.Millisecond))
+	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie2, first: time.Time{}, want: stateAtAnswer(late)})
+	wantStateAtNowIsCurrent(t, s, ws.ID, forced)
+
+	// A finalize that asks for a time before the latest one, as after a
+	// clock step back, gets one millisecond after the latest one.
+	back := w.finalizeCreatedAt(t, s, 4, created.Add(3*time.Second), tie)
+
+	wantStamped(t, back, tie2.Add(2*time.Millisecond))
+	wantStateAtNowIsCurrent(t, s, ws.ID, back)
+}
+
+// testWorkspaceStateAtFenceTie proves that FenceAndUnlock also stamps a time
+// after every earlier finalize of the workspace, when the fence version asks
+// for the millisecond of the current state version.
+func testWorkspaceStateAtFenceTie(t *testing.T, s WorkspaceStateAtStore) {
 	t.Helper()
 
 	w, ws := newStateAtWorkspace(t, s)
 	tie := workspaceStateAtBase().Add(time.Minute)
-	created := now()
+	v1 := w.finalizeAt(t, s, 1, tie)
 
-	w.finalizeCreatedAt(t, s, 1, created, tie)
-	newer := w.finalizeCreatedAt(t, s, 2, created.Add(time.Second), tie)
+	fence := newFenceVersion(t, w.locked, 2, tie)
+	stageFence(t, s, w.ns, fence)
 
-	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie, first: time.Time{}, want: stateAtAnswer(newer)})
-	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie.Add(time.Hour), first: time.Time{}, want: stateAtAnswer(newer)})
-
-	// With the same creation time, the smaller ID wins.
-	tie2 := tie.Add(time.Minute)
-	a := w.finalizeCreatedAt(t, s, 3, created, tie2)
-	b := w.finalizeCreatedAt(t, s, 4, created, tie2)
-
-	want := a
-	if b.ID < a.ID {
-		want = b
+	err := s.FenceAndUnlock(t.Context(), releasedWorkspace(w.locked, tie), fence, v1.ID, w.ns.Fence())
+	if err != nil {
+		t.Fatalf("fence and unlock: %v", err)
 	}
 
-	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie2, first: time.Time{}, want: stateAtAnswer(want)})
-	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie, first: time.Time{}, want: stateAtAnswer(newer)})
+	stamped := storedStateVersion(t, s, fence.ID)
+
+	wantStamped(t, stamped, tie.Add(time.Millisecond))
+	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie, first: time.Time{}, want: stateAtAnswer(v1)})
+	wantStateAtNowIsCurrent(t, s, ws.ID, stamped)
+}
+
+// wantStamped checks that the stored finalize time of sv is want.
+func wantStamped(t *testing.T, sv workspace.StateVersion, want time.Time) {
+	t.Helper()
+
+	if sv.FinalizedAt.Equal(want) {
+		return
+	}
+
+	t.Fatalf("finalize time of %s = %s, want %s", sv.ID, sv.FinalizedAt, want)
+}
+
+// wantStateAtNowIsCurrent checks that a read after every finalize of the
+// state-at cases returns the current state version of the workspace id, and
+// that it is want.
+func wantStateAtNowIsCurrent(t *testing.T, s WorkspaceStateAtStore, id workspace.ID, want workspace.StateVersion) {
+	t.Helper()
+
+	cur, err := s.CurrentStateVersion(t.Context(), id)
+	if err != nil {
+		t.Fatalf("current state version: %v", err)
+	}
+
+	if cur.ID != want.ID {
+		t.Fatalf("current state version = %s, want %s", cur.ID, want.ID)
+	}
+
+	got, err := s.WorkspaceStateAt(t.Context(), id, workspaceStateAtBase().Add(24*time.Hour))
+	if err != nil || got.StateVersion != cur.ID || !got.FinalizedAt.Equal(cur.FinalizedAt) {
+		t.Fatalf("state at the end of the timeline = %+v, %v; want the current state version %s finalized at %s",
+			got, err, cur.ID, cur.FinalizedAt)
+	}
 }

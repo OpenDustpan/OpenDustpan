@@ -135,9 +135,12 @@ type StateAtReader interface {
 	// of the same read in the other domain packages, so that one store can
 	// implement all of them. It returns ErrNoStateAt when no state version
 	// finalized at or before at, and ErrNotFound for an unknown workspace.
-	// State versions finalized in the same millisecond break the tie in the
-	// order in which they became current: the latest creation time first,
-	// then the ID.
+	// A finalize stamps a time after every earlier finalize of the
+	// workspace (see StateStore.FinalizeStateVersion and FenceAndUnlock), so
+	// the version that became current last has the latest finalize time,
+	// and a read at a time after it returns the current state version.
+	// Versions with the same finalize time, which only rows that the stamp
+	// did not write can have, break the tie by ID.
 	// The ErrNoStateAt error is a *NoStateAtError, and its First holds the
 	// finalize time of the first state version, or the zero time when the
 	// workspace has none. A pending state version does not count. The result
