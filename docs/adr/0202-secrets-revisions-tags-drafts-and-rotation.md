@@ -1,0 +1,202 @@
+# 202. Secrets, revisions, tags, change approvals and rotation of profiles
+
+Status: accepted · 2026-10-18 · part of ADR 200
+
+## Context
+
+The parity list of the project owner (ADR 200) holds, from Pulumi ESC:
+static secrets, versioning and tags, approvals where ESC has them, and
+rotators. The research note gives the ESC features one by one:
+
+- **Secrets.** `fn::secret` with plain text is sealed at save, and the
+  stored document holds the ciphertext. The permission `open` decrypts it.
+- **Versions.** Each save makes an immutable numbered revision. The tag
+  `latest` always names the newest one. Other tags are named pointers that
+  a person moves. An environment also has key and value tags for search.
+  ESC has rollback, retract (a revision that nobody can open, whose tags
+  move) and a diff of two revisions or of two environments.
+- **Approvals.** A ruleset gates updates or opens. With a gate on updates,
+  a person writes a draft, which is a change request, and others approve
+  it. A draft that is behind the newest revision gets a three-way merge. A
+  stack can preview with a draft. A gate on opens gives access for a time
+  after approval.
+- **Rotation.** A rotator keeps state in the document. A rotation makes a
+  new revision, and keeps a current and a previous credential. Each
+  environment has one schedule, at most once a day. An environment with a
+  rotator cannot roll back in practice, because the rotation retired the old
+  credential.
+- **Lifecycle.** Clone (also the only rename of ESC), soft delete with a
+  restore, deletion protection, and a list of the environments and stacks
+  that import an environment.
+
+## Decision
+
+1. **Static secrets.** The save seals each `$secret` with the data key of
+   the scope of the profile, `<namespace>` and `profile:<profile ID>`
+   (ADR 23), and stores `$sealed` with the ciphertext in its place. The
+   plain text reaches no table, no blob, no log and no audit entry.
+   - A read of a document with `profile:read` answers the text with the
+     `$sealed` values. A person can send them back in a save. The scope
+     binds each ciphertext to its profile, so a `$sealed` value that a
+     person copies into another profile fails the save with
+     `profile.ErrInvalid`.
+   - A read with `showSecrets` answers each static secret in plain text. It
+     needs `profile:open`, as an open does, and writes an audit entry.
+   - The final delete of a profile deletes its data key in the same
+     transaction (ADR 23 decision 5).
+2. **Revisions.** Each save makes a new revision: the number (1, 2, 3 and
+   so on), the document, the principal, the time, an optional reason of at
+   most 500 characters, the Expr version and the SHA-256 of the document.
+   A revision never changes. A save names the revision that it read, and a
+   save on a stale read fails with `profile.ErrConflict`.
+   - Each revision is a history item with its own item key (ADR 151). A
+     person with `profile:redact` can redact a revision, for example after
+     a secret went into a plain value by mistake. A redacted revision
+     cannot be opened, and its tags move as decision 5 says.
+   - A profile keeps every revision until its final delete.
+3. **Tags.** A **revision tag** names one revision of one profile.
+   - `latest` always names the newest revision that is not retracted.
+     Nobody moves or deletes it.
+   - A profile has at most 32 other tags. A name has 1 to 63 characters of
+     `a-z`, `0-9`, `.`, `_` and `-`, and starts with a letter, so a tag is
+     never read as a revision number.
+   - A person with `profile:write` creates, moves and deletes a tag. Each
+     change writes an audit entry, with the revision before and after.
+     When the change rule of the profile covers tags (decision 6), a move
+     of a tag is a draft too.
+   - Imports, the run command, the stack config of the Pulumi CLI and the
+     provider of OpenTofu name a revision as `name@tag` or `name@number`.
+4. **Labels.** A profile has 0 to 32 labels, each a key and a value, for
+   views, filters and search (the label of ADR 51 decision 7). A label
+   grants nothing. `GET /api/profiles/{ns}/labels` answers each key with
+   its values.
+5. **Rollback, retract and diff.**
+   - **Rollback** saves the document of an earlier revision as a new
+     revision. The state of each rotator stays the current state (decision
+     8), so a rollback never brings back a retired credential. This is the
+     case where ESC cannot roll back.
+   - **Retract** marks a revision that nobody can open or import. Its tags
+     move to the replacement that the request names, or to the newest
+     earlier revision that is not retracted. `latest` is never retracted,
+     so to retract the newest revision, a person rolls back first. A
+     retract needs a reason, and writes an audit entry.
+   - **Diff** compares two revisions of one profile or of two profiles of
+     one namespace. It answers the change of the text and, for each path of
+     a static secret, `changed` or `unchanged`, with no value. With
+     `showSecrets` and `profile:open`, it also gives the values. The diff
+     also names each provider block whose `use`, `login` or URL host
+     changed, so that a reviewer sees where secrets go (ADR 208).
+6. **The change rule.** A profile can have one change rule. Without one, a
+   person with `profile:write` saves directly. With one, a save becomes a
+   **profile draft**, and a revision exists only after approval:
+   - The rule names the number of approvals (1 to 5), the eligible
+     approvers (principals and groups that hold `profile:approve`), and
+     whether it covers tag moves.
+   - The author of a draft never approves it, and the approvals come from
+     distinct people, as for a change order (ADR 192). An agent never
+     approves.
+   - Each principal has at most one open draft for each profile, and many
+     principals can have drafts at the same time.
+   - A draft names its base revision. An edit of a draft voids its
+     approvals. When the base is not the newest revision, the author updates
+     the draft with a three-way merge of the text. A conflict names each
+     line, and the author resolves it before a submit.
+   - An approved draft applies as a new revision. A draft that sees no
+     write for 30 days expires.
+   - A draft can be opened before approval for a plan, as
+     `name@draft:<draft ID>`, by its author and its approvers. Such an open
+     has `access` `read` or `open` and never `write` (ADR 205 decision 4), so
+     an apply never runs with a draft.
+   - A change of the change rule itself needs `profile:manage` and an
+     approval under the old rule.
+7. **The gate on opens.** A profile can also have an **open rule**: an
+   open needs an approved **access request** first.
+   - A person asks with a reason, the time that the access lasts (at most 7
+     days) and the time that the request stays valid before its first use.
+     Approvers approve as in decision 6. The access starts at the first
+     open after approval.
+   - An open of a profile that imports a profile with an open rule needs an
+     access request for each such profile. The console makes them in one
+     step, and each one gets its own approval.
+   - For a job, ADR 203 decision 5 says how the open rule applies.
+8. **Rotation.** A `rotators` block names a rotator (ADR 207 decision 8),
+   its inputs, its login block and a schedule:
+
+   ```yaml
+   rotators:
+     db:
+       use: postgres
+       login: dbadmin
+       with:
+         host: db.payments.internal
+         users: [app_blue, app_green]
+       schedule: "0 3 * * 1"      # each Monday at 03:00 in the time zone of the namespace
+   values:
+     db:
+       user: ${ rotators.db.current.username }
+       password: ${ rotators.db.current.password }
+   ```
+
+   - The state of a rotator is not in the document. The store keeps it in a
+     **rotation record**, sealed with the data key of the profile. So the
+     document stays a text that a person writes, and an open always reads
+     the current credential, also with an older revision of the document.
+     The outputs are `current` and `previous`.
+   - A schedule is a cron expression with at most one run a day, or one time
+     (`once`). Each block has its own schedule. The schedule `profile.rotate`
+     starts one durable operation for each due rotation, with the start key
+     `<profile ID>/<block>/<time>`.
+   - A rotation calls `Rotate`. On success, the old `previous` credential
+     is retired with `Retire`, the old `current` becomes `previous`, and the
+     new credential becomes `current`, in one transaction of the record. A
+     failure keeps the record as it was, retries with the backoff of the
+     operation for at most 1 hour, and then records the failure.
+   - Each block rotates alone, so one failure does not stop the others.
+   - `POST .../rotate` rotates now, for all blocks or for named blocks.
+     It needs `profile:rotate`.
+   - A rotation opens its login block with the action `rotate` and the
+     access `write` (ADR 205). The history of rotations of each block keeps
+     the time, the outcome, who or which schedule started it, and the class
+     of the error, never a credential.
+9. **Lifecycle.**
+   - **Create** needs `profile:write` on the namespace. A profile has an ID
+     with the prefix `prf-` and a name: 1 or 2 segments of `a-z`, `0-9`,
+     `.`, `_` and `-`, joined with `/`, at most 100 characters, for example
+     `aws-prod` or `payments/aws-prod`. The first segment of a 2-segment
+     name is a **profile folder**, which groups profiles in views. The
+     Pulumi CLI sees the folder as the ESC project (ADR 209 decision 6).
+   - **Rename** keeps the ID. It fails with `profile.ErrInUse` while a
+     profile, a blueprint or an attachment names the profile by its name.
+     The error names each one.
+   - **Clone** copies the newest revision to a new name, and optionally the
+     history, the tags and the labels. It never copies grants or rules.
+   - **Delete** is a soft delete with a recovery window of 30 days, as for a
+     unit (ADR 47, ADR 153). It fails with `profile.ErrInUse` while a
+     profile imports it, an attachment names it, or a job that is not
+     terminal reads it. **Deletion protection**, a setting of the profile,
+     makes each delete fail until a person with `profile:manage` turns it
+     off.
+   - **Restore** brings back a deleted profile within the window.
+   - **Referrers** lists the profiles that import the profile or read it
+     with `profiles[...]`, the attachments, the blueprints, and the units
+     whose runs read it in the last 90 days, each with the revision.
+10. **Fences, backups and limits.** Each write carries the fence of the
+    namespace and appends its audit entries in the transaction. The
+    profiles, revisions, tags, labels, rules, drafts, access requests,
+    rotation records and attachments are namespace data, so the backup of
+    the namespace holds them. A namespace has at most 1,000 profiles. A
+    write above a limit fails with `profile.ErrLimit`.
+
+## Consequences
+
+- A team without approvals saves in one step. A team with approvals gets
+  drafts, reviews and a gate on opens, with the review rules that it
+  already knows from change orders.
+- A rollback is always safe for a profile with rotators.
+- A pin of a revision pins the document, never a rotated credential. The
+  docs say so.
+- `profiletest` gets cases for each rule: the conflict of a stale save, the
+  scope of a sealed value, the moves of tags at a retract, the voided
+  approvals at an edit, the merge, the expiry of a draft, the record of a
+  rotation and its failure, the refusal of a rename or a delete in use, and
+  the fence.

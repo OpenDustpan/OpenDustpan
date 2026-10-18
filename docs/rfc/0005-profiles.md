@@ -1,13 +1,15 @@
 ---
 rfc: 5
 title: Profiles, shared config and secrets for every tool
-status: draft
+status: discussing
 created: 2026-10-10
 ---
 
 # RFC 5. Profiles, shared config and secrets for every tool
 
-Status: draft. The name and the scope are proposals.
+Status: discussing. The owner accepted the core of profiles on 2026-10-18:
+ADRs 200 to 209 hold it. The questions below are still open, each with a
+recommendation.
 
 ## Problem
 
@@ -22,7 +24,7 @@ Other products fill this gap:
 
 - Pulumi ESC holds named sets of config and secrets that import each other,
   pull values from external stores, and give short-lived cloud credentials
-  through OIDC. Any tool can use it through `esc run`.
+  through OIDC. Any tool can use it through `pulumi env run`.
 - HCP Terraform and Terraform Enterprise split the same job into variable
   sets (flat, shared variables for many workspaces), dynamic provider
   credentials (OIDC) and HashiCorp Vault.
@@ -30,96 +32,114 @@ Other products fill this gap:
 A backend for many tools is a natural home for one shared set of values that
 every tool reads.
 
-## Proposal
+## Accepted
 
-A **profile** is a named set of config, secrets and credentials in a
-namespace. A run of any tool can read it.
+On 2026-10-18 the project owner decided ten points. ADR 200 lists them
+with the design that follows:
 
-- **Values.** A profile holds plain values, secret values and credential
-  sources. The `secret` package encrypts secret values, with the profile as
-  its own scope, so each profile has its own data key.
-- **Imports.** A profile can import other profiles in the same namespace.
-  Later imports win, and the profile's own values win over all imports. An
-  import cycle is an error when the profile is saved.
-- **Credentials.** A credential source gives a short-lived credential when a
-  run opens the profile: for example an AWS role through OIDC. The profile
-  stores the trust settings, never a long-lived key, where the cloud allows
-  that.
-- **External stores.** Later, a value can come from an external store (Vault,
-  AWS Secrets Manager). Each store is an adapter behind a port, like the
-  storage adapters (ADR 2).
-- **Access.** Opening a profile is an action of its own, separate from
-  reading a unit. A person can deploy a unit without seeing the profile's
-  secrets in the console.
-- **Audit.** Every open of a profile is recorded: who, which run, which
-  values. The audit log never holds the values.
+| ADR | Part |
+| --- | --- |
+| [200](../adr/0200-profiles-config-secrets-and-credentials-for-every-tool.md) | The decisions of the owner, the package, the ports, the fit with accepted ADRs, the conflicts, the worked examples |
+| [201](../adr/0201-the-profile-document-imports-and-expressions.md) | The document, imports, Expr, entries, provider blocks, exports, types and checks |
+| [202](../adr/0202-secrets-revisions-tags-drafts-and-rotation.md) | Static secrets, revisions, tags, labels, change rules and drafts, open rules, rotation, lifecycle |
+| [203](../adr/0203-opening-a-profile-delivery-actions-and-audit.md) | Open, sessions, attachments, delivery to runners, actions, routes, audit, notifications |
+| [204](../adr/0204-opendustpan-as-an-oidc-issuer.md) | The OIDC issuer of each namespace |
+| [205](../adr/0205-the-claims-of-an-issued-token-and-the-subject.md) | The claims and the subject |
+| [206](../adr/0206-the-profile-provider-port-rotators-and-conformance.md) | The provider port, rotators and conformance suites |
+| [207](../adr/0207-the-built-in-profile-providers.md) | The built-in adapters, with Keycloak and its siblings |
+| [208](../adr/0208-the-external-adapter-protocol.md) | The external adapter protocol |
+| [209](../adr/0209-how-each-tool-reads-a-profile.md) | The provider of OpenTofu, the Pulumi CLI paths, the run command |
 
-Profiles are part of the shared core (ADR 12). They belong to no tool, and no
-tool's model changes for them (ADR 13).
+The research note
+[profiles-esc-parity-and-oidc-claims](../research/profiles-esc-parity-and-oidc-claims.md)
+holds the ESC parity table, the claim comparison and the facts about each
+external system.
 
-## How each tool reads a profile
-
-- **Pulumi CLI.** A stack's config can import ESC environments
-  (`environment:` in `Pulumi.<stack>.yaml`). The CLI then asks its backend for
-  the values. If OpenDustpan serves that part of the Pulumi Cloud-compatible
-  API, the Pulumi CLI reads profiles with no extra tool. This needs a check
-  against the real CLI with `make e2e`.
-- **OpenTofu.** OpenTofu has no way to ask its backend for variables when it
-  runs on a workstation. Under the TFE-compatible API, workspace variables and
-  variable sets apply only to remote runs. So OpenTofu reads profiles through
-  a runner (RFC 6), which passes the values as `TF_VAR_*` and environment
-  variables. On a workstation, OpenTofu reads no profile.
-
-## Options
-
-1. **Profiles as above.**
-2. **Do nothing.** Teams keep values in each tool's files and in CI secrets.
-   This is cheap and loses the main reason to share one backend.
-3. **ESC-compatible only.** Serve the ESC API for the Pulumi CLI and nothing
-   for OpenTofu. This adds a feature for one tool to the shared core, which
-   ADR 12 forbids.
-4. **A CLI wrapper** (`dustpan run --profile x -- tofu plan`). It would serve
-   OpenTofu on workstations. ADR 12 says OpenDustpan ships no client plugins
-   or wrappers, so this needs a new ADR.
-
-## Proposed glossary entry
-
-**Profile**:
-A named set of config, secrets and credential sources in a namespace, which a
-run of any tool can read.
-_Avoid_: Environment, context, config, variable set, vault
-
-The person's own settings page is then "Account", never "Profile".
+Option 4 of the first draft, a command for any tool, is now part of ADR
+209 (`opendustpan profile run`). The text "On a workstation, OpenTofu reads
+no profile" of the first draft no longer holds: the provider of ADR 209
+reads profiles on a workstation.
 
 ## Open questions
 
-- The Pulumi CLI calls these "environments". Does the Pulumi
-  Cloud-compatible API keep that word on the wire, while the console says
-  "profile"? ADR 13 says each tool keeps its own words in its own views.
-- Does a profile belong to a namespace only, or also to a group of units
-  (RFC 4)?
-- Which credential sources come first: AWS, Google Cloud, Azure, Vault?
-- Are profiles versioned, so that a run records which version it read?
-- Is option 4 worth a new ADR, so that OpenTofu on a workstation can read a
-  profile?
+Each question has the recommendation of the project manager or of the
+design, and is not decided.
 
-## Gaps from the competitor review
-
-Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
-worked into the proposal above.
-
-- Compatibility with the Pulumi CLI's `pulumi env` commands and the ESC API,
-  beyond stack config references.
-- Secret rotation and rotation webhooks (Pulumi ESC).
-- Precedence shown in the console: which value wins and why (HCP Terraform's
-  OVERWRITTEN flag).
-- Typed values with required, read-only, regex and dropdowns, and descriptions
-  that pass down (env zero).
-- A separate credential per operation: read-only for plan and preview,
-  read-write for apply (HCP Terraform's plan and apply roles).
-- OIDC audiences per cloud (Spacelift, env zero), and external stores such as
-  Vault at run time (env zero, Harness).
+1. **The word on the Pulumi Cloud-compatible API.** The paths say
+   `environments`, because the CLI sends them. Do the messages of that API
+   and the Pulumi views of the console also say "environment", while every
+   other place says "profile"? Recommendation: yes. It follows ADR 13: each
+   tool keeps its own words in its own views.
+2. **The first cloud logins.** Recommendation: AWS, Google Cloud and Azure
+   first, then Vault.
+3. **Each run records the revision that it read.** A job does, because the
+   spec fixes the revisions (ADR 100 decision 5, ADR 203 decision 5). A
+   Pulumi update outside a job sends `stack.environments` with versions
+   (ADR 209 decision 5). Recommendation: the history item of each update
+   and each state version links the profiles and the revisions that the run
+   read, also for a run outside a job, so that a person can answer "which
+   password did this apply use".
+4. **Who owns a profile.** Recommendation: a profile belongs to one
+   namespace, and attachments put it on a namespace, a collection or a unit
+   (ADR 51 decision 8, ADR 203 decision 5). No profile belongs to a
+   collection.
+5. **Rotation in the first release.** Recommendation: `password`,
+   `passphrase`, `external`, `postgres` and `aws-iam` first. `mysql` needs
+   a new dependency (question 12). `azure-app-secret` and `snowflake-user`
+   come next.
+6. **The open rule and jobs.** ADR 203 decision 5 refuses a job whose
+   profiles have an open rule. Recommendation: the job waits in
+   `awaiting-approval` with a gate, and an approver of the open rule
+   approves it. For a job of a change order, an approval of the change
+   order by an approver of the open rule counts.
+7. **A runner job with no profile.** ADR 101 decision 1 refuses a spec with
+   no profile. Recommendation: allow a job with no attachment, so that a
+   unit with no secret needs no empty profile. This needs a change of ADR
+   101.
+8. **The actions `dedrift` and `unseal`.** The project manager named them
+   for the `action` claim. No operation has them yet. Recommendation:
+   reserve the names, and let the ADR of each operation add its value to
+   ADR 205 decision 5.
+9. **A claim for the blueprint.** Recommendation: add `blueprint` and
+   `catalog_request` when the Catalog runs jobs, as an addition to the
+   claim set.
+10. **Where the provider of OpenTofu lives.** Recommendation: its own
+    repository, built with the provider SDK of providerkit, with its own
+    release line and the gates of ADR 170 decision 4.
+11. **The `pulumi env` commands of the first release.** Recommendation:
+    `open`, `run`, `ls`, `init`, `get` and `edit` first, then `version` and
+    `version tag`. Each one needs its e2e step first.
+12. **New dependencies.** `mysql` needs a MySQL driver. A 1Password service
+    account needs the SDK of 1Password. Recommendation: ask the owner for
+    each one, and ship without them first.
+13. **Kubernetes and SDKs.** ESC has an External Secrets Operator provider,
+    a Secrets Store CSI provider and SDKs in four languages.
+    Recommendation: a later RFC, on the REST API of ADR 203.
+14. **A migration tool from ESC.** Recommendation: a later command that
+    reads ESC YAML and writes the format of ADR 201, with a report of each
+    function that it cannot map.
+15. **Tokens for sweeps and job sessions.** ADR 133 and ADR 164 ask whether
+    the server signs a token for a sweep or a job session. The issuer of ADR
+    204 exists now. Recommendation: a separate RFC, because ADR 164
+    decision 4 holds that the server never takes part in the credentials of
+    a sweep.
+16. **Attached profiles for the Pulumi CLI outside a job.** The Pulumi CLI
+    can read a stack config that the backend stores, but then ignores the
+    stack file. Recommendation: no. Outside a job, a person names the
+    profiles in `environment:` of the stack file.
+17. **The order of work.** Recommendation, each slice with its conformance
+    suite and its e2e steps first:
+    1. The document, the store, static secrets, open, the REST API and the
+       run command.
+    2. The issuer and `login/aws`, `login/gcp`, `login/azure`, `login/oidc`.
+    3. Delivery to runners.
+    4. The Pulumi CLI paths.
+    5. The provider of OpenTofu, with the ephemeral resource.
+    6. `login/vault`, `secrets/vault`, `outputs/opendustpan`.
+    7. Change rules, drafts and open rules.
+    8. Rotation.
+    9. The other adapters.
 
 ## Outcome
 
-None yet.
+Accepted in part: ADRs 200 to 209. The open questions above stay open.

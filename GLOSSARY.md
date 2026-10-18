@@ -672,6 +672,96 @@ _Avoid_: Group (alone: that is a set of principals), batch, bucket
 The console heading of a plan of a change order whose units are of more than one tool (ADR 195). For units of one tool, the heading is the word of that tool: "Preview" or "Plan".
 _Avoid_: Plan (for a set of Pulumi units), preview (for OpenTofu units), change set
 
+### Profiles
+
+**Profile**:
+A named set of config, secrets and credential sources in one namespace, which a run of any tool can read (ADR 200). It has an ID with the prefix `prf-` and a name of one or two segments, for example `aws-prod` or `payments/aws-prod`. Each save makes a new profile revision.
+_Avoid_: Environment (except in the paths of the Pulumi Cloud-compatible API), context, config, variable set, vault
+
+**Profile folder**:
+The first segment of a profile name of two segments. It groups profiles in views, and the Pulumi CLI sees it as the ESC project (ADR 202 decision 9).
+_Avoid_: Project (alone)
+
+**Profile revision**:
+One immutable, numbered version of the document of a profile (ADR 202 decision 2). Each revision is a history item with its own item key.
+_Avoid_: Version (alone)
+
+**Revision tag**:
+A name that points to one profile revision, for example `stable`. The tag `latest` always names the newest revision that is not retracted (ADR 202 decision 3).
+_Avoid_: Label (a label is a key and a value for views), version tag
+
+**Entry**:
+A map in the `values` of a profile document whose keys start with `$`, for example `$secret`, `$final` or `$type`. It describes one value (ADR 201 decision 6).
+_Avoid_: Function, fn
+
+**Provider block**:
+A named block under `providers` in a profile document. Its `use` names a profile provider, for example `login/aws` (ADR 201 decision 7).
+_Avoid_: Provider (alone), source, integration
+
+**Profile provider**:
+An adapter that an open of a profile calls, of the kind `login`, `secrets` or `outputs` (ADR 206). The external adapter is one of them.
+_Avoid_: Provider (alone: that is a plugin of OpenTofu or the Pulumi CLI), integration, plugin
+
+**Rotator**:
+An adapter that makes a new credential on a schedule and retires the old one (ADR 206 decision 5). A rotator block of a profile names it.
+_Avoid_: Rotation provider
+
+**Rotation record**:
+The sealed state of one rotator block, with the current and the previous credential. It lives outside the document, so a rollback never brings back a retired credential (ADR 202 decision 8).
+_Avoid_: Rotation state (alone)
+
+**Exports**:
+The part of a profile document that says what reaches a consumer: `variables`, `files`, `pulumi` and `opentofu` (ADR 201 decision 9).
+_Avoid_: Outputs (outputs belong to a unit or a provider block), environment variables (alone)
+
+**Never store**:
+The mark of a value that no consumer may store in a plan or in state. The data source of OpenTofu refuses it, and only the ephemeral resource reads it (ADR 201 decision 12, ADR 209 decision 3).
+_Avoid_: Ephemeral (alone), transient
+
+**Open**:
+The resolve of a profile for one caller: imports, provider blocks, types and checks, with the secret marks (ADR 203). Each open writes one audit entry. An open needs `profile:open`, or a job token for a profile that the job fixed.
+_Avoid_: Read (a read of a profile gives sealed secrets), decrypt
+
+**Open session**:
+The stored result of an open, with an ID of the prefix `pos-` (ADR 203 decision 3). Only its principal reads it, for at most 12 hours.
+_Avoid_: Session (alone)
+
+**Profile attachment**:
+A link from a profile to a namespace, a collection or a unit. The jobs of each unit of the object read the profile (ADR 203 decision 5).
+_Avoid_: Binding, assignment (an assignment is a runner term)
+
+**Change rule**:
+The rule of a profile that turns each save into a profile draft that needs approvals (ADR 202 decision 6).
+_Avoid_: Ruleset, change gate
+
+**Profile draft**:
+A proposed revision of a profile under a change rule, with a base revision and approvals. It applies as a new revision after approval (ADR 202 decision 6).
+_Avoid_: Change request, draft (alone: a draft review belongs to a change order)
+
+**Open rule**:
+The rule of a profile that needs an approved access request before a person opens it (ADR 202 decision 7).
+_Avoid_: Open gate, just-in-time access
+
+**Access request**:
+A request of a person to open a profile for a time, under an open rule (ADR 202 decision 7). It holds a reason.
+_Avoid_: Open request
+
+**Issuer**:
+The OIDC issuer of one namespace, at `https://<public host>/oidc/<namespace>`, with its own signing keys (ADR 204). Clouds and other systems trust it.
+_Avoid_: Identity provider (an identity provider signs in people), OIDC provider (alone)
+
+**Issued token**:
+A JWT that the issuer of a namespace signs, with the claims of ADR 205. Its `purpose` is `login` or `adapter`. It lives at most 60 minutes.
+_Avoid_: ID token, access token (an access token authenticates to OpenDustpan)
+
+**Subject template**:
+The list of keys that make the `sub` of an issued token, for example `namespace`, `collection`, `tool`, `unit` and `access` (ADR 205 decision 6).
+_Avoid_: Subject attributes, sub format
+
+**External adapter**:
+A profile provider or a rotator that a team writes and hosts. The server calls it with an HTTPS `POST` and an issued token with the hash of the body (ADR 208).
+_Avoid_: Webhook, plugin, connector
+
 ### Agents
 
 **Dusty**:
@@ -958,7 +1048,7 @@ _Avoid_: Scheme, theme (for branding)
 
 **Preferences**:
 The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
-_Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
+_Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user settings
 
 
 **Language** (of a person):
@@ -1039,4 +1129,9 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
+- **Provider** has two meanings. A provider of OpenTofu or the Pulumi CLI is a plugin of the tool, for example a provider wrapper (ADR 170). A profile provider is an adapter that an open calls (ADR 206). Write "profile provider" or "provider block" for the second.
+- **Environment** is the word of the Pulumi CLI for a profile, in the paths of the Pulumi Cloud-compatible API (ADR 209). Everywhere else, write "profile". An environment variable is a variable of a process.
+- **Open session** and the other sessions are different: an open session holds the result of one open of a profile (ADR 203).
+- **Access** is also a claim of an issued token: `read`, `write` or `open` (ADR 205). An access token authenticates to OpenDustpan. Name which one.
+- **Tag** has two meanings: a tag that a tool sends for a unit, and a revision tag of a profile. The key and value pairs of a profile are labels. Name which one.
 - **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.
