@@ -97,7 +97,7 @@ design makes each one a field of the connection document:
    | `query` | extra query parameters (decision 11) | empty |
    | `userAgent` | the `User-Agent` header (decision 12) | `OpenDustpan/<release>` |
    | `outputTokens` | the field name and the limit for each call (decision 13) | none |
-   | `contextTokens` | the context window of the model | none |
+   | `contextTokens` | the context window of the model, for the status route and the console | empty |
    | `tools` | the tool fields (decision 14) | none |
    | `transport` | `whole` or `stream` (decision 15) | none |
    | `reasoning` | the reasoning parts to keep (decision 16) | empty |
@@ -112,6 +112,11 @@ design makes each one a field of the connection document:
    `metadata.session`. It has 1 to 8 segments and at most 128 bytes. A
    segment is a decimal index, or a name of letters, digits and `_` that
    does not start with a digit.
+
+   `contextTokens` is optional. The status route answers it, and the
+   console shows it. The loop and the adapter do not read it in version 1:
+   a request that is too long gets an error from the server, and the
+   adapter maps that error to `ErrContextTooLong` (decision 22).
 4. **The base address.** `baseURL` is an absolute URL of at most 2048
    bytes. Validation refuses user information, a query string (`query`
    holds query parameters), a fragment, and a path that ends in the path
@@ -183,14 +188,18 @@ design makes each one a field of the connection document:
     | `GET /api/agent/secrets` | lists the references, with the times of create, change and last use |
     | `DELETE /api/agent/secrets/{ref}` | removes the item, or answers 409 while the connection uses it |
 
-    The `DELETE` checks the use and removes the item in one transaction,
-    and a connection write that adds a reference checks the item in its
-    own transaction. So a `DELETE` and a `PUT` of the connection cannot
-    both pass. No route answers a value. A rotation takes effect at the
-    next model call. The value is never in a log, an audit entry, a
-    metric, an error or a transcript. The audit log is on for the agent
-    (ADR 120 decision 5), so each write of a secret item writes an entry
-    (decision 33).
+    Each reference in the connection or in a pending document (decision
+    29) is a row with a foreign key to its secret item. A `DELETE` of an
+    item that a reference row holds fails on the foreign key, and the
+    route answers 409. A connection write adds its reference rows in its
+    own transaction, and fails on the foreign key when the item does not
+    exist. So a `DELETE` of an item and a `PUT` of the connection cannot
+    both pass, also under the read committed isolation of PostgreSQL.
+
+    No route answers a value. A rotation takes effect at the next model
+    call. The value is never in a log, an audit entry, a metric, an error
+    or a transcript. The audit log is on for the agent (ADR 120 decision
+    5), so each write of a secret item writes an entry (decision 33).
 11. **Extra headers and query parameters.** `headers` maps a header name
     to `{"value": "..."}` or `{"secret": "itm-..."}`. `query` maps a
     parameter name to the same two forms. Each holds at most 16 entries,
@@ -239,9 +248,15 @@ design makes each one a field of the connection document:
     - `choice` is `omit` or `auto`. With `omit`, the request has no
       `tool_choice` field, for a server that refuses it. The adapter never
       forces a tool.
-    - `parallel` is `omit`, `true` or `false`. It sets
-      `parallel_tool_calls` or `disable_parallel_tool_use`. Some servers
-      need `true` for more than one call in a turn.
+    - `parallel` is `omit`, `on` or `off`. With `omit`, the request has
+      no field for parallel tool calls. For `chat-completions`, `on` and
+      `off` set `parallel_tool_calls` to `true` and `false`. For
+      `messages`, they set `tool_choice.disable_parallel_tool_use` to
+      `false` and `true`. Some servers need `on` for more than one call in
+      a turn.
+    - The Messages format puts that field in `tool_choice`. So for
+      `messages`, validation refuses `parallel` `on` or `off` with
+      `choice` `omit`.
 
     The adapter sends the tool catalog (ADR 122) in the order of the
     catalog, with each JSON Schema in canonical JSON. So the bytes of the
@@ -272,6 +287,22 @@ design makes each one a field of the connection document:
     `tool_calls` or `role`. The fields that turn reasoning on and set its
     effort differ for each server. The operator sets them in
     `providerFields`.
+
+    With `stream`, the adapter builds the value of each entry from the
+    deltas, with one rule for each format:
+    - For `chat-completions` and `responses`, the adapter merges the value
+      at the path of the entry in each delta into the value that it built.
+      It appends a string to the string. It merges an object key by key,
+      with the same rule. It appends each element of an array. An element
+      with an `index` field merges into the element with the same `index`,
+      with the same rule. Another value replaces the value that it built.
+    - For `messages`, the start event of a block of a type in `keep` gives
+      the block. Each delta event of that block appends each string field
+      other than `type` to the field of the block with the same name, for
+      example `thinking` and `signature`. The stop event ends the block.
+
+    The probe has a `reasoning` check (decision 30) for a `keep` list that
+    is not empty.
 17. **Caching.** `cache` holds `mode` and `ttl`:
     - `none`: the adapter adds no cache field.
     - `automatic`: the server caches by itself. The adapter adds no cache
@@ -318,13 +349,16 @@ design makes each one a field of the connection document:
     The HMAC key is one random 32-byte value for the installation, sealed
     in the scope `@server` (ADR 23). It is not a secret item of decision
     10: the secrets routes do not list, replace or remove it, and no route
-    answers it. The server makes it in the transaction that stores the
-    first connection. Two instances that store a first connection at the
-    same time cannot make two keys, because the second transaction finds
-    the key of the first. The HMAC key is in the table list of a backup
-    (ADR 30), sealed. No route rotates it in version 1. A new key changes
-    the conversation key of each running conversation. The only cost is
-    one cache miss for each conversation.
+    answers it. The server makes it at start, before it serves a route:
+    an insert into a table with one row and a unique key, with an
+    on-conflict clause that does nothing, and then a read of the row. So
+    two instances that start at the same time make one key, also under the
+    read committed isolation of PostgreSQL, and the first probe can send
+    the conversation key. A probe has no run, so the probe computes the
+    key over its own probe ID. The HMAC key is in the table list of a
+    backup (ADR 30), sealed. No route rotates it in version 1. A new key
+    changes the conversation key of each running conversation. The only
+    cost is one cache miss for each conversation.
 
     The adapter never sends an end-user field: `user`,
     `safety_identifier`, `metadata.user_id`, or a header with a subject,
@@ -348,18 +382,28 @@ design makes each one a field of the connection document:
 ### Request body fields
 
 21. **`providerFields` is a JSON object of extra fields.** The adapter
-    merges it into the top level of each request body. It holds at most
-    8 KiB and at most 8 levels. Examples are a routing object of a
-    gateway, the reasoning fields of decision 16, and a context size
-    option of a local model server. Validation refuses each key that the
-    adapter owns:
-    - `model`, `messages`, `system`, `input`, `tools`, `tool_choice`,
-      `parallel_tool_calls`, `disable_parallel_tool_use`, `stream`,
-      `stream_options`, and the `field` of `outputTokens`,
-    - `cache_control`, and the path of `conversationKey.bodyField`,
-    - the end-user fields of decision 19.
+    merges it into each request body with a deep merge: when the body and
+    `providerFields` both hold an object at a key, the adapter merges the
+    two objects key by key, with the same rule. It adds each other key of
+    `providerFields` that the body does not hold. `providerFields` holds at
+    most 8 KiB and at most 8 levels. Examples are a routing object of a
+    gateway, the reasoning fields of decision 16, and a context size option
+    of a local model server.
 
-    The server does not check the meaning of the other keys. The probe of
+    Validation checks the full path of each key of `providerFields`, at
+    each level. It refuses a path that is an owned path or is below an
+    owned path, and a value that is not an object at a path above an owned
+    path. These are the owned paths:
+    - `model`, `messages`, `system`, `input`, `tools`, `tool_choice`,
+      `parallel_tool_calls`, `stream`, `stream_options`, and the `field` of
+      `outputTokens`,
+    - `cache_control` at each level, and the path of
+      `conversationKey.bodyField`,
+    - the end-user fields of decision 19: `user`, `safety_identifier` and
+      `metadata.user_id`.
+
+    So the deep merge never changes a value that the adapter wrote. The
+    server does not check the meaning of the other keys. The probe of
     decision 29 shows whether the server accepts them.
 
 ### Errors
@@ -449,22 +493,34 @@ design makes each one a field of the connection document:
     - has no port, or more than one port,
     - is in a range that embeds an IPv4 address (`::ffff:0:0/96`, `::/96`,
       `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`). The
-      operator writes the IPv4 range instead,
+      operator writes the IPv4 range instead. The range `::/96` also holds
+      `::1`, so validation refuses `::1/128`. A model server on the same
+      host as the server uses `127.0.0.1`,
     - overlaps the always-denied list.
 
     The always-denied list is in the binary, and no entry overrides it:
     `0.0.0.0/8`, `169.254.0.0/16`, `255.255.255.255/32`,
-    `100.100.100.200/32`, `224.0.0.0/4`, `::/128`, `fe80::/10`,
+    `100.100.100.200/32`, `168.63.129.16/32`, `224.0.0.0/4`, `::/128`,
+    `fe80::/10`,
     `fd00:ec2::254/128` and `ff00::/8`. It holds the link-local range, the
     metadata addresses of clouds, the unspecified addresses, broadcast and
     multicast. Each check unmaps an IPv4-mapped IPv6 address with
     `Unmap()` first, and then checks the IPv4 address.
 
+    A public address is an address that `egress.CheckAddr` accepts. So a
+    loopback, private (RFC 1918), shared (`100.64.0.0/10`), unique local
+    (`fc00::/7`), link-local, multicast or other reserved address is not
+    public.
+
     The server flag `--egress-public-only` makes the server refuse each
-    CIDR entry: a `PUT` of the allowlist with one answers 422. So a model
-    call reaches public addresses only. OpenDustpan Cloud sets this flag.
-    A self-hosted operator can set it too, so the hosted service has no
-    path of its own (ADR 59). A change of the flag needs a restart.
+    CIDR entry: a `PUT` of the allowlist with one answers 422. With the
+    flag, `egress.CheckModelURL` and the dial guard also ignore each CIDR
+    entry that the store holds, for example an entry from before the
+    restart or from a restored backup. The server logs once at start that
+    it ignores these entries, with their count. So a model call reaches
+    public addresses only. OpenDustpan Cloud sets this flag. A self-hosted
+    operator can set it too, so the hosted service has no path of its own
+    (ADR 59). A change of the flag needs a restart.
 26. **The URL check of a model connection.** `egress.CheckModelURL` checks
     `baseURL` against the allowlist, at validation and before each call:
     - A host name must match a host entry or a `*.` suffix entry. Its
@@ -479,9 +535,10 @@ design makes each one a field of the connection document:
       `"http": true`. A public address always needs `https`.
 27. **The dial guard.** The guard checks each resolved address of each
     connection. It refuses an address in the always-denied list first. It
-    then allows a public address, and an address in a CIDR entry on the
-    port of that entry. It refuses each other address. So an allowed host
-    name that resolves to an address in a CIDR entry connects. This
+    then allows a public address (decision 25), and an address in a CIDR
+    entry on the port of that entry. It refuses each other address. So an
+    allowed host name that resolves to an address that is not public
+    connects only when a CIDR entry holds that address and port. This
     accepts DNS rebinding of an allowed `https` host name to an address
     that a CIDR entry allows. The design accepts it for these reasons:
     - A homelab often serves a model on an internal host name with an
@@ -511,19 +568,32 @@ design makes each one a field of the connection document:
 29. **The capability probe is a durable operation.** The probe runs as a
     durable operation of the kind `agent.probe` (ADR 72 decision 1), so a
     route never waits on a model:
-    - `PUT /api/agent/connection` checks the document, stores it as the
-      pending document, starts a probe, and answers 202 at once with the
-      probe ID. When the probe passes, its last step makes the pending
-      document the connection, in the transaction of its own write. That
-      step checks the version of `If-Match` again. When the probe fails,
-      the connection stays as it was.
+    - `PUT /api/agent/connection` checks the document, stores it as a
+      pending document with the ID of a new probe as its key, starts that
+      probe, and answers 202 at once with the probe ID. A probe checks
+      only the pending document of its own ID. When the probe passes, its
+      last step makes that document the connection, in the transaction of
+      its own write, and only when the version of `If-Match` is still the
+      version of the connection. Otherwise, and when the probe fails, the
+      connection stays as it was, and the probe removes its pending
+      document.
+    - A later `PUT` of the connection, in its own transaction, cancels
+      each earlier probe that has a pending document, and removes those
+      documents. A canceled probe ends with the state `canceled` at its
+      next step. Its last step finds no pending document, and changes
+      nothing.
+    - `DELETE /api/agent/connection` removes the connection, removes each
+      pending document and cancels each probe that has one, in one
+      transaction. A check that runs at that time ends at its next step.
+      A probe with no store (the next item) holds no pending document, so
+      the `DELETE` does not cancel it.
     - `POST /api/agent/connection/probe` starts a probe of a document with
       no store, and answers 202 with the probe ID.
     - `GET /api/agent/connection/probes/{id}` answers the state of the
       probe and of each check: `pending`, `running`, `passed`, `warning`,
-      `failed` or `skipped`. For each check it gives the time it took, the
-      tokens it used, and for a failure the status class of the answer,
-      the sentinel and an error in strict STE.
+      `failed`, `skipped` or `canceled`. For each check it gives the time
+      it took, the tokens it used, and for a failure the status class of
+      the answer, the sentinel and an error in strict STE.
     - A check has a timeout of 2 minutes, and `reach` 10 seconds. The
       probe has a total timeout of 10 minutes. A timeout fails the check.
 30. **The checks.** The probe makes these checks, in order, and stops at
@@ -537,6 +607,7 @@ design makes each one a field of the connection document:
     | `tool-result` | sends the tool result back and asks for a text answer | blocks the connect |
     | `transport` | with `stream`, reads the streams of the earlier checks to their end | blocks the connect |
     | `usage` | checks that the answers report input and output tokens | a warning |
+    | `reasoning` | with a `keep` list that is not empty, checks that an answer held a value at each entry. It then sends the values back in the next request | a warning |
     | `cache` | with `automatic` or `breakpoints`, sends a fixed prefix of at least 2,048 tokens two times and reads the cache tokens | a warning |
 
     Dusty needs tool calls. A small local model can answer one attempt
@@ -554,6 +625,9 @@ design makes each one a field of the connection document:
 31. **The probe costs tokens, and the ledger records them.** A full probe
     uses about 6,000 input tokens and at most 400 output tokens. Each
     probe call writes a ledger row with the origin `probe` and no run.
+    The key of a probe row is the probe ID, the name of the check and the
+    number of the attempt. A second row with the same key changes nothing,
+    as a second row for one run, turn and claim (ADR 120 decision 20).
     The installation can start 6 probes in each minute. A `PUT` of the
     connection and a `POST` of the probe route both count.
 
@@ -656,7 +730,7 @@ design makes each one a field of the connection document:
       "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-..." },
       "outputTokens": { "field": "max_tokens", "max": 8192 },
       "contextTokens": 65536,
-      "tools": { "choice": "auto", "parallel": true },
+      "tools": { "choice": "auto", "parallel": "on" },
       "transport": "stream",
       "cache": { "mode": "automatic" }
     }
@@ -758,13 +832,25 @@ design makes each one a field of the connection document:
       it back to the adapter unchanged. The run, the turn and the part are
       the additional data of the seal. No route answers an opaque part,
       and the console never shows one.
+    - A model can repeat a revealed value (ADR 124 decision 9) in its
+      reasoning. So from the first model call of a run whose request holds
+      a revealed value, each opaque part of the run gets the hard expiry
+      of that reveal. After it, the store answers no such part, and the
+      reaper removes it. The design uses the hard expiry and not a removal
+      at run end, because the reaper removes the part also when the
+      durable runner fails the turn for good and no step of the run runs
+      again. No later run needs the part, because a follow-up run drops
+      the opaque parts of its parent.
     - A run uses the format and the model of the connection at its first
       turn. The `check` step of a later turn ends the run with the stop
-      reason `connection-changed` when the format or the model changed.
-      So no tool turn sends an opaque part to another format or model. A
-      follow-up run starts on the new connection, and drops the opaque
-      parts of the transcript of its parent. A change of another field
-      takes effect at the next model call of the run.
+      reason `connection-changed` when the format, the model or `baseURL`
+      changed. So no tool turn sends an opaque part to another format,
+      model or server. A follow-up run starts on the new connection, and
+      drops the opaque parts of the transcript of its parent. A change of
+      another field takes effect at the next model call of the run.
+    - `Info()` answers the format and the model name of the connection,
+      not the name of a provider. The status route answers the format and
+      the model name.
     - `ErrModelQuota`: the account has no plan, quota or credit left.
       The loop stops the run with the stop reason `model-quota`, and the
       status route says so.
@@ -790,13 +876,25 @@ design makes each one a field of the connection document:
   secret item of `@server` (decision 10).
 - **ADR 120, decision 7:** the rows `PUT /api/agent/connection` and
   `DELETE /api/agent/connection`. Decision 32 gives the routes of the
-  connection.
+  connection. Also "the provider and model names" in the answer of the
+  status route: the status route answers the format and the model name
+  (decision 37).
+- **ADR 120, decision 20:** "Each model call writes one row to a token
+  ledger, with the run, the turn, the token of the claim". A row also has
+  an origin, and a probe row has no run and has the key of decision 31.
 - **ADR 120, stop reasons:** the stop reasons of a run get
   `model-quota`, `model-rate-limited` and `connection-changed` (decision
+  37).
+- **ADR 121, decision 1:** "`Info() ModelInfo`: the names of the adapter
+  and the model". `Info()` answers the format and the model name (decision
   37).
 - **ADR 121, decision 2:** "A part is text, a tool call ... or a tool
   result". A part can also be opaque (decision 37).
 - **ADR 121, decision 4:** the table gets `ErrModelQuota` (decision 37).
+  The row `ErrModelRateLimited` changes: it is a rate limit, and not a
+  quota (decision 22). The loop retries the turn after the wait, and
+  stops the run with `model-rate-limited` when the wait is above 5
+  minutes (decision 23).
 - **ADR 121, decision 8:** "Two adapters come in a later change, each in
   its own package under `pkg/agent/model/`". Both adapters come in the
   first adapter change (decision 5), in packages under `pkg/modeladapter/`
@@ -815,8 +913,10 @@ design makes each one a field of the connection document:
   `ErrPlainSecret`, `ErrModelQuota`, the opaque part and the probe kind.
   `agent.Connection` holds the document.
 - `pkg/modeladapter/chatcompletions` and `pkg/modeladapter/messages` are
-  the first two adapters. Each runs `agenttest.RunModel` against a fake
-  server for each mechanism of decisions 13 to 23.
+  the first two adapters. The change that adds them adds
+  `pkg/modeladapter/` to the Layout section of `CLAUDE.md`. Each adapter
+  runs `agenttest.RunModel` against a fake server for each mechanism of
+  decisions 13 to 23.
 - `pkg/egress` gets the egress allowlist, the always-denied list, the CIDR
   entries, `CheckModelURL`, the `http` rule and the flag
   `--egress-public-only`. The webhook and the iCal feed keep their rules:
@@ -846,6 +946,8 @@ design makes each one a field of the connection document:
 - Request signing and OAuth token refresh in the server.
 - A format of one provider or one model server.
 - A path of a format other than the fixed path of decision 4.
+- A form for a key in the path of `baseURL`. Version 1 has no supported
+  form for it, and the plain-secret check refuses one (decision 4).
 - A secret form for `providerFields`.
 - An outbound proxy for model calls.
 - A route that rotates the HMAC key of the conversation key.

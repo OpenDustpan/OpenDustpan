@@ -1,6 +1,6 @@
 # 120. Dusty, the built-in agent, runs on durable operations
 
-Status: accepted · 2026-10-17 · decision 22 superseded in part by ADR 128. Decisions 3 and 7 superseded in part, and stop reasons added, by ADR 129
+Status: accepted · 2026-10-17 · decision 22 superseded in part by ADR 128. Decisions 3, 7 and 20 superseded in part, and stop reasons added, by ADR 129
 
 ## Context
 
