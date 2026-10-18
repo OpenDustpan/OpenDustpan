@@ -13,9 +13,10 @@ import (
 // cases. A case evaluates facts and states the result and the matched
 // gates that it expects.
 type TestFile struct {
-	Gates []Gate         `json:"gates"`
-	Rules []ApprovalRule `json:"rules,omitempty"`
-	Cases []TestCase     `json:"cases"`
+	Gates  []Gate         `json:"gates"`
+	Rules  []ApprovalRule `json:"rules,omitempty"`
+	Owners []OwnerRule    `json:"owners,omitempty"`
+	Cases  []TestCase     `json:"cases"`
 }
 
 // TestCase is one case of a TestFile.
@@ -24,7 +25,6 @@ type TestCase struct {
 	Subject   Subject   `json:"subject"`
 	Principal Principal `json:"principal"`
 	Facts     Facts     `json:"facts"`
-	Owners    string    `json:"owners,omitempty"`
 	Expect    Expect    `json:"expect"`
 }
 
@@ -73,6 +73,13 @@ func RunTestFile(ctx context.Context, path string) ([]CaseResult, error) {
 		}
 	}
 
+	for _, o := range tf.Owners {
+		err = eng.Registry.PutOwnerRule(o)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	out := make([]CaseResult, 0, len(tf.Cases))
 
 	for _, c := range tf.Cases {
@@ -84,7 +91,7 @@ func RunTestFile(ctx context.Context, path string) ([]CaseResult, error) {
 
 func runCase(ctx context.Context, eng *Engine, c TestCase) CaseResult {
 	rec, err := eng.Planned(ctx, PlannedRequest{
-		Subject: c.Subject, Principal: c.Principal, Facts: c.Facts, Owners: []byte(c.Owners),
+		Subject: c.Subject, Principal: c.Principal, Facts: c.Facts,
 	})
 	if err != nil && !errors.Is(err, ErrRuleFailed) {
 		return CaseResult{Name: c.Name, Detail: err.Error()}

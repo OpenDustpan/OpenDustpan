@@ -19,8 +19,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-const ownersFile = "# network changes need netops\n[network] @group:netops 1 modules/network/**\n"
-
 var subject = pkggate.Subject{Tool: "opentofu", Namespace: "acme", Collection: "prod", Name: "prod/net"}
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -91,7 +89,6 @@ func TestSpikeEndToEnd(t *testing.T) {
 
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-q")
-	write(t, repo, "OWNERS.dustpan", ownersFile)
 	write(t, repo, "modules/network/main.tf", "# v1\n")
 	write(t, repo, "modules/app/main.tf", "# v1\n")
 	runGit(t, repo, "add", ".")
@@ -100,8 +97,6 @@ func TestSpikeEndToEnd(t *testing.T) {
 	write(t, repo, "modules/network/main.tf", "# v2\n")
 	runGit(t, repo, "commit", "-q", "-am", "change network")
 	head := runGit(t, repo, "rev-parse", "HEAD")
-	// The working tree must not matter: the file is read at the commit.
-	write(t, repo, "OWNERS.dustpan", "# edited after the plan\n")
 
 	src := pkggate.GitSource{Dir: repo}
 	eng := pkggate.NewEngine()
@@ -130,18 +125,13 @@ func TestSpikeEndToEnd(t *testing.T) {
 	plan := func(who pkggate.Principal) pkggate.Record {
 		t.Helper()
 
-		owners, ownErr := src.Owners(ctx, head)
-		if ownErr != nil {
-			t.Fatalf("owners: %v", ownErr)
-		}
-
 		paths, pathErr := src.ChangedPaths(ctx, base, head)
 		if pathErr != nil {
 			t.Fatalf("paths: %v", pathErr)
 		}
 
 		rec, planErr := eng.Planned(ctx, pkggate.PlannedRequest{
-			Subject: subject, Principal: who, Owners: owners,
+			Subject: subject, Principal: who,
 			Facts: pkggate.Facts{
 				Operation: "apply",
 				Unit:      pkggate.UnitFact{Collection: "prod", Labels: []string{"tier=core"}},
@@ -172,7 +162,7 @@ func TestSpikeEndToEnd(t *testing.T) {
 		{
 			ID: "acme/cost-warn", Scope: pkggate.Scope{Level: pkggate.LevelNamespace, Name: "acme"},
 			DecisionPoint: pkggate.PointChangePlanned, Condition: "context.cost.deltaMonthly > 10000",
-			Outcome: pkggate.OutcomeWarn, Message: "Monthly cost grows by more than 100.00 USD.", Mode: pkggate.ModeEnforce,
+			Outcome: pkggate.OutcomeWarn, Message: "Monthly cost grows by {{cost.deltaMonthly}} cents.", Mode: pkggate.ModeEnforce,
 		},
 		{
 			ID: "acme/net-owners", Scope: pkggate.Scope{Level: pkggate.LevelCollection, Name: "acme/prod"},
@@ -183,6 +173,13 @@ func TestSpikeEndToEnd(t *testing.T) {
 		if putErr := eng.Registry.PutGate(g); putErr != nil {
 			t.Fatalf("put gate %s: %v", g.ID, putErr)
 		}
+	}
+
+	err = eng.Registry.PutOwnerRule(pkggate.OwnerRule{
+		ID: "network", Scope: prodScope, Paths: []string{"modules/network/**"}, Groups: []string{"netops"}, Count: 1,
+	})
+	if err != nil {
+		t.Fatalf("put owner rule: %v", err)
 	}
 
 	err = eng.Registry.PutLimit(pkggate.Limit{
@@ -209,6 +206,10 @@ func TestSpikeEndToEnd(t *testing.T) {
 
 	if len(rec.Matched) != 2 || rec.Matched[0].Gate != "acme/cost-warn" || rec.Matched[1].Gate != "acme/net-owners" {
 		t.Fatalf("step 3: matched = %+v, want cost-warn and net-owners", rec.Matched)
+	}
+
+	if rec.Matched[0].Message != "Monthly cost grows by 15000 cents." {
+		t.Fatalf("step 3: message = %q, want the rendered template", rec.Matched[0].Message)
 	}
 
 	if len(rec.Approvals) != 1 || rec.Approvals[0].Rule != "owners/network" || rec.Approvals[0].Need != 1 {

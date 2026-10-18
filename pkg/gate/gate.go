@@ -185,7 +185,14 @@ func (g Gate) Validate() error {
 		return fmt.Errorf("%w: gate %s: mode %q", ErrInvalid, g.ID, g.Mode)
 	}
 
-	_, err := parseOne(g.policyText(), cedar.Permit)
+	// A message names only facts of the schema; the check renders it on
+	// empty facts.
+	_, err := renderMessage(g.Message, Facts{})
+	if err != nil {
+		return fmt.Errorf("gate %s: %w", g.ID, err)
+	}
+
+	_, err = parseOne(g.policyText(), cedar.Permit)
 	if err != nil {
 		return fmt.Errorf("%w: gate %s: %w", ErrInvalid, g.ID, err)
 	}

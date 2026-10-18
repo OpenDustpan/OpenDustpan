@@ -10,9 +10,8 @@ import (
 
 var commitPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
-// GitSource reads a source from a Git repository on disk. It reads the
-// ownership file at a commit, never from the working tree, and it lists the
-// files that two commits differ in.
+// GitSource reads a source from a Git repository on disk. It lists the files
+// that two commits differ in, as the fact change.paths.
 type GitSource struct{ Dir string }
 
 func (g GitSource) git(ctx context.Context, verb string, args ...string) ([]byte, error) {
@@ -23,22 +22,6 @@ func (g GitSource) git(ctx context.Context, verb string, args ...string) ([]byte
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git %s: %w", verb, err)
-	}
-
-	return out, nil
-}
-
-// Owners returns the content of the ownership file at commit, and nil when
-// the commit has none.
-func (g GitSource) Owners(ctx context.Context, commit string) ([]byte, error) {
-	if !commitPattern.MatchString(commit) {
-		return nil, fmt.Errorf("%w: commit %q", ErrInvalid, commit)
-	}
-
-	out, err := g.git(ctx, "show", commit+":"+OwnersFileName)
-	if err != nil {
-		// A commit with no ownership file is valid: no requirement.
-		return nil, nil //nolint:nilerr // see above
 	}
 
 	return out, nil

@@ -19,9 +19,10 @@ v1.8.0 (released 2026-06-01) to `go.mod`.
 - **Facts.** Fact schema v0 of `change.planned`: plan counts, cost
   (`deltaMonthly` in cents, `available`), changed paths, input keys, unit
   collection and labels. The cost comes from a JSON file.
-- **Ownership file.** `OWNERS.dustpan` is read with `git show <commit>:` at the
-  commit of the plan, never from the working tree. The test edits the working
-  tree after the plan and the requirement stays.
+- **Owner rules.** The server stores them (managed as code through the IaC
+  providers). The spike has no repository file: the first push had an
+  `OWNERS.dustpan` reader and it is removed. The changed paths are a fact; the
+  test reads them with `git diff --name-only` between two commits.
 - **Decision record.** One JSON record for each evaluation, also for an access
   limit and for an error. A route reads it.
 - **Offline runner.** `gate.RunTestFile` runs a JSON file of gates and cases
@@ -67,12 +68,25 @@ v1.8.0 (released 2026-06-01) to `go.mod`.
    result is `allow` and no enforced gate warns. A warn in `evaluate` mode
    does not block (`TestWarnBlocksAutoApply`).
 
+### Later decisions
+
+- **Ownership rules are server-only.** The reader of `OWNERS.dustpan` and its
+  tests are removed; the end-to-end test stores the rule through the registry.
+- **Access limits** stay Cedar `forbid` only, for each scope.
+- **Missing fact: a typed value, and templates fail closed.** A fact always
+  has a value of its type (`cost.available` is false and `deltaMonthly` is 0
+  when there is no cost). A gate message may hold `{{fact.path}}`. A path that
+  is not a fact is refused at save (`ErrInvalid`). A template that cannot
+  render at run time stops the change with `ErrRuleFailed` and does not give
+  an empty string (`TestMessageTemplateFailsClosed`, step 3 of the
+  end-to-end test).
+- **Names.** The stored rule is a "gate". The job state that waits for people
+  is "approval wait": the result `require-approval` of a record is the cause
+  of that state, and the spike does not add the job state.
+
 ### Proposed shape of an ownership rule
 
-The spike keeps `OWNERS.dustpan` minimal (`[name] @group:<g> <count> <globs>`),
-and the server stores the full rule. The file is one source of rules, in the
-form of the stored rule, so the file can move behind the API with no change
-to the engine.
+The server stores the rule and no repository file holds it. The shape is:
 
 ```json
 {
@@ -136,7 +150,7 @@ passes and `testdata/fail.gatetest.json` has one failed case.
 - **No quantifier.** "Every changed path is under `modules/`" cannot be said.
   `.all(p, ...)` is a parse error. Only `contains`, `containsAll` and
   `containsAny` were the set tests that the spike used. A glob works on one string
-  (`like`), never on each element of a set. The ownership file does the path
+  (`like`), never on each element of a set. An owner rule does the path
   matching in Go for this reason.
 - **No open map.** A record has the keys that the schema names. Unit labels are
   a `Set<String>` of `key=value` strings.
@@ -218,7 +232,7 @@ the record, or a plan with many resources.
 - `go test -race ./pkg/gate ./internal/api/gate`: pass.
 - `make nilaway` equivalent on the two packages: no finding.
 - `govulncheck` on the two packages: no vulnerability.
-- `golangci-lint run` on the two packages: **89 findings remain**. They are
+- `golangci-lint run` on the two packages: **the findings remain (89 on the last count)**. They are
   54 `exhaustruct_v5` on literals of test fixtures and value types, `cyclop`,
   `gocognit` and `maintidx` on the scenario tests, 8 `funcorder`, 7 `gocritic`
   `rangeValCopy`, 2 `gochecknoglobals` in tests, and smaller ones. The spike does not fix them, so it does not meet the definition of

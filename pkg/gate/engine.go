@@ -26,9 +26,6 @@ type PlannedRequest struct {
 	Subject   Subject
 	Principal Principal
 	Facts     Facts
-	// Owners is the content of the ownership file at the commit of the
-	// plan, or nil. The file is a minimal source of owner rules.
-	Owners []byte
 }
 
 // evaluated holds what one Cedar run found for the stored rules.
@@ -47,7 +44,7 @@ func (e *Engine) Planned(_ context.Context, req PlannedRequest) (Record, error) 
 	rec := Record{
 		ID: newRecordID(), Point: PointChangePlanned, Schema: SchemaVersion,
 		Subject:        RecordSubject{Unit: req.Subject.Ref(), Principal: req.Principal.ID},
-		InputDigest:    inputDigest(req.Subject, req.Principal, req.Facts, string(req.Owners)),
+		InputDigest:    inputDigest(req.Subject, req.Principal, req.Facts),
 		PolicyVersions: map[string]string{},
 		Matched:        []Match{}, Blockers: []string{}, Approvals: []Approval{}, Errors: []string{},
 	}
@@ -78,11 +75,19 @@ func (e *Engine) Planned(_ context.Context, req PlannedRequest) (Record, error) 
 	}
 
 	for id := range ev.gates {
-		if g := ev.gates[id]; ev.matched[id] {
-			rec.Matched = append(rec.Matched, Match{
-				Gate: g.ID, Scope: g.Scope.String(), Outcome: g.Outcome, Mode: g.Mode, Message: g.Message,
-			})
+		g := ev.gates[id]
+		if !ev.matched[id] {
+			continue
 		}
+
+		msg, renderErr := renderMessage(g.Message, req.Facts)
+		if renderErr != nil {
+			return e.fail(rec, fmt.Errorf("gate %s: %w", g.ID, renderErr))
+		}
+
+		rec.Matched = append(rec.Matched, Match{
+			Gate: g.ID, Scope: g.Scope.String(), Outcome: g.Outcome, Mode: g.Mode, Message: msg,
+		})
 	}
 
 	slices.SortFunc(rec.Matched, func(a, b Match) int { return compareStrings(a.Gate, b.Gate) })
@@ -253,7 +258,7 @@ const ownersRule = "owners"
 
 func (e *Engine) requirements(rule string, req PlannedRequest, ev *evaluated) ([]Approval, error) {
 	if rule == ownersRule {
-		return ownerRequirements(req, ev)
+		return ownerRequirements(req, ev), nil
 	}
 
 	r, ok := e.Registry.Rule(rule)
@@ -266,7 +271,7 @@ func (e *Engine) requirements(rule string, req PlannedRequest, ev *evaluated) ([
 	}}, nil
 }
 
-func ownerRequirements(req PlannedRequest, ev *evaluated) ([]Approval, error) {
+func ownerRequirements(req PlannedRequest, ev *evaluated) []Approval {
 	var out []Approval
 
 	ids := make([]string, 0, len(ev.owners))
@@ -288,20 +293,7 @@ func ownerRequirements(req PlannedRequest, ev *evaluated) ([]Approval, error) {
 		})
 	}
 
-	secs, err := ParseOwners(req.Owners)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, s := range secs {
-		if s.Matches(req.Facts.Change.Paths) {
-			out = append(out, Approval{
-				Rule: ownersRule + "/" + s.Name, Need: s.Count, From: []string{"group:" + s.Group},
-			})
-		}
-	}
-
-	return out, nil
+	return out
 }
 
 func approvers(groups, users []string) []string {

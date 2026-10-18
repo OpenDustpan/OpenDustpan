@@ -196,3 +196,30 @@ func TestWarnBlocksAutoApply(t *testing.T) {
 		t.Fatalf("enforced warn: %+v, want allow without autoApply", rec)
 	}
 }
+
+// A message template names facts of the schema. A name that is not a fact
+// is refused at save, and a template that cannot render stops the change.
+func TestMessageTemplateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	eng := gate.NewEngine()
+
+	bad := gateOf("a/bad", "true", gate.OutcomeWarn)
+	bad.Message = "Risk {{risk.score}}."
+
+	if err := eng.Registry.PutGate(bad); !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("unknown fact in message: err = %v, want ErrInvalid", err)
+	}
+
+	ok := gateOf("a/ok", "true", gate.OutcomeWarn)
+	ok.Message = "Cost known: {{cost.available}}, delta {{ cost.deltaMonthly }}."
+
+	must(t, eng.Registry.PutGate(ok))
+
+	f := goodFacts()
+	f.Cost = gate.CostFact{}
+
+	if rec := planOn(t, eng, "alice", f); rec.Matched[0].Message != "Cost known: false, delta 0." {
+		t.Fatalf("message = %q, want typed zero values", rec.Matched[0].Message)
+	}
+}

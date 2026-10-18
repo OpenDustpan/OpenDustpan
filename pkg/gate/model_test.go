@@ -26,28 +26,28 @@ func gateOf(id, cond string, out gate.Outcome) gate.Gate {
 	}
 }
 
-func TestOwnersParseAndMatch(t *testing.T) {
+func TestOwnerPathGlobs(t *testing.T) {
 	t.Parallel()
 
-	secs, err := gate.ParseOwners(
-		[]byte("# c\n\n[network] @group:netops 2 modules/network/** infra/*.tf\n[docs] @group:writers 1 docs/**\n"),
-	)
-	if err != nil || len(secs) != 2 || secs[0].Count != 2 || secs[0].Group != "netops" {
-		t.Fatalf("parse: %+v, %v", secs, err)
-	}
+	eng := gate.NewEngine()
+	must(t, eng.Registry.PutGate(gateOf("a/owners", "true", gate.ApprovalOutcome("owners"))))
+	must(t, eng.Registry.PutOwnerRule(gate.OwnerRule{
+		ID:     "n",
+		Scope:  prodScope,
+		Paths:  []string{"modules/network/**", "infra/*.tf"},
+		Groups: []string{"netops"},
+		Count:  1,
+	}))
 
 	for path, want := range map[string]bool{
 		"modules/network/main.tf": true, "modules/network/a/b.tf": true, "infra/x.tf": true,
-		"infra/a/x.tf": false, "modules/app/main.tf": false, "modules/network": true,
+		"infra/a/x.tf": false, "modules/app/main.tf": false,
 	} {
-		if got := secs[0].Matches([]string{path}); got != want {
-			t.Errorf("Matches(%q) = %v, want %v", path, got, want)
-		}
-	}
+		f := goodFacts()
+		f.Change.Paths = []string{path}
 
-	for _, bad := range []string{"[x] @user:bob 1 a", "[x] @group:g 0 a", "x @group:g 1 a", "[x] @group:g 1"} {
-		if _, err := gate.ParseOwners([]byte(bad)); !errors.Is(err, gate.ErrInvalid) {
-			t.Errorf("ParseOwners(%q): err = %v, want ErrInvalid", bad, err)
+		if got := len(planOn(t, eng, "alice", f).Approvals) == 1; got != want {
+			t.Errorf("path %q: requirement = %v, want %v", path, got, want)
 		}
 	}
 }
@@ -282,7 +282,6 @@ func BenchmarkGateEvaluation(b *testing.B) {
 
 			req := gate.PlannedRequest{
 				Subject: subject, Principal: gate.Principal{ID: "alice", Groups: []string{"dev"}}, Facts: goodFacts(),
-				Owners: []byte("[network] @group:netops 1 modules/network/**\n"),
 			}
 
 			b.ReportAllocs()
