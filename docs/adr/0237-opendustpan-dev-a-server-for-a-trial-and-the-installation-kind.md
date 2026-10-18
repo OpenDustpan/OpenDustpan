@@ -24,8 +24,9 @@ This ADR records the `dev` command and the marker that keeps the data of
 `dev` and `serve` apart. ADR 238 records the changes to `serve`, the
 `key generate` and `doctor` commands, the container default and the SDK
 start gate. A decision of the owner has the label "(owner)". A decision of
-the product manager has the label "(product manager)" and a "Benchmark:"
-line. The other decisions are the design of RFC 75 that the owner accepted
+the product manager has the label "(product manager)" and always has a
+"Benchmark:" line. A "Benchmark:" line gives the reason for a decision, and
+an owner decision may have one too. The other decisions are the design of RFC 75 that the owner accepted
 with the proposal.
 
 Facts:
@@ -76,10 +77,11 @@ Facts:
    so that a stop of `dev` never loses the state of real cloud resources.
    `dev` finds its data directory in this order:
    1. `--data-dir DIR`: the directory is `DIR`.
-   2. `DUSTPAN_DATA_DIR`: the variable names a parent directory, for
+   2. `--ephemeral`: a new temporary directory (decision 5). `dev` ignores
+      `DUSTPAN_DATA_DIR` and logs that it ignores it.
+   3. `DUSTPAN_DATA_DIR`: the variable names a parent directory, for
       example the volume `/data` of the image. The directory is
       `<parent>/dev`. `dev` never writes outside this subdirectory.
-   3. `--ephemeral`: a new temporary directory (decision 5).
    4. None of these: the directory for each user.
 
    The directory for each user is:
@@ -106,8 +108,9 @@ Facts:
    key with mode 0600. At each start, `dev` refuses to start when one of
    these is true:
    - The group or others can read, write or enter the data directory.
-   - The current user ID does not own the data directory, the key file,
-     `dev.addr`, `dev.env` or `dev.tfrc`.
+   - The current user ID does not own the data directory, the key file, the
+     token file, the TLS key, the certificate bundle, `dev.addr`, `dev.env`
+     or `dev.tfrc`, or the group or others can write one of them.
 
    The error names the path, its mode or owner, and one command:
    `chmod 700 <dir>`, or `chown <uid> <path>` with the current user ID.
@@ -156,12 +159,34 @@ Facts:
     the variable. Else `dev` makes a token at the first start and keeps it
     in the token file.
 12. **A one-time sign-in link (owner).** At the first start of a data
-    directory, `dev` prints a sign-in link for the console. The link holds a
-    random code. The code signs one browser in to the console as the admin
-    of the dev installation. It works one time, and it stops working when
-    `dev` stops. `dev` keeps only a hash of the code. A later start prints
-    no link. The banner never prints the admin token. When `dev` serves no
-    console, the banner names `--console-dir` in place of the link.
+    directory, `dev` prints a sign-in link for the console. The link holds a code of 32 random bytes from `crypto/rand`, in
+    the URL fragment, so no request line, access log or `Referer` header
+    holds it. The console sends the code in the body of a POST to the
+    sign-in route of `dev`. The code signs one browser in to the console as
+    the admin of the dev installation. It works one time. It stops working
+    15 minutes after the start, or when `dev` stops, whichever comes first.
+    `dev` keeps only a hash of the code, in memory, and compares it in
+    constant time. Only the wiring of `dev` serves the route. `serve` and an
+    SDK server never serve it, whatever their installation kind. The route
+    test lists the route as public. The banner prints the link only when
+    stderr is a terminal. Else it prints the path of the token file in place
+    of the link, so a CI log or a container log never holds the code. A
+    later start prints no link. The banner never prints the admin token.
+    When `dev` serves no console, the banner names `--console-dir` in place
+    of the link.
+
+    The 15 minutes are a product manager decision. Benchmark: magic sign-in
+    links of common SaaS products and OWASP session guidance expire within 15
+    minutes. Jenkins and Argo CD write the first admin secret to a file, not
+    to the log.
+
+    The admin token of `dev` is the bootstrap admin token (ADR 6). The
+    session of the link belongs to the same principal. To sign in again after
+    the session ends, the user signs in to the console with the token from
+    the token file. While the kind is `dev`, the console does not ask to
+    retire the token (ADR 53 decision 9), because `dev.env` and `dev.tfrc`
+    hold it. This is a product manager decision. Benchmark: Vault -dev keeps
+    its root token for the life of the dev server.
 13. **Credentials of the CLIs in `dev.env` and `dev.tfrc` (owner).** `dev`
     writes the credentials of the CLIs to two files in the data directory.
     `dev.env` is a POSIX `sh` file. A user runs `. <data dir>/dev.env`, and
@@ -198,7 +223,9 @@ Facts:
 
 15. **Loopback by default (product manager).** `dev` binds
     `127.0.0.1:8080` by default. `--listen` accepts another address. A
-    non-loopback address adds a banner line that names the address. A
+    non-loopback address adds a banner line and a log line at each start that
+    name the address. Without `--tls`, the line also states that the admin
+    token and the sign-in code cross the network in plain text. A
     container needs `--listen 0.0.0.0:8080`. The documented container
     command publishes the port on the host loopback address only:
     `docker run -p 127.0.0.1:8080:8080 <image> dev --listen 0.0.0.0:8080`.
@@ -228,8 +255,9 @@ Facts:
       first root file that Go reads on that platform. `dev.env` then clears
       `SSL_CERT_DIR`. So provider and plugin downloads keep their roots.
     - On macOS and Windows, `dev.env` does not set `SSL_CERT_FILE`, because
-      no file holds the platform roots. The banner prints the command that
-      trusts the certificate on that platform, and the user runs it.
+      no file holds the platform roots. `dev` does not change the trust
+      store (owner). The banner names the guide page for trusting the leaf
+      and prints no trust-store command.
 18. **`health` finds `dev`.** `dev` deletes `dev.addr` at start, before it
     listens. When it listens, it writes `dev.addr` with mode 0600. The file
     holds an address that a client can dial, the path of the certificate,
@@ -242,8 +270,11 @@ Facts:
     - A missing `dev.addr`, a missing certificate or a process ID with
       another start time is "not ready", with exit code 1.
     - The image sets `DUSTPAN_DATA_DIR=/data`. The `HEALTHCHECK` stays
-      `["/opendustpan", "health"]`. When `/data/dev/dev.addr` exists,
-      `health` probes `dev`. Else it probes with the settings of `serve`.
+      `["/opendustpan", "health"]`. When `/data/dev/dev.addr` exists
+      and names a running process with its start time, `health` probes `dev`.
+      Else it probes with the settings of `serve`. So a `dev.addr` that a
+      crash of `dev` left on the volume does not fail the probe of a later
+      `serve`. `health --data-dir DIR` keeps the rule above.
 
 ### What a dev installation holds
 
@@ -286,7 +317,7 @@ Facts:
     opendustpan dev: this server is for a trial or for CI. Do not use it in production.
     Data:     /home/alex/.local/share/opendustpan/dev
     Server:   http://127.0.0.1:8080
-    Sign in:  http://127.0.0.1:8080/sign-in#code=<code>   (first start only, works one time)
+    Sign in:  http://127.0.0.1:8080/sign-in#code=<code>   (first start on a terminal only, works one time, for 15 minutes)
     Settings: . /home/alex/.local/share/opendustpan/dev/dev.env
     The key-encryption key is in the data directory. A backup of this directory holds the key.
     For production, run: opendustpan serve --help
@@ -302,7 +333,8 @@ Facts:
     are `dev` and `production`. The owner rejected "mode", "purpose" and
     "origin". "Mode" is near the installation state `maintenance`.
 24. **The column.** The `installation` table gets one column, `kind`, with
-    the values `dev`, `production` and NULL. The baseline migration inserts
+    the values `dev`, `production` and NULL. A CHECK constraint
+    `kind IS NULL OR kind IN ('dev', 'production')` holds the values. The baseline migration inserts
     the row with `kind` NULL, and no column default sets a kind. So a crash
     between the migration and the claim leaves NULL, never a wrong kind. On
     a database from an untagged build, the new migration gives the row the
@@ -322,7 +354,8 @@ Facts:
     server then reads the kind. When the stored kind differs from the kind
     of the command, the start stops. Several instances of `serve` on one new
     database all claim `production`, so their order does not matter. No API
-    and no command changes the kind after the claim.
+    and no command changes the kind after the claim. A restore keeps the live
+    `installation` row, so a restore never changes the kind.
 27. **The port.** A new domain package, `pkg/installation`, holds the type
     `Kind` with `KindDev` and `KindProduction`, and the port `KindStore`
     with one method:
@@ -345,13 +378,14 @@ Facts:
     `NewServer` reads no database, as today. `cmd/opendustpan` passes
     `production` for `serve` and `dev` for `dev`. With no kind option,
     `NewServer` uses `production`, so an SDK user gets the production rules.
-29. **Visible in the API, the console and the audit log.** The installation
-    API reports the field `kind`. The console shows a band on each page
+29. **Visible in the API, the console and the audit log.** `GET /api/server/upgrade-check`, the route that `upgrade check`
+    reads, reports the field `kind`. The route keeps its action, which is
+    `server:observe` in code and `installation:observe` in ADR 216. The console shows a band on each page
     while the kind is `dev`. The audit entry of each start records the kind.
 30. **The errors.**
 
     ```
-    opendustpan: opendustpan dev made this database: serve refuses it. To start over, set a new --database.
+    opendustpan: opendustpan dev made this database: serve refuses it. Set --database to a new database.
     ```
 
     ```
@@ -375,8 +409,16 @@ Facts:
 - A CI job on a reused runner that sets no `--data-dir` and no
   `--ephemeral` leaves files in the directory for each user.
 - The `cloud` block of OpenTofu needs `--tls`. On macOS and Windows, it also
-  needs the trust command that the banner prints. An e2e run with real CLI
-  builds on macOS and Windows must check this before the guide promises it.
+  needs a trust step that the user does by hand from the guide, again after
+  each new leaf, about every 23 days. Old leaves stay in the trust store
+  until the user deletes them. An e2e run with real CLI builds on macOS and
+  Windows must check this before the guide promises it.
+- Nothing stops a team that runs `dev --listen` on a shared host as its
+  server. The banner, the band of the console, the audit entry of each start
+  and `doctor --server` make it visible.
+- In a shell that loads `dev.env`, OpenTofu reads only `dev.tfrc`. A user or
+  a CI job with its own CLI configuration copies those settings into
+  `dev.tfrc`.
 - If a client refuses a self-signed leaf, a new ADR must decide the
   replacement.
 - The console needs the sign-in route of the one-time link and the band for

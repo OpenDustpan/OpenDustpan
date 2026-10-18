@@ -77,11 +77,11 @@ One server process of an installation. Each start makes a new instance ID, `ins-
 _Avoid_: Node, replica, host
 
 **Installation kind**:
-The marker of an installation that says which server command may open its data: `dev` or `production` (ADR 237). The first command that starts on a new database claims it, and no API or command changes it after that. `opendustpan serve` and an SDK server claim `production`. `opendustpan dev` claims `dev`. Each command refuses a database of the other kind. It is not the installation state (`normal` or maintenance mode).
+The marker of an installation that says which server command may open its data: `dev` or `production` (ADR 237). The first command that starts on a new database claims it, and no API or command changes it after that. `opendustpan serve` claims `production`. An SDK server claims `production` unless it sets another kind. `opendustpan dev` claims `dev`. Each command refuses a database of the other kind. It is not the installation state (`normal` or maintenance mode).
 _Avoid_: Mode, purpose, origin
 
 **Dev installation**:
-An installation with the installation kind `dev`, which `opendustpan dev` made for a trial or for CI (ADR 237). Its key-encryption key and admin token live in its data directory. It has no backup, and no command turns it into a production installation. To keep a unit, a user moves it with the export and import commands of its tool.
+An installation with the installation kind `dev`, which `opendustpan dev` made for a trial or for CI (ADR 237). Its key-encryption key, and the admin token that `dev` makes, live in its data directory. It has no backup, and no command turns it into a production installation. To keep a unit, a user moves it with the export and import commands of its tool.
 _Avoid_: Test installation, sandbox, demo installation
 
 **IP allowlist**:

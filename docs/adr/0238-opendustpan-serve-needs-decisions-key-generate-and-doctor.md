@@ -40,8 +40,9 @@ Facts:
 
 ### `serve`
 
-1. **An explicit key.** `serve` needs `DUSTPAN_KEY_ENCRYPTION_KEY` or
-   `--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). The
+1. **An explicit key.** `serve` needs `DUSTPAN_KEY_ENCRYPTION_KEY`,
+   `--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`), or a KMS
+   key-encryption key when that setting exists (ADR 217). The
    default key file path, the terminal prompt and
    `--generate-key-encryption-key` (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY`)
    go, with no deprecation. With no key, `serve` stops before it opens the
@@ -74,6 +75,9 @@ Facts:
    ```
    opendustpan: no database is set: set --database (DUSTPAN_DATABASE), for example sqlite:/var/lib/opendustpan/dustpan.db
    ```
+
+   When the KMS key-encryption key setting exists (ADR 217), the error names
+   that setting too, and a KMS key counts as a key.
 
    For the trial hint, each of these counts as a setting of `serve`: a flag
    of `serve`, a key in a configuration file, `--config`, `DUSTPAN_CONFIG`
@@ -129,7 +133,7 @@ Facts:
 
     | Check | Result when it fails |
     | --- | --- |
-    | The operator set a key-encryption key. The key file exists, has mode 0600 or stricter, and has the size of a base64 key. | fail |
+    | The operator set a key-encryption key. The key file exists, has mode 0600 or stricter, and has the size of a base64 key. For a KMS key, `doctor` checks only that the operator set it. | fail |
     | The key file is not in the directory of the SQLite file or of the blobs, after link resolution. | warn |
     | The operator set a database. | fail |
     | The operator set an admin token of at least 32 bytes. | fail |
