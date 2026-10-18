@@ -126,8 +126,9 @@ type StateStore interface {
 	// makes sv the workspace's current state. The stamped time is
 	// sv.FinalizedAt, or one millisecond after the latest finalize time of
 	// the workspace when sv.FinalizedAt is not later than it, so the current
-	// state always has the latest finalize time. It checks in the same
-	// transaction that:
+	// state always has the latest finalize time. The sv of the caller keeps
+	// the requested time; read the stored version for the stamped time. It
+	// checks in the same transaction that:
 	//   - the stored version is still pending, else ErrUploadDenied;
 	//   - the stored version still names sv.Content as its latest attempt,
 	//     else ErrUploadDenied: a superseded attempt never finalizes over a
