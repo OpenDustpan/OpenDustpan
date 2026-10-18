@@ -96,8 +96,8 @@ Facts:
    formatting locale and change only the order of the parts. The console
    builds them from `Intl.DateTimeFormat.prototype.formatToParts`, not from
    its own format strings. The first day of the week sets the calendar
-   controls of the console. If `Intl.Locale.prototype.getWeekInfo` is not
-   available, the default is Monday. UTC is one choice away in the time
+   controls of the console. If neither `Intl.Locale.prototype.getWeekInfo()` nor the older
+   `weekInfo` property is available, the default is Monday. UTC is one choice away in the time
    zone list, because operators often compare times with logs in UTC. If
    `Intl` rejects a stored time zone, the console falls back to the
    browser's time zone and says so in settings.
@@ -235,6 +235,7 @@ Facts:
   and ADR 182.
 - This ADR changes ADR 180 only by the six fields of decision 8. The
   integrator adds them, and their checks, with the routes of ADR 180.
+- `cmd/opendustpan` imports `time/tzdata` (about 450 KB more binary).
 - `OpenDustpan/console` gets these changes. This ADR does not change that
   repository.
   - An ICU MessageFormat library, for example FormatJS, is a new

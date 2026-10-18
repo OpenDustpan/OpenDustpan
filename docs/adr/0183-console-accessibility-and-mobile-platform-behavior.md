@@ -63,6 +63,9 @@ Facts:
    | Text spacing | The text spacing values of WCAG 1.4.12 cause no loss of content or function |
    | System settings | reduced motion, forced colors (Windows contrast themes) |
 
+   Data tables, diffs, code, logs and other machine-made text can scroll
+   horizontally in their own region. The page does not scroll horizontally.
+
    The pull request of the change records each check and its result. A
    person who cannot do a check asks a maintainer to do it.
 

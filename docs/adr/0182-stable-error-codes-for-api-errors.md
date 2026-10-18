@@ -32,7 +32,8 @@ Facts:
    answers has a machine code. A code is a contract: a code that a tag
    shipped is never removed or given another meaning. A new kind of error
    gets a new code. A code is 3 to 64 characters and matches the regular
-   expression `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$`. It has the form
+   expression `^[a-z][a-z0-9]*(-[a-z0-9]+)*(\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$`.
+   A code is two or more segments that dots join. It has the form
    `<area>.<reason>`, for example `workspace.locked`, `stack.not-found` or
    `request.field-invalid`.
 
@@ -55,21 +56,23 @@ Facts:
    camelCase shapes stays the HTTP status. The new fields are additions. A
    change to a tool-compatible API lands only after `make e2e` shows that
    each supported CLI version accepts the added fields.
-4. **Arguments, not text.** A value that the English text holds, for
-   example the name of a stack or of a field, is also in the arguments, as
-   a JSON object. The registry of decision 7 declares the argument keys of
-   each code and the type of each key. The keys are camelCase and part of
-   the contract of the code. A test rejects an error that has a key that its
+4. **Arguments, not text.** A name that the English text holds, for
+   example the name of a stack or of a field, and that this decision allows
+   in an argument, is also in the arguments, as a JSON object. The registry
+   of decision 7 declares the argument keys of each code and the type of
+   each key. The keys are camelCase and part of the contract of the code. A test rejects an error that has a key that its
    code does not declare. These limits apply:
 
    - An error has at most 8 keys.
    - A string is at most 256 characters.
-   - A number is an integer within ±2^53.
+   - A number is an integer within ±(2^53 − 1).
    - An ID is a string.
 
-   An argument names a field or an object. It never echoes a value from the
-   request body. Arguments never hold a secret, a token or state. The rules
-   of ADR 32 for error text apply to them too.
+   An argument holds the name of a field, or the name of an object that the
+   path names or that the store holds. It never holds a value from the
+   request body. When the English text holds a value from the request body,
+   the arguments name the field only. Arguments never hold a secret, a
+   token or state. The rules of ADR 32 for error text apply to them too.
 
    An argument has one of two kinds, and the registry declares the kind:
 
@@ -86,8 +89,9 @@ Facts:
 6. **An unknown code.** The console shows the English text of the server
    for a code that it does not know, with `lang="en"` on its element. An
    error with no code, from a proxy or from an older server, is the same
-   case. A 500 answer has the code `server.internal`, and its text says
-   nothing more than ADR 32 allows.
+   case. A 500 that no `classify` branch handles has the code
+   `server.internal`. A classified 500 keeps its own code. The text of a 500
+   says nothing more than ADR 32 allows.
 7. **One registry of codes.** One registry in `internal/` (not in a shared
    domain package) declares each code, its meaning and its arguments with
    their kinds. Each adapter declares the subset of codes that it uses, next
