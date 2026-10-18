@@ -683,7 +683,7 @@ One request of a person to Dusty, from a prompt to its end (ADR 120 decision 6).
 _Avoid_: Run (alone, where an update or a job can be meant), session, job, task
 
 **Stop reason**:
-The reason that an agent run ended, which the status route of the run gives. Examples are `canceled`, `turn-failed` and `credential-ended` (ADR 120). ADR 129 adds three. `model-quota` is for a used-up plan, quota or credit. `model-rate-limited` is for a wait above 5 minutes. `connection-changed` is for a change of the format or the model during a run.
+The reason that an agent run ended, which the status route of the run gives. Examples are `canceled`, `turn-failed` and `credential-ended` (ADR 120). ADR 129 adds three. `model-quota` is for a used-up plan, quota or credit. `model-rate-limited` is for a wait above 5 minutes. `connection-changed` is for a change of the format, the model or the base address during a run.
 _Avoid_: Exit code, end state, status (alone)
 
 **Turn**:
@@ -731,7 +731,7 @@ The filter that takes secret-like text out of prompts, tool results and model an
 _Avoid_: Reply filter, output scrubber, redaction (that is a history action), masking (that is for revealed values)
 
 **Capability probe**:
-The durable operation that checks a model connection before the server stores it (ADR 129 decision 29). Its checks are the reach, the authentication, a tool call, a tool result, the transport, the token use and the cache. A failure of the first five blocks the connect. The connect route answers at once, and a status route gives the result of each check.
+The durable operation that checks a model connection before the document becomes the connection (ADR 129 decision 29). Its checks are the reach, the authentication, a tool call, a tool result, the transport, the token use, the reasoning parts and the cache. A failure of the first five blocks the connect. The connect route answers at once, and a status route gives the result of each check.
 _Avoid_: Health check, connection test, ping
 
 **Egress allowlist**:

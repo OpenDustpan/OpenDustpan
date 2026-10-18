@@ -203,7 +203,7 @@ design makes each one a field of the connection document:
 11. **Extra headers and query parameters.** `headers` maps a header name
     to `{"value": "..."}` or `{"secret": "itm-..."}`. `query` maps a
     parameter name to the same two forms. Each holds at most 16 entries,
-    and each value at most 1 KiB. These rules apply:
+    and each value at most 1 KiB. A query parameter name holds letters, digits and `-._~` only. These rules apply:
     - A header name is a token of RFC 9110: letters, digits and
       ``!#$%&'*+-.^_`|~``, with no space and no `:`. Validation compares
       names with no regard to case, and refuses two names that differ
@@ -492,7 +492,7 @@ design makes each one a field of the connection document:
     - is wider than `/24` for IPv4 or `/64` for IPv6, `/0` included,
     - has no port, or more than one port,
     - is in a range that embeds an IPv4 address (`::ffff:0:0/96`, `::/96`,
-      `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`). The
+      `::ffff:0:0:0/96`, `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`). The
       operator writes the IPv4 range instead. The range `::/96` also holds
       `::1`, so validation refuses `::1/128`. A model server on the same
       host as the server uses `127.0.0.1`,
@@ -576,7 +576,7 @@ design makes each one a field of the connection document:
       its own write, and only when the version of `If-Match` is still the
       version of the connection. Otherwise, and when the probe fails, the
       connection stays as it was, and the probe removes its pending
-      document.
+      document. A probe whose version is no longer current ends with the state `failed`. Its error tells the operator to read the connection and send the `PUT` again.
     - A later `PUT` of the connection, in its own transaction, cancels
       each earlier probe that has a pending document, and removes those
       documents. A canceled probe ends with the state `canceled` at its
@@ -607,7 +607,7 @@ design makes each one a field of the connection document:
     | `tool-result` | sends the tool result back and asks for a text answer | blocks the connect |
     | `transport` | with `stream`, reads the streams of the earlier checks to their end | blocks the connect |
     | `usage` | checks that the answers report input and output tokens | a warning |
-    | `reasoning` | with a `keep` list that is not empty, checks that an answer held a value at each entry. It then sends the values back in the next request | a warning |
+    | `reasoning` | with a `keep` list that is not empty, checks that an answer held a value at each entry. It then sends the values back in one more request, and checks that the server accepts it | a warning |
     | `cache` | with `automatic` or `breakpoints`, sends a fixed prefix of at least 2,048 tokens two times and reads the cache tokens | a warning |
 
     Dusty needs tool calls. A small local model can answer one attempt
@@ -622,14 +622,13 @@ design makes each one a field of the connection document:
       model server has tool calls on."
     - "The server refused the field max_tokens. Set outputTokens.field to
       the name of the output token field that the server documents."
-31. **The probe costs tokens, and the ledger records them.** A full probe
-    uses about 6,000 input tokens and at most 400 output tokens. Each
+31. **The probe costs tokens, and the ledger records them.** Each probe call sends the lower of `outputTokens.max` and 1,024 as its output token limit. A full probe makes at most 7 calls, so it uses about 6,000 input tokens and at most 7,168 output tokens. Each
     probe call writes a ledger row with the origin `probe` and no run.
     The key of a probe row is the probe ID, the name of the check and the
     number of the attempt. A second row with the same key changes nothing,
     as a second row for one run, turn and claim (ADR 120 decision 20).
     The installation can start 6 probes in each minute. A `PUT` of the
-    connection and a `POST` of the probe route both count.
+    connection and a `POST` of the probe route both count. A start above the limit answers 429 with `retry-after`.
 
 ### Routes
 
