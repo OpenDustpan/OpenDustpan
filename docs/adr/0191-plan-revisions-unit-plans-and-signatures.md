@@ -1,6 +1,6 @@
 # 191. Plan revisions, unit plans and signatures
 
-Status: accepted · 2026-10-18 · part of ADR 190
+Status: accepted · 2026-10-18 · part of ADR 190. The open question on fresh authentication answered by ADR 227. Decision 6 amended by ADR 225 decision 12
 
 ## Context
 

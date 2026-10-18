@@ -1,6 +1,6 @@
 # 194. The review view of a big plan
 
-Status: accepted · 2026-10-18 · part of ADR 190
+Status: accepted · 2026-10-18 · part of ADR 190. Decisions 6 and 8 superseded in part by ADR 226
 
 ## Context
 

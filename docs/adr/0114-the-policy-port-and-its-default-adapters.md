@@ -1,6 +1,6 @@
 # 114. The policy port and its four default adapters
 
-Status: accepted · 2026-10-17 · supersedes the "Policy engines" section of RFC 13
+Status: accepted · 2026-10-17 · supersedes the "Policy engines" section of RFC 13. Superseded by ADRs 224 and 229, with two exceptions. Decision 4 is kept by ADR 225 decision 3. The request signature of decision 8 is kept by ADR 226 decision 10
 
 ## Context
 

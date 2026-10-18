@@ -1,6 +1,6 @@
 # 117. Catalog actions, audit entries, routes and limits
 
-Status: accepted · 2026-10-17. Route paths superseded in part by ADR 210. An open question answered, and the action of the options route superseded, by ADR 213
+Status: accepted · 2026-10-17. Route paths superseded in part by ADR 210. An open question answered, and the action of the options route superseded, by ADR 213. Decisions 2, 5, 6 and 7 superseded in part by ADR 230
 
 ## Context
 
