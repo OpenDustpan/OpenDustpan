@@ -34,8 +34,10 @@ const (
 	// DirProfile holds the credential files of the profile.
 	DirProfile = "profile"
 	// SocketHelper is the Unix socket on which the launcher answers its
-	// helpers during a tool step. The directory has mode 0700, so only the
-	// user of the step reaches it.
+	// helpers during a tool step. The socket has ModeSocket, and it and its
+	// directory belong to the owner of the step (StepUser.Owner), so only
+	// the user of the step reaches it. The launcher also checks that the
+	// user ID of the peer of each connection is that owner.
 	SocketHelper = "helper.sock"
 )
 
@@ -173,7 +175,8 @@ type Masker interface {
 type MemoryVolume interface {
 	// Prepare checks that dir is on tmpfs or ramfs, and then creates in it
 	// a new directory with mode 0700 that the user of the launcher owns,
-	// and returns its path. The volume itself can have another owner and
+	// and returns its path. The launcher creates the directory of each
+	// step in it, with the owner of StepUser.Owner. The volume itself can have another owner and
 	// mode, for example an emptyDir of Kubernetes with the medium Memory.
 	// It returns an error when dir is not on tmpfs or ramfs, or when the
 	// new directory does not have the mode 0700 and the user of the
@@ -182,11 +185,43 @@ type MemoryVolume interface {
 	Prepare(dir string) (string, error)
 }
 
+// The modes of what the launcher creates for a step.
+const (
+	// ModeDir is the mode of the directory of a step, of its
+	// subdirectories and of the checkout directories.
+	ModeDir = 0o700
+	// ModeFile is the mode of a credential file of a step.
+	ModeFile = 0o600
+	// ModeSocket is the mode of SocketHelper.
+	ModeSocket = 0o600
+)
+
 // StepUser is the user and the group of the processes of the steps, when
 // the place lets the launcher run them as a user other than its own.
 type StepUser struct {
 	UID uint32
 	GID uint32
+}
+
+// Owner is the user and the group that own a file.
+type Owner struct {
+	UID uint32
+	GID uint32
+}
+
+// Owner returns the owner of the directory of each step, of its
+// credential files, of SocketHelper and of the checkout, for the launcher
+// user launcher. With an isolated StepUser it is u: the step reads its
+// files with ModeDir and ModeFile, and other steps and processes of other
+// users read nothing. The launcher creates each of them, sets the owner
+// before it writes a credential, and keeps its own files (the session key
+// stays in memory) out of them. Else it is the launcher user.
+func (u StepUser) Owner(launcher Owner) Owner {
+	if !u.Isolated(launcher.UID) {
+		return launcher
+	}
+
+	return Owner(u)
 }
 
 // Isolated reports whether the steps of u run as a user other than the

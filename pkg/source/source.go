@@ -427,7 +427,9 @@ type URLPattern string
 
 // Validate returns ErrInvalid for a pattern that is not an https URL with a
 // host and a path, that has a user, a query, a fragment, a port or a '%',
-// or that has a "*" that is not the whole last path part.
+// whose host has a character other than an ASCII letter, a digit, '.' or
+// '-', that has an empty path part, or that has a "*" that is not the
+// whole last path part.
 func (u URLPattern) Validate() error {
 	h, ok := splitHTTPS(string(u))
 	if !ok || h.host == "" || len(h.parts) == 0 {
@@ -488,32 +490,76 @@ type httpsURL struct {
 	parts []string
 }
 
+// String returns the URL with no '/' at its end.
+func (u httpsURL) String() string {
+	if len(u.parts) == 0 {
+		return "https://" + u.host
+	}
+
+	return "https://" + u.host + "/" + strings.Join(u.parts, "/")
+}
+
 // splitHTTPS splits an https URL with no user, port, query, fragment or
-// '%' into its host and its path parts. It refuses a path part "." or
-// "..".
+// '%' into its host and its path parts. It takes one '/' off the end of
+// the path. It refuses a host with a character other than an ASCII letter,
+// a digit, '.' or '-', or with an empty label, and a path part that is
+// empty, "." or "..". So "https://h/a/b/" is "https://h/a/b", and
+// "https://h/a//b" and "https://h/a/b//" are refused.
 func splitHTTPS(s string) (httpsURL, bool) {
 	none := httpsURL{host: "", parts: nil}
 
 	rest, found := strings.CutPrefix(s, "https://")
-	if !found || strings.ContainsAny(rest, "@?#:%\\ \t\n\r") || strings.ContainsRune(rest, 0) {
+	if !found {
 		return none, false
 	}
 
 	host, p, _ := strings.Cut(rest, "/")
-	p = strings.TrimSuffix(p, "/")
+	if !validHost(host) {
+		return none, false
+	}
 
+	p = strings.TrimSuffix(p, "/")
 	if p == "" {
 		return httpsURL{host: host, parts: nil}, true
 	}
 
+	if strings.ContainsAny(p, "@?#:%\\ \t\n\r") || strings.ContainsRune(p, 0) {
+		return none, false
+	}
+
 	parts := strings.Split(p, "/")
 	for _, part := range parts {
-		if part == "." || part == ".." {
+		if part == "" || part == "." || part == ".." {
 			return none, false
 		}
 	}
 
 	return httpsURL{host: host, parts: parts}, true
+}
+
+// validHost reports whether h is empty, or is labels of ASCII letters,
+// digits and '-', with '.' between them. An empty host is for the caller
+// to refuse. A host with any other character, for example a non-ASCII
+// letter that looks like an ASCII one, a '_' or a port, never matches a
+// pattern.
+func validHost(h string) bool {
+	if h == "" {
+		return true
+	}
+
+	for label := range strings.SplitSeq(h, ".") {
+		if label == "" {
+			return false
+		}
+
+		for _, c := range label {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // ResolveURL returns the URL of a submodule whose .gitmodules URL is ref,
@@ -530,11 +576,12 @@ func ResolveURL(base, ref string) (string, error) {
 	}
 
 	if !strings.HasPrefix(ref, "./") && !strings.HasPrefix(ref, "../") {
-		if _, valid := splitHTTPS(ref); !valid {
+		u, valid := splitHTTPS(ref)
+		if !valid || u.host == "" || len(u.parts) == 0 {
 			return "", fmt.Errorf("%w: submodule URL %q", ErrNotAllowed, ref)
 		}
 
-		return ref, nil
+		return u.String(), nil
 	}
 
 	parts, rest, ok := upParts(b.parts, ref)
@@ -542,12 +589,12 @@ func ResolveURL(base, ref string) (string, error) {
 		return "", fmt.Errorf("%w: submodule URL %q leaves the host", ErrNotAllowed, ref)
 	}
 
-	out := "https://" + b.host + "/" + strings.Join(append(parts, rest), "/")
-	if _, valid := splitHTTPS(out); !valid || rest == "" {
+	out, valid := splitHTTPS("https://" + b.host + "/" + strings.Join(append(parts, rest), "/"))
+	if !valid || strings.TrimSuffix(rest, "/") == "" {
 		return "", fmt.Errorf("%w: submodule URL %q", ErrNotAllowed, ref)
 	}
 
-	return out, nil
+	return out.String(), nil
 }
 
 // upParts takes the leading "./" and "../" off ref, and one part off a
@@ -595,7 +642,7 @@ func LFSEndpoint(repo string) (string, error) {
 	last := len(u.parts) - 1
 	u.parts[last] = strings.TrimSuffix(u.parts[last], ".git") + ".git"
 
-	return "https://" + u.host + "/" + strings.Join(u.parts, "/") + "/info/lfs", nil
+	return u.String() + "/info/lfs", nil
 }
 
 // lfsPointer is the first line of a Git LFS pointer file.

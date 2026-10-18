@@ -90,9 +90,11 @@ const (
 	// short time rotate.
 	MaxKeyAge = 30 * 24 * time.Hour
 	// RotateGrace is the time after a rotation during which the server
-	// still accepts the previous key, for the rotation request only. A
-	// runner that lost the answer of its rotation sends it again with the
-	// old key, and the server answers as for the first request.
+	// still accepts the previous key, for a retry of that rotation only: a
+	// rotation request whose next key is the current key. A runner that
+	// lost the answer of its rotation sends it again with the old key, and
+	// the server answers as for the first request and changes nothing
+	// (Runner.CheckRotation).
 	RotateGrace = 5 * time.Minute
 )
 
@@ -153,7 +155,10 @@ type HandoffToken struct {
 	Operation string
 	Token     int64
 	// Runner is the ID of the runner that asked for the token.
-	Runner    string
+	Runner string
+	// IssuedAt is the time of the request for the token. The first token
+	// of a claim records the claim time, from which MaxSessionWait counts.
+	IssuedAt  time.Time
 	ExpiresAt time.Time
 	UsedAt    time.Time
 }
@@ -197,19 +202,29 @@ type Session struct {
 // or end of a claim records once.
 const (
 	// ProofWindow is the largest difference between the time of a proof
-	// and the clock of the server.
+	// and the clock of the server. CheckProof accepts a proof at exactly
+	// ProofWindow.
 	ProofWindow = time.Minute
+	// MaxClockSkew is the largest difference between the clocks of two
+	// instances of the server that the nonce store allows for. Durable
+	// claims use the clock of the database and need no such bound. A
+	// proof is checked on the clock of the instance that gets it, so the
+	// nonce store needs one. The instances keep their clocks in step with
+	// NTP, which keeps them much closer than this.
+	MaxClockSkew = time.Minute
 	// NonceTTL is the time after the time of a proof for which the server
-	// keeps its nonce. After it, CheckProof refuses the proof, so the
-	// server needs the nonce no longer.
-	NonceTTL = ProofWindow
+	// keeps its nonce: ProofWindow, and MaxClockSkew for an instance whose
+	// clock is behind the clock of the instance that prunes the store.
+	// Until then, an instance that accepts the proof also finds its nonce.
+	NonceTTL = ProofWindow + MaxClockSkew
 	// proofContext starts the signed text, so that a signature of another
 	// protocol never counts as a proof.
 	proofContext = "opendustpan-runner-proof-v1"
 )
 
 // NonceExpiry returns the time until which the server keeps the nonce of
-// p: the time of the proof plus NonceTTL.
+// p: the time of the proof plus NonceTTL. The store refuses the nonce
+// again up to and at this time (SessionStore.UseNonce).
 func NonceExpiry(p Proof) time.Time {
 	return p.At.Add(NonceTTL)
 }

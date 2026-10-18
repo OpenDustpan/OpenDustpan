@@ -71,8 +71,8 @@ func TestHandoffTokenIsSingleUse(t *testing.T) {
 
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	open := runner.HandoffToken{
-		SHA256: "", Operation: "op-1", Token: 1, Runner: "rn-1", ExpiresAt: now.Add(runner.HandoffTokenTTL),
-		UsedAt: time.Time{},
+		SHA256: "", Operation: "op-1", Token: 1, Runner: "rn-1", IssuedAt: now,
+		ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
 	}
 
 	if err := open.CheckUse(now); err != nil {
@@ -145,8 +145,58 @@ func TestCheckContentHash(t *testing.T) {
 	}
 
 	p := runner.Proof{Subject: "rn-1", At: time.Unix(1_700_000_000, 0), Nonce: "", Signature: nil}
-	if got := runner.NonceExpiry(p); !got.Equal(p.At.Add(runner.ProofWindow)) {
-		t.Errorf("NonceExpiry = %v, want the time of the proof plus the proof window", got)
+	if got := runner.NonceExpiry(p); !got.Equal(p.At.Add(runner.ProofWindow + runner.MaxClockSkew)) {
+		t.Errorf("NonceExpiry = %v, want the time of the proof plus the proof window and the clock skew", got)
+	}
+}
+
+func TestCheckRotation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	old, _ := newKey(t, now.Add(-runner.RotateKeyAfter))
+	cur, _ := newKey(t, now)
+	next, _ := newKey(t, now)
+	r := runner.Runner{
+		ID:          "rn-1",
+		Pool:        "rp-1",
+		Namespace:   "acme",
+		Name:        "cluster-a",
+		Kind:        runner.KindKubernetes,
+		Isolation:   runner.IsolationKubernetes,
+		Labels:      nil,
+		Release:     runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""},
+		Key:         cur,
+		PreviousKey: old,
+		RotatedAt:   now,
+		JoinedWith:  "rjt-1",
+		Draining:    false,
+		RetiredAt:   time.Time{},
+		LastSeenAt:  now,
+		JoinedAt:    now,
+	}
+
+	cases := []struct {
+		name   string
+		signer runner.Key
+		next   runner.Key
+		at     time.Time
+		rotate bool
+		ok     bool
+	}{
+		{"current key to a new key", cur, next, now, true, true},
+		{"current key to itself", cur, cur, now, false, true},
+		{"previous key repeats the rotation", old, cur, now.Add(runner.RotateGrace), false, true},
+		{"previous key to a new key", old, next, now.Add(time.Second), false, false},
+		{"previous key after the grace window", old, cur, now.Add(runner.RotateGrace + time.Millisecond), false, false},
+		{"unknown key", next, next, now, false, false},
+	}
+
+	for _, tc := range cases {
+		rotate, err := r.CheckRotation(tc.signer.ID(), tc.next, tc.at)
+		if rotate != tc.rotate || tc.ok != (err == nil) || (err != nil && !errors.Is(err, runner.ErrBadProof)) {
+			t.Errorf("%s: CheckRotation = %v, %v, want %v ok %v", tc.name, rotate, err, tc.rotate, tc.ok)
+		}
 	}
 }
 

@@ -107,9 +107,11 @@ func ServiceAccountFor(p Purpose, w *Work, sa *ServiceAccounts) (string, error) 
 // session. The runner renews the claim until then, for MaxSessionWait at
 // most.
 const (
-	// MaxSessionWait is the longest time from a claim to the job session
-	// of its launcher. After it, a renewal by the runner fails with
-	// ErrClaimLost, and the server releases the claim.
+	// MaxSessionWait is the longest time from the claim time of a claim
+	// (SessionStore) to the job session of its launcher. After it,
+	// SessionStore.OpenSession refuses the session, and
+	// SessionStore.RunnerRenew releases the claim and fails with
+	// ErrClaimLost.
 	MaxSessionWait = 30 * time.Minute
 	// SourceWait is the longest time that the launcher waits for a source
 	// snapshot that is not ready.
@@ -120,11 +122,12 @@ const (
 	StartAllowance = MaxSessionWait + SourceWait
 )
 
-// CheckRunnerRenew checks a renewal by the runner of a claim that it took
-// at claimedAt. It returns ErrSessionOpen when the launcher of the claim
-// opened its session: the runner then stops its renewals and leaves the
-// Job or the sandbox alone. It returns ErrClaimLost after MaxSessionWait
-// with no session: the server releases the claim.
+// CheckRunnerRenew checks a renewal by the runner of a claim with the
+// claim time claimedAt. It returns ErrSessionOpen when the launcher of the
+// claim opened its session, also after MaxSessionWait: the runner then
+// stops its renewals and leaves the Job or the sandbox alone. It returns
+// ErrClaimLost after MaxSessionWait with no session: the store releases
+// the claim in the same transaction (SessionStore.RunnerRenew).
 func CheckRunnerRenew(claimedAt time.Time, sessionOpen bool, now time.Time) error {
 	switch {
 	case sessionOpen:

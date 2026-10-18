@@ -249,20 +249,39 @@ func testRejoinKeepsID(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
+	secret := joinToken(t, f, time.Hour)
 
-	first, err := join(t, f, joinToken(t, f, time.Hour), "cluster-a", now)
-	if err != nil {
-		t.Fatalf("Join: %v", err)
+	first, err := joinWith(t, f, secret, joinRequest(t, secret, "cluster-a"), now)
+	if err != nil || first.Rejoined {
+		t.Fatalf("Join = %+v, %v, want a new runner", first, err)
 	}
 
-	later := now.Add(31 * 24 * time.Hour)
+	r := first.Runner
+	next := newKey(t)
+	next.CreatedAt = now.Add(runner.RotateKeyAfter)
 
-	again, err := join(t, f, joinTokenAt(t, f, later, time.Hour), "cluster-a", later)
-	if err != nil || again.ID != first.ID || bytes.Equal(again.Key.Public, first.Key.Public) {
-		t.Fatalf("Join again = %+v, %v, want ID %s with a new key", again, err, first.ID)
+	if _, err = rotate(t, f, r.ID, r.Key, next); err != nil {
+		t.Fatalf("RotateKey: %v", err)
 	}
 
-	if _, err := h.Members.Heartbeat(t.Context(), again.ID, again.Release, later); err != nil {
+	later := now.Add(runner.RotateKeyAfter + runner.OfflineAfter + time.Second)
+	secret = joinTokenAt(t, f, later, time.Hour)
+
+	joined, err := joinWith(t, f, secret, joinRequest(t, secret, "cluster-a"), later)
+	again := joined.Runner
+
+	if err != nil || !joined.Rejoined || again.ID != r.ID || bytes.Equal(again.Key.Public, next.Public) {
+		t.Fatalf("Join again = %+v, %v, want a join again of ID %s with a new key", joined, err, r.ID)
+	}
+
+	if len(again.PreviousKey.Public) != 0 || !again.RotatedAt.IsZero() || len(again.RotationKeys(later)) != 1 {
+		t.Fatalf("Join again kept the previous key %x of %v, want none", again.PreviousKey.Public, again.RotatedAt)
+	}
+
+	_, err = rotate(t, f, r.ID, r.Key, again.Key)
+	wantErr(t, "RotateKey with a key from before the join again", err, runner.ErrBadProof)
+
+	if _, err = h.Members.Heartbeat(t.Context(), again.ID, again.Release, later); err != nil {
 		t.Fatalf("Heartbeat after the join again: %v", err)
 	}
 }
@@ -288,7 +307,7 @@ func testKeyExpired(t *testing.T, h Harness) {
 	late := newKey(t)
 	late.CreatedAt = now.Add(runner.MaxKeyAge + time.Second)
 
-	_, err = h.Members.RotateKey(t.Context(), r.ID, late, f.fence, entries(f.fence))
+	_, err = rotate(t, f, r.ID, r.Key, late)
 	wantErr(t, "RotateKey after the key age limit", err, runner.ErrKeyExpired)
 }
 
@@ -320,8 +339,16 @@ func testRetired(t *testing.T, h Harness) {
 	_, err = h.Members.Heartbeat(t.Context(), r.ID, r.Release, now)
 	wantErr(t, "Heartbeat of a retired runner", err, runner.ErrRetired)
 
-	if runners, err := h.Members.Runners(t.Context(), f.pool.ID); err != nil || len(runners) != 0 {
+	runners, err := h.Members.Runners(t.Context(), f.pool.ID)
+	if err != nil || len(runners) != 0 {
 		t.Fatalf("Runners after Retire = %+v, %v", runners, err)
+	}
+
+	secret := joinToken(t, f, time.Hour)
+
+	fresh, err := joinWith(t, f, secret, joinRequest(t, secret, "cluster-a"), now)
+	if err != nil || fresh.Rejoined || fresh.Runner.ID == r.ID {
+		t.Fatalf("Join with the name of a retired runner = %+v, %v, want a new runner", fresh, err)
 	}
 }
 
@@ -339,7 +366,7 @@ func testRotateKey(t *testing.T, h Harness) {
 	next := newKey(t)
 	next.CreatedAt = at
 
-	got, err := h.Members.RotateKey(t.Context(), r.ID, next, f.fence, entries(f.fence))
+	got, err := rotate(t, f, r.ID, r.Key, next)
 	if err != nil || !bytes.Equal(got.Key.Public, next.Public) || !got.Key.CreatedAt.Equal(at) {
 		t.Fatalf("RotateKey = %+v, %v", got, err)
 	}
@@ -352,7 +379,7 @@ func testRotateKey(t *testing.T, h Harness) {
 	retry := next
 	retry.CreatedAt = at.Add(time.Minute)
 
-	again, err := h.Members.RotateKey(t.Context(), r.ID, retry, f.fence, entries(f.fence))
+	again, err := rotate(t, f, r.ID, r.Key, retry)
 	if err != nil || !again.Key.CreatedAt.Equal(at) || !bytes.Equal(again.PreviousKey.Public, r.Key.Public) {
 		t.Fatalf("RotateKey retry = %+v, %v, want no change", again, err)
 	}
@@ -364,10 +391,59 @@ func testRotateKey(t *testing.T, h Harness) {
 	}
 }
 
-// handoff is a runner with a claim of its pool and a handoff token for it.
+func testRotateWithPreviousKey(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	r, err := join(t, f, joinToken(t, f, time.Hour), "cluster-a", now)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	at := now.Add(runner.RotateKeyAfter)
+	rotateTo := func(signer, k runner.Key, when time.Time) (runner.Runner, error) {
+		k.CreatedAt = when
+
+		return rotate(t, f, r.ID, signer, k)
+	}
+
+	second, third := newKey(t), newKey(t)
+	if _, err = rotateTo(r.Key, second, at); err != nil {
+		t.Fatalf("RotateKey: %v", err)
+	}
+
+	_, err = rotateTo(r.Key, third, at.Add(time.Minute))
+	wantErr(t, "RotateKey to another key with the previous key in the grace window", err, runner.ErrBadProof)
+
+	_, err = rotateTo(newKey(t), third, at.Add(time.Minute))
+	wantErr(t, "RotateKey with a key that the runner never had", err, runner.ErrBadProof)
+
+	_, err = rotateTo(r.Key, second, at.Add(runner.RotateGrace+time.Second))
+	wantErr(t, "RotateKey retry with the previous key after the grace window", err, runner.ErrBadProof)
+
+	stored, err := h.Members.Runner(t.Context(), r.ID)
+	if err != nil || !bytes.Equal(stored.Key.Public, second.Public) || !bytes.Equal(stored.PreviousKey.Public,
+		r.Key.Public) {
+		t.Fatalf("Runner after refused rotations = %+v, %v, want the second key, after the first", stored, err)
+	}
+
+	got, err := rotateTo(second, third, at.Add(runner.RotateGrace+time.Second))
+	if err != nil || !bytes.Equal(got.Key.Public, third.Public) || !bytes.Equal(got.PreviousKey.Public,
+		second.Public) {
+		t.Fatalf("RotateKey with the current key = %+v, %v, want the third key, after the second", got, err)
+	}
+
+	_, err = rotateTo(r.Key, third, at.Add(runner.RotateGrace+2*time.Second))
+	wantErr(t, "RotateKey with a key from before the previous key", err, runner.ErrBadProof)
+}
+
+// handoff is a runner with a claim of its pool and a handoff token for it,
+// issued at now.
 type handoff struct {
 	f      fixture
 	r      runner.Runner
+	c      durable.Claim
 	tok    runner.HandoffToken
 	secret string
 }
@@ -388,17 +464,13 @@ func handoffSetUp(t *testing.T, h Harness) handoff {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	secret := runner.HandoffTokenPrefix + randomHex(t)
-	tok := runner.HandoffToken{
-		SHA256: hash(secret), Operation: string(c.Operation), Token: c.Token, Runner: r.ID,
-		ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
-	}
+	tok, secret := handoffToken(t, c, r.ID, now)
 
 	if err = h.Sessions.IssueHandoffToken(t.Context(), tok, c); err != nil {
 		t.Fatalf("IssueHandoffToken: %v", err)
 	}
 
-	return handoff{f: f, r: r, tok: tok, secret: secret}
+	return handoff{f: f, r: r, c: c, tok: tok, secret: secret}
 }
 
 func testHandoffTokenSingleUse(t *testing.T, h Harness) {
@@ -438,10 +510,7 @@ func testHandoffTokenClaim(t *testing.T, h Harness) {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	tok := runner.HandoffToken{
-		SHA256: hash(runner.HandoffTokenPrefix + randomHex(t)), Operation: string(sweep.Operation), Token: sweep.Token,
-		Runner: r.ID, ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
-	}
+	tok, _ := handoffToken(t, sweep, r.ID, now)
 
 	err = h.Sessions.IssueHandoffToken(t.Context(), tok, sweep)
 	wantErr(t, "IssueHandoffToken for a kind of the other purpose", err, runner.ErrInvalid)
@@ -526,20 +595,15 @@ func testRejoinNeedsOffline(t *testing.T, h Harness) {
 	offline := now.Add(runner.OfflineAfter + time.Second)
 	secret := joinTokenAt(t, f, offline, time.Hour)
 
-	_, err = joinExpecting(t, f, runner.Joining{
-		TokenSHA256: hash(secret), Request: joinRequest(t, secret, "cluster-a"), At: offline, Rejoin: "",
-	})
-	wantErr(t, "Join again that expects a new runner", err, runner.ErrConflict)
+	joined, err := joinWith(t, f, secret, joinRequest(t, secret, "cluster-a"), offline)
+	again := joined.Runner
 
-	again, err := join(t, f, secret, "cluster-a", offline)
-	if err != nil || again.ID != first.ID || bytes.Equal(again.Key.Public, first.Key.Public) {
-		t.Fatalf("Join again of an offline runner = %+v, %v, want ID %s with a new key", again, err, first.ID)
+	if err != nil || !joined.Rejoined || again.ID != first.ID || bytes.Equal(again.Key.Public, first.Key.Public) {
+		t.Fatalf("Join again of an offline runner = %+v, %v, want a join again of ID %s with a new key", joined, err,
+			first.ID)
 	}
 
-	tok := runner.HandoffToken{
-		SHA256: hash(runner.HandoffTokenPrefix + randomHex(t)), Operation: string(c.Operation), Token: c.Token,
-		Runner: first.ID, ExpiresAt: offline.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
-	}
+	tok, _ := handoffToken(t, c, first.ID, offline)
 
 	err = h.Sessions.IssueHandoffToken(t.Context(), tok, c)
 	wantErr(t, "IssueHandoffToken for a claim of the old key", err, runner.ErrClaimLost)
@@ -579,10 +643,7 @@ func testHandoffTokenOwner(t *testing.T, h Harness) {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	stolen := runner.HandoffToken{
-		SHA256: hash(runner.HandoffTokenPrefix + randomHex(t)), Operation: string(c.Operation), Token: c.Token,
-		Runner: other.ID, ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
-	}
+	stolen, _ := handoffToken(t, c, other.ID, now)
 
 	err = h.Sessions.IssueHandoffToken(t.Context(), stolen, c)
 	if !errors.Is(err, runner.ErrClaimLost) && !errors.Is(err, runner.ErrNotFound) {
@@ -655,7 +716,14 @@ func testNonce(t *testing.T, h Harness) {
 		t.Fatalf("UseNonce of another nonce: %v", err)
 	}
 
-	if err = h.Sessions.UseNonce(t.Context(), "rn-1", nonce, expires.Add(runner.NonceTTL), expires); err != nil {
+	err = h.Sessions.UseNonce(t.Context(), "rn-1", nonce, expires, now.Add(runner.ProofWindow))
+	wantErr(t, "UseNonce at the end of the proof window", err, runner.ErrReplay)
+
+	err = h.Sessions.UseNonce(t.Context(), "rn-1", nonce, expires, expires)
+	wantErr(t, "UseNonce at the expiry", err, runner.ErrReplay)
+
+	err = h.Sessions.UseNonce(t.Context(), "rn-1", nonce, expires.Add(runner.NonceTTL), expires.Add(time.Millisecond))
+	if err != nil {
 		t.Fatalf("UseNonce after the expiry: %v", err)
 	}
 }
@@ -678,4 +746,147 @@ func checkRotationKeys(t *testing.T, r *runner.Runner, old runner.Key, at time.T
 	if late := r.RotationKeys(at.Add(runner.RotateGrace + time.Second)); len(late) != 1 {
 		t.Fatalf("RotationKeys after the grace window = %d keys, want the new key only", len(late))
 	}
+}
+
+func testRejoinKeepsSessions(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	f, r := l.f, l.r
+
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+
+	waiting, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	tok, _ := handoffToken(t, waiting, r.ID, now)
+	if err = h.Sessions.IssueHandoffToken(t.Context(), tok, waiting); err != nil {
+		t.Fatalf("IssueHandoffToken: %v", err)
+	}
+
+	offline := now.Add(runner.OfflineAfter + time.Second)
+	if _, err = join(t, f, joinTokenAt(t, f, offline, time.Hour), "cluster-a", offline); err != nil {
+		t.Fatalf("Join again: %v", err)
+	}
+
+	if got, lost := h.Sessions.Session(t.Context(), s.ID); lost != nil || got.ID != s.ID {
+		t.Fatalf("Session of a launcher after a join again of its runner = %+v, %v, want it live", got, lost)
+	}
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), l.c, runner.DefaultLease, offline)
+	wantErr(t, "RunnerRenew of the claim with a session after a join again", err, runner.ErrSessionOpen)
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, runner.DefaultLease, offline)
+	wantErr(t, "RunnerRenew of a claim with no session after a join again", err, runner.ErrClaimLost)
+
+	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), offline)
+	wantErr(t, "OpenSession for a claim with no session after a join again", err, runner.ErrClaimLost)
+}
+
+func testRunnerRenew(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	f, r, c := l.f, l.r, l.c
+
+	got, err := h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, now.Add(time.Minute))
+	if err != nil || got.Token != c.Token || !got.ExpiresAt.Equal(now.Add(time.Minute+runner.DefaultLease)) {
+		t.Fatalf("RunnerRenew = %+v, %v, want the expiry %v", got, err, now.Add(time.Minute+runner.DefaultLease))
+	}
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, 0, now)
+	wantErr(t, "RunnerRenew with no lease", err, runner.ErrInvalid)
+
+	other := c
+	other.Owner = "rn-other"
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), other, runner.DefaultLease, now)
+	wantErr(t, "RunnerRenew of a claim with another owner", err, runner.ErrClaimLost)
+
+	limit := now.Add(runner.MaxSessionWait)
+
+	if _, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, limit); err != nil {
+		t.Fatalf("RunnerRenew at the session wait limit: %v", err)
+	}
+
+	late, _ := handoffToken(t, c, r.ID, now.Add(runner.MaxSessionWait-time.Minute))
+	if err = h.Sessions.IssueHandoffToken(t.Context(), late, c); err != nil {
+		t.Fatalf("IssueHandoffToken near the session wait limit: %v", err)
+	}
+
+	after := now.Add(runner.MaxSessionWait + time.Second)
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, after)
+	wantErr(t, "RunnerRenew after the session wait limit", err, runner.ErrClaimLost)
+
+	_, err = h.Sessions.OpenSession(t.Context(), late.SHA256, newKey(t), after)
+	wantErr(t, "OpenSession of a released claim", err, runner.ErrClaimLost)
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, after)
+	wantErr(t, "RunnerRenew of a released claim", err, runner.ErrClaimLost)
+
+	renewed, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	if _, err = h.Sessions.RunnerRenew(t.Context(), renewed, runner.DefaultLease, now); err != nil {
+		t.Fatalf("RunnerRenew before a handoff token: %v", err)
+	}
+
+	tok, _ := handoffToken(t, renewed, r.ID, now.Add(runner.MaxSessionWait-time.Minute))
+	if err = h.Sessions.IssueHandoffToken(t.Context(), tok, renewed); err != nil {
+		t.Fatalf("IssueHandoffToken: %v", err)
+	}
+
+	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), after)
+	wantErr(t, "OpenSession after the session wait limit from the first renewal", err, runner.ErrClaimLost)
+}
+
+func testSessionNearWaitLimit(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	f, r, c := l.f, l.r, l.c
+	limit := now.Add(runner.MaxSessionWait)
+
+	tok, _ := handoffToken(t, c, r.ID, limit.Add(-time.Minute))
+	if err := h.Sessions.IssueHandoffToken(t.Context(), tok, c); err != nil {
+		t.Fatalf("IssueHandoffToken: %v", err)
+	}
+
+	s, err := h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), limit)
+	if err != nil {
+		t.Fatalf("OpenSession at the session wait limit: %v", err)
+	}
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, limit.Add(time.Minute))
+	wantErr(t, "RunnerRenew after the limit of a claim with a session", err, runner.ErrSessionOpen)
+
+	if _, err = h.Sessions.Session(t.Context(), s.ID); err != nil {
+		t.Fatalf("Session after a renewal by the runner past the limit: %v", err)
+	}
+
+	slow, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	first, _ := handoffToken(t, slow, r.ID, now)
+	if err = h.Sessions.IssueHandoffToken(t.Context(), first, slow); err != nil {
+		t.Fatalf("IssueHandoffToken: %v", err)
+	}
+
+	next, _ := handoffToken(t, slow, r.ID, limit.Add(-time.Minute))
+	if err = h.Sessions.IssueHandoffToken(t.Context(), next, slow); err != nil {
+		t.Fatalf("IssueHandoffToken again: %v", err)
+	}
+
+	_, err = h.Sessions.OpenSession(t.Context(), next.SHA256, newKey(t), limit.Add(time.Second))
+	wantErr(t, "OpenSession after the session wait limit with a new token", err, runner.ErrClaimLost)
 }

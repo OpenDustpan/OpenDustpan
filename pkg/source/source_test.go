@@ -150,6 +150,17 @@ func TestURLPattern(t *testing.T) {
 		{"https://git.example.com/platform/*", "https://git.example.com/platform/./network", true, false},
 		{"https://git.example.com/platform/*", "https://git.example.com/a/../platform/network", true, false},
 		{"https://git.example.com/platform/../modules", "https://git.example.com/modules", false, false},
+		{"https://git-1.example.com/platform/*", "https://GIT-1.example.com/platform/network", true, true},
+		{"https://git.example.com/platform/*", "https://git.example.com/platform/network/", true, true},
+		{"https://git.example.com/platform/*/", "https://git.example.com/platform/network", true, true},
+		{"https://git.ex\u0430mple.com/platform/*", "https://git.ex\u0430mple.com/platform/network", false, false},
+		{"https://git.example.com/platform/*", "https://git.ex\u0430mple.com/platform/network", true, false},
+		{"https://git_host.example.com/platform/*", "https://git_host.example.com/platform/a", false, false},
+		{"https://git..example.com/platform/*", "https://git..example.com/platform/a", false, false},
+		{"https://.example.com/platform/*", "https://.example.com/platform/a", false, false},
+		{"https://git.example.com/platform/*", "https://git.example.com./platform/network", true, false},
+		{"https://git.example.com/platform/*", "https://git.example.com/platform/network//", true, false},
+		{"https://git.example.com/platform//", "https://git.example.com/platform//", false, false},
 	}
 
 	for _, tc := range cases {
@@ -263,12 +274,41 @@ func TestResolveURL(t *testing.T) {
 		{"git@git.example.com:acme/modules", "", false},
 		{"http://git.example.com/acme/modules", "", false},
 		{"/srv/git/modules", "", false},
+		{"../modules/", "https://git.example.com/acme/modules", true},
+		{"../modules//", "", false},
+		{"..//modules", "", false},
+		{"https://other.example.com/a/b/", "https://other.example.com/a/b", true},
+		{"https://other.example.com/", "", false},
+		{"https://oth\u00e9r.example.com/a/b", "", false},
 	}
 
 	for _, tc := range cases {
 		got, err := source.ResolveURL(base, tc.ref)
 		if tc.ok != (err == nil) || got != tc.want || (err != nil && !errors.Is(err, source.ErrNotAllowed)) {
 			t.Errorf("ResolveURL(%q) = %q, %v, want %q ok %v", tc.ref, got, err, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestResolveURLWithBases(t *testing.T) {
+	t.Parallel()
+
+	base := "https://git.example.com/acme/infra.git"
+	bases := []struct {
+		base, ref, want string
+		ok              bool
+	}{
+		{"https://git.example.com/acme/infra/", "../modules", "https://git.example.com/acme/modules", true},
+		{"https://git.example.com/acme/infra.git/", "../modules", "https://git.example.com/acme/modules", true},
+		{"https://git.example.com/acme/infra//", "../modules", "", false},
+		{"https://git.example.com//infra", "../modules", "", false},
+		{"https://git_x.example.com/acme/infra", "../modules", "", false},
+	}
+
+	for _, tc := range bases {
+		got, err := source.ResolveURL(tc.base, tc.ref)
+		if tc.ok != (err == nil) || got != tc.want || (err != nil && !errors.Is(err, source.ErrNotAllowed)) {
+			t.Errorf("ResolveURL(%q, %q) = %q, %v, want %q ok %v", tc.base, tc.ref, got, err, tc.want, tc.ok)
 		}
 	}
 
@@ -307,16 +347,26 @@ func TestSameHostAndLFSEndpoint(t *testing.T) {
 	}
 
 	for in, want := range map[string]string{
-		"https://git.example.com/acme/infra":     "https://git.example.com/acme/infra.git/info/lfs",
-		"https://git.example.com/acme/infra.git": "https://git.example.com/acme/infra.git/info/lfs",
+		"https://git.example.com/acme/infra":      "https://git.example.com/acme/infra.git/info/lfs",
+		"https://git.example.com/acme/infra.git":  "https://git.example.com/acme/infra.git/info/lfs",
+		"https://git.example.com/acme/infra/":     "https://git.example.com/acme/infra.git/info/lfs",
+		"https://git.example.com/acme/infra.git/": "https://git.example.com/acme/infra.git/info/lfs",
 	} {
 		if got, err := source.LFSEndpoint(in); err != nil || got != want {
 			t.Errorf("LFSEndpoint(%s) = %s, %v, want %s", in, got, err, want)
 		}
 	}
 
-	if _, err := source.LFSEndpoint("https://git.example.com"); !errors.Is(err, source.ErrNotAllowed) {
-		t.Errorf("LFSEndpoint of a URL with no path = %v, want ErrNotAllowed", err)
+	for _, in := range []string{
+		"https://git.example.com",
+		"https://git.example.com/",
+		"https://git.example.com/acme/infra//",
+		"https://git.example.com//infra",
+		"https://git_x.example.com/acme/infra",
+	} {
+		if _, err := source.LFSEndpoint(in); !errors.Is(err, source.ErrNotAllowed) {
+			t.Errorf("LFSEndpoint(%s) = %v, want ErrNotAllowed", in, err)
+		}
 	}
 }
 

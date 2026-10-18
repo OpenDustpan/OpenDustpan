@@ -65,8 +65,7 @@ var (
 	// names a pool for sweeps, or a sweep target that names a pool for jobs.
 	ErrPurpose = errors.New("runner pool has another purpose")
 	// ErrConflict reports a request that conflicts with the state of the
-	// store: a handoff token for a claim that has a job session already, or
-	// a join that expected another runner of the same name.
+	// store: a handoff token for a claim that has a job session already.
 	ErrConflict = errors.New("runner request conflicts with the state of the store")
 	// ErrRunnerOnline reports a join with the name of a runner that is not
 	// offline and whose key is not expired. A join again is only for an
@@ -89,8 +88,9 @@ var (
 	ErrVersionUnsupported = errors.New("runner release is not supported by this server")
 	// ErrVersionAhead reports a runner or a launcher release that is newer
 	// than the server, for example during a rolling deploy or after a
-	// rollback of the server. The caller retries with backoff. It does not
-	// wrap ErrVersionUnsupported.
+	// rollback of the server. The caller retries with backoff for
+	// VersionAheadLimit at most (CheckVersionAhead). It does not wrap
+	// ErrVersionUnsupported.
 	ErrVersionAhead = errors.New("runner release is newer than this server")
 )
 

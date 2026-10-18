@@ -57,10 +57,18 @@ the meaning of ADR 100.
    only for a runner that is offline or has the status `must-rejoin`
    (`runner.Runner.CanRejoin`). A join again of a runner that still sends
    heartbeats fails with `runner.ErrRunnerOnline`, so a leaked join token
-   cannot take the name of a working runner. In the same transaction, a
-   join again expires every live claim of the runner, so the claims and
-   the job sessions of the old key end and a takeover gets them. It
-   appends the audit entry `runner-rejoined` (ADR 138).
+   cannot take the name of a working runner. The store decides in the
+   transaction of the join whether it is a join again, and returns that
+   (`runner.Joined`), so the server appends the audit entry
+   `runner-rejoined` or `runner-joined` from what the store found
+   (`runner.JoinEvent`, ADR 138). In the same transaction, a join again:
+   - expires every live claim of the runner that has no job session, so a
+     takeover gets those claims,
+   - keeps every claim that has a job session. Its launcher holds its own
+     session key, renews the claim through its session, and runs until it
+     ends,
+   - clears the previous key and the time of the last rotation, so no key
+     of the runner from before the join works.
 4. **Where the runner keeps its key.** The machine runner keeps its private
    key in a file of mode 0600 that only its user reads. The Kubernetes
    runner keeps it in a Kubernetes Secret of its own namespace. The
@@ -71,16 +79,24 @@ the meaning of ADR 100.
    128 bits, and an Ed25519 signature. The signature covers a fixed
    context, the subject, the method, the path with its query, the SHA-256
    of the body, the time and the nonce (`runner.ProofInput`). The server
-   refuses a time more than 60 seconds from its clock
-   (`runner.CheckProof`).
+   refuses a time more than 60 seconds from its clock, and accepts a time
+   at exactly 60 seconds (`runner.CheckProof`).
 
    On the four paths that are not safe to repeat (the rotation, the poll,
    the handoff and the session exchange), the server keeps the nonce of
-   each proof in a nonce store until 60 seconds after the time of the
+   each proof in a nonce store until 2 minutes after the time of the
    proof (`runner.NonceExpiry`, `runner.SessionStore.UseNonce`). It refuses
    a second proof with the same nonce for the same subject with
-   `bad-proof` (`runner.ErrReplay`). After the 60 seconds, the proof window
-   refuses the proof anyway, so the store can delete the nonce. The
+   `bad-proof` (`runner.ErrReplay`), up to and at that expiry, so a replay
+   at exactly the end of the proof window fails. Each instance checks the
+   proof window on its own clock. ADR 72 puts durable claims on the clock
+   of the database and sets no bound for the clocks of the instances, so
+   this design sets one for proofs: the clocks of two instances differ by
+   at most 60 seconds (`runner.MaxClockSkew`). The expiry is the 60
+   seconds of the proof window plus that skew (`runner.NonceTTL`). The
+   store deletes a nonce only after its expiry on the clock of the
+   instance that deletes it. So no instance accepts a proof whose nonce
+   another instance deleted. The
    session exchange carries a proof by the new session key, whose subject
    is the SHA-256 of the handoff token. On every other path, a proof that
    an attacker replays inside its window can only repeat the same request,
@@ -93,11 +109,16 @@ the meaning of ADR 100.
    holds a signature of the new key (`runner.RotateChallenge`). The server
    replaces the key in one write, and keeps the old key as the previous
    key. For 5 minutes after the rotation (`runner.RotateGrace`), the server
-   accepts a proof of the previous key for the rotation request only
-   (`runner.Runner.RotationKeys`). Every other request needs the new key
-   at once (`runner.Runner.ProofKeys`). So a runner that lost the answer of
-   its rotation sends it again with the old key and the same new key, and
-   gets the same answer. The runner keeps the old key until a request with
+   accepts a proof of the previous key for a retry of that rotation only:
+   a rotation request whose new key is the current key. It then answers
+   as for the first request and changes nothing. A proof of the previous
+   key for any other new key fails with `bad-proof`, so a leaked old key
+   cannot rotate the runner to a key of its own
+   (`runner.Runner.CheckRotation`, `runner.Runner.RotationKeys`). The store
+   checks this in the transaction of the rotation. Every other request
+   needs the new key at once (`runner.Runner.ProofKeys`). So a runner that
+   lost the answer of its rotation sends it again with the old key and the
+   same new key, and gets the same answer. The runner keeps the old key until a request with
    the new key succeeds. A key older than 30 days authenticates nothing: the server answers
    `key-expired`, and the runner must join again (`runner.MaxKeyAge`).
 7. **A join again of an idle runner (owner).** A runner that was offline
@@ -135,7 +156,10 @@ the meaning of ADR 100.
    The runner keeps no copy after the handoff. A second token for a claim
    with no session replaces the first: the first then opens nothing. So a
    pod that waited for a node longer than 10 minutes can get a new one. A
-   token for a claim with a session fails with `conflict`.
+   new token never moves the claim time that the first token recorded, so
+   no token opens a session later than 30 minutes after the claim time
+   (ADR 131 decision 7). A token for a claim with a session fails with
+   `conflict`.
 10. **The deliveries of a handoff token (owner)** (`runner.HandoffFor`):
     - **Kubernetes: TokenReview pull.** The pod gets a projected service
       account token with the audience `opendustpan-coordinator` and the
@@ -196,8 +220,11 @@ the meaning of ADR 100.
 - A runner that is off for more than 30 days needs a person. This is the
   cost of the rotation rule.
 - The server keeps a nonce store for four paths. Its size is the number
-  of those requests in the last 2 minutes, because each nonce goes after
-  60 seconds past the time of its proof.
+  of those requests in the last 3 minutes, because a proof can be up to
+  60 seconds in the future and each nonce stays until 2 minutes after the
+  time of its proof.
+- A join again does not stop a launcher that runs. To stop it, an
+  administrator retires the runner or cancels the job.
 
 ## Open questions
 

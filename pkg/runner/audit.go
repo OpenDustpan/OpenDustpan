@@ -29,8 +29,9 @@ const (
 	EventJoinTokenCreated Event = "join-token-created" //nolint:gosec // An event name, not a credential.
 	EventJoinTokenRevoked Event = "join-token-revoked" //nolint:gosec // An event name, not a credential.
 	EventRunnerJoined     Event = "runner-joined"
-	// EventRunnerRejoined is a join again: the runner keeps its ID, gets a
-	// new key, and its claims and sessions of the old key end.
+	// EventRunnerRejoined is a join again: the runner keeps its ID and gets
+	// a new key. Its claims with no job session end. The launchers of its
+	// job sessions run until they end.
 	EventRunnerRejoined Event = "runner-rejoined"
 	EventKeyRotated     Event = "runner-key-rotated"
 	EventRunnerDrained  Event = "runner-drained"

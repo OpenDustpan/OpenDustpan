@@ -1,8 +1,8 @@
 package runnertest_test
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -29,11 +29,14 @@ func TestReferenceStore(t *testing.T) {
 	})
 }
 
-// op is a durable operation of the reference adapter.
+// op is a durable operation of the reference adapter, with the expiry of
+// its claim and the claim time that the session store recorded for it.
 type op struct {
-	kind  durable.Kind
-	owner string
-	token int64
+	kind      durable.Kind
+	owner     string
+	token     int64
+	expires   time.Time
+	claimedAt time.Time
 }
 
 // nonceKey is a nonce of one subject.
@@ -115,7 +118,7 @@ func (m *mem) Claim(_ context.Context, kind durable.Kind, owner string) (durable
 	defer m.mu.Unlock()
 
 	id := durable.ID(nextID(m, "op-"))
-	m.ops[id] = op{kind: kind, owner: owner, token: 1}
+	m.ops[id] = op{kind: kind, owner: owner, token: 1, expires: time.Time{}, claimedAt: time.Time{}}
 
 	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: time.Time{}}, nil
 }
@@ -130,7 +133,7 @@ func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error
 	}
 
 	o.token++
-	o.owner = c.Owner
+	o.owner, o.claimedAt = c.Owner, time.Time{}
 	m.ops[c.Operation] = o
 
 	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: time.Time{}}, nil
@@ -385,28 +388,30 @@ func (m *mem) LookupJoin(_ context.Context, sum string) (runner.JoinToken, runne
 	return t, m.pools[t.Pool], nil
 }
 
-func (m *mem) Join(_ context.Context, j runner.Joining, fence namespace.Fence, e []audit.Entry) (runner.Runner, error) {
+func (m *mem) Join(
+	_ context.Context, j runner.Joining, fence namespace.Fence, e runner.JoinAudit,
+) (runner.Joined, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := checkFence(m, fence); err != nil {
-		return runner.Runner{}, err
+		return runner.Joined{}, err
 	}
 
 	req, now := j.Request, j.At
 
 	t, ok := tokenByHash(m, j.TokenSHA256)
 	if !ok {
-		return runner.Runner{}, runner.ErrNotFound
+		return runner.Joined{}, runner.ErrNotFound
 	}
 
 	if err := t.CheckUse(now); err != nil {
-		return runner.Runner{}, err
+		return runner.Joined{}, err
 	}
 
 	p := m.pools[t.Pool]
 	if !p.Allows(req.Isolation) {
-		return runner.Runner{}, fmt.Errorf(
+		return runner.Joined{}, fmt.Errorf(
 			"%w: the pool does not allow the isolation %s",
 			runner.ErrInvalid,
 			req.Isolation,
@@ -414,31 +419,32 @@ func (m *mem) Join(_ context.Context, j runner.Joining, fence namespace.Fence, e
 	}
 
 	r := runnerNamed(m, p.ID, req.Name)
+	rejoined := r.ID != ""
 
 	switch {
-	case r.ID != j.Rejoin:
-		return runner.Runner{}, fmt.Errorf("%w: the join expected runner %q, the pool has %q", runner.ErrConflict,
-			j.Rejoin, r.ID)
-	case r.ID == "":
+	case !rejoined:
 		r.ID = nextID(m, runner.RunnerIDPrefix)
 		r.JoinedAt = now
 	case !r.CanRejoin(now):
-		return runner.Runner{}, runner.ErrRunnerOnline
+		return runner.Joined{}, runner.ErrRunnerOnline
 	default:
-		expireClaims(m, r.ID)
+		expireWaitingClaims(m, r.ID)
 	}
 
 	key := req.Key
 	key.CreatedAt = now
 	r.Pool, r.Namespace, r.Name, r.Kind, r.Isolation = p.ID, p.Namespace, req.Name, req.Kind, req.Isolation
 	r.Labels, r.Release, r.Key, r.JoinedWith, r.LastSeenAt = req.Labels, req.Release, key, t.ID, now
+	r.PreviousKey, r.RotatedAt = runner.Key{Public: nil, CreatedAt: time.Time{}}, time.Time{}
 	m.runners[r.ID] = r
 
 	t.UsedAt, t.UsedBy = now, r.ID
 	m.tokens[t.ID] = t
-	appendAudit(m, fence, e)
 
-	return r, nil
+	out := runner.Joined{Runner: r, Rejoined: rejoined}
+	appendAudit(m, fence, e(&out))
+
+	return out, nil
 }
 
 // runnerNamed returns the runner of pool called name that is not retired,
@@ -518,7 +524,7 @@ func (m *mem) Heartbeat(_ context.Context, id string, rel runner.Release, now ti
 }
 
 func (m *mem) RotateKey(
-	_ context.Context, id string, next runner.Key, fence namespace.Fence, e []audit.Entry,
+	_ context.Context, rot runner.Rotation, fence namespace.Fence, e []audit.Entry,
 ) (runner.Runner, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -527,13 +533,19 @@ func (m *mem) RotateKey(
 		return runner.Runner{}, err
 	}
 
+	id, next := rot.Runner, rot.Next
+	if err := next.Validate(); err != nil {
+		return runner.Runner{}, err
+	}
+
 	r, err := liveRunner(m, id, next.CreatedAt)
 	if err != nil {
 		return runner.Runner{}, err
 	}
 
-	if bytes.Equal(r.Key.Public, next.Public) {
-		return r, nil
+	rotate, err := r.CheckRotation(rot.Signer, next, next.CreatedAt)
+	if err != nil || !rotate {
+		return r, err
 	}
 
 	r.PreviousKey, r.RotatedAt, r.Key = r.Key, next.CreatedAt, next
@@ -586,22 +598,46 @@ func (m *mem) Retire(_ context.Context, id string, now time.Time, fence namespac
 
 	r.RetiredAt = now
 	m.runners[id] = r
-	expireClaims(m, id)
+	expireAllClaims(m, id)
 	appendAudit(m, fence, e)
 
 	return nil
 }
 
-// expireClaims ends every live claim of the runner id, as an expiry does:
-// the next claim of each operation gets a new token.
-func expireClaims(m *mem, id string) {
+// expireAllClaims ends every live claim of the runner id, as an expiry
+// does: the next claim of each operation gets a new token.
+func expireAllClaims(m *mem, id string) {
 	for k, o := range m.ops {
 		if o.owner == id {
-			o.token++
-			o.owner = ""
-			m.ops[k] = o
+			releaseOp(m, k)
 		}
 	}
+}
+
+// expireWaitingClaims ends the live claims of the runner id that have no
+// job session.
+func expireWaitingClaims(m *mem, id string) {
+	for k, o := range m.ops {
+		if o.owner == id && !hasSession(m, k, o.token) {
+			releaseOp(m, k)
+		}
+	}
+}
+
+// releaseOp ends the live claim of the operation id.
+func releaseOp(m *mem, id durable.ID) {
+	o := m.ops[id]
+	o.token++
+	o.owner, o.claimedAt = "", time.Time{}
+	m.ops[id] = o
+}
+
+// hasSession reports whether the claim token of the operation id has a
+// job session.
+func hasSession(m *mem, id durable.ID, token int64) bool {
+	sid, ok := m.sessionOf[id]
+
+	return ok && m.sessions[sid].Token == token
 }
 
 // SessionStore.
@@ -636,19 +672,29 @@ func (m *mem) IssueHandoffToken(_ context.Context, t runner.HandoffToken, c dura
 		return fmt.Errorf("%w: the operation is not of a kind of the pool", runner.ErrInvalid)
 	}
 
-	if _, ok := m.sessionOf[c.Operation]; ok {
+	if hasSession(m, c.Operation, c.Token) {
 		return runner.ErrConflict
 	}
 
-	for h, o := range m.launches {
-		if o.Operation == t.Operation && o.Token == t.Token {
+	for h := range m.launches {
+		if o := m.launches[h]; o.Operation == t.Operation && o.Token == t.Token {
 			delete(m.launches, h)
 		}
 	}
 
 	m.launches[t.SHA256] = t
+	recordClaimTime(m, c.Operation, t.IssuedAt)
 
 	return nil
+}
+
+// recordClaimTime records the claim time at of the live claim of the
+// operation id, when it has none.
+func recordClaimTime(m *mem, id durable.ID, at time.Time) {
+	if o := m.ops[id]; o.claimedAt.IsZero() {
+		o.claimedAt = at
+		m.ops[id] = o
+	}
 }
 
 func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.Time) (runner.Session, error) {
@@ -669,6 +715,11 @@ func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.
 		return runner.Session{}, runner.ErrClaimLost
 	}
 
+	if now.Sub(m.ops[op].claimedAt) > runner.MaxSessionWait {
+		return runner.Session{}, fmt.Errorf("%w: no job session %v after the claim", runner.ErrClaimLost,
+			runner.MaxSessionWait)
+	}
+
 	t.UsedAt = now
 	m.launches[sum] = t
 
@@ -680,6 +731,39 @@ func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.
 	m.sessionOf[op] = s.ID
 
 	return s, nil
+}
+
+func (m *mem) RunnerRenew(
+	_ context.Context, c durable.Claim, d time.Duration, now time.Time,
+) (durable.Claim, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if d <= 0 {
+		return durable.Claim{}, fmt.Errorf("%w: a renewal needs a positive lease", runner.ErrInvalid)
+	}
+
+	if !liveClaim(m, c) {
+		return durable.Claim{}, runner.ErrClaimLost
+	}
+
+	recordClaimTime(m, c.Operation, now)
+
+	err := runner.CheckRunnerRenew(m.ops[c.Operation].claimedAt, hasSession(m, c.Operation, c.Token), now)
+	if errors.Is(err, runner.ErrClaimLost) {
+		releaseOp(m, c.Operation)
+	}
+
+	if err != nil {
+		return durable.Claim{}, err
+	}
+
+	o := m.ops[c.Operation]
+	o.expires = now.Add(d)
+	m.ops[c.Operation] = o
+	c.ExpiresAt = o.expires
+
+	return c, nil
 }
 
 func (m *mem) Session(_ context.Context, id string) (runner.Session, error) {
@@ -708,7 +792,7 @@ func (m *mem) UseNonce(_ context.Context, subject, nonce string, expires, now ti
 	defer m.mu.Unlock()
 
 	k := nonceKey{subject: subject, nonce: nonce}
-	if until, ok := m.nonces[k]; ok && now.Before(until) {
+	if until, ok := m.nonces[k]; ok && !now.After(until) {
 		return runner.ErrReplay
 	}
 

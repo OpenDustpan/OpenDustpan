@@ -73,25 +73,27 @@ type MemberStore interface {
 	// Join registers the runner of j.Request with the join token whose
 	// secret has the hash j.TokenSHA256, at j.At. In one transaction it
 	// checks the token with JoinToken.CheckUse, marks it used, and stores
-	// the runner with j.Request.Key, created at j.At.
+	// the runner with j.Request.Key, created at j.At. It appends the audit
+	// entries that e returns for the result, so the caller picks
+	// EventRunnerJoined or EventRunnerRejoined (JoinEvent) from what the
+	// store found, not from an earlier read.
 	//
 	// A runner name that the pool has, of a runner that is not retired, is
-	// a join again: the runner keeps its ID and gets the new key, only when
-	// Runner.CanRejoin is true at j.At, else Join returns ErrRunnerOnline.
-	// A join again expires every live claim of the runner in the same
-	// transaction, so the claims and the sessions of the old key end and a
-	// takeover gets them. The caller reads the runners of the pool first,
-	// and sets j.Rejoin to the ID of the runner that the join replaces, or
-	// to empty for a new runner, so that it appends the entry of
-	// EventRunnerRejoined or EventRunnerJoined. Join returns ErrConflict
-	// when j.Rejoin does not match the store, and the caller reads again.
+	// a join again (Joined.Rejoined): the runner keeps its ID and gets the
+	// new key, only when Runner.CanRejoin is true at j.At, else Join
+	// returns ErrRunnerOnline. A join again clears Runner.PreviousKey and
+	// Runner.RotatedAt, so no key of the runner before the join works. In
+	// the same transaction it expires every live claim of the runner that
+	// has no job session, so a takeover gets those claims. A claim with a
+	// job session stays: its launcher holds its own session key, renews
+	// the claim through its session, and runs until it ends.
 	//
 	// It returns ErrNotFound for an unknown hash, ErrTokenUsed and
 	// ErrTokenExpired from CheckUse, ErrInvalid for an isolation that the
 	// pool does not allow, and ErrLimit when the pool has
 	// MaxRunnersPerPool runners. The caller checks JoinRequest.Validate and
 	// the proof of j.Request against JoinChallenge first.
-	Join(ctx context.Context, j Joining, fence namespace.Fence, e []audit.Entry) (Runner, error)
+	Join(ctx context.Context, j Joining, fence namespace.Fence, e JoinAudit) (Joined, error)
 
 	// Runner returns the runner id, also a retired one, or ErrNotFound.
 	Runner(ctx context.Context, id string) (Runner, error)
@@ -103,46 +105,77 @@ type MemberStore interface {
 	// runner, ErrRetired for a retired one, and ErrKeyExpired when the key
 	// of the runner is older than MaxKeyAge. It appends no audit entry.
 	Heartbeat(ctx context.Context, id string, rel Release, now time.Time) (Runner, error)
-	// RotateKey replaces the key of the runner id with next, whose
-	// CreatedAt is the time of the rotation, and returns the runner. It
-	// keeps the old key as Runner.PreviousKey, with Runner.RotatedAt, so
-	// that a retry signed by the old key passes Runner.RotationKeys for
-	// RotateGrace. It returns ErrNotFound, ErrRetired and ErrKeyExpired as
-	// Heartbeat does. The caller checks a proof of the old key and a
-	// signature of RotateChallenge by next first. A rotation to the current
-	// key changes nothing, so a retry after a lost answer is safe.
-	RotateKey(ctx context.Context, id string, next Key, fence namespace.Fence, e []audit.Entry) (Runner, error)
+	// RotateKey replaces the key of the runner r.Runner with r.Next, whose
+	// CreatedAt is the time of the rotation, and returns the runner. The
+	// proof of the request is of the key with the ID r.Signer. In one
+	// transaction it checks the request with Runner.CheckRotation: a proof
+	// of the current key rotates, and a proof of Runner.PreviousKey in
+	// RotateGrace is only a retry, with r.Next equal to the current key. It
+	// keeps the old key as Runner.PreviousKey, with Runner.RotatedAt. A
+	// request that changes nothing appends no audit entry. It returns
+	// ErrBadProof from CheckRotation, ErrInvalid for a next key that is not
+	// valid, and ErrNotFound, ErrRetired and ErrKeyExpired as Heartbeat
+	// does. The caller checks the proof against Runner.RotationKeys and a
+	// signature of RotateChallenge by r.Next first.
+	RotateKey(ctx context.Context, r Rotation, fence namespace.Fence, e []audit.Entry) (Runner, error)
 	// SetDraining sets or clears the drain of the runner id. A draining
 	// runner claims no new work. It returns ErrNotFound and ErrRetired.
 	SetDraining(ctx context.Context, id string, draining bool, fence namespace.Fence, e []audit.Entry) error
 	// Retire retires the runner id at now. Its key then authenticates
 	// nothing. In the same transaction it expires every live claim of the
-	// runner, so its claims go to a takeover, and it ends every job session
-	// of the runner: SessionStore.Session returns ErrRetired for them. It
+	// runner, also a claim with a job session, so its claims go to a
+	// takeover, and it ends every job session of the runner:
+	// SessionStore.Session returns ErrRetired for them. It
 	// returns ErrNotFound for an unknown runner. A retire of a retired
 	// runner changes nothing.
 	Retire(ctx context.Context, id string, now time.Time, fence namespace.Fence, e []audit.Entry) error
 }
 
 // SessionStore is the persistence port for handoff tokens and job sessions.
+//
+// The claim time of a claim of a runner is the IssuedAt of its first
+// handoff token, or the now of its first RunnerRenew if that comes first.
+// The store records it once for each claim. A new handoff token for the
+// same claim never moves it. The coordinator asks for the handoff token
+// right after the claim, so the claim time is at most one renewal after
+// the claim. MaxSessionWait counts from the claim time.
 type SessionStore interface {
 	// IssueHandoffToken stores t for the live claim c of the runner
-	// t.Runner. It returns ErrClaimLost when c is not the live claim of its
-	// operation, or when the owner of c is not t.Runner, so a runner never
-	// gets a token for the claim of another runner. It returns ErrInvalid
-	// when the operation is not of a kind of the pool of the runner
-	// (ClaimKinds), and ErrConflict when the claim has a session already. A
-	// second token for a claim with no session replaces the first: the
+	// t.Runner, and records the claim time t.IssuedAt when c has none. It
+	// returns ErrClaimLost when c is not the live claim of its operation,
+	// or when the owner of c is not t.Runner, so a runner never gets a
+	// token for the claim of another runner. It returns ErrInvalid when
+	// the operation is not of a kind of the pool of the runner
+	// (ClaimKinds), and ErrConflict when the claim has a session already.
+	// A second token for a claim with no session replaces the first: the
 	// first then opens nothing (ErrNotFound). So a pod that waited past
-	// HandoffTokenTTL can get a new one.
+	// HandoffTokenTTL can get a new one, until MaxSessionWait.
 	IssueHandoffToken(ctx context.Context, t HandoffToken, c durable.Claim) error
 	// OpenSession exchanges the handoff token whose secret has the hash
 	// sha256 for a job session with the key k, at now. In one transaction
 	// it checks the token with HandoffToken.CheckUse, checks that its claim
-	// is live, marks the token used and stores the session. It returns
+	// is live and that now is not later than MaxSessionWait after the
+	// claim time, marks the token used and stores the session. It returns
 	// ErrNotFound for an unknown hash, ErrTokenUsed and ErrTokenExpired
-	// from CheckUse, and ErrClaimLost when the claim is not live.
+	// from CheckUse, and ErrClaimLost when the claim is not live or when
+	// MaxSessionWait passed. A session at exactly MaxSessionWait opens.
 	OpenSession(ctx context.Context, sha256 string, k Key, now time.Time) (Session, error)
+	// RunnerRenew is the renewal of the claim c by its runner, before the
+	// launcher opens a session. In one transaction, with the rules of
+	// CheckRunnerRenew, it:
+	//   - returns ErrClaimLost when c is not live, or when its owner is not
+	//     the runner of the request;
+	//   - returns ErrSessionOpen when the claim has a job session. It does
+	//     not renew: the launcher renews the claim through its session.
+	//   - releases the claim, as SweepClaimer.Release and job.Claimer do,
+	//     and returns ErrClaimLost, when now is later than MaxSessionWait
+	//     after the claim time and the claim has no session. This is the
+	//     one error after which the store has changed something.
+	//   - else moves the expiry of c to now plus d and returns the claim.
+	//
+	// It records the claim time now when c has none. It returns
+	// ErrInvalid for a d that is not positive.
+	RunnerRenew(ctx context.Context, c durable.Claim, d time.Duration, now time.Time) (durable.Claim, error)
 	// Session returns the session id, or ErrNotFound. It returns
 	// ErrClaimLost when the claim of the session is no longer live, so a
 	// launcher of a claim that another claim replaced writes nothing, and
@@ -152,10 +185,16 @@ type SessionStore interface {
 	// UseNonce records the nonce of a proof of subject, a runner ID, a
 	// session ID or the hash of a handoff token, and keeps it until
 	// expires (NonceExpiry). It returns ErrReplay when the store holds the
-	// same nonce for subject and it has not expired at now. The protocol
-	// adapter calls it after CheckProof, on the paths that
-	// protocol.NeedsNonce names. The store can delete a nonce after its
-	// expiry. Nonces are control data, and a backup does not hold them.
+	// same nonce for subject and now is not after its expiry: up to and
+	// at the expiry, so a replay at exactly the end of ProofWindow, which
+	// CheckProof accepts, still fails. A nonce after its expiry is free
+	// again. The protocol adapter calls it after CheckProof, on the paths
+	// that protocol.NeedsNonce names, with the clock of its instance. The
+	// store deletes a nonce only after its expiry on the clock of the
+	// instance that deletes it. NonceTTL allows for MaxClockSkew between
+	// the instances, so no instance accepts a proof whose nonce another
+	// instance deleted. Nonces are control data, and a backup does not
+	// hold them.
 	UseNonce(ctx context.Context, subject, nonce string, expires, now time.Time) error
 }
 
@@ -197,7 +236,35 @@ type Joining struct {
 	TokenSHA256 string
 	Request     JoinRequest
 	At          time.Time
-	// Rejoin is the ID of the runner that the caller expects the join to
-	// replace, or empty for a new runner.
-	Rejoin string
+}
+
+// Rotation is the input of MemberStore.RotateKey.
+type Rotation struct {
+	// Runner is the ID of the runner.
+	Runner string
+	// Signer is the ID of the key of the proof of the request (Key.ID).
+	Signer string
+	// Next is the new key. Its CreatedAt is the time of the rotation.
+	Next Key
+}
+
+// Joined is the result of MemberStore.Join: the runner, and whether the
+// join was a join again of a runner of the same name.
+type Joined struct {
+	Runner   Runner
+	Rejoined bool
+}
+
+// JoinAudit returns the audit entries of a join, from its result. The
+// store calls it in the transaction of the join, before the commit.
+type JoinAudit func(j *Joined) []audit.Entry
+
+// JoinEvent returns the event of the audit entry of the join j:
+// EventRunnerRejoined for a join again, else EventRunnerJoined.
+func JoinEvent(j *Joined) Event {
+	if j.Rejoined {
+		return EventRunnerRejoined
+	}
+
+	return EventRunnerJoined
 }

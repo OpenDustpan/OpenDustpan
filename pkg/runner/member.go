@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -170,10 +171,10 @@ type Runner struct {
 	// new key succeeds.
 	Key Key
 	// PreviousKey is the key before the last rotation, and RotatedAt the
-	// time of that rotation. The server accepts PreviousKey for the
-	// rotation request only, for RotateGrace after RotatedAt, so a runner
-	// that lost the answer of its rotation can send it again
-	// (Runner.ProofKeys).
+	// time of that rotation. The server accepts PreviousKey for a retry of
+	// that rotation only, for RotateGrace after RotatedAt, so a runner that
+	// lost the answer of its rotation can send it again
+	// (Runner.CheckRotation). A join again clears both.
 	PreviousKey Key
 	RotatedAt   time.Time
 	// JoinedWith is the ID of the join token of the last join.
@@ -233,6 +234,42 @@ func (r *Runner) RotationKeys(now time.Time) []Key {
 	}
 
 	return keys
+}
+
+// CheckRotation checks a rotation request of r to the key next at now,
+// whose proof the key with the ID signer made. The store calls it in the
+// transaction of the rotation, after the caller checked the proof against
+// RotationKeys. It returns true when the request replaces the key, and
+// false for a request that changes nothing:
+//   - A proof of the current key rotates to next. A next key that is the
+//     current key changes nothing.
+//   - A proof of PreviousKey, for RotateGrace after RotatedAt, is a retry
+//     of the last rotation only: next must be the current key, and nothing
+//     changes. Any other next key fails with ErrBadProof, so a leaked old
+//     key cannot rotate the runner to a key of its own.
+//   - A proof of any other key fails with ErrBadProof.
+func (r *Runner) CheckRotation(signer string, next Key, now time.Time) (bool, error) {
+	same := bytes.Equal(next.Public, r.Key.Public)
+
+	for _, k := range r.ProofKeys(now) {
+		if k.ID() == signer {
+			return !same, nil
+		}
+	}
+
+	for _, k := range r.RotationKeys(now) {
+		if k.ID() != signer {
+			continue
+		}
+
+		if !same {
+			return false, fmt.Errorf("%w: the previous key can only repeat the last rotation", ErrBadProof)
+		}
+
+		return false, nil
+	}
+
+	return false, fmt.Errorf("%w: the key %s cannot rotate runner %s", ErrBadProof, signer, r.ID)
 }
 
 // JoinRequest is what a runner sends with a join token.

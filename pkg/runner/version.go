@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ProtocolVersion is the version of the runner protocol in the path
@@ -109,4 +110,26 @@ func CheckSkew(server, client Release) error {
 	default:
 		return nil
 	}
+}
+
+// VersionAheadLimit is the longest time for which a runner or a launcher
+// retries after ErrVersionAhead. A rolling deploy of the server ends in a
+// few minutes. A server that stays older for longer was rolled back, and
+// the client must go back to a release that the server accepts.
+const VersionAheadLimit = 15 * time.Minute
+
+// CheckVersionAhead checks a retry at now of a client that got
+// ErrVersionAhead first at since, with no answer from the server between.
+// It returns nil while the client may retry, and ErrVersionUnsupported
+// after VersionAheadLimit. The runner then stops its polls, and its log
+// and status show version-unsupported with the release of the server.
+// The launcher ends with the exit code of a refused release. A launcher
+// never waits past MaxSessionWait either.
+func CheckVersionAhead(since, now time.Time) error {
+	if now.Sub(since) > VersionAheadLimit {
+		return fmt.Errorf("%w: the server stayed older than this release for %v", ErrVersionUnsupported,
+			VersionAheadLimit)
+	}
+
+	return nil
 }

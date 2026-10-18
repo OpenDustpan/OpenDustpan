@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/runner"
 )
@@ -84,5 +85,20 @@ func TestCheckSkewAcceptsTwoOlderReleases(t *testing.T) {
 		if errors.Is(err, runner.ErrVersionAhead) && errors.Is(err, runner.ErrVersionUnsupported) {
 			t.Errorf("%s: a newer client wraps ErrVersionUnsupported", tc.name)
 		}
+	}
+}
+
+func TestCheckVersionAheadIsBounded(t *testing.T) {
+	t.Parallel()
+
+	since := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	if err := runner.CheckVersionAhead(since, since.Add(runner.VersionAheadLimit)); err != nil {
+		t.Errorf("CheckVersionAhead at the limit = %v, want nil", err)
+	}
+
+	err := runner.CheckVersionAhead(since, since.Add(runner.VersionAheadLimit+time.Second))
+	if !errors.Is(err, runner.ErrVersionUnsupported) || errors.Is(err, runner.ErrVersionAhead) {
+		t.Errorf("CheckVersionAhead after the limit = %v, want ErrVersionUnsupported", err)
 	}
 }

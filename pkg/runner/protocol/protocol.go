@@ -38,7 +38,9 @@ const (
 	// (HandoffResponse). Path parameter: {operation}.
 	PathClaimHandoff = Prefix + "/claims/{operation}/handoff"
 	// PathClaimRenew renews a claim that has no job session yet
-	// (RenewResponse).
+	// (RenewResponse), through runner.SessionStore.RunnerRenew: the answer
+	// has SessionOpen once a session exists, and the code ErrorClaimLost
+	// after runner.MaxSessionWait with no session.
 	PathClaimRenew = Prefix + "/claims/{operation}/renew"
 	// PathClaimRelease gives back a claim whose launcher never opened a
 	// session, for example after an image pull error (ReleaseRequest).

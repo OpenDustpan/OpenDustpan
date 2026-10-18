@@ -122,9 +122,20 @@ share one shape.
    A runner that sees no session after the handoff token expired, for
    example a pod that waits for a node, asks for a new handoff token, or
    releases the claim. The time from the claim to the session is at most
-   30 minutes (`runner.MaxSessionWait`). After it, a renewal by the runner
-   fails with `claim-lost`, and the server releases the claim
-   (`runner.CheckRunnerRenew`).
+   30 minutes (`runner.MaxSessionWait`). The store records the claim time
+   once for each claim: at its first handoff token, or at its first
+   renewal by the runner if that comes first. A new handoff token never
+   moves it. One store method answers a renewal by the runner, in one
+   transaction (`runner.SessionStore.RunnerRenew`,
+   `runner.CheckRunnerRenew`):
+   - For a claim with a session, it answers `sessionOpen`, also after
+     the 30 minutes.
+   - For a claim with no session after the 30 minutes, it releases the
+     claim and answers `claim-lost`.
+   - For any other claim, it renews the claim.
+
+   The session exchange also refuses a session after the 30 minutes with
+   `claim-lost`. A session at exactly 30 minutes opens.
 8. **Heartbeats.** A runner sends a heartbeat every 15 seconds, also while
    it polls. The answer lists the claims of the runner that a cancel stops,
    the claims that are no longer live, whether the key must rotate and
@@ -184,13 +195,14 @@ share one shape.
     expires.
 13. **Replays.** Four paths are not safe to repeat: the rotation, the
     poll, the handoff and the session exchange (`protocol.NoncePaths`).
-    On these paths, the server keeps the nonce of each proof for 60 seconds
-    after the time of the proof (`runner.NonceTTL`,
-    `runner.SessionStore.UseNonce`), and refuses a second proof with the
-    same nonce for the same subject with `bad-proof`. After the 60
-    seconds, the proof window refuses the proof anyway (ADR 133 decision
-    5). Every other request is safe to repeat, and the server keeps no
-    nonce for it:
+    On these paths, the server keeps the nonce of each proof for 2 minutes
+    after the time of the proof: the 60 seconds of the proof window, and
+    60 seconds for the clock skew between instances (`runner.NonceTTL`,
+    `runner.MaxClockSkew`, `runner.SessionStore.UseNonce`). It refuses a
+    second proof with the same nonce for the same subject with `bad-proof`,
+    up to and at the end of that time. After it, the proof window refuses
+    the proof anyway on every instance (ADR 133 decision 5). Every other
+    request is safe to repeat, and the server keeps no nonce for it:
     - A join with a used token fails and changes nothing.
     - A heartbeat and a renewal change nothing twice.
     - A step start or end of a claim records once.

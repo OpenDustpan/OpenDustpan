@@ -36,11 +36,19 @@ its own rules.
 
    A client that is newer than the server, of a newer minor or major
    release, gets the code `version-ahead` with the status 426
-   (`runner.ErrVersionAhead`). The client does not stop: it retries with
-   exponential backoff from 1 second to 5 minutes, with jitter. A rolling
-   deploy of the server, or a rollback of the server after a runner
-   update, causes this answer, and it ends when the server catches up. The
-   runner log and the heartbeat of the console show the two releases.
+   (`runner.ErrVersionAhead`). The client does not stop at once: it
+   retries with exponential backoff from 1 second to 5 minutes, with
+   jitter. A rolling deploy of the server causes this answer, and it ends
+   when the server catches up. The retries last 15 minutes at most from
+   the first `version-ahead` with no other answer between
+   (`runner.VersionAheadLimit`, `runner.CheckVersionAhead`). A server that
+   stays older for longer had a rollback. The runner then stops its polls,
+   and its log and status show `version-unsupported` with the two
+   releases, so a person installs a release that the server accepts. A
+   launcher ends with the exit code of a refused release (ADR 134), and
+   never waits past the 30 minutes from the claim to the session (ADR 131
+   decision 7). The runner log and the heartbeat of the console show the
+   two releases while the retries last.
 3. **A server updates first.** A runner newer than its server gets no
    work until the server catches up. So the order of an update is: the
    server, then the runners. The rolling
@@ -84,6 +92,9 @@ its own rules.
 - A team updates its runners at most every two minor releases of the
   server. A hosted server tells each team before a release that would
   refuse its runners.
+- A rollback of the server that lasts more than 15 minutes stops the
+  runners of the newer release. A person must install an older runner, or
+  update the server again.
 - A field that changes behavior needs a new runner before a job can use it.
   The console shows the job that waits for it.
 - Until 1.0, a minor release can still break the protocol through

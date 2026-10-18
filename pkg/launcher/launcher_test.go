@@ -357,9 +357,24 @@ func TestStepUserIsolated(t *testing.T) {
 		{launcher.StepUser{UID: 2000, GID: 2000}, true},
 	}
 
+	self := launcher.Owner{UID: 1000, GID: 1000}
+
 	for _, tc := range cases {
 		if got := tc.user.Isolated(1000); got != tc.want {
 			t.Errorf("%+v.Isolated(1000) = %v, want %v", tc.user, got, tc.want)
 		}
+
+		want := self
+		if tc.want {
+			want = launcher.Owner(tc.user)
+		}
+
+		if got := tc.user.Owner(self); got != want {
+			t.Errorf("%+v.Owner = %+v, want %+v", tc.user, got, want)
+		}
+	}
+
+	if launcher.ModeDir != 0o700 || launcher.ModeFile != 0o600 || launcher.ModeSocket != 0o600 {
+		t.Errorf("modes %o %o %o, want 0700 0600 0600", launcher.ModeDir, launcher.ModeFile, launcher.ModeSocket)
 	}
 }

@@ -172,6 +172,18 @@ The rules are in `pkg/launcher`.
     launcher `CAP_SETUID` and `CAP_SETGID`. The default pod of ADR 136
     drops all capabilities, so its steps run as the user of the launcher.
 
+    With a separate step user, the launcher creates the directory of each
+    step, its credential files, the helper socket and the checkout, and
+    gives them to the step user and its group (`launcher.StepUser.Owner`)
+    before it writes a credential. The modes are 0700 for directories
+    (`launcher.ModeDir`), 0600 for files (`launcher.ModeFile`) and 0600 for
+    the helper socket (`launcher.ModeSocket`). So the step reads its own
+    files, and no other user does. The launcher answers on the socket only
+    a peer whose user ID, from the credentials of the socket, is the step
+    user. The secrets directory of `MemoryVolume.Prepare` stays with the
+    user of the launcher. The session key and the job token stay in the
+    memory of the launcher, which the step user cannot read.
+
     The risk that stays when the steps run as the user of the launcher:
     - A step can read the credential files that its own step got, as any
       tool can.

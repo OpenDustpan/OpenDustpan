@@ -97,18 +97,26 @@ the verb "get" for the work of the source fetcher.
      holds the empty directory of the gitlink or the pointer file as it is.
 
    A URL pattern is an `https` URL of a repository with no user, port,
-   query, fragment or `%`. A `*` can be the whole last path part, and
-   matches one part (`source.URLPattern`). A URL to match with a `%`, or
-   with a path part `.` or `..`, matches no pattern, so an encoded `/` or
-   `.` cannot pass a pattern. A policy has at most 64 patterns in each
+   query, fragment or `%`. Its host has only ASCII letters, digits, `.`
+   and `-`, with no empty label, so a host with a letter of another
+   script that looks like an ASCII letter cannot be a pattern. A `*` can
+   be the whole last path part, and matches one part
+   (`source.URLPattern`). A URL to match with a `%`, with such a host, or
+   with a path part that is empty, `.` or `..`, matches no pattern, so an
+   encoded `/` or `.` cannot pass a pattern. One `/` at the end of a URL
+   does not count: `https://h/a/b/` is `https://h/a/b`. The server
+   refuses `//` at the end. A policy has at most 64 patterns in each
    list. A change of the policy needs `namespace:manage-runners`, and makes
    a new snapshot key.
 
    The server applies the policy with these rules:
    - A relative URL in `.gitmodules`, which starts with `./` or `../`,
      resolves against the URL of the superproject before the match, as
-     git resolves it (`source.ResolveURL`). The server refuses a relative
-     URL that leaves the host of the superproject.
+     git resolves it (`source.ResolveURL`). One `/` at the end of the URL
+     of the superproject or of the submodule does not count, and the
+     result has no `/` at its end. The server refuses a relative URL that
+     leaves the host of the superproject, and a URL with an empty path
+     part.
    - When the server gets a submodule or a Git LFS object, it follows no
      redirect to another host.
    - The server sends the credentials of the forge connection only to the
@@ -116,7 +124,8 @@ the verb "get" for the work of the source fetcher.
      submodule of another host with no credentials.
    - The server gets Git LFS objects only from the standard Git LFS
      endpoint of the repository on the forge, `<repository>.git/info/lfs`
-     (`source.LFSEndpoint`). It never reads `lfs.url` from a `.lfsconfig`
+     (`source.LFSEndpoint`), with one `/` at the end of the repository URL
+     taken off first. It never reads `lfs.url` from a `.lfsconfig`
      file of the commit.
 7. **Git credentials of a step (owner).** A tool that runs git during a
    step, for example to get an OpenTofu module from a git URL, gets the

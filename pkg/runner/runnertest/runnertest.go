@@ -80,17 +80,21 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a join token registers one runner", testJoinTokenSingleUse},
 		{"an expired or revoked join token registers nothing", testJoinTokenExpiredRevoked},
 		{"the pool decides the isolation of a runner", testJoinIsolation},
-		{"a join again with one name keeps the runner ID", testRejoinKeepsID},
+		{"a join again with one name keeps the runner ID and clears the previous key", testRejoinKeepsID},
 		{"a join again needs an offline runner and ends its claims", testRejoinNeedsOffline},
+		{"a join again keeps the sessions of launchers", testRejoinKeepsSessions},
 		{"a key older than 30 days must join again", testKeyExpired},
 		{"a retired runner authenticates nothing", testRetired},
 		{"a retire ends the sessions of the runner", testRetireEndsSessions},
 		{"a key rotation replaces the key, and a retry changes nothing", testRotateKey},
+		{"the previous key only repeats the last rotation", testRotateWithPreviousKey},
 		{"a handoff token opens one session for a live claim", testHandoffTokenSingleUse},
 		{"a handoff token needs a live claim of the pool", testHandoffTokenClaim},
 		{"a handoff token is only for a claim of its own runner", testHandoffTokenOwner},
 		{"a new handoff token replaces the old one until a session opens", testHandoffTokenReplace},
-		{"a nonce is good for one proof until its expiry", testNonce},
+		{"a nonce is good for one proof up to and at its expiry", testNonce},
+		{"a runner renews a claim until the session wait limit", testRunnerRenew},
+		{"a session opens up to the session wait limit", testSessionNearWaitLimit},
 		{"a session of a claim that a takeover replaced is lost", testSessionAfterTakeover},
 		{"each change appends its audit entry", testAuditEntries},
 	}
@@ -182,42 +186,40 @@ func joinTokenAt(t *testing.T, f fixture, at time.Time, ttl time.Duration) strin
 func join(t *testing.T, f fixture, secret, name string, at time.Time) (runner.Runner, error) {
 	t.Helper()
 
-	return joinWith(t, f, secret, joinRequest(t, secret, name), at)
+	j, err := joinWith(t, f, secret, joinRequest(t, secret, name), at)
+
+	return j.Runner, err
 }
 
 // joinWith registers the runner of req, at at, as the protocol adapter
-// does: it checks the request, reads the runner of the same name, and
-// gives the store the hash of the secret.
-func joinWith(t *testing.T, f fixture, secret string, req runner.JoinRequest, at time.Time) (runner.Runner, error) {
+// does: it checks the request, gives the store the hash of the secret and
+// no secret, and appends the audit entry of the event that the result
+// names.
+func joinWith(t *testing.T, f fixture, secret string, req runner.JoinRequest, at time.Time) (runner.Joined, error) {
 	t.Helper()
 
 	if err := req.Validate(); err != nil {
 		t.Fatalf("JoinRequest.Validate: %v", err)
 	}
 
-	runners, err := f.h.Members.Runners(t.Context(), f.pool.ID)
-	if err != nil {
-		t.Fatalf("Runners: %v", err)
+	req.Token = ""
+
+	var seen []runner.Joined
+
+	got, err := f.h.Members.Join(t.Context(), runner.Joining{TokenSHA256: hash(secret), Request: req, At: at},
+		f.fence, func(j *runner.Joined) []audit.Entry {
+			seen = append(seen, *j)
+			e := entries(f.fence)
+			e[0].Action = string(runner.ActionRunnerJoin)
+
+			return e
+		})
+
+	if err == nil && (len(seen) != 1 || seen[0].Runner.ID != got.Runner.ID || seen[0].Rejoined != got.Rejoined) {
+		t.Fatalf("Join called its audit function with %+v, want once with the result %+v", seen, got)
 	}
 
-	rejoin := ""
-
-	for i := range runners {
-		if runners[i].Name == req.Name {
-			rejoin = runners[i].ID
-		}
-	}
-
-	return joinExpecting(t, f, runner.Joining{TokenSHA256: hash(secret), Request: req, At: at, Rejoin: rejoin})
-}
-
-// joinExpecting registers the runner of j, with no secret in the request.
-func joinExpecting(t *testing.T, f fixture, j runner.Joining) (runner.Runner, error) {
-	t.Helper()
-
-	j.Request.Token = ""
-
-	return f.h.Members.Join(t.Context(), j, f.fence, entries(f.fence))
+	return got, err
 }
 
 // joinRequest returns a join request of a Kubernetes runner with a new key.
@@ -267,6 +269,28 @@ func hash(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 
 	return hex.EncodeToString(sum[:])
+}
+
+// handoffToken returns a new handoff token of runnerID for the claim c,
+// issued at at, and its secret.
+func handoffToken(t *testing.T, c durable.Claim, runnerID string, at time.Time) (runner.HandoffToken, string) {
+	t.Helper()
+
+	secret := runner.HandoffTokenPrefix + randomHex(t)
+
+	return runner.HandoffToken{
+		SHA256: hash(secret), Operation: string(c.Operation), Token: c.Token, Runner: runnerID, IssuedAt: at,
+		ExpiresAt: at.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+	}, secret
+}
+
+// rotate rotates the runner id to next, with a proof of signer.
+func rotate(t *testing.T, f fixture, id string, signer, next runner.Key) (runner.Runner, error) {
+	t.Helper()
+
+	r := runner.Rotation{Runner: id, Signer: signer.ID(), Next: next}
+
+	return f.h.Members.RotateKey(t.Context(), r, f.fence, entries(f.fence))
 }
 
 // durableClaim returns the durable claim of the session s of the runner r.

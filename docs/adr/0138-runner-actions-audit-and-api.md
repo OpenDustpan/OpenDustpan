@@ -55,9 +55,12 @@ ADR.
    | `handoff-refused` | the runner or the session | `runner:claim` | `change`, outcome `denied` |
 
    The object is the pool, or the unit of the job for
-   `credentials-issued`. The entry `runner-rejoined` names the runner, the
+   `credentials-issued`. The store of runners decides whether a join is a
+   join again, in the transaction of the join, and the server picks
+   `runner-joined` or `runner-rejoined` from that result
+   (`runner.JoinEvent`). The entry `runner-rejoined` names the runner, the
    ID of the old key and of the new key, and the claims that the join
-   again ended. An entry holds IDs, names, releases, key IDs,
+   again ended: the claims with no job session. An entry holds IDs, names, releases, key IDs,
    isolation kinds and the changed fields. It never holds a token, a
    private key, a credential value or the content of a credential file.
    The change of a pool records the old and the new isolation list and
