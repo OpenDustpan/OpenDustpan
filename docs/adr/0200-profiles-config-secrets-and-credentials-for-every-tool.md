@@ -1,6 +1,6 @@
 # 200. Profiles: config, secrets and credentials for every tool
 
-Status: accepted · 2026-10-18 · ADRs 201 to 209 give the parts · accepts parts of RFC 5
+Status: accepted · 2026-10-18 · ADRs 201 to 209 give the parts · accepts parts of RFC 5. ADR 210 decision 6 amends decision 9: the replay record holds a keyed hash (HMAC-SHA-256), not a plain SHA-256.
 
 ## Context
 

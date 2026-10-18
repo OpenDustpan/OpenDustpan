@@ -1,6 +1,6 @@
 # 135. The source pipeline: snapshots of git packs
 
-Status: accepted · 2026-10-18 · supersedes the "Source" item of RFC 6 · adds to ADR 100 decision 5 · ADR 199 adds file sets
+Status: accepted · 2026-10-18 · supersedes the "Source" item of RFC 6 · adds to ADR 100 decision 5 · ADR 199 adds file sets. Decision 6 extended by ADR 213 decision 2
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 25. OpenTofu through the TFE-compatible API
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11. Extended by ADR 213 decision 10
 
 ## Context
 
