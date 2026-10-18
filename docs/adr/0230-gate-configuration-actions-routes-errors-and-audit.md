@@ -30,6 +30,7 @@ gate.
    | `namespace:break-gate-error` | namespace | the break-glass for gates in error of a change in the namespace, except a final gate of the installation |
    | `namespace:read-gates` | namespace | read them, and read the decision records |
    | `namespace:simulate-gates` | namespace | the simulate route |
+   | `unit:edit-labels` | unit | change the labels of the unit, with no state write (ADR 223 decision 11) |
 
    `namespace:manage-gates` replaces `namespace:manage-policy`. It is in no
    built-in role except the namespace administrator. The two break-glass
@@ -72,6 +73,7 @@ gate.
    | `PUT`, `DELETE .../gates/{id}`, and the same for `.../access-limits/{id}`, `.../approval-rules/{id}`, `.../ownership-rules/{id}` and `.../path-sets/{id}` | `installation:manage-gates` |
    | `GET`, `PUT .../signature-carry-over` | `installation:read-gates`, `installation:manage-gates` |
    | `POST .../gates/check` | `installation:read-gates` |
+   | `GET .../decision-records/{id}`, for a record of an access limit on an installation object | `installation:read-gates` |
 
    A list route gives the objects stored at that scope, not the objects of
    wider scopes. A `PUT` names no scope in its body, and refuses an unknown

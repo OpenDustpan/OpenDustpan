@@ -269,7 +269,7 @@ unit took 98 µs on 4 CPUs of an Intel Xeon at 2.1 GHz, with no cache.
     no state and meets no gate. A create of a unit with no state, a change
     of the override switches and a label change write no state. So
     `PATCH .../tags` of the Pulumi Cloud-compatible API meets no
-    `state.write` (ADR 223 decision 10). The route test lists these routes
+    `state.write` (ADR 223 decision 11). The route test lists these routes
     as routes that write no state.
 
     A write with the job token of a phase that passed `change.apply`, to a

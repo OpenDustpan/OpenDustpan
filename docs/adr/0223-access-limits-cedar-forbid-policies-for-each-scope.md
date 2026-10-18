@@ -79,7 +79,12 @@ the limit set. A `permit` in a limit set was refused at save.
     label that an access limit or a gate reads. The label-edit action is
     `unit:edit-labels`. Each route that changes labels needs it, also
     `PATCH .../tags` of the Pulumi Cloud-compatible API, which needs
-    `unit:write` today. Each built-in role that holds `unit:write` also
+    `unit:write` today. A create of a unit sets its first labels with the action
+    of the create (`unit:manage` at `POST /api/stacks/{namespace}/{project}`)
+    and needs no `unit:edit-labels`, because the Pulumi CLI sends tags at each
+    create. So a limit on `unit:edit-labels` does not hold for the labels of a
+    create, and a rule that must hold for each new unit names `unit.collection`.
+    Each built-in role that holds `unit:write` also
     holds `unit:edit-labels`. A scope that wants to protect its labels
     saves an access limit that forbids the label-edit action for everyone
     except a named group:

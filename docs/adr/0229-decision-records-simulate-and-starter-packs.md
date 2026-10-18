@@ -56,7 +56,8 @@ limit and for an error, and read it through one route.
    record ID. A record of a refusal is written in its own transaction. A
    record of `state.write` or of an access limit lives for the audit
    retention (ADR 68). A record of an access limit on an installation
-   object is installation data, and `installation:manage-gates` reads it.
+   object is installation data, and `installation:read-gates` reads it (ADR 230
+   decision 3).
 6. **The simulate route (owner).** `POST .../namespaces/{namespace}/gates/simulate`
    takes draft gates, draft approval rules and a filter of stored records:
    a decision point, a time range and at most 1,000 records. It replays
