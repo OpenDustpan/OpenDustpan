@@ -16,13 +16,17 @@ import (
 // the holder attribute of the state version. Opaque is true when the client
 // encrypted the state, so the document holds no resource. NextCursor is the
 // cursor of the next page of resources, or "" on the last page. Incomplete
-// is true when the server cut the list short of paging.
+// is true when the server cut the list short of paging. NameAtTime is the
+// name of the workspace at the time, and CurrentName is its name now. Each
+// is omitted when the inventory change log does not know it.
 type stateAtMeta struct {
 	FinalizedAt int64  `json:"finalized-at"` //nolint:tagliatelle // The wire name of this API.
 	RequestedBy string `json:"requested-by"` //nolint:tagliatelle // The wire name of this API.
 	NextCursor  string `json:"next-cursor"`  //nolint:tagliatelle // The wire name of this API.
 	Opaque      bool   `json:"opaque"`
 	Incomplete  bool   `json:"incomplete"`
+	NameAtTime  string `json:"name-at-time,omitempty"` //nolint:tagliatelle // The wire name of this API.
+	CurrentName string `json:"current-name,omitempty"` //nolint:tagliatelle // The wire name of this API.
 }
 
 // stateAtDocument is the response of the state-at route: the state version
@@ -122,6 +126,8 @@ func (h *Handler) readStateAt(
 			NextCursor:  read.Page.NextCursor,
 			Opaque:      read.Opaque,
 			Incomplete:  read.Page.Incomplete,
+			NameAtTime:  read.Names.AtTime,
+			CurrentName: read.Names.Current,
 		},
 	})
 }

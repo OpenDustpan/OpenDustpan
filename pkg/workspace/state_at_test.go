@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -146,5 +148,117 @@ func TestReadStateAtClientEncrypted(t *testing.T) {
 	if !got.Opaque || got.Version.ID != cur.ID || got.State != answer ||
 		len(got.Page.Resources) != 0 || got.Page.NextCursor != "" {
 		t.Fatalf("state at = %+v, want the opaque version %s with no resource", got, cur.ID)
+	}
+}
+
+// namedStates is stateAtStates plus an inventory.HistoryReader that gives
+// fixed names. Every read of the log fails with err when it is set.
+type namedStates struct {
+	stateAtStates
+
+	names inventory.Names
+	err   error
+}
+
+func (s namedStates) ListChanges(
+	context.Context, namespace.Name, time.Time, *inventory.ChangeCursor, int,
+) ([]inventory.Change, error) {
+	return []inventory.Change{}, s.err
+}
+
+func (s namedStates) UnitsAt(context.Context, namespace.Name, time.Time) ([]inventory.Entry, error) {
+	return []inventory.Entry{}, s.err
+}
+
+func (s namedStates) ViewAt(context.Context, namespace.Name, time.Time) (inventory.UnitsView, error) {
+	return inventory.UnitsView{Units: []inventory.UnitAt{}, Purged: 0}, s.err
+}
+
+func (s namedStates) UnitNames(
+	context.Context, namespace.Name, string, string, time.Time,
+) (inventory.Names, error) {
+	return s.names, s.err
+}
+
+// errNamesFailed is the failure of the change log in TestReadStateAtNames.
+var errNamesFailed = errors.New("change log failed")
+
+// namedFixture pushes a state to the fixture workspace and returns a service
+// over a state store that gives names, with the state version of the push as
+// the answer of the state-at read, and the finalize time of that version.
+func namedFixture(t *testing.T, names inventory.Names, logErr error) (*workspace.Service, workspace.ID, time.Time) {
+	t.Helper()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	const encrypted = `{"encrypted_data":"c2VjcmV0"}`
+
+	if err := f.push(t, newState("lin-1", 1, encrypted), encrypted); err != nil {
+		t.Fatalf("push state: %v", err)
+	}
+
+	cur, err := f.store.CurrentStateVersion(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current state version: %v", err)
+	}
+
+	answer := workspace.StateAt{FinalizedAt: cur.FinalizedAt, By: "alice", StateVersion: cur.ID}
+	states := namedStates{
+		stateAtStates: stateAtStates{memStore: f.store, err: nil, answer: answer},
+		names:         names,
+		err:           logErr,
+	}
+
+	svc, newErr := workspace.NewService(workspace.Config{
+		Workspaces: f.store, States: states, Blobs: f.blobs, Namespaces: f.namespaces, Sealer: f.secrets,
+		Logger: nil, Now: func() time.Time { return *f.now }, MaxStateBytes: 64, MaxPendingVersions: 0,
+		Retention: 0,
+	})
+	if newErr != nil {
+		t.Fatalf("service: %v", newErr)
+	}
+
+	return svc, f.ws.ID, cur.FinalizedAt
+}
+
+// TestReadStateAtNames proves that a state store that keeps the inventory
+// change log gives the names of the workspace at the time and now, and that a
+// failure of the log fails the read.
+func TestReadStateAtNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		err   error
+		name  string
+		names inventory.Names
+	}{
+		{name: "a renamed workspace", names: inventory.Names{AtTime: "network", Current: "network-2"}, err: nil},
+		{name: "a failure of the log", names: inventory.Names{AtTime: "", Current: ""}, err: errNamesFailed},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, id, finalized := namedFixture(t, tc.names, tc.err)
+
+			got, err := svc.ReadStateAt(t.Context(), id, stateAtRequest(finalized))
+			if tc.err != nil {
+				if !errors.Is(err, tc.err) {
+					t.Fatalf("state at: err = %v, want %v", err, tc.err)
+				}
+
+				return
+			}
+
+			if err != nil || got.Names != tc.names {
+				t.Fatalf("state at names = %+v, %v, want %+v", got.Names, err, tc.names)
+			}
+		})
 	}
 }

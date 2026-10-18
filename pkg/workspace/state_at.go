@@ -5,16 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/inventory"
 )
+
+// InventoryTool is the tool code of OpenTofu in the inventory and its change
+// log.
+const InventoryTool = "opentofu"
 
 // StateAtRead is the masked state of a workspace at a time. State names the
 // state version and its actor, and Version is that state version. Opaque is true when the client encrypted the
 // state: the server could not read it, so Page is empty. Page holds one page
-// of the masked resource list, as ReadResources returns it.
+// of the masked resource list, as ReadResources returns it. Names holds the
+// name of the workspace at the time and its name now, from the inventory
+// change log. A name is empty when the log does not know it, for example for
+// a workspace that the server created before it kept the log.
 type StateAtRead struct {
 	Page    StatePage
 	Version StateVersion
 	State   StateAt
+	Names   inventory.Names
 	Opaque  bool
 }
 
@@ -72,7 +82,15 @@ func (s *Service) ReadStateAt(ctx context.Context, id ID, req StateAtRequest) (S
 		Page:    StatePage{Resources: nil, NextCursor: "", Incomplete: false},
 		Version: sv,
 		State:   found,
+		Names:   inventory.Names{AtTime: "", Current: ""},
 		Opaque:  false,
+	}
+
+	if s.names != nil {
+		out.Names, err = s.names.UnitNames(ctx, w.Ref.Namespace, InventoryTool, id.String(), req.At)
+		if err != nil {
+			return StateAtRead{}, fmt.Errorf("names of %s at %s: %w", w.Ref, req.At.UTC().Format(time.RFC3339), err)
+		}
 	}
 
 	out.Page, err = s.ReadResources(ctx, found.StateVersion, req.Cursor, req.Size, req.Filter)

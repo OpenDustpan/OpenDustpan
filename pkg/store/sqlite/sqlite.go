@@ -580,7 +580,12 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			return err
 		}
 
-		return publishStackInventory(ctx, q, st.Ref, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			st.Ref,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+		)
 	})
 }
 
@@ -657,7 +662,12 @@ func (s *Store) UpdateStackTags(
 			return err
 		}
 
-		return publishStackInventory(ctx, q, ref, id, codec.Millis(updatedAt))
+		return publishStackInventory(
+			ctx,
+			q,
+			ref,
+			unitWrite{unitID: id, atMs: codec.Millis(updatedAt), kind: inventory.ChangeChanged},
+		)
 	})
 }
 
@@ -741,7 +751,12 @@ func (s *Store) RenameStack(
 			return fmt.Errorf("read renamed stack: %w", err)
 		}
 
-		return publishStackInventory(ctx, q, newRef, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			newRef,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeRenamed},
+		)
 	})
 }
 
