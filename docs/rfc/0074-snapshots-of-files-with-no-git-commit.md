@@ -7,9 +7,9 @@ created: 2026-10-18
 
 # RFC 74. Snapshots of files that have no git commit
 
-Status: draft. The review of the Catalog design (pull request 831) found
-that ADR 110 and ADR 135 do not agree on the code of a runner job that has
-no git commit. ADR 110 lists this as an open question. This RFC holds the
+Status: draft. A review of the Catalog design against the source pipeline
+found that ADR 110 and ADR 135 do not agree on the code of a runner job
+that has no git commit. ADR 110 lists this as an open question. This RFC holds the
 options. It changes no accepted ADR.
 
 ## Problem
@@ -95,9 +95,9 @@ from the review.
    The renderer adapter of each tool makes a set of files. The snapshot
    does not know which tool reads them.
 8. **Fenced writes.** The server writes the record of a snapshot in a
-   transaction of the store that carries the `namespace.Fence` of the namespace. Blobs
-   that a write puts in the store before a failed commit go to the orphan
-   cleanup (ADR 151 decision 22).
+   transaction of the store that carries the `namespace.Fence` of the
+   namespace. Blobs that a write puts in the store before a failed commit
+   go to the orphan cleanup (ADR 151 decision 22).
 9. **Visible in history and blame (ADRs 150 to 153).** A person who reads
    the blame of a resource can follow it to the job and from the job to
    the exact files that ran. A person can compare the files of two
@@ -122,24 +122,19 @@ A new kind of snapshot, **file set**, next to the git pack of ADR 135. A
 file set has two blobs:
 
 - **The manifest.** One JSON document in the canonical form of RFC 8785,
-  as ADR 111 decision 6 uses for a request document. It lists each file
-  with its path, its mode (regular, executable or symbolic link), its
-  size, its SHA-256 and, for a link, its target. The paths are in the
-  order of their bytes. The manifest also names the producer (for example
-  `catalog.render`), the version of the producer, and the mounts: other
-  snapshots that the launcher writes at a path below the work directory,
-  each by its own digest. A module snapshot of ADR 110 change 3 is a
-  mount.
-- **The content.** One tar file in the POSIX format, with the files in the
-  order of the manifest. Each header has a time of 0, a user and a group
-  of 0, no user name and no group name. The launcher reads it with
-  `archive/tar` from the standard library.
+  as ADR 111 decision 6 uses for a request document. It lists each entry
+  with its path, its mode, its size, its SHA-256 and, for a link, its
+  target. It also names the producer (for example `catalog.render`), the
+  version of the producer, the SHA-256 of the tar file, and the mounts:
+  other snapshots that the launcher writes at a path below the work
+  directory. A module snapshot of ADR 110 change 3 is a mount.
+- **The content.** One tar file with the entries in the order of the
+  manifest. The launcher reads it with `archive/tar` from the standard
+  library.
 
-The digest of the snapshot is the SHA-256 of the manifest bytes. The
+The digest of the file set is the SHA-256 of the manifest bytes. The
 manifest holds the SHA-256 of the tar file, so the one digest pins both
-blobs. The launcher checks the digest of the manifest, the hash of the tar
-file, and then the hash and the size of each file as it reads it. It
-applies the path rules of ADR 135 decision 4 to each path and each link.
+blobs. The exact form and the order of the checks are in the proposal.
 
 - Cost: a second format in `pkg/source`, with its own checks and its own
   conformance tests. The console needs its own diff of two manifests
@@ -161,14 +156,23 @@ source snapshot of that commit with the path of ADR 135. The forge
 connection is a connection of a new kind, `opendustpan`, that names the
 repository on the server.
 
-- Cost: the server must write git objects and keep refs, which ADR 135
-  decision 2 avoids: today the server reads only the pack format. A
-  repository on the server needs storage, a garbage collection of objects,
-  a lock or a fence on each ref update, and a backup format of its own.
-  The object format of the repository (SHA-1 or SHA-256) becomes a
-  setting. A commit ID depends on the parent, so the same files after a
-  different parent give a different ID. The snapshot is then reproducible
-  only when the server always writes commits with no parent.
+ADR 135 decision 2 says that the `source.fetch` operation never writes a
+work tree. It does not forbid a git repository on the server. So option B
+does not contradict ADR 135, but it adds a kind of storage that ADR 135
+does not have.
+
+- Cost: the server must write git objects and keep refs. Today it only
+  reads the pack format. A repository on the server needs storage, a
+  garbage collection of objects, a lock or a fence on each ref update, and
+  a backup format of its own. The object format of the repository (SHA-1
+  or SHA-256) becomes a setting. A commit ID depends on the parent, so the
+  same files after a different parent give a different ID. The snapshot is
+  then reproducible only when the server always writes commits with no
+  parent. A commit message that names the revision also changes the ID:
+  the same files from two revisions give two commits. So the message must
+  be fixed too, and the link from the commit to the revision moves to SQL.
+  For a person to clone the repository, the server needs a git smart HTTP
+  route, with its own authorization and limits.
 - Gives: the launcher, the checks and `DUSTPAN_COMMIT` of ADR 135 stay as
   they are. A person can clone the repository and read the history and the
   diff of the rendered files with git. A blame row links to a commit, as
@@ -195,25 +199,41 @@ later.
   RFC 54 could use the same code. A team can copy an artifact with OCI
   tools when a registry route exists.
 
+**Variant C2: one layer for each file.** The ORAS convention stores each
+file as one layer, with its path in the annotation
+`org.opencontainers.image.title`, and the empty config
+(`application/vnd.oci.empty.v1+json`).
+
+- Cost: the paths are in annotations, which the OCI specification does
+  not restrict, so the path rules of this RFC apply on top. A symbolic
+  link and an executable mode have no standard field, so they need
+  annotations of our own, which other OCI tools ignore. A unit with 10,000
+  files gives a manifest with 10,000 layers, more than many registries
+  accept (Docker builds stop at 127 layers). Each file is a blob, so the
+  blob store holds many small objects.
+- Gives: the manifest lists each file by path and digest, so a diff of two
+  revisions reads the two manifests only, as in option A. ORAS can pull
+  the artifact when a registry route exists.
+
 ## Comparison
 
 | Constraint | A. File set | B. Synthetic commit | C. OCI artifact |
 | --- | --- | --- | --- |
-| 1. Addressed by content | Yes | Yes, with no parent only | Yes |
+| 1. Addressed by content | Yes | Yes, with no parent and a fixed message only | Yes |
 | 2. Pinned by a digest | `sha256:` of the manifest | Commit ID, SHA-1 or SHA-256 | `sha256:` of the manifest |
-| 3. Reproducible | Yes, by the format rules | Only with a fixed author, time and no parent | Yes, with a fixed config and fixed tar headers |
+| 3. Reproducible | Yes, by the format rules | Only with a fixed author, time, message and no parent | Yes, with a fixed config and fixed tar headers |
 | 4. Bounded | Limits on the manifest | Limits of ADR 135 | Limits on each layer |
-| 5. Sealed | Data key or item key | Data key or item key, and the repository on the server too | Data key or item key |
-| 6. Backup and retention | Manifest in SQL, blobs by a rule | A repository to back up | File list in SQL, blobs by a rule |
+| 5. Sealed | Data key or item key, manifest and tar | Data key or item key, and the repository on the server too | Data key or item key |
+| 6. Backup and retention | Manifest in SQL, tar by a rule | A repository to back up | File list in SQL (C) or manifest (C2), blobs by a rule |
 | 7. Tool-neutral | Yes | Yes | Yes |
 | 8. Fenced writes | One record | A record and a ref update | One record |
-| 9. History and blame | Diff by manifest in the server | Diff with git | Needs a file list of its own |
-| New code in the server | A manifest and a tar writer | A git object writer, refs, garbage collection | An OCI writer and a file list |
+| 9. History and blame | Diff by manifest in the server | Diff with git | Needs a file list of its own (C), manifest diff (C2) |
+| New code in the server | A manifest and a tar writer | A git object writer, refs, garbage collection, a smart HTTP route | An OCI writer and a file list |
 | New code in the launcher | A manifest and tar check | None | An OCI manifest and layer check |
 
 ## Proposal
 
-Take option A, the file set.
+We propose option A, the file set.
 
 - It meets every constraint with the standard library and no new storage
   kind on the server.
@@ -225,42 +245,232 @@ Take option A, the file set.
 - Its digest has the form of an OCI digest, so a later decision can serve
   the same manifest and tar file as an OCI artifact (option C) without a
   new format.
-- Option B gives git tools to the team, but it makes the server a git
-  host, which ADR 135 decided against.
+- Option B gives git tools to the team. It does not contradict ADR 135,
+  but it adds a git repository, refs, garbage collection and a smart HTTP
+  route to the server, and its commit IDs are reproducible only with a
+  fixed parent, author, time and message.
 
-The proposal for each constraint:
+The proposal for each constraint follows.
 
-1. **The key.** The key of a file set is its namespace and its digest. Two
-   jobs that render the same bytes in one namespace share one file set.
-2. **The job spec.** `job.Location` of the kind `catalog` names the digest
-   (ADR 110 change 3). The launcher gets the digest from its job session
-   and puts it in `DUSTPAN_SNAPSHOT`. `DUSTPAN_COMMIT` stays empty.
-3. **Reproducible bytes.** `pkg/source` writes the manifest and the tar
-   file. A renderer adapter gives only paths, modes and bytes. A test
-   writes the same file set twice and compares the digests.
-4. **Limits.** A file set has at most 64 MiB of content and 10,000 files,
-   and a manifest at most 4 MiB. A rendered root module is a few KiB, so
-   these limits leave room for an upload of RFC 72. The limits of ADR 135
-   decision 8 still apply to the whole checkout, mounts included.
-5. **Sealing.** The server seals the tar file with the data key of the
-   namespace, as ADR 135 decision 10 does. A producer that can put a
-   secret in a file set (none today) seals it with an item key of its
-   own, so a redaction can shred it.
-6. **Backup and retention.** The record of a file set, with its manifest,
-   is in SQL and so in the backup. The tar file stays in the blob store as
-   long as the job log of the job that ran it (ADR 152 decision 3), and is
-   in the backup for that time. The end of that period deletes the tar file
-   and keeps the manifest. The purge of the unit deletes both. A job after
-   a restore that needs a deleted tar file renders again, and the server
-   compares the new digest with the old one.
-7. **Code.** The format, the checks and a conformance suite
-   (`sourcetest`) live in `pkg/source`, with no import of `catalog`.
-8. **Writes.** The start transaction of the job writes the record of the
-   file set with the fence, after the server wrote the blobs. A blob with
-   no record goes to the orphan cleanup.
-9. **History.** A history item already records its job (ADR 150 decision
-   3). The job names the digest. The console shows the manifest, each file
-   and the diff of two manifests, under `unit:read`.
+### 1. The key
+
+We propose the key namespace, unit and digest. The unit is the tool, the
+namespace and the name of the unit (ADR 13). Two jobs of one unit that
+render the same bytes share one file set. Two units never share a file
+set, also when their digests are equal. So a purge, a redaction and the
+end of a retention period act on the file sets of one unit only, and
+never on the files of another unit.
+
+Rejected alternative: the key namespace and digest, with a reference
+count of the units that use each file set. It stores equal content once.
+But a purge or a redaction of one unit must then count the other units,
+and must keep the blobs while one other unit uses them. Rendered root
+modules are a few KiB, so the storage that a shared key saves is small.
+
+### 2. The job spec
+
+`job.Location` of the kind `catalog` names the digest (ADR 110 change 3).
+The launcher gets the digest from its job session and puts it in
+`DUSTPAN_SNAPSHOT`. `DUSTPAN_COMMIT` stays empty (see the open questions).
+
+### 3. The exact canonical form
+
+`pkg/source` writes the manifest and the tar file. A renderer adapter
+gives only paths, modes, link targets and bytes. The writer refuses an
+input that breaks a rule below. The launcher refuses a file set that
+breaks a rule below. A test writes the same file set twice and compares
+the digests.
+
+**Paths.**
+
+- The separator is `/`. A path has no leading `/` and no trailing `/`.
+- No part of a path is empty, `.` or `..`.
+- A path is valid UTF-8 in Unicode Normalization Form C (NFC). A path that
+  is not in NFC is an error. The writer does not normalize it.
+- Two paths that are equal after NFC or after Unicode case folding are an
+  error, because a file system that folds case or normalizes names writes
+  them to one file.
+- A duplicate path is an error.
+
+**Directories.** The manifest and the tar file have no directory entries.
+A directory exists only as a parent of a file or a link, so a file set has
+no empty directory. The launcher makes each parent directory with mode
+`0755`.
+
+**Symbolic links.**
+
+- A target is relative. An absolute target is an error.
+- A target is in normal form: no empty part, no `.` part, and `..` only
+  at the start.
+- The target, resolved from the directory of the link, is a regular file
+  or a directory inside the file set. A target that leaves the file set or
+  names nothing in it is an error.
+- A target is never a link, and no part of the resolved path is a link.
+  So no chain goes through a link.
+- No path of the file set is below the path of a link. For example, the
+  link `m` and the file `m/x` are an error.
+
+**Tar.**
+
+- The format is PAX (POSIX.1-2001). Each header has a time of 0, a user
+  and a group of 0, no user name and no group name. A PAX extended header
+  holds only the records `path` and `linkpath`, and only when a value
+  does not fit the USTAR fields.
+- The entry types are regular file and symbolic link only. A hard link, a
+  directory, a character device, a block device, a FIFO, a sparse file and
+  every other type are errors.
+- The writer sets fixed mode bits: `0644` for a regular file, `0755` for an
+  executable file, `0777` for a link.
+- The entries are in the order of the manifest. The tar file ends with
+  the two zero blocks of the format. A byte after them is an error.
+
+**Manifest values.**
+
+- A size is a JSON integer from 0 to 2^53 − 1, so that RFC 8785 writes it
+  in one form.
+- Each hash is SHA-256 in lowercase hex, with no prefix. The digest of the
+  file set has the prefix `sha256:`.
+- A mode is one of the strings `file`, `executable` and `symlink`.
+- Entries are in the order of the bytes of their paths.
+- The hash of the tar file is the hash of its plaintext, before the server
+  seals it.
+
+**The canonicalizer.** `pkg/catalog/jcs.go` writes RFC 8785 today. We
+propose to move it to shared code that `pkg/catalog` and `pkg/source` both
+import, for example `internal/jcs`, so that `pkg/source` never imports
+`catalog`.
+
+### 4. Mounts
+
+A mount names its snapshot by a reproducible key, never by the hash of a
+pack: the forge connection, the repository, the commit and the hash of the
+source policy, as ADR 135 decision 1 keys a source snapshot. The manifest
+holds this key and the path of the mount. So the digest of the file set
+covers the key of each mount, not the bytes of the pack. When the forge
+gives a different pack for the same commit, the digest does not change.
+
+The start transaction of the job writes in this order:
+
+1. The renderer makes the file set in memory and the server checks the
+   limits.
+2. The server writes the manifest and the tar file to the blob store.
+3. The transaction writes the record of the file set, with the fence.
+4. The transaction starts one `source.fetch` operation for each mount
+   that has no snapshot yet (ADR 135 decision 2).
+
+The `source.fetch` operation never changes the digest of the file set, because the manifest
+holds only the key of the mount. A blob with no record, after a failed
+commit, goes to the orphan cleanup.
+
+### 5. The checks of the launcher
+
+The launcher never writes to the work directory before it checks the
+hash of the tar file:
+
+1. It checks the SHA-256 of the manifest against the digest of the job
+   spec, and checks the manifest against the rules of section 3 and the
+   limits of section 6.
+2. It reads the tar file into a private staging area, with mode `0700`,
+   outside the work directory. It stops at the size that the manifest
+   gives, and at the limit. It checks the SHA-256 of the tar file against
+   the manifest.
+3. It unpacks the tar file into a staging directory. For each entry, it
+   checks the path, the type, the mode and the order against the
+   manifest, and the hash and the size of the content as it reads it.
+4. It moves the tree into the work directory only when all checks pass.
+   On any error, it deletes the staging area and the job fails before its
+   first step.
+
+The unpack follows the rules of ADR 139 decision 2 (proposed): it writes
+through an `os.Root` on the staging directory, it creates each regular
+file with `O_CREATE|O_EXCL|O_NOFOLLOW`, and it writes each link with
+`Root.Symlink` after the checks of section 3. The launcher then writes the
+mounts at their paths.
+
+### 6. Limits
+
+We propose limits for each pool, as ADR 139 decision 7 (proposed) gives
+for images. Each pool can change each limit. An entry is one regular file
+or one symbolic link of the manifest. Directories are not entries.
+
+| Limit | Checked | Default |
+| --- | --- | --- |
+| Size of the manifest | before the server writes it, and before the launcher reads the tar file | 4 MiB (4,194,304 bytes) |
+| Entries | the same | 10,000 |
+| Total content bytes (the sum of the sizes) | the same, and while the launcher unpacks | 64 MiB (67,108,864 bytes) |
+| Size of one file | the same | 16 MiB (16,777,216 bytes) |
+
+A rendered root module is a few KiB, so these limits leave room for an
+upload of RFC 72. The limits of ADR 135 decision 8 still apply to the
+whole checkout, mounts included. The server applies the limits of the
+pool of the job before it writes a blob.
+
+A file set that passes a limit fails the job before its first step. The
+error names the digest, the limit, its value and the pool setting that
+changes it, for example: `File set sha256:65801d79252f... has more than
+10,000 entries. Set a larger fileSet.maxEntries on the pool, or render
+fewer files.` The setting name is a placeholder.
+
+### 7. Sealing
+
+The server seals the tar file with the data key of the namespace, as ADR
+135 decision 10 does. A producer that can put a secret in a file set (none
+today) seals it with an item key of its own, so that a redaction can shred
+it.
+
+The digest is the hash of the plaintext manifest. This has a cost: the
+manifest names each path and the hash of each file, so a person who sees
+a digest or the manifest can test a guess of the content of a small file.
+A hash of the sealed bytes would hide this, but the digest would then
+change with each seal and would not be reproducible (constraint 3). We
+propose to keep the plaintext digest and to seal the manifest in SQL with
+the same key as the tar file. A reader then needs the key to see the
+paths and the hashes, and the job spec shows only the digest.
+
+### 8. Backup and retention
+
+- The record of a file set, with its sealed manifest, is in SQL and so in
+  the backup.
+- We propose that a file set becomes a history item of a new kind,
+  `file-set`, with the digest as its item ID (ADR 150 decision 1). This
+  needs an amendment of ADR 150 decision 1, which lists the kinds
+  `state`, `plan` and `job-log`.
+- The tar file stays in the blob store, and in the backup, until the
+  latest expiry time of the first version of the job log of each job of
+  the unit that names the file set (ADR 152 decisions 3 and 4). The rule
+  uses the first version because a substitution writes a new version with a new
+  expiry time, and a substitution must not extend the life of the files.
+- The end of that period is a redaction of the `file-set` item, on the
+  path of ADR 152 decision 5: the actor `@server`, the cause `retention`,
+  and an audit entry with the action `unit:redact`. The redaction deletes
+  the tar file and keeps the manifest.
+- The purge of the unit deletes the manifest and the tar file.
+- A job after a restore that needs a deleted tar file renders again. When
+  the new digest is equal, the server writes the tar file again. When it
+  is different, the job fails with `source.ErrFileSetDigestMismatch`,
+  which names the old digest and the new digest. The server never
+  replaces a file set in silence.
+
+### 9. Code
+
+The format, the checks and a conformance suite (`sourcetest`) live in
+`pkg/source`, with no import of `catalog`. The canonicalizer moves to
+shared code (section 3).
+
+### 10. History and the API
+
+A history item already records its job (ADR 150 decision 3). The job
+names the digest. We propose two routes in the job API, for example:
+
+| Operation | Route | Action | Object |
+| --- | --- | --- | --- |
+| Read the manifest of the file set of a job | `GET /api/jobs/{job}/files` | `job:read-files` | unit |
+| Read the content of one file | `GET /api/jobs/{job}/files/{path}` | `job:read-files` | unit |
+
+`job:read-files` is a new action, like `job:read-logs` (ADR 152 decision
+10). The console shows the manifest, each file and the diff of two
+manifests through these routes only (ADR 17). A redacted tar file answers
+410 for the content of a file, and the manifest stays readable.
 
 ## Open questions
 
@@ -268,6 +478,8 @@ The proposal for each constraint:
   only, and ADR 110 says "rendered snapshot". Is a file set a kind of
   source snapshot, or a term of its own? The glossary changes when an ADR
   decides this.
+- **The action.** Is `job:read-files` a new action, or does
+  `job:read-logs` cover the files too? Which built-in roles get it?
 - **One file from a forge.** Does a render from git store the
   `request.json` that it read as a file set, so that the revision can show
   the bytes after the commit leaves the forge? Or is the commit in the
@@ -278,8 +490,13 @@ The proposal for each constraint:
 - **A minimal `.git` directory.** ADR 135 asks if the launcher writes a
   `.git` directory with `HEAD` for tools that read git metadata. Does the
   same answer apply to a file set, which has no commit?
+- **A git-compatible ID in `DUSTPAN_COMMIT`.** Does the launcher put a
+  git tree or commit ID of the file set in `DUSTPAN_COMMIT`, so that tools
+  that read the variable get a value? Or does the variable stay empty?
 - **Mount paths.** Which path below the work directory does a module
-  snapshot get, and can two mounts share a path prefix?
+  snapshot get, and can two mounts share a path prefix? Can a mount path
+  be equal to a file of the set, or be below it or above it? We propose
+  that each of these is an error, but the rule is not decided.
 - **Renderer upgrades.** A new renderer version can give new bytes for the
   same revision. Does a rerun of an old revision use the stored file set,
   or render again and show the diff before it runs?
