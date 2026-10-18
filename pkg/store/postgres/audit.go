@@ -124,6 +124,12 @@ func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db
 // of e that only the transaction knows, such as the object ID, before the
 // append. The transaction holds the
 // namespace row FOR UPDATE, as Append does, so the appends form one sequence.
+//
+// The checks run in this order: the entry, then its namespace against the
+// fence, then the fence in the transaction, then fn, then the append. An
+// invalid entry therefore answers audit.ErrInvalidEntry even when the fence is
+// stale, and an error of fn (for example an invalid object) never hides a
+// stale fence.
 func (s *Store) inFencedAuditedTx(
 	ctx context.Context, fence namespace.Fence, e *audit.Entry, fn func(q *db.Queries) error,
 ) error {

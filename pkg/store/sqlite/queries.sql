@@ -1393,6 +1393,13 @@ SELECT unit_id
 FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
+-- name: ContextUnitExists :one
+-- Whether the namespace holds the unit in its live inventory or in its deleted
+-- units. A context write checks it in its own transaction, so a purge that
+-- committed before the write refuses the write.
+SELECT CAST(EXISTS (SELECT 1 FROM inventory AS i WHERE i.namespace = ?1 AND i.tool = ?2 AND i.unit_id = ?3)
+    OR EXISTS (SELECT 1 FROM inventory_deleted AS d WHERE d.namespace = ?1 AND d.tool = ?2 AND d.unit_id = ?3) AS INTEGER) AS present;
+
 -- name: GetUnitCollection :one
 -- The collection of one unit by its ID, as written.
 SELECT c.name
@@ -1953,3 +1960,83 @@ RETURNING count;
 -- name: PruneSignInFailures :execrows
 -- Deletes every window that ended at or before threshold_ms.
 DELETE FROM sign_in_failures WHERE window_end_ms <= ?;
+
+-- name: GetNamespaceID :one
+-- The stable ID of the namespace that has the name now.
+SELECT id
+FROM namespaces
+WHERE name = ?;
+
+-- name: GetCollectionNameByID :one
+SELECT name
+FROM collections
+WHERE namespace = ? AND id = ?;
+
+-- name: ListObjectContext :many
+-- The entries of one object, both sources, API first. The caller checks the
+-- fence of the namespace in the same transaction for a write.
+SELECT tool, source, fields, warning, item_id, item_seq, updated_at_ms, updated_by
+FROM object_context
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ?
+ORDER BY source;
+
+-- name: UpsertObjectContext :exec
+-- Writes one entry. The deleted mark of a resource and its order stay as
+-- they are on a conflict.
+INSERT INTO object_context (
+    namespace_id, object_kind, object_id, tool, resource_key, source, fields, warning,
+    item_id, item_seq, resource_deleted_at_ms, marks_seq, updated_at_ms, updated_by
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+ON CONFLICT (namespace_id, object_kind, object_id, resource_key, source) DO UPDATE
+SET tool = excluded.tool,
+    fields = excluded.fields,
+    warning = excluded.warning,
+    item_id = excluded.item_id,
+    item_seq = excluded.item_seq,
+    updated_at_ms = excluded.updated_at_ms,
+    updated_by = excluded.updated_by;
+
+-- name: DeleteObjectContext :execrows
+-- Deletes one entry. The owner rows of the entry go with it.
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ? AND source = ?;
+
+-- name: DeleteObjectOwners :exec
+DELETE FROM object_context_owners
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ? AND source = ?;
+
+-- name: InsertObjectOwner :exec
+INSERT INTO object_context_owners (namespace_id, owner, object_kind, object_id, resource_key, source)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetUnitOutputSeq :one
+-- The order of the state item that the output entries of a unit come from.
+SELECT item_seq
+FROM object_context
+WHERE namespace_id = ? AND object_kind = 'unit' AND object_id = ? AND resource_key = '' AND source = 'output';
+
+-- name: DeleteUnitOutputContext :exec
+-- Deletes the output entries of a unit and of its resources.
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind IN ('unit', 'resource') AND object_id = ? AND source = 'output';
+
+-- name: DeleteUnitContext :exec
+-- Deletes the entries of a unit and of its resources, both sources.
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind IN ('unit', 'resource') AND object_id = ?;
+
+-- name: PageObjectContextByOwner :many
+-- One page of the entries that name an owner, read from the owner index and
+-- joined by the primary key of the entries.
+SELECT c.object_kind, c.object_id, c.tool, c.resource_key, c.source, c.fields, c.warning, c.item_id,
+       c.item_seq, c.updated_at_ms, c.updated_by
+FROM object_context_owners o
+JOIN object_context c
+    ON c.namespace_id = o.namespace_id AND c.object_kind = o.object_kind AND c.object_id = o.object_id
+   AND c.resource_key = o.resource_key AND c.source = o.source
+WHERE o.namespace_id = sqlc.arg(namespace_id) AND o.owner = sqlc.arg(owner)
+  AND (o.object_kind, o.object_id, o.resource_key, o.source) > (sqlc.arg(after_kind), sqlc.arg(after_id), sqlc.arg(after_key), sqlc.arg(after_source))
+ORDER BY o.object_kind, o.object_id, o.resource_key, o.source
+LIMIT sqlc.arg(page_limit);
