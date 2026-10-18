@@ -810,8 +810,20 @@ _Avoid_: Suppression, filter, allowlist
 
 ### Operations
 
+**Incident**:
+An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.
+_Avoid_: Ticket, outage, alert
+
+**Classification**:
+The record of a person that says whether an incident is major, with the criteria that the person found met (ADR 147 decision 5). Classifications are append-only. The last one is the current classification. The server never classifies an incident.
+_Avoid_: Triage, severity (a severity is a different field)
+
+**Commander**:
+The person who leads the response to an incident (ADR 147 decision 1).
+_Avoid_: Owner, lead
+
 **Cyber threat record**:
-A record of a cyber threat in a namespace, with an ID that has the prefix `thr-` (ADR 148 decision 13). It has a title, a description, the time of detection, links to units and notes. A person records whether the threat is significant, with a reason, and each voluntary notice of the threat to an authority. The server never decides that a threat is significant, and never sends a notice. A cyber threat record is not an incident: no service was affected.
+A record of a cyber threat in a namespace, with an ID that has the prefix `thr-` (ADR 148 decision 13). It has a title, a description, the time of detection, links to units and notes. A person records whether the threat is significant, with a reason, and each voluntary notice of the threat to an authority. The server never decides that a threat is significant, and never sends a notice. A person closes the record with a note on the outcome. A cyber threat record is not an incident: the threat did not affect a service.
 _Avoid_: Threat (alone), alert, vulnerability
 
 ## Flagged ambiguities

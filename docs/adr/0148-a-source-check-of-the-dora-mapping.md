@@ -61,17 +61,17 @@ support" for each interpretation. A user document keeps that hedge.
    | DORA Article 6(5) | a review of the ICT risk management framework, also after a major ICT-related incident | may support: the review after a major incident (decision 9) gives facts to that review. That review stays outside OpenDustpan |
    | DORA Article 8(1), 8(3), 8(4) | identify and document ICT assets and their links and dependencies, and assess the risk at each major change | may support: the resource index (ADR 163) and the unit graph (ADR 162) document assets and dependencies. The risk assessment field of a change (decision 2) links an assessment |
    | DORA Article 9(4)(c), 9(4)(d) | limit access to what a role needs, and use strong authentication | may support: groups, roles, grants and the access review (ADR 52), and MFA (ADR 46). Also the life cycle of access tokens (ADR 53) and workload identity (ADR 54) |
-   | DORA Article 9(4)(e) and RTS 2024/1774 Article 17(1)(a) to (h) (Article 38 for an entity under DORA Article 16) | documented ICT change management: record, test, assess, approve and implement each change, and check it after. Rules for emergency changes | supports: the job is the change record (ADR 147 decision 9). It gets the change fields (decision 2), the `verify` phase (decision 3) and independent approval (decision 4). Break-glass with its review is the emergency change (decision 5) |
+   | DORA Article 9(4)(e) and RTS 2024/1774 Article 17(1)(b) and (d) to (g) (Article 38 for an entity under DORA Article 16) | documented ICT change management: record, test, assess, approve and implement each change, and check it after. Rules for emergency changes | supports: the job is the change record (ADR 147 decision 9). It gets the change fields (decision 2), the `verify` phase (decision 3) and independent approval (decision 4). Break-glass with its review is the emergency change (decision 5) |
    | RTS 2024/1774 Article 12(2)(c)(iii), 12(2)(d) | log changes, and protect the logs against change and unauthorized access | may support: the audit log with the audit chain (ADR 64), on by default |
    | DORA Article 11(2)(b), 11(2)(c), 11(3), 11(8) and RTS 2024/1774 Article 26(1)(d) | response and recovery plans, and a record of what the entity did in an incident | may support: runbooks on each unit (ADR 143 decision 13) and the timeline of each incident (ADR 147 decision 4) |
    | DORA Article 11(10) | an estimate of the yearly costs and losses of major ICT-related incidents | may support: the cost entries of an incident (decision 15) and their yearly sum. The cost port (ADR 144) gives the actual cloud spend as information only |
    | DORA Article 12 | backup policies, restore procedures and tests of them | may support: backups and restore (ADR 30, ADR 38, ADR 42) and a record of each restore test (decision 16) |
-   | DORA Article 13(2) | a review after a major ICT-related incident that checks the response, the forensic analysis, the escalation and the communication | supports: the review after a major incident (decision 9) |
+   | DORA Article 13(2) | a review "after a major ICT-related incident disrupts their core activities" that checks the response, the forensic analysis, the escalation and the communication | supports: the review after a major incident (decision 9) |
    | DORA Article 17(1), 17(2) | a process to detect, manage and notify ICT-related incidents, a record of each incident and each significant cyber threat, and the root cause | supports: incident records (ADR 147 decision 1), the root cause at each close (decision 7) and cyber threat records (decision 13) |
-   | DORA Article 17(3)(b), 17(3)(c) and RTS 2024/1774 Article 23(1), 23(2)(c) | roles for incident response, and the plans to communicate and to escalate | may support: on-call schedules and paging (ADR 143, ADR 147 decision 7) |
+   | DORA Article 17(3)(c), 17(3)(d) and RTS 2024/1774 Article 23(1), 23(2)(c) | roles for incident response, and the plans to communicate and to escalate | may support: on-call schedules and paging (ADR 143, ADR 147 decision 7) |
    | DORA Article 17(3)(e) | a report of at least each major incident to the management body | supports: the record of a notice to the management body (decision 12) |
-   | RTS 2024/1774 Article 22, Article 23(4) | the incident management policy: evidence kept safe for a limited period, and the time of occurrence next to the time of detection | may support: the time of occurrence (decision 6) and the retention period of incidents (decision 14) |
-   | DORA Article 18(1)(a) to (f) and RTS 2024/1772 Articles 1 to 8 | classify each incident by six criteria, and find a major incident by thresholds | supports: the default criteria (decision 10) and the record of the classification of a person. The server never decides |
+   | RTS 2024/1774 Article 22 and Article 23(4) | the incident management policy: evidence kept safe for a limited period, and the time of occurrence next to the time of detection | may support: the time of occurrence (decision 6) and the retention period of incidents (decision 14). Article 23(4) names the fields. The ordering rule of decision 6 is ours |
+   | DORA Article 18(1)(a) to (f) and RTS 2024/1772 Articles 1 to 9 | classify each incident by six criteria, and find a major incident by thresholds | supports: the default criteria (decision 10) and the record of the classification of a person. The server never decides |
    | DORA Article 19(1), 19(4), RTS 2025/301 and ITS 2025/302 | reports of a major incident to the authority, with their content and time limits | supports: records of the reports that a person made (decision 11). The server never sends a report |
    | DORA Article 19(2) | a voluntary notice of a significant cyber threat | supports: the notice records of a cyber threat (decision 13) |
    | DORA Article 19(3) | a notice to clients of a major incident | supports: the record of a client notice (decision 12) |
@@ -86,21 +86,27 @@ support" for each interpretation. A user document keeps that hedge.
    - DORA Articles 28 to 30, the risk of ICT third parties, the register of
      information and the terms of contracts. A self-hosted installation is
      software that the entity runs, so these articles are for the entity to
-     apply. OpenDustpan Cloud (ADR 77) is itself an ICT third-party service
-     provider, so Article 30 applies to the contracts of OpenDustpan Cloud.
+     apply. OpenDustpan Cloud (ADR 77) may be an ICT third-party service
+     provider to a financial entity that uses it, so Article 30 may apply to
+     those contracts.
 
 ### Change records
 
 2. **Change fields.** A job gets four optional text fields: the purpose,
    the scope, the expected outcome and the fall-back plan (RTS 2024/1774
    Article 17(1)(d) and (e)). It also gets an optional risk assessment: a
-   URL or a text (DORA Article 8(3)). A start request gives them, and the
+   URL or a text (DORA Article 8(3)), and an optional planned window: a
+   start time and an end time. The implementation timeline (RTS 2024/1774
+   Article 17(1)(d)(ii)) is the planned window and the times that the job
+   already holds: the time of its creation, and the start and the end of
+   each phase. A start request gives them, and the
    job keeps them with its spec. A namespace setting
    `changeFieldsRequired` makes the four fields required for each job
    that changes. Then a start without them fails with `ErrInvalid`. The
    server checks only that a field has text. It never judges the text.
 3. **A `verify` phase.** A new phase kind `verify` comes after the apply
-   phase of a runner job. It holds runner steps that change nothing, for
+   phase of a runner apply job and of a runner destroy job. It has no
+   approval gate. It holds runner steps that change nothing, for
    example a smoke test of the team or a plan that must show no changes.
    The unit settings name its steps. With no steps, the job has no `verify`
    phase, and the change record has `verified: false`. A failed `verify` phase
@@ -138,14 +144,19 @@ support" for each interpretation. A user document keeps that hedge.
    classifies an incident, the console shows the incidents of the namespace
    of the last 6 months that have the same root-cause category. This is
    information only. RTS 2024/1772 Article 8(2) counts recurring incidents
-   as one major incident in some cases. The person decides whether the
-   case applies.
+   as one major incident in some cases. For a recurring incident, the
+   specific apparent root cause counts, not the broad category (ITS
+   2025/302 field 4.2). So the same category is a hint, and the console
+   says so. The person decides whether the case applies.
 9. **The review after a major incident.** When the current classification
    of a person says major, the close needs four more texts, one for each
    subject of DORA Article 13(2)(a) to (d): the promptness of the response,
    the forensic analysis, the escalation, and the internal and external
    communication. The server uses the classification of the person. It
-   never decides that an incident is major.
+   never decides that an incident is major. A closed incident can get a
+   later classification as major. Then a person adds a review record with
+   the same four texts. The review records are append-only, as reports
+   are, and the close of the incident does not change.
 10. **Default classification criteria.** The list of criteria of an
     installation starts with a default list. An administrator can change
     it. The default list holds the six criteria of DORA Article 18(1)(a) to
@@ -162,7 +173,7 @@ support" for each interpretation. A user document keeps that hedge.
     A classification also records whether the person found malicious
     unauthorized access. The console shows the rule of RTS 2024/1772
     Article 8(1) as help text: critical services affected, and malicious
-    unauthorized access or two other thresholds met. The person decides.
+    unauthorized access or two or more other thresholds met. The person decides.
     The server stores the time of the first classification as major.
     This answers an open question of ADR 147.
 11. **Report records.** A report record has one of these kinds: `initial`,
@@ -174,6 +185,14 @@ support" for each interpretation. A user document keeps that hedge.
       most 24 hours from the time the entity knew of the incident,
     - the intermediate report: 72 hours from the initial notice,
     - the final report: 1 month from the last intermediate report.
+
+    For a late classification, the initial notice is due 4 hours from the
+    classification (RTS 2025/301 Article 5(2)). A time limit that ends on a
+    weekend or a bank holiday moves to noon of the next working day, with
+    some exceptions (RTS 2025/301 Article 5(4) and 5(5)). The page cannot
+    compute the bank holidays of each entity. So it labels each time that
+    it shows "Article 5(1) only", and a person applies Article 5(2), 5(4)
+    and 5(5).
 
     The page labels these times "information only". The server never
     marks a report as late, and never says that a report meets a time
@@ -189,20 +208,23 @@ support" for each interpretation. A user document keeps that hedge.
     the time of detection, links to units and notes. A person records
     whether the threat is significant, with a reason. A person also records
     each voluntary notice of the threat to an authority (DORA Article
-    19(2)). The server never decides that a threat is significant. The
+    19(2)). A person closes a threat record with a note on the outcome. The close is
+    a step of a person with `namespace:respond-incidents`. The server never
+    decides that a threat is significant. The
     package `incident` holds it, with the same fence and audit rules as an
     incident (ADR 147 decisions 15 and 16).
 14. **Retention.** Incident records and cyber threat records stay for a
     retention period that the installation sets
     (`--incident-retention`). RTS 2024/1774 Article 22(d) asks for evidence
-    that the entity keeps safe and for a limited period. After the period,
-    the server deletes a closed record and writes an audit entry. With no
+    that the entity keeps safe and for a limited period. The period counts from the close of the record.
+    After the period, the server deletes a closed record and writes an audit entry. With no
     setting, the server deletes nothing. The audit chain (ADR 64) covers
     each write, and the read actions of ADR 147 decision 14 limit who reads.
 15. **Cost entries.** A person adds cost entries to an incident: an amount,
     a currency, a kind (`direct` or `indirect`) and a note. They are
     append-only. A yearly export sums them for the incidents that a person
-    classified as major (DORA Article 11(10)). The cost port (ADR 144) gives
+    classified as major (DORA Article 11(10)), one sum for each currency.
+    The server never converts a currency. The cost port (ADR 144) gives
     the actual cloud spend in the time of the incident, as information only.
 16. **Restore test records.** Each restore through the server (ADR 38)
     writes an audit entry with the backup ID and the result. A person can
@@ -222,9 +244,15 @@ support" for each interpretation. A user document keeps that hedge.
     | `GET /api/namespaces/{ns}/incidents/costs?year=` | `namespace:read-audit` | namespace |
     | `GET /api/namespaces/{ns}/cyber-threats[/{id}]`, `.../notes` | `namespace:read` | namespace |
     | `POST /api/namespaces/{ns}/cyber-threats`, `PUT .../{id}`, `POST .../{id}/notes` | `namespace:respond-incidents` | namespace |
+    | `POST /api/namespaces/{ns}/incidents/{id}/reviews` | `namespace:respond-incidents` | namespace |
+    | `POST /api/namespaces/{ns}/cyber-threats/{id}/steps` | `namespace:respond-incidents` | namespace |
     | `POST /api/namespaces/{ns}/cyber-threats/{id}/classifications`, `POST .../notices` | `namespace:classify-incidents` | namespace |
     | `GET /api/server/restore-tests` | `server:read-audit` | server |
     | `POST /api/server/restore-tests` | `server:backup` | server |
+
+    The reads of the cost entries and of the notices of an incident need
+    `namespace:read-audit`, not `namespace:read`, because they are an
+    extract of the audit trail. The other incident reads keep `namespace:read`.
 
     The change records export of ADR 147 decision 11 adds the change
     fields, the `verify` phase and its result, whether each approver is the
@@ -243,7 +271,9 @@ support" for each interpretation. A user document keeps that hedge.
     - The banned phrases in "Consequences". Decision 19 below adds to them.
 19. **Banned phrases.** `scripts/docs-banned-words.py` also refuses
     `complies with DORA`, `compliant with DORA`, `DORA-ready`,
-    `meets Article` and `satisfies DORA`, and their forms, in any case. Its
+    `meets Article`, `met Article`, `satisfies DORA`, `satisfies Article`,
+    `fulfils DORA`, `fulfills DORA` and `DORA certified`, and their forms, in
+    any case. A phrase that wraps across a line break counts too. Its
     self-test has a case for each one.
 
 ## Consequences
@@ -251,9 +281,10 @@ support" for each interpretation. A user document keeps that hedge.
 - A financial entity can keep more of the facts that the texts name next
   to the changes and the incidents. It still classifies, reports and
   reviews by itself.
-- The job model gets a fourth phase kind, `verify`. The phase tables of ADR
-  100 decision 4 get it for a runner apply and a runner destroy with `verify`
-  steps.
+- The job model gets a fourth phase kind, `verify`. Decision 3 extends the
+  table of ADR 100 decision 4: a runner apply and a runner destroy get the
+  phase when the unit settings name `verify` steps. Decision 4 extends the
+  gate counting of ADR 103 decision 2 with `independentApproval`.
 - The package `incident` gets cyber threat records, notices, costs, links
   between incidents and the root-cause categories. Each port change gets
   conformance tests first.

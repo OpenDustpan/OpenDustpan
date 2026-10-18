@@ -14,6 +14,7 @@ code spans, because commands and wire values keep their own words.
 Standard library only.
 """
 
+import os
 import re
 import sys
 
@@ -44,6 +45,11 @@ BANNED = [
     (r"DORA[- ]ready", "say 'designed against DORA' and name the article"),
     (r"meet(s|ing)?\s+Article", "say 'designed against DORA' and name the article"),
     (r"satisf(y|ies|ied|ying)\s+DORA", "say 'designed against DORA' and name the article"),
+    (r"met\s+Article", "say 'designed against DORA' and name the article"),
+    (r"satisf(y|ies|ied|ying)\s+Article", "say 'designed against DORA' and name the article"),
+    (r"fulfil(s|led|ling)?\s+DORA", "say 'designed against DORA' and name the article"),
+    (r"fulfill(s|ed|ing)?\s+DORA", "say 'designed against DORA' and name the article"),
+    (r"DORA[- ]certified", "say 'designed against DORA' and name the article"),
 ]
 
 WORD_RE = re.compile(
@@ -62,6 +68,13 @@ EMOJI_RE = re.compile(
     "]"
 )
 
+# An accepted ADR changes only in its status line, so a phrase that it
+# already holds, in a sentence that denies the claim, stays. Each key is a
+# file name. Each value lists the phrases (lower case) that the file may keep.
+EXEMPT = {
+    "0147-incident-and-change-records-designed-against-dora.md": {"complies with dora"},
+}
+
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
 
@@ -74,21 +87,58 @@ def advice_for(word):
 
 
 def check_text(text):
-    """Return a list of (line, column, found, advice) for one document."""
+    """Return a list of (line, column, found, advice) for one document.
+
+    A phrase can wrap across a line break, so the check joins the lines of a
+    paragraph before it matches. A blank line, a fence or a line that
+    starts a new block ends a paragraph. Each finding keeps the line and
+    column of its first character.
+    """
     findings = []
     in_fence = False
+    block = []  # (line number, prose) of the lines of the open paragraph
+
+    def flush():
+        if not block:
+            return
+        joined = ""
+        offsets = []  # (start offset in joined, line number, line start)
+        for number, prose in block:
+            offsets.append((len(joined), number))
+            joined += prose + "\n"
+        for match in WORD_RE.finditer(joined):
+            start = match.start()
+            number = block[0][0]
+            base = 0
+            for offset, line_number in offsets:
+                if offset <= start:
+                    number, base = line_number, offset
+            word = re.sub(r"\s+", " ", match.group(0))
+            findings.append((number, start - base + 1, word, advice_for(word)))
+        for match in EMOJI_RE.finditer(joined):
+            start = match.start()
+            number = block[0][0]
+            base = 0
+            for offset, line_number in offsets:
+                if offset <= start:
+                    number, base = line_number, offset
+            findings.append((number, start - base + 1, match.group(0), "no emoji"))
+        block.clear()
+
     for number, line in enumerate(text.splitlines(), start=1):
         if FENCE_RE.match(line):
+            flush()
             in_fence = not in_fence
             continue
         if in_fence:
             continue
+        if not line.strip():
+            flush()
+            continue
         prose = CODE_SPAN_RE.sub(lambda m: " " * len(m.group(0)), line)
-        for match in WORD_RE.finditer(prose):
-            word = match.group(0)
-            findings.append((number, match.start() + 1, word, advice_for(word)))
-        for match in EMOJI_RE.finditer(prose):
-            findings.append((number, match.start() + 1, match.group(0), "no emoji"))
+        block.append((number, prose))
+    flush()
+    findings.sort()
     return findings
 
 
@@ -125,8 +175,19 @@ def selftest():
         ("The design satisfied dora in full.", ["satisfied dora"]),
         ("Designed against DORA Article 17, not a claim that it meets the need.", []),
         ("A word like Articles stays.", []),
+        ("It complies\nwith DORA.", ["complies with DORA"]),
+        ("First line.\nIt is compliant\n  with dora in full.", ["compliant with dora"]),
+        ("Ends a paragraph with meets\n\nArticle 5 starts the next one.", []),
+        ("The requirement met Article 17.", ["met Article"]),
+        ("It satisfies Article 9.", ["satisfies Article"]),
+        ("It fulfils DORA. It fulfills dora.", ["fulfils DORA", "fulfills dora"]),
+        ("A DORA certified server.", ["DORA certified"]),
     ]
     failed = 0
+    wrapped = check_text("a\nb\nIt complies\nwith DORA.")
+    if wrapped != [(3, 4, "complies with DORA", advice_for("complies with DORA"))]:
+        failed += 1
+        print(f"selftest: wrapped position: got {wrapped}", file=sys.stderr)
     for text, want in cases:
         got = [f[2] for f in check_text(text)]
         if got != want:
@@ -149,6 +210,8 @@ def main(argv):
     for path in argv:
         with open(path, encoding="utf-8") as handle:
             findings = check_text(handle.read())
+        name = os.path.basename(path)
+        findings = [f for f in findings if f[2].lower() not in EXEMPT.get(name, ())]
         for line, column, found, advice in findings:
             print(f"{path}:{line}:{column} banned word {found!r}: {advice}")
         total += len(findings)
