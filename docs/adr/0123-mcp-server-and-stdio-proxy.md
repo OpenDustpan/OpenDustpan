@@ -1,6 +1,6 @@
 # 123. An MCP endpoint and a stdio proxy offer the same tools
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17. Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 

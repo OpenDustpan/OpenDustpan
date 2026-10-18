@@ -1,6 +1,6 @@
 # 166. Context and graph: gaps found before the implementation
 
-Status: accepted · 2026-10-18 · supersedes part of ADRs 160 to 165 (see "What this ADR replaces")
+Status: accepted · 2026-10-18. Supersedes part of ADRs 160 to 165 (see "What this ADR replaces"). Route paths superseded in part by ADR 210
 
 ## Context
 

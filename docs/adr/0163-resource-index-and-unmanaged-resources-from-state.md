@@ -1,6 +1,6 @@
 # 163. The resource index and unmanaged resources found from state
 
-Status: accepted · 2026-10-17 · decisions 5 and 11 superseded in part by ADR 166
+Status: accepted · 2026-10-17. Decisions 5 and 11 superseded in part by ADR 166. Route paths and `server:` action names superseded in part by ADR 210. Decision 9 superseded in part by ADR 216: a link needs the acceptance of each namespace
 
 ## Context
 

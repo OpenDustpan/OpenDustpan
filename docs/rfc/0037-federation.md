@@ -14,8 +14,8 @@ RFC replaces the separate multi-tenancy RFC that RFC 68 names. It decides
 nothing.
 
 On 2026-10-18 the owner decided parts of it. See "Outcome": the hosted
-service is multitenant (ADR 215), and no routing and no reads go across
-installations (ADR 221). Regions in one installation stay open here.
+service is multitenant with the namespace as the tenant (ADR 215), and
+routing between installations is an opt-in capability (RFC 77).
 
 ## Problem
 
@@ -406,19 +406,15 @@ a license, an edition or a hosted flag, and each exists in every build.
 
 Decided in part on 2026-10-18 (owner decisions):
 
-- [ADR 221](../adr/0221-no-bucket-of-the-customer-and-no-routing-across-installations.md):
-  no routing, forwarding or redirect to another installation, and no read
-  across installations. This drops the placement map for installations
-  (design point 1, options B and C), forwarding to another installation
-  (design point 2), the trust between installations (design point 3), the
-  fan-out of design point 4, and the read view of design point 8.
-- [ADR 215](../adr/0215-the-account-is-the-tenant-of-a-multitenant-hosted-service.md):
-  design point 7. OpenDustpan Cloud runs many accounts on shared
-  installations (option B, with an account above namespaces), and the
-  operator can shard. A request reaches its shard by the host name of its
-  account and DNS, so the router is not needed for it.
-- The operator's move of an account between shards goes to RFC 76.
+- [ADR 215](../adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md):
+  design point 7. OpenDustpan Cloud runs the namespaces of many customers
+  on one shared installation, with the namespace as the tenant and no layer
+  above it. It answers on one host, with the namespace in the path. Option
+  A (one installation for each customer) is not taken. ADR 215 decision 5
+  keeps a namespace name unique in the installation.
+- Routing, forwarding and replication between installations are allowed as
+  an opt-in capability. [RFC 77](0077-opt-in-federation-routing-and-geo-replication.md)
+  designs it from design points 1 to 6 of this RFC. An earlier draft of
+  ADR 221 that said "no routing across installations" is reversed.
 
-Regions in one installation (design point 1 option A, design points 2 and
-5), the move of a namespace (design point 6) and open questions 1, 2, 7 and
-9 for regions stay open.
+The other design points and open questions stay open, here and in RFC 77.

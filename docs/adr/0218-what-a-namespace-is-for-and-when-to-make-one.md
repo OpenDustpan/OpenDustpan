@@ -28,8 +28,8 @@ What the accepted ADRs already give a namespace:
 - ADR 30 decision 1: a backup holds the whole installation. RFC 8 lists a
   backup of one namespace as a proposal.
 
-ADR 215 puts the account above namespaces. A namespace belongs to one
-account.
+ADR 215 makes the namespace the tenant of OpenDustpan Cloud. On the hosted
+service, a namespace also holds its own principals, groups and sign-in.
 
 ## Decision
 
@@ -43,13 +43,15 @@ account.
    | Writes | Each write carries the fence of the namespace. A promotion or a restore ends the old writers of that namespace only. | ADR 4 |
    | Region | One home region for each namespace. | ADR 4 |
    | Access | A grant on the namespace reaches its collections and units. The IP allowlist and the reach of a token have the namespace as object. | ADR 52, ADR 70 |
+   | Members and sign-in | With `identity.principalHome: namespace`, its own principals, groups, custom roles and identity provider. | ADR 215, ADR 216 |
+   | Tenant | The tenant of OpenDustpan Cloud, shown as "account" in the hosted console. | ADR 215 |
    | Audit | Each namespace is an audit scope, read with `namespace:read-audit`. | ADR 60 |
    | Backup and restore | One namespace can be backed up and restored alone (decision 4). | owner, RFC 8 |
    | Blueprints | A blueprint lives in one namespace and makes units only in that namespace (decision 3). | owner, ADR 112, RFC 14 |
    | Profiles | A profile imports only profiles of its own namespace. | ADR 201 |
    | Cloud trust | One OIDC issuer and its own signing keys. A cloud trust policy that names the issuer of a namespace never matches a token of another namespace. | ADR 204 |
-   | Settings and limits | A namespace layer of settings, and its own storage limit and request rate bucket, each only lower than the account value. | ADR 215 decision 12 |
-   | Keys | One namespace key wraps the data keys and item keys of the namespace. | ADR 217 |
+   | Settings and limits | A namespace layer of settings, and its own storage limit and request rate bucket, each only lower than the installation value. | ADR 220 |
+   | Keys | One namespace key, and an optional customer key, wrap the data keys and item keys of the namespace. | ADR 217 |
    | Tool name | Each tool calls it an organization. | ADR 18 |
 
 2. **A collection is not a boundary.** A collection groups units inside one
@@ -69,25 +71,33 @@ account.
 4. **One namespace can be backed up and restored (owner).** This adds to
    ADR 30, which backs up the whole installation.
    - A namespace backup holds each row whose namespace ID is the namespace,
-     the blobs that the rows name, the item key blobs, and the namespace
-     key, wrapped by the account key (ADR 217). It uses the portable format
-     of ADR 42, with the scope `namespace` in the manifest.
+     the blobs that the rows name, and the namespace key records, each
+     wrapped as ADR 217 says. It uses the portable format of ADR 42, with
+     the scope `namespace` in the manifest.
    - It holds the grants on the namespace and on its collections and units.
-     It holds no principal and no group, because those belong to the
-     account (ADR 215 decision 6).
+     It holds the principals, groups, custom roles and sign-in settings
+     whose home is the namespace (ADR 215 decision 9). It holds no
+     principal and no group of the installation.
+   - **Item keys go only to a named backup target.** A namespace backup
+     writes item key blobs only to a backup target that the `backups`
+     table names, as ADR 151 does. So a shred still reaches each copy. A
+     download of a namespace backup through the API holds no item keys. It
+     restores only into its own namespace, while the item keys are still
+     on the installation.
    - The actions are `namespace:backup` and `namespace:restore`, in the
-     data family. The roles `admin` and `account-administrator` hold them.
-     A restore that replaces grants also needs `account:restore-access`
-     (ADR 216).
-   - A restore replaces the namespace in its own account. The namespace
+     data family. The namespace role `admin` holds them. A restore that
+     replaces grants also needs `namespace:restore-access` (ADR 216).
+   - A restore replaces the namespace in place. The namespace
      refuses new writes while the restore runs, as maintenance mode does
      for the installation (ADR 38 decision 4), and the restore adds one to
      the failover version of the namespace (ADR 4). So a late write of an
      old writer fails at the fence.
-   - A grant whose holder no longer exists in the account does not restore.
-     The restore record lists each one.
+   - A grant whose holder no longer exists does not restore. The restore
+     record lists each one.
    - ADR 204 decision 4 applies: a restore into the same installation
-     keeps the issuer keys.
+     keeps the issuer keys. The sign-in secrets of the namespace stay
+     wrapped by the key-encryption key (ADR 217 decision 6), so they
+     restore only into the same installation.
    - RFC 76 keeps open: a restore as a copy into a new namespace, schedules
      for each namespace, and an export to a target of the tenant.
 
@@ -118,7 +128,7 @@ account.
 8. **The guide.** A page in `docs/explanation/` gives decisions 1, 2, 5, 6
    and 7 with an example: a platform team, two product teams, production
    and development. It ships with the first change that adds a namespace
-   backup route (ADR 214, in review).
+   backup route (ADR 214).
 
 ## Benchmarks
 

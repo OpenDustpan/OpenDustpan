@@ -1,6 +1,6 @@
 # 67. Who creates and administers a service principal
 
-Status: accepted · 2026-10-14
+Status: accepted · 2026-10-14. The `server:` action names superseded in part by ADR 210. Decision 7 superseded in part by ADR 215: persons, workloads and groups of a namespace
 
 ## Context
 

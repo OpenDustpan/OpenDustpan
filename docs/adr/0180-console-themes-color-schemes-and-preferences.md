@@ -1,6 +1,6 @@
 # 180. Console themes, color schemes and the preferences of a person
 
-Status: accepted · 2026-10-18 · adds to ADR 58
+Status: accepted · 2026-10-18. Adds to ADR 58. Route paths superseded in part by ADR 210. Decision 11 extended by ADR 212
 
 ## Context
 

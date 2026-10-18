@@ -1,6 +1,6 @@
 # 204. OpenDustpan as an OIDC issuer
 
-Status: accepted · 2026-10-18 · part of ADR 200. Decision 1 superseded in part by ADR 215: the issuer host on a server with more than one account
+Status: accepted · 2026-10-18 · part of ADR 200
 
 ## Context
 

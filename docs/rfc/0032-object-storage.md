@@ -44,7 +44,7 @@ for milestone 3: the S3-compatible adapter, with no new dependency. GCS,
 Azure Blob, a bucket for each namespace and cloud identity stay open for a
 later decision.
 
-On 2026-10-18 the owner decided that no account and no namespace brings its
-own bucket ([ADR 221](../adr/0221-no-bucket-of-the-customer-and-no-routing-across-installations.md)).
+On 2026-10-18 the owner decided that no namespace brings its own bucket
+([ADR 221](../adr/0221-no-bucket-of-the-customer.md)).
 The advice for data residency is to self-host. The open question "Is a
 storage location per namespace needed?" is answered: no.

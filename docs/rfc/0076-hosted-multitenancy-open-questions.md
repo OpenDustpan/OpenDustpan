@@ -1,91 +1,84 @@
 ---
 rfc: 76
-title: Hosted multitenancy, the open questions after the account decisions
+title: Hosted multitenancy, the open questions after the namespace decisions
 status: draft
 created: 2026-10-18
 ---
 
-# RFC 76. Hosted multitenancy, the open questions after the account decisions
+# RFC 76. Hosted multitenancy, the open questions after the namespace decisions
 
 Status: draft.
 
 ## Problem
 
 ADRs 215 to 221 record the owner decisions of 2026-10-18: OpenDustpan Cloud
-is multitenant, the account is the tenant, and each account can bring its
-own key. Those ADRs leave these questions open. Each one has options and a
-recommendation. The owner decides.
+is multitenant, the namespace is the tenant, and each namespace can bring
+its own key. Those ADRs leave these questions open. Each one has options
+and a recommendation. The owner decides. RFC 77 holds the questions of
+federation and geo-replication.
 
-## 1. The host name of an account
+## 1. A path prefix for each namespace in the CLI backend URL
 
-ADR 215 decision 9 gives each account a host name that never changes.
+ADR 215 decision 14: the Pulumi CLI keeps one token for each backend URL,
+and OpenTofu one token for each host. A person in two namespaces on one
+host re-logs in, or sets a token for each namespace in the environment
+(ADR 215 decision 15).
 
-- **Option A. A name that the tenant picks at sign-up**, for example
-  `acme.opendustpan.com`. Easy to type in `pulumi login` and in a backend
-  block. The sign-up shim keeps the names unique. A taken name tells a new
-  customer that the name exists, as an organization name does on other
-  hosted products.
-- **Option B. The account ID**, for example `acc-k3v9q2m7x4t8p1w6z5r0.opendustpan.com`.
-  Says nothing about other accounts. Hard to type.
-- **Option C. A custom domain of the tenant**, for example
-  `iac.acme.example`, with a CNAME to the shard and a certificate from ACME.
-  It costs certificate work for each account. A domain that the tenant
-  loses can break its cloud trusts (ADR 215 decision 10).
+- **Option A. Only the environment variables of ADR 215 decision 15.** No
+  server change.
+- **Option B. Also a path prefix for each namespace**, for example
+  `pulumi login https://app.opendustpan.com/acme`. The Pulumi CLI would
+  keep one token for each URL. It works only if the Pulumi CLI keeps the
+  path of the backend URL in each request. OpenTofu finds its API through
+  `/.well-known/terraform.json` on the host, so a path prefix does not help
+  OpenTofu.
 
-**Recommendation: A first, C later as an extra host name.** The account ID
-host of B can stay as a second host name that always works.
+**Recommendation: A now.** Measure B with `make e2e` against each
+supported version of the Pulumi CLI. Add it only if every version keeps the
+path.
 
-## 2. One person in many accounts
+## 2. A move of a principal of the installation into a namespace
 
-ADR 215 decision 6 gives a person a separate principal in each account.
+ADR 215 decision 11: a change of `identity.principalHome` converts nothing.
+A self-hosted installation that changes to `namespace` keeps its people as
+principals of the installation.
 
-- **Option A. Keep separate principals.** Simple isolation. A person signs
-  in to each account host on its own.
-- **Option B. One identity with an account picker**, as the Pulumi Cloud and
-  HCP Terraform organization models do. One sign-in, then a choice of
-  account. It needs an identity object above accounts, which is a read
-  across accounts (ADR 220 decision 10).
+- **Option A. No move.** People sign in again through the identity provider
+  of a namespace and get a new principal there. The administrator makes
+  the grants again.
+- **Option B. A move operation**, `POST .../principals/{id}/move`, that
+  gives the principal a namespace home, if each grant of the principal is
+  inside that namespace.
 
-**Recommendation: A** until customers ask for B with a count.
+**Recommendation: A** until a self-hosted operator asks for B.
 
-## 3. The move of an account between shards
+## 3. The role `account-administrator`
 
-ADR 215 decision 2 lets only the operator move an account. ADR 221 allows no
-routing, so a move is a copy and a DNS change.
+`pkg/access/roles.go` has `account-administrator` for "the tenant side of a
+hosted installation". With the namespace as the tenant, the namespace role
+`admin` does that job (ADR 216 decision 17).
 
-Proposed steps:
+- **Option A. Delete the role.** No tag shipped it (ADR 73), so the server
+  keeps no alias. A grant that holds it fails the migration check.
+- **Option B. Keep it as an installation role** with the administration
+  actions of the installation directory only.
 
-1. The source sets the account state `moving`. It refuses new work and
-   waits for work in progress, as maintenance mode does (ADR 38).
-2. The source exports the account in the portable format of ADR 42, with
-   the scope `account`.
-3. The target imports it with the same account ID, namespace IDs and unit
-   IDs. The key-encryption key of the target wraps the account key again. A
-   customer key must allow the identity of the account on the target.
-4. The source sets the state `moved`. It refuses each write and signs no
-   issuer token. Then the operator changes DNS.
+**Recommendation: A.** The word "account" is a console label only (ADR 215
+decision 3), so a role name with it misleads.
 
-Open: ADR 204 decision 4 says that a restore into another installation
-restores no issuer key. A move must keep the keys, or each cloud trust
-breaks. **Recommendation:** a move is a third case next to "restore into the
-same installation" and "copy". It keeps the keys, and the state `moved` on
-the source makes sure that two installations never sign with one key.
+## 4. The notices of a suspension
 
-## 4. A suspended account
+ADR 215 decision 16 sends notices at the suspension, 7 days before the
+`disabled` state, and 7 days and 1 day before the delete.
 
-ADR 215 decision 3 has the state `suspended`, for example for an unpaid
-invoice.
-
-- **Option A. Read only.** Reads, exports and sign-in work. New work is
-  refused. Work in progress ends.
-- **Option B. No access**, except for the tenant administrators.
-
-**Recommendation: A**, for 30 days, then the operator can delete the
-account after a notice. The number of days is the owner's.
+- **Question:** are these days right? Who can resume a `disabled`
+  namespace: the operator only, or also a namespace administrator after the
+  cause ends? The owner gave the periods of 30, 31 and 90 days. The notice
+  days are a proposal.
 
 ## 5. The open parts of a namespace backup
 
-ADR 218 decision 4 lets a namespace back up and restore in its own account.
+ADR 218 decision 4 lets a namespace back up and restore in place.
 
 - **Restore as a copy into a new namespace.** Recommendation: allow it, with
   a new namespace ID and no issuer keys (the copy case of ADR 204 decision
@@ -93,86 +86,96 @@ ADR 218 decision 4 lets a namespace back up and restore in its own account.
 - **Schedules for each namespace.** Recommendation: wait for the backup
   schedule of the installation (ADR 30 defers it), then add a namespace
   scope to it.
-- **An export to the tenant.** This is not a bucket of the customer for its
-  data (ADR 221): the data stays in the shard. Recommendation: a download of
-  the backup archive first, a push to a target of the tenant later.
+- **An export to the tenant.** A download holds no item keys (ADR 218
+  decision 4), so it opens only on its installation. A tenant that leaves
+  reads its data with the tool CLIs (`pulumi stack export`, `tofu state
+  pull`). Recommendation: document that path, and add an export with item
+  keys later only with a customer key that wraps them.
 
 ## 6. The client of each KMS adapter
 
-ADR 217 needs adapters for AWS KMS, Google Cloud KMS, Azure Key Vault and
-Vault Transit. `CLAUDE.md` asks the owner before each new dependency.
+ADR 217 decision 7 gives one port that fits three kinds of client. The
+owner asked for a measurement before a choice.
 
 - **Option A. The SDK of each cloud.** Four large dependencies.
+  `CLAUDE.md` asks the owner before each new dependency.
 - **Option B. Hand-written clients on `net/http`.** ADR 31 made the S3
-  adapter with no new dependency, and its request signing serves AWS KMS
-  too. Each of the four APIs needs a few calls only.
+  adapter with no new dependency, and its request signing can serve AWS
+  KMS too. Each KMS needs a few calls only.
+- **Option C. Adapters outside the server**, over a small protocol on a
+  Unix socket, as Kubernetes KMS v2 plugins are, or over the external
+  adapter protocol of ADR 208. The server ships no KMS client. The
+  operator runs one adapter process for each KMS.
 
-**Recommendation: B**, with each adapter on the `Wrapper` conformance suite
-and a recorded test against the real service in CI.
+**The measurement.** For each of AWS KMS, Google Cloud KMS, Azure Key Vault
+and Vault Transit, and for each option:
 
-## 7. The KMS identity of each account
-
-ADR 217 decision 7 needs one identity for each account at its KMS.
-
-| KMS | Option |
+| Measure | How |
 | --- | --- |
-| AWS KMS | One IAM role of the operator for each account, with the account ID as the external ID. The key policy also requires the encryption context of the account. |
-| Google Cloud KMS | One service account of the operator for each account. |
-| Azure Key Vault | One application of the operator for each account, with a federated credential. |
-| Vault Transit | One JWT auth role for each account, with a token that the server signs for the account. |
+| Modules that the binary links | `go list -m all` before and after |
+| Size of the binary | bytes before and after |
+| Known vulnerabilities | `govulncheck` now, and the advisories of the last 12 months for those modules |
+| Licenses | `make licenses` and `make trivy` |
+| Lines that we keep | lines of the adapter and its tests |
+| Latency of one wrap and one unwrap | p50 and p99 of 1,000 calls against the real service, from one region |
+| Conformance | the `Wrapper` suite and the error-class suite pass |
+| Auth paths | workload identity, static keys, the identity of ADR 217 decision 9 |
+| Work for an operator | processes to run and to upgrade (option C) |
 
-**Recommendation:** the table, with the operator making each identity in
-the create-account step (ADR 216 decision 4).
+**Recommendation:** run the measurement for AWS KMS first, with options B
+and C, then decide for all four.
 
-## 8. The rotation of a namespace key
+## 7. A new data key for a Pulumi stack after a compromise
 
-ADR 217 decision 14 says a namespace key does not rotate.
+ADR 217 decision 20: a full re-encryption cannot change the data key of a
+Pulumi stack, because the Pulumi CLI keeps ciphertexts of it in the stack
+configuration.
 
-- **Option A. No rotation**, as for data keys (ADR 23).
-- **Option B. A new version for new keys only.** A new namespace key
-  version wraps new data keys and item keys. Old keys stay under the old
-  version. A rotation then needs no new write of an item key blob.
-- **Option C. A full rewrap** of every item key into a new blob. It breaks
-  the rule of ADR 151 that one delete reaches each backup.
+- **Option A. The job lists the stacks**, and the docs give the steps: a
+  new stack data key, and `pulumi config` with each secret again.
+- **Option B. A second data key for the stack**: new secrets use it, and old
+  ciphertexts still open with the old key until the team writes them
+  again.
 
-**Recommendation: B.**
+**Recommendation: A**, and test the steps with `make e2e`.
 
-## 9. More than one account on SQLite
+## 8. `identity.principalHome: namespace` on SQLite
 
-SQLite has no row-level security (ADR 220 decision 4).
+SQLite has no row-level security (ADR 220 decision 6).
 
-- **Option A. Refuse it.** An installation on SQLite holds one account.
-- **Option B. Allow it with a static setting**, with the checks of ADR 220
-  decision 3 only.
+- **Option A. Refuse it.** The server refuses to start with `namespace` on
+  SQLite. The error names PostgreSQL.
+- **Option B. Allow it**, with the query checks of ADR 220 decision 5
+  only.
 
-**Recommendation: A.** A team that needs more than one account runs
-PostgreSQL.
+**Recommendation: A.** A team that needs tenants with their own members
+runs PostgreSQL.
 
-## 10. A lock that turns a feature off on OpenDustpan Cloud
+## 9. A lock that turns a feature off on OpenDustpan Cloud
 
 ADR 219 lets the server lock a feature off. ADR 59 decision 1 says that the
 hosted service never turns a feature off for its customers.
 
 - **Option A. Keep ADR 59 decision 1.** The hosted operator locks limits and
-  defaults only.
+  defaults only. The locks of ADR 215 decision 10 and ADR 216 decision 7
+  set where principals live and what an operator grant reaches. They turn
+  no feature off.
 - **Option B. Allow it for a module that is not a security switch**, for
   example an experimental module before its release, with the notice of
   ADR 219 decision 4.
 
 **Recommendation: A.** It keeps the promise of ADR 59. The owner decides.
 
-## 11. Usage counters for billing
+## 10. Billing
 
-ADR 215 decision 3 gives each account a billing reference, and ADR 216
-decision 4 lets `installation:read-accounts` answer usage counters.
-
-**Recommendation:** stored bytes and the count of units only. No counter of
-requests or of people, so that the server keeps no behavior data (ADR 74).
+The owner did not decide billing. ADR 215 decision 18 gives the server no
+billing object and no usage counter for billing. This RFC asks nothing about
+billing now. A later RFC asks it.
 
 ## Open questions
 
-1. Which option for each of the sections 1 to 11?
-2. The number of days of section 4.
+1. Which option for each of the sections 1 to 3 and 5 to 9?
+2. The notice days and the resume of section 4.
 
 ## Outcome
 

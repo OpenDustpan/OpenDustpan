@@ -1,6 +1,6 @@
 # 70. Act-as reach, identity provider groups and break-glass accounts
 
-Status: accepted · 2026-10-15. Decision 11 superseded in part by ADR 216 for the account scope
+Status: accepted · 2026-10-15. The `server:` action names superseded in part by ADR 210. Decisions 11, 23 and 28 superseded in part by ADR 216: the sign-in of a namespace, and support access
 
 ## Context
 
