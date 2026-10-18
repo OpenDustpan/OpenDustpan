@@ -7,6 +7,7 @@ package opsmem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -67,13 +68,33 @@ func (d *Domain) AuditEntries(_ context.Context, scope namespace.Name) ([]audit.
 	return slices.Clone(d.audit[scope]), nil
 }
 
-// Write runs change as one transaction. When fence names a namespace, it
-// first checks the fence and returns namespace.ErrFenced for a stale one.
-// When change returns nil, Write appends entries, each to the scope of
-// its namespace. A zero fence skips the check, for a write outside a
-// namespace.
-func (d *Domain) Write(fence namespace.Fence, entries []audit.Entry, change func() error) error {
-	return d.WriteEntries(fence, func() ([]audit.Entry, error) {
+// ErrScope is the error of a write whose fence does not belong to the
+// namespace of its row: a zero fence for a row in a namespace, a fence for
+// a row in the server scope, or the fence of another namespace. An adapter
+// translates it into the sentinel of its port, for example ErrInvalid or
+// ErrNotFound.
+var ErrScope = errors.New("the fence does not belong to the namespace of the row")
+
+// Scope returns a scope function for a row in the namespace ns that is
+// known before the write, for example the row of a create.
+func Scope(ns namespace.Name) func() (namespace.Name, error) {
+	return func() (namespace.Name, error) { return ns, nil }
+}
+
+// Write runs change as one transaction. It first calls scope, under the
+// mutex, to get the namespace of the row; an error of scope, for example
+// an unknown row, stops the write. Then it checks fence against that
+// namespace: a row in audit.ServerScope needs a zero fence, every other
+// row needs the fence of its own namespace (ErrScope), at the current
+// failover version (namespace.ErrFenced). When change returns nil, Write
+// appends entries, each to the scope of its namespace.
+func (d *Domain) Write(
+	fence namespace.Fence,
+	scope func() (namespace.Name, error),
+	entries []audit.Entry,
+	change func() error,
+) error {
+	return d.WriteEntries(fence, scope, func() ([]audit.Entry, error) {
 		return entries, change()
 	})
 }
@@ -81,19 +102,22 @@ func (d *Domain) Write(fence namespace.Fence, entries []audit.Entry, change func
 // WriteEntries is Write for a change that decides its audit entries
 // itself, for example a create that appends an entry only when the row
 // is new.
-func (d *Domain) WriteEntries(fence namespace.Fence, change func() ([]audit.Entry, error)) error {
+func (d *Domain) WriteEntries(
+	fence namespace.Fence,
+	scope func() (namespace.Name, error),
+	change func() ([]audit.Entry, error),
+) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if fence.Namespace != "" {
-		v, ok := d.fences[fence.Namespace]
-		if !ok {
-			return fmt.Errorf("write: %w", namespace.ErrNotFound)
-		}
+	ns, err := scope()
+	if err != nil {
+		return err
+	}
 
-		if v != fence.FailoverVersion {
-			return fmt.Errorf("write: %w", namespace.ErrFenced)
-		}
+	err = d.check(fence, ns)
+	if err != nil {
+		return err
 	}
 
 	entries, err := change()
@@ -114,6 +138,31 @@ func (d *Domain) Read(read func()) {
 	defer d.mu.Unlock()
 
 	read()
+}
+
+func (d *Domain) check(fence namespace.Fence, ns namespace.Name) error {
+	if ns == audit.ServerScope {
+		if fence.Namespace != "" || fence.FailoverVersion != 0 {
+			return fmt.Errorf("write: %w", ErrScope)
+		}
+
+		return nil
+	}
+
+	if fence.Namespace == "" || fence.Namespace != ns {
+		return fmt.Errorf("write: %w", ErrScope)
+	}
+
+	v, ok := d.fences[fence.Namespace]
+	if !ok {
+		return fmt.Errorf("write: %w", namespace.ErrNotFound)
+	}
+
+	if v != fence.FailoverVersion {
+		return fmt.Errorf("write: %w", namespace.ErrFenced)
+	}
+
+	return nil
 }
 
 // Entry returns a valid audit entry of the kind change, for a suite that
