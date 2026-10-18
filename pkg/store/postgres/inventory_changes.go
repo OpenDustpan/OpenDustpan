@@ -21,7 +21,8 @@ var _ inventory.HistoryReader = (*Store)(nil)
 // appendInventoryChange appends one row to the inventory change log of the
 // namespace of c, in the caller's transaction. It takes the sequence from the
 // counter row of the namespace, so the caller runs it as the last statement of
-// its transaction. The row holds the collection that holds the unit now. It
+// its transaction. It ignores the Collection and the Seq of c: the row holds the
+// collection that holds the unit now, and the sequence of the counter. It
 // returns namespace.ErrNotFound when the namespace does not exist.
 func appendInventoryChange(ctx context.Context, q *db.Queries, c inventory.Change) error {
 	_, err := insertInventoryChange(ctx, q, c)

@@ -5763,16 +5763,49 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 }
 
 const listInventoryChangeBounds = `-- name: ListInventoryChangeBounds :many
-SELECT c.namespace_id, c.seq, c.at_ms, c.tool, c.unit_id, c.name, c.display_name, c.status, c.collection,
-       c.kind, c.resource_count
-FROM inventory_changes AS c
-WHERE c.namespace_id = ?1
-  AND (c.seq = (SELECT MAX(a.seq) FROM inventory_changes AS a
-                WHERE a.namespace_id = c.namespace_id AND a.tool = c.tool AND a.unit_id = c.unit_id
-                  AND a.at_ms <= ?2)
-    OR c.seq = (SELECT MAX(l.seq) FROM inventory_changes AS l
-                WHERE l.namespace_id = c.namespace_id AND l.tool = c.tool AND l.unit_id = c.unit_id))
-ORDER BY c.seq
+WITH RECURSIVE units(tool, unit_id) AS (
+    SELECT seed.tool, seed.unit_id
+    FROM (
+        SELECT f.tool, f.unit_id
+        FROM inventory_changes AS f
+        WHERE f.namespace_id = ?1
+        ORDER BY f.tool, f.unit_id
+        LIMIT 1
+    ) AS seed
+    UNION ALL
+    SELECT n.tool, n.unit_id
+    FROM units AS u
+    JOIN inventory_changes AS n ON n.rowid = (
+        SELECT s.rowid
+        FROM inventory_changes AS s
+        WHERE s.namespace_id = ?1 AND (s.tool, s.unit_id) > (u.tool, u.unit_id)
+        ORDER BY s.tool, s.unit_id
+        LIMIT 1)
+)
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT a.rowid
+        FROM inventory_changes AS a
+        WHERE a.namespace_id = ?1 AND a.tool = u.tool AND a.unit_id = u.unit_id
+          AND a.at_ms <= ?2
+        ORDER BY a.seq DESC
+        LIMIT 1)
+    UNION
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT l.rowid
+        FROM inventory_changes AS l
+        WHERE l.namespace_id = ?1 AND l.tool = u.tool AND l.unit_id = u.unit_id
+        ORDER BY l.seq DESC
+        LIMIT 1)
+)
+ORDER BY seq
 `
 
 type ListInventoryChangeBoundsParams struct {
@@ -5782,7 +5815,9 @@ type ListInventoryChangeBoundsParams struct {
 
 // For each unit of a namespace, the row with the highest sequence among the
 // rows at or before the time, and the row with the highest sequence of all.
-// ReplayAt and ReplayView need no other row.
+// ReplayAt and ReplayView need no other row. A skip scan on the index finds
+// each unit once, then two lookups on the index read its rows, so the cost
+// follows the count of units, not the count of rows.
 func (q *Queries) ListInventoryChangeBounds(ctx context.Context, arg ListInventoryChangeBoundsParams) ([]InventoryChange, error) {
 	rows, err := q.db.QueryContext(ctx, listInventoryChangeBounds, arg.NamespaceID, arg.AtMs)
 	if err != nil {
@@ -5877,16 +5912,27 @@ func (q *Queries) ListInventoryChanges(ctx context.Context, arg ListInventoryCha
 }
 
 const listInventoryUnitBounds = `-- name: ListInventoryUnitBounds :many
-SELECT c.namespace_id, c.seq, c.at_ms, c.tool, c.unit_id, c.name, c.display_name, c.status, c.collection,
-       c.kind, c.resource_count
-FROM inventory_changes AS c
-WHERE c.namespace_id = ?1 AND c.tool = ?2 AND c.unit_id = ?3
-  AND (c.seq = (SELECT MAX(a.seq) FROM inventory_changes AS a
-                WHERE a.namespace_id = c.namespace_id AND a.tool = c.tool AND a.unit_id = c.unit_id
-                  AND a.at_ms <= ?4)
-    OR c.seq = (SELECT MAX(l.seq) FROM inventory_changes AS l
-                WHERE l.namespace_id = c.namespace_id AND l.tool = c.tool AND l.unit_id = c.unit_id))
-ORDER BY c.seq
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+           a.kind, a.resource_count
+    FROM inventory_changes AS a
+    WHERE a.namespace_id = ?1 AND a.tool = ?2 AND a.unit_id = ?3
+      AND a.at_ms <= ?4
+    ORDER BY a.seq DESC
+    LIMIT 1
+)
+UNION
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+           l.kind, l.resource_count
+    FROM inventory_changes AS l
+    WHERE l.namespace_id = ?1 AND l.tool = ?2 AND l.unit_id = ?3
+    ORDER BY l.seq DESC
+    LIMIT 1
+)
+ORDER BY seq
 `
 
 type ListInventoryUnitBoundsParams struct {

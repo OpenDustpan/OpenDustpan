@@ -94,7 +94,12 @@ func unitAtObject(u coreinventory.UnitAt) (identity.Object, error) {
 // namespace:read on the namespace; this removes every unit that the caller
 // may not read now (unit:read) and counts it in omitted. It lists a renamed
 // unit under its name at the time with its current name, and a soft-deleted
-// unit with the mark deleted. It counts a purged unit and never names it.
+// unit with the mark deleted. It counts a purged unit and never names it. The
+// entries hold no collection, because a move to another collection appends no
+// row to the change log. The view is complete from the time that the
+// installation first ran the change log: a unit that existed then has one
+// baseline row at its last change time, or at its delete time, and the view
+// at an earlier time does not list it.
 func (h *Handler) listUnitsAt(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, at time.Time,
 ) {

@@ -181,6 +181,7 @@ func RunHistory(t *testing.T, newFixture func(t *testing.T) Fixture) {
 		{name: "ViewAtLifeCycle", run: viewAtLifeCycle},
 		{name: "ViewAtBeforeFirstChange", run: viewAtBeforeFirstChange},
 		{name: "ViewAtRenameChain", run: viewAtRenameChain},
+		{name: "ViewAtNameReuse", run: viewAtNameReuse},
 		{name: "UnitNamesRenameChain", run: unitNamesRenameChain},
 		{name: "UnitNamesLifeCycle", run: unitNamesLifeCycle},
 		{name: "UnitNamesScope", run: unitNamesScope},
@@ -882,6 +883,55 @@ func viewAtRenameChain(t *testing.T, f Fixture) {
 	}
 }
 
+// viewAtNameReuse: a name that a soft delete freed and a new unit took lists
+// the unit that held the name at the time. The deleted unit keeps its name as
+// the current name and is deleted.
+func viewAtNameReuse(t *testing.T, f Fixture) {
+	t.Helper()
+
+	fence := makeNamespace(t, f, "acme")
+	appendAll(t, f, fence,
+		row(toolPulumi, "stk-a", "web/a", inventory.ChangeCreated, at(100)),
+		row(toolPulumi, "stk-a", "web/a", inventory.ChangeDeleted, at(200)),
+		row(toolPulumi, "stk-b", "web/a", inventory.ChangeCreated, at(300)),
+	)
+
+	cases := []struct {
+		when    time.Time
+		unitID  string
+		deleted bool
+	}{
+		{when: at(150), unitID: "stk-a", deleted: true},
+		{when: at(250), unitID: "", deleted: false},
+		{when: at(350), unitID: "stk-b", deleted: false},
+	}
+
+	for _, tc := range cases {
+		view, err := f.ViewAt(t.Context(), "acme", tc.when)
+		if err != nil {
+			t.Fatalf("at %s: %v", tc.when, err)
+		}
+
+		if tc.unitID == "" {
+			if len(view.Units) != 0 {
+				t.Fatalf("at %s: %+v, want no unit", tc.when, view.Units)
+			}
+
+			continue
+		}
+
+		if len(view.Units) != 1 {
+			t.Fatalf("at %s: %+v, want one unit", tc.when, view.Units)
+		}
+
+		got := view.Units[0]
+		if got.Entry.UnitID != tc.unitID || got.Entry.Name != "web/a" || got.CurrentName != "web/a" ||
+			got.Deleted() != tc.deleted {
+			t.Fatalf("at %s: unit %+v, want %s named web/a, deleted %t", tc.when, got, tc.unitID, tc.deleted)
+		}
+	}
+}
+
 // unitNamesRenameChain: UnitNames follows a rename chain, including a return
 // to an earlier name.
 func unitNamesRenameChain(t *testing.T, f Fixture) {
@@ -892,6 +942,7 @@ func unitNamesRenameChain(t *testing.T, f Fixture) {
 		row(toolPulumi, "stk-a", "web/a", inventory.ChangeCreated, at(100)),
 		row(toolPulumi, "stk-a", "web/b", inventory.ChangeRenamed, at(200)),
 		row(toolPulumi, "stk-a", "web/c", inventory.ChangeRenamed, at(300)),
+		row(toolPulumi, "stk-a", "web/a", inventory.ChangeRenamed, at(400)),
 	)
 
 	for _, when := range pointsOf(stored) {
@@ -906,7 +957,7 @@ func unitNamesRenameChain(t *testing.T, f Fixture) {
 	}
 
 	got, err := f.UnitNames(t.Context(), "acme", toolPulumi, "stk-a", at(250))
-	if err != nil || got != (inventory.Names{AtTime: "web/b", Current: "web/c"}) {
+	if err != nil || got != (inventory.Names{AtTime: "web/b", Current: "web/a"}) {
 		t.Fatalf("at 250: %+v, err %v", got, err)
 	}
 }

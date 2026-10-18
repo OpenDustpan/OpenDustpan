@@ -473,30 +473,64 @@ LIMIT sqlc.arg(page_limit);
 -- name: ListInventoryChangeBounds :many
 -- For each unit of a namespace, the row with the highest sequence among the
 -- rows at or before the time, and the row with the highest sequence of all.
--- ReplayAt and ReplayView need no other row.
-SELECT c.namespace_id, c.seq, c.at_ms, c.tool, c.unit_id, c.name, c.display_name, c.status, c.collection,
-       c.kind, c.resource_count
-FROM inventory_changes AS c
-WHERE c.namespace_id = sqlc.arg(namespace_id)
-  AND (c.seq = (SELECT MAX(a.seq) FROM inventory_changes AS a
-                WHERE a.namespace_id = c.namespace_id AND a.tool = c.tool AND a.unit_id = c.unit_id
-                  AND a.at_ms <= sqlc.arg(at_ms))
-    OR c.seq = (SELECT MAX(l.seq) FROM inventory_changes AS l
-                WHERE l.namespace_id = c.namespace_id AND l.tool = c.tool AND l.unit_id = c.unit_id))
-ORDER BY c.seq;
+-- ReplayAt and ReplayView need no other row. A skip scan on the index finds
+-- each unit once, then two lookups on the index read its rows, so the cost
+-- follows the count of units, not the count of rows.
+WITH RECURSIVE units(tool, unit_id) AS (
+    (SELECT f.tool, f.unit_id
+     FROM inventory_changes AS f
+     WHERE f.namespace_id = sqlc.arg(namespace_id)
+     ORDER BY f.tool, f.unit_id
+     LIMIT 1)
+    UNION ALL
+    SELECT n.tool, n.unit_id
+    FROM units AS u
+    CROSS JOIN LATERAL (
+        SELECT s.tool, s.unit_id
+        FROM inventory_changes AS s
+        WHERE s.namespace_id = sqlc.arg(namespace_id) AND (s.tool, s.unit_id) > (u.tool, u.unit_id)
+        ORDER BY s.tool, s.unit_id
+        LIMIT 1
+    ) AS n
+)
+SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+       r.kind, r.resource_count
+FROM units AS u
+CROSS JOIN LATERAL (
+    (SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+            a.kind, a.resource_count
+     FROM inventory_changes AS a
+     WHERE a.namespace_id = sqlc.arg(namespace_id) AND a.tool = u.tool AND a.unit_id = u.unit_id
+       AND a.at_ms <= sqlc.arg(at_ms)
+     ORDER BY a.seq DESC
+     LIMIT 1)
+    UNION
+    (SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+            l.kind, l.resource_count
+     FROM inventory_changes AS l
+     WHERE l.namespace_id = sqlc.arg(namespace_id) AND l.tool = u.tool AND l.unit_id = u.unit_id
+     ORDER BY l.seq DESC
+     LIMIT 1)
+) AS r
+ORDER BY r.seq;
 
 -- name: ListInventoryUnitBounds :many
 -- The rows of ListInventoryChangeBounds for one unit.
-SELECT c.namespace_id, c.seq, c.at_ms, c.tool, c.unit_id, c.name, c.display_name, c.status, c.collection,
-       c.kind, c.resource_count
-FROM inventory_changes AS c
-WHERE c.namespace_id = sqlc.arg(namespace_id) AND c.tool = sqlc.arg(tool) AND c.unit_id = sqlc.arg(unit_id)
-  AND (c.seq = (SELECT MAX(a.seq) FROM inventory_changes AS a
-                WHERE a.namespace_id = c.namespace_id AND a.tool = c.tool AND a.unit_id = c.unit_id
-                  AND a.at_ms <= sqlc.arg(at_ms))
-    OR c.seq = (SELECT MAX(l.seq) FROM inventory_changes AS l
-                WHERE l.namespace_id = c.namespace_id AND l.tool = c.tool AND l.unit_id = c.unit_id))
-ORDER BY c.seq;
+(SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+        a.kind, a.resource_count
+ FROM inventory_changes AS a
+ WHERE a.namespace_id = sqlc.arg(namespace_id) AND a.tool = sqlc.arg(tool) AND a.unit_id = sqlc.arg(unit_id)
+   AND a.at_ms <= sqlc.arg(at_ms)
+ ORDER BY a.seq DESC
+ LIMIT 1)
+UNION
+(SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+        l.kind, l.resource_count
+ FROM inventory_changes AS l
+ WHERE l.namespace_id = sqlc.arg(namespace_id) AND l.tool = sqlc.arg(tool) AND l.unit_id = sqlc.arg(unit_id)
+ ORDER BY l.seq DESC
+ LIMIT 1)
+ORDER BY seq;
 
 -- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,

@@ -21,7 +21,7 @@ var (
 )
 
 // workspaceInventoryTool names OpenTofu in inventory entries.
-const workspaceInventoryTool = "opentofu"
+const workspaceInventoryTool = workspace.InventoryTool
 
 // CreateWorkspace implements workspace.Store with a fenced insert. The
 // inventory entry is written in the same transaction.

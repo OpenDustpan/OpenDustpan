@@ -22,7 +22,7 @@ var (
 )
 
 // inventoryTool names the Pulumi CLI in inventory entries.
-const inventoryTool = "pulumi"
+const inventoryTool = stack.InventoryTool
 
 // stackUnitName returns the tool's own name for a stack: project/stack.
 func stackUnitName(ref stack.Ref) string {

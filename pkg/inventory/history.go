@@ -53,7 +53,9 @@ type Change struct {
 }
 
 // Entry returns the inventory entry that the row records. The lock of a
-// unit is not history, so the entry has none.
+// unit is not history, so the entry has none. The collection of a unit is
+// not history either: a move to another collection appends no row, so the
+// collection in a row may be out of date, and the entry has none.
 func (c Change) Entry() Entry {
 	return Entry{
 		LastChanged:   c.At,
@@ -65,7 +67,7 @@ func (c Change) Entry() Entry {
 		Status:        c.Status,
 		ResourceCount: c.ResourceCount,
 		Lock:          nil,
-		Collection:    c.Collection,
+		Collection:    "",
 	}
 }
 
@@ -122,7 +124,7 @@ func (u UnitAt) Deleted() bool {
 
 // UnitsView is the inventory of one namespace at a time, with the units that
 // the caller may not name. Purged counts the units that existed at the time
-// and that a purge removed since. The view never names them (ADR 150).
+// and that a purge removed since. The view never names them.
 type UnitsView struct {
 	Units  []UnitAt
 	Purged int
