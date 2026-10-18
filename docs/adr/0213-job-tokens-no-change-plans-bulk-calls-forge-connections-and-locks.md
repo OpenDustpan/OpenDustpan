@@ -18,7 +18,7 @@ or that the competitors share where these sources say nothing:
   must read them. A job reads them on two paths: the tool reads them with
   the job token (a stack reference of the Pulumi CLI, or a
   `terraform_remote_state` data source of OpenTofu), or a profile block
-  `outputs/opendustpan` gives them to the job (the profile ADRs).
+  `outputs/opendustpan` gives them to the job (ADR 207).
 - ADR 153 decision 4 records an edge at each output read, but names only
   the read paths of a workstation.
 - ADR 103 decision 8: what a job that only plans can read. A plan of
@@ -52,7 +52,7 @@ or that the competitors share where these sources say nothing:
    | Path | Check 1 | Check 2 |
    | --- | --- | --- |
    | The tool reads with the job token: a stack reference (Pulumi CLI) or `terraform_remote_state` (OpenTofu) | An output-sharing rule of the source unit names the unit of the job. | The principal that started the job has `unit:read` on the source unit with its own grants, and `unit:read-secrets` for a secret output. |
-   | A profile block `outputs/opendustpan` in a job | An output-sharing rule of the source unit names the unit of the job. | The authority of the profile attachment has `unit:read` on the source unit, and `unit:read-secrets` for a secret output (the profile ADRs, ADR 207 decision 7). |
+   | A profile block `outputs/opendustpan` in a job | An output-sharing rule of the source unit names the unit of the job. | The authority of the profile attachment has `unit:read` on the source unit, and `unit:read-secrets` for a secret output (ADR 207 decision 7). |
 
    The job gets the intersection of the two checks, never more. It reads
    no other part of the other unit. This replaces "limited to the unit of
@@ -71,6 +71,16 @@ or that the competitors share where these sources say nothing:
    answer. A secret output stays a secret in the tool: a Pulumi secret, or
    an OpenTofu output with `sensitive = true`.
 
+   **A secret output of the Pulumi CLI.** For the Pulumi CLI, a secret
+   output reaches the tool as ciphertext of the source unit, and the tool
+   asks the source unit to decrypt it. The job token may call the decrypt
+   route of the source unit only when both checks of the path pass at
+   that call. The server decrypts only ciphertexts that are root outputs
+   of the current state of the source unit, and refuses each other
+   ciphertext with 403. An e2e step checks a secret output and a refused
+   ciphertext that is not an output. That step checks the behavior of
+   the CLI before the code lands.
+
    **The edge.** Each such read records the edge of ADR 153 decision 4,
    with the evidence `job`. A read through the profile block records the
    same edge.
@@ -88,20 +98,37 @@ or that the competitors share where these sources say nothing:
    the grants of its principal. HCP Terraform lets a workspace read the
    outputs of another workspace only when that workspace shares its state
    with it.
-2. **A job that only plans decrypts the secrets of its own unit.** The job
-   token of a job that only plans (`unit:run-plan`, ADR 103 decision 8)
-   gets `unit:decrypt` and an unmasked read of the state of its own unit,
-   when the principal that started the job has `unit:run-plan`. It gets no
-   write: no state write, no lock other than the lock of the plan, and no
+2. **A job that only plans decrypts the secrets of its own unit only from
+   trusted code.** The job token of a job that only plans (`unit:run-plan`,
+   ADR 103 decision 8) gets `unit:decrypt` and an unmasked read of the
+   state of its own unit only when one of these is true:
+   - the principal that started the job has `unit:read-secrets` on the
+     unit.
+   - the commit of the job is on a branch that the source policy of the
+     code location marks protected.
+
+   Else the plan runs with masked secrets and no decrypt. A plan that needs
+   a secret then fails with `job.ErrSecretsWithheld`. The server checks
+   the condition at each decrypt.
+
+   The token gets no write except the lock or the update lease of the plan
+   and the events of the plan. It gets no state write, no checkpoint and no
    `unit:encrypt`. It gets no read of another unit, except by decision 1.
    The plan and the logs stay masked (ADR 102). The role page of `planner`
-   says that the code of a plan runs on the runner and can see the secrets
-   of the unit there.
+   says that the code of a plan with secrets runs on the runner and can
+   see the secrets of the unit there, and that a plan of a branch that is
+   not protected gets no secrets. So ADR 212 decision 1 stays true: a
+   planner cannot read a secret value.
 
-   Benchmark: the "plan" permission of HCP Terraform has the same
-   property: a plan run reads the sensitive variables and the state of its
-   workspace on the agent, and a person with the permission cannot read
-   them in the console.
+   An e2e step runs a Pulumi preview with a new secret value under the job
+   token. If the preview needs `unit:encrypt`, this decision changes
+   before the code lands.
+
+   Benchmark: GitHub Actions gives no secrets to a workflow that runs from
+   the pull request of a fork. The "plan" permission of HCP Terraform lets
+   a plan run read the sensitive variables and the state of its workspace
+   on the agent, and a person with the permission cannot read them in the
+   console.
 3. **A plan with no change ends `succeeded`.** When the plan phase of a job
    finds no change, the job ends `succeeded`. The apply phase does not run,
    and no approval gate of the apply opens. A unit plan with no change in a
@@ -145,8 +172,9 @@ or that the competitors share where these sources say nothing:
    tells no more about which objects exist than single calls do.
 
    A retry of a bulk call is safe with the `Idempotency-Key` header (ADR
-   210 decision 6): a replay answers the result of each item of the first
-   call and does no item a second time.
+   210 decision 6). The server does not store an item that failed with 5xx
+   or 429. A replay does such items again, answers the stored result of
+   each other item, and does no other item a second time.
 
    Benchmark: Amazon S3 `DeleteObjects` (up to 1,000 keys) and Amazon SQS
    `DeleteMessageBatch` (up to 10 entries) answer one result for each entry
@@ -202,17 +230,27 @@ or that the competitors share where these sources say nothing:
     - The action is `unit:lock` on the object of the lock: a unit, a
       collection or a namespace. A collection and a namespace widen the
       object, as ADR 51 decision 8 says. The reason is required, at most
-      500 characters.
+      500 characters. The built-in roles with `unit:lock` are
+      `maintainer` and `admin`.
+    - A unit that joins a locked collection is covered from that moment.
+      A unit that leaves the collection is not covered.
     - While a manual lock covers a unit, no new job of the unit starts, and
       no queued phase of the unit dispatches. A queued job waits with the
-      reason `locked`. A phase that already runs runs to its end.
+      reason `locked`, and keeps the queue timeout of the job model. A
+      phase that already runs runs to its end.
     - A lock request of a tool for the unit (an OpenTofu lock, or the start
       of a Pulumi update) fails as for a lock that another principal holds
       (ADR 25 for OpenTofu, ADR 20 for the Pulumi CLI). The message names
-      the holder and the reason of the manual lock. A state write of a tool that already holds its
-      own lock is never refused.
+      the holder and the reason of the manual lock. A state write of a tool
+      that already holds its own lock is never refused. A lock request of
+      a tool with the job token of a phase that started before the manual
+      lock passes.
     - The holder removes the lock. A person with `unit:manage` on the
-      object of the lock can also remove it, as a force-unlock.
+      object of the lock can also remove it, as a force-unlock with an
+      audit entry. A force-unlock through a tool API removes only a lock
+      of a tool, never a manual lock.
+    - `namespace:break-freeze` does not pass a manual lock. The way out is
+      the force-unlock with `unit:manage`.
     - Each lock and each removal writes an audit entry with the principal,
       the object and the reason.
     - Each unit that a manual lock covers shows the flag of decision 9,
@@ -243,8 +281,12 @@ or that the competitors share where these sources say nothing:
   gets two steps: a Pulumi stack reference in a job, and a
   `terraform_remote_state` data source in a job. Each step checks a secret
   output and a refused read with no rule.
-- The job token of a plan-only job gets the reads of decision 2, and a test
-  checks that it can write nothing.
+- The job token of a plan-only job gets the reads of decision 2 only under
+  its conditions. A test checks that it can write nothing except the lock
+  or lease and the events of the plan, and that the plan of each tool
+  passes. A test checks `job.ErrSecretsWithheld` for a plan of a branch
+  that is not protected. The e2e suite gets the Pulumi preview step of
+  decision 2 and the decrypt step of decision 1.
 - The plan step of each tool reports "no change". The job model gets the
   rule of decision 3, and `jobtest` checks that no apply phase starts.
 - `job.Decider` gets the values of decision 4. A canary test checks that no

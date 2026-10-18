@@ -1,6 +1,6 @@
 # 203. Opening a profile: sessions, attachments, delivery, actions and audit
 
-Status: accepted · 2026-10-18 · part of ADR 200
+Status: accepted · 2026-10-18 · part of ADR 200 · decision 12 amended by ADR 210 decision 6. The replay record holds a keyed hash. A route that does not take the key answers 400.
 
 ## Context
 

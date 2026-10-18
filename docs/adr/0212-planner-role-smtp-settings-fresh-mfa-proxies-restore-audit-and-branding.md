@@ -45,7 +45,9 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    action of `viewer`, and `unit:run-plan` and `job:read-plans` (ADR 103
    decision 8). So a planner can start a runner job that only plans, and
    can read the masked plan. It cannot apply, destroy, approve or read a
-   secret value. ADR 197 decision 3 also gives it `changeorder:author`,
+   secret value. A plan job that a planner starts gets the secrets of the
+   unit only when its commit is on a protected branch (ADR 213 decision
+   2). ADR 197 decision 3 also gives it `changeorder:author`,
    because it has `unit:run-plan`.
 
    **The caveat for a workstation.** The role limits what the server runs
@@ -54,7 +56,8 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    `viewer` does. That plan is not a job and the server keeps no record of
    it (ADR 152 decision 12). A person who also holds cloud credentials can
    change the cloud from a workstation. The role does not prevent that. The
-   role page in the docs says so.
+   role page in the docs says so. The role page also says that a plan of a
+   planner on a branch that is not protected gets no secrets.
 
    Benchmark: HCP Terraform has a fixed "plan" permission set on a
    workspace, between "read" and "write". It separates a plan from an
@@ -64,15 +67,18 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    ADR 63 decision 1. The password is a sensitive setting (ADR 63 decision
    6). It comes only from an environment variable or from a file that a
    `*_FILE` key names (ADR 63 decision 4). It never comes from a flag or
-   from the database.
+   from the database. So the declaration of the SMTP password does not
+   allow the database, and a `PATCH` of it answers 409 (decision 7).
 
    Benchmark: the `*_FILE` convention of container images for secrets.
    Designed against PCI DSS v4.0.1 requirement 8.6.2: no password of a
    system account in a script or in a configuration file.
 3. **Fresh MFA for a change that reduces security, and for approvals.**
 
-   **Settings.** A change of an installation setting through the API needs
-   a fresh MFA step when it makes the installation less secure. The step
+   **Settings.** A change of an installation setting or of a namespace
+   setting through the API needs a fresh MFA step when it makes the
+   installation or the namespace less secure. When one key of a `PATCH`
+   reduces security, the whole `PATCH` needs the step. The step
    is the step of ADR 70: the window of ADR 56 for built-in MFA, and the
    window of ADR 71 for a console session from an SSO provider. With
    built-in MFA off and no SSO provider, ADR 56 decision 5 applies, and the
@@ -91,6 +97,7 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    - the audit log, the hash chain or signed checkpoints from on to off,
      when the API can set the setting,
    - a longer list of trusted proxies, when the API can set the setting,
+   - "fresh MFA for every approval" of a namespace from on to off,
    - the three changes of ADR 70 decisions 16, 17 and 23.
 
    The declaration of each setting says which change reduces security, as
@@ -113,7 +120,7 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    token, as before.
 
    **Approvals (owner decision 2026-10-18).** An approval of a gate of a
-   `destroy` phase (ADR 103 decision 2) always needs a fresh MFA step, as
+   `destroy` phase (ADR 103 decision 2) needs a fresh MFA step, as
    for a setting above. A namespace setting, "fresh MFA for every
    approval", off by default, makes every approval in the namespace need
    the step. The step is the step of the confirmation of ADR 103 decision 2:
@@ -205,18 +212,27 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
      as RFC 68 ("API shape") proposes.
    - `PATCH` on the same path changes one or more database values with JSON
      Merge Patch (ADR 210 decision 10). All of them change, or none do. A
-     `null` deletes the database value, and the effective value goes back
-     to the default or to the static value.
-   - The resource has one revision. Each answer holds its `ETag`. A `PATCH`
-     needs `If-Match`. A stale revision answers 412 and changes nothing.
-   - A key that the static layer sets is locked: a `PATCH` of it answers
-     409 with the key and its source, and changes no key.
+     `null` deletes the database value, and the effective value goes to
+     the default.
+   - The resource has one revision. The revision changes at each change
+     of a database value, and at each reload or start that changes an
+     effective value or a source. The `ETag` covers the effective values.
+     Each answer holds its `ETag`. A `PATCH` needs `If-Match`. A stale
+     revision answers 412 and changes nothing.
+   - A key that the static layer sets is locked: a `PATCH` that sets it
+     answers 409 with the key and its source, and changes no key. A `null`
+     for a locked key deletes the database value that the static value
+     shadows. The answer shows such a database value with
+     `shadowed: true`.
    - The actions are `installation:read-settings` and
      `installation:manage-settings` on `@server`, and
      `namespace:read-settings` and `namespace:manage-settings` on the
      namespace.
    - A secret setting answers `"secret": true` and whether it is set, never
-     its value. A `PATCH` can set or replace it, never read it.
+     its value. A `PATCH` can set or replace only a secret setting whose
+     declaration allows the database, and never reads it. A `PATCH` of a
+     secret setting that only the static layer can set, for example the
+     SMTP password, answers 409.
 
    The routes of one policy become views of the resource:
    `/api/dustpan/v1/settings/session-policy`,
@@ -240,7 +256,8 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
 ## Consequences
 
 - `pkg/access` gets the `planner` role. The role page in the docs gives the
-  caveat of decision 1.
+  caveat of decision 1, and says that a plan of a planner on a branch that
+  is not protected gets no secrets.
 - The settings declarations get the field for decision 3. The settings API
   answers a change that needs a fresh MFA step as ADR 71 does: 401 with the
   path of a new sign-in, or the MFA prompt of ADR 56. An access token gets

@@ -38,7 +38,9 @@ The facts on `main`:
    which switch to turn on. The message says the same. A route of a module
    that is on, and a path that no module has, keep the 404 that they have
    today. The module starts no schedule, no timer and no durable operation
-   of its own. Its data stays in the store. When the operator turns the
+   of its own. A durable operation of the module that runs when the
+   operator turns the module off runs to its end. The server refuses each
+   new one. Its data stays in the store. When the operator turns the
    module on again, it uses the same data.
 4. **Every migration always applies.** The server applies each migration at
    each start, whatever the switches are. So the tables of an off module

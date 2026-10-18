@@ -72,24 +72,18 @@ The facts on `main`:
    | `/.well-known/terraform.json` | OpenTofu service discovery | no change |
    | the probe paths (ADR 34) | the orchestrator | no change |
    | `/runner/v1/...` (ADR 131, ADR 132) | the runner binary | no change. The runner protocol has its own version. |
-   | `/oidc/{namespace ID}/.well-known/openid-configuration` and `/oidc/{namespace ID}/jwks` | a cloud trust policy | as the profile ADRs give them |
-   | `/sign-in/{id}/callback` | the identity provider, as a redirect URI | moves once (below) |
+   | `/oidc/{namespace ID}/.well-known/openid-configuration` and `/oidc/{namespace ID}/jwks` | a cloud trust policy | as ADR 204 gives them |
+   | `/sign-in/{id}/callback` | the identity provider, as a redirect URI | moves once from `/api/server/sign-in/{id}/callback`, with no alias (below) |
    | `/mcp` | the configuration of an MCP client | moves once from `/api/agent/mcp`. MCP has its own protocol version. |
    | `/metrics` | the scrape configuration of a Prometheus server | moves once from `/api/server/metrics`. The action of ADR 32 stays. |
    | `/chat/{tool}/actions` | the app configuration of a chat tool | moves once from `/api/chat/{tool}/actions` (ADR 146) |
 
    **The sign-in callback.** The callback moves one time, now, from
    `/api/server/sign-in/{id}/callback` to `/sign-in/{id}/callback`. It
-   never moves with a major version. The old path keeps answering as an
-   alias until the next major release, so that each redirect URI that an
-   operator registered keeps working. The server writes a WARN log line
-   for each use of the old path, with the provider ID. The start of a
-   sign-in is a route of the REST API (`/api/dustpan/v1/sign-in/{id}`),
-   because only the console calls it.
-
-   This alias is the one exception to "no alias" in decision 1. An
-   operator registered these URIs at the identity provider before this
-   ADR, and a broken redirect URI locks every person out.
+   never moves with a major version. The server keeps no alias for the
+   old path, because no tag shipped it (ADR 73). The start of a sign-in
+   is a route of the REST API (`/api/dustpan/v1/sign-in/{id}`), because
+   only the console calls it.
 
    Benchmark: OAuth 2.0 redirect URIs match exactly (RFC 6749 section
    3.1.2), so the identity providers keep them stable. Kubernetes keeps
@@ -146,33 +140,60 @@ The facts on `main`:
    `Idempotency-Key`. The project owner wants easy integration with
    workflow engines such as Temporal, which retry a call that timed out.
    - **Scope.** The server keys a stored answer by the caller (the
-     principal), the route (the method and the path pattern with its
-     values) and the key. The same key from another caller or on another
+     principal), the route (the method and the path) and the key. The same key from another caller or on another
      route is a new key.
    - **The key.** A string of 1 to 255 printable ASCII characters. A
      client uses a random value, for example a UUID. A key that is not
      valid answers 400 and changes nothing.
-   - **Retention.** The server keeps the key, a hash of the request body
-     and the first answer for 24 hours from the first request.
+   - **Retention.** The server keeps the replay record (the key, a keyed
+     hash of the request body and the first answer) for 24 hours from the
+     first request.
+   - **No secret in a replay record.** A replay record never holds a
+     request body, a secret, a credential or a decrypted value. It holds
+     the key, a keyed hash of the request body (HMAC-SHA-256 with a server
+     key, never a plain hash, because a body can hold a low-entropy
+     secret), the status and the answer. When the answer of a route holds
+     a secret or a credential, the record holds the ID of the object that
+     the first request made (for example a token ID or an open-session ID)
+     in place of the answer. A replay then answers 409 with the error code
+     `request.idempotency-key-replayed-secret` and that ID, and never
+     answers the secret again. The declaration of the route says that its
+     answer holds a secret, and a test checks each such route.
    - **A replay.** A request with a known key and the same body answers
      the stored first answer, with its status, and does the operation no
      second time. The answer has the header `Idempotent-Replayed: true`.
+     Before it answers, a replay checks the authorization of the route
+     again. If the caller does not have the action now, the replay
+     answers 403 and does not answer the stored answer.
    - **A different body.** The same key with a different body answers 422
      with the error code `request.idempotency-key-reused` and changes
      nothing.
    - **A request in progress.** A request with a key whose first request
      has not ended answers 409 with the error code
      `request.idempotency-key-in-progress`. The client retries later.
-   - **Errors.** The server stores an answer with status 2xx or 4xx. It
-     does not store a 5xx answer or a 429 answer, so a retry of such a
-     request does the operation.
-   - **Bulk calls.** A bulk call (ADR 213 decision 4) uses the key for a
-     safe retry of the whole call: a replay answers the result of each
-     item from the first call.
-   - The key is optional. A route that changes data with no key behaves as
-     today. A route can require the key. The route says so.
-   - The store write of the key is in the same transaction as the write
-     of the operation, so a crash never stores one without the other.
+   - **Errors.** The server stores an answer only when the operation ran:
+     a 2xx answer, or a 4xx answer that the operation itself gave after it
+     started. It never stores 400 (a key that is not valid), 401, 403,
+     404, 409, 412, 422 (a reused key), 423, 429 or 5xx, so a retry with
+     the same key after the client fixes the cause does the operation.
+   - **Bulk calls.** A bulk call (ADR 213 decision 5) uses the key for a
+     safe retry of the whole call. The server does not store an item that
+     failed with 5xx or 429. A replay does such items again and answers
+     the stored result of each other item.
+   - **Which routes.** Decision 6 applies to the routes under
+     `/api/dustpan/v1`. The key is optional. A route that changes data
+     with no key behaves as today. A route can require the key. The route
+     says so. A route that does not take the key declares it, and a
+     request to it with the key answers 400. The server never ignores the
+     key without an error.
+   - **Transactions.** The server writes a pending record of the key in
+     its own transaction, before the operation starts. It writes the final
+     answer in the same transaction as the write of the operation, so a
+     crash never stores an answer without the operation. A pending record
+     that has no final answer after 5 minutes (for example after a crash)
+     expires, and a retry with the same key then does the operation.
+   - **Backup and restore.** The idempotency table is not in the backup
+     table list. A restore empties it.
 
    Benchmark: Stripe idempotency keys (24 hours, a replay answers the
    first answer, a key with other parameters is an error), the AWS
@@ -263,13 +284,13 @@ the rule for each kind:
 | `/api/runners/{namespace}/pools[/{id}]` | `/api/dustpan/v1/namespaces/{namespace}/runner-pools[/{id}]` |
 | `/api/server/session-policy`, `/api/server/token-policy`, `/api/server/namespaces/{namespace}/ip-allowlist` | views of the settings resource (ADR 212 decision 7) |
 | `/api/server/sign-in/{provider}` | `/api/dustpan/v1/sign-in/{id}` |
-| `/api/server/sign-in/{provider}/callback` | `/sign-in/{id}/callback`, with the old path as an alias (decision 2) |
+| `/api/server/sign-in/{provider}/callback` | `/sign-in/{id}/callback`, with no alias (decision 2) |
 | `/api/inventory/units?namespace=...` | `/api/dustpan/v1/namespaces/{namespace}/units`, or `/api/dustpan/v1/namespaces/-/units` across namespaces |
 | `/api/inventory/units/{tool}/{unit_id}/dependents` | `/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/dependents`, also through `namespaces/-` |
 | `/api/inventory/units/{tool}/{unit_id}/graph/{upstream,downstream,focus}` | `/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/graph/{upstream,downstream,focus}`, also through `namespaces/-` |
 | `/api/inventory/deleted-units?organization=...` | `/api/dustpan/v1/namespaces/{namespace}/deleted-units`, or `/api/dustpan/v1/namespaces/-/deleted-units` across namespaces |
 | `/api/inventory/deleted-units/{tool}/{unit_id}[/restore]` | `/api/dustpan/v1/namespaces/{namespace}/deleted-units/{unit_id}[/restore]` |
-| `/api/server/deleted-units/sweep` | `/api/dustpan/v1/namespaces/-/deleted-units/sweep` |
+| `/api/server/deleted-units/sweep` | `/api/dustpan/v1/deleted-units/sweep` (an operation of the installation, because a write never takes `-`) |
 | `/api/inventory/namespaces/{namespace}/collections[/{collection}]` | `/api/dustpan/v1/namespaces/{namespace}/collections[/{collection}]` |
 | `/api/context/units/{tool}/{unit_id}[/resource?key=...]` | `/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/context[/resource?key=...]`, also through `namespaces/-` |
 | `/api/unmanaged/{namespace}/...` | `/api/dustpan/v1/namespaces/{namespace}/...` |
@@ -307,12 +328,13 @@ ADRs 28, 30, 32, 38, 60, 64, 65, 67, 70, 102, 110, 113, 117, 120, 122, 123,
   the `identity` package change with it. The console change merges before
   the next server tag (ADR 73).
 - The route test puts the paths of decision 2 in a separate list, so a
-  route outside `/api/dustpan/v1` cannot be added by mistake. The callback
-  alias has a test that checks its WARN log line.
+  route outside `/api/dustpan/v1` cannot be added by mistake. A test
+  checks that the old callback path answers 404.
 - The Pulumi CLI and OpenTofu see no change. `make e2e` shows it.
 - The idempotency store of decision 6 gets a port in the consuming package
   and a conformance suite, and each store adapter runs it. A sweep deletes
-  keys older than 24 hours.
+  keys older than 24 hours and pending records older than 5 minutes. A
+  test checks each route whose answer holds a secret.
 - The `GLOSSARY.md` entries that name a path, such as **Installation** and
   **Preferences**, name the new path.
 - Three reference pages come with the move: the action grammar of decision
