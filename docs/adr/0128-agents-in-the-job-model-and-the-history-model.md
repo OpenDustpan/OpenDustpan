@@ -178,18 +178,20 @@ it.
    decision 12). The port gets the token ID from `job.Actor.Credential`
    and the MCP session ID from the agent reference (`SessionID`, empty for
    the channel `agent` and with no agent). The refusal is
-   `job.ErrTokenRevealed`. `Start` refuses an actor with an agent
-   reference whose `Credential` kind is empty or unknown with
-   `ErrInvalid`, so a missing credential never skips the check. An error of the port fails the start, and the
-   start creates no job: the check fails closed. It applies to each
+   `job.ErrTokenRevealed`. `Start` refuses each actor whose
+   `Credential` kind is empty or unknown with `ErrInvalid`, so a missing
+   credential never skips the check. A start that the server makes
+   itself, for example by the Catalog, sets an explicit credential kind.
+   An error of the port fails the start, and the start creates no job:
+   the check fails closed. It applies to each
    caller of `job.Service`: the REST API, the Catalog and the agent. A run
    with `Run.ReadPlainSecrets` stays refused by the `Toolset` before the
    port (ADR 124 decision 12). A console session is not marked: the mark
    is on the token and on the MCP session, as ADR 124 says. The
    conformance suite `jobtest` gets a case for a marked token, an
    unmarked one and an error of the port. When the code lands, `jobtest`
-   also gets a case for an actor with an agent reference and an empty or
-   unknown `Credential` kind: `Start` fails with `ErrInvalid` and creates
+   also gets a case for an actor with an empty or unknown `Credential`
+   kind: `Start` fails with `ErrInvalid` and creates
    no job.
 9. **A person who cannot give a confirmation gets no change of an agent.** With
    decision 4, every change of an agent waits for a confirmation, also in
@@ -251,10 +253,11 @@ object is a job, so the text names the job.
     - the person who opened the thread, in a request with no agent
       reference, or
     - an approver who may dismiss, in a request with no agent reference:
-      a principal who may record an `approve` verdict on a gate of the
-      job that is not open yet (`waiting`): `job:approve` on the unit and
-      the groups of that gate. That principal is never the author whom the
-      thread asks for a change: never `Job.StartedBy`, never an agent.
+      a principal who may record an `approve` verdict on an approval gate
+      of the job (`job:approve` on the unit and the groups of that gate),
+      whatever the status of the gate. That principal is never the author
+      whom the thread asks for a change: never `Job.StartedBy`, never an
+      agent.
 
     It refuses `Job.StartedBy` with the new error `job.ErrSelfResolve`,
     also when that person holds `job:approve`. It refuses each actor with
@@ -264,7 +267,7 @@ object is a job, so the text names the job.
     has the person of the agent as its author: that person can resolve it
     in a request of their own, unless that person is `Job.StartedBy`.
     With no approval gate, only the person who opened the thread resolves
-    it, so the job waits until its gate expires or someone cancels it.
+    it, so the job waits until a gate expires, if it has one, or someone cancels it.
 14. **A dismissal needs a reason.** A resolve by anyone other than the
     author of the thread is a **dismissal**. A dismissal needs a reason of
     1 to 1000 characters of plain text with no control characters, as for
