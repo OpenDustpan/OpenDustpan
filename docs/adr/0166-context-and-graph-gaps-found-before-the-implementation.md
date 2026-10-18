@@ -142,45 +142,53 @@ The facts on `main` that the decisions build on:
 7. **A standalone operation kind, one for each unit, that coalesces.** The
    kind is `projection.unit`, version 1. The table `projection_heads` holds
    one row for each unit: (`namespace_id`, `tool`, `unit_id`, `run_id`,
-   `queued`). The start key of a run is
+   `queued`, `started_at_ms`, `marked_run_id`). The start key of a run is
    `projection.unit:<namespace ID>:<tool>:<unit ID>:<run ID>`. The run ID
-   is a random ID that the server makes for each start.
+   is a random ID that the server makes for each start. `started_at_ms` is
+   the time of the start. `marked_run_id` is the run ID of the last failed
+   run that `MarkIncomplete` recorded, else empty.
    - **The start.** Each transaction that sets a new latest state item of
      a unit also runs one atomic upsert on its head row:
 
      ```sql
-     INSERT INTO projection_heads (namespace_id, tool, unit_id, run_id, queued)
-     VALUES ($1, $2, $3, $4, true)
+     INSERT INTO projection_heads
+       (namespace_id, tool, unit_id, run_id, queued, started_at_ms, marked_run_id)
+     VALUES ($1, $2, $3, $4, true, $5, '')
      ON CONFLICT (namespace_id, tool, unit_id) DO UPDATE
-       SET run_id = excluded.run_id, queued = true
+       SET run_id = excluded.run_id, queued = true,
+           started_at_ms = excluded.started_at_ms
        WHERE NOT projection_heads.queued
-          OR EXISTS (SELECT 1 FROM durable_operations o
-                     WHERE o.start_key = 'projection.unit:' || $1 || ':' || $2
-                                         || ':' || $3 || ':' || projection_heads.run_id
-                       AND o.state IN ('succeeded', 'failed', 'canceled'))
+          OR NOT EXISTS (SELECT 1 FROM durable_operations o
+                         WHERE o.start_key = 'projection.unit:' || $1 || ':' || $2
+                                             || ':' || $3 || ':' || projection_heads.run_id
+                           AND o.state IN ('pending', 'running'))
      RETURNING run_id
      ```
 
-     `$4` is a new run ID. The upsert takes the head when the row does not
-     exist, when `queued` is false, or when the durable operation of the
-     run ID in the row ended. It reads `durable_operations` by the
-     start key in the same transaction. When the upsert returns a row, the
-     transaction starts the run with that run ID (`durable.StartRequest`).
-     Both dialects support this form of upsert.
-     When it returns no row, a live run waits, and the transaction starts
-     nothing. Two concurrent transactions on one unit serialize on the row,
-     so only one of them takes the head.
-   - **Why the start also takes an ended head.** A run that ends before
-     its first step, for example with a final failure or a cancel, leaves
-     `queued` true. Without the ended check, no later item could start a
-     run for that unit.
+     `$4` is a new run ID and `$5` is the current time. The upsert takes
+     the head when the row does not exist, when `queued` is false, or when
+     no operation with the start key of the run ID in the row is pending or
+     running. It reads `durable_operations` by the start key in the same
+     transaction. When the upsert returns a row, the transaction starts the
+     run with that run ID (`durable.StartRequest`). Both dialects support
+     this form of upsert. When it returns no row, a live run waits, and the
+     transaction starts nothing. Two concurrent transactions on one unit
+     serialize on the row, so only one of them takes the head.
+   - **Why the start also takes a head with no live operation.** A run
+     that ends before its first step, for example with a final failure or
+     a cancel, leaves `queued` true. Without the `NOT EXISTS` check, no
+     later item could start a run for that unit. The check also takes a
+     head whose operation is missing, so a lost start cannot block the
+     unit.
    - **The reconcile tick.** A durable schedule `projection.reconcile`
-     runs every 10 minutes. It reads the head rows with `queued` true, at
-     most 1,000 for each tick, and for each one whose operation ended,
-     it takes the head and starts a run with the same upsert. So a unit
-     with no new item also gets its last item projected.
-     The conformance suite holds the case "a run that fails before its
-     first step does not block the next start".
+     runs every 10 minutes. It starts runs only for heads that stay in
+     `queued`: the head rows with `queued` true and no pending or running
+     operation for their run ID. It applies the limit of 1,000 heads for
+     each tick after this filter, oldest `started_at_ms` first. For each
+     head, it takes the head and starts a run with the same upsert. So a
+     unit whose run ended before its first step gets its last item
+     projected with no new item. The conformance suite holds the case "a
+     run that fails before its first step does not block the next start".
    - **Why a random run ID.** A durable start key names one operation for
      ever. A restore empties `projection_heads` and keeps the durable
      operations (decision 9). A counter in the head row would then start
@@ -200,6 +208,12 @@ The facts on `main` that the decisions build on:
      item. For a soft-deleted unit, it writes the index entries with the
      deleted mark (`Index.SetDeleted`), so a rebuild keeps the findings of
      the kind left behind.
+   - **A unit with more than 100,000 resources.** The run indexes the
+     first 100,000 resources by resource key (ADR 163 decision 7), and the
+     index write records the mark "not fully indexed" of the unit. The run
+     calls `MarkResources` with `complete` false and the keys of those
+     first 100,000 resources, so the method sets no deleted mark (decision
+     23). A legal unit never gets `ErrTooManyKeys`.
    - **A restore during a run.** The apply step of a restore fences every
      namespace. So a run that read its item before the swap fails its
      writes with `namespace.ErrFenced` and writes nothing from the old
@@ -214,20 +228,35 @@ The facts on `main` that the decisions build on:
    - **A unit that no longer exists.** A run that finds no live or
      soft-deleted unit with its ID ends with success and writes nothing.
    - **Failure.** A run that fails retries with the backoff of ADR 72. A
-     run that fails for the last time ends failed, and the next state item
-     or the reconcile tick starts a new run.
+     run that fails for the last time ends failed. When it fails before its
+     first step, `queued` stays true, and the next state item or the
+     reconcile tick starts a new run. When it fails after its first step,
+     `queued` is false, and only the next state item of the unit starts a
+     new run. The reconcile does not start it again, so a unit whose
+     projection always fails does not retry in a loop. The mark "not fully
+     indexed" records the failure.
    - **"Not fully indexed" is a store write by the reconcile.** The
-     reconcile tick reads the head rows whose operation ended failed, and
-     writes the mark "not fully indexed" of the unit (ADR 163 decision 7)
-     with `unmanaged.Index.MarkIncomplete(unit, runID, fence)`. The next
-     run that succeeds for the unit clears the mark in the transaction of
-     its index write. The failed run itself writes no mark, because its
+     reconcile tick also reads the head rows whose operation ended failed
+     and whose `marked_run_id` is not their `run_id`, with the same limit
+     of 1,000 after this filter, oldest `started_at_ms` first. For each
+     one, it writes the mark "not fully indexed" of the unit (ADR 163
+     decision 7) with `unmanaged.Index.MarkIncomplete(unit, runID, fence)`.
+     In its own transaction, `MarkIncomplete` checks that the head row of
+     the unit still holds `runID` and that the operation of that run ended
+     failed. Only then does it write the mark and set `marked_run_id` to
+     `runID`. Else it changes nothing and returns nil. So a mark never
+     covers a newer run. The failed run itself writes no mark, because its
      last attempt can end before any of its writes.
+   - **A success clears the failure mark.** The next run that succeeds for
+     the unit clears the failure mark in the transaction of its index
+     write. A success for a unit with more than 100,000 resources keeps
+     the mark of ADR 163 decision 7.
    - **A projection inside a rebuild.** A rebuild (decision 9) runs the
      same projection of one unit in its own step, but it does not read or
-     write `projection_heads`. So a rebuild and a live run of one unit can
-     run at the same time. Each write keeps the entries of the highest
-     order, so the two give the same result.
+     write `projection_heads`, and it uses the fence of the rebuild. So a
+     rebuild and a live run of one unit can run at the same time. Each
+     write keeps the entries of the highest order, so the two give the
+     same result.
 8. **Independent of blame.** The run does not wait for the blame operation
    of ADR 150, which is not built yet, and does not share its operation.
    The reasons:
@@ -249,12 +278,40 @@ The facts on `main` that the decisions build on:
    `projection.rebuild:<namespace ID>:<restore ID>`. The restore ID is in
    the key, so a second restore of the same backup starts new rebuilds. A
    crash after the swap cannot leave a namespace with no row and no
-   rebuild. A rebuild reads the
-   live and soft-deleted units of its namespace in pages of 100, by unit
-   ID, and records a step for each page. So a takeover continues from the
-   last page. For each unit, it runs the projection of decision 7 in its
-   own step. At the end it writes the row of the namespace in
-   `resource_index_ready`, in one transaction with the last step.
+   rebuild.
+   - **The port change.** `backup.Applier.ApplyStaging` and
+     `backup.AccessKeepingApplier.ApplyStagingKeepingAccess` take a
+     `[]durable.StartRequest`. The restore service builds the list, one
+     start for each namespace ID of the staged data, so the backup
+     adapters know no projection kind. The adapters start the operations
+     in the swap transaction, after the copy of `durable_operations`, in
+     both dialects. A start before the copy would go with the replaced
+     control rows.
+   - **The steps.** A rebuild reads the fence of its namespace one time,
+     in its first step, and uses that fence for every write, also for the
+     write of the ready row. It reads the live and soft-deleted units of
+     its namespace in pages of 100, by unit ID, and records a step for
+     each page. So a takeover continues from the last page. For each unit,
+     it runs the projection of decision 7 in its own step. At the end it
+     writes the row of the namespace in `resource_index_ready`, in one
+     transaction with the last step.
+   - **A restore during a rebuild.** `namespace.ErrFenced` is a permanent
+     failure for a rebuild: the rebuild ends failed with no retry. The
+     restore that fenced it started its own rebuild of the namespace. So
+     the old rebuild writes no row in `resource_index_ready` from the old
+     data. The conformance suite holds the case "restore during rebuild:
+     the old rebuild writes no ready row".
+   - **A unit that fails in a rebuild.** A unit projection that fails 3
+     times in a row in its step, with an error that is not
+     `namespace.ErrFenced`, fails permanently. The step then writes the
+     mark "not fully indexed" of the unit with
+     `unmanaged.Index.MarkIncompleteFromRebuild(unit, seq, fence)`, records
+     itself as done, and the rebuild goes on with the next unit. The method
+     writes the mark only when the index of the unit holds no write of the
+     order `seq` or higher, so a live run that succeeded keeps its result.
+     The rebuild has no head row, so `MarkIncomplete` does not apply. So
+     "ready" means that the rebuild tried every unit, not that every unit
+     succeeded. The next state item of a failed unit starts a live run.
    - **Fail closed while the index is not ready.** A namespace with no row
      in `resource_index_ready` has an index that is not complete. While it
      is not complete, the state check and the match of a cloud sweep in
@@ -287,6 +344,24 @@ The facts on `main` that the decisions build on:
      write left with no row, gets a new rebuild. The reconcile reads and
      starts in one transaction that locks the row of the namespace, so two
      servers that start at the same time start one rebuild, not two.
+   - **The lookup of a live rebuild.** The reconcile does not search
+     `durable_operations` by a prefix of `start_key`. `durable.StartRequest`
+     gets a field `Subject`, a tool-neutral text that names the object of
+     the operation, and `durable_operations` gets the column `subject`
+     with the index (`kind`, `subject`) on the pending and running rows. A
+     rebuild sets `Subject` to the namespace ID. The reconcile reads the
+     live rebuild of a namespace with one range read of this index.
+   - **The installation signal.** The restore status
+     (`GET /api/server/restores/{id}`) answers `namespacesNotReady`, the
+     number of namespaces with no row in `resource_index_ready`, and
+     `rebuildsFailed`, the number of `projection.rebuild` operations that
+     ended failed for such a namespace. The metrics give the same two
+     numbers as gauges. The signal holds no namespace name, ID or other
+     namespace data, so the actions of the installation suffice to read
+     it. While a namespace is not ready, a person can cancel a waiting
+     sweep, and the cancel works. A waiting sweep keeps its target busy,
+     so a new sweep of that target answers `unmanaged.ErrScanBusy` until
+     the waiting sweep ends or a person cancels it.
    - **The API shows "index not ready".** The routes of findings, sweeps
      and the inventory answer the field `indexReady: false` for a
      namespace with no row in `resource_index_ready`, and the console shows
@@ -375,10 +450,21 @@ The facts on `main` that the decisions build on:
       namespace, a purged object and an object that the caller cannot read
       all answer the same 404, with the same body. The answer never tells
       that the object exists.
-    - **A resource that the state does not hold.** A `PATCH` of the
-      context of a resource key that the latest state item of the unit does
-      not hold, with no mark of decision 23, answers 404. A person can add
+    - **A resource that the state does not hold.** The `PATCH` of the
+      context of a resource checks the key against the index entries of
+      the unit, not against the state item. A key that the index does not
+      hold, with no mark of decision 23, answers 404. A person can add
       context only to a resource that exists.
+    - **The index lags a new item.** When the order of the index of the
+      unit is lower than the order of its latest state item, a projection
+      run waits. Then a key that the index does not hold answers 409
+      (`objectcontext.ErrIndexBehind`), and the message tells the client to
+      try again after the projection. So a key from an item that is not
+      projected yet never answers 404.
+    - **A unit that is not fully indexed.** For a unit with the mark "not
+      fully indexed", a key that the index does not hold answers 409
+      (`objectcontext.ErrResourcesUnreadable`), because the server cannot
+      check the key.
     - **Client-encrypted state.** The server cannot read the resources of a
       unit with client-encrypted state (ADR 163 decision 6). So a `PATCH`
       of the context of a resource of such a unit answers 409
@@ -582,16 +668,21 @@ The facts on `main` that the decisions build on:
       `marks_seq`. So a late run of an older item, or a rebuild that runs
       next to a live run, never sets or clears a mark against a newer item.
     - **The store method.** The run calls
-      `objectcontext.Store.MarkResources(ctx, unit, seq, presentKeys, now, fence)`.
+      `objectcontext.Store.MarkResources(ctx, unit, seq, presentKeys, complete, now, fence)`.
       `presentKeys` holds the resource keys of the item, at most 100,000
-      (the limit of ADR 163 decision 7). In one transaction, the method
-      sets the mark at `now` on each resource entry of `unit` whose key is
-      not in `presentKeys` and that has no mark, and clears the mark of
-      each entry whose key is in it, each only when `seq` is higher than
-      `marks_seq`. It sets `marks_seq` to `seq` on each entry it changes.
-      It returns `ErrInvalidObject` for an invalid unit, the new sentinel
-      `ErrTooManyKeys` for more than 100,000 keys, `namespace.ErrFenced` for a stale fence,
-      and nil when it changes no row.
+      (the limit of ADR 163 decision 7). `complete` is false when the item
+      holds more resources than `presentKeys`. In one transaction, the
+      method clears the mark of each entry whose key is in `presentKeys`.
+      When `complete` is true, it also sets the mark at `now` on each
+      resource entry of `unit` whose key is not in `presentKeys` and that
+      has no mark. When `complete` is false, it sets no mark, because a key
+      outside `presentKeys` can still be in the state. It changes an entry
+      only when `seq` is higher than `marks_seq`, and sets `marks_seq` to
+      `seq` on each entry it changes. It returns `ErrInvalidObject` for an
+      invalid unit, the new sentinel `ErrTooManyKeys` for more than 100,000
+      keys, `namespace.ErrFenced` for a stale fence, and nil when it
+      changes no row. The run never passes more than 100,000 keys (decision
+      7), so a legal unit never gets `ErrTooManyKeys`.
 24. **The read API shows the mark.** The `context` section of a resource
     answers `deleted: true` and `deletedAt`. `ByOwner` answers a marked
     entry with the same mark, so the console can show it apart. A `PATCH`
@@ -648,6 +739,11 @@ replaces:
   start key now holds a random run ID, and the head row of the unit gives
   the coalescing, because a durable start key names one operation for ever
   (decision 7).
+- **ADR 163, the `unmanaged.Index` port:** the port gets
+  `MarkIncomplete(unit, runID, fence)` and
+  `MarkIncompleteFromRebuild(unit, seq, fence)`, which write the mark "not
+  fully indexed" after a failed projection (decisions 7 and 9). A success
+  over the limit of 100,000 entries keeps the mark of ADR 163 decision 7.
 - **ADR 163, decision 11, in part:** the daily offset hashes the namespace
   ID (decision 12).
 - **ADR 163, "Requests to other designs", first item:** the route is
@@ -660,7 +756,11 @@ replaces:
 - **ADR 163, "Consequences", the item "Identity":** the family and the
   built-in roles of `server:link-namespaces` (decision 19).
 - **ADR 72, in part:** the durable package gets the step result `NotYet`
-  and the store method `Defer`, which are not failures (decision 9).
+  and the store method `Defer`, which are not failures, and the field
+  `StartRequest.Subject` with its indexed column (decision 9).
+- **The backup ports:** `backup.Applier.ApplyStaging` and
+  `backup.AccessKeepingApplier.ApplyStagingKeepingAccess` take a
+  `[]durable.StartRequest` and start the rebuilds in the swap (decision 9).
 
 ## Consequences
 
@@ -686,11 +786,23 @@ replaces:
   1. The stable namespace ID (ADR 154, open work item 1).
   2. `dependency.Store.Edges` with its cases, then the graph adapter.
   3. The context tables, the owner index and `ByOwner` with its cursor,
-     with `objectcontexttest` cases for decisions 3, 12, 14 and 25.
-  4. `durable.NotYet` and `Store.Defer` with their `durabletest` cases.
+     with `objectcontexttest` cases for decisions 3, 12, 14 and 25. The new
+     sentinels of `objectcontext`: `ErrResourcesUnreadable`,
+     `ErrUnitDeleted`, `ErrResourceDeleted`, `ErrIndexBehind` and
+     `ErrTooManyKeys`.
+  4. `durable.NotYet`, `Store.Defer` and `StartRequest.Subject` with their
+     `durabletest` cases.
   5. `backup.ProjectionTables`, the resource index tables, the
      projection heads, `projection.unit`, `projection.rebuild` and
-     `projection.reconcile`.
-  6. The routes of decision 13, with the families and the roles of
+     `projection.reconcile`. With them: `unmanaged.Index.MarkIncomplete`
+     and `MarkIncompleteFromRebuild` with their `unmanagedtest` cases, the
+     new `[]durable.StartRequest` parameter of `ApplyStaging` and
+     `ApplyStagingKeepingAccess` with the starts after the copy of
+     `durable_operations` in both dialects, and the installation signal
+     of decision 9.
+  6. The doc comment of `unmanaged.Index` and the entry "Resource index"
+     in `GLOSSARY.md` get the limit of 100,000 entries with the mark "not
+     fully indexed", the failure mark, and the rebuild after a restore.
+  7. The routes of decision 13, with the families and the roles of
      decision 19.
-  7. The rename of decisions 20 to 22, with the console change.
+  8. The rename of decisions 20 to 22, with the console change.
