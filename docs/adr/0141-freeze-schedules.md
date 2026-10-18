@@ -31,7 +31,9 @@ operations and their schedules.
 
 1. **A schedule makes freezes.** `freeze.Schedule` belongs to one namespace,
    never to the server scope. It has an ID with the prefix `fzs-`, a name,
-   a reason and one rule of three kinds:
+   a reason and one rule of three kinds. The server makes the ID of each
+   schedule and of each freeze, also of a freeze that a person creates. A
+   request never sets an ID.
    - `window`: one freeze from a start to an end.
    - `weekly`: on some days of the week, at a time of day in a time zone,
      for a length of at most 6 days. The occurrences of one rule must not
@@ -70,7 +72,12 @@ operations and their schedules.
    the SHA-256 of the namespace. A schedule ID that is free again after a
    delete can name a schedule in another namespace, and the hash keeps the
    freezes of one start in two namespaces apart. `CreateFreeze` refuses an
-   ID that exists, in any namespace, with `ErrInvalid` and changes nothing. `Occurrences` never cuts an
+   ID that exists, in any namespace, with `ErrInvalid` and changes nothing.
+   It also refuses an ID in the form of an occurrence ID
+   (`freeze.IsOccurrenceID`), in any namespace, with `ErrInvalid`. Anyone can
+   compute the ID of an occurrence before its plan runs, so without this
+   rule a freeze of another namespace could take the ID first, and the replace
+   would then skip the freeze of the schedule. `Occurrences` never cuts an
    occurrence at the start or the end of its range. For a calendar rule, it
    reads back and forward over each day that the rule freezes whole, for
    at most `calendar.MaxSearchDays` days in each direction. So a second run
@@ -99,6 +106,8 @@ operations and their schedules.
    change a freeze of another namespace. `CreateFreeze` refuses a
    `CreatedBy` that starts with `@schedule:` with `ErrInvalid`, so a person
    cannot make a freeze that the writes of a schedule take as their own.
+   The server makes the ID of a freeze that a person creates, never in the
+   form of an occurrence ID (decision 4).
    The schedule store and the freeze store are one database, because a
    replace reads the stored schedule in its transaction.
 7. **Replace, but never rewrite the past.** `Sink.ReplaceScheduled` takes
@@ -131,9 +140,14 @@ operations and their schedules.
    deletes the freezes that did not start. The request that deletes a
    schedule then calls `Sink.DeleteScheduled`. It deletes the freezes of
    the schedule that did not start and that no person ended, and fails
-   with `ErrExists` while the schedule exists. Each hourly run also calls
-   it for each schedule ID that has freezes but no schedule, so a request
-   that fails between the two writes leaves no future freeze. An active
+   with `ErrExists` while the schedule exists in the namespace of its fence.
+   A schedule with the same ID in another namespace does not stop it. Each
+   hourly run also calls it, with the fence of the namespace of the
+   freezes, for each schedule ID that has freezes in a namespace but no
+   schedule in that namespace. The run compares the namespace of the
+   schedule with the namespace of the freezes. So a request that fails
+   between the two writes leaves no future freeze, also when another
+   namespace then uses the free ID. An active
    occurrence stays until its end, or until a person ends it. This keeps
    one rule: only a person ends an active freeze early, and the audit log
    names that person.
@@ -170,6 +184,11 @@ operations and their schedules.
     | `GET /api/namespaces/{ns}/freeze-schedules[/{id}]` | `namespace:read` | namespace |
     | `GET /api/namespaces/{ns}/freeze-schedules/{id}/occurrences?from=&to=` | `namespace:read` | namespace |
     | `POST`, `PUT`, `DELETE /api/namespaces/{ns}/freeze-schedules[/{id}]` | `namespace:manage-freezes` | namespace |
+
+    A route with `{id}` answers 404 when the namespace of the schedule is
+    not `{ns}`, as for an unknown ID: `freeze.Store.Get` takes the
+    namespace and returns `ErrNotFound` for a schedule of another
+    namespace.
 
     The occurrences route answers a preview for a range of at most 92 days,
     so a person sees the effect of a rule before the save.
