@@ -24,14 +24,33 @@ ADRs 110 to 116 decide the Catalog.
    | Action | Object | Allows |
    | --- | --- | --- |
    | `blueprint:read` | blueprint, or namespace for a list | Read a blueprint, its draft, its versions and its form. |
-   | `blueprint:publish` | blueprint, or namespace for a new one | Write the draft, and publish it as a version. A publish also needs `unit:read` on each source (ADR 113 decision 10), and `unit:define-steps` on the blueprint for custom steps. |
+   | `blueprint:publish` | blueprint, or namespace for a new one | Write the draft, and publish it as a version. A publish that names a source principal also needs `principal:manage-tokens` on that principal (ADR 113 decision 10), and a publish with custom steps `unit:define-steps` on the blueprint. The publisher needs no grant on the sources. |
    | `blueprint:retire` | blueprint | Retire a version. |
-   | `catalog:request` | blueprint | Submit a create, read the options, and check a document with no submit. |
+   | `catalog:request` | blueprint | Submit a create, and, for a create, read the options, check a document with no submit, and render a document from git. |
    | `unit:edit-inputs` | unit | Submit an update of the request of the unit, also an upgrade of its blueprint version. |
    | `unit:request-destroy` | unit | Submit a revision with `ensure` set to `absent`. |
    | `catalog:read` | unit, or namespace for a list | Read the requests, their revisions, their checks and their decisions. |
-   | `catalog:render` | unit | Render a request document for the team's CI. |
+   | `catalog:render` | unit, or blueprint for a create | Render a request document from git for the team's CI. A render also needs the action of its operation. |
    | `namespace:manage-policy` | namespace | Bind policy engines to kinds, and set the namespace policy documents and the settings of the adapters. |
+
+   The rows of `unit:edit-inputs` and `unit:request-destroy` also cover
+   the options, the check and the render of an update or a destroy. So
+   `catalog.Requirements` maps the options, the check and the render by
+   their operation, as the submit:
+
+   | Route | Create | Update | Destroy |
+   | --- | --- | --- | --- |
+   | submit, check, options | `catalog:request` on the blueprint | `unit:edit-inputs` on the unit | `unit:request-destroy` on the unit |
+   | render | `catalog:render` and `catalog:request` on the blueprint | `catalog:render` and `unit:edit-inputs` on the unit | `catalog:render` and `unit:request-destroy` on the unit |
+
+   A render of a document equal to the last revision stores nothing and
+   needs `catalog:render` only. So a token of the CI can never do more
+   through a render than a submit of the same document can.
+
+   The source principal of a blueprint needs `unit:read` on the collection
+   of each source, or on the namespace for a source of the units of a
+   blueprint (`catalog.SourceRequirements`). The server checks it for the
+   principal at each computation of the options.
 
    The job actions of ADR 103 stay. A cancel of a revision needs
    `job:cancel` on the unit. An approval needs `job:approve` on the unit.
@@ -59,9 +78,13 @@ ADRs 110 to 116 decide the Catalog.
      publishes the draft.
    - `GET /api/catalog/blueprints/{namespace}/{blueprint}/versions/{version}`.
    - `POST /api/catalog/blueprints/{namespace}/{blueprint}/versions/{version}/retire`.
-   - `POST /api/catalog/options/{namespace}` (ADR 113 decision 11).
+   - `POST /api/catalog/options/{namespace}` (ADR 113 decision 11) takes
+     `{"blueprint": {"name": ..., "version": ...}, "request": "<name>",
+     "answers": {...}}`. `request` names the request of an update, and is
+     empty for a create.
    - `POST /api/catalog/check/{namespace}` checks a document at `submit`
-     and stores nothing.
+     and stores nothing. The server picks the operation from the document
+     and the request, as a submit does.
    - `POST /api/catalog/requests/{namespace}` submits. The body is
      `{"document": <request.json>, "reason": "...", "breakGlass":
      {"reason": "..."}}`, and the header `Idempotency-Key` makes a retry
@@ -73,9 +96,11 @@ ADRs 110 to 116 decide the Catalog.
    - `GET /api/catalog/requests/{namespace}/{blueprint}/{name}` and
      `.../revisions/{revision}`.
    - `POST /api/catalog/requests/{namespace}/{blueprint}/{name}/cancel`.
-   - `POST /api/catalog/render/{namespace}` takes `{"document": ...,
-     "commit": "..."}` and gives the files and the operation (ADR 110
-     decision 8).
+   - `POST /api/catalog/render/{namespace}` takes `{"connection": "...",
+     "repository": "...", "commit": "...", "path": "..."}` and gives the
+     files and the operation (ADR 110 decision 8). The server reads the
+     request file at the commit from the forge, and the body holds no
+     document. `connection` is optional, and `commit` is a full commit ID.
    - `GET`, `PUT /api/catalog/policy/{namespace}`.
 
    The errors use the error shape of the tool-neutral APIs. A failure of
@@ -88,12 +113,12 @@ ADRs 110 to 116 decide the Catalog.
    | Event | Subject | Action | Kind | Object |
    | --- | --- | --- | --- | --- |
    | Draft written | the principal, and the agent | `blueprint:publish` | `change` | blueprint |
-   | Version published | the principal | `blueprint:publish` | `change` | blueprint |
+   | Version published, with each source and the source principal | the principal | `blueprint:publish` | `change` | blueprint |
    | Version retired | the principal | `blueprint:retire` | `change` | blueprint |
    | Expr version recorded again (ADR 112 decision 11) | the instance | `blueprint:publish` | `change` | blueprint |
    | Submit accepted | the principal, and the agent | the action of the operation | `change`, or `override` with break-glass | blueprint for a create, else unit |
    | Submit refused by a check or a policy | the principal, and the agent | the action of the operation | `change`, outcome denied | as above |
-   | Revision from git stored at a render | the principal of the render | `catalog:render` | `change` | unit |
+   | Revision from git stored at a render, and the revision that it superseded | the principal of the render | `catalog:render` | `change` | blueprint for a create, else unit |
    | Recheck failed | the instance | the action of the revision | `change` | unit |
    | Policy settings changed | the principal | `namespace:manage-policy` | `change` | namespace |
 
@@ -155,6 +180,7 @@ ADRs 110 to 116 decide the Catalog.
 - Does a read of the options of a source need its own action, so that a
   platform team can let a person read a form and not submit it?
 - Does a render need the job token of a CI job, or any access token with
-  `catalog:render`? Version 1 takes any token with the action.
+  `catalog:render` and the action of the operation? Version 1 takes any
+  token with the actions.
 - Is 60 submits a minute for each principal the right number for a
   developer portal that submits for many people with one token?

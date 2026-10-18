@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // RecheckPoint names a point where the server checks a revision, because a
@@ -137,6 +135,49 @@ const (
 	ResultString ResultKind = "string"
 )
 
+// Limits of the built-in Expr engine. With them, the slowest expression that
+// a test found ran in 13 ms, with 1,000 groups in the environment, on one
+// core of a 2.1 GHz Xeon, with Expr v1.17.8. A rule of a usual size ran in
+// less than 1 ms. Without them, an expression of 200 bytes used all the
+// memory of the test machine.
+const (
+	// MaxExprNodes is the node limit of the Expr compiler for one
+	// expression.
+	MaxExprNodes = 128
+	// ExprMemoryBudget is the memory budget of the Expr virtual machine for
+	// one run: the count of the items of the lists that the run makes.
+	ExprMemoryBudget = 1000
+	// MaxConcatBytes bounds the string that the operator + gives. The
+	// engine runs + on two strings through a function that refuses a
+	// longer result, because the memory budget does not count strings.
+	MaxConcatBytes = 1 << 10
+	// MaxEnvGroups bounds the groups of the requester in an Env. A
+	// requester in more groups fails each expression with ErrRuleFailed
+	// for a validation rule, and makes a policy or a quota rule fail to
+	// run.
+	MaxEnvGroups = 1000
+	// MaxClosureDepth is the deepest nesting of closures, such as the
+	// predicate of all or filter, that an expression can have.
+	MaxClosureDepth = 1
+)
+
+// ExprBuiltins returns the builtins of Expr that an expression can call,
+// sorted. The engine refuses each other builtin at compile: the builtins
+// that read the time or the local time zone (now, date, timezone,
+// duration), the builtins whose result order follows the order of a map
+// (keys, values, toPairs), and the builtins that can make a string or a
+// list larger than the memory budget counts (join, repeat, replace, string,
+// toJSON, reduce and the others). The engine also refuses the syntax let
+// and the range operator .., and a closure inside a closure.
+func ExprBuiltins() []string {
+	return []string{
+		"abs", "all", "any", "ceil", "count", "filter", "find", "findIndex", "findLast", "findLastIndex",
+		"first", "float", "floor", "get", "hasPrefix", "hasSuffix", "indexOf", "int", "last", "lastIndexOf",
+		"len", "lower", "map", "max", "mean", "median", "min", "none", "one", "round", "sum", "trim",
+		"trimPrefix", "trimSuffix", "upper",
+	}
+}
+
 // Requester is the requester as an expression sees it.
 type Requester struct {
 	Subject string   `expr:"subject"`
@@ -146,9 +187,9 @@ type Requester struct {
 
 // RequestEnv is the request as an expression sees it.
 type RequestEnv struct {
-	Requester Requester      `expr:"requester"`
-	Namespace namespace.Name `expr:"namespace"`
-	Name      string         `expr:"name"`
+	Requester Requester `expr:"requester"`
+	Namespace string    `expr:"namespace"`
+	Name      string    `expr:"name"`
 }
 
 // Env is the environment of an expression. Value is the answer that a
@@ -156,6 +197,10 @@ type RequestEnv struct {
 // defaults filled in. Usage maps the key of each quota rule to its usage.
 // Input is the policy input document, for a policy rule. An expression sees
 // the fields by their expr tag.
+//
+// Env and each type in it are data only: they have no method, and each
+// value in Inputs, Value and Input is a JSON value as encoding/json decodes
+// it. So an expression can read data and cannot call code of the server.
 type Env struct {
 	Value   any            `expr:"value"`
 	Inputs  map[string]any `expr:"inputs"`
@@ -165,22 +210,31 @@ type Env struct {
 }
 
 // Evaluator is the port of the built-in Expr engine. The adapter compiles
-// each expression with a type check against Env, a node limit, the memory
-// budget of the Expr library and no function that does input or output,
-// reads the time or reads random data. Each run has a time limit of
-// ExprTimeoutMillis, so a rule gives the same result for the same inputs at
-// each recheck point.
+// each expression with a type check against Env, the node limit
+// MaxExprNodes, only the builtins of ExprBuiltins, no let, no range
+// operator, closures nested at most MaxClosureDepth deep, and the operator
+// + on two strings bounded by MaxConcatBytes. It runs each expression with
+// the memory budget ExprMemoryBudget and a time limit of
+// ExprTimeoutMillis. So an expression cannot read the time, the local time
+// zone, random data or the network, and a rule gives the same result for
+// the same inputs at each recheck point.
 type Evaluator interface {
 	// Version returns the version of the Expr library that the server
 	// links, for example "v1.17.8". A publish records it in the blueprint.
 	Version() string
 	// Compile checks that source compiles to kind. It returns an error that
-	// wraps ErrInvalid for an expression that does not compile, and
-	// ErrLimit above MaxExprBytes or the node limit.
+	// wraps ErrInvalid for an expression that does not compile or uses
+	// syntax or a builtin that the engine refuses, and ErrLimit above
+	// MaxExprBytes or MaxExprNodes.
 	Compile(source string, kind ResultKind) error
 	// Bool runs source in env and returns its boolean result. It returns an
-	// error that wraps ErrRuleFailed for a run that fails or passes the
-	// time limit. The caller counts an error as a failure, never as true.
+	// error that wraps ErrRuleFailed for a run that fails, passes the
+	// memory budget or passes the time limit. The caller never counts an
+	// error as true. For a validation rule, the error fails the answer. For
+	// a policy condition or a quota rule, the error means that the check
+	// cannot run: the policy engine returns policy.ErrRuleFailed, the quota
+	// check returns quota.ErrRuleFailed, and the recheck stops with no
+	// change.
 	Bool(ctx context.Context, source string, env *Env) (bool, error)
 	// String runs source in env and returns its string result, with the
 	// errors of Bool.

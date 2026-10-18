@@ -43,6 +43,16 @@ const (
 	// PolicySlow answers after SlowFor, which is after the deadline of the
 	// suite.
 	PolicySlow Policy = "slow"
+	// PolicyFailingDeny holds two rules: a deny rule whose condition fails
+	// to run for every input, for example a condition that divides by a
+	// field that the document does not have, and an approve rule of
+	// DBAApprovals by DBAGroup that matches every input. A rule that fails
+	// to run is never a pass, so the engine must return an error, not the
+	// approve of the other rule and not an allow. An adapter turns on the
+	// strict errors of its engine for this: for example OPA with
+	// strict-builtin-errors, and Cedar with each policy error in the
+	// diagnostics counted.
+	PolicyFailingDeny Policy = "failing-deny"
 )
 
 // The values of the fixture set.
@@ -80,6 +90,7 @@ func Run(t *testing.T, kinds []policy.Kind, newEngine Factory) {
 		{"an approve gives the approvals and the groups", testApprove},
 		{"a slow engine is ErrUnavailable, not a deny", testSlow},
 		{"a canceled context is an error, not a deny", testCanceled},
+		{"a deny rule that fails to run is an error, not an allow", testFailingDeny},
 		{"an input that is not valid is ErrInvalidInput", testInvalidInput},
 		{"a kind that the adapter does not decide is ErrUnsupportedKind", testUnsupportedKind},
 		{"each decision is valid and names its engine", testDecisionValid},
@@ -188,6 +199,23 @@ func testCanceled(t *testing.T, kinds []policy.Kind, newEngine Factory) {
 
 	if d, err := e.Decide(ctx, input(kinds[0], "postgres")); err == nil {
 		t.Fatalf("Decide(canceled) = %+v, want an error", d)
+	}
+}
+
+func testFailingDeny(t *testing.T, kinds []policy.Kind, newEngine Factory) {
+	t.Helper()
+
+	e := newEngine(t, PolicyFailingDeny)
+
+	for _, k := range kinds {
+		d, err := e.Decide(t.Context(), input(k, "postgres"))
+		if err == nil {
+			t.Fatalf("Decide(%s) = %+v, want an error for the rule that fails to run", k, d)
+		}
+
+		if !errors.Is(err, policy.ErrRuleFailed) && !errors.Is(err, policy.ErrUnavailable) {
+			t.Fatalf("Decide(%s) = %v, want ErrRuleFailed or ErrUnavailable", k, err)
+		}
 	}
 }
 

@@ -71,10 +71,11 @@ limits.
    - **`git`**: the document is a file in a repository of the team (ADR 111
      decision 7). A submit through the API starts a write-back job that
      commits the file, as a review request or a direct push. The team's CI
-     renders the file through the API (decision 8) and applies it with its
-     own credentials. The final state version closes the job (ADR 100
-     decision 15). OpenDustpan keeps no copy of the document as a source.
-     The revision keeps the document that it delivered as a record only.
+     asks the server to render the file at a commit (decision 8), and
+     applies the result with its own credentials. The final state version
+     closes the job (ADR 100 decision 15). OpenDustpan keeps no copy of the
+     document as a source. The revision keeps the document that it
+     delivered as a record only.
    - **`opendustpan`**: the document lives in OpenDustpan only. A submit
      starts a runner job. The server renders the files of the tool at the
      claim of each phase, from the revision that the job fixed at start.
@@ -87,9 +88,15 @@ limits.
    stack or an OpenTofu workspace, with the name that the blueprint computes
    (ADR 112 decision 9). The internal wiring of the server implements the
    port with the tool package, so no tool package imports `catalog`. The
-   make is idempotent by the request ID. A create revision that ends
-   `rejected`, `canceled`, `failed` or `expired` before any state version
-   deletes the empty unit again through the same port.
+   make is idempotent by the request ID. A create through the API makes the
+   unit in the start operation (ADR 116 decision 5). A create from git has
+   no start operation: the render makes the unit in the store transaction
+   that stores the revision, so the revision, its reservation and the empty
+   unit commit together or not at all (ADR 116 decision 9). A create
+   revision that ends `rejected`, `canceled`, `failed` or `expired` before
+   any state version deletes the empty unit again through the same port. A
+   create that a revision from git supersedes keeps its unit, because the
+   new revision takes it over.
 7. **The Catalog starts jobs through `job.Service` only.** A revision gives
    one `job.StartRequest`. The idempotency key is `<request ID>/<revision>`,
    so a retry of the start gives one job. The Catalog never writes to the job
@@ -103,19 +110,34 @@ limits.
    program of one component resource and its stack settings. The render
    gives no secret value. Secrets come from the profile of the blueprint at
    run time (RFC 5). Two renders of one revision give the same bytes.
+   - **Answers are data.** The render writes each answer and each platform
+     value with a JSON encoder into the variables file or the stack
+     settings, and never into the text of the root module or of the Pulumi
+     YAML program. The program text names only the keys of the blueprint,
+     which the publish checks (ADR 112 decision 5). So no answer can change
+     the program that the tool runs.
    - A runner job gets the files at the claim of each phase.
-   - The team's CI calls the render route (ADR 117) with the document from
-     its checkout and the commit. The server checks the document at the
-     point `apply` (ADR 113 decision 8) and returns the files. A CLI command
+   - The team's CI calls the render route (ADR 117) with the repository,
+     the commit and the path of the request file. The server reads
+     `request.json` at that commit from the forge itself, through the port
+     `catalog.RequestFiles`, and never takes a document from the caller. It
+     checks the path (ADR 111 decision 7) and the document at the point
+     `apply` (ADR 113 decision 8), and returns the files. A CLI command
      wraps the call. So the server alone checks the answers also when the
-     team's CI applies.
+     team's CI applies, and a render renders only what is in git.
+   - A render needs `catalog:render` and the action of its operation:
+     `catalog:request` on the blueprint for a create, `unit:edit-inputs` on
+     the unit for an update, and `unit:request-destroy` on the unit for a
+     destroy (ADR 117 decision 2). So a token of the CI can never do more
+     through a render than a submit of the same document can.
 
    A render never writes the files to git. The rendered files are output, not
    a second home.
 9. **Approvals add to the forge.** The gates of a Catalog job come from the
-   job decision (ADR 103 decision 1), with the Catalog decision in its input
-   (ADR 116 decision 6). A write-back job waits at the gate before its
-   commit. After the commit, the review request still needs the approvals of
+   job decision (ADR 103 decision 1), which reads the Catalog origin of the
+   job spec (ADR 116 decision 6). The requester never counts as an
+   approver of its own request. A write-back job waits at the gate before
+   its commit. After the commit, the review request still needs the approvals of
    the forge. A change that a team makes to a request file in git and
    applies in its own CI has no job. The render checks it, and no
    OpenDustpan approval gates it (ADR 116 decision 9).
@@ -133,8 +155,8 @@ limits.
 ## Changes requested in the job model
 
 The job model (ADRs 100 to 103) is a design that no tag shipped (ADR 73).
-The Catalog needs these changes. Each one adds to the job model and changes
-none of its rules:
+The Catalog needs these four changes. Each one adds to the job model and
+changes none of its rules:
 
 1. **A Catalog origin on a job.** `job.StartRequest` and `job.Spec` get a
    field `Catalog *job.CatalogRef`: the request ID, the revision number and
@@ -142,29 +164,35 @@ none of its rules:
    then returns that Catalog action on its object instead of `unit:run-*`
    or `unit:write-back`. A consumer of a blueprint has `catalog:request` on
    the blueprint, not `unit:run-apply` on the unit (ADR 117 decision 2).
-   Only the Catalog sets the field: the job REST API refuses it.
+   Only the Catalog sets the field: the job REST API refuses it. The
+   `job.Decider` adapter reads the field in `job.DecisionInput.Spec`, and
+   so gets the Catalog decision of the revision with no other field.
 2. **A precondition port.** `job.Service` calls a new port
    `job.Precondition` at two points: before it records an approval, and
    before the dispatch of a phase that changes. The Catalog implements it
-   with its recheck (ADR 113 decision 8). A failed check applies `rejected`
-   with the reason of the check. A check that cannot run (a policy that
-   fails, a source that does not answer) leaves the job as it is and returns
-   the error, so the reconcile schedule tries again.
-3. **The Catalog decision in the job decision input.**
-   `job.DecisionInput` gets the field `Catalog *job.CatalogRef`, so the
-   `job.Decider` adapter can read the decision that the Catalog recorded for
-   the revision and give its approvals as gates (ADR 116 decision 6).
-4. **Rendered code for a runner job.** A runner job of a request in
+   with its recheck (ADR 113 decision 8). The contract:
+   - A failed check applies `rejected`, with the reason of the check.
+   - A check that cannot run (a policy or a quota rule that fails to run,
+     an engine that does not answer, a source that does not answer)
+     returns an error. With the error, the job model records no approval
+     and dispatches nothing. It leaves the job as it is, and the reconcile
+     schedule tries again.
+   - The timeout of the gate or of the queue still applies. So a job whose
+     check keeps failing to run ends `expired` at that time, as any other
+     job that waits.
+3. **Rendered code for a runner job.** A runner job of a request in
    OpenDustpan has no code location in git. `job.Location` gets the kind
    `catalog`: the runner protocol then gets the files from
    `catalog.Renderer` at the claim, from the revision of the spec.
-5. **The request file is editable.** `job.ValidateEdits` accepts the request
-   file of ADR 111 decision 7, `request.json`, as an editable file, in
-   addition to the files that the `StepPlanner` of the tool names. A
-   `job.FileEdit` on a file that does not exist makes the file. The CI
-   configuration rule of ADR 101 decision 4 still applies to the path.
-6. **A batch ID.** ADR 100 asks whether a batch is a field of the job. The
-   Catalog does not need a batch in version 1 (ADR 112 "Open questions").
+4. **An edit on a missing file creates it.** A `job.FileEdit` on a file
+   that does not exist at the base commit makes the file. The Catalog
+   planner gives `job.ValidateEdits` an editable predicate that allows
+   exactly the request file of the revision, `GitPath(ref)`
+   (`catalog.EditableRequestFile`), and no other file. The CI configuration
+   rule of ADR 101 decision 4 still applies to the path.
+
+The Catalog needs no new field in `job.DecisionInput` (item 1 covers it)
+and no batch ID in version 1 (ADR 112 "Open questions").
 
 ## Superseded proposals
 
@@ -188,7 +216,7 @@ none of its rules:
   render. A CI with no network path to the server cannot apply a request.
 - An empty unit exists from the first submit of a create. The inventory
   shows it with no state version until the first job applies.
-- The job model gets six requested changes. Until they land, a Catalog
+- The job model gets four requested changes. Until they land, a Catalog
   adapter cannot start a job.
 
 ## Open questions

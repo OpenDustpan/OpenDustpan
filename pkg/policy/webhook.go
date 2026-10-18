@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -38,11 +39,12 @@ var (
 )
 
 // WebhookCall is the body that the webhook adapter sends. Document is the
-// input document as JSON.
+// input document as JSON, as it is: a receiver reads an object, never a
+// base64 string.
 type WebhookCall struct {
-	Kind          Kind   `json:"kind"`
-	Document      []byte `json:"document"`
-	SchemaVersion int    `json:"schemaVersion"`
+	Kind          Kind            `json:"kind"`
+	Document      json.RawMessage `json:"document"`
+	SchemaVersion int             `json:"schemaVersion"`
 }
 
 // Sign returns the value of SignatureHeader for body at the time at:

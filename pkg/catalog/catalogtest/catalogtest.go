@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/policy"
+	"opendustpan.org/opendustpan/pkg/quota"
 )
 
 // Harness is one fresh, empty database for one case. The stores share the
@@ -50,6 +51,13 @@ type Domain interface {
 	// Operation returns the kind of the durable operation with the start
 	// key key, and false when none exists.
 	Operation(ctx context.Context, key string) (durable.Kind, bool, error)
+	// QuotaUsage returns the usage of the key of each of checks at when, as
+	// quota.Counter.Usage gives it from the counter that shares the
+	// database of the stores.
+	QuotaUsage(ctx context.Context, checks []quota.Check, when time.Time) ([]quota.Usage, error)
+	// Unit returns the unit of tool with the tool's own name in the
+	// namespace ns, with its stable unit ID set, and false when none exists.
+	Unit(ctx context.Context, ns namespace.Name, tool, name string) (identity.Object, bool, error)
 }
 
 // Factory returns a fresh harness for one case.
@@ -78,6 +86,13 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a change on a stale version is ErrConflict", testChangeStale},
 		{"a revision after a terminal one gets the next number", testNextRevision},
 		{"a stale fence writes nothing", testSubmitFenced},
+		{"a submit reserves and records in its transaction", testSubmitQuota},
+		{"a failed submit keeps no reservation and no request", testSubmitQuotaFails},
+		{"a submit refused by a units limit records no request", testSubmitExceeded},
+		{"a revision needs a deadline, and its reservation ends at it", testSubmitDeadline},
+		{"a revision from git supersedes a create and takes its unit and reservation", testSupersedeCreate},
+		{"a supersede of a change that is in git is ErrConflict", testSupersedeDelivered},
+		{"a create from git makes its unit in the submit", testSubmitProvisions},
 		{"a state version applies the revision from git at its commit", testObserve},
 		{"list selects by blueprint and by state", testList},
 		{"a new draft gets version 1, and a stale one is ErrConflict", testDraft},
@@ -165,11 +180,12 @@ func submission(f fixture, req catalog.Request, op catalog.Operation, size strin
 				Ref:        "main",
 				Delivery:   "",
 			},
-			Ensure:   "",
-			UnitName: "databases/orders-db",
-			Last:     0,
-			Applied:  0,
-			Version:  0,
+			Ensure:    "",
+			UnitName:  "databases/orders-db",
+			QuotaKeys: nil,
+			Last:      0,
+			Applied:   0,
+			Version:   0,
 		}
 	}
 
@@ -184,8 +200,12 @@ func submission(f fixture, req catalog.Request, op catalog.Operation, size strin
 				Effect: policy.EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: "",
 			},
 			Decisions: nil, Failures: nil, Usage: nil, Number: 0, BlueprintVersion: 1,
+			Deadline: catalog.RevisionDeadline(catalog.OriginAPI, time.Now().UTC()),
 		},
-		Audit: []audit.Entry{entry(catalog.ActionCatalogRequest, "payments/postgres")},
+		Audit:      []audit.Entry{entry(catalog.ActionCatalogRequest, "payments/postgres")},
+		Quota:      nil,
+		Provision:  nil,
+		Supersedes: 0,
 	}
 }
 

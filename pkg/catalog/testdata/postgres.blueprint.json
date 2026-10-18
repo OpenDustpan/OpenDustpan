@@ -8,6 +8,7 @@
   },
   "exprVersion": "v1.17.8",
   "unitName": "'databases/' + request.name",
+  "sourcePrincipal": "catalog-reader",
   "inputs": [
     { "name": "size", "type": "string", "default": "small",
       "choice": { "values": ["small", "medium", "large"] },

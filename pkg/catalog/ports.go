@@ -19,13 +19,31 @@ import (
 type Store interface {
 	// Submit stores s: it creates the request at its first revision, with
 	// s.Request.Version 0, or updates it at s.Request.Version, and stores
-	// the revision in StateAccepted with the durable operation of KindStart
-	// and the start key of Revision.Key, in one transaction. The store sets
-	// the ID of a new request, the number of the revision, which is the
-	// last number plus 1, and Request.Last. It returns ErrConflict when the
-	// request is not at s.Request.Version, also for a create of a request
-	// that exists, and ErrInFlight when a revision of the request has not
-	// ended.
+	// the revision in StateAccepted, in one transaction. For a revision of
+	// OriginAPI it starts the durable operation of KindStart with the start
+	// key of Revision.Key. The store sets the ID of a new request, the
+	// number of the revision, which is the last number plus 1, and
+	// Request.Last. In the same transaction, it:
+	//   - moves the revision s.Supersedes to StateSuperseded, with
+	//     CheckSupersede, and gives its unit and its reservation to the new
+	//     revision when both are creates,
+	//   - makes the empty unit of s.Provision, as UnitProvisioner.Provision
+	//     does, with the code of the tool on the same transaction, and sets
+	//     Request.Unit,
+	//   - writes s.Quota through the quota.Tx of the transaction: Reserve
+	//     first, then Record, and sets Revision.Reservation.
+	//
+	// When one of these fails, the store keeps none of them: no request, no
+	// revision, no unit, no reservation and no request in a window. It
+	// returns ErrConflict when the request is not at s.Request.Version, also
+	// for a create of a request that exists, and for a supersede that
+	// CheckSupersede refuses or that names a revision that is not the last;
+	// ErrInFlight when a revision of the request has not ended and
+	// s.Supersedes is 0; ErrInvalid for a revision with no deadline, a
+	// reservation whose end time is not the deadline, or a new reservation
+	// next to a supersede that moves one; ErrUnitName for a unit of
+	// s.Provision that another request owns; and the errors of quota.Tx,
+	// such as an *quota.ExceededError.
 	Submit(ctx context.Context, s *Submission, fence namespace.Fence) (Request, Revision, error)
 	// Get returns the request ref, or ErrNotFound.
 	Get(ctx context.Context, ref RequestRef) (Request, error)
@@ -37,8 +55,8 @@ type Store interface {
 	// CheckTransition, at c.Version of the request, and appends e, in one
 	// transaction. A change to StateApplied also sets Request.Applied and
 	// Request.Ensure. A change to a terminal state of a create starts the
-	// durable operation of KindQuota, with the start key of QuotaKey. It returns ErrNotFound, ErrConflict,
-	// and the errors of CheckTransition.
+	// durable operation of KindQuota, with the start key of QuotaKey. It
+	// returns ErrNotFound, ErrConflict, and the errors of CheckTransition.
 	Change(ctx context.Context, c RevisionChange, fence namespace.Fence, e []audit.Entry) (Revision, error)
 	// ObserveStateVersion applies a final state version to the revision from
 	// git that waits for it, in the transaction of the state write: the
@@ -145,13 +163,46 @@ type Rendered struct {
 // one adapter in the internal wiring. Two renders of one input give the
 // same bytes. A render never holds a secret value: secrets come from the
 // profile of the blueprint at run time.
+//
+// An answer and a platform value are data only. The render writes them
+// with a JSON encoder into the variables file, .tfvars.json, or into the
+// stack settings of Pulumi, and never into the text of the root module or
+// of the Pulumi YAML program. The program text names only the keys of the
+// blueprint, which ValidKey checked at the publish. So no answer can change
+// the program that the tool runs.
 type Renderer interface {
 	// Tool returns the tool name that the renderer renders for.
 	Tool() string
 	// Render returns the files of in. It returns ErrOneHome, naming the key
 	// and both homes, for a key that another home of the unit also sets,
-	// for example a stack settings file that the team wrote.
+	// for example a stack settings file that the team wrote. It compares
+	// the keys in the form of NormalizeKey.
 	Render(ctx context.Context, in RenderInput) (Rendered, error)
+}
+
+// RenderRequest is the body of a render for the team's CI: the request file
+// at Path in Repository of the forge connection Connection, at Commit. The
+// server reads the file from the forge itself, through RequestFiles, and
+// never takes a document from the caller, so a render renders only what is
+// in git at that commit. An empty Connection takes the forge connection of
+// the namespace.
+type RenderRequest struct {
+	Namespace  namespace.Name
+	Connection string
+	Repository string
+	Commit     string
+	Path       string
+}
+
+// RequestFiles reads request files from the forge. The internal wiring
+// implements it with the forge connections of the namespace.
+type RequestFiles interface {
+	// Read returns the bytes of the file at path in repository of the forge
+	// connection, at commit, which must be a full commit ID. It returns
+	// ErrNotFound for a missing file, repository or commit, ErrLimit for a
+	// file above MaxDocumentBytes, and an error that wraps
+	// ErrForgeUnavailable when it cannot read.
+	Read(ctx context.Context, ns namespace.Name, connection, repository, commit, path string) ([]byte, error)
 }
 
 // SubmitRequest is the body of a submit: the document, the reason of the
@@ -200,13 +251,19 @@ type Service interface {
 	// cannot run.
 	Check(ctx context.Context, a job.Actor, d Document) ([]Failure, error)
 	// Options returns the options of each choice input of q, in the order
-	// of Order.
+	// of Order, each cut with OptionSet.ForRoute. It reads the sources as
+	// the source principal of the blueprint, after a check of
+	// SourceRequirements for that principal.
 	Options(ctx context.Context, a job.Actor, q OptionsQuery) ([]OptionSet, error)
-	// Render checks d at PointApply and returns its files, for the team's
-	// CI. commit is the commit of the checkout. A document that differs
-	// from the last revision stores a revision from git. It returns a
-	// *CheckError and ErrInFlight as Submit does.
-	Render(ctx context.Context, a job.Actor, d Document, commit string) (Rendered, error)
+	// Render reads the request file of r from the forge, checks it with
+	// CheckPath and at PointApply, and returns its files, for the team's
+	// CI. A document that differs from the last revision stores a revision
+	// from git at r.Commit, in one store write that also makes the empty
+	// unit of a create and supersedes a revision in flight. It needs the
+	// actions of Requirements for OpRender. It returns a *CheckError as
+	// Submit does, ErrPathMismatch, ErrConflict for a supersede that
+	// CheckSupersede refuses, and the errors of RequestFiles.
+	Render(ctx context.Context, a job.Actor, r RenderRequest) (Rendered, error)
 	// Get returns the request ref.
 	Get(ctx context.Context, a job.Actor, ref RequestRef) (Request, error)
 	// Cancel cancels the revision in flight of ref through job.Service, and
@@ -214,12 +271,18 @@ type Service interface {
 	Cancel(ctx context.Context, a job.Actor, ref RequestRef, reason string) (Revision, error)
 }
 
-// Rechecker is what the job model calls before it records an approval and
-// before the dispatch of a phase that changes, for a job with a Catalog
-// origin. It checks the revision key of the job at point. It returns a
-// *CheckError for a failure, which rejects the job, ErrPolicyChanged for a
-// policy that asks for more approvals than the job has, and another error
-// for a check that cannot run, which leaves the job as it is.
+// Rechecker is what the job model calls, through its precondition port,
+// before it records an approval and before the dispatch of a phase that
+// changes, for a job with a Catalog origin. It checks the revision key of
+// the job at point. It returns a *CheckError for a failure, which rejects
+// the job, ErrPolicyChanged for a policy that asks for more approvals than
+// the job has, and another error for a check that cannot run: a policy or a
+// quota rule that fails to run (policy.ErrRuleFailed,
+// quota.ErrRuleFailed), an engine that does not answer
+// (policy.ErrUnavailable), or a source that cannot read
+// (ErrSourceUnavailable). With such an error, the job model records no
+// approval and dispatches nothing, and the gate timeout of the job still
+// ends a job whose check keeps failing.
 type Rechecker interface {
 	Recheck(ctx context.Context, revision string, point RecheckPoint) error
 }

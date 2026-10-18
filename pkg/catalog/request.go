@@ -3,6 +3,7 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -32,6 +33,13 @@ type Request struct {
 	// UnitName is the tool's own name of the unit, as the blueprint
 	// computed it at the first submit. It never changes.
 	UnitName string
+	// QuotaKeys are the keys of KindUnits that the unit of the request
+	// counts in: the keys of the reservation of the create, with the scope
+	// of the requester and of each group of the requester at the submit.
+	// The reconcile schedule counts the settled units of each key from
+	// these records, so a unit counts in the keys of its create, also after
+	// its requester leaves a group.
+	QuotaKeys []quota.Key
 	// Last is the number of the newest revision, and Applied the number of
 	// the last applied revision, or 0.
 	Last    int
@@ -74,8 +82,14 @@ type Revision struct {
 	Reason      string
 	SubmittedBy string
 	Agent       string
-	// Reservation is the reservation of a create, or empty.
+	// Reservation is the reservation of a create, or empty. A revision from
+	// git that supersedes a create takes over its reservation, so the ID can
+	// be the key of the superseded revision.
 	Reservation quota.ReservationID
+	// Deadline is the time at which the revision ends StateExpired if it is
+	// still in flight (RevisionDeadline). The reservation of a create ends at
+	// the same time.
+	Deadline time.Time
 	// Document is the document of the revision. For a request in git it is
 	// a record of what the revision delivered, never a second home.
 	Document Document
@@ -99,11 +113,43 @@ func (r *Revision) Key() string {
 // Submission is the first write of a revision: the request, created or
 // updated with the new Last, the revision in StateAccepted, and the audit
 // entries of the submit. The store starts the durable operation of the
-// start of the revision in the same transaction.
+// start of the revision in the same transaction, for a revision of
+// OriginAPI.
+//
+// Quota, Provision and Supersedes add writes to the same transaction, so
+// that a failed submit keeps none of them.
 type Submission struct {
-	Request  Request
-	Revision Revision
-	Audit    []audit.Entry
+	// Quota is the quota write of the submit, or nil when the blueprint
+	// version has no rule that counts.
+	Quota *QuotaWrite
+	// Provision is set for a create from git: the store makes the empty
+	// unit in the transaction of the submit and sets Request.Unit. A create
+	// through the API makes its unit in the start operation instead.
+	Provision *Provision
+	Request   Request
+	Revision  Revision
+	Audit     []audit.Entry
+	// Supersedes is the number of the revision in flight that a revision
+	// from git replaces, or 0. The store moves that revision to
+	// StateSuperseded with CheckSupersede. When both revisions are creates,
+	// the new revision takes over the unit and the reservation of the old
+	// one, and the store sets the end of the reservation to the new
+	// deadline. The unit stays, and nothing is reserved twice.
+	Supersedes int
+}
+
+// QuotaWrite is the quota write of a submit. The store writes it through
+// the quota.Tx of its own transaction, after its other checks and in this
+// order: Reserve of Reservation with the checks Units, then Record of the
+// submit at Reservation.At, or at the time of the submit when Reservation
+// is nil, with the checks Requests. A submit that a units limit refuses
+// never counts in the window of a requests limit.
+type QuotaWrite struct {
+	// Reservation is the reservation of a create, with the ID of the
+	// revision key and EndsAt equal to the deadline of the revision, or nil.
+	Reservation *quota.Reservation
+	Units       []quota.Check
+	Requests    []quota.Check
 }
 
 // RevisionChange is one change of the state of a revision, made with the
@@ -142,8 +188,15 @@ const KindStart durable.Kind = "catalog.start"
 
 // KindQuota is the durable operation that settles or releases the
 // reservation of a revision, and deletes the empty unit of a create that
-// did not apply, with the start key of QuotaKey.
+// did not apply, with the start key of QuotaKey. A create that a revision
+// from git superseded starts none: its unit and its reservation belong to
+// the new revision.
 const KindQuota durable.Kind = "catalog.quota"
+
+// KindExpire is the schedule that moves each revision in flight past its
+// deadline to StateExpired, cancels its job when the job model allows it,
+// and starts its operation of KindQuota.
+const KindExpire durable.Kind = "catalog.expire"
 
 // QuotaKey returns the start key of the operation of KindQuota of the
 // revision key revision: <request ID>/<revision>/quota.
@@ -208,6 +261,34 @@ func StartRequestFor(req *Request, rev *Revision, v *Version, reason string) (jo
 	}
 
 	return out, nil
+}
+
+// GateFor returns the approval gate that the combined Catalog decision d
+// gives to the first phase that changes, and false when d gives no gate.
+// The gate needs the approvals of d by members of its groups, and never
+// counts the requester: AllowSelf is false, so a requester cannot approve
+// its own request, also when it is in a group of the gate. bindPlan binds
+// the approvals to the plan of the phase before, when there is one.
+func GateFor(d *policy.Decision, bindPlan bool) (job.Gate, bool) {
+	if d.Effect != policy.EffectApprove || d.Approvals == nil {
+		return job.Gate{Type: "", Approvals: 0, Groups: nil, AllowSelf: false, Timeout: 0, BindPlan: false}, false
+	}
+
+	return job.Gate{
+		Type: job.GateApproval, Approvals: d.Approvals.Count, Groups: slices.Clone(d.Approvals.Groups),
+		AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
+	}, true
+}
+
+// EditableRequestFile returns the predicate that the Catalog gives to
+// job.ValidateEdits for the write-back job of ref, whose code location has
+// the directory dir: it allows exactly the request file of ref, at
+// GitPath(ref), and no other file. The path must be RequestFile as it is,
+// and dir must be GitDir(ref), so no other spelling of the path passes.
+func EditableRequestFile(ref RequestRef, dir string) func(p string) bool {
+	return func(p string) bool {
+		return dir == GitDir(ref) && p == RequestFile
+	}
 }
 
 // requestFileEdit returns the edit of the request file that writes d: one

@@ -8,8 +8,9 @@
 // API, Cedar, and a webhook that the server signs. It imports no transport
 // and no store.
 //
-// An error of an engine is a failure of the policy, never a denial. A caller
-// that gets an error changes nothing and tries again later.
+// An error of an engine is a failure of the policy, never a denial and never
+// an allow. A caller that gets an error changes nothing and tries again
+// later.
 package policy
 
 import (
@@ -33,6 +34,12 @@ var (
 	// ErrInvalidInput reports an input with an empty kind, a schema version
 	// below 1 or an empty document.
 	ErrInvalidInput = errors.New("policy input is not valid")
+	// ErrRuleFailed reports a rule of a policy whose condition failed to
+	// run, for example an Expr condition that reads a missing field or
+	// passes its time limit. The engine gives no decision: a rule that
+	// cannot run is never a pass, so the engine does not skip it and decide
+	// on the other rules.
+	ErrRuleFailed = errors.New("policy rule failed to run")
 )
 
 // Kind names what an input document describes. Each kind has its own
@@ -129,10 +136,12 @@ type Decision struct {
 
 // Validate reports whether d is a decision within the limits. It returns
 // ErrInvalidDecision otherwise. A decision of EffectApprove needs from 1 to
-// MaxApprovals approvals. Another effect has no approvals.
+// MaxApprovals approvals. Another effect has no approvals. The error text
+// never quotes a value of d, because d can come from the answer of an
+// engine over the network.
 func (d Decision) Validate() error {
 	if !d.Effect.Valid() {
-		return fmt.Errorf("%w: effect %q", ErrInvalidDecision, d.Effect)
+		return fmt.Errorf("%w: the effect is not allow, approve or deny", ErrInvalidDecision)
 	}
 
 	if err := validateReasons(d.Reasons); err != nil {
@@ -174,8 +183,11 @@ type Engine interface {
 	// ErrInvalidInput for an input that fails Input.Validate,
 	// ErrUnsupportedKind for a kind that the engine does not decide,
 	// ErrUnavailable when the engine does not answer within the deadline of
-	// ctx, and ErrInvalidDecision for an answer that is not a valid
-	// decision. An error is never a denial: the caller changes nothing.
+	// ctx, ErrInvalidDecision for an answer that is not a valid decision,
+	// and ErrRuleFailed when a rule of the policy fails to run. A rule that
+	// fails to run makes the whole decision an error, also when another
+	// rule matches. An error is never a denial and never an allow: the
+	// caller changes nothing, and a recheck stops.
 	Decide(ctx context.Context, in Input) (Decision, error)
 }
 
@@ -185,7 +197,20 @@ type Engine interface {
 // approve, sorted and with no duplicates. Else the result is allow, also for
 // no decision. Engine and PolicyVersion of the result are empty: the record
 // keeps each decision with its own.
-func Combine(ds []Decision) Decision {
+//
+// Combine first checks each decision with Decision.Validate, and returns an
+// error that wraps ErrInvalidDecision and names the index of the first
+// decision that fails: an empty or unknown effect, an approve with no
+// approvals or with a count outside 1 to MaxApprovals, or approvals on
+// another effect. So a decision that an engine or a caller built wrong never
+// becomes an allow.
+func Combine(ds []Decision) (Decision, error) {
+	for i := range ds {
+		if err := ds[i].Validate(); err != nil {
+			return Decision{}, fmt.Errorf("decision %d: %w", i, err)
+		}
+	}
+
 	out := Decision{Effect: EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
 
 	for i := range ds {
@@ -199,8 +224,17 @@ func Combine(ds []Decision) Decision {
 	}
 
 	if out.Effect == EffectDeny {
-		return out
+		return out, nil
 	}
+
+	return combineApprovals(ds), nil
+}
+
+// combineApprovals joins the decisions of EffectApprove of ds, which
+// Decision.Validate checked: the highest count and every group once. With
+// no approve, the result is allow.
+func combineApprovals(ds []Decision) Decision {
+	out := Decision{Effect: EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
 
 	for i := range ds {
 		if ds[i].Effect != EffectApprove || ds[i].Approvals == nil {

@@ -10,7 +10,9 @@
 // the last unit.
 //
 // The package holds the port Counter. The default adapter is a counter in
-// the database of the namespace. The package imports no transport and no
+// the database of the namespace, in the SQL store adapter that also holds
+// the Catalog records, so that a reservation and the revision that holds it
+// commit in one transaction (Tx). The package imports no transport and no
 // store.
 package quota
 
@@ -40,6 +42,10 @@ var (
 	// ErrInvalid reports a rule, a key or a reservation with an empty or bad
 	// field.
 	ErrInvalid = errors.New("quota rule is not valid")
+	// ErrRuleFailed reports a rule of KindExpr whose expression failed to
+	// run. The check cannot run: it is never a pass and never a failure of
+	// the request, and the caller changes nothing.
+	ErrRuleFailed = errors.New("quota rule failed to run")
 )
 
 // Kind names what a rule counts.
@@ -63,8 +69,10 @@ const (
 	MaxMessageBytes = 1 << 10
 	// MaxRules bounds the rules of one blueprint version.
 	MaxRules = 16
-	// ReservationGrace is the time after the end of a job that its
-	// reservation still counts. After it, a lost release cannot hold a slot.
+	// ReservationGrace is the time after the longest wait of a revision
+	// that its reservation still counts. The end time of a reservation is
+	// the deadline of its revision, which adds this grace. After it, a lost
+	// release cannot hold a slot.
 	ReservationGrace = 24 * time.Hour
 )
 

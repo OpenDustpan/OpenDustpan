@@ -3,6 +3,7 @@ package catalogtest_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/quota"
 )
 
 // memDB is the reference adapter. One mutex stands for the transaction of
@@ -30,7 +32,29 @@ type memDB struct {
 	revisions  map[string]catalog.Revision
 	drafts     map[catalog.BlueprintRef]draft
 	versions   map[catalog.BlueprintRef][]catalog.Version
+	units      map[string]identity.Object
+	quota      quotaState
 	nextID     int
+}
+
+// quotaState is the counter that shares the database of the stores. The
+// store writes it through a quota.Tx in the transaction of a submit.
+type quotaState struct {
+	settled      map[quota.Key]int
+	reservations map[quota.ReservationID]quota.Reservation
+	requests     map[quota.Key][]time.Time
+}
+
+func (q quotaState) clone() quotaState {
+	out := quotaState{
+		settled: maps.Clone(q.settled), reservations: maps.Clone(q.reservations),
+		requests: make(map[quota.Key][]time.Time, len(q.requests)),
+	}
+	for k, v := range q.requests {
+		out.requests[k] = slices.Clone(v)
+	}
+
+	return out
 }
 
 type draft struct {
@@ -48,7 +72,12 @@ func newMemDB() *memDB {
 		revisions:  map[string]catalog.Revision{},
 		drafts:     map[catalog.BlueprintRef]draft{},
 		versions:   map[catalog.BlueprintRef][]catalog.Version{},
-		nextID:     0,
+		units:      map[string]identity.Object{},
+		quota: quotaState{
+			settled: map[quota.Key]int{}, reservations: map[quota.ReservationID]quota.Reservation{},
+			requests: map[quota.Key][]time.Time{},
+		},
+		nextID: 0,
 	}
 }
 
@@ -100,8 +129,32 @@ func (m *memDB) Operation(_ context.Context, key string) (durable.Kind, bool, er
 	return k, ok, nil
 }
 
+// QuotaUsage implements catalogtest.Domain.
+func (m *memDB) QuotaUsage(_ context.Context, checks []quota.Check, when time.Time) ([]quota.Usage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tx := memQuotaTx{state: m.quota}
+
+	return tx.usages(checks, when), nil
+}
+
+// Unit implements catalogtest.Domain.
+func (m *memDB) Unit(_ context.Context, ns namespace.Name, tool, name string) (identity.Object, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	u, ok := m.units[unitKey(ns, tool, name)]
+
+	return u, ok, nil
+}
+
+func unitKey(ns namespace.Name, tool, name string) string {
+	return ns.String() + "/" + tool + "/" + name
+}
+
 // Submit implements catalog.Store.
-func (m *memDB) Submit(_ context.Context, s *catalog.Submission, fence namespace.Fence) (catalog.Request,
+func (m *memDB) Submit(ctx context.Context, s *catalog.Submission, fence namespace.Fence) (catalog.Request,
 	catalog.Revision, error,
 ) {
 	m.mu.Lock()
@@ -111,44 +164,178 @@ func (m *memDB) Submit(_ context.Context, s *catalog.Submission, fence namespace
 		return catalog.Request{}, catalog.Revision{}, err
 	}
 
-	req := s.Request
-	have, exists := m.requests[req.Ref]
-
-	switch {
-	case exists && have.Version != req.Version, !exists && req.Version != 0:
-		return catalog.Request{}, catalog.Revision{}, fmt.Errorf("%w: %s", catalog.ErrConflict, req.Ref)
-	case exists:
-		last := m.revisions[catalog.RevisionKey(have.ID, have.Last)]
-		if !last.State.Terminal() {
-			return catalog.Request{}, catalog.Revision{}, fmt.Errorf(
-				"%w: revision %d",
-				catalog.ErrInFlight,
-				last.Number,
-			)
-		}
-
-		req = have
-	default:
-		m.nextID++
-		req.ID = catalog.RequestID(catalog.RequestIDPrefix + strconv.Itoa(m.nextID))
-		req.CreatedAt = time.Now().UTC()
+	rows, err := m.rowsOf(s)
+	if err != nil {
+		return catalog.Request{}, catalog.Revision{}, err
 	}
 
-	rev := s.Revision
-	rev.Request = req.ID
-	rev.Number = req.Last + 1
-	rev.State = catalog.StateAccepted
-	rev.CreatedAt = time.Now().UTC()
-	req.Last = rev.Number
-	req.Version++
-	req.UpdatedAt = rev.CreatedAt
+	// The writes below change a copy of the counter, which replaces it only
+	// when each one passes: the rollback of a SQL transaction.
+	tx := memQuotaTx{state: m.quota.clone()}
 
-	m.requests[req.Ref] = req
-	m.revisions[rev.Key()] = rev
-	m.operations[rev.Key()] = catalog.KindStart
+	if err := m.supersede(ctx, &tx, s, &rows); err != nil {
+		return catalog.Request{}, catalog.Revision{}, err
+	}
+
+	if err := writeQuota(ctx, &tx, s, &rows.rev); err != nil {
+		return catalog.Request{}, catalog.Revision{}, err
+	}
+
+	var made *identity.Object
+
+	if s.Provision != nil {
+		u, err := m.provision(s.Provision)
+		if err != nil {
+			return catalog.Request{}, catalog.Revision{}, err
+		}
+
+		rows.req.Unit, made = u, &u
+	}
+
+	m.commit(&rows, made, tx.state)
 	m.audit[fence.Namespace] = append(m.audit[fence.Namespace], s.Audit...)
 
-	return req, rev, nil
+	return rows.req, rows.rev, nil
+}
+
+// submitRows are the rows that a submit writes: the request, the new
+// revision, and the last revision of a request that exists, or nil, with
+// supersedes set when the submit supersedes it.
+type submitRows struct {
+	last       *catalog.Revision
+	req        catalog.Request
+	rev        catalog.Revision
+	supersedes bool
+}
+
+// checkSubmission checks the fields of s that need no stored row.
+func checkSubmission(s *catalog.Submission) error {
+	switch {
+	case s.Revision.Deadline.IsZero():
+		return fmt.Errorf("%w: a revision needs a deadline", catalog.ErrInvalid)
+	case s.Quota != nil && s.Quota.Reservation != nil && !s.Quota.Reservation.EndsAt.Equal(s.Revision.Deadline):
+		return fmt.Errorf("%w: the reservation does not end at the deadline", catalog.ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+// checkLast checks s against last, the last revision of its request.
+func checkLast(s *catalog.Submission, last *catalog.Revision) error {
+	switch {
+	case s.Supersedes != 0 && s.Supersedes != last.Number:
+		return fmt.Errorf("%w: revision %d is not the last one", catalog.ErrConflict, s.Supersedes)
+	case s.Supersedes != 0:
+		return catalog.CheckSupersede(last, nil)
+	case !last.State.Terminal():
+		return fmt.Errorf("%w: revision %d", catalog.ErrInFlight, last.Number)
+	default:
+		return nil
+	}
+}
+
+// writeQuota reserves, then records, through tx.
+func writeQuota(ctx context.Context, tx *memQuotaTx, s *catalog.Submission, rev *catalog.Revision) error {
+	if s.Quota == nil {
+		return nil
+	}
+
+	at := time.Now().UTC()
+
+	if r := s.Quota.Reservation; r != nil {
+		if _, err := tx.Reserve(ctx, *r, s.Quota.Units); err != nil {
+			return fmt.Errorf("reserve: %w", err)
+		}
+
+		rev.Reservation, at = r.ID, r.At
+	}
+
+	if err := tx.Record(ctx, at, s.Quota.Requests); err != nil {
+		return fmt.Errorf("record: %w", err)
+	}
+
+	return nil
+}
+
+// memQuotaTx is the quota.Tx of the reference adapter, on the copy of the
+// counter that one submit writes.
+type memQuotaTx struct {
+	state quotaState
+}
+
+func (tx *memQuotaTx) Reserve(_ context.Context, r quota.Reservation, checks []quota.Check) (quota.Reservation,
+	error,
+) {
+	if err := r.Validate(); err != nil {
+		return quota.Reservation{}, err
+	}
+
+	if have, ok := tx.state.reservations[r.ID]; ok {
+		return have, nil
+	}
+
+	if x := quota.Evaluate(checks, tx.usages(checks, r.At), 1); x != nil {
+		return quota.Reservation{}, &quota.ExceededError{Exceeded: x}
+	}
+
+	tx.state.reservations[r.ID] = r
+
+	return r, nil
+}
+
+func (tx *memQuotaTx) Record(_ context.Context, at time.Time, checks []quota.Check) error {
+	if x := quota.Evaluate(checks, tx.usages(checks, at), 1); x != nil {
+		return &quota.ExceededError{Exceeded: x}
+	}
+
+	for _, c := range checks {
+		tx.state.requests[c.Key] = append(tx.state.requests[c.Key], at)
+	}
+
+	return nil
+}
+
+func (tx *memQuotaTx) SetEnd(_ context.Context, id quota.ReservationID, endsAt time.Time) error {
+	r, ok := tx.state.reservations[id]
+
+	switch {
+	case !ok:
+		return fmt.Errorf("%w: %s", quota.ErrNotFound, id)
+	case r.State != quota.ReservationOpen:
+		return fmt.Errorf("%w: %s", quota.ErrEnded, id)
+	case !endsAt.After(r.At):
+		return fmt.Errorf("%w: %s cannot end before %v", quota.ErrInvalid, id, r.At)
+	default:
+	}
+
+	r.EndsAt = endsAt
+	tx.state.reservations[id] = r
+
+	return nil
+}
+
+func (tx *memQuotaTx) usages(checks []quota.Check, at time.Time) []quota.Usage {
+	out := make([]quota.Usage, 0, len(checks))
+
+	for _, c := range checks {
+		u := quota.Usage{Key: c.Key, Settled: tx.state.settled[c.Key], Reserved: 0, Requests: 0}
+
+		for _, r := range tx.state.reservations {
+			if r.State == quota.ReservationOpen && r.EndsAt.After(at) && slices.Contains(r.Keys, c.Key) {
+				u.Reserved++
+			}
+		}
+
+		for _, t := range tx.state.requests[c.Key] {
+			if c.Key.Kind == quota.KindRequests && t.After(at.Add(-c.Window)) && !t.After(at) {
+				u.Requests++
+			}
+		}
+
+		out = append(out, u)
+	}
+
+	return out
 }
 
 // Get implements catalog.Store.
@@ -388,6 +575,115 @@ func (m *memDB) SetExprVersion(_ context.Context, ref catalog.BlueprintRef, n in
 	return m.changeVersion(ref, n, fence, nil, func(v *catalog.Version) { v.Blueprint.ExprVersion = expr })
 }
 
+// rowsOf checks s against the stored rows and returns the rows to write.
+func (m *memDB) rowsOf(s *catalog.Submission) (submitRows, error) {
+	rows := submitRows{last: nil, req: s.Request, rev: s.Revision, supersedes: s.Supersedes != 0}
+
+	if err := checkSubmission(s); err != nil {
+		return rows, err
+	}
+
+	have, found := m.requests[rows.req.Ref]
+
+	switch {
+	case found && have.Version != rows.req.Version, !found && rows.req.Version != 0:
+		return rows, fmt.Errorf("%w: %s", catalog.ErrConflict, rows.req.Ref)
+	case !found:
+		rows.req.ID = ""
+
+		return rows, nil
+	default:
+	}
+
+	last := m.revisions[catalog.RevisionKey(have.ID, have.Last)]
+	if err := checkLast(s, &last); err != nil {
+		return rows, err
+	}
+
+	if len(have.QuotaKeys) == 0 {
+		have.QuotaKeys = rows.req.QuotaKeys
+	}
+
+	rows.req, rows.last = have, &last
+
+	return rows, nil
+}
+
+// supersede gives the reservation of a superseded create to the new
+// revision, and moves its end time to the new deadline.
+func (m *memDB) supersede(ctx context.Context, tx *memQuotaTx, s *catalog.Submission, rows *submitRows) error {
+	last, rev := rows.last, &rows.rev
+	if !rows.supersedes || last == nil || last.Operation != catalog.OperationCreate ||
+		rev.Operation != catalog.OperationCreate || last.Reservation == "" {
+		return nil
+	}
+
+	if s.Quota != nil && s.Quota.Reservation != nil {
+		return fmt.Errorf("%w: a supersede moves the reservation of revision %d, so the submit holds none",
+			catalog.ErrInvalid, last.Number)
+	}
+
+	if err := tx.SetEnd(ctx, last.Reservation, rev.Deadline); err != nil {
+		return fmt.Errorf("supersede: %w", err)
+	}
+
+	rev.Reservation = last.Reservation
+
+	return nil
+}
+
+// provision makes the empty unit of p, or returns ErrUnitName for a unit
+// of that name that exists.
+func (m *memDB) provision(p *catalog.Provision) (identity.Object, error) {
+	if _, ok := m.units[unitKey(p.Ref.Namespace, p.Tool, p.Unit)]; ok {
+		return identity.Object{}, fmt.Errorf("%w: %s", catalog.ErrUnitName, p.Unit)
+	}
+
+	o, err := identity.UnitObject(p.Tool, p.Ref.Namespace, p.Unit)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("%w: %w", catalog.ErrUnitName, err)
+	}
+
+	return o.WithUnitID("ws-" + p.Unit), nil
+}
+
+// commit writes the rows of a submit that passed each check, and the
+// counter q.
+func (m *memDB) commit(rows *submitRows, made *identity.Object, q quotaState) {
+	req, rev := &rows.req, &rows.rev
+
+	if req.ID == "" {
+		m.nextID++
+		req.ID = catalog.RequestID(catalog.RequestIDPrefix + strconv.Itoa(m.nextID))
+		req.CreatedAt = time.Now().UTC()
+	}
+
+	rev.Request = req.ID
+	rev.Number = req.Last + 1
+	rev.State = catalog.StateAccepted
+	rev.CreatedAt = time.Now().UTC()
+	req.Last = rev.Number
+	req.Version++
+	req.UpdatedAt = rev.CreatedAt
+
+	if rows.last != nil && rows.supersedes {
+		rows.last.State, rows.last.UpdatedAt = catalog.StateSuperseded, rev.CreatedAt
+		m.revisions[rows.last.Key()] = *rows.last
+	}
+
+	if made != nil {
+		m.units[unitKey(req.Ref.Namespace, made.Tool(), made.UnitName())] = *made
+	}
+
+	m.quota = q
+	m.requests[req.Ref] = *req
+	m.revisions[rev.Key()] = *rev
+
+	if rev.Origin == catalog.OriginAPI {
+		m.operations[rev.Key()] = catalog.KindStart
+	}
+}
+
 func (m *memDB) changeVersion(ref catalog.BlueprintRef, n int, fence namespace.Fence, e []audit.Entry,
 	f func(v *catalog.Version),
 ) error {
@@ -414,7 +710,8 @@ func (m *memDB) changeVersion(ref catalog.BlueprintRef, n int, fence namespace.F
 func (m *memDB) apply(req *catalog.Request, rev *catalog.Revision, c catalog.RevisionChange) {
 	now := time.Now().UTC()
 
-	if c.To != rev.State && c.To.Terminal() && rev.Operation == catalog.OperationCreate {
+	if c.To != rev.State && c.To.Terminal() && c.To != catalog.StateSuperseded &&
+		rev.Operation == catalog.OperationCreate {
 		m.operations[catalog.QuotaKey(rev.Key())] = catalog.KindQuota
 	}
 

@@ -28,9 +28,11 @@ const (
 )
 
 // Reservation holds one unit of each of its keys for a create in flight.
-// At is the time of the submit: Reserve counts the usage at At. EndsAt is
-// the end time of the job of the revision plus ReservationGrace. After it,
-// an open reservation counts in no usage.
+// At is the time of the submit: a reserve counts the usage at At. EndsAt is
+// the deadline of the revision that holds the reservation, which the caller
+// knows at the reserve: the revision ends expired at that time if it has not
+// ended before, so a reservation never expires while its revision is in
+// flight. After EndsAt, an open reservation counts in no usage.
 type Reservation struct {
 	ID        ReservationID
 	Namespace namespace.Name
@@ -70,6 +72,40 @@ func (r Reservation) Validate() error {
 	return nil
 }
 
+// Tx is the counter inside one open transaction of the store that holds
+// it. Its writes commit or roll back with every other write of that
+// transaction, so a caller that stores a revision and its reservation in one
+// transaction never keeps one without the other. A Tx is valid only inside
+// the function that Counter.InTx, or the store that owns the transaction,
+// gives it to.
+//
+// A caller that reserves and records in one transaction calls Reserve
+// first: a submit that a units limit refuses then never counts in the window
+// of a requests limit.
+type Tx interface {
+	// Reserve checks each of checks with r counted, with the usage at r.At,
+	// and stores r only when each one passes. A reservation with the ID of an
+	// open or ended one and the same keys returns the stored one, with no
+	// change, so a retry is safe. It returns an *ExceededError that matches
+	// ErrExceeded with each check that fails, ErrConflict for an ID that
+	// names other keys, and ErrInvalid for a reservation that fails
+	// Reservation.Validate.
+	Reserve(ctx context.Context, r Reservation, checks []Check) (Reservation, error)
+	// Record checks each of checks, which are of KindRequests, with one
+	// request at the time submitted counted in the window of each, and
+	// stores one request for the key of each check only when each one
+	// passes. It returns an *ExceededError that matches ErrExceeded
+	// otherwise, and ErrInvalid for a check of another kind.
+	Record(ctx context.Context, submitted time.Time, checks []Check) error
+	// SetEnd sets the end time of the open reservation id to endsAt, the
+	// deadline of a revision that takes the reservation over, so the
+	// reservation still ends at the deadline of the revision that holds it.
+	// It returns ErrNotFound for an unknown ID, ErrEnded for a reservation
+	// that ended, and ErrInvalid for an endsAt that is not after the time of
+	// the reservation.
+	SetEnd(ctx context.Context, id ReservationID, endsAt time.Time) error
+}
+
 // Counter is the port of quota accounting. The default adapter keeps a row
 // for each key and a row for each reservation and each request, in the
 // database of the namespace. It serializes the writes of one key, for
@@ -80,14 +116,12 @@ func (r Reservation) Validate() error {
 // Each write checks fence in its transaction and returns an error that
 // wraps namespace.ErrFenced when the fence is stale.
 type Counter interface {
-	// Reserve checks each of checks with r counted, with the usage at r.At,
-	// and stores r only when each one passes, in one transaction. A reservation with the ID of an
-	// open or ended one and the same keys returns the stored one, with no
-	// change, so a retry is safe. It returns an *ExceededError that matches
-	// ErrExceeded with each check that fails, ErrConflict for an ID that
-	// names other keys, and ErrInvalid for a reservation that fails
-	// Reservation.Validate.
-	Reserve(ctx context.Context, r Reservation, checks []Check, fence namespace.Fence) (Reservation, error)
+	// InTx runs fn with a Tx in one new transaction, after a check of
+	// fence. It commits when fn returns nil, and rolls back each write of
+	// the Tx when fn returns an error, which InTx then returns. The Catalog
+	// store adapter does not call InTx: it gives the Tx of its own
+	// transaction to the same code.
+	InTx(ctx context.Context, fence namespace.Fence, fn func(tx Tx) error) error
 	// Settle moves the units of reservation id from reserved to settled. A
 	// settle of a settled reservation changes nothing. It returns
 	// ErrNotFound for an unknown ID, and ErrEnded for a released one.
@@ -96,11 +130,6 @@ type Counter interface {
 	// reservation changes nothing. It returns ErrNotFound for an unknown ID,
 	// and ErrEnded for a settled one.
 	Release(ctx context.Context, id ReservationID, fence namespace.Fence) error
-	// Record checks each of checks, which are of KindRequests, with the
-	// request at the time submitted counted in the window of each. It stores
-	// the request for key only when each one passes, in one transaction. It
-	// returns an *ExceededError that matches ErrExceeded otherwise.
-	Record(ctx context.Context, key Key, submitted time.Time, checks []Check, fence namespace.Fence) error
 	// Usage returns the usage of the key of each of checks at the time
 	// when, in the order of checks: for a key of KindUnits, the settled count
 	// and the open reservations whose end time is after when, and for a key
@@ -108,7 +137,8 @@ type Counter interface {
 	// when. A key that the counter does not know uses nothing.
 	Usage(ctx context.Context, checks []Check, when time.Time) ([]Usage, error)
 	// SetSettled writes the settled count of key, as the reconcile
-	// schedule counts it from the inventory. It returns ErrInvalid for a
-	// key that is not of KindUnits or a count below 0.
+	// schedule counts it from the inventory and the Catalog records. It
+	// returns ErrInvalid for a key that is not of KindUnits or a count below
+	// 0.
 	SetSettled(ctx context.Context, key Key, count int, fence namespace.Fence) error
 }

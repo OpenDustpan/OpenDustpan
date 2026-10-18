@@ -175,7 +175,9 @@ func (d *Document) Ref() RequestRef {
 
 // Canonical returns the canonical bytes of d with the defaults of b filled
 // in: ensure set, each input with a default that d leaves out set to its
-// default, keys sorted, no white space, and no home. Two documents with
+// default, and no home, in the canonical JSON of CanonicalJSON. So keys are
+// sorted, there is no white space, and numbers and strings have one form:
+// an answer of 20, 20.0 or 2e1 gives the same bytes. Two documents with
 // equal canonical bytes ask for the same state, so a submit equal to the
 // last applied revision makes no job.
 func (d *Document) Canonical(b *Blueprint) ([]byte, error) {
@@ -199,12 +201,9 @@ func (d *Document) Canonical(b *Blueprint) ([]byte, error) {
 	}
 
 	for name, raw := range c.Inputs {
-		compact, err := compactJSON(raw)
-		if err != nil {
+		if _, err := compactJSON(raw); err != nil {
 			return nil, fmt.Errorf("input %s: %w", name, err)
 		}
-
-		c.Inputs[name] = compact
 	}
 
 	out, err := json.Marshal(&c)
@@ -212,7 +211,7 @@ func (d *Document) Canonical(b *Blueprint) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
-	return out, nil
+	return CanonicalJSON(out)
 }
 
 // Encode returns the bytes of the request file in git: the fields in the

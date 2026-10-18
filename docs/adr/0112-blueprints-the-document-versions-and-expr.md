@@ -54,6 +54,7 @@ decide.
      },
      "exprVersion": "v1.17.8",
      "unitName": "'databases/' + request.name",
+     "sourcePrincipal": "catalog-reader",
      "inputs": [
        { "name": "size", "type": "string", "default": "small",
          "choice": { "values": ["small", "medium", "large"] },
@@ -88,6 +89,9 @@ decide.
    - `component`: a Pulumi component, by its package, an exact version and
      its type token.
 
+   `tool` is `opentofu` or `pulumi`. A blueprint of OpenTofu names a
+   module, and a blueprint of Pulumi names a component.
+
    The blueprint never holds code of the tool. The render (ADR 110 decision
    8) makes one module call or one component resource from it. The module
    keeps its own variable validation, and the tool runs it at the plan. A
@@ -100,6 +104,19 @@ decide.
    of its type, and `maps`: the variable of the module or the config key of
    the component that the answer sets. An input with a default is never
    required. No input is secret (ADR 111 decision 3).
+
+   The publish checks each key of `maps` and of `platform.values` with
+   `catalog.ValidKey`, at most 128 bytes:
+   - For OpenTofu, an HCL identifier: a letter or `_`, then letters, digits,
+     `_` and `-`, and not a name that a module block keeps (`source`,
+     `version`, `providers`, `count`, `for_each`, `lifecycle`,
+     `depends_on`, `locals`).
+   - For Pulumi, a config key: a name, or a namespace, `:` and a name, where
+     each part is a letter, then letters, digits, `_` and `-`.
+
+   The render writes answers only as data, in the variables file or the
+   stack settings (ADR 110 decision 8). The program text holds only these
+   keys, so no answer and no key can change the program.
 6. **Validation in Expr.** An input has 0 to 32 `validate` rules. Each rule
    is an Expr expression that gives a boolean, and a message. The
    expression sees `value` (the answer), `inputs` (all answers, with
@@ -108,24 +125,42 @@ decide.
    message. A rule that fails to run fails the answer with
    `catalog.ErrRuleFailed`, never with a pass. The server runs every rule
    and returns every failure, so a form can show all of them at once.
+
+   The environment, `catalog.Env`, is data only: a struct of fields with no
+   method, and no method on any type in it. The namespace is a plain
+   string, and each answer is a JSON value. So an expression can read data
+   and cannot call code of the server. A test walks the types and fails on
+   a method.
 7. **Policy and quota rules.** The `policy` list holds 0 to 64 rules: an
    Expr condition `when`, an effect (`deny` or `approve`), a message, and
    for `approve` a number of approvals and the groups of the approvers. The
    built-in Expr adapter of ADR 114 runs them. The `quotas` list holds 0 to
    16 rules of ADR 115. Both lists are part of the version: a change of a
    rule is a new version.
+
+   A `when` condition or a quota `expr` rule that fails to run is not a
+   failure of the answer, as a validation rule is. It is a check that
+   cannot run: the engine returns an error that wraps
+   `policy.ErrRuleFailed` or `quota.ErrRuleFailed`, and gives no decision.
+   The recheck stops and changes nothing (ADR 113 decision 8). So a deny
+   rule that fails to run never becomes an allow.
 8. **Platform values have one home.** `platform` holds the values that the
    platform team sets and the consumer cannot see or change: fixed values of
    variables or config keys, the profile that supplies the secrets of a run
    (RFC 5), and the runner pool. The one-home rule of RFC 12 holds in three
    places:
    - At publish: no key is in `maps` of two inputs, or in `maps` of an input
-     and in `platform.values`. `catalog.CheckOneHome` holds the rule.
+     and in `platform.values`. `catalog.CheckOneHome` holds the rule. It
+     compares keys in the form of `catalog.NormalizeKey`: in lowercase, and,
+     for Pulumi, with no namespace when the namespace is the project of the
+     render, which is the name of the blueprint. So `Size`, `size` and
+     `postgres:size` are one key of the blueprint `postgres`.
    - At publish: no key of `maps` or of `platform.values` is a key that the
      profile of the blueprint sets.
    - At render: the render refuses a key that another home of the unit also
      sets, for example a stack settings file that the team wrote, with
-     `catalog.ErrOneHome`. It names the key and both homes.
+     `catalog.ErrOneHome`, in the same normalized form. It names the key and
+     both homes.
 9. **The unit name.** `unitName` is an Expr expression that gives the tool's
    own name of the unit from `request` and `inputs`. The server computes it
    at the first submit and keeps it: a later change of an input never
@@ -157,10 +192,43 @@ decide.
     to `go.mod`.
 12. **Limits of Expr.** An expression is at most 4 KiB of source. The
     adapter compiles it with a type check against the environment of
-    decision 6, a node limit and the memory budget of the Expr library, and
-    no function that does input or output, reads the time or reads random
-    data. Each run has a time limit of 50 ms. So a rule gives the same
-    result for the same inputs at submit, at approval and at apply.
+    decision 6, and runs it with a time limit of 50 ms. The constants of
+    `pkg/catalog` hold the other limits:
+
+    | Limit | Value |
+    | --- | --- |
+    | Node limit of the compiler (`MaxExprNodes`) | 128 |
+    | Memory budget of the virtual machine for one run (`ExprMemoryBudget`), in items of the lists that the run makes | 1,000 |
+    | String that the operator `+` gives (`MaxConcatBytes`) | 1 KiB |
+    | Groups of the requester in the environment (`MaxEnvGroups`) | 1,000 |
+    | Depth of closures, such as the predicate of `all` (`MaxClosureDepth`) | 1 |
+
+    The adapter refuses at compile:
+    - each builtin that is not in `catalog.ExprBuiltins`. The list leaves
+      out the builtins that read the time or the local time zone (`now`,
+      `date`, `timezone`, `duration`), the builtins whose result order is
+      the order of a map (`keys`, `values`, `toPairs`), and the builtins
+      that can make a string or a list larger than the memory budget
+      counts (`join`, `repeat`, `replace`, `string`, `toJSON`, `reduce`
+      and others),
+    - the syntax `let`, the range operator `..`, and a closure inside a
+      closure.
+
+    It runs `+` on two strings through a function that refuses a result
+    above `MaxConcatBytes`, because the memory budget of Expr does not
+    count strings.
+
+    We measured these limits with Expr v1.17.8 on one core of a 2.1 GHz
+    Xeon, with a set of hostile expressions (nested loops, string growth,
+    regular expressions on 4 KiB strings) and of usual rules:
+    - Without the limits, an expression of 200 bytes (a `let` chain that
+      doubles a string) used all the memory of the machine, and a nested
+      `join` took 180 ms.
+    - With the limits, the slowest expression took 13 ms, with 1,000 groups
+      in the environment. Each usual rule took less than 1 ms.
+
+    So a rule gives the same result for the same inputs at submit, at
+    approval and at apply, and a rule cannot hold the server.
 13. **The blueprint document has a schema version.** It follows the rules of
     ADR 111 decision 4, with its own counter. `catalog.ParseBlueprint`
     refuses an unknown field and a document over 256 KiB.

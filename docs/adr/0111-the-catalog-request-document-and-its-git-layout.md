@@ -74,10 +74,17 @@ and the git path.
    entry. So two submits of one document with two reasons give one desired
    state.
 6. **Equal documents are equal states.** `catalog.Document.Canonical` gives
-   the canonical bytes of a document: keys in sorted order, no white space,
-   defaults filled in, and `home` left out after the first submit. A submit
-   whose canonical bytes equal those of the last applied revision makes no
-   job. The API answers with that revision and the status `unchanged`.
+   the canonical bytes of a document: defaults filled in, `home` left out
+   after the first submit, and the JSON in the canonical form of RFC 8785,
+   the JSON Canonicalization Scheme (`catalog.CanonicalJSON`). So the keys
+   of each object are in the order of their UTF-16 code units, there is no
+   white space, each number has the shortest form that reads back as the
+   same IEEE 754 double (`20`, `20.0` and `2e1` give `20`), and each string
+   has only the escapes of the scheme (`"\u00e9"` and `"é"` give `"é"`). A
+   submit whose canonical bytes equal those of the last applied revision
+   makes no job. The API answers with that revision and the status
+   `unchanged`. The equality filters of choices (ADR 113 decision 4) use the
+   same form.
 7. **The git layout.** In a repository, the request of namespace `<ns>`,
    blueprint `<bp>` and name `<name>` is the file
 

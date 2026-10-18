@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/catalog"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/policy"
 )
 
 // startFixture is a request of the document of the ADR, in each home, and
@@ -98,6 +99,54 @@ func TestStartRequestForWriteBack(t *testing.T) {
 	rev = f.revision(catalog.OperationNone)
 	if _, err := catalog.StartRequestFor(&f.inGit, &rev, &f.version, ""); !errors.Is(err, catalog.ErrInvalid) {
 		t.Fatalf("StartRequestFor(none) = %v, want ErrInvalid", err)
+	}
+}
+
+func TestEditableRequestFile(t *testing.T) {
+	t.Parallel()
+
+	f := newStartFixture(t)
+	rev := f.revision(catalog.OperationUpdate)
+
+	got, err := catalog.StartRequestFor(&f.inGit, &rev, &f.version, "")
+	if err != nil {
+		t.Fatalf("StartRequestFor() = %v", err)
+	}
+
+	// The job model takes the edit with the predicate of the Catalog, which
+	// allows the request file and no other file.
+	editable := catalog.EditableRequestFile(f.doc.Ref(), got.Location.Directory)
+	if err := job.ValidateEdits(got.Location.Directory, got.Edits, editable); err != nil {
+		t.Fatalf("ValidateEdits() = %v", err)
+	}
+
+	for _, p := range []string{"main.tf", "../orders-db/request.json", "x/request.json", "request.json.tmp"} {
+		if editable(p) {
+			t.Fatalf("EditableRequestFile() allows %q", p)
+		}
+	}
+
+	if catalog.EditableRequestFile(f.doc.Ref(), "catalog/payments/redis/orders-db")(catalog.RequestFile) {
+		t.Fatal("EditableRequestFile() allows the request file of another directory")
+	}
+}
+
+func TestGateFor(t *testing.T) {
+	t.Parallel()
+
+	approve := policy.Decision{
+		Effect: policy.EffectApprove, Reasons: nil, Approvals: &policy.Approvals{Groups: []string{"dba"}, Count: 2},
+		Engine: "", PolicyVersion: "",
+	}
+
+	g, ok := catalog.GateFor(&approve, true)
+	if !ok || g.Type != job.GateApproval || g.Approvals != 2 || len(g.Groups) != 1 || g.AllowSelf || !g.BindPlan {
+		t.Fatalf("GateFor(approve) = %+v, %v, want 2 approvals by dba, not by the requester", g, ok)
+	}
+
+	allow := policy.Decision{Effect: policy.EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
+	if _, ok := catalog.GateFor(&allow, true); ok {
+		t.Fatal("GateFor(allow) gives a gate")
 	}
 }
 

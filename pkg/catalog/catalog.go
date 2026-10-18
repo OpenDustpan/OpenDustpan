@@ -43,7 +43,8 @@ var (
 	// that the store does not know.
 	ErrNotFound = errors.New("catalog object not found")
 	// ErrConflict reports a write that read an older version of a request or
-	// a draft. The caller reads again and decides again.
+	// a draft, or a supersede of a revision whose change is already in git.
+	// The caller reads again and decides again.
 	ErrConflict = errors.New("catalog object changed since it was read")
 	// ErrInFlight reports a submit while a revision of the same request has
 	// not ended.
@@ -86,6 +87,8 @@ var (
 	// ErrHasState reports a delete of the unit of a request that has a state
 	// version.
 	ErrHasState = errors.New("unit has a state version")
+	// ErrForgeUnavailable reports a forge that cannot give a request file.
+	ErrForgeUnavailable = errors.New("forge is not available")
 )
 
 // Limits of the store and of the API. A store adapter returns ErrLimit

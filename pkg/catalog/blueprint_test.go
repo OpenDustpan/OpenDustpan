@@ -224,6 +224,51 @@ func TestBlueprintValidate(t *testing.T) {
 		{"no home", func(b *catalog.Blueprint) {
 			b.Delivery = catalog.Delivery{Git: nil, Default: catalog.HomeGit, Homes: nil}
 		}, catalog.ErrInvalid},
+		{"an unknown tool", func(b *catalog.Blueprint) { b.Tool = "terraform" }, catalog.ErrInvalid},
+		{"a module for Pulumi", func(b *catalog.Blueprint) { b.Tool = catalog.ToolPulumi }, catalog.ErrInvalid},
+		{"maps to a key that is not an HCL identifier", func(b *catalog.Blueprint) {
+			b.Inputs[0].Maps = "size\"\nresource \"x\""
+		}, catalog.ErrInvalid},
+		{"maps to a name that a module block keeps", func(b *catalog.Blueprint) {
+			b.Inputs[0].Maps = "count"
+		}, catalog.ErrInvalid},
+		{"a platform value that is not a key", func(b *catalog.Blueprint) {
+			b.Platform.Values["${file(\"/etc/passwd\")}"] = json.RawMessage(`1`)
+		}, catalog.ErrInvalid},
+		{"two inputs map to one key in another case", func(b *catalog.Blueprint) {
+			b.Inputs[1].Maps = "Instance_Size"
+		}, catalog.ErrOneHome},
+		{"a Pulumi key with and with no project namespace", func(b *catalog.Blueprint) {
+			b.Tool = catalog.ToolPulumi
+			b.Program = catalog.Program{Module: nil, Component: &catalog.Component{
+				Package: "acme-postgres", Version: "1.2.0", Type: "acme:index:Postgres",
+			}}
+			b.Inputs[1].Maps = "postgres:instance_size"
+		}, catalog.ErrOneHome},
+		{"a Pulumi key of a provider", func(b *catalog.Blueprint) {
+			b.Tool = catalog.ToolPulumi
+			b.Program = catalog.Program{Module: nil, Component: &catalog.Component{
+				Package: "acme-postgres", Version: "1.2.0", Type: "acme:index:Postgres",
+			}}
+			b.Platform.Values["aws:region"] = json.RawMessage(`"eu-west-1"`)
+		}, nil},
+		{"a Pulumi key with two namespaces", func(b *catalog.Blueprint) {
+			b.Tool = catalog.ToolPulumi
+			b.Program = catalog.Program{Module: nil, Component: &catalog.Component{
+				Package: "acme-postgres", Version: "1.2.0", Type: "acme:index:Postgres",
+			}}
+			b.Inputs[0].Maps = "a:b:c"
+		}, catalog.ErrInvalid},
+		{
+			"a source with no source principal", func(b *catalog.Blueprint) { b.SourcePrincipal = "" },
+			catalog.ErrInvalid,
+		},
+		{"a source principal with no source", func(b *catalog.Blueprint) {
+			b.Inputs = b.Inputs[:1]
+		}, catalog.ErrInvalid},
+		{"a source principal that is not an ID", func(b *catalog.Blueprint) {
+			b.SourcePrincipal = "a/b"
+		}, catalog.ErrInvalid},
 	}
 
 	for _, tc := range cases {

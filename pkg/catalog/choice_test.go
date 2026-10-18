@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -194,9 +195,26 @@ func TestOptionsTruncate(t *testing.T) {
 		rows = append(rows, row(t, id, map[string]string{"network_id": `"` + id + `"`}))
 	}
 
-	got := catalog.Options(&in, nil, rows, "")
+	full := catalog.Options(&in, nil, rows, "")
+	if len(full.Options) != catalog.MaxOptions+5 || full.Truncated {
+		t.Fatalf("Options() gave %d options, truncated %v, want every option", len(full.Options), full.Truncated)
+	}
+
+	got := full.ForRoute()
 	if len(got.Options) != catalog.MaxOptions || !got.Truncated || got.Options[0].Value != "u0000" {
-		t.Fatalf("Options() gave %d options, truncated %v", len(got.Options), got.Truncated)
+		t.Fatalf("ForRoute() gave %d options, truncated %v", len(got.Options), got.Truncated)
+	}
+
+	// An answer past the cut is an option of the full set, and the check
+	// refuses the cut set.
+	last := json.RawMessage(fmt.Sprintf(`"u%04d"`, catalog.MaxOptions+4))
+
+	if fails, err := catalog.CheckAnswer(&in, last, full); err != nil || fails != nil {
+		t.Fatalf("CheckAnswer(full) = %v, %v, want a pass", fails, err)
+	}
+
+	if _, err := catalog.CheckAnswer(&in, last, got); !errors.Is(err, catalog.ErrInvalid) {
+		t.Fatalf("CheckAnswer(cut) = %v, want ErrInvalid", err)
 	}
 }
 
@@ -257,8 +275,13 @@ func TestCheckAnswer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			fails, err := catalog.CheckAnswer(&tc.in, json.RawMessage(tc.answer), tc.set)
+			if err != nil {
+				t.Fatalf("CheckAnswer() = %v", err)
+			}
+
 			var codes []catalog.FailureCode
-			for _, f := range catalog.CheckAnswer(&tc.in, json.RawMessage(tc.answer), tc.set) {
+			for _, f := range fails {
 				codes = append(codes, f.Code)
 			}
 

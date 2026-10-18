@@ -46,13 +46,16 @@ break-glass come from the job model.
    | `failed` | Terminal. The job failed, or the start failed. |
    | `rejected` | Terminal. A person, a review request or a recheck rejected it. |
    | `canceled` | Terminal. A person canceled it. |
-   | `expired` | Terminal. The job expired. |
-   | `superseded` | Terminal. A revision from git replaced it (decision 9). |
+   | `expired` | Terminal. The job expired, or the revision passed its deadline (decision 13). |
+   | `superseded` | Terminal. A revision from git replaced it before its job delivered (decision 9). |
 
 3. **One revision in flight.** A submit while a revision of the same
    request is not terminal fails with `catalog.ErrInFlight`. The requester
-   cancels the revision in flight first. So two revisions never race for
-   one unit, and a reservation always belongs to one revision.
+   cancels the revision in flight first. A render from git does not fail:
+   it supersedes the revision in flight in the same store write, or fails
+   with `catalog.ErrConflict` when the change of that revision is already in
+   git (decision 9). So two revisions never race for one unit, and a
+   reservation always belongs to one revision.
 4. **Job states give revision states.** After `accepted`, the state of a
    revision comes from the state of its job. `catalog.StateOf` holds the
    map, and a table-driven test covers each job state:
@@ -76,9 +79,11 @@ break-glass come from the job model.
    is the record. The revision state is a copy for lists and filters, and a
    read of one revision reads the job again.
 5. **The start of a revision.** A submit that passes its checks stores the
-   revision `accepted`, with its reservation, and starts a durable operation
-   `catalog.start` with the start key `<request ID>/<revision>`, in one
-   transaction. The operation makes the unit (ADR 110 decision 6), then
+   revision `accepted`, writes its reservation and its count in the windows
+   of the `requests` rules through the `quota.Tx` of the same transaction
+   (ADR 115 decision 5), and starts a durable operation `catalog.start` with
+   the start key `<request ID>/<revision>`, all in one transaction. A
+   submit that fails keeps none of them. The operation makes the unit (ADR 110 decision 6), then
    calls `job.Service.Start`. The API runs the operation at once and waits
    for it up to 10 seconds, so a submit with no problem answers with the job.
    Each step is idempotent, so a retry after a crash gives one unit and one
@@ -98,12 +103,16 @@ break-glass come from the job model.
    break-glass fails with `job.ErrFrozen` and stores no revision.
 6. **The Catalog decision gives the gates.** The combined decision of the
    `submit` point (ADR 114 decision 4) is in the revision. The job decision
-   of the job of the revision joins it (ADR 114 decision 10):
+   of the job of the revision joins it (ADR 114 decision 10): the
+   `job.Decider` adapter finds the revision through the Catalog origin of
+   the job spec (ADR 110, "Changes requested in the job model", item 1).
    - `deny` cannot reach the job: the submit already failed.
    - `approve` gives a gate of type `job.GateApproval` on the first phase
      that changes: `apply` for a runner job, `deliver` for a write-back job.
      The gate binds the approvals to the plan when a plan phase comes
-     before.
+     before. The gate sets `AllowSelf` to false (`catalog.GateFor`), so the
+     requester never counts as an approver of its own request, also when it
+     is a member of a group of the gate.
    - `allow` gives no gate.
 
    An approver approves through `job.Service.Approve`, as for any job, and
@@ -113,7 +122,10 @@ break-glass come from the job model.
    (ADR 113 decision 8), the job model calls the Catalog through the
    precondition port (ADR 110, "Changes requested in the job model", item
    2). A failed recheck rejects the job. The revision then ends `rejected`,
-   with each failure, and the Catalog releases its reservation.
+   with each failure, and the Catalog releases its reservation. A recheck
+   that cannot run, for example a policy rule that fails to run, records no
+   approval and dispatches nothing. The job waits, and the timeout of its
+   gate still ends it.
 8. **Freezes and break-glass.** A submit can carry a break-glass with a
    reason. The Catalog passes it to `job.StartRequest.BreakGlass`, and the
    job model applies ADR 103 decision 6: the action `namespace:break-freeze`
@@ -123,7 +135,17 @@ break-glass come from the job model.
    deliver phase changes the code in git, so the freeze holds it, as for any
    write-back job.
 9. **A change in git with no API.** A person can change a request file in
-   git with no submit, and the team's CI then renders it:
+   git with no submit, and the team's CI then asks for a render of it:
+   - **The server reads the file.** The render takes the repository, the
+     commit and the path, and reads `request.json` at that commit from the
+     forge itself (`catalog.RequestFiles`). It never takes a document from
+     the caller. It checks that the path and the document agree (ADR 111
+     decision 7).
+   - **The render has the actions of its operation.** It needs
+     `catalog:render` and the action of the operation that the document
+     gives: `catalog:request` on the blueprint for a create,
+     `unit:edit-inputs` on the unit for an update, and
+     `unit:request-destroy` on the unit for a destroy (ADR 117 decision 2).
    - The render checks the document at `apply` (ADR 113 decision 8). A
      failure refuses the render. The policy effect `approve` does not gate
      the render: the forge approvals of the team are the approvals of a
@@ -131,17 +153,35 @@ break-glass come from the job model.
    - When the document differs from the last revision, the render stores a
      revision with the origin `git`, the commit, and the state
      `awaiting-state`. It has no job. A `create` from git reserves its unit,
-     as a submit does.
+     as a submit does, and the store makes the empty unit in the same
+     transaction (`catalog.Submission.Provision`). So the revision, its
+     reservation and its unit commit together or not at all.
    - The next final state version of the unit at that commit, or after the
      render when the tool reports no commit, makes the revision `applied`.
      The Catalog applies this rule in the transaction of the state write,
      through the same tool-neutral report as the job model
      (`job.StateVersion`, ADR 100 decision 15).
-   - A revision from the API that waits in `awaiting-merge` or in
-     `awaiting-state` while a render of another commit stores a revision
-     from git ends `superseded`. Its job keeps its own rules.
-   - A render from git that would make a second revision in flight with
-     another document fails with `catalog.ErrInFlight`.
+   - **Supersede.** When a revision of the request is in flight, the render
+     supersedes it in the same store write (`catalog.Submission.Supersedes`):
+     - When the job of that revision did not deliver its change for good,
+       the revision ends `superseded`, and the Catalog cancels its job
+       after the store write. A canceled job no longer changes the
+       revision: the revision follows its job only until it ends.
+     - When the job delivered its change for good, a direct push or a
+       merged review request, the change is in git and waits for its state
+       version. The render then fails with `catalog.ErrConflict`, which says
+       that the change of the revision is already in git and names the job
+       (`catalog.CheckSupersede`). The CI renders again after that state
+       version.
+     - When both revisions are creates, the new revision takes over the
+       unit and the reservation of the old one. The unit stays, and the
+       Catalog reserves nothing twice. The store moves the end time of the reservation
+       to the deadline of the new revision (ADR 115 decision 5), and the old
+       revision starts no `catalog.quota` operation.
+     - The Catalog reads the job before the store write. A job that
+       delivers between that read and the cancel keeps its own rules: its
+       change is in git, and its state version closes the job, not the new
+       revision.
 10. **Cancel.** A cancel of a revision cancels its job through
     `job.Service.Cancel`, and needs `job:cancel` on the unit. The error of
     the job model is the error of the cancel, for example
@@ -156,11 +196,31 @@ break-glass come from the job model.
     one, and the settled count counts the unit.
 12. **The record of a request.** `catalog.Request` holds the request ID with
     the prefix `req-`, the namespace, the blueprint, the name, the home, the
-    unit reference with its unit ID, the number of the last revision, the
-    number of the last applied revision, and a version for writes on a
-    stale read (`catalog.ErrConflict`). A request record is namespace data:
+    unit reference with its unit ID, the quota keys of the unit (ADR 115
+    decision 4), the number of the last revision, the number of the last
+    applied revision, and a version for writes on a stale read
+    (`catalog.ErrConflict`). A request record is namespace data:
     the store checks the fence and appends the audit entries in the
     transaction of each write, and the backup of the namespace holds it.
+
+13. **Each revision has a deadline.** The store takes each revision with a
+    deadline (`catalog.Revision.Deadline`, `catalog.RevisionDeadline`),
+    which the Catalog knows at the submit or at the render:
+    - A revision from git: the render, plus 14 days, the state wait of a
+      write-back job (`job.DefaultStateTimeout`), plus a grace of 1 day.
+    - A revision with a job: the submit, plus 30 days, the sum of the time
+      limits of the job model for a Catalog job (the queue, one approval
+      gate, the dispatch of a plan and of an apply, and the state wait),
+      plus a grace of 1 day.
+
+    A revision in flight at its deadline ends `expired`: a read treats it as
+    `expired` (`Revision.Expired`), and the schedule `catalog.expire` writes
+    the state, cancels the job when the job model allows it, and starts the
+    `catalog.quota` operation. The reservation of a create ends at the same
+    deadline (ADR 115 decision 7). So a reservation never expires while its
+    revision is in flight. The store refuses a revision with no deadline,
+    and a reservation that does not end at the deadline of its revision,
+    with `catalog.ErrInvalid`.
 
 ## Consequences
 
@@ -172,6 +232,8 @@ break-glass come from the job model.
 - A team that changes request files in git by hand gets every check at the
   render, and no OpenDustpan approval.
 - A failed create leaves no empty unit, unless the tool wrote state.
+- A request in git whose CI never applies its change ends `expired` 15
+  days after the render, and frees its reservation.
 
 ## Open questions
 

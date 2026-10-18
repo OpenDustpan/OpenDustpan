@@ -17,29 +17,34 @@ const (
 	// a list.
 	ActionBlueprintRead identity.Action = "blueprint:read"
 	// ActionBlueprintPublish allows writing the draft of a blueprint and
-	// publishing it as a version. A publish also needs unit:read on each
-	// source of a choice. Its object is a blueprint, or the namespace for a
-	// new one.
+	// publishing it as a version. A publish that names a source principal
+	// also needs principal:manage-tokens on that principal. Its object is a
+	// blueprint, or the namespace for a new one.
 	ActionBlueprintPublish identity.Action = "blueprint:publish"
 	// ActionBlueprintRetire allows retiring a version. Its object is a
 	// blueprint.
 	ActionBlueprintRetire identity.Action = "blueprint:retire"
 	// ActionCatalogRequest allows submitting a create from a blueprint,
-	// reading the options of its choices, and checking a document with no
-	// submit. Its object is a blueprint.
+	// and, for a create, reading the options of its choices, checking a
+	// document with no submit and rendering a document from git. Its object
+	// is a blueprint.
 	ActionCatalogRequest identity.Action = "catalog:request"
 	// ActionUnitEditInputs allows submitting an update of the request of a
-	// unit, also an upgrade of its blueprint version. Its object is a unit.
+	// unit, also an upgrade of its blueprint version, and, for an update,
+	// reading the options, checking a document and rendering a document
+	// from git. Its object is a unit.
 	ActionUnitEditInputs identity.Action = "unit:edit-inputs"
 	// ActionUnitRequestDestroy allows submitting a revision that asks for
-	// the unit to be absent. Its object is a unit.
+	// the unit to be absent, and checking or rendering such a document. Its
+	// object is a unit.
 	ActionUnitRequestDestroy identity.Action = "unit:request-destroy"
 	// ActionCatalogRead allows reading requests, their revisions, their
 	// checks and their decisions. Its object is a unit, or the namespace for
 	// a list.
 	ActionCatalogRead identity.Action = "catalog:read"
-	// ActionCatalogRender allows rendering a request document for the
-	// team's CI. Its object is a unit.
+	// ActionCatalogRender allows rendering a request document from git for
+	// the team's CI. A render also needs the action of its operation. Its
+	// object is the unit, or the blueprint for a create.
 	ActionCatalogRender identity.Action = "catalog:render"
 	// ActionNamespaceManagePolicy allows binding policy engines to kinds,
 	// and setting the namespace policy documents and the settings of the
@@ -56,13 +61,15 @@ const (
 	ObjectCollection ObjectKind = "collection"
 	ObjectBlueprint  ObjectKind = "blueprint"
 	ObjectUnit       ObjectKind = "unit"
+	ObjectPrincipal  ObjectKind = "principal"
 )
 
 // Object is the object of a Catalog action: a namespace, a blueprint, or
-// the unit of a request, and a collection for the sources of a publish.
-// The identity package has no blueprint kind yet, so the Catalog names its
-// objects with this type, and Identity gives the identity form of the
-// other kinds, which Unit holds for a unit and a collection.
+// the unit of a request, a collection for a source of a choice, and a
+// principal for the source principal of a publish. The identity package has
+// no blueprint kind yet, so the Catalog names its objects with this type,
+// and Identity gives the identity form of the other kinds, which Unit holds
+// for a unit, a collection and a principal.
 type Object struct {
 	Unit      identity.Object
 	Kind      ObjectKind
@@ -76,7 +83,7 @@ func (o Object) Identity() (identity.Object, bool) {
 		return identity.NamespaceObject(o.Namespace), true
 	}
 
-	if o.Kind == ObjectUnit || o.Kind == ObjectCollection {
+	if o.Kind == ObjectUnit || o.Kind == ObjectCollection || o.Kind == ObjectPrincipal {
 		return o.Unit, true
 	}
 
@@ -110,7 +117,8 @@ const (
 
 // Target is what an operation acts on. Blueprint is the blueprint of the
 // operation, and Unit the unit of the request, or the zero value for a
-// create. Operation and BreakGlass are for OpSubmit.
+// create. Operation is for OpSubmit, OpCheck, OpOptions and OpRender, and
+// BreakGlass for OpSubmit.
 type Target struct {
 	Unit       identity.Object
 	Namespace  namespace.Name
@@ -119,22 +127,45 @@ type Target struct {
 	BreakGlass bool
 }
 
-// Requirements returns the actions that op on t needs. A submit needs the
-// action of its operation: catalog:request on the blueprint for a create,
-// unit:edit-inputs on the unit for an update, and unit:request-destroy on
-// the unit for a destroy. A break-glass also needs the break-glass action
-// of the job model on the namespace. A cancel needs the cancel action of
-// the job model. It returns ErrInvalid for an unknown operation, and for a
-// target that lacks the object of the operation.
+// Requirements returns the actions that op on t needs. A submit, a check
+// and a read of the options need the action of their operation:
+// catalog:request on the blueprint for a create, unit:edit-inputs on the
+// unit for an update, and unit:request-destroy on the unit for a destroy.
+// A render needs catalog:render, on the unit or on the blueprint for a
+// create, and the action of its operation, so a render from git never does
+// more than a submit of the same document can. A render that stores no
+// revision needs catalog:render only. A break-glass also needs the
+// break-glass action of the job model on the namespace. A cancel needs the
+// cancel action of the job model. It returns ErrInvalid for an unknown
+// operation, and for a target that lacks the object of the operation.
 func Requirements(op Op, t Target) ([]Requirement, error) {
 	ns := Object{Unit: identity.Object{}, Kind: ObjectNamespace, Namespace: t.Namespace, Blueprint: ""}
 	bp := Object{Unit: identity.Object{}, Kind: ObjectBlueprint, Namespace: t.Namespace, Blueprint: t.Blueprint}
 	unit := Object{Unit: t.Unit, Kind: ObjectUnit, Namespace: t.Namespace, Blueprint: t.Blueprint}
 
-	if op == OpSubmit {
-		return submitRequirements(t, ns, bp, unit)
+	if op == OpSubmit || op == OpCheck || op == OpOptions {
+		out, err := operationRequirement(op, t, bp, unit)
+		if err != nil {
+			return nil, err
+		}
+
+		if op == OpSubmit && t.BreakGlass {
+			out = append(out, Requirement{Action: job.ActionNamespaceBreakFreeze, Object: ns})
+		}
+
+		return out, nil
 	}
 
+	if op == OpRender {
+		return renderRequirements(t, bp, unit)
+	}
+
+	return simpleRequirementsOf(op, t, ns, bp, unit)
+}
+
+// simpleRequirementsOf returns the one action of op from
+// simpleRequirements, on its object.
+func simpleRequirementsOf(op Op, t Target, ns, bp, unit Object) ([]Requirement, error) {
 	r, ok := simpleRequirements()[op]
 	if !ok {
 		return nil, fmt.Errorf("%w: operation %q", ErrInvalid, op)
@@ -153,8 +184,10 @@ func Requirements(op Op, t Target) ([]Requirement, error) {
 		}
 
 		return []Requirement{{Action: r.action, Object: unit}}, nil
-	case ObjectNamespace, ObjectCollection:
+	case ObjectNamespace:
 		return []Requirement{{Action: r.action, Object: ns}}, nil
+	case ObjectCollection, ObjectPrincipal:
+		return nil, fmt.Errorf("%w: no operation of the API acts on a %s", ErrInvalid, r.on)
 	default:
 		return nil, fmt.Errorf("%w: operation %q", ErrInvalid, op)
 	}
@@ -165,37 +198,35 @@ type simpleRequirement struct {
 	on     ObjectKind
 }
 
-// simpleRequirements maps each operation but OpSubmit to its one action and
-// the kind of its object.
+// simpleRequirements maps each operation whose action does not depend on
+// the operation of a revision to its one action and the kind of its object.
 func simpleRequirements() map[Op]simpleRequirement {
 	return map[Op]simpleRequirement{
 		OpListBlueprints: {action: ActionBlueprintRead, on: ObjectNamespace},
 		OpReadBlueprint:  {action: ActionBlueprintRead, on: ObjectBlueprint},
 		OpWriteDraft:     {action: ActionBlueprintPublish, on: ObjectBlueprint},
 		OpRetire:         {action: ActionBlueprintRetire, on: ObjectBlueprint},
-		OpOptions:        {action: ActionCatalogRequest, on: ObjectBlueprint},
-		OpCheck:          {action: ActionCatalogRequest, on: ObjectBlueprint},
 		OpListRequests:   {action: ActionCatalogRead, on: ObjectNamespace},
 		OpReadRequest:    {action: ActionCatalogRead, on: ObjectUnit},
 		OpCancel:         {action: job.ActionJobCancel, on: ObjectUnit},
-		OpRender:         {action: ActionCatalogRender, on: ObjectUnit},
 		OpManagePolicy:   {action: ActionNamespaceManagePolicy, on: ObjectNamespace},
 	}
 }
 
-func submitRequirements(t Target, ns, bp, unit Object) ([]Requirement, error) {
-	var out []Requirement
-
+// operationRequirement returns the action of the operation of t, on the
+// blueprint for a create and on the unit else. A document equal to the last
+// applied revision needs the action of an update.
+func operationRequirement(op Op, t Target, bp, unit Object) ([]Requirement, error) {
 	switch t.Operation {
 	case OperationCreate:
 		if t.Blueprint == "" {
-			return nil, fmt.Errorf("%w: a create needs a blueprint", ErrInvalid)
+			return nil, fmt.Errorf("%w: %s of a create needs a blueprint", ErrInvalid, op)
 		}
 
-		out = append(out, Requirement{Action: ActionCatalogRequest, Object: bp})
+		return []Requirement{{Action: ActionCatalogRequest, Object: bp}}, nil
 	case OperationUpdate, OperationNone, OperationDestroy:
 		if !t.Unit.IsUnit() {
-			return nil, fmt.Errorf("%w: a submit of %s needs a unit", ErrInvalid, t.Operation)
+			return nil, fmt.Errorf("%w: %s of %s needs a unit", ErrInvalid, op, t.Operation)
 		}
 
 		action := ActionUnitEditInputs
@@ -203,28 +234,76 @@ func submitRequirements(t Target, ns, bp, unit Object) ([]Requirement, error) {
 			action = ActionUnitRequestDestroy
 		}
 
-		out = append(out, Requirement{Action: action, Object: unit})
+		return []Requirement{{Action: action, Object: unit}}, nil
 	default:
-		return nil, fmt.Errorf("%w: submit of the operation %q", ErrInvalid, t.Operation)
+		return nil, fmt.Errorf("%w: %s of the operation %q", ErrInvalid, op, t.Operation)
+	}
+}
+
+// renderRequirements returns catalog:render on the unit, or on the
+// blueprint for a create, and the action of the operation of the render.
+func renderRequirements(t Target, bp, unit Object) ([]Requirement, error) {
+	on := unit
+
+	switch {
+	case t.Operation == OperationCreate:
+		on = bp
+	case !t.Unit.IsUnit():
+		return nil, fmt.Errorf("%w: %s of %s needs a unit", ErrInvalid, OpRender, t.Operation)
+	default:
 	}
 
-	if t.BreakGlass {
-		out = append(out, Requirement{Action: job.ActionNamespaceBreakFreeze, Object: ns})
+	render := Requirement{Action: ActionCatalogRender, Object: on}
+
+	if t.Operation == OperationNone {
+		return []Requirement{render}, nil
 	}
 
-	return out, nil
+	op, err := operationRequirement(OpRender, t, bp, unit)
+	if err != nil {
+		return nil, err
+	}
+
+	return append([]Requirement{render}, op...), nil
 }
 
 // PublishRequirements returns the actions that a publish of b in ns needs:
-// blueprint:publish on the blueprint, and unit:read on the source of each
-// choice. A source of the units of a collection needs it on the collection,
-// and a source of the units of a blueprint on the namespace, because those
-// units can be in any collection. The list has no duplicate.
+// blueprint:publish on the blueprint, and, when b names a source principal,
+// principal:manage-tokens on that principal. A holder of that action can
+// already act as the principal, so the publish gives the blueprint no
+// grant that the publisher could not use itself. The publisher needs no
+// grant on the sources: the server reads them as the source principal
+// (SourceRequirements).
 func PublishRequirements(ns namespace.Name, b *Blueprint) []Requirement {
 	out := []Requirement{{
 		Action: ActionBlueprintPublish,
 		Object: Object{Unit: identity.Object{}, Kind: ObjectBlueprint, Namespace: ns, Blueprint: b.Name},
 	}}
+
+	if b.SourcePrincipal != "" {
+		out = append(out, Requirement{
+			Action: identity.ActionPrincipalManageTokens,
+			Object: Object{
+				Unit: identity.PrincipalObject(b.SourcePrincipal), Kind: ObjectPrincipal, Namespace: ns, Blueprint: "",
+			},
+		})
+	}
+
+	return out
+}
+
+// SourceRequirements returns the actions that the source principal of b
+// needs to read the sources of the choices of b in ns: unit:read on the
+// collection of a source of a collection, and on the namespace for a source
+// of the units of a blueprint, because those units can be in any
+// collection. The list has no duplicate. The server checks it for the
+// source principal at each computation of the options, at the options route
+// and at each recheck, so a revoke of a grant of the principal stops the
+// reads at once. A missing action makes the check unable to run: the
+// options route answers with the error, and a recheck stops with no
+// change.
+func SourceRequirements(ns namespace.Name, b *Blueprint) []Requirement {
+	var out []Requirement
 
 	for i := range b.Inputs {
 		c := b.Inputs[i].Choice

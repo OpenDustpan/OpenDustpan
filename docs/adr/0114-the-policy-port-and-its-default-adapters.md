@@ -29,10 +29,14 @@ REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
    - The decision has an effect (`allow`, `deny` or `approve`), the reasons,
      the approvals for `approve` (a number and the groups of the approvers),
      and the name and the version of the policy that decided.
-   - An error is a failure of the policy, never a denial. It wraps
-     `policy.ErrUnavailable` for an engine that does not answer in time and
-     `policy.ErrInvalidDecision` for an answer that does not parse. The
-     caller then changes nothing (ADR 113 decision 8).
+   - An error is a failure of the policy, never a denial and never an
+     allow. It wraps `policy.ErrUnavailable` for an engine that does not
+     answer in time, `policy.ErrInvalidDecision` for an answer that does not
+     parse, and `policy.ErrRuleFailed` for a rule whose condition fails to
+     run. A rule that fails to run makes the whole decision an error, also
+     when another rule matches: the engine never skips it and decides on
+     the other rules. The caller then changes nothing, and the recheck
+     stops (ADR 113 decision 8).
    - A kind that an engine does not take gives `policy.ErrUnsupportedKind`.
      A namespace binds each engine to the kinds that it decides.
 3. **The input of `catalog.request`.** The document holds the recheck point,
@@ -49,19 +53,29 @@ REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
      and every group of each `approve`.
    - Else the result is `allow`.
 
-   A table-driven test covers the rule.
+   `policy.Combine` first checks each decision, and returns an error that
+   wraps `policy.ErrInvalidDecision` for a decision that is not valid: an
+   empty or unknown effect, `approve` with no approvals or with a count
+   outside 1 to 10, or approvals on another effect. So a decision that an
+   engine or a caller built wrong never becomes an `allow`. A table-driven
+   test covers the rule and each error.
 5. **The built-in Expr adapter.** It runs the `policy` rules of a blueprint
    version (ADR 112 decision 7), and the rules of a namespace policy
    document in the same shape. The environment is the input document as
    `input`, with the aliases `inputs`, `request` and `usage` of ADR 112
    decision 6. A rule whose `when` gives true adds its effect. No rule that
-   matches gives `allow`. The limits of ADR 112 decision 12 apply. The
-   decision names the blueprint version or the namespace policy version.
+   matches gives `allow`. A `when` that fails to run gives an error that
+   wraps `policy.ErrRuleFailed` and no decision (ADR 112 decision 7). The
+   limits of ADR 112 decision 12 apply. The decision names the blueprint
+   version or the namespace policy version.
 6. **The OPA adapter.** It calls the Data API of an OPA server that the
    team runs:
    - `POST <url>/v1/data/<path>` with the body `{"input": <document>}`, over
      HTTPS, with a bearer token from a sensitive setting of the namespace,
-     and no redirect.
+     and no redirect. The URL passes the endpoint rule of decision 9.
+   - The adapter asks with `strict-builtin-errors`, so a rule whose built-in
+     function fails gives an error, which the adapter returns as
+     `policy.ErrRuleFailed`, not an undefined rule.
    - The answer must be `{"result": {"effect": "...", "reasons": [...],
      "approvals": {"count": n, "groups": [...]}}}`. A missing `result` (an
      undefined decision) is `policy.ErrInvalidDecision`, not a `deny`, so a
@@ -85,13 +99,19 @@ REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
    `.without-approval`. Deny on the first gives `deny`. Allow on the first
    and deny on the second gives `approve`, with the number of approvals and
    the groups of a setting of the namespace. Allow on both gives `allow`. The
-   reasons are the IDs of the policies that decided. The adapter needs a
+   reasons are the IDs of the policies that decided. Cedar skips a policy
+   whose evaluation fails, and lists the error in its diagnostics. The
+   adapter returns `policy.ErrRuleFailed` for each such error, so a `forbid`
+   policy that fails never becomes an allow. The adapter needs a
    Cedar library, `github.com/cedar-policy/cedar-go`, which is a new
    dependency. The PM decides on it before the adapter pull request.
 8. **The signed webhook adapter.** It sends the input to a URL that the
    team runs:
    - `POST <url>` with the body `{"kind": ..., "schemaVersion": ...,
-     "document": ...}`, over HTTPS, with no redirect.
+     "document": ...}`, over HTTPS, with no redirect. The URL passes the
+     endpoint rule of decision 9. `document` is the input document as a
+     JSON object (`policy.WebhookCall.Document` is a `json.RawMessage`),
+     never a base64 string.
    - The header `Dustpan-Signature: t=<unix seconds>,v1=<hex>` signs the
      body. `<hex>` is the HMAC-SHA256 of `<unix seconds>.<body>` with the
      shared secret of the hook, in lowercase hex. The header
@@ -108,7 +128,22 @@ REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
 9. **Limits of every adapter.** A call has a time limit of 5 seconds. An
    answer is at most 64 KiB, with at most 32 reasons of at most 1 KiB each.
    A decision of `approve` needs from 1 to 10 approvals. An answer outside
-   these limits is `policy.ErrInvalidDecision`.
+   these limits is `policy.ErrInvalidDecision`. An error never holds a part
+   of the body of an answer, also not an unknown field or an effect that is
+   not valid: it names the size, or the offset of a syntax error, only.
+
+   **Endpoints.** An operator of the installation sets an allowlist of the
+   endpoints of the OPA and the webhook adapters (`policy.Allowlist`). A
+   holder of `namespace:manage-policy` can name only a URL whose host is on
+   it (`Allowlist.CheckURL`): HTTPS, no user info and no fragment. The
+   adapter checks each address that it connects to after the name
+   resolution (`Allowlist.CheckAddr`), and follows no redirect. It refuses
+   a loopback, private, link-local, unspecified or multicast address, and
+   the other special ranges (shared address space, benchmarking, NAT64,
+   documentation), unless a private prefix of the allowlist holds it. So a
+   namespace setting cannot point the server at the metadata service of a
+   cloud or at an internal service, also when a DNS answer changes after
+   the check. A refused URL or address is `policy.ErrEndpoint`.
 10. **The job decision uses the same port.** The `job.Decider` adapter of the
     server asks the engines that the namespace binds to `job.start`, and
     joins the result with the decision that the Catalog recorded for the
@@ -122,8 +157,11 @@ REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
     revision, so a person can read what the policy saw.
 12. **A conformance suite.** `pkg/policy/policytest` gets a fixture that
     each adapter implements, with a small set of policies: allow all, deny a
-    blueprint by name, ask for 2 approvals by the group `dba`, and a policy
-    that times out. Each adapter runs the suite against a real engine in its
+    blueprint by name, ask for 2 approvals by the group `dba`, a policy
+    that times out, and a deny rule that fails to run next to an approve
+    rule that matches. The last one must give an error that wraps
+    `policy.ErrRuleFailed` or `policy.ErrUnavailable`, not an allow and not
+    the approve. Each adapter runs the suite against a real engine in its
     own test: an OPA server, the Cedar library, or a webhook receiver in the
     test.
 

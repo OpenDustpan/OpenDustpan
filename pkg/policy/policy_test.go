@@ -1,6 +1,7 @@
 package policy_test
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -20,6 +21,11 @@ func approve(count int, groups ...string) policy.Decision {
 	}
 }
 
+// noDecision is the zero decision of a case that wants an error.
+func noDecision() policy.Decision {
+	return policy.Decision{Effect: "", Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
+}
+
 func effect(e policy.Effect, reason string) policy.Decision {
 	return policy.Decision{Effect: e, Reasons: []string{reason}, Approvals: nil, Engine: "", PolicyVersion: ""}
 }
@@ -31,6 +37,7 @@ func TestCombine(t *testing.T) {
 		name string
 		in   []policy.Decision
 		want policy.Decision
+		err  error
 	}{
 		{
 			name: "no decision allows",
@@ -42,6 +49,7 @@ func TestCombine(t *testing.T) {
 				Engine:        "",
 				PolicyVersion: "",
 			},
+			err: nil,
 		},
 		{
 			name: "two allows give allow",
@@ -53,6 +61,7 @@ func TestCombine(t *testing.T) {
 				Engine:        "",
 				PolicyVersion: "",
 			},
+			err: nil,
 		},
 		{
 			name: "one deny wins over approve and allow, with each deny reason",
@@ -64,6 +73,7 @@ func TestCombine(t *testing.T) {
 				Effect: policy.EffectDeny, Reasons: []string{"too large", "frozen region"},
 				Approvals: nil, Engine: "", PolicyVersion: "",
 			},
+			err: nil,
 		},
 		{
 			name: "approve takes the highest count and every group once",
@@ -74,6 +84,40 @@ func TestCombine(t *testing.T) {
 				Approvals: &policy.Approvals{Groups: []string{"dba", "sre"}, Count: 2},
 				Engine:    "", PolicyVersion: "",
 			},
+			err: nil,
+		},
+		{
+			name: "approve with no approvals is an error, not an allow",
+			in:   []policy.Decision{effect(policy.EffectAllow, "ok"), effect(policy.EffectApprove, "x")},
+			want: noDecision(),
+			err:  policy.ErrInvalidDecision,
+		},
+		{
+			name: "approve with zero approvals is an error",
+			in:   []policy.Decision{approve(0, "dba")},
+			want: noDecision(),
+			err:  policy.ErrInvalidDecision,
+		},
+		{
+			name: "an empty effect is an error",
+			in:   []policy.Decision{effect("", "x")},
+			want: noDecision(),
+			err:  policy.ErrInvalidDecision,
+		},
+		{
+			name: "an unknown effect is an error, also next to a deny",
+			in:   []policy.Decision{effect(policy.EffectDeny, "no"), effect("maybe", "x")},
+			want: noDecision(),
+			err:  policy.ErrInvalidDecision,
+		},
+		{
+			name: "allow with approvals is an error",
+			in: []policy.Decision{{
+				Effect: policy.EffectAllow, Reasons: nil,
+				Approvals: &policy.Approvals{Groups: nil, Count: 1}, Engine: "", PolicyVersion: "",
+			}},
+			want: noDecision(),
+			err:  policy.ErrInvalidDecision,
 		},
 	}
 
@@ -81,7 +125,12 @@ func TestCombine(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := policy.Combine(tc.in); !reflect.DeepEqual(got, tc.want) {
+			got, err := policy.Combine(tc.in)
+			if !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
+				t.Fatalf("Combine() = %+v, %v, want error %v", got, err, tc.err)
+			}
+
+			if err == nil && !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("Combine() = %+v, want %+v", got, tc.want)
 			}
 		})
@@ -287,6 +336,44 @@ func TestParseOPAAnswer(t *testing.T) {
 				t.Fatalf("ParseOPAAnswer() = %+v, want effect %q from opa at bundle-7", d, tc.want)
 			}
 		})
+	}
+}
+
+func TestAnswerErrorsHoldNoBody(t *testing.T) {
+	t.Parallel()
+
+	const marker = "s3cr3t-marker"
+
+	bodies := []string{
+		`{"result":{"effect":"` + marker + `"}}`,
+		`{"result":{"effect":"allow","` + marker + `":1}}`,
+		`{"result":{"effect":"allow","reasons":` + marker + `}}`,
+		marker,
+	}
+
+	for _, b := range bodies {
+		_, err := policy.ParseOPAAnswer([]byte(b), "")
+		if !errors.Is(err, policy.ErrInvalidDecision) || strings.Contains(err.Error(), marker) {
+			t.Fatalf("ParseOPAAnswer(%s) = %v, want ErrInvalidDecision with no part of the body", b, err)
+		}
+	}
+}
+
+func TestWebhookCallDocumentIsJSON(t *testing.T) {
+	t.Parallel()
+
+	call := policy.WebhookCall{
+		Kind: policy.KindCatalogRequest, Document: json.RawMessage(`{"name":"orders-db"}`), SchemaVersion: 1,
+	}
+
+	got, err := json.Marshal(call)
+	if err != nil {
+		t.Fatalf("Marshal() = %v", err)
+	}
+
+	const want = `{"kind":"catalog.request","document":{"name":"orders-db"},"schemaVersion":1}`
+	if string(got) != want {
+		t.Fatalf("Marshal() = %s, want %s", got, want)
 	}
 }
 

@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/quota"
 )
 
 // RevisionState is where a revision of a request is in its life. After
@@ -40,10 +42,11 @@ const (
 	StateRejected RevisionState = "rejected"
 	// StateCanceled: terminal, a person canceled it.
 	StateCanceled RevisionState = "canceled"
-	// StateExpired: terminal, the job expired.
+	// StateExpired: terminal, the job expired, or the revision passed its
+	// deadline (RevisionDeadline).
 	StateExpired RevisionState = "expired"
-	// StateSuperseded: terminal, a revision from git replaced it while it
-	// waited for a merge or a state version.
+	// StateSuperseded: terminal, a revision from git replaced it before its
+	// job delivered (CheckSupersede).
 	StateSuperseded RevisionState = "superseded"
 )
 
@@ -102,12 +105,11 @@ func StateOf(j *job.Job) (RevisionState, error) {
 }
 
 // CheckTransition reports whether a revision can move from the state old to
-// the state next. A
-// terminal revision does not change: ErrFinished. No revision goes back to
-// StateAccepted, and only a revision that waits for a merge or a state
-// version is superseded: ErrTransition. A move to the same state is
-// allowed and changes nothing. Every other move is allowed, because the
-// job model decides the order of the job states.
+// the state next. A terminal revision does not change: ErrFinished. No
+// revision goes back to StateAccepted: ErrTransition. A move to the same
+// state is allowed and changes nothing. Every other move is allowed,
+// because the job model decides the order of the job states. A move to
+// StateSuperseded also needs CheckSupersede.
 func CheckTransition(old, next RevisionState) error {
 	switch {
 	case !old.Valid() || !next.Valid():
@@ -118,11 +120,70 @@ func CheckTransition(old, next RevisionState) error {
 		return fmt.Errorf("%w: the revision is %s", ErrFinished, old)
 	case next == StateAccepted:
 		return fmt.Errorf("%w: from %s back to %s", ErrTransition, old, next)
-	case next == StateSuperseded && old != StateAwaitingMerge && old != StateAwaitingState:
-		return fmt.Errorf("%w: a %s revision is not superseded", ErrTransition, old)
 	default:
 		return nil
 	}
+}
+
+// CheckSupersede reports whether a revision from git can supersede old, the
+// revision in flight of the same request, whose job is j, or nil when the
+// caller did not read the job. It returns ErrFinished for an old revision
+// that ended. It returns ErrConflict when the job of old delivered its
+// change for good, a direct push or a merged review request: the change is
+// in git and waits for its state version, so the job cannot be canceled,
+// and a second change of the unit must wait for it. The error says so and
+// names the job. Else a supersede is allowed, and the Catalog cancels the
+// job of old after the store write.
+func CheckSupersede(old *Revision, j *job.Job) error {
+	switch {
+	case old.State.Terminal():
+		return fmt.Errorf("%w: the revision is %s", ErrFinished, old.State)
+	case old.Job != "" && (old.State == StateAwaitingState || (j != nil && j.Delivery.Settled())):
+		return fmt.Errorf("%w: the change of revision %d is already in git with the job %s; "+
+			"wait for its state version, then render again", ErrConflict, old.Number, old.Job)
+	default:
+		return nil
+	}
+}
+
+// The longest waits of a revision, before the grace of its reservation.
+const (
+	// GitRevisionWait is the longest wait of a revision from git for its
+	// state version: the state wait of a write-back job.
+	GitRevisionWait = job.DefaultStateTimeout
+	// JobRevisionWait is the longest wait of a revision with a job: the
+	// sum of the time limits of the job model for a Catalog job, which are
+	// the queue, one approval gate, the dispatch of a plan and of an apply,
+	// and the state wait.
+	JobRevisionWait = job.DefaultQueueTimeout + job.DefaultApprovalTimeout + 2*job.DefaultDispatchTimeout +
+		job.DefaultStateTimeout
+)
+
+// RevisionDeadline returns the deadline of a revision of origin that the
+// store takes at the time at: at, plus the longest wait of the origin, plus
+// quota.ReservationGrace. A revision from git waits for its state version
+// for at most GitRevisionWait, so its deadline is 15 days after its render.
+// The reservation of a create ends at the same time (quota.Reservation
+// EndsAt), so the Catalog knows the end time at the reserve.
+//
+// A revision in flight at its deadline ends StateExpired. The Catalog
+// cancels its job when the job model allows it, and releases its
+// reservation. So a reservation never expires while its revision is in
+// flight.
+func RevisionDeadline(origin Origin, at time.Time) time.Time {
+	wait := JobRevisionWait
+	if origin == OriginGit {
+		wait = GitRevisionWait
+	}
+
+	return at.Add(wait + quota.ReservationGrace)
+}
+
+// Expired reports whether r is in flight at now and past its deadline. A
+// read of r treats it as StateExpired, and the expire schedule writes the
+// state.
+func (r *Revision) Expired(now time.Time) bool {
+	return !r.State.Terminal() && !r.Deadline.IsZero() && !now.Before(r.Deadline)
 }
 
 // StartFailure returns the state of a revision whose job start failed with

@@ -41,7 +41,8 @@ which dependents read the outputs of a unit.
 4. **Filters are equality only.** A filter (`catalog.Filter`) names an
    output and the value that it must equal: a fixed JSON scalar, or the
    answer of another input (`{"input": "<name>"}`). Two values are equal
-   when their canonical JSON is equal, so `"1"` does not equal `1`. A filter
+   when their canonical JSON (ADR 111 decision 6) is equal, so `"1"` does
+   not equal `1`, and `1` equals `1.0`. A filter
    on an input makes the choice depend on that input. There is no other
    operator in version 1.
 5. **Dependencies form a list, not a loop.** The inputs and their filters
@@ -58,13 +59,16 @@ which dependents read the outputs of a unit.
    packages (ADR 41). It returns `catalog.ErrSourceUnavailable` when it
    cannot read, and never a partial list as a full one.
 7. **The engine is pure.** `catalog.Options` takes an input, the answers so
-   far and the rows of the port, and gives the options, sorted by label,
-   then by value. When an input that the choice depends on has no answer,
-   the result is empty, and `catalog.OptionSet.WaitingFor` names those
-   inputs. When two units
-   give the same value, the options merge into one, with the labels of both.
-   `catalog.CheckAnswer` gives a failure when an answer is not among the
-   options. Both are pure, and table-driven tests cover them.
+   far and the rows of the port, and gives every option, sorted by label,
+   then by value, with no limit. When an input that the choice depends on
+   has no answer, the result is empty, and `catalog.OptionSet.WaitingFor`
+   names those inputs. When two units give the same value, the options
+   merge into one, with the labels of both. `catalog.CheckAnswer` gives a
+   failure when an answer is not among the options. It always takes the
+   full set: `OptionSet.ForRoute` cuts a set at 1,000 options for the
+   options route, and `CheckAnswer` refuses a cut set with
+   `catalog.ErrInvalid`, because an answer past the cut is still an option.
+   Both are pure, and table-driven tests cover them.
 8. **Recheck points.** The server checks a revision again at each point
    where a value can change. `catalog.RecheckPoint` names them:
 
@@ -84,27 +88,52 @@ which dependents read the outputs of a unit.
    5. the quotas (ADR 115). A reservation that the revision holds counts
       as its own, so a recheck of a create does not count it twice.
 
-   A step that cannot run, for example a policy that times out or a source
-   that does not answer, is not a failure. The check returns the error, and
-   nothing changes. At `submit` the API answers 503. At `approval` and at
-   `apply` the job waits, and the reconcile schedule asks again.
+   A step that cannot run is not a failure and never a pass: a policy that
+   times out (`policy.ErrUnavailable`), a policy rule or a quota `expr` rule
+   that fails to run (`policy.ErrRuleFailed`, `quota.ErrRuleFailed`), a
+   source that does not answer (`catalog.ErrSourceUnavailable`), or a source
+   principal that lost its grant (decision 10). The check stops at that
+   step, returns the error, and nothing changes. At `submit` the API
+   answers with the status 503. At `approval` and at `apply` the job model
+   records no approval and dispatches nothing (ADR 110, "Changes requested
+   in the job model", item 2): the job waits, the reconcile schedule asks
+   again, and the timeout of the gate still ends a job whose check keeps
+   failing.
 9. **A recheck can only refuse.** A recheck never changes an answer, never
    picks another option, and never changes a gate. When a policy at a later
    point asks for more approvals than the gates of the job have, the
    recheck fails with `catalog.ErrPolicyChanged`, and the requester submits
    again. So a person who approved saw the same answers as the apply uses.
-10. **The server reads options with the scope of the blueprint.** A requester sees
-    the options of a source, also when it cannot read the source units. The
-    platform team decides this when it publishes: a publish needs
-    `unit:read` on the collection or the namespace of each source. An option
-    shows only its value and its label, never another output, the state or
-    a unit that the source does not name. The audit entry of the publish
-    names each source.
+10. **The server reads options as the source principal of the blueprint.**
+    A requester sees the options of a source, also when it cannot read the
+    source units. A blueprint with a source names a service principal in
+    `sourcePrincipal` (ADR 112 decision 3), and the server reads the outputs
+    of each source with the grants of that principal, never with the grants
+    of the publisher at the time of the publish:
+    - The principal is a principal of the namespace that an administrator
+      makes. The blueprint version records it, so a reviewer of the
+      blueprint sees who reads the sources.
+    - A publish that names it needs `principal:manage-tokens` on it (ADR 117
+      decision 2). A holder of that action can already act as the principal,
+      so the publish gives the blueprint no grant that the publisher could
+      not use itself.
+    - At each computation of the options, at the options route and at each
+      recheck, the server checks `unit:read` of the principal on the
+      collection of each source, or on the namespace for a source of the
+      units of a blueprint (`catalog.SourceRequirements`). A revoke of the
+      grant stops the reads at once: the options route answers with the
+      error, and a recheck cannot run.
+
+    An option shows only its value and its label, never another output, the
+    state or a unit that the source does not name. The audit entry of the
+    publish names each source and the principal.
 11. **The options route.** `POST /api/catalog/options/{namespace}` (ADR 117)
-    takes a blueprint version and the answers so far, and gives the options
-    of each choice input whose dependencies have answers, with the
-    `WaitingFor` reason of the others. It needs the same action as a submit
-    of that blueprint. A form calls it after each answer.
+    takes a blueprint version, the answers so far, and, for an update, the
+    name of the request. It gives the options of each choice input whose
+    dependencies have answers, cut at 1,000, with the `WaitingFor` reason of
+    the others. It needs the action of the operation, as a submit does:
+    `catalog:request` on the blueprint for a create, and `unit:edit-inputs`
+    on the unit for an update. A form calls it after each answer.
 12. **Dependents.** A revision whose answer comes from a source records a
     dependency edge from the source unit to the unit of the request
     (ADR 153), with the kind `output-read` and the evidence `declared`, when
@@ -130,4 +159,5 @@ which dependents read the outputs of a unit.
 - Can a source read units of another namespace? Version 1 limits a source
   to the namespace of the blueprint.
 - Does a form need a search over a source with more than 1,000 options?
-  Version 1 returns the first 1,000 and a truncated mark.
+  Version 1 returns the first 1,000 and a truncated mark, and the check of
+  an answer uses every option.

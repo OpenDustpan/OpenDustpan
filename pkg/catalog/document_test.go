@@ -116,9 +116,9 @@ func TestCanonical(t *testing.T) {
 		`"inputs":{"subnetGroup":"orders-private","network":"net-0a1b2c"},`+
 		`"home":{"kind":"opendustpan"}}`)
 	// The same state: other key order, white space, the defaults written
-	// out, ensure written out, and another home, which a later submit
-	// ignores.
-	c := parseDocument(t, `{"inputs":{"network":"net-0a1b2c","size":"small","storageGb":20,`+
+	// out, a number in another form, a string with an escape, ensure
+	// written out, and another home, which a later submit ignores.
+	c := parseDocument(t, `{"inputs":{"network":"net-0a1b2c","size":"sm\u0061ll","storageGb":2.0e1,`+
 		`"subnetGroup":"orders-private"},"ensure":"present",`+
 		`"blueprint":{"version":3,"name":"postgres"},"name":"orders-db","namespace":"payments",`+
 		`"schemaVersion":1, "home":{"kind":"git","repository":"a/b","ref":"main"}}`)

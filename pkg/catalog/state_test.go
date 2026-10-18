@@ -103,7 +103,8 @@ func TestCheckTransition(t *testing.T) {
 		{from: catalog.StateAwaitingState, to: catalog.StateSuperseded, want: nil},
 		{from: catalog.StateRunning, to: catalog.StateRunning, want: nil},
 		{from: catalog.StateApplied, to: catalog.StateApplied, want: nil},
-		{from: catalog.StateRunning, to: catalog.StateSuperseded, want: catalog.ErrTransition},
+		{from: catalog.StateRunning, to: catalog.StateSuperseded, want: nil},
+		{from: catalog.StateAccepted, to: catalog.StateSuperseded, want: nil},
 		{from: catalog.StateQueued, to: catalog.StateAccepted, want: catalog.ErrTransition},
 		{from: catalog.StateApplied, to: catalog.StateRunning, want: catalog.ErrFinished},
 		{from: catalog.StateSuperseded, to: catalog.StateApplied, want: catalog.ErrFinished},
@@ -115,6 +116,85 @@ func TestCheckTransition(t *testing.T) {
 		if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
 			t.Fatalf("CheckTransition(%s, %s) = %v, want %v", tc.from, tc.to, err, tc.want)
 		}
+	}
+}
+
+func TestCheckSupersede(t *testing.T) {
+	t.Parallel()
+
+	rev := func(state catalog.RevisionState, j job.ID) *catalog.Revision {
+		var r catalog.Revision
+
+		r.State, r.Job, r.Number = state, j, 1
+
+		return &r
+	}
+	withDelivery := func(d *job.DeliveryResult) *job.Job {
+		var j job.Job
+
+		j.ID, j.State, j.Delivery = "job-1", job.StateAwaitingState, d
+
+		return &j
+	}
+
+	cases := []struct {
+		name string
+		old  *catalog.Revision
+		job  *job.Job
+		want error
+	}{
+		{"accepted with no job", rev(catalog.StateAccepted, ""), nil, nil},
+		{"queued", rev(catalog.StateQueued, "job-1"), nil, nil},
+		{
+			"a review request with no merge", rev(catalog.StateAwaitingMerge, "job-1"),
+			withDelivery(delivered(job.DeliveryReviewRequest, 0)), nil,
+		},
+		{"a revision from git that waits for its state", rev(catalog.StateAwaitingState, ""), nil, nil},
+		{"a job in git for good", rev(catalog.StateAwaitingState, "job-1"), nil, catalog.ErrConflict},
+		{
+			"a merge that the revision did not see yet", rev(catalog.StateAwaitingMerge, "job-1"),
+			withDelivery(delivered(job.DeliveryReviewRequest, time.Hour)), catalog.ErrConflict,
+		},
+		{
+			"a direct push during a run", rev(catalog.StateRunning, "job-1"),
+			withDelivery(delivered(job.DeliveryDirectPush, 0)), catalog.ErrConflict,
+		},
+		{"an ended revision", rev(catalog.StateApplied, "job-1"), nil, catalog.ErrFinished},
+	}
+
+	for _, tc := range cases {
+		err := catalog.CheckSupersede(tc.old, tc.job)
+		if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+			t.Fatalf("%s: CheckSupersede() = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestRevisionDeadline(t *testing.T) {
+	t.Parallel()
+
+	at := time.Unix(1_790_000_000, 0).UTC()
+	day := 24 * time.Hour
+
+	if got := catalog.RevisionDeadline(catalog.OriginGit, at); !got.Equal(at.Add(15 * day)) {
+		t.Fatalf("RevisionDeadline(git) = %v, want 14 days of state wait and 1 day of grace", got)
+	}
+
+	if got := catalog.RevisionDeadline(catalog.OriginAPI, at); !got.Equal(at.Add(31 * day)) {
+		t.Fatalf("RevisionDeadline(api) = %v, want 30 days of job limits and 1 day of grace", got)
+	}
+
+	var r catalog.Revision
+
+	r.State, r.Deadline = catalog.StateAwaitingState, catalog.RevisionDeadline(catalog.OriginGit, at)
+
+	if r.Expired(r.Deadline.Add(-time.Second)) || !r.Expired(r.Deadline) {
+		t.Fatal("Expired() does not end the revision at its deadline")
+	}
+
+	r.State = catalog.StateApplied
+	if r.Expired(r.Deadline.Add(day)) {
+		t.Fatal("Expired() of an ended revision")
 	}
 }
 
@@ -235,21 +315,64 @@ func TestRequirements(t *testing.T) {
 			catalog.ErrInvalid,
 		},
 		{
-			"options", catalog.OpOptions, target("", identity.Object{}, false),
+			"options of a create", catalog.OpOptions, target(catalog.OperationCreate, identity.Object{}, false),
 			[]catalog.Requirement{{Action: catalog.ActionCatalogRequest, Object: bp}},
 			nil,
 		},
+		{
+			"options of an update", catalog.OpOptions, target(catalog.OperationUpdate, u, false),
+			[]catalog.Requirement{{Action: catalog.ActionUnitEditInputs, Object: on}},
+			nil,
+		},
+		{
+			"check of an update", catalog.OpCheck, target(catalog.OperationUpdate, u, true),
+			[]catalog.Requirement{{Action: catalog.ActionUnitEditInputs, Object: on}},
+			nil,
+		},
+		{
+			"check of a destroy", catalog.OpCheck, target(catalog.OperationDestroy, u, false),
+			[]catalog.Requirement{{Action: catalog.ActionUnitRequestDestroy, Object: on}},
+			nil,
+		},
+		{"options with no operation", catalog.OpOptions, target("", u, false), nil, catalog.ErrInvalid},
 		{
 			"cancel", catalog.OpCancel, target("", u, false),
 			[]catalog.Requirement{{Action: job.ActionJobCancel, Object: on}},
 			nil,
 		},
 		{
-			"render", catalog.OpRender, target("", u, false),
+			"render of a create", catalog.OpRender, target(catalog.OperationCreate, identity.Object{}, false),
+			[]catalog.Requirement{
+				{Action: catalog.ActionCatalogRender, Object: bp},
+				{Action: catalog.ActionCatalogRequest, Object: bp},
+			},
+			nil,
+		},
+		{
+			"render of an update", catalog.OpRender, target(catalog.OperationUpdate, u, false),
+			[]catalog.Requirement{
+				{Action: catalog.ActionCatalogRender, Object: on},
+				{Action: catalog.ActionUnitEditInputs, Object: on},
+			},
+			nil,
+		},
+		{
+			"render of a destroy", catalog.OpRender, target(catalog.OperationDestroy, u, false),
+			[]catalog.Requirement{
+				{Action: catalog.ActionCatalogRender, Object: on},
+				{Action: catalog.ActionUnitRequestDestroy, Object: on},
+			},
+			nil,
+		},
+		{
+			"render that stores no revision", catalog.OpRender, target(catalog.OperationNone, u, false),
 			[]catalog.Requirement{{Action: catalog.ActionCatalogRender, Object: on}},
 			nil,
 		},
-		{"a render with no unit", catalog.OpRender, target("", identity.Object{}, false), nil, catalog.ErrInvalid},
+		{
+			"a render of an update with no unit", catalog.OpRender,
+			target(catalog.OperationUpdate, identity.Object{}, false), nil, catalog.ErrInvalid,
+		},
 		{
 			"list requests", catalog.OpListRequests, target("", identity.Object{}, false),
 			[]catalog.Requirement{{Action: catalog.ActionCatalogRead, Object: ns}},
@@ -281,13 +404,47 @@ func TestPublishRequirements(t *testing.T) {
 	b := parseBlueprint(t, readFile(t, "postgres.blueprint.json"))
 	got := catalog.PublishRequirements("payments", &b)
 
-	// Two sources of blueprints need unit:read on the namespace once.
-	if len(got) != 2 || got[0].Action != catalog.ActionBlueprintPublish || got[1].Action != identity.ActionUnitRead ||
-		got[1].Object.Kind != catalog.ObjectNamespace {
+	// The publisher needs the publish action, and can attach the source
+	// principal only when it can already act as it. It needs no grant on
+	// the sources.
+	if len(got) != 2 || got[0].Action != catalog.ActionBlueprintPublish ||
+		got[1].Action != identity.ActionPrincipalManageTokens || got[1].Object.Kind != catalog.ObjectPrincipal {
 		t.Fatalf("PublishRequirements() = %+v", got)
+	}
+
+	if o, ok := got[1].Object.Identity(); !ok || o.PrincipalID() != "catalog-reader" {
+		t.Fatalf("Identity() of the source principal = %v, %v", o, ok)
 	}
 
 	if _, ok := got[0].Object.Identity(); ok {
 		t.Fatal("a blueprint has an identity object")
+	}
+
+	b.Inputs = b.Inputs[:1]
+	b.SourcePrincipal = ""
+
+	if got := catalog.PublishRequirements("payments", &b); len(got) != 1 {
+		t.Fatalf("PublishRequirements(no source) = %+v, want the publish action only", got)
+	}
+}
+
+func TestSourceRequirements(t *testing.T) {
+	t.Parallel()
+
+	b := parseBlueprint(t, readFile(t, "postgres.blueprint.json"))
+
+	// Two sources of blueprints need unit:read on the namespace once.
+	got := catalog.SourceRequirements("payments", &b)
+	if len(got) != 1 || got[0].Action != identity.ActionUnitRead || got[0].Object.Kind != catalog.ObjectNamespace {
+		t.Fatalf("SourceRequirements() = %+v", got)
+	}
+
+	b.Inputs[1].Choice.Source.Blueprint = ""
+	b.Inputs[1].Choice.Source.Collection = "networks"
+
+	got = catalog.SourceRequirements("payments", &b)
+	if len(got) != 2 || got[0].Object.Kind != catalog.ObjectCollection ||
+		got[1].Object.Kind != catalog.ObjectNamespace {
+		t.Fatalf("SourceRequirements(a collection) = %+v", got)
 	}
 }

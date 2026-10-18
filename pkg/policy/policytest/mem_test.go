@@ -48,6 +48,8 @@ func (e memEngine) Decide(ctx context.Context, in policy.Input) (policy.Decision
 		return d, nil
 	case policytest.PolicySlow:
 		return slow(ctx, d)
+	case policytest.PolicyFailingDeny:
+		return failingDeny(d, in)
 	default:
 		return policy.Decision{}, fmt.Errorf("%w: %q", errUnknownPolicy, e.policy)
 	}
@@ -74,6 +76,34 @@ func denyBlueprint(d policy.Decision, in policy.Input) (policy.Decision, error) 
 		d.Effect = policy.EffectDeny
 		d.Reasons = []string{policytest.ForbiddenReason}
 	}
+
+	return d, nil
+}
+
+// failingDeny runs the two rules of PolicyFailingDeny in order. The deny
+// rule reads blueprint.weight, which no fixture document has, so it fails
+// to run, and the engine stops with an error before the approve rule.
+func failingDeny(d policy.Decision, in policy.Input) (policy.Decision, error) {
+	var doc map[string]map[string]any
+
+	if err := json.Unmarshal(in.Document, &doc); err != nil {
+		return policy.Decision{}, fmt.Errorf("%w: %w", policy.ErrInvalidInput, err)
+	}
+
+	weight, ok := doc["blueprint"]["weight"].(float64)
+	if !ok {
+		return policy.Decision{}, fmt.Errorf("%w: rule 1 reads blueprint.weight, which the document lacks",
+			policy.ErrRuleFailed)
+	}
+
+	if 100/weight > 1 {
+		d.Effect = policy.EffectDeny
+
+		return d, nil
+	}
+
+	d.Effect = policy.EffectApprove
+	d.Approvals = &policy.Approvals{Groups: []string{policytest.DBAGroup}, Count: policytest.DBAApprovals}
 
 	return d, nil
 }

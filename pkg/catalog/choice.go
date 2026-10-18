@@ -13,8 +13,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// MaxOptions bounds the options of one input that the server returns. A
-// longer list ends with OptionSet.Truncated set.
+// MaxOptions bounds the options of one input that the options route
+// returns. A longer list ends with OptionSet.Truncated set (ForRoute). The
+// check of an answer uses every option.
 const MaxOptions = 1000
 
 // Source gives the options of a choice from the outputs of a set of units:
@@ -173,7 +174,7 @@ type Option struct {
 
 // OptionSet is the options of one input. WaitingFor lists the inputs that
 // the choice depends on and that have no answer yet: the options are then
-// empty. Truncated is true when the list stops at MaxOptions.
+// empty. Truncated is true when ForRoute cut the list at MaxOptions.
 type OptionSet struct {
 	Input      string   `json:"input"`
 	Options    []Option `json:"options"`
@@ -181,12 +182,13 @@ type OptionSet struct {
 	Truncated  bool     `json:"truncated,omitempty"`
 }
 
-// Options returns the options of the choice of in, with the answers so far
-// and the rows that the OutputSource gave for its source. A unit whose ID
-// is exclude, the unit of the request itself, gives no option. The options
-// are sorted by their first label, then by value. Two units that give one
-// value give one option with the labels of both. An input with no choice
-// gives an empty set.
+// Options returns every option of the choice of in, with the answers so
+// far and the rows that the OutputSource gave for its source. A unit whose
+// ID is exclude, the unit of the request itself, gives no option. The
+// options are sorted by their first label, then by value. Two units that
+// give one value give one option with the labels of both. An input with no
+// choice gives an empty set. The list has no limit: CheckAnswer needs each
+// option, and the options route cuts it with ForRoute.
 func Options(in *Input, answers map[string]json.RawMessage, rows []UnitOutputs, exclude string) OptionSet {
 	set := OptionSet{Input: in.Name, Options: []Option{}, WaitingFor: nil, Truncated: false}
 
@@ -214,12 +216,20 @@ func Options(in *Input, answers map[string]json.RawMessage, rows []UnitOutputs, 
 	}
 
 	set.Options = mergeOptions(src, rows, answers, exclude)
-	if len(set.Options) > MaxOptions {
-		set.Options = set.Options[:MaxOptions]
-		set.Truncated = true
-	}
 
 	return set
+}
+
+// ForRoute returns s as the options route gives it: at most MaxOptions
+// options, with Truncated set when the list was longer. CheckAnswer refuses
+// the result of ForRoute when it cut the list.
+func (s OptionSet) ForRoute() OptionSet {
+	if len(s.Options) > MaxOptions {
+		s.Options = s.Options[:MaxOptions]
+		s.Truncated = true
+	}
+
+	return s
 }
 
 // mergeOptions returns one option for each value that rows give, with the
@@ -384,49 +394,45 @@ func scalarString(raw json.RawMessage) string {
 	return string(bytes.TrimSpace(raw))
 }
 
-// equalJSON reports whether a and b have equal canonical JSON. So "1" does
-// not equal 1, and 1 equals 1.0.
+// equalJSON reports whether a and b have equal canonical JSON
+// (CanonicalJSON). So "1" does not equal 1, and 1 equals 1.0.
 func equalJSON(a, b json.RawMessage) bool {
-	var va, vb any
-	if json.Unmarshal(a, &va) != nil || json.Unmarshal(b, &vb) != nil {
-		return false
-	}
-
-	ca, errA := json.Marshal(va)
-	cb, errB := json.Marshal(vb)
+	ca, errA := CanonicalJSON(a)
+	cb, errB := CanonicalJSON(b)
 
 	return errA == nil && errB == nil && bytes.Equal(ca, cb)
 }
 
-// CheckAnswer returns the failures of the answer of in against set, the
-// options that the server computed now: an answer that is not among the
-// options, also each item of a string-list. It returns nil for an input
-// with no choice.
-func CheckAnswer(in *Input, answer json.RawMessage, set OptionSet) []Failure {
+// CheckAnswer returns the failures of the answer of in against set, every
+// option that the server computed now with Options: an answer that is not
+// among the options, also each item of a string-list. It returns nil for an
+// input with no choice. It returns ErrInvalid for a set that ForRoute cut,
+// because an answer past the cut is still an option.
+func CheckAnswer(in *Input, answer json.RawMessage, set OptionSet) ([]Failure, error) {
 	if in.Choice == nil {
-		return nil
+		return nil, nil
+	}
+
+	if set.Truncated {
+		return nil, fmt.Errorf("%w: the options of %s were cut for the route, check with every option", ErrInvalid,
+			in.Name)
 	}
 
 	if len(set.WaitingFor) > 0 {
 		return []Failure{{
 			Input: in.Name, Code: FailureChoice,
 			Message: "Answer " + strings.Join(set.WaitingFor, ", ") + " first.",
-		}}
+		}}, nil
 	}
 
-	var values []string
-
-	if in.Type == TypeStringList {
-		if err := json.Unmarshal(answer, &values); err != nil {
-			return []Failure{{Input: in.Name, Code: FailureType, Message: "Give a list of strings."}}
-		}
-	} else {
-		var v string
-		if err := json.Unmarshal(answer, &v); err != nil {
-			return []Failure{{Input: in.Name, Code: FailureType, Message: "Give a string."}}
+	values, ok := choiceValues(in.Type, answer)
+	if !ok {
+		message := "Give a string."
+		if in.Type == TypeStringList {
+			message = "Give a list of strings."
 		}
 
-		values = []string{v}
+		return []Failure{{Input: in.Name, Code: FailureType, Message: message}}, nil
 	}
 
 	var out []Failure
@@ -440,7 +446,25 @@ func CheckAnswer(in *Input, answer json.RawMessage, set OptionSet) []Failure {
 		}
 	}
 
-	return out
+	return out, nil
+}
+
+// choiceValues returns the strings of an answer of a string or a
+// string-list input, and false for an answer of another shape.
+func choiceValues(t InputType, answer json.RawMessage) ([]string, bool) {
+	if t == TypeStringList {
+		var values []string
+
+		err := json.Unmarshal(answer, &values)
+
+		return values, err == nil
+	}
+
+	var v string
+
+	err := json.Unmarshal(answer, &v)
+
+	return []string{v}, err == nil
 }
 
 // Order returns the names of inputs in an order where each input comes

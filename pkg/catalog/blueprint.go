@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/policy"
@@ -48,11 +49,17 @@ type Blueprint struct {
 	ExprVersion string `json:"exprVersion,omitempty"`
 	// UnitName is an Expr expression that gives the tool's own name of the
 	// unit. The server computes it at the first submit and keeps it.
-	UnitName      string       `json:"unitName"`
-	Inputs        []Input      `json:"inputs"`
-	Policy        []PolicyRule `json:"policy,omitempty"`
-	Quotas        []QuotaRule  `json:"quotas,omitempty"`
-	SchemaVersion int          `json:"schemaVersion"`
+	UnitName string `json:"unitName"`
+	// SourcePrincipal is the ID of the service principal that reads the
+	// sources of the choices. The server reads the outputs of each source
+	// with the grants of this principal, and checks its unit:read on the
+	// source at each computation of the options. It is required when an
+	// input has a source, and empty when none has one.
+	SourcePrincipal string       `json:"sourcePrincipal,omitempty"`
+	Inputs          []Input      `json:"inputs"`
+	Policy          []PolicyRule `json:"policy,omitempty"`
+	Quotas          []QuotaRule  `json:"quotas,omitempty"`
+	SchemaVersion   int          `json:"schemaVersion"`
 }
 
 // Program is the module or the component that a blueprint adds to. Exactly
@@ -94,9 +101,9 @@ const (
 )
 
 // Input is one value that a requester can set. Maps names the variable of
-// the module or the config key of the component that the answer sets. An
-// input with a default is never required. No input is secret: a secret
-// comes from the profile of the blueprint.
+// the module or the config key of the component that the answer sets
+// (ValidKey). An input with a default is never required. No input is
+// secret: a secret comes from the profile of the blueprint.
 type Input struct {
 	Choice      *Choice         `json:"choice,omitempty"`
 	Name        string          `json:"name"`
@@ -229,15 +236,15 @@ func ParseBlueprint(data []byte) (Blueprint, error) {
 }
 
 // Validate checks each rule of a blueprint that needs no engine: the
-// header, the program, each input, the one-home rule, the order of the
-// choices, the policy and quota rules, and the delivery. A publish also
-// compiles each expression with the Evaluator.
+// header, the program, each input, the keys, the one-home rule, the order
+// of the choices, the source principal, the policy and quota rules, and the
+// delivery. A publish also compiles each expression with the Evaluator.
 func (b *Blueprint) Validate() error {
 	checks := []func() error{
-		b.validateHeader, b.Program.validate, b.validateInputs,
+		b.validateHeader, b.validateProgram, b.validateInputs, b.validateKeys,
 		func() error { return CheckOneHome(b) },
 		func() error { _, err := Order(b.Inputs); return err },
-		b.validatePolicy, b.validateQuotas, b.validateDelivery,
+		b.validateSourcePrincipal, b.validatePolicy, b.validateQuotas, b.validateDelivery,
 	}
 
 	for _, check := range checks {
@@ -260,24 +267,183 @@ func (b *Blueprint) InputNamed(name string) (*Input, bool) {
 	return nil, false
 }
 
+// The tools of a blueprint, as the unit reference writes them.
+const (
+	ToolOpenTofu = "opentofu"
+	ToolPulumi   = "pulumi"
+)
+
+// MaxKeyBytes bounds a key of Input.Maps and of Platform.Values.
+const MaxKeyBytes = 128
+
+// reservedModuleArgs are the names that a module block of OpenTofu keeps
+// for itself. No variable of a module can have them.
+func reservedModuleArgs() []string {
+	return []string{"source", "version", "providers", "count", "for_each", "lifecycle", "depends_on", "locals"}
+}
+
+// ValidKey reports whether key is a key that a blueprint of tool can set:
+//   - for OpenTofu, a variable of the module: an HCL identifier, which is a
+//     letter or '_' and then letters, digits, '_' and '-', and not a name
+//     that a module block keeps, such as source or count,
+//   - for Pulumi, a config key: a name, or a namespace, a ':' and a name,
+//     where each part is a letter and then letters, digits, '_' and '-'.
+//
+// A key is at most MaxKeyBytes. The render writes an answer only as data,
+// in the variables file or in the stack settings, and writes only keys of
+// this form in the program text, so an answer can never change the program.
+func ValidKey(tool, key string) bool {
+	if key == "" || len(key) > MaxKeyBytes {
+		return false
+	}
+
+	switch tool {
+	case ToolOpenTofu:
+		return hclIdentifier(key) && !slices.Contains(reservedModuleArgs(), key)
+	case ToolPulumi:
+		ns, name, found := strings.Cut(key, ":")
+		if !found {
+			return configName(key)
+		}
+
+		return configName(ns) && configName(name)
+	default:
+		return false
+	}
+}
+
+func hclIdentifier(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+
+		switch {
+		case isLetter(c) || c == '_':
+		case i > 0 && ((c >= '0' && c <= '9') || c == '-'):
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+func configName(s string) bool {
+	if s == "" || !isLetter(s[0]) {
+		return false
+	}
+
+	for i := range len(s) {
+		c := s[i]
+		if !isLetter(c) && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// NormalizeKey returns the form of key that the one-home check compares:
+// in lowercase, and, for Pulumi, with no namespace when the namespace is
+// the project of the render, which is the name of the blueprint. So
+// "Size", "size" and "postgres:size" are one key of the blueprint postgres.
+// Two keys that differ only in case are one key, also for a tool that
+// tells them apart, so that a person who reads them never sees two values
+// for what looks like one.
+func NormalizeKey(b *Blueprint, key string) string {
+	if b.Tool == ToolPulumi {
+		key = strings.TrimPrefix(key, b.Name+":")
+	}
+
+	return strings.ToLower(key)
+}
+
+// HasSource reports whether an input of b has a choice with a source.
+func (b *Blueprint) HasSource() bool {
+	return slices.ContainsFunc(b.Inputs, func(in Input) bool { return in.Choice != nil && in.Choice.Source != nil })
+}
+
 // CheckOneHome returns ErrOneHome when a key has more than one home in b:
 // two inputs that map to one key, or an input that maps to a key that a
-// platform value also sets. The error names the key. The render checks the
-// keys against the other homes of the unit.
+// platform value also sets, compared in the form of NormalizeKey. The error
+// names the key. The render checks the keys against the other homes of the
+// unit in the same form.
 func CheckOneHome(b *Blueprint) error {
 	owner := make(map[string]string, len(b.Inputs)+len(b.Platform.Values))
 
+	keys := make([]string, 0, len(b.Platform.Values))
 	for key := range b.Platform.Values {
-		owner[key] = "the platform values"
+		keys = append(keys, key)
+	}
+
+	slices.Sort(keys)
+
+	for _, key := range keys {
+		n := NormalizeKey(b, key)
+		if have, ok := owner[n]; ok {
+			return fmt.Errorf("%w: key %q is set by the platform values and by %s", ErrOneHome, key, have)
+		}
+
+		owner[n] = fmt.Sprintf("the platform value %q", key)
 	}
 
 	for i := range b.Inputs {
 		in := &b.Inputs[i]
-		if have, ok := owner[in.Maps]; ok {
+
+		n := NormalizeKey(b, in.Maps)
+		if have, ok := owner[n]; ok {
 			return fmt.Errorf("%w: key %q is set by the input %s and by %s", ErrOneHome, in.Maps, in.Name, have)
 		}
 
-		owner[in.Maps] = "the input " + in.Name
+		owner[n] = "the input " + in.Name
+	}
+
+	return nil
+}
+
+func (b *Blueprint) validateKeys() error {
+	for i := range b.Inputs {
+		if in := &b.Inputs[i]; !ValidKey(b.Tool, in.Maps) {
+			return fmt.Errorf("%w: input %s maps to %q, which is not a key of %s", ErrInvalid, in.Name, in.Maps, b.Tool)
+		}
+	}
+
+	for key := range b.Platform.Values {
+		if !ValidKey(b.Tool, key) {
+			return fmt.Errorf("%w: the platform value %q is not a key of %s", ErrInvalid, key, b.Tool)
+		}
+	}
+
+	return nil
+}
+
+func (b *Blueprint) validateProgram() error {
+	if err := b.Program.validate(); err != nil {
+		return err
+	}
+
+	switch {
+	case b.Tool == ToolOpenTofu && b.Program.Module == nil:
+		return fmt.Errorf("%w: a blueprint of OpenTofu names a module", ErrInvalid)
+	case b.Tool == ToolPulumi && b.Program.Component == nil:
+		return fmt.Errorf("%w: a blueprint of Pulumi names a component", ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+func (b *Blueprint) validateSourcePrincipal() error {
+	switch {
+	case b.HasSource() && b.SourcePrincipal == "":
+		return fmt.Errorf("%w: a blueprint with a source names the principal that reads it", ErrInvalid)
+	case !b.HasSource() && b.SourcePrincipal != "":
+		return fmt.Errorf("%w: a blueprint with no source names no source principal", ErrInvalid)
+	case b.SourcePrincipal == "":
+		return nil
+	default:
+	}
+
+	if _, err := identity.ParsePrincipalObject(b.SourcePrincipal); err != nil {
+		return fmt.Errorf("%w: source principal %q", ErrInvalid, b.SourcePrincipal)
 	}
 
 	return nil
@@ -292,8 +458,10 @@ func (b *Blueprint) validateHeader() error {
 			ErrSchemaVersion, b.SchemaVersion, BlueprintSchemaVersion)
 	case !ValidName(b.Name):
 		return fmt.Errorf("%w: blueprint name %q", ErrInvalid, b.Name)
-	case b.Title == "" || b.Tool == "":
-		return fmt.Errorf("%w: a blueprint needs a title and a tool", ErrInvalid)
+	case b.Title == "":
+		return fmt.Errorf("%w: a blueprint needs a title", ErrInvalid)
+	case b.Tool != ToolOpenTofu && b.Tool != ToolPulumi:
+		return fmt.Errorf("%w: tool %q, give %s or %s", ErrInvalid, b.Tool, ToolOpenTofu, ToolPulumi)
 	default:
 		return checkExpr("unitName", b.UnitName)
 	}

@@ -3,6 +3,7 @@ package policy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -62,6 +63,10 @@ func ParseWebhookAnswer(body []byte) (Decision, error) {
 	return d, nil
 }
 
+// decodeAnswer decodes the answer of an engine into v. Its errors never
+// hold a part of body: an answer can echo the input document, or hold text
+// that the engine did not mean for the log. They name the size, or the
+// offset of a syntax error, only.
 func decodeAnswer(body []byte, v any) error {
 	if len(body) > MaxAnswerBytes {
 		return fmt.Errorf("%w: %d bytes, the limit is %d", ErrInvalidDecision, len(body), MaxAnswerBytes)
@@ -71,7 +76,11 @@ func decodeAnswer(body []byte, v any) error {
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidDecision, err)
+		if syntax, ok := errors.AsType[*json.SyntaxError](err); ok {
+			return fmt.Errorf("%w: the answer is not JSON, at byte %d", ErrInvalidDecision, syntax.Offset)
+		}
+
+		return fmt.Errorf("%w: the answer is not of the shape of a decision", ErrInvalidDecision)
 	}
 
 	if dec.More() {
