@@ -27,7 +27,9 @@ here:
 - **Keycloak** trusts an external JWT best through federated client
   authentication: `client_credentials` with the JWT as a `jwt-bearer`
   client assertion, an identity provider in the realm, and an exact
-  `sub` for each client. It is supported from Keycloak 26.6. Its JWT
+  `sub` for each client. It is supported from Keycloak 26.6, as the
+  research of 2026-10-18 found. Check this version against the release
+  notes of Keycloak before the adapter ships. Its JWT
   Authorization Grant (RFC 7523) needs a Keycloak user that already exists
   for each `sub`. Its standard token exchange takes only tokens of its own
   realm.
@@ -113,7 +115,8 @@ here:
    three grants. `grant` names one:
    - `client-assertion`: `client_credentials` with the token as a
      `jwt-bearer` client assertion (RFC 7523 section 2.2). Keycloak
-     (federated client authentication, 26.6 and later) and Authentik use
+     (federated client authentication, 26.6 and later, to check before
+     the adapter ships) and Authentik use
      it.
    - `jwt-bearer`: the JWT authorization grant (RFC 7523 section 2.1).
      Ory Hydra and the JWT Authorization Grant of Keycloak use it.
@@ -155,7 +158,22 @@ here:
    | `secrets/external` | The external adapter protocol (ADR 208) | `url`, `request` | none |
 
    Each output is secret. A login block that a secrets block names must be
-   in `exchange` mode, because the server makes the call. The server calls
+   in `exchange` mode, because the server makes the call. Each block that
+   calls a host on a private network can trust an internal CA with the
+   input `caCertificates` or the installation setting
+   `profileCACertificates` (ADR 206 decision 6). This applies to
+   `login/vault`, `login/oauth`, `login/oidc`, `secrets/vault`,
+   `secrets/1password`, `outputs/opentofu-state` with `http` or `remote`,
+   the `postgres` and `mysql` rotators, and each external block.
+   - A dynamic engine of `secrets/vault`, for example database
+     credentials, gives a value with a lease. The server keeps the lease
+     ID with the open session (ADR 203). When the session ends or expires,
+     the server revokes each lease of the session with the same login
+     (`sys/leases/revoke`). The revoke is best effort: when it fails, the
+     server writes an audit entry and the lease ends at its own TTL in
+     Vault. An open with no session, for example an open of a job, revokes
+     its leases when the job ends. The docs say to give each dynamic role
+     a short TTL, because a revoke can fail. The server calls
    the REST API of each store with the standard library, and signs AWS
    calls with the SigV4 code that the S3 blob adapter already has.
 7. **Outputs providers.**
@@ -173,9 +191,19 @@ here:
      packages (ADR 41), as the options of the Catalog do (ADR 113 decision
      6). It names each output with the words of its tool, and keeps the
      secret mark of each output.
-   - The access check is for the principal of the open, at each open: it
-     needs `unit:read` on the source unit, and `unit:read-secrets` for a
-     secret output (ADR 41). The save checks the same for the author, so
+   - A save resolves each `unit` reference to the ID of the unit and stores
+     the ID with the revision. An open reads the unit with that ID, not
+     with its name. When a person deletes the unit and makes a new unit
+     with the same name, the new unit does not match, and the open of the
+     block fails with `ErrRemoteNotFound`, which names the reference. A
+     person who wants the new unit saves the profile again.
+   - The access check is for the attachment authority of the open (ADR
+     203 decision 4), at each open: it needs `unit:read` on the source
+     unit, and `unit:read-secrets` for a secret output (ADR 41). For a
+     direct open, the attachment authority is the caller. For a job open,
+     it is the principal that made the attachment, or the blueprint
+     publisher for a Catalog attachment, and not the person who started
+     the job. The save checks the same for the author, so
      an author cannot put into a profile an output that the author cannot
      read. When output sharing rules exist (RFC 15), the adapter applies
      them too.

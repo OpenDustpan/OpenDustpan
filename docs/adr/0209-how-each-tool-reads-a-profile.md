@@ -30,11 +30,13 @@ The research note gives what the Pulumi CLI calls, from its source:
 
 - For the `environment:` list of `Pulumi.<stack>.yaml`, the CLI sends
   `POST /api/esc/environments/{org}/yaml/open?duration=2h0m0s` with the
-  body `{"imports": [...]}`, then `GET
+  `imports` list in the body, then `GET
   /api/esc/environments/{org}/yaml/open/{id}`. The answer holds
   `properties` with `pulumiConfig`, `environmentVariables` and `files`,
   each value with a `secret` mark. `pulumi config` with no `--open` sends
-  `POST .../yaml/check`.
+  `POST .../yaml/check`. The body may be a YAML document (`imports:`) and
+  not JSON. The research could not check this against the source of the
+  CLI, so it is an item for `make e2e` to check (decision 5).
 - The CLI encrypts each secret of `pulumiConfig` with the secrets
   provider of the stack, and sends it as ciphertext in the update. It sets
   `environmentVariables` in its own process, and writes each of `files` to
@@ -81,12 +83,23 @@ The research note gives what the Pulumi CLI calls, from its source:
      string form, and `secrets`, a sensitive map from the path of each
      secret leaf to its string form. A path is the dotted path of the leaf,
      for example `db.password`, with list positions as `[0]`. `json` is the
-     whole tree as JSON, sensitive when it holds a secret. `revision` is the
-     revision that the open read.
+     whole tree as JSON, and is always sensitive: the provider protocol sets
+     sensitivity for each attribute in the schema, not for each value, so
+     an attribute that can hold a secret is sensitive for every value.
+     `revision` is the revision that the open read.
    - The data source refuses a profile that holds a leaf marked never store
      on the asked paths, with an error that names the path and says to use
      the ephemeral resource. A plain value never becomes sensitive by
      mistake, and a secret never becomes plain.
+   - The data source also refuses each leaf that comes from a login block,
+     and each leaf of a result that has an expiry (`Expires` of ADR 206),
+     with the same error. OpenTofu reads a data source in the plan, with
+     the access `read`, and keeps the result in the saved plan. It does
+     not read the data source again at apply. So short-lived credentials
+     from a data source would be in the stored plan, and the apply would
+     use the credentials of the plan, with the access `read`, after they
+     possibly expired. Such leaves go to the ephemeral resource, which
+     OpenTofu opens again in the apply.
 3. **Never store, and the ephemeral resource (owner).** `ephemeral
    "opendustpan_profile"` has the same inputs and outputs. OpenTofu keeps
    an ephemeral value out of the plan and the state. It is the only way for
@@ -114,6 +127,11 @@ The research note gives what the Pulumi CLI calls, from its source:
       CLI configuration, then `credentials.tfrc.json`, then the credentials
       helper that the CLI configuration names.
 
+   The provider always looks up the token by the host that it resolved,
+   never by another value. So a module that sets `host` to a host of its
+   own gets only a token that the configuration holds for that host, and
+   never the token of another host.
+
    So `tofu login` on a workstation is enough, and on a runner the
    credentials helper of the launcher answers the job token (ADR 134
    decision 7). With a job token, the provider opens only the profiles that
@@ -137,6 +155,10 @@ The research note gives what the Pulumi CLI calls, from its source:
      segments, folder and name. A profile name of one segment is the
      project `default`. So no profile folder has the name `default`, and the
      save refuses it with `profile.ErrInvalid`. `@tag` and `@number` in an import name a revision.
+   - The server parses a body of `yaml/open` and `yaml/check` as YAML,
+     which also reads a JSON body. The CLI may send the `environment:` list
+     as a YAML document with `imports:`. `make e2e` checks the format
+     that each supported version sends.
    - A body of `yaml/open` and `yaml/check` holds `imports` only. A body
      with any other key, for example `values` or an `fn::` function, fails
      with `400` and a diagnostic that says that OpenDustpan reads profiles
@@ -155,7 +177,9 @@ The research note gives what the Pulumi CLI calls, from its source:
    - The update metadata of the CLI names each import with its version
      (`stack.environments`). The server stores it with the update, so the
      history of a stack shows the profiles and revisions that each update
-     read.
+     read. The name and the shape of `stack.environments` in the update
+     metadata are an item for `make e2e` to check, as the body of
+     `yaml/open` is.
    - `make e2e` drives each path with the real CLI before it ships, for
      each supported version, as each endpoint of this API needs (CLAUDE.md).
 6. **Each tool keeps its words.** Profiles, revisions and tags are the words

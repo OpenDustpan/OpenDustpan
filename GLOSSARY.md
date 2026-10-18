@@ -707,8 +707,12 @@ An adapter that makes a new credential on a schedule and retires the old one (AD
 _Avoid_: Rotation provider
 
 **Rotation record**:
-The sealed state of one rotator block, with the current and the previous credential. It lives outside the document, so a rollback never brings back a retired credential (ADR 202 decision 8).
+The sealed state of one rotator block, with the current and the previous credential. It lives outside the document, so a rollback never brings back a retired credential. The server binds it to a hash of the target inputs of the block. A change of that hash starts a new record (ADR 202 decision 8).
 _Avoid_: Rotation state (alone)
+
+**Rotation lease**:
+The lease in the store that lets one rotation at a time run for one rotator block. A manual rotation and a scheduled one take the same lease. The rotation writes the state `pending` before it calls the rotator (ADR 202 decision 8).
+_Avoid_: Rotation lock
 
 **Exports**:
 The part of a profile document that says what reaches a consumer: `variables`, `files`, `pulumi` and `opentofu` (ADR 201 decision 9).
@@ -723,16 +727,24 @@ The resolve of a profile for one caller: imports, provider blocks, types and che
 _Avoid_: Read (a read of a profile gives sealed secrets), decrypt
 
 **Open session**:
-The stored result of an open, with an ID of the prefix `pos-` (ADR 203 decision 3). Only its principal reads it, for at most 12 hours.
+The stored result of an open, with an ID of the prefix `pos-` (ADR 203 decision 3). Only its principal reads it, for at most 12 hours, and each read checks the action of the principal again.
 _Avoid_: Session (alone)
 
 **Profile attachment**:
 A link from a profile to a namespace, a collection or a unit. The jobs of each unit of the object read the profile (ADR 203 decision 5).
 _Avoid_: Binding, assignment (an assignment is a runner term)
 
+**Attachment authority**:
+The principal whose actions an open uses. For a direct open, it is the caller. For a job open, it is the principal who made the attachment, or the person who published the blueprint for an attachment of the Catalog. The server checks it again at each job start (ADR 203).
+_Avoid_: Attachment owner, run-as
+
 **Change rule**:
 The rule of a profile that turns each save into a profile draft that needs approvals (ADR 202 decision 6).
 _Avoid_: Ruleset, change gate
+
+**Routing change**:
+A change of a profile that can change where a provider or rotator block sends secrets. It is one of these: a change to a path that a block input reads, directly or through expressions. A change to `imports` or `exports`. A rollback or tag move that changes the resolved inputs of a block. It needs `profile:open` as well as `profile:write`. The diff compares the evaluated destination hosts, not the text (ADR 202 decision 2).
+_Avoid_: Sensitive change, dangerous change
 
 **Profile draft**:
 A proposed revision of a profile under a change rule, with a base revision and approvals. It applies as a new revision after approval (ADR 202 decision 6).
@@ -747,7 +759,7 @@ A request of a person to open a profile for a time, under an open rule (ADR 202 
 _Avoid_: Open request
 
 **Issuer**:
-The OIDC issuer of one namespace, at `https://<public host>/oidc/<namespace>`, with its own signing keys (ADR 204). Clouds and other systems trust it.
+The OIDC issuer of one namespace, at `https://<issuer host>/oidc/<namespace ID>`, with its own signing keys (ADR 204). The issuer host comes from the installation setting `issuerBaseURL`, else from `publicURL`. When the namespace sets `issuerURL`, `iss` is that URL. Clouds and other systems trust it.
 _Avoid_: Identity provider (an identity provider signs in people), OIDC provider (alone)
 
 **Issued token**:

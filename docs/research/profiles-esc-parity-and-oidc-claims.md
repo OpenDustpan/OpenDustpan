@@ -233,7 +233,7 @@ Sources of section 2:
 
 | System | Fits | How | Source |
 | --- | --- | --- | --- |
-| Keycloak 26.6 | yes | Federated client authentication: `client_credentials` with a `jwt-bearer` client assertion, exact `sub` for each client, `aud` the realm issuer. | `https://www.keycloak.org/2026/01/federated-client-authentication` |
+| Keycloak 26.6 (verify before ship: version and feature state read on 2026-10-18 from the blog post only) | yes | Federated client authentication: `client_credentials` with a `jwt-bearer` client assertion, exact `sub` for each client, `aud` the realm issuer. | `https://www.keycloak.org/2026/01/federated-client-authentication` |
 | Keycloak JWT Authorization Grant | partly | RFC 7523 grant. The `sub` must be a linked Keycloak user that exists. | `https://www.keycloak.org/securing-apps/jwt-authorization-grant` |
 | Keycloak token exchange V2 | no | Tokens of its own realm only. | `https://www.keycloak.org/securing-apps/token-exchange` |
 | Authentik | yes, with a policy | Client assertion from a federated OIDC source. Checks only the signature and `exp` by default. | `https://docs.goauthentik.io/add-secure-apps/providers/oauth2/client_credentials/` |
@@ -250,10 +250,16 @@ From the source of `github.com/pulumi/pulumi` at commit
 `b9e87ddf20c455810052cab51319a7eb3fc899c1` (`pkg/cmd/pulumi/config/io.go`,
 `pkg/backend/httpstate/environments.go`, `pkg/cmd/esc/cli/client/client.go`):
 
-- The stack config `environment:` list becomes `{"imports": [...]}`, sent to
-  `POST /api/esc/environments/{org}/yaml/open?duration=2h0m0s`. Then `GET
+- The stack config `environment:` list becomes an `imports:` document, sent
+  to `POST /api/esc/environments/{org}/yaml/open?duration=2h0m0s`. Then `GET
   .../yaml/open/{id}` reads `properties` with `pulumiConfig`,
   `environmentVariables` and `files`.
+- **E2e-verify item.** The CLI may send that document as a YAML body
+  (`imports:`), not as a JSON body (`{"imports": [...]}`). A JSON document is
+  also valid YAML, so the server parses the body as YAML and accepts both.
+  The e2e suite must record the real body and its content type. It must
+  also check whether the CLI sends the list as `stack.environments` in the
+  metadata of an update. This note could not confirm either point.
 - The CLI encrypts each secret of `pulumiConfig` with the secrets provider
   of the stack and sends it as ciphertext in the update. It sets
   `environmentVariables` in its own process. It writes `files` to

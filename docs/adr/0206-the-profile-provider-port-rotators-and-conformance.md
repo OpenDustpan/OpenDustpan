@@ -37,7 +37,11 @@ own, as `pkg/blob/s3` does for the blob port.
    ```
 
    depguard holds `pkg/profile`, `profiletest` and `providertest` to the
-   rules of the domain packages. An adapter package can import `net/http`
+   rules of the domain packages, with the globs `**/pkg/profile/*.go`,
+   `**/pkg/profile/profiletest/**` and `**/pkg/profile/providertest/**`.
+   The glob `**/pkg/profile/**` is wrong, because it also holds the
+   adapters under `pkg/profile/adapter`, which must import `net/http`. The
+   rules of `blob` and `egress` use the same `*.go` form. An adapter package can import `net/http`
    and `pkg/egress`, and no store, no tool package and no `internal/api`
    package. An adapter never imports another adapter.
 2. **The kinds.**
@@ -80,9 +84,10 @@ own, as `pkg/blob/s3` does for the blob port.
        // each bad input.
        Check(in Value) error
        // Open resolves one block for one open. ErrInvalid for an input
-       // that the remote system refuses as malformed. ErrDenied when the
-       // remote system refuses the credential or the trust. ErrNotFound
-       // for a value that the remote system does not have.
+       // that the remote system refuses as malformed. ErrRemoteDenied
+       // when the remote system refuses the credential or the trust.
+       // ErrRemoteNotFound for a value that the remote system does not
+       // have.
        // ErrUnavailable for a timeout, a refused connection or an answer
        // of 5xx. ErrTooLarge for an answer above MaxProviderResult.
        Open(ctx context.Context, r Request) (Result, error)
@@ -158,20 +163,33 @@ own, as `pkg/blob/s3` does for the blob port.
        // Check validates the inputs of one rotator block at save. It
        // calls no network. ErrInvalid.
        Check(in Value) error
-       // Rotate makes a new credential. It gets the current state and the
-       // credential of the login block that the rotator names, and
-       // returns the new state. It never retires the current credential.
-       // ErrInvalid, ErrDenied, ErrNotFound, ErrUnavailable as for Open.
+       // Rotate makes a new credential. It gets the current state, the
+       // credential of the login block that the rotator names and the
+       // rotation ID, and returns the new state. It never retires the
+       // current credential. A second call with the same rotation ID is
+       // the same rotation: it returns the credential of the first call
+       // and makes no second credential. ErrInvalid, ErrRemoteDenied,
+       // ErrRemoteNotFound, ErrUnavailable as for Open.
        Rotate(ctx context.Context, r RotateRequest) (Rotation, error)
        // Retire revokes the credential of an earlier rotation. A
-       // credential that is already gone gives nil. ErrDenied,
+       // credential that is already gone gives nil. ErrRemoteDenied,
        // ErrUnavailable.
        Retire(ctx context.Context, r RetireRequest) error
    }
    ```
 
    ADR 202 decision 8 gives the schedule, the state and the record of a
-   rotation.
+   rotation. The server calls `Rotate` for one block only while it holds
+   the **rotation lease** of that block in the store, so a manual rotate
+   and a scheduled run never run at the same time. The second start
+   fails with `profile.ErrConflict`, or joins the rotation that runs.
+   Before it calls `Rotate`, the server writes the rotation record with
+   the state `pending` and a new `RotationID`. `RotationID` is the
+   idempotency key of the rotation. When the call times out or the server
+   stops after the remote system made the credential, the next attempt
+   finds the `pending` record and calls `Rotate` again with the same
+   `RotationID`, so no credential stays live with no record. The record
+   leaves `pending` only in the transaction that writes the new state.
 6. **Each call goes through one outbound client.** An adapter gets its HTTP
    client from the wiring, never from `http.DefaultClient`:
    `egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly)` with the dial
@@ -179,12 +197,26 @@ own, as `pkg/blob/s3` does for the blob port.
    `MaxProviderResult` (1 MiB) of an answer.
    - A homelab or a company network often runs Vault, Keycloak or a
      database on a private address. The installation setting
-     `profileProviderNetworks` lists the private networks that a provider
-     can reach, as CIDR blocks. It is empty by default. Only an operator
-     sets it (`server:manage-settings`). A link-local address, for example
+     `profileProviderNetworks` lists the private destinations that a
+     provider can reach. It is empty by default. Only an operator sets it
+     (`server:manage-settings`). Each entry is a CIDR block or a
+     `host:port`, and each entry names the namespaces that can use it, or
+     `*` for all namespaces. On a shared installation, an operator who
+     allows one Vault for one team writes `vault.internal:8200` for that
+     namespace, not `10.0.0.0/8` for every namespace. A wide entry lets
+     each author of a profile in its namespaces reach the whole network
+     through `secrets/external` or the `http` backend of
+     `outputs/opentofu-state`, and the answer comes back as values. A link-local address, for example
      `169.254.169.254`, and a loopback address stay refused for every
      setting, so that a profile cannot read the metadata service of the
      host of the server.
+   - **Private certificate authorities.** An internal Vault, Keycloak,
+     database or external adapter often has a certificate from an internal
+     CA. Each block that calls a host accepts the input `caCertificates`, a
+     PEM bundle that the client trusts for that block in addition to the
+     system roots. The installation setting `profileCACertificates` holds a
+     PEM bundle that every block trusts. There is no option to skip the
+     check of the certificate, in a block or in a setting.
    - The egress proxy of RFC 16, when it exists, applies to these calls
      too.
 7. **Errors.** `pkg/profile` holds the sentinels of the port:
@@ -192,13 +224,19 @@ own, as `pkg/blob/s3` does for the blob port.
    | Error | When |
    | --- | --- |
    | `ErrInvalid` | A bad input, at save or at open. |
-   | `ErrDenied` | The remote system refused the credential, the token or the trust. |
-   | `ErrNotFound` | The remote system has no such value or object. |
+   | `ErrRemoteDenied` | The remote system refused the credential, the token or the trust. |
+   | `ErrRemoteNotFound` | The remote system has no such value or object. |
    | `ErrUnavailable` | A timeout, a refused connection, a DNS failure, a refused address or an answer of 5xx. |
    | `ErrTooLarge` | An answer above `MaxProviderResult`. |
 
    An adapter translates each error of its client library into one of
-   them, and never returns an error of the library to the open.
+   them, and never returns an error of the library to the open. The names
+   `ErrRemoteDenied` and `ErrRemoteNotFound` are different from
+   `identity.ErrDenied` (the caller does not have an action) and
+   `profile.ErrNotFound` (no such profile), so that a refusal of the remote
+   system never maps to 403 for the caller or to 404 "profile not found".
+   The HTTP adapter answers a remote error as a failed open of the block
+   that it names.
 8. **A conformance suite for each port (owner).** `providertest` holds
    `RunProvider` and `RunRotator`. Each built-in adapter and the external
    client run them, with a fake of the remote system in the test:
@@ -215,8 +253,12 @@ own, as `pkg/blob/s3` does for the blob port.
      its inputs, or for its default audience, and sends the token only to
      the fake of its remote system.
    - Rotators: `Rotate` keeps the current credential, `Retire` of a gone
-     credential gives nil, and a `Rotate` that fails leaves the state as it
-     was.
+     credential gives nil, a `Rotate` that fails leaves the state as it
+     was, and a second `Rotate` with the same rotation ID makes no second
+     credential.
+   - TLS: a block with `caCertificates` reaches a fake that has a
+     certificate of that CA, and a block without it fails with
+     `ErrUnavailable`.
    - Leaks: the suite runs each case with `goleak` (ADR 36).
 
    A new adapter merges with its suite run. A new method of a port gets

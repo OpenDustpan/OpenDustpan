@@ -68,6 +68,13 @@ of its environments to webhooks.
    - Only the credential that opened a session reads it: the same
      principal, and for a job token the same job. A person who started a job
      cannot read a session of the job with a personal token.
+   - Each read of a session checks the action again, as at the open: for a
+     direct open, `profile:open` on each profile of the session, and an
+     access request that is still valid when an open rule applies. For a
+     job open, it checks that the job is not terminal. A read that fails the check
+     fails with `identity.ErrDenied`, and the server deletes the session.
+     So a revoked grant or an expired access request ends the session at
+     the next read, not at the end of its duration.
    - Sessions are not in a backup, because they hold credentials that end
      within hours.
    - The other consumers get the result in the answer and the server
@@ -86,7 +93,24 @@ of its environments to webhooks.
      fixed, at the revisions that the spec fixed (decision 5). The
      attachments decide, not the actions of the person who started the job.
      So a person who can run a plan of a unit does not need
-     `profile:open`, and cannot read the profile outside the job.
+     `profile:open`.
+   - **The job is not a hard boundary.** The code of the unit runs in the
+     job and can read each file and variable that the job gets. So each
+     person who can push code that a job of an attached unit runs, or make
+     a unit in an attached collection, can get the credentials of the
+     profile at the access of that job. The real boundary is the trust
+     policy at the cloud or the remote: it names the `access`, the
+     `ref_protected` and the `unit_id` claims of ADR 205 that it accepts.
+     The security docs say so, with an example policy for each cloud.
+   - **The attachment authority.** Each check that an open makes for a
+     principal, for example `unit:read-secrets` on the source unit of
+     `outputs/opendustpan` (ADR 207), uses the caller for a direct open.
+     For a job open, it uses the **attachment authority**: the principal
+     that made the attachment, or for a Catalog attachment the publisher
+     of the blueprint. The attachment stores that principal. The server
+     checks its actions again at the start of each job, so a revoked grant
+     fails the next job with `identity.ErrDenied`, which names the
+     attachment.
    - **An agent** opens with masked values only: each secret answers
      `[masked]`, and no login block runs. No path gives an agent a value of
      a profile in plain text, also with the secret gate of ADR 124 open,
@@ -105,10 +129,20 @@ of its environments to webhooks.
    - The profiles of a unit are the attachments of its namespace, then of
      its collection, then of the unit itself, each list in order of
      position. They merge as imports do: a later one wins. So a unit can
-     replace a value of its collection.
+     replace a value of its collection, but not a value that a wider
+     attachment marks `$final` (ADR 201): such a change fails the job
+     start with `profile.ErrFinal`. Every check of every profile that the
+     job evaluates runs, from each attachment and each import. A narrower
+     attachment cannot delete a check.
    - A blueprint names a profile in `platform.profile` (ADR 112 decision
      8). The Catalog makes a unit attachment with that profile when it makes
-     the unit.
+     the unit. It uses the authority of the publisher of the blueprint, not
+     of the requester: the publish of a blueprint that names a profile
+     needs `profile:open` and `profile:attach` on that profile, and the
+     publish writes an audit entry that names the profile. A requester needs
+     no `profile:open`. The attachment that the Catalog makes names the
+     publisher as its attachment authority (decision 4), and its audit
+     entry names the request, the blueprint and the publisher.
    - At the start of a job, the server resolves the attachments of the
      unit to fixed revisions and stores them in the spec, as ADR 100
      decision 5 says. It also fixes the revision of each profile that they
@@ -160,7 +194,9 @@ of its environments to webhooks.
    It answers only the token files of the step.
 8. **No cache across opens.** Each open calls its blocks again. A step of a
    job opens once. So each credential is as short-lived as its block says,
-   and a revoke in a cloud applies at the next open.
+   and a revoke in a cloud applies at the next open. This rule does not
+   cover open sessions (decision 3): a read of a session answers the
+   values of its open, for at most the duration of the session.
 9. **The audit entry of an open.** Each open writes one audit entry of the
    kind `access`, with the action `profile:open` and the consumer:
    - the root profile and each profile and revision that the open read,
@@ -191,34 +227,44 @@ of its environments to webhooks.
     | Action | Object | Allows |
     | --- | --- | --- |
     | `profile:read` | the profile, or the namespace for a list | Read the metadata, the documents with sealed secrets, the revisions, the tags, the labels, the diff with no secret, the referrers and the claims preview. |
-    | `profile:write` | the namespace for a create, else the profile | Create, save a revision or a draft, change tags and labels, roll back, clone. A save that changes a provider or rotator block also needs `profile:open` (ADR 202 decision 2). |
+    | `profile:write` | the namespace for a create, else the profile | Create, save a revision or a draft, change tags and labels, roll back, clone, change a rotation schedule (a save). A routing change also needs `profile:open` (ADR 202 decision 2). |
     | `profile:open` | the profile | Open, read the static secrets of a document, a diff with secrets. |
     | `profile:approve` | the profile | Approve a draft or an access request (ADR 202). |
-    | `profile:rotate` | the profile | Rotate now, change a schedule. |
+    | `profile:rotate` | the profile | Rotate now. |
     | `profile:attach` | the profile | Attach and detach, with `unit:manage` on the object, and `profile:open` for an attach. |
-    | `profile:manage` | the profile | Change the rules, rename, delete, restore, retract, deletion protection. |
+    | `profile:manage` | the profile | Change the rules and the settings, rename, delete, restore, retract, deletion protection. |
     | `profile:redact` | the profile | Redact a revision (ADR 202 decision 2). |
 
     Built-in roles: each role with `namespace:read` gets `profile:read`.
-    Each role with `unit:write` gets `profile:write` and `profile:attach`.
-    `profile:open`, `profile:approve`, `profile:rotate`, `profile:manage` and
-    `profile:redact` go only to the role that holds `namespace:admin`, and
-    to custom roles through a grant (ADR 52). So the default for a person
-    who deploys is to deploy with a profile and not to read its secrets.
+    A role with `unit:write` gets no other profile action. Each other
+    profile action goes only to the role that holds `namespace:admin`, and
+    to custom roles through a grant (ADR 52), for example a grant of
+    `profile:write` on one profile folder to a team. The reason is least
+    privilege, the rule of ISO/IEC 27001:2022 control A.8.2 on privileged
+    access: a person who deploys does not change, attach or detach the
+    profiles that hold guardrails, for example the `checks` and `$final`
+    values of a namespace attachment. So the default for a person who
+    deploys is to deploy with a profile, and not to read or change it.
 12. **Routes.** The routes are tool-neutral, under `/api/profiles`. `{ns}` is
     the namespace and `{profile}` the profile name, with one or two
     segments. The routes of a namespace that are not one profile start with
     `-`, for example `/api/profiles/{ns}/-/labels`, and no name segment is
     `-`. No name segment is one of the words that a route of a profile adds:
     `revisions`, `rollback`, `diff`, `tags`, `labels`, `open`, `check`,
-    `drafts`, `access-requests`, `rules`, `rotate`, `rotations`, `clone`,
-    `rename`, `restore`, `referrers`. The save refuses such a name with
-    `profile.ErrInvalid`. So each path has one meaning.
+    `drafts`, `access-requests`, `rules`, `settings`, `rotate`,
+    `rotations`, `clone`, `rename`, `restore`, `referrers`. The save
+    refuses such a name with `profile.ErrInvalid`. So each path has one
+    meaning. `ServeMux` cannot match a name of one or two segments with
+    one wildcard. So each route of a profile is registered as
+    `/api/profiles/{ns}/{rest...}`, and the handler parses `rest` by hand:
+    it reads the name from the left, and the first segment that is one of
+    the words above starts the rest of the route.
 
     | Method and path | Action |
     | --- | --- |
     | `GET`, `POST /api/profiles/{ns}` | `profile:read`, `profile:write` |
     | `GET`, `DELETE /api/profiles/{ns}/{profile}` | `profile:read`, `profile:manage` |
+    | `GET`, `PUT /api/profiles/{ns}/{profile}/settings` | `profile:read`, `profile:manage`: deletion protection and the other settings of the profile |
     | `GET`, `POST /api/profiles/{ns}/{profile}/revisions` | `profile:read`, `profile:write` for a save, with `If-Match` on the revision |
     | `GET /api/profiles/{ns}/{profile}/revisions/{rev}` | `profile:read`, and `profile:open` with `showSecrets` |
     | `POST /api/profiles/{ns}/{profile}/revisions/{rev}/retract` | `profile:manage` |
@@ -233,14 +279,17 @@ of its environments to webhooks.
     | `GET`, `POST /api/profiles/{ns}/{profile}/drafts` | `profile:read`, `profile:write` |
     | `GET`, `PUT /api/profiles/{ns}/{profile}/drafts/{draft}` | `profile:read`, the author |
     | `POST /api/profiles/{ns}/{profile}/drafts/{draft}/reviews` | `profile:approve` |
-    | `POST /api/profiles/{ns}/{profile}/access-requests` | `profile:open` |
+    | `GET`, `POST /api/profiles/{ns}/{profile}/access-requests` | `profile:read` (each request of the profile), `profile:open` |
+    | `GET /api/profiles/{ns}/{profile}/access-requests/{id}` | `profile:read` |
+    | `POST /api/profiles/{ns}/{profile}/access-requests/{id}/withdraw` | the requester |
     | `POST /api/profiles/{ns}/{profile}/access-requests/{id}/reviews` | `profile:approve` |
-    | `PUT /api/profiles/{ns}/{profile}/rules` | `profile:manage` |
+    | `GET`, `PUT /api/profiles/{ns}/{profile}/rules` | `profile:read`, `profile:manage` |
     | `POST /api/profiles/{ns}/{profile}/rotate` | `profile:rotate` |
     | `GET /api/profiles/{ns}/{profile}/rotations` | `profile:read` |
     | `POST /api/profiles/{ns}/{profile}/clone`, `.../rename`, `.../restore` | `profile:write`, `profile:manage`, `profile:manage` |
     | `GET /api/profiles/{ns}/{profile}/referrers` | `profile:read` |
-    | `GET`, `POST`, `DELETE /api/profiles/{ns}/-/attachments` | `profile:read`, and `profile:attach`, `profile:open` and `unit:manage` |
+    | `GET`, `POST /api/profiles/{ns}/-/attachments` | `profile:read`, and `profile:attach`, `profile:open` and `unit:manage` |
+    | `DELETE /api/profiles/{ns}/-/attachments/{attachment}` | `profile:attach` and `unit:manage` |
     | `GET /api/profiles/-/adapters`, `GET /api/profiles/-/context-schema` | any signed-in principal |
     | `POST /api/profiles/{ns}/{profile}/revisions/{rev}/redact` | `profile:redact` |
 

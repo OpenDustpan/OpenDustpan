@@ -67,7 +67,8 @@ CircleCI. The facts that shape this ADR:
    | `iss` | The issuer of the namespace (ADR 204 decision 1). |
    | `sub` | The subject of decision 6. |
    | `aud` | One string: the audience of the login block (ADR 204 decision 7). Never a list. |
-   | `iat`, `nbf` | The time of the issue, in Unix seconds. `nbf` equals `iat`. |
+   | `iat` | The time of the issue, in Unix seconds. |
+   | `nbf` | `iat` minus 30 seconds, so that a token from a server whose clock runs up to 30 seconds ahead still verifies at a cloud. |
    | `exp` | `iat` plus the lifetime (ADR 204 decision 6). |
    | `jti` | A random ID with the prefix `oit-`. |
 
@@ -97,11 +98,30 @@ CircleCI. The facts that shape this ADR:
    | `change_order`, `change_order_revision` | The change order of the job and its revision (ADR 190). | When the job has a change order origin. |
    | `runner_pool`, `runner_pool_id` | The name and the ID of the pool of the claim (ADR 130). | When a job opens. |
    | `repository` | The forge host and the path of the repository, for example `github.com/acme/infra`. | When the job has a git code location. |
-   | `ref`, `ref_type` | The full ref, for example `refs/heads/main`, and `branch`, `tag` or `commit`. | When the job has a git code location. |
-   | `ref_protected` | `"true"` when the forge reports a protected ref, else `"false"`. | When the forge answers. |
-   | `commit` | The commit of the phase (ADR 100 decision 5). | When the job has a git code location. |
+   | `ref`, `ref_type` | The full ref, for example `refs/heads/main`, and `branch` or `tag`. | Only when the server resolved the ref (below). |
+   | `ref_protected` | `"true"` when the forge reports a protected ref, else `"false"`. | Only when the server resolved the ref and the forge answered (below). |
+   | `commit` | The commit of the phase (ADR 100 decision 5). | Only when the server resolved the ref (below). |
    | `source` | `git`, or `file-set` for a source with no commit (ADR 199). | When a job opens. |
    | `https://aws.amazon.com/tags` | An object with `principal_tags`: each claim that `sessionTags` of a `login/aws` block names, with its value, as AWS reads session tags (ADR 207 decision 3). The block names the claims. The server sets the values. | When the block sets `sessionTags`. |
+
+   **The ref claims.** A job spec comes in part from the caller, so the
+   server does not trust a ref or a commit that the spec names. The claims
+   `ref`, `ref_type`, `ref_protected` and `commit` are present only when
+   all of these are true:
+   - At job start, the server resolved the commit itself as the head of
+     the named ref, through the forge connection of the repository (ADR
+     213, in review). The request named a ref, not a commit.
+   - For `ref_protected`, the server asked the forge, at the same time and
+     with the credential of that same forge connection, whether the ref is
+     protected.
+
+   The server records the four values in the job at start, and they stay
+   fixed for the job, also when the ref moves or its protection changes
+   later. In each other case, for example a job that names a commit, a
+   source with no forge connection, or a forge that does not answer, the
+   server leaves out the four claims. A trust policy or a check that needs
+   one of them then fails closed: the Vault example of ADR 200 and a
+   `checks` rule on `context.refProtected` refuse such a job.
 
    The server takes each value from its own records: the job spec, the
    claim, the principal, the unit and the forge. No caller, no profile
@@ -155,12 +175,12 @@ CircleCI. The facts that shape this ADR:
    - A **subject template** names the keys. The default template is
      `namespace`, `collection`, `tool`, `unit` and `access`, for example
      `namespace:acme:collection:payments@<collection ID>:tool:pulumi:unit:web/prod@<unit ID>:access:write`.
-   - In `sub`, the keys `collection`, `unit`, `profile` and `root_profile`
-     hold the name, `@` and the stable ID, as the immutable subjects of
-     GitHub do. A person reads the name, and a trust policy matches the ID.
-     A unit that a rename gives an old name, or a new collection with the
-     name of a deleted one, has another ID, so it never matches the trust
-     of the old object. The namespace is in the issuer URL by its ID (ADR
+   - In `sub`, the keys `collection`, `unit`, `profile`, `root_profile`
+     and `runner_pool` hold the name, `@` and the stable ID, as the
+     immutable subjects of GitHub do. A person reads the name, and a trust policy matches the ID.
+     A unit that a rename gives an old name, or a new collection or
+     runner pool with the name of a deleted one, has another ID, so it
+     never matches the trust of the old object. The namespace is in the issuer URL by its ID (ADR
      204 decision 1), so `namespace` holds the name only.
    - A template must start with `namespace` or `namespace_id`, and holds
      only the keys of the list. A per-run value (`job`, `commit`, `jti`,
@@ -170,8 +190,9 @@ CircleCI. The facts that shape this ADR:
      An open with no unit gives
      `namespace:acme:access:open`. The label of each value stays in `sub`,
      so a subject never looks like a subject with another key.
-   - In a value, `%` becomes `%25` and `:` becomes `%3A`. So a value never
-     makes a new pair.
+   - In a value, `%` becomes `%25`, `:` becomes `%3A` and `@` becomes
+     `%40`. So a value never makes a new pair, and a `name@ID` value always
+     splits at its one `@`.
    - The server refuses a template whose longest subject can pass 600
      characters (`profile.ErrSubjectTooLong`). The docs say that a subject
      above 127 characters does not fit `google.subject`, and show the
@@ -181,8 +202,7 @@ CircleCI. The facts that shape this ADR:
      from doing so.
 
    **One-way door:** cloud trust policies hold subjects. A new key goes
-   at the end of the order. A change of the order needs a new template
-   version.
+   at the end of the order. The order never changes.
 7. **Trust policy shapes.** The docs give one example for each cloud. With
    the default template:
    - AWS, a role for applies of one collection: `StringLike` on `sub`
@@ -195,6 +215,17 @@ CircleCI. The facts that shape this ADR:
    - Google Cloud: `google.subject = assertion.unit_id`, `attribute.access =
      assertion.access`, and a condition on `assertion.collection`.
    - Vault: `bound_claims` with `access`, `collection` and `ref_protected`.
+   - **The trade-off of the default template.** The default template has
+     no `ref_protected`, so that one unit has few subjects and Azure fits
+     two credentials for each collection. AWS reads only `sub`, so an AWS
+     role with the default template trusts each apply job of the
+     collection from any branch, when the namespace has no gates. A team
+     that wants only protected refs adds `ref_protected` to the template,
+     for example `namespace`, `collection`, `tool`, `unit`, `access`,
+     `ref_protected`, and matches `*:access:write:ref_protected:true`.
+     A job with no resolved ref then has no `ref_protected` key in `sub`
+     (decision 3), so it fails closed. The docs show this template, and
+     ADR 200 uses it in the small-team example.
 8. **Personal data.** The safe default holds no personal data:
    `actor_id` is an opaque ID. The namespace setting `includeActorName`
    adds `actor`, the login name. No setting adds an e-mail address, a

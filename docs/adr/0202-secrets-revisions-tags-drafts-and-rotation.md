@@ -50,15 +50,29 @@ rotators. The research note gives the ESC features one by one:
    most 500 characters, the Expr version and the SHA-256 of the document.
    A revision never changes. A save names the revision that it read, and a
    save on a stale read fails with `profile.ErrConflict`.
-   - **A save that can send secrets elsewhere needs `profile:open`.** A save
-     that adds, deletes or changes a block of `providers` or `rotators`, or
-     that adds an expression that reads a secret into the inputs of a
-     block, needs `profile:open` on the profile as well as `profile:write`.
-     Without it, the save fails with `identity.ErrDenied`, which names the
-     block. So a person who can write a profile but not open it cannot
-     point an external block at a URL of their own and receive the secrets
-     (ADR 208 decision 2). A save that changes only plain values, tags or
-     labels needs `profile:write` only.
+   - **A routing change needs `profile:open`.** A **routing change** is a
+     change that can change where a block sends secrets, an issued token or
+     the result of a login block. The server finds it by taint: it follows
+     each input of each `providers` and `rotators` block, through each
+     expression, to each path that the input reads. These changes are
+     routing changes:
+     - a change to a block of `providers` or `rotators`.
+     - a change to a path that an input of such a block reads, directly or
+       transitively through expressions, also when the path holds a plain
+       value (for example a value that feeds `with.url`, `address`,
+       `tokenUrl` or `server`).
+     - a change to `imports` or `exports`.
+     - a rollback, a tag move or the apply of a draft that changes the
+       resolved inputs of a block, also through a tag that an import names.
+
+     A save, a rollback, a tag move or the apply of an approved draft that
+     makes a routing change needs `profile:open` on the profile as well as
+     `profile:write`. Without it, the request fails with
+     `identity.ErrDenied`, which names the block or the import. So a person
+     who can write a profile but not open it cannot point a block at a host
+     of their own and receive the secrets (ADR 208 decision 2). A change
+     that no block input reads, and a change of labels, needs
+     `profile:write` only.
    - Each revision is a history item with its own item key (ADR 151). A
      person with `profile:redact` can redact a revision, for example after
      a secret went into a plain value by mistake. A redacted revision
@@ -72,6 +86,9 @@ rotators. The research note gives the ESC features one by one:
      never read as a revision number.
    - A person with `profile:write` creates, moves and deletes a tag. Each
      change writes an audit entry, with the revision before and after.
+     A tag move that is a routing change also needs `profile:open`
+     (decision 2), also when only an import of another profile names the
+     tag.
      When the change rule of the profile covers tags (decision 6), a move
      of a tag is a draft too.
    - Imports, the run command, the stack config of the Pulumi CLI and the
@@ -95,8 +112,10 @@ rotators. The research note gives the ESC features one by one:
      one namespace. It answers the change of the text and, for each path of
      a static secret, `changed` or `unchanged`, with no value. With
      `showSecrets` and `profile:open`, it also gives the values. The diff
-     also names each provider block whose `use`, `login` or URL host
-     changed, so that a reviewer sees where secrets go (ADR 208).
+     also names each block whose `use`, `login` or destination host
+     changed, so that a reviewer sees where secrets go (ADR 208). It
+     compares the evaluated hosts of the two revisions, not the text, so
+     a host that an expression or an import makes is also shown.
 6. **The change rule.** A profile can have one change rule. Without one, a
    person with `profile:write` saves directly. With one, a save becomes a
    **profile draft**, and a revision exists only after approval:
@@ -119,8 +138,10 @@ rotators. The research note gives the ESC features one by one:
      `profile:open` on the profile. Such an open
      has `access` `read` or `open` and never `write` (ADR 205 decision 4), so
      an apply never runs with a draft.
-   - A change of the change rule itself needs `profile:manage` and an
-     approval under the old rule.
+   - A change of the change rule or of the open rule (decision 7) needs
+     `profile:manage` and an approval under the change rule as it was
+     before the change. So a person with `profile:manage` alone cannot
+     delete an open rule and go around the access requests.
 7. **The gate on opens.** A profile can also have an **open rule**: an
    open needs an approved **access request** first.
    - A person asks with a reason, the time that the access lasts (at most 7
@@ -156,15 +177,43 @@ rotators. The research note gives the ESC features one by one:
      document stays a text that a person writes, and an open always reads
      the current credential, also with an older revision of the document.
      The outputs are `current` and `previous`.
+   - The record is bound to the block name and to the SHA-256 of the
+     evaluated target inputs of the block: the rotator name and the inputs
+     that name the target, for example `host` and `users`. When a revision
+     renames the block or changes its target, the hash changes, and the
+     server starts a new record. It never uses the old record for the new
+     target. The old record stays for 30 days, so that a rollback finds it,
+     and then the server deletes it.
    - A schedule is a cron expression with at most one run a day, or one time
-     (`once`). Each block has its own schedule. The schedule `profile.rotate`
-     starts one durable operation for each due rotation, with the start key
-     `<profile ID>/<block>/<time>`.
-   - A rotation calls `Rotate`. On success, the old `previous` credential
-     is retired with `Retire`, the old `current` becomes `previous`, and the
-     new credential becomes `current`, in one transaction of the record. A
-     failure keeps the record as it was, retries with the backoff of the
-     operation for at most 1 hour, and then records the failure.
+     (`once`). Each block has its own schedule. A change of the schedule is
+     a save. The schedule `profile.rotate` starts one durable operation for
+     each due rotation, with the start key `<profile ID>/<block>/<time>`.
+   - **One rotation at a time for each block.** A rotation, from the
+     schedule or from `POST .../rotate`, first takes the **rotation lease**
+     of the block in the store. While another rotation holds the lease, a
+     manual rotation fails with `profile.ErrConflict`, and a scheduled
+     rotation waits for the next run. The lease ends when the rotation
+     records its outcome, or after 1 hour.
+   - **Pending before `Rotate`.** With the lease, the rotation writes the
+     state `pending` and a new `rotationId` to the record, and commits,
+     before it calls `Rotate`. `Rotate` gets the `rotationId` as its
+     idempotency key (ADR 206, and ADR 208 for an external adapter). A
+     retry after a timeout or a crash reads the `pending` state and calls
+     `Rotate` again with the same `rotationId`, so the remote gives back
+     the same new credential and makes no second one.
+   - On success, the old `previous` credential is retired with `Retire`,
+     the old `current` becomes `previous`, the new credential becomes
+     `current`, and the `pending` state ends, in one transaction of the
+     record. A failure keeps `current` and `previous` as they were, retries
+     with the backoff of the operation for at most 1 hour, and then
+     records the failure and ends the `pending` state.
+   - `Retire` runs only after a grace period from the time the retired
+     credential stopped being `current`: the longest open session (12
+     hours) or the longest job time, whichever is longer. Until then, the
+     record keeps the credential as `retiring`, and a later schedule run
+     retires it. So a running job or a live open session that holds it
+     does not fail. The docs say that a credential can stay valid for
+     this grace period after the rotation that replaced it.
    - Each block rotates alone, so one failure does not stop the others.
    - `POST .../rotate` rotates now, for all blocks or for named blocks.
      It needs `profile:rotate`.

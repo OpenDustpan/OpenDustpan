@@ -107,19 +107,45 @@ double what a person must learn and what the server must limit.
    - A cycle of imports or of `profiles[...]` reads fails the save with
      `profile.ErrImportCycle`, which names the cycle. The open checks again,
      because a later revision of an import can make a cycle.
+   - The name in `profiles[...]` and `imports[...]` is a string literal,
+     with an optional `@tag` or `@number`. A computed name fails the save
+     with `profile.ErrInvalid`. So the save can find each cycle, a job can
+     fix the revision of each profile that it reads (ADR 203 decision 4),
+     and the secret mark is found from the syntax tree (decision 12).
    - The depth of imports is at most 16 levels.
+   - **The checks and finals of each profile hold.** The merge takes
+     values, providers and exports. It never removes a check: the open runs
+     every check of every profile that it evaluates (decision 11). A
+     `$final` value holds across imports and across the attachments of ADR
+     203 decision 5. A narrower attachment cannot replace a final value of
+     a wider attachment, and a `null` cannot remove it. The open or the job
+     start then fails with `profile.ErrFinal`, which names the path and both
+     profiles.
 4. **Expressions are Expr.** A string that is exactly `${ <expression> }`
    gives the value of the expression, of any type. A `${ }` inside a longer
    string gives the string form of the value. `$${` writes a literal `${`.
    The expression language is Expr, with the version pin, the compile
    rules and the limits of ADR 112 decisions 11 and 12. A profile revision
    records its Expr version, as a blueprint version does.
-   - An expression sees `values` (the merged tree), `providers` (the
-     outputs of each provider block), `imports`, `profiles` and `context`
-     (decision 5).
+   - An expression sees `values`, `providers` (the outputs of each
+     provider block), `imports`, `profiles` and `context` (decision 5).
    - An expression is early-bound: the open evaluates it in the profile that
      holds it, before the merge into a profile that imports it. A later
      import cannot change what an expression of an earlier profile read.
+   - For an expression of profile P, `values` is the **own tree** of P: the
+     merge of the own trees of the imports of P, in list order, then the
+     values of P. It never holds a value of a profile that imports P, of an
+     attachment, or of a `merge: false` import of P. The same profile
+     revision gives the same own tree in each open with the same context,
+     whatever imports it.
+   - A value that comes from a provider, an adapter or `context` is data.
+     The open never parses it again as an expression, so a `${` in such a
+     value stays text.
+   - Some facts of `context` come from outside the server, for example
+     `context.ref` from the forge. A person who can push a branch chooses
+     its name. Do not put such a fact into a block input that selects a
+     credential, for example `roleArn`, unless a check or the cloud trust
+     policy also limits it. The docs show this.
    - A path that does not exist fails the open with
      `profile.ErrReference`, which names the path and the profile. The save
      checks each path that it can find without a provider call.
@@ -129,6 +155,13 @@ double what a person must learn and what the server must limit.
    `context.unit`, `context.refProtected`, `context.commit` and
    `context.trigger`. The claim `profile_revision` is `context.revision`.
    `context.openDuration` adds the duration of the open. A fact that the open does not have is `nil`.
+   Each fact has its type: `context.refProtected` is a boolean, not the
+   string `"true"`. Only the issued token holds the string form (ADR 205
+   decision 3). The save refuses a comparison of a fact with a value of
+   another type when it knows both types, with `profile.ErrInvalid`.
+   `context.ref`, `context.refType`, `context.refProtected` and
+   `context.commit` are `nil` unless the server resolved the commit from
+   the ref itself (ADR 205 decision 3).
    The context of the profile that holds an expression is the context of
    that profile, so `context.profile` names it, and `context.rootProfile`
    names the profile that the caller opened.
@@ -140,7 +173,7 @@ double what a person must learn and what the server must limit.
    | `$value` | The value, as any value of the tree. |
    | `$secret` | A secret in plain text. The save seals it, and the stored document holds `$sealed` in its place (ADR 202 decision 1). |
    | `$sealed` | A sealed secret. Only the server writes it. |
-   | `$final` | `true`: a profile that imports this one cannot replace the value. A replace fails the save with `profile.ErrFinal`, which names the path and the profile that set it. |
+   | `$final` | `true`: a profile that imports this one cannot replace or remove the value. A replace fails the save with `profile.ErrFinal`, which names the path and the profile that set it. A narrower attachment cannot replace it either, and the open or the job start fails (decision 3). |
    | `$type` | The type and the limits of the value (decision 10). |
    | `$description` | Text for the console and the docs of the profile. |
    | `$neverStore` | `true`: no consumer may store the value (decision 12). |
@@ -174,6 +207,13 @@ double what a person must learn and what the server must limit.
      input of the adapter spec must come from an entry with `$secret` or
      from an expression that reads a secret. A plain literal fails the save,
      so a static key never sits in a document in plain text.
+   - Because an input can read other paths, a plain value can choose where
+     a block sends secrets, for example a `values.vaultHost` that feeds
+     `address`. So each change to a path that a block input reads, directly
+     or through other expressions, is a **routing change**, which needs
+     `profile:open` as well as `profile:write` (ADR 202 decision 2). The
+     save finds these paths from the syntax tree, as for the marks of
+     decision 12.
    - `login` names a login block of this profile or of an import. The
      open gives its result to this block (`Request.Login`).
    - `audience` and `subject` (a subject template, ADR 205 decision 6) are
@@ -251,7 +291,7 @@ double what a person must learn and what the server must limit.
     checks:
       - rule: values.region in ["eu-west-1", "eu-central-1"]
         message: The region must be in the EU.
-      - rule: context.access != "write" || context.refProtected == "true"
+      - rule: context.access != "write" || context.refProtected == true
         message: An apply reads this profile only from a protected ref.
     ```
 
@@ -260,6 +300,19 @@ double what a person must learn and what the server must limit.
     rule that gives false fails the open with `profile.ErrCheckFailed` and
     the message. A rule that fails to run fails the open too. So a profile
     can refuse an open by its context, which ESC cannot do.
+
+    The open runs every check of every profile that it evaluates: the
+    opened profile, each import at each depth, each profile of
+    `profiles[...]` and each attachment. No profile can remove or replace
+    the check of another profile.
+    - A check of a profile in the merge (an attachment, or an import that
+      merges into it) runs on the final result of the open, so a check of
+      a wide attachment also applies to a value that a narrower attachment
+      sets.
+    - A check of a profile outside the merge (a `merge: false` import or a
+      profile of `profiles[...]`) runs on the own tree of that profile
+      (decision 4).
+    - Each check runs with the context of the profile that holds it.
 12. **Marks propagate.** Each value has two marks:
     - **secret**: from `$secret`, `$sealed`, a secret output of a provider,
       or `secret(x)`.
@@ -268,14 +321,20 @@ double what a person must learn and what the server must limit.
     A value that an expression computes from a marked value gets the same
     mark. The server finds the paths that an expression reads from its
     syntax tree, before it runs it. So the mark is never lost, also when
-    the result does not look like the input. A value marked never store is
+    the result does not look like the input. An index that is not a
+    literal, for example `values.db[context.unit]`, reads each value of the
+    tree that it indexes, so the result gets each mark of that tree. A
+    value marked never store is
     also a secret. ADR 209 decision 3 gives what each consumer does with
     the never-store mark: the data source of OpenTofu refuses it, the
     ephemeral resource reads it, the consumer `pulumi` refuses it in
     `exports.pulumi`, and a job start refuses it in `exports.opentofu`.
 13. **Limits.** A document has at most 256 KiB of text, 64 provider blocks,
     16 rotator blocks, 4,096 leaves in `values` and a depth of 32. The
-    resolved result of an open has at most 4 MiB. A save or an open above a
+    resolved result of an open has at most 4 MiB. One open, across the
+    whole graph of imports, `profiles[...]` reads and attachments,
+    evaluates at most 64 profile revisions, makes at most 128 provider
+    calls, and takes at most 60 seconds in total. A save or an open above a
     limit fails with `profile.ErrLimit`, which names the limit.
     `profile.Limits` holds the numbers.
 

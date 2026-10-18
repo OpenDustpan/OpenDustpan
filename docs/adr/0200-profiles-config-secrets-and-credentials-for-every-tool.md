@@ -68,6 +68,7 @@ external system accepts, with the sources and their dates.
 | Decision | Why it is hard to undo |
 | --- | --- |
 | One issuer URL for each namespace (ADR 204 decision 1) | Clouds hold the issuer URL in their trust. |
+| The issuer host: `issuerBaseURL`, else `publicURL` (ADR 204 decision 1) | Clouds hold the host in the issuer URL. A change of the host, a move of a namespace to another installation, or a restore elsewhere breaks each trust, unless the namespace sets `issuerURL`. |
 | The claim names and values, version 1 (ADR 205 decision 1) | Trust policies and Vault roles hold them. |
 | The subject format and the order of its keys (ADR 205 decision 6) | Trust policies hold subjects. |
 | The body and the JWT of the external adapter protocol, version 1 (ADR 208) | Adapters that teams host hold the shape. |
@@ -81,7 +82,11 @@ external system accepts, with the sources and their dates.
    It imports no tool package, no store adapter and no transport. No tool
    package imports it. The wiring of the server connects it to the tool
    packages, the job model and the runner protocol, as ADR 128 decision 2
-   does for `pkg/agent`. ADR 206 decision 1 gives the layout.
+   does for `pkg/agent`. ADR 206 decision 1 gives the layout. The depguard
+   rule of the domain covers `**/pkg/profile/*.go`,
+   `**/pkg/profile/profiletest/**` and `**/pkg/profile/providertest/**`,
+   as the rules of `blob` and `egress` do, so that the adapters under
+   `pkg/profile/adapter` can import `net/http`.
 2. **The objects.**
 
    | Object | ADR |
@@ -105,15 +110,15 @@ external system accepts, with the sources and their dates.
    | Error | When |
    | --- | --- |
    | `ErrInvalid` | A bad field, document, block, audience or template. |
-   | `ErrNotFound` | An unknown profile, revision, tag, draft or session, or a caller without `profile:read`. |
-   | `ErrConflict` | A write on a stale read. |
+   | `ErrNotFound` | An unknown profile, revision, tag, draft or session, or a caller without `profile:read`. Never an answer of a remote system. |
+   | `ErrConflict` | A write on a stale read, or a rotation of a block that another rotation holds (ADR 202 decision 8). |
    | `ErrSchemaVersion` | A document with a higher `schemaVersion`. |
    | `ErrImportCycle` | A cycle of imports or `profiles[...]` reads. |
    | `ErrReference` | A path that does not exist at open. |
-   | `ErrFinal` | A replace of a final value. |
+   | `ErrFinal` | A replace of a final value at a save. Also an open or a job start where a narrower attachment replaces a final value of a wider one. |
    | `ErrCheckFailed` | A type or a rule of `checks` that fails. |
    | `ErrProvider` | A provider block that failed at open. It wraps the error of the port. |
-   | `ErrDenied`, `ErrUnavailable`, `ErrTooLarge` | The errors of the provider port (ADR 206 decision 7). |
+   | `ErrRemoteDenied`, `ErrRemoteNotFound`, `ErrUnavailable`, `ErrTooLarge` | The errors of the provider port (ADR 206 decision 7): the remote system refused, or did not find the object. The names differ from `identity.ErrDenied` and `ErrNotFound`, so an error of a remote never becomes a 403 or a 404 of the profile. |
    | `ErrSecretVariable` | A secret in `exports.variables` for a job on a runner. |
    | `ErrNeverStore` | A value marked never store for a consumer that stores it. |
    | `ErrOpenRule` | A job of a profile with an open rule. |
@@ -126,7 +131,9 @@ external system accepts, with the sources and their dates.
    | `ErrLimit` | A write or an open above a limit. The error names the limit. |
 
    A caller without the action of a route gets an error that wraps
-   `identity.ErrDenied`, for example an open without `profile:open`.
+   `identity.ErrDenied`, for example an open without `profile:open`. The
+   REST API maps `ErrProvider` before any other error, so a wrapped port
+   error answers as a failure of the block.
 
 4. **The ports.** The ports of ADRs 204 and 206 (`Issuer`, `Provider`,
    `Rotator`, `TokenSource`) and these ports of the store and the wiring
@@ -303,8 +310,9 @@ external system accepts, with the sources and their dates.
    starts a deployment, which waits for run triggers (RFC 24).
 8. **Terms.** `GLOSSARY.md` gets: Profile, Profile revision, Revision tag,
    Profile folder, Entry, Provider block, Profile provider, Rotator,
-   Rotation record, Exports, Never store, Open, Open session, Profile
-   attachment, Change rule, Profile draft, Open rule, Access request,
+   Rotation record, Rotation lease, Exports, Never store, Open, Open
+   session, Profile attachment, Attachment authority, Change rule, Routing
+   change, Profile draft, Open rule, Access request,
    Issuer, Issued token, Subject template, External adapter. The word for
    a profile in the paths of the Pulumi Cloud-compatible API is
    `environments`, because the CLI sends it (ADR 209 decision 6).
@@ -368,8 +376,10 @@ exports:
     region: ${ values.region }
 ```
 
-The trust policy of the role `deploy` trusts only applies of the
-collection:
+The namespace sets its subject template to `namespace`, `collection`,
+`tool`, `unit`, `access`, `ref_protected` (ADR 205 decision 7). The trust
+policy of the role `deploy` trusts only applies of the collection from a
+protected ref:
 
 ```json
 {
@@ -378,7 +388,7 @@ collection:
   "Action": "sts:AssumeRoleWithWebIdentity",
   "Condition": {
     "StringEquals": { "dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0:aud": "sts.amazonaws.com" },
-    "StringLike": { "dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0:sub": "namespace:acme:collection:prod@<collection ID>:*:access:write" }
+    "StringLike": { "dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0:sub": "namespace:acme:collection:prod@<collection ID>:*:access:write:ref_protected:true" }
   }
 }
 ```
@@ -388,6 +398,20 @@ can preview from a workstation with `environment: [aws/prod]` in the stack
 config. The plan phase of each job gets the role `read`, and only an
 approved apply gets the role `deploy`. The units need no change of code to
 read the profile on the runner.
+
+The trade-off: a job whose ref the server did not resolve from the forge,
+for example a job that a person starts from a workstation with no forge
+connection, has no `ref_protected` in `sub`, so it cannot get the role
+`deploy`. A team that has no forge connection uses the default template
+and relies on its gates instead. With the default template, AWS trusts
+each apply of the collection from any branch.
+
+The real boundary is this trust policy, not the job. The code of a unit
+runs in the job and reads the files of the profile. So a person who can
+push code to a unit, or make a unit, in the collection gets the
+credentials of the collection at the access of the job. The trust policy
+limits that access by `access`, `ref_protected` and `unit_id`. The
+security docs say this (ADR 203 decision 4).
 
 ### A platform team
 
@@ -402,7 +426,7 @@ values:
     costCenter: { $type: { kind: string, pattern: "^cc-[0-9]{4}$" }, $value: cc-0000 }
     managedBy: { $final: true, $value: opendustpan }
 checks:
-  - rule: context.access != "write" || context.refProtected == "true"
+  - rule: context.access != "write" || context.refProtected == true
     message: Applies read this profile only from a protected ref.
 ```
 
@@ -437,6 +461,11 @@ exports:
     PAYMENTS_DB_PASSWORD_FILE: ${ values.dbPassword }
 ```
 
+- The profile `platform/base` is a guardrail. A person who deploys gets
+  no `profile:write` and no `profile:attach` from the built-in roles (ADR
+  203 decision 11), so a team cannot change or detach it. Its checks run on
+  each open of each unit of the namespace, and its `$final` value holds
+  against each narrower attachment (ADR 201 decision 3).
 - The Pulumi stacks of the team read the VPC of an OpenTofu workspace with
   no copy of the value.
 - The Vault role binds `collection` and `ref_protected` with
@@ -453,7 +482,10 @@ exports:
   so each collection needs two federated credentials, inside the limit of
   20 for each identity.
 - A blueprint names `payments/prod` in `platform.profile`, so each unit of
-  the Catalog gets the attachment.
+  the Catalog gets the attachment. The attachment uses the authority of the
+  person who published the blueprint, which the server checks at publish
+  time and audits. A person who requests a unit needs no `profile:open`
+  (ADR 203 decision 5).
 
 ## Consequences
 

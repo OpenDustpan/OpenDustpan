@@ -35,7 +35,10 @@ each call.
 
    The URL must be `https`, with no user information, no query that holds
    a secret input and no fragment. The outbound rules of ADR 206 decision 6
-   apply.
+   apply. The server trusts an adapter with a certificate from an internal
+   CA through the block input `caCertificates` or the installation setting
+   `profileCACertificates` (ADR 206 decision 6). There is no option to
+   skip the check of the certificate.
 2. **The request.** The server sends one `POST` to the URL:
 
    ```
@@ -68,7 +71,13 @@ each call.
    - `context` holds the claims of the JWT, for an adapter that reads JSON
      and does not decode the JWT.
    - For `rotate`, the body also holds `state`, the current state of the
-     rotator. For `retire`, it holds the state of the rotation to retire.
+     rotator, and `rotationId`, the ID of the rotation (ADR 206 decision
+     5). The server sends the same `rotationId` when it calls again after a
+     timeout or a restart. An adapter must treat a repeated `rotationId`
+     as the same rotation: it answers the credential of the first call and
+     makes no second credential. For `retire`, the body holds the state and
+     the `rotationId` of the rotation to retire. `rotationId` is part of
+     version 1, so an adapter can rely on it from the first release.
 3. **The JWT.** The issuer of the namespace signs it (ADR 204), with
    `RS256` and the `kid` of the active key. Its claims are:
 
@@ -77,7 +86,8 @@ each call.
    | `iss` | The issuer of the namespace. |
    | `sub` | The subject of the block (ADR 205 decision 6). |
    | `aud` | The full URL of the block, with its path. No block can set another audience. |
-   | `iat`, `nbf` | The time of the call. |
+   | `iat` | The time of the call. |
+   | `nbf` | `iat` minus 30 seconds (ADR 205). |
    | `exp` | `iat` plus 60 seconds. |
    | `jti` | A random ID with the prefix `oit-`. |
    | `purpose` | `adapter`. |
@@ -102,7 +112,10 @@ each call.
    4. Check that `purpose` is `adapter`.
    5. Hash the body bytes as received, and compare with `body_sha256` in
       constant time.
-   6. Refuse a `jti` that it saw in the last 2 minutes.
+   6. Refuse a `jti` that it saw in the last 2 minutes. An adapter that
+      runs as more than one instance keeps the `jti` values in a store
+      that all instances share, or each instance accepts a token that
+      another instance already saw.
    7. Apply its own rules to the claims, for example `namespace` and
       `collection`.
 
@@ -137,8 +150,8 @@ each call.
    | Status | `code` | Error of the port |
    | --- | --- | --- |
    | 400 | `invalid` | `ErrInvalid` |
-   | 401, 403 | `denied` | `ErrDenied` |
-   | 404 | `not-found` | `ErrNotFound` |
+   | 401, 403 | `denied` | `ErrRemoteDenied` |
+   | 404 | `not-found` | `ErrRemoteNotFound` |
    | 429, 500 to 599 | `unavailable` | `ErrUnavailable` |
 
    The server keeps at most 200 characters of `message`, and masks each
@@ -175,9 +188,13 @@ each call.
 
 - A team can connect any internal system to profiles with one HTTPS
   endpoint and no shared secret.
-- The server sends secret inputs to the adapter. A profile author who
-  points a block at a wrong URL sends them there. The save of a revision
-  shows each new host of an external block in the change, so a reviewer of
-  the change sees it (ADR 202 decision 5).
+- The server sends secret inputs and the JWT to the adapter. A profile
+  author who points a block at a wrong URL sends them there. So a save
+  that makes a routing change needs `profile:open` (ADR 202 decision 2): a
+  change to any path that an input of the block reads, directly or
+  through other values, a change to the imports or the exports, and a
+  rollback or tag move that changes the resolved inputs of the block. The
+  diff compares the evaluated hosts of each block, not the text, and shows
+  each new host to a reviewer of the change (ADR 202 decision 5).
 - The public SDK of the server (ADR 35) gets `pkg/profile/external`, which
   adapter authors import.

@@ -36,7 +36,7 @@ gives what the relying parties need:
 ## Decision
 
 1. **One issuer for each namespace (one-way door).** The issuer of a
-   namespace is `https://<public host>/oidc/<namespace ID>`, for example
+   namespace is `https://<issuer host>/oidc/<namespace ID>`, for example
    `https://dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0`. Each namespace
    has its own signing keys.
    - The path holds the stable ID of the namespace, not its name. A rename
@@ -49,13 +49,26 @@ gives what the relying parties need:
      Cloud.
    - A namespace can rotate or revoke its keys with no effect on another
      namespace.
-   - The public host comes from the installation setting `publicURL`. A
-     server with no `publicURL` issues no token, and an open of a login
-     block fails with `profile.ErrIssuerNotConfigured`, which names the
-     setting.
+   - The issuer host comes from the installation setting `issuerBaseURL`.
+     When it is empty, the server uses the installation setting
+     `publicURL`. An operator can set `issuerBaseURL` to a host that stays
+     the same when the API host changes, for example
+     `https://issuer.example.com`. A server with neither setting issues no
+     token, and an open of a login block fails with
+     `profile.ErrIssuerNotConfigured`, which names the two settings.
+   - When a namespace sets `issuerURL` (decision 3), each token that it
+     signs carries that URL as `iss`, and the discovery document of
+     decision 2 answers it as `issuer`. Else `iss` is the URL of this
+     decision.
 
    **One-way door:** clouds hold the issuer URL in their trust
-   configuration. A new form of the URL breaks each trust.
+   configuration. A new form of the URL breaks each trust. The issuer host
+   is part of this door: a change of `issuerBaseURL`, or of `publicURL`
+   when `issuerBaseURL` is empty, breaks each cloud trust of each
+   namespace that has no `issuerURL`. A namespace that moves to another
+   installation or region keeps its trust only when the new installation
+   answers the same issuer URL, or when the namespace sets `issuerURL`. The
+   console shows this before a change of either setting.
 2. **The discovery document.** `GET /oidc/{nsid}/.well-known/openid-configuration`
    answers:
 
@@ -82,9 +95,25 @@ gives what the relying parties need:
    example a bucket of static files.
    - `GET /api/issuer/{ns}/export` answers the two files, the discovery
      document and the JWKS, for that URL. The person copies them to it.
-   - The JWKS of the export holds the active key and the next key, so a
-     copy after each rotation event keeps the trust. The notification
-     `issuer.key-next` (decision 11) tells the team when to copy.
+   - The JWKS of the export holds each key of the states `next`, `active`
+     and `retired`, the same keys as `GET /oidc/{nsid}/jwks`. So a token
+     that a key signed just before a promotion still verifies after the
+     next copy. A copy after each rotation event keeps the trust. The
+     notification `issuer.key-next` (decision 11) tells the team when to
+     copy.
+   - Before the first copy, a person makes the keys with `POST
+     /api/issuer/{ns}/keys` (decision 13). The export also makes them when
+     the namespace has no key. So the first login after a copy works, and
+     the first open of a login block does not make a key that no file
+     holds.
+   - For a namespace with `issuerURL`, the server promotes a `next` key
+     (decision 5) only after it read the JWKS at `issuerURL` through the
+     egress guard and found the `kid` of the `next` key. When the read
+     fails or the `kid` is not there, the active key keeps signing after
+     its 90 days, the server sends `issuer.key-copy-missing` (decision 11)
+     each day, and it tries again the next day. An active key never signs
+     for more than 180 days. At that limit the open of a login block fails
+     with `profile.ErrIssuerKeyExpired`, which names the export route.
    - Google Cloud, Vault and Kubernetes can take the keys with no URL. The
      docs show each one.
 4. **Keys.** A key is RSA 2048 with `RS256`, with a `kid` of the prefix
@@ -103,22 +132,46 @@ gives what the relying parties need:
      key never signs anything.
    - The keys are namespace data. The backup of the namespace holds the
      wrapped keys, so a restore keeps the trust of each cloud.
+   - A restore into another installation is a copy unless it is a move of
+     the namespace (the source stops serving it). A copy must not sign with
+     the same keys as the source, or two installations sign for one
+     issuer. So a restore that is not a move restores no key. The
+     namespace gets new keys at the next open, and its clouds must trust
+     the new issuer URL.
    - Only `profile.Issuer` reads a private key, in the memory of the
      instance that signs, for at most one minute. No route answers a
      private key.
 5. **Rotation.** The schedule `issuer.rotate` runs each day:
-   - A namespace with no key gets an `active` key at the first open of a
-     login block, and a `next` key at the same time.
+   - A namespace with no key gets an `active` key and a `next` key at the
+     first open of a login block, at `POST /api/issuer/{ns}/keys`, or at
+     the first export (decision 3). A namespace with `issuerURL` and no
+     key refuses the open with `profile.ErrIssuerKeyMissing`, which names
+     the route that makes the keys, so the server never signs with a key
+     that no copied file holds.
    - Each active key signs for 90 days. Seven days before the end, the
      schedule makes a new `next` key if none exists. At the end, the `next`
-     key becomes `active` and the old key becomes `retired`.
+     key becomes `active` and the old key becomes `retired`. For a
+     namespace with `issuerURL`, the check of decision 3 comes first.
    - A `retired` key stays in the JWKS for 7 days, then becomes `deleted`.
    - A person with `namespace:manage-issuer` can rotate now. A normal
-     rotation makes the `next` key active. An **emergency rotation** also
-     deletes the active key at once, so tokens that it signed stop working
-     at each relying party that reads the JWKS again. The console says
-     that a copy of the files at an `issuerURL` must follow at once.
-   - The JWKS holds at most 4 keys.
+     rotation makes the `next` key active and makes a new `next` key.
+   - An **emergency rotation** makes a fresh `active` key and a fresh
+     `next` key, and deletes each earlier key at once, also the earlier
+     `next` key. A compromise of the store or of the wrapper may expose the
+     `next` key too, so the server never promotes it in an emergency.
+     Tokens that an earlier key signed stop working at each relying party
+     when it reads the JWKS again. A relying party drops a key only when it
+     refreshes its cache, which can take minutes to hours. A cloud session
+     that a token already got, for example an STS session of up to 12
+     hours, stays valid until it ends. The docs say this, and say how to
+     revoke such sessions at each cloud. The console says that a copy of
+     the files at an `issuerURL` must follow at once.
+   - The JWKS holds at most 4 keys: one `active`, one `next` and at most 2
+     `retired`. When a manual rotation would make a third `retired` key,
+     the oldest `retired` key becomes `deleted` before its 7 days end. A
+     token that it signed is at most 60 minutes old (decision 6), so this
+     breaks no token unless rotations come less than 60 minutes apart. The
+     answer of the rotation names each key that it deleted.
 6. **Lifetimes.** `exp - iat` is 5 minutes by default for a token that the
    server uses at once in an exchange. A login block can set `tokenLifetime`
    from 1 to 60 minutes. A token in a file for a tool (the login mode
@@ -145,12 +198,14 @@ gives what the relying parties need:
    // Issuer signs tokens for one namespace.
    type Issuer interface {
        // Login signs a token with purpose "login" for one block of one
-       // open. ErrIssuerNotConfigured, ErrInvalid for an audience of
+       // open. ErrIssuerNotConfigured, ErrIssuerKeyMissing,
+       // ErrIssuerKeyExpired (decision 3), ErrInvalid for an audience of
        // decision 7, ErrSubjectTooLong (ADR 205 decision 6).
        Login(ctx context.Context, o OpenContext, block string, aud string, lifetime time.Duration) (Token, error)
        // Adapter signs a token with purpose "adapter" and the hash of
        // body for one call of an external adapter (ADR 208).
-       // ErrIssuerNotConfigured, ErrInvalid.
+       // ErrIssuerNotConfigured, ErrIssuerKeyMissing, ErrIssuerKeyExpired,
+       // ErrInvalid.
        Adapter(ctx context.Context, o OpenContext, block string, aud string, body []byte) (Token, error)
    }
    ```
@@ -179,7 +234,9 @@ gives what the relying parties need:
     session of an incident from the `jti` in the logs of the cloud.
 11. **Notifications.** The catalog of ADR 145 decision 5 gets
     `issuer.key-next` (a new next key, with the time when it becomes
-    active) and `issuer.key-revoked` (an emergency rotation). A notice
+    active), `issuer.key-revoked` (an emergency rotation) and
+    `issuer.key-copy-missing` (the JWKS at `issuerURL` has no `next` key,
+    decision 3). A notice
     holds the namespace, the `kid` and the times, never a key.
 12. **A preview of the claims.** `POST /api/issuer/{ns}/claims-preview`
     takes a profile, a block and a context: a unit, an action, a phase and
@@ -196,8 +253,9 @@ gives what the relying parties need:
     | `GET /oidc/{nsid}/jwks` | none (public) | The public keys of the states `next`, `active` and `retired`. |
     | `GET /api/issuer/{ns}` | `namespace:read` | The settings, the issuer URL and the metadata of each key. |
     | `PUT /api/issuer/{ns}` | `namespace:manage-issuer` | The settings of decision 9. |
+    | `POST /api/issuer/{ns}/keys` | `namespace:manage-issuer` | Makes the `active` and `next` keys of a namespace that has no key. `409` when keys exist. |
     | `POST /api/issuer/{ns}/keys/rotate` | `namespace:manage-issuer` | The keys after the rotation. The body sets `emergency` and requires `reason`. |
-    | `GET /api/issuer/{ns}/export` | `namespace:manage-issuer` | The two files of decision 3. |
+    | `GET /api/issuer/{ns}/export` | `namespace:manage-issuer` | The two files of decision 3. Makes the keys when the namespace has none. |
     | `POST /api/issuer/{ns}/claims-preview` | `profile:read` on the profile | The claims of decision 12. |
 
     The built-in role that holds `namespace:admin` gets
