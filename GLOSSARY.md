@@ -1096,7 +1096,7 @@ _Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user sett
 
 
 **Language** (of a person):
-The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 28 languages of ADR 181. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 31 languages of ADR 181 and ADR 230. The language also sets the direction of the page: `ar` and `he` write from right to left. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
 _Avoid_: Locale (for the language)
 
 **Formatting locale**:
@@ -1104,16 +1104,32 @@ The BCP 47 locale that sets how the console shows dates, times, numbers and list
 _Avoid_: Language (for formats), region
 
 **Message file**:
-The file of the console that holds the messages of one language in ICU MessageFormat (ADR 181). It marks each high-stakes message, which needs native review before it ships.
+The file that holds the messages of one language in ICU MessageFormat (ADR 181). The console has one for each language, and the server has one for each language of its emails and chat notices (ADR 233). It marks each high-stakes message, which needs native review before it ships. Each translated message carries its translation status and the hash of its English source (ADR 231).
 _Avoid_: Catalog (that is the self-service gateway), translation table
 
 **Term list**:
-The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
+The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). It adds to the shared term list, which holds the names of tools and projects, commands and CLI flags for every language (ADR 232). A check fails a translation that changes a term. A language can ship with a draft list. An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
 _Avoid_: Glossary (that is this file), do-not-translate list
 
 **Pseudo-locale**:
-`en-XA`, a test language of the console (ADR 181). It makes each message longer, adds accents and puts brackets around it. Tests use it to find clipped text and text outside a message file. Release builds do not list it.
+A test language of the console. `en-XA` makes each message longer, adds accents and puts brackets around it (ADR 181). `ar-XB` reverses each message and sets the direction to right to left (ADR 230). Tests use them to find clipped text, text outside a message file and layout that does not mirror. Release builds do not list them.
 _Avoid_: Test language, fake locale
+
+**Translation status**:
+How far people checked a translated message or a language: `machine-translated`, `community-verified` or `native-reviewed` (ADR 231). A change to the English source makes a translation stale, and a stale translation counts as `machine-translated`. A language has the highest status that 95% of its messages and all its high-stakes messages hold. The check computes it.
+_Avoid_: Quality, completeness (for the status), approved
+
+**Machine-translation note**:
+The note for a language with the status `machine-translated` (ADR 231). The console, the docs and each notice show it, in that language and in English. It asks the community to fix and check the text, with a link to report a string. The credits page names the people who translated or checked each language.
+_Avoid_: Disclaimer, warning (for the note)
+
+**Product name**:
+The name of the application that an operator sets for the installation, `branding.productName` (ADR 234). The default is "OpenDustpan". It reaches the console and emails only. Server errors, logs, CLI output and audit entries say "OpenDustpan".
+_Avoid_: Brand, white label (for the name)
+
+**Agent name**:
+The name of the built-in agent that an operator sets, `branding.agentName` (ADR 234). The default is "Dusty". Text that the agent writes to a person uses it. Logs, the audit log and the API keep the fixed agent ID `dusty`.
+_Avoid_: Bot name, persona
 
 **Error code**:
 The stable machine code of an API error, for example `workspace.locked` (ADR 182). It is `errorCode` in the camelCase APIs and the JSON:API `code` member in the TFE-compatible API. A code never changes its meaning. The console selects its message by the code and never parses the English text. Not the `code` field of the camelCase error shapes, which is the HTTP status.

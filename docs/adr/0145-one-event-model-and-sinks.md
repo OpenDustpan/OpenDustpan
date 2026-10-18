@@ -1,6 +1,6 @@
 # 145. One notification model with sinks for email, chat and signed webhooks
 
-Status: accepted · 2026-10-18. Answers part of RFC 23. Decisions 3, 13, 15, 24 and 27 and the identity consequence superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210
+Status: accepted · 2026-10-18. Answers part of RFC 23. Decisions 3, 13, 15, 24 and 27 and the identity consequence superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210. Decisions 1 and 24 extended by ADR 233
 
 ## Context
 
