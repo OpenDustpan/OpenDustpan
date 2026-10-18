@@ -1,6 +1,6 @@
 # 12. A backend for many infrastructure-as-code tools
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10 · a sentence of the decision superseded in part by ADR 209
 
 ## Context
 
