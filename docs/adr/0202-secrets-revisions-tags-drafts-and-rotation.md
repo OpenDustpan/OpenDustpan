@@ -246,11 +246,7 @@ rotators. The research note gives the ESC features one by one:
      credentials that the remote can hold at the same time for one block,
      for example 2 for `aws-iam` (two access keys), and 2 for `postgres`
      and `mysql` (two users in turn). The record names the slot of each
-     credential. A rotation writes its new credential into one slot, which
-     holds no `current` and no `previous` credential. When a `retiring`
-     credential holds that slot, the rotation fails with
-     `profile.ErrConflict`, which names the time when the grace period of
-     that credential ends and the slot frees. A scheduled rotation records
+     credential. A rotation writes its new credential into one slot that holds no `current` credential. This is a free slot, else the slot of the oldest `retiring` credential, else the slot of `previous`. The credential in that slot must be past its grace period (below). The rotation then clears it from the outputs in the commit that writes `pending`. It calls `Retire` for it before `Rotate`. When the grace period did not end, the rotation fails with `profile.ErrConflict`. The error names the time when the grace period of that credential ends and the slot frees. A scheduled rotation records
      the conflict and runs again at that time. When the grace period of the
      credential in the slot ended, the rotation calls `Retire` for it
      first. A rotator that holds no remote credential, for example
@@ -266,7 +262,7 @@ rotators. The research note gives the ESC features one by one:
      `Rotate` again with the same `rotationId` and the same sealed
      credential, so the remote gives back the same new credential and
      makes no second one.
-   - On success, the old `previous` credential becomes `retiring`, the old
+   - On success, the old `previous` credential, when it still holds a slot, becomes `retiring`, the old
      `current` becomes `previous`, the new credential becomes `current`,
      and the `pending` state ends, in one transaction of the record.
    - **A failure keeps `pending`.** A failure keeps `current` and
@@ -279,9 +275,7 @@ rotators. The research note gives the ESC features one by one:
      next rotation of the block, from the schedule or from `POST
      .../rotate`, takes the lease and calls `Rotate` again with the same
      `rotationId`, so a credential that the remote made is used and not
-     left as an orphan in a slot. `POST .../rotators/{block}/abandon`, with
-     `profile:rotate`, calls `Retire` for the `pending` `rotationId`, and
-     ends the `pending` state only when `Retire` succeeds.
+     left as an orphan in a slot. `POST .../rotators/{block}/abandon`, with `profile:rotate`, takes the rotation lease, calls `Retire` for the `pending` `rotationId`, and ends the `pending` state only when `Retire` succeeds. While another rotation holds the lease, it fails with `profile.ErrConflict`.
    - `Retire` runs only after a grace period from the time the retired
      credential stopped being `current`. The grace period ends when both
      are true: 12 hours passed, which is the longest open session (ADR 203

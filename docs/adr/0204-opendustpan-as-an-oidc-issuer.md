@@ -120,8 +120,7 @@ gives what the relying parties need:
    - **The copy check.** The server reads the discovery document at
      `<issuerURL>/.well-known/openid-configuration` through the egress
      guard, and checks that its `issuer` is `issuerURL` and that its
-     `jwks_uri` is `<issuerURL>/jwks`. It then reads the JWKS at that
-     `jwks_uri` and looks for a `kid`. The check passes only when each step
+     `jwks_uri` is `<issuerURL>/jwks`. It then reads the JWKS at that `jwks_uri` and looks for the `kid` of the `active` key, and before a promotion also of the `next` key. The check passes only when each step
      passes. It runs in the daily schedule, before each manual rotation,
      and at `POST .../issuer/keys/check-copy`, which runs it at once and
      answers each step with its outcome. A person who copied the files

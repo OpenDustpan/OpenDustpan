@@ -363,6 +363,7 @@ what ADRs 210 to 214 must say for these ADRs to fit.
    - **ADR 210, the custom method**: the operations of these ADRs that are
      not a create, a read, an update or a delete use a sub-path until ADR
      210 decides the shape (ADR 203 decision 12).
+   - **ADR 210, the idempotency key**: a replay record holds the SHA-256 of a request body, never the body. It never holds the answer of an open of a profile with values in it (ADR 203 decision 12).
    - **ADR 211 decision 1**: profiles and the issuer are part of the core.
      They hold secrets and signing keys, and their schedules rotate
      credentials and keys and revoke leases. A switch that stopped them

@@ -203,8 +203,7 @@ of its environments to webhooks.
      reader of the job sees what the job read.
    - An attach and a detach need `profile:attach` on the profile and
      `unit:manage` on the object, which a collection or a namespace widens
-     (ADR 51 decision 8). An attach also needs `profile:open` on the
-     profile, because each job of the object then reads its secrets. An
+     (ADR 51 decision 8). An attach and a re-authorize also need each check of the table of decision 4 for the caller. These are `profile:open` on the profile and on each profile that it imports or reads, and the reads of each `outputs/opendustpan` block. Each job of the object then reads their secrets. An
      attach writes an audit entry.
    - A job of a unit whose profiles have an open rule (ADR 202 decision 7)
      fails at start with `profile.ErrOpenRule`. RFC 5 keeps open how the
@@ -241,9 +240,7 @@ of its environments to webhooks.
    new one through its session at two thirds of its life, and replaces the
    file with a rename, so a reader never sees half a file. A step that
    runs for hours keeps a valid token, and the SDK of the cloud reads the
-   new file. The session path of the runner protocol is `POST
-   .../session/credentials/renew`, under the prefix that ADR 210 gives the
-   runner protocol. It answers only the token files of the step. Each
+   new file. The session path of the runner protocol is `POST /runner/v1/session/credentials/renew` (ADR 131), outside the versioned API (ADR 210, in review). It answers only the token files of the step. Each
    renewal checks the attachment authority again (decision 4).
 8. **No cache across opens.** Each open calls its blocks again. A step of a
    job opens once. So each credential is as short-lived as its block says,
@@ -327,6 +324,7 @@ of its environments to webhooks.
       `ETag` of a profile names its newest revision, so a save on a stale
       read answers `412`. A list takes `pageSize` and `pageToken`. A time is
       an RFC 3339 string.
+    - Each `POST`, `PATCH`, `PUT` and `DELETE` route below takes the `Idempotency-Key` header of ADR 210 (in review). The replay record holds the SHA-256 of the request body, never the body, because a save body holds `$secret` in plain text. The replay record of an open holds only the ID of its open session, never a value. An open with no session (the consumers `run`, `opentofu`, `launcher` and `observe`) ignores the key. Each call is a new open with its own audit entry (decision 8).
     - The operations that are not a create, a read, an update or a delete
       (`open`, `check`, `rollback`, `retract`, `redact`, `rotate`,
       `abandon`, `apply`, `clone`, `rename`, `restore`, `withdraw`,

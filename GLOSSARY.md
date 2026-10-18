@@ -711,7 +711,7 @@ The sealed state of one rotator block, with the current, the previous and each `
 _Avoid_: Rotation state (alone)
 
 **Rotator slot**:
-One place at the remote for one credential of a rotator block, for example one of the two access keys of an IAM user. The spec of a rotator declares its slots. A rotation writes into a slot that holds no `current` and no `previous` credential, and fails with `ErrConflict` while a `retiring` credential holds it (ADR 202 decision 8).
+One place at the remote for one credential of a rotator block, for example one of the two access keys of an IAM user. The spec of a rotator declares its slots. A rotation writes into a slot that holds no `current` credential. It retires the credential of that slot first, and fails with `ErrConflict` while the grace period of that credential has not ended (ADR 202 decision 8).
 _Avoid_: Key slot, version
 
 **Rotation lease**:
@@ -1121,6 +1121,7 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
+- **Lease** names the update lease of the Pulumi CLI, the rotation lease of a rotator block, and a lease of Vault (ADR 207). Name which one.
 - **Orphan** means a stored file, for example a blob that no row names. For a cloud resource that no unit manages, or that two units manage, write "unmanaged resource" and name its kind.
 - **Catalog** is the self-service gateway only. The list of all units is the inventory.
 - **Job** and **operation** are different. A job is work that OpenDustpan asks an executor to do on one unit. Each phase of a job is one durable operation (ADR 100). The operation of a job is `plan`, `apply`, `destroy` or `refresh`. Name which one.

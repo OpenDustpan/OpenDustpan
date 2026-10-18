@@ -271,8 +271,7 @@ own, as `pkg/blob/s3` does for the blob port.
      at the fake, so that a `retiring` credential keeps working. A
      rotator with a credential that the server makes uses the credential
      of the request, and makes no other one.
-   - `profiletest` checks the server side: a rotation into a slot that a
-     `retiring` credential holds fails with `profile.ErrConflict` and
+   - `profiletest` checks the server side: a rotation into a slot whose credential is in its grace period fails with `profile.ErrConflict` and
      names the time when the slot frees, and calls no `Rotate`.
    - TLS: a block with `caCertificates` reaches a fake that has a
      certificate of that CA, and a block without it fails with
