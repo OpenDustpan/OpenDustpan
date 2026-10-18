@@ -1835,6 +1835,10 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
+	// A reader with no change log still serves the live list; only a request
+	// with the at value fails.
+	history := historyOf(cfg.inventoryReader)
+
 	stacks, workspaces := unitLifecycles(svc, cfg)
 
 	// The move check is the escalation check of the access service. A store
@@ -1853,6 +1857,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
+		History:    history,
 		Lifecycles: map[string]inventory.Lifecycle{
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,
@@ -1871,6 +1876,15 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// historyOf returns the change log reader of r, or nil when r keeps none.
+func historyOf(r inventory.Reader) inventory.HistoryReader { //nolint:ireturn // The optional port of the reader.
+	if history, ok := r.(inventory.HistoryReader); ok {
+		return history
+	}
+
+	return nil
 }
 
 // unitLifecycles returns the restore and purge of each tool. The

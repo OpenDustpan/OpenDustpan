@@ -47,6 +47,8 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		name string
 	}{
 		{name: "create and read by name and by ID", test: testWorkspaceRoundTrip},
+		{name: "the change log follows the writes of a workspace", test: testWorkspaceChangeLog},
+		{name: "a refused write of a workspace appends no change log row", test: testWorkspaceChangeLogFence},
 		{name: "duplicate workspace name is ErrAlreadyExists", test: testDuplicateWorkspace},
 		{name: "create in a missing namespace is namespace.ErrNotFound", test: testWorkspaceMissingNamespace},
 		{name: "missing workspace is ErrNotFound", test: testMissingWorkspace},

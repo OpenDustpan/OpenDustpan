@@ -1648,6 +1648,7 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		"stack", "--show-name", "--stack", qualified,
 	))
 	checkStateAtRunning(ctx, t, env, org)
+	pulumiRenameNamesSteps(ctx, t, env, org, betweenUps)
 	env.Step(ctx, t, step(
 		"masked state resource search",
 		checkMaskedStateFilter(ctx, env, org, maskedStateSecret),
@@ -2933,7 +2934,12 @@ func stackIDOf(t *testing.T, env *e2e.Env, org, name string) string {
 func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, softDeleted)
 
+	// existedAt is a time when the stack still existed: the inventory at
+	// that time lists it, whatever happens to it later.
+	existedAt := new(time.Time)
+
 	steps := []e2e.StepSpec{
+		step("note the time before the delete", noteTime(existedAt), "stack", "ls", "--json", "--all"),
 		step("stack rm soft", nil, "stack", "rm", "--yes", "--stack", qualified),
 		step("stack ls hides the removed stack", checkNoTombstone(ctx, env, org), "stack", "ls", "--json", "--all"),
 		{
@@ -2965,7 +2971,7 @@ func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID str
 
 	// While the new stack holds the old name, the restore steps prove the
 	// 409, the restore under a new name and the purge.
-	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID)...)
+	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID, existedAt)...)
 
 	return append(steps,
 		step("stack history of new stack", func(r e2e.Result) error {
@@ -4492,6 +4498,10 @@ const remoteProdName = e2e.RemotePrefix + e2e.RemoteProd
 func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 	var removedID string
 
+	// existedAt is a time when the workspace still existed: the inventory at
+	// that time lists it, whatever happens to it later.
+	existedAt := new(time.Time)
+
 	// While the new workspace holds the old name, the restore steps prove the
 	// 409, the restore under a new name and the purge.
 	return append([]e2e.StepSpec{
@@ -4499,7 +4509,13 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 			id, err := remoteWorkspaceID(ctx, env, remoteProdName)
 			removedID = id
 
-			return err
+			if err != nil {
+				return err
+			}
+
+			recordTime(existedAt)
+
+			return nil
 		}, "workspace", "select", e2e.RemoteDev, "-no-color"),
 		step("workspace delete prod", func(e2e.Result) error {
 			path := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/" + remoteProdName
@@ -4514,7 +4530,7 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 		}, "workspace", "list", "-no-color"),
 		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
 		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
-	}, tofuRestoreSteps(ctx, env, &removedID)...)
+	}, tofuRestoreSteps(ctx, env, &removedID, existedAt)...)
 }
 
 // workspaceIDData is the data member of a TFE-compatible workspace document,

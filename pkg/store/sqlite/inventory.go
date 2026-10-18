@@ -30,11 +30,29 @@ func stackUnitName(ref stack.Ref) string {
 }
 
 // publishStackInventory writes the Pulumi entry for ref with the given unit
-// ID and change time. Status and resource count stay unknown: the Pulumi CLI
-// reports no status vocabulary and the server never reads deployments. The
-// lock columns stay untouched: only UpdateInventoryLock changes them, in the
-// same transaction as the update start or end that they describe.
-func publishStackInventory(
+// ID and change time, and appends the change log row of the kind kind. Status
+// and resource count stay unknown: the Pulumi CLI reports no status
+// vocabulary and the server never reads deployments. The lock columns stay
+// untouched: only UpdateInventoryLock changes them, in the same transaction
+// as the update start or end that they describe. The caller runs it as the
+// last write of its transaction.
+func publishStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref, w unitWrite) error {
+	if err := upsertStackInventory(ctx, q, ref, w.unitID, w.atMs); err != nil {
+		return err
+	}
+
+	return appendStackChange(ctx, q, ref, w)
+}
+
+// appendStackChange appends the change log row of the stack ref.
+func appendStackChange(ctx context.Context, q *db.Queries, ref stack.Ref, w unitWrite) error {
+	return appendInventoryChange(ctx, q, unitChange(ref.Namespace, inventoryTool, stackUnitName(ref), w))
+}
+
+// upsertStackInventory writes the Pulumi entry for ref and appends no change
+// log row. A caller that writes the lock after the entry uses it, so that the
+// change log row is the last write of its transaction.
+func upsertStackInventory(
 	ctx context.Context, q *db.Queries, ref stack.Ref, unitID string, lastChangedMs int64,
 ) error {
 	name := stackUnitName(ref)
@@ -149,7 +167,18 @@ func moveStackInventoryToDeleted(
 		return fmt.Errorf("insert deleted inventory entry: %w", err)
 	}
 
-	return removeStackInventory(ctx, q, ref)
+	if removeErr := removeStackInventory(ctx, q, ref); removeErr != nil {
+		return removeErr
+	}
+
+	deleted := unitChange(
+		ref.Namespace,
+		inventoryTool,
+		stackUnitName(ref),
+		unitWrite{unitID: stackID, atMs: d.Entry.At.UnixMilli(), kind: inventory.ChangeDeleted},
+	)
+
+	return appendInventoryChange(ctx, q, deleted)
 }
 
 // ListDeletedUnits implements inventory.DeletedReader: the deleted units of

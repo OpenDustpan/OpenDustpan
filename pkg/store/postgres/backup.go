@@ -43,6 +43,8 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
+	pgColNamespaceID = "namespace_id"
+	pgColSeq         = "seq"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
@@ -192,6 +194,19 @@ func pgCopyScopeTables() []pgCopyTable {
 			orderBy: []string{pgColTool, pgColUnitID},
 		},
 		{
+			table:   "inventory_change_heads",
+			columns: []string{pgColNamespaceID, "last_seq"},
+			orderBy: []string{pgColNamespaceID},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
+				pgColStatus, "collection", "kind", "resource_count",
+			},
+			orderBy: []string{pgColNamespaceID, pgColSeq},
+		},
+		{
 			table: "collections",
 			columns: []string{
 				"id", pgColNamespace, pgColNameKey, pgColName, pgColCreatedAtMs,
@@ -277,8 +292,8 @@ func pgControlTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableDurableSteps,
-			columns: []string{"operation_id", pgColName, "seq", "result", "done_at_ms"},
-			orderBy: []string{"operation_id", "seq"},
+			columns: []string{"operation_id", pgColName, pgColSeq, "result", "done_at_ms"},
+			orderBy: []string{"operation_id", pgColSeq},
 		},
 		{
 			table:   backup.TableDurableSchedules,

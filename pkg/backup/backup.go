@@ -86,6 +86,8 @@ var Tables = []string{
 	"secret_keys",
 	"inventory",
 	"inventory_deleted",
+	"inventory_change_heads",
+	"inventory_changes",
 	"collections",
 	"collection_members",
 	"blob_purges",

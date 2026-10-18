@@ -228,6 +228,17 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table:   "inventory_change_heads",
+			columns: []string{"namespace_id", "last_seq"},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				"namespace_id", "seq", "at_ms", backupColTool, backupColUnitID, backupColName, backupColDisplayName,
+				backupColStatus, "collection", backupColKind, "resource_count",
+			},
+		},
+		{
 			table: "blob_purges",
 			columns: []string{
 				backupColTool,

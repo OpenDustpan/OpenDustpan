@@ -10,6 +10,7 @@ const (
 	portColProviderID   = "provider_id"
 	portColCreatedBy    = "created_by"
 	portColNamespace    = "namespace"
+	portColNamespaceID  = "namespace_id"
 	portTableNamespaces = "namespaces"
 	portColVersion      = "version"
 	portColStackID      = "stack_id"
@@ -215,6 +216,31 @@ func portableSpec() []PortableTable {
 				{Name: portColName, Kind: KindText},
 				{Name: portColDeletedAtMs, Kind: KindTime},
 				{Name: "purge_after_ms", Kind: KindTime},
+			},
+		},
+		{
+			Table:   "inventory_change_heads",
+			OrderBy: []string{portColNamespaceID},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "last_seq", Kind: KindInteger},
+			},
+		},
+		{
+			Table:   "inventory_changes",
+			OrderBy: []string{portColNamespaceID, "seq"},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "seq", Kind: KindInteger},
+				{Name: "at_ms", Kind: KindTime},
+				{Name: portColTool, Kind: KindText},
+				{Name: portColUnitID, Kind: KindText},
+				{Name: portColName, Kind: KindText},
+				{Name: portColDisplayName, Kind: KindText},
+				{Name: portColStatus, Kind: KindText},
+				{Name: "collection", Kind: KindText},
+				{Name: portColKind, Kind: KindText},
+				{Name: "resource_count", Kind: KindInteger},
 			},
 		},
 		{

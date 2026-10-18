@@ -632,6 +632,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Units:         coverageReader{},
 		Collections:   collections,
 		Deleted:       coverageReader{},
+		History:       nil,
 		Lifecycles:    map[string]coreinventory.Lifecycle{"pulumi": coverageLifecycle{}},
 		ReadScope:     coverageScope{},
 		Authenticator: coverageAuthenticator{},
