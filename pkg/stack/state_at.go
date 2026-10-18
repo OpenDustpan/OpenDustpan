@@ -25,14 +25,15 @@ func (s *Updates) ExportAt(ctx context.Context, ref Ref, at time.Time) (Checkpoi
 	}
 
 	found, err := s.stateAt.StateAt(ctx, st.ID, at)
-	if errors.Is(err, ErrNoStateAt) {
-		if found.EndedAt.IsZero() {
+
+	if none, ok := errors.AsType[*NoStateAtError](err); ok {
+		if none.First.IsZero() {
 			return Checkpoint{}, StateAt{}, fmt.Errorf("%w: %s has no checkpoint yet", ErrNoStateAt, ref)
 		}
 
 		return Checkpoint{}, StateAt{}, fmt.Errorf(
 			"%w: the first state of %s is at %s (%d ms)",
-			ErrNoStateAt, ref, found.EndedAt.UTC().Format(time.RFC3339), found.EndedAt.UnixMilli(),
+			ErrNoStateAt, ref, none.First.UTC().Format(time.RFC3339), none.First.UnixMilli(),
 		)
 	}
 

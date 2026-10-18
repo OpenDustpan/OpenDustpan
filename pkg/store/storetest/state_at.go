@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ func RunStateAt(t *testing.T, newStore StateAtFactory) {
 		{name: "state at a time follows the end of the update", test: testStateAtBoundary},
 		{name: "state at a time names an update that ran then", test: testStateAtRunning},
 		{name: "state at a time of a stack without a checkpoint", test: testStateAtNoCheckpoint},
+		{name: "state at a time ignores a running update below the found version", test: testStateAtOlderRunning},
 		{name: "state at a time of a soft-deleted stack", test: testStateAtSoftDeleted},
 		{name: "state at a time of an unknown stack is ErrNotFound", test: testStateAtUnknownStack},
 	}
@@ -61,7 +63,10 @@ func stateAtBase() time.Time {
 func (f stateAtFixture) startAt(t *testing.T, id string, at time.Time, body string) stack.Update {
 	t.Helper()
 
-	u := started(t, f.create(t, f.ref, id, mutating()))
+	plan := mutating()
+	plan.CreatedBy = "by-" + id
+
+	u := started(t, f.create(t, f.ref, id, plan))
 	u.StartedAt = at
 
 	got, err := f.s.StartUpdate(t.Context(), u, f.fence)
@@ -101,27 +106,56 @@ func stateAtID(t *testing.T, f stateAtFixture) stack.ID {
 	return st.ID
 }
 
-// stateAtOf returns the expected answer of a case.
+// stateAtOf returns the expected answer of a case. Update "u<n>" has version
+// n and the creator "by-u<n>".
 func stateAtOf(ended time.Time, version, running int) stack.StateAt {
-	return stack.StateAt{EndedAt: ended, Version: version, Running: running}
+	return stack.StateAt{EndedAt: ended, CreatedBy: fmt.Sprintf("by-u%d", version), Version: version, Running: running}
 }
 
+// stateAtCase is one question and its answer. With wantErr ErrNoStateAt, first
+// is the First of the NoStateAtError.
 type stateAtCase struct {
 	name    string
 	at      time.Time
+	first   time.Time
 	want    stack.StateAt
 	wantErr error
+}
+
+// noState is the answer that comes with an error.
+func noState() stack.StateAt {
+	return stack.StateAt{EndedAt: time.Time{}, CreatedBy: "", Version: 0, Running: 0}
+}
+
+// answers returns the case with a state and no error.
+func answers(name string, at time.Time, want stack.StateAt) stateAtCase {
+	return stateAtCase{name: name, at: at, first: time.Time{}, want: want, wantErr: nil}
+}
+
+// refused returns the case with an error. first is the First of a
+// NoStateAtError.
+func refused(name string, at, first time.Time, wantErr error) stateAtCase {
+	return stateAtCase{name: name, at: at, first: first, want: noState(), wantErr: wantErr}
 }
 
 func checkStateAt(t *testing.T, f stateAtFixture, id stack.ID, cases []stateAtCase) {
 	t.Helper()
 
-	for _, tc := range cases {
+	for i := range cases {
+		tc := &cases[i]
+
 		got, err := f.s.StateAt(t.Context(), id, tc.at)
 		if !errors.Is(err, tc.wantErr) {
 			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.wantErr)
 
 			continue
+		}
+
+		if errors.Is(err, stack.ErrNoStateAt) {
+			var none *stack.NoStateAtError
+			if !errors.As(err, &none) || !none.First.Equal(tc.first) {
+				t.Errorf("%s: err = %#v, want a NoStateAtError with First %s", tc.name, err, tc.first)
+			}
 		}
 
 		if got != tc.want {
@@ -152,32 +186,12 @@ func testStateAtBoundary(t *testing.T, f stateAtFixture) {
 	ms := time.Millisecond
 
 	checkStateAt(t, f, stateAtID(t, f), []stateAtCase{
-		{
-			name:    "before the first end",
-			at:      end1.Add(-ms),
-			want:    stateAtOf(end1, 0, 0),
-			wantErr: stack.ErrNoStateAt,
-		},
-		{name: "at the first end", at: end1, want: stateAtOf(end1, 1, 0), wantErr: nil},
-		{
-			name:    "between the two",
-			at:      end1.Add(time.Minute),
-			want:    stateAtOf(end1, 1, 0),
-			wantErr: nil,
-		},
-		{
-			name:    "just before the second end",
-			at:      end2.Add(-ms),
-			want:    stateAtOf(end1, 1, 2),
-			wantErr: nil,
-		},
-		{name: "at the second end", at: end2, want: stateAtOf(end2, 2, 0), wantErr: nil},
-		{
-			name:    "after an update with no checkpoint",
-			at:      base.Add(time.Hour),
-			want:    stateAtOf(end2, 2, 0),
-			wantErr: nil,
-		},
+		refused("before the first end", end1.Add(-ms), end1, stack.ErrNoStateAt),
+		answers("at the first end", end1, stateAtOf(end1, 1, 0)),
+		answers("between the two", end1.Add(time.Minute), stateAtOf(end1, 1, 0)),
+		answers("just before the second end", end2.Add(-ms), stateAtOf(end1, 1, 2)),
+		answers("at the second end", end2, stateAtOf(end2, 2, 0)),
+		answers("after an update with no checkpoint", base.Add(time.Hour), stateAtOf(end2, 2, 0)),
 	})
 }
 
@@ -196,24 +210,29 @@ func testStateAtRunning(t *testing.T, f stateAtFixture) {
 	f.startAt(t, "u2", startTwo, `{"v":2}`)
 
 	checkStateAt(t, f, stateAtID(t, f), []stateAtCase{
-		{
-			name:    "before the running update",
-			at:      startTwo.Add(-time.Millisecond),
-			want:    stateAtOf(end1, 1, 0),
-			wantErr: nil,
-		},
-		{
-			name:    "while it runs",
-			at:      startTwo.Add(time.Minute),
-			want:    stateAtOf(end1, 1, 2),
-			wantErr: nil,
-		},
-		{
-			name:    "after its start, far in the future",
-			at:      base.Add(24 * time.Hour),
-			want:    stateAtOf(end1, 1, 2),
-			wantErr: nil,
-		},
+		answers("before the running update", startTwo.Add(-time.Millisecond), stateAtOf(end1, 1, 0)),
+		answers("while it runs", startTwo.Add(time.Minute), stateAtOf(end1, 1, 2)),
+		answers("after its start, far in the future", base.Add(24*time.Hour), stateAtOf(end1, 1, 2)),
+	})
+}
+
+// testStateAtOlderRunning checks that Running names only an update above the
+// version that holds the state.
+func testStateAtOlderRunning(t *testing.T, f stateAtFixture) {
+	t.Helper()
+
+	base := stateAtBase()
+	end2 := base.Add(15 * time.Minute)
+
+	// The recorded times of u1 overlap those of u2, as after a clock step.
+	one := f.startAt(t, "u1", base, "")
+	f.endAt(t, one, base.Add(30*time.Minute))
+
+	two := f.startAt(t, "u2", base.Add(10*time.Minute), `{"v":2}`)
+	f.endAt(t, two, end2)
+
+	checkStateAt(t, f, stateAtID(t, f), []stateAtCase{
+		answers("older update still running", end2.Add(time.Minute), stateAtOf(end2, 2, 0)),
 	})
 }
 
@@ -226,19 +245,14 @@ func testStateAtNoCheckpoint(t *testing.T, f stateAtFixture) {
 	id := stateAtID(t, f)
 
 	checkStateAt(t, f, id, []stateAtCase{
-		{name: "new stack", at: base, want: stateAtOf(time.Time{}, 0, 0), wantErr: stack.ErrNoStateAt},
+		refused("new stack", base, time.Time{}, stack.ErrNoStateAt),
 	})
 
 	u := f.startAt(t, "u1", base, "")
 	f.endAt(t, u, base.Add(time.Minute))
 
 	checkStateAt(t, f, id, []stateAtCase{
-		{
-			name:    "update with no checkpoint",
-			at:      base.Add(time.Hour),
-			want:    stateAtOf(time.Time{}, 0, 0),
-			wantErr: stack.ErrNoStateAt,
-		},
+		refused("update with no checkpoint", base.Add(time.Hour), time.Time{}, stack.ErrNoStateAt),
 	})
 }
 
@@ -258,7 +272,7 @@ func testStateAtSoftDeleted(t *testing.T, f stateAtFixture) {
 	at := end1.Add(time.Minute)
 	want := stateAtOf(end1, 1, 0)
 
-	checkStateAt(t, f, id, []stateAtCase{{name: "before the delete", at: at, want: want, wantErr: nil}})
+	checkStateAt(t, f, id, []stateAtCase{answers("before the delete", at, want)})
 
 	err := f.s.DeleteStack(
 		t.Context(), f.ref, f.fence, countedGuard(one, body),
@@ -268,13 +282,13 @@ func testStateAtSoftDeleted(t *testing.T, f stateAtFixture) {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	checkStateAt(t, f, id, []stateAtCase{{name: "after the delete", at: at, want: want, wantErr: nil}})
+	checkStateAt(t, f, id, []stateAtCase{answers("after the delete", at, want)})
 }
 
 func testStateAtUnknownStack(t *testing.T, f stateAtFixture) {
 	t.Helper()
 
 	checkStateAt(t, f, "stk-unknown", []stateAtCase{
-		{name: "unknown stack", at: stateAtBase(), want: stateAtOf(time.Time{}, 0, 0), wantErr: stack.ErrNotFound},
+		refused("unknown stack", stateAtBase(), time.Time{}, stack.ErrNotFound),
 	})
 }

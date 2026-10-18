@@ -253,11 +253,12 @@ LIMIT 1;
 SELECT id FROM stacks WHERE id = $1;
 
 -- name: StateAtUpdate :one
-SELECT u.version, u.ended_at_ms
+SELECT u.version, u.ended_at_ms, u.created_by
 FROM updates AS u
 JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1
   AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
   AND u.ended_at_ms > 0 AND u.ended_at_ms <= $2
 ORDER BY u.version DESC
 LIMIT 1;
@@ -268,6 +269,7 @@ FROM updates AS u
 JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1
   AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
   AND u.ended_at_ms > 0
 ORDER BY u.version ASC
 LIMIT 1;
@@ -276,6 +278,7 @@ LIMIT 1;
 SELECT u.version
 FROM updates AS u
 WHERE u.stack_id = $1
+  AND u.version > $3
   AND u.dry_run = FALSE AND u.kind <> 'preview'
   AND u.status <> 'not started'
   AND u.started_at_ms <= $2

@@ -202,8 +202,15 @@ func (s *recordingStackStore) UpdateStackTags(
 	return nil
 }
 
+// unknownStackName is the one stack name that GetStack reports as not found.
+const unknownStackName = "absent"
+
 func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, error) {
 	var out stack.Stack
+
+	if string(ref.Stack) == unknownStackName {
+		return out, stack.ErrNotFound
+	}
 
 	out.Ref = ref
 	out.ID = "stk-test"

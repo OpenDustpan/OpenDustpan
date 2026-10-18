@@ -80,11 +80,14 @@ type stateVersions struct {
 
 // seedStateVersion saves deployment as the next finished version of the
 // fixture stack and returns its version.
+// stateActor is the subject that asks for each seeded update.
+const stateActor = "alice"
+
 func seedStateVersion(t *testing.T, f updateFixture, deployment string) int {
 	t.Helper()
 
 	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: stateActor, RestoredFrom: 0,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1065,9 +1068,10 @@ func stateAtFuture() string {
 type stateAtDoc struct {
 	stateListDoc
 
-	Version int   `json:"version"`
-	EndedAt int64 `json:"endedAt"`
-	Running int   `json:"running"`
+	RequestedBy string `json:"requestedBy"`
+	Version     int    `json:"version"`
+	EndedAt     int64  `json:"endedAt"`
+	Running     int    `json:"running"`
 }
 
 // startRunningUpdate starts an update of the fixture stack and leaves it
@@ -1119,36 +1123,58 @@ func TestStateAtResources(t *testing.T) {
 				t.Fatalf("decode list at a time: %v", err)
 			}
 
-			if doc.Version != 2 || doc.Running != tc.wantRunning || len(doc.Resources) != 2 || doc.EndedAt == 0 {
-				t.Errorf("list = %+v, want version 2, running %d, 2 resources", doc, tc.wantRunning)
+			if doc.Version != 2 || doc.Running != tc.wantRunning || len(doc.Resources) != 2 || doc.EndedAt == 0 ||
+				doc.RequestedBy != stateActor {
+				t.Errorf("list = %+v, want version 2, running %d, 2 resources, requestedBy %q",
+					doc, tc.wantRunning, stateActor)
 			}
 		})
 	}
 }
 
 // TestStateAtRefusals proves the refusals of the resource list at a time: a
-// time before the first update names the time of that update, and a bad time
-// answers a clear error.
+// time before the first update names the time of that update, a stack with no
+// checkpoint and an unknown stack answer 404, and a bad time answers a clear
+// error. Each answer has the error shape {"code": <status>, "message": "..."}.
 func TestStateAtRefusals(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
 		target  string
+		seed    bool
 		want    int
 		message *regexp.Regexp
 	}{
 		{
 			name:   "before the first update",
 			target: "/api/stacks/acme/web/prod/state-at/1/resources",
+			seed:   true,
 			want:   http.StatusNotFound,
 			message: regexp.MustCompile(
-				`no state at that time: the first state of acme/web/prod is at \S+ \(\d{13} ms\)`,
+				`^stack has no state at that time: the first state of acme/web/prod is at \S+ \(\d{13} ms\)$`,
+			),
+		},
+		{
+			name:    "a stack with no checkpoint",
+			target:  "/api/stacks/acme/web/prod/state-at/1/resources",
+			seed:    false,
+			want:    http.StatusNotFound,
+			message: regexp.MustCompile(`^stack has no state at that time: acme/web/prod has no checkpoint yet$`),
+		},
+		{
+			name:   "an unknown stack",
+			target: "/api/stacks/acme/web/absent/state-at/1/resources",
+			seed:   true,
+			want:   http.StatusNotFound,
+			message: regexp.MustCompile(
+				`^state of acme/web/absent at \S+: get stack acme/web/absent: stack not found$`,
 			),
 		},
 		{
 			name:    "a time that is not Unix milliseconds",
 			target:  "/api/stacks/acme/web/prod/state-at/yesterday/resources",
+			seed:    true,
 			want:    http.StatusBadRequest,
 			message: regexp.MustCompile(`is not Unix milliseconds`),
 		},
@@ -1159,11 +1185,29 @@ func TestStateAtRefusals(t *testing.T) {
 			t.Parallel()
 
 			f := newUpdateFixture(t, allowAll())
-			seedStateVersions(t, f)
+			if tc.seed {
+				seedStateVersions(t, f)
+			}
 
 			status, body := f.doUpdate(t, accessRequest(http.MethodGet, tc.target, ""))
-			if status != tc.want || !tc.message.MatchString(body) {
-				t.Errorf("answer = %d %s, want %d matching %q", status, body, tc.want, tc.message)
+
+			var shape map[string]any
+			if err := json.Unmarshal([]byte(body), &shape); err != nil {
+				t.Fatalf("decode error %q: %v", body, err)
+			}
+
+			message, messageOK := shape["message"].(string)
+			code, codeOK := shape["code"].(float64)
+
+			if !messageOK || !codeOK || status != tc.want || int(code) != tc.want || len(shape) != 2 ||
+				!tc.message.MatchString(message) {
+				t.Errorf(
+					"answer = %d %s, want {\"code\":%d,\"message\":...} matching %q",
+					status,
+					body,
+					tc.want,
+					tc.message,
+				)
 			}
 		})
 	}

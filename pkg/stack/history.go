@@ -12,6 +12,24 @@ import (
 // ErrNoStateAt reports a time before the first checkpoint of a stack.
 var ErrNoStateAt = errors.New("stack has no state at that time")
 
+// NoStateAtError is the error that StateAt returns for a time before the first
+// checkpoint. First is the end time of the first update that saved a
+// checkpoint, or the zero time when the stack has none yet. It matches
+// ErrNoStateAt with errors.Is.
+type NoStateAtError struct {
+	First time.Time
+}
+
+// Error implements error.
+func (e *NoStateAtError) Error() string {
+	return ErrNoStateAt.Error()
+}
+
+// Is reports whether target is ErrNoStateAt.
+func (e *NoStateAtError) Is(target error) bool {
+	return target == ErrNoStateAt
+}
+
 // ResourceChangeKind is what one update did to one resource, by URN.
 type ResourceChangeKind string
 
@@ -85,11 +103,13 @@ type BlameStore interface {
 // StateAt names the update that held the state of a stack at a time.
 // Version is the update with the highest version that saved a checkpoint
 // and ended at or before the time. Running is the version of an update that
-// ran at that time, whose checkpoints were not final, or 0.
+// ran at that time, whose checkpoints were not final, or 0. CreatedBy is the
+// subject that asked for the update of Version.
 type StateAt struct {
-	EndedAt time.Time
-	Version int
-	Running int
+	EndedAt   time.Time
+	CreatedBy string
+	Version   int
+	Running   int
 }
 
 // StateAtReader finds the state of a stack at a time.
@@ -97,8 +117,9 @@ type StateAtReader interface {
 	// StateAt returns the update that held the state of the stack id at the
 	// time at. It returns ErrNoStateAt when no update that saved a
 	// checkpoint ended at or before at, and ErrNotFound for an unknown
-	// stack. With ErrNoStateAt, the EndedAt of the result holds the end time
-	// of the first update that saved a checkpoint, or the zero time when the
-	// stack has none. A soft-deleted stack answers as before its delete.
+	// stack. The ErrNoStateAt error is a *NoStateAtError, and its First holds
+	// the end time of the first update that saved a checkpoint, or the zero
+	// time when the stack has none. The result is the zero StateAt with
+	// each error. A soft-deleted stack answers as before its delete.
 	StateAt(ctx context.Context, id ID, at time.Time) (StateAt, error)
 }

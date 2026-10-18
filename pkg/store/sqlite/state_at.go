@@ -32,16 +32,7 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 
 	row, err := s.queries.StateAtUpdate(ctx, db.StateAtUpdateParams{StackID: id.String(), EndedAtMs: atMs})
 	if errors.Is(err, sql.ErrNoRows) {
-		first, firstErr := s.queries.FirstStateUpdateEnd(ctx, id.String())
-		if errors.Is(firstErr, sql.ErrNoRows) {
-			return stack.StateAt{}, stack.ErrNoStateAt
-		}
-
-		if firstErr != nil {
-			return stack.StateAt{}, fmt.Errorf("select first state update: %w", firstErr)
-		}
-
-		return stack.StateAt{EndedAt: codec.FromMillis(first), Version: 0, Running: 0}, stack.ErrNoStateAt
+		return stack.StateAt{}, s.noStateAt(ctx, id)
 	}
 
 	if err != nil {
@@ -49,15 +40,30 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 	}
 
 	running, err := s.queries.RunningUpdateAt(ctx, db.RunningUpdateAtParams{
-		StackID: id.String(), StartedAtMs: atMs, EndedAtMs: atMs,
+		StackID: id.String(), Version: row.Version, StartedAtMs: atMs, EndedAtMs: atMs,
 	})
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return stack.StateAt{}, fmt.Errorf("select running update: %w", err)
 	}
 
 	return stack.StateAt{
-		EndedAt: codec.FromMillis(row.EndedAtMs),
-		Version: int(row.Version),
-		Running: int(running),
+		EndedAt:   codec.FromMillis(row.EndedAtMs),
+		CreatedBy: row.CreatedBy,
+		Version:   int(row.Version),
+		Running:   int(running),
 	}, nil
+}
+
+// noStateAt builds the error for a time before the first checkpoint.
+func (s *Store) noStateAt(ctx context.Context, id stack.ID) error {
+	first, err := s.queries.FirstStateUpdateEnd(ctx, id.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return &stack.NoStateAtError{First: time.Time{}}
+	}
+
+	if err != nil {
+		return fmt.Errorf("select first state update: %w", err)
+	}
+
+	return &stack.NoStateAtError{First: codec.FromMillis(first)}
 }

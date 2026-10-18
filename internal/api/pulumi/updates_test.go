@@ -231,10 +231,25 @@ func (m *memUpdateStore) StateAt(_ context.Context, _ stack.ID, at time.Time) (s
 	}
 
 	if best.Version == 0 {
-		return stack.StateAt{EndedAt: first.EndedAt, Version: 0, Running: 0}, stack.ErrNoStateAt
+		return stack.StateAt{}, &stack.NoStateAtError{First: first.EndedAt}
 	}
 
-	return stack.StateAt{EndedAt: best.EndedAt, Version: int(best.Version), Running: int(running.Version)}, nil
+	return stack.StateAt{
+		EndedAt:   best.EndedAt,
+		CreatedBy: best.CreatedBy,
+		Version:   int(best.Version),
+		Running:   runningAbove(running, best),
+	}, nil
+}
+
+// runningAbove returns the version of running when it is above that of best,
+// or 0.
+func runningAbove(running, best stack.Update) int {
+	if running.Version <= best.Version {
+		return 0
+	}
+
+	return int(running.Version)
 }
 
 // lowerVersion returns the update with the lower version; the zero update

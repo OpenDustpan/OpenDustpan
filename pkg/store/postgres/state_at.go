@@ -17,7 +17,23 @@ var _ stack.StateAtReader = (*Store)(nil)
 
 // StateAt implements stack.StateAtReader.
 func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.StateAt, error) {
-	_, err := s.queries.StackExistsByID(ctx, id.String())
+	// One snapshot, so that the update, the running update and the first
+	// end time come from the same state of the database.
+	//nolint:exhaustruct_v5 // A snapshot read sets only isolation and access mode.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return stack.StateAt{}, fmt.Errorf("begin read transaction: %w", err)
+	}
+
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			_ = rollbackErr
+		}
+	}()
+
+	q := s.queries.WithTx(tx)
+
+	_, err = q.StackExistsByID(ctx, id.String())
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stack.StateAt{}, stack.ErrNotFound
 	}
@@ -28,34 +44,40 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 
 	atMs := codec.Millis(at)
 
-	row, err := s.queries.StateAtUpdate(ctx, db.StateAtUpdateParams{StackID: id.String(), EndedAtMs: atMs})
+	row, err := q.StateAtUpdate(ctx, db.StateAtUpdateParams{StackID: id.String(), EndedAtMs: atMs})
 	if errors.Is(err, pgx.ErrNoRows) {
-		first, firstErr := s.queries.FirstStateUpdateEnd(ctx, id.String())
-		if errors.Is(firstErr, pgx.ErrNoRows) {
-			return stack.StateAt{}, stack.ErrNoStateAt
-		}
-
-		if firstErr != nil {
-			return stack.StateAt{}, fmt.Errorf("select first state update: %w", firstErr)
-		}
-
-		return stack.StateAt{EndedAt: codec.FromMillis(first), Version: 0, Running: 0}, stack.ErrNoStateAt
+		return stack.StateAt{}, noStateAt(ctx, q, id)
 	}
 
 	if err != nil {
 		return stack.StateAt{}, fmt.Errorf("select state update: %w", err)
 	}
 
-	running, err := s.queries.RunningUpdateAt(ctx, db.RunningUpdateAtParams{
-		StackID: id.String(), StartedAtMs: atMs,
+	running, err := q.RunningUpdateAt(ctx, db.RunningUpdateAtParams{
+		StackID: id.String(), StartedAtMs: atMs, Version: row.Version,
 	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return stack.StateAt{}, fmt.Errorf("select running update: %w", err)
 	}
 
 	return stack.StateAt{
-		EndedAt: codec.FromMillis(row.EndedAtMs),
-		Version: int(row.Version),
-		Running: int(running),
+		EndedAt:   codec.FromMillis(row.EndedAtMs),
+		CreatedBy: row.CreatedBy,
+		Version:   int(row.Version),
+		Running:   int(running),
 	}, nil
+}
+
+// noStateAt builds the error for a time before the first checkpoint.
+func noStateAt(ctx context.Context, q *db.Queries, id stack.ID) error {
+	first, err := q.FirstStateUpdateEnd(ctx, id.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return &stack.NoStateAtError{First: time.Time{}}
+	}
+
+	if err != nil {
+		return fmt.Errorf("select first state update: %w", err)
+	}
+
+	return &stack.NoStateAtError{First: codec.FromMillis(first)}
 }

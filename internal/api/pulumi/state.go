@@ -353,15 +353,18 @@ func (h *Handler) listStateResources(
 // stateAtResourcesResponse is one page of the masked resource list of a stack
 // at a time. Version is the update that held the state, and EndedAt is its end
 // time in Unix milliseconds. Running is the version of an update that ran at
-// the time, or 0: the state is then the one before that update.
+// the time, or 0: the state is then the one before that update. RequestedBy
+// is the subject that asked for the update of Version, as in the update
+// history.
 type stateAtResourcesResponse struct {
-	Resources  []stateResourceItem `json:"resources"`
-	NextCursor string              `json:"nextCursor"`
-	Reason     string              `json:"reason,omitempty"`
-	Version    int                 `json:"version"`
-	EndedAt    int64               `json:"endedAt"`
-	Running    int                 `json:"running"`
-	Incomplete bool                `json:"incomplete"`
+	Resources   []stateResourceItem `json:"resources"`
+	NextCursor  string              `json:"nextCursor"`
+	Reason      string              `json:"reason,omitempty"`
+	Version     int                 `json:"version"`
+	EndedAt     int64               `json:"endedAt"`
+	Running     int                 `json:"running"`
+	RequestedBy string              `json:"requestedBy"`
+	Incomplete  bool                `json:"incomplete"`
 }
 
 // parseStateAt reads the time of a state-at request: Unix milliseconds.
@@ -432,13 +435,14 @@ func (h *Handler) listStateAtResources(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, stateAtResourcesResponse{
-		Resources:  items,
-		NextCursor: page.NextCursor,
-		Reason:     page.Reason,
-		Version:    found.Version,
-		EndedAt:    found.EndedAt.UnixMilli(),
-		Running:    found.Running,
-		Incomplete: page.Incomplete,
+		Resources:   items,
+		NextCursor:  page.NextCursor,
+		Reason:      page.Reason,
+		Version:     found.Version,
+		EndedAt:     found.EndedAt.UnixMilli(),
+		Running:     found.Running,
+		RequestedBy: found.CreatedBy,
+		Incomplete:  page.Incomplete,
 	})
 }
 
