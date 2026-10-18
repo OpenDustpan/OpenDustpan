@@ -106,7 +106,15 @@ func (m *memPeople) Members(_ context.Context, name string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return slices.Clone(m.groups[name]), nil
+	var out []string
+
+	for _, id := range m.groups[name] {
+		if !m.disabled[id] {
+			out = append(out, id)
+		}
+	}
+
+	return out, nil
 }
 
 func (m *memPeople) Admins(_ context.Context, scope namespace.Name) ([]string, error) {
@@ -121,7 +129,7 @@ func (m *memPeople) Admins(_ context.Context, scope namespace.Name) ([]string, e
 	var out []string
 
 	for _, id := range slices.Sorted(maps.Keys(m.contacts)) {
-		if m.grants[grantKey{id: id, action: action, scope: scope}] {
+		if !m.disabled[id] && m.grants[grantKey{id: id, action: action, scope: scope}] {
 			out = append(out, id)
 		}
 	}

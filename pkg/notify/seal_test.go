@@ -229,6 +229,7 @@ func TestSinkSealerRefuses(t *testing.T) {
 	moved := sealSink("snk-2", "shop", "itm-1", "itm-2")
 	elsewhere := sealSink("snk-1", "other", "itm-1", "itm-2")
 	server := sealSink("snk-1", "@server", "itm-1", "itm-2")
+	noPrefix := sealSink("fzs-1", "@server", "itm-1", "itm-2")
 
 	cases := []struct {
 		name   string
@@ -263,6 +264,20 @@ func TestSinkSealerRefuses(t *testing.T) {
 		{"two values under each other's ref", s, []notify.SealedSecret{
 			notify.StoredSecret("shop", "snk-1", "itm-1", two), notify.StoredSecret("shop", "snk-1", "itm-2", one),
 		}, secret.ErrDecrypt},
+		{
+			"a sink ID with no sink prefix",
+			noPrefix,
+			[]notify.SealedSecret{
+				notify.StoredSecret(
+					"@server",
+					"fzs-1",
+					"itm-1",
+					one,
+				),
+				notify.StoredSecret("@server", "fzs-1", "itm-2", two),
+			},
+			notify.ErrInvalid,
+		},
 		{"a plaintext value", s, []notify.SealedSecret{
 			notify.StoredSecret("shop", "snk-1", "itm-1", []byte("one")),
 			notify.StoredSecret("shop", "snk-1", "itm-2", []byte("two")),
@@ -280,8 +295,8 @@ func TestSinkSealerRefuses(t *testing.T) {
 	}
 }
 
-// TestSinkSealerSeal checks that Seal validates the plaintext items, and
-// fails with no sealer for the scope of the sink.
+// TestSinkSealerSeal checks that Seal validates the plaintext items and
+// the sink ID, and fails with no sealer for the scope of the sink.
 func TestSinkSealerSeal(t *testing.T) {
 	t.Parallel()
 
@@ -290,6 +305,13 @@ func TestSinkSealerSeal(t *testing.T) {
 	_, err := newSinkSealer(t).Seal(t.Context(), s, []notify.SinkSecret{plain("itm-2", "v")})
 	if !errors.Is(err, notify.ErrInvalid) {
 		t.Fatalf("Seal of a ref that the sink does not name: err = %v, want ErrInvalid", err)
+	}
+
+	_, err = newSinkSealer(
+		t,
+	).Seal(t.Context(), sealSink("fzs-1", "@server", "itm-1"), []notify.SinkSecret{plain("itm-1", "v")})
+	if !errors.Is(err, notify.ErrInvalid) {
+		t.Fatalf("Seal for a sink ID with no sink prefix: err = %v, want ErrInvalid", err)
 	}
 
 	empty := notify.SinkSealer{Namespaces: nil, Installation: nil}

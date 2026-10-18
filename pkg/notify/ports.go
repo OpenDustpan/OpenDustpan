@@ -414,13 +414,15 @@ type Contacts interface {
 	// dispatcher calls it before each attempt of a delivery to a contact
 	// (BeforeAttempt).
 	ContactsOf(ctx context.Context, id string) ([]Contact, error)
-	// Members returns the principal IDs of the group name, in any order,
-	// or none for an unknown group.
+	// Members returns the principal IDs of the enabled members of the
+	// group name, in any order, or none for an unknown group. It returns
+	// enabled principals only.
 	Members(ctx context.Context, name string) ([]string, error)
 	// Admins returns the principal IDs of the administrators of scope, in
-	// any order: each principal that holds ActionManage on the namespace
-	// scope, or ActionManageServer for audit.ServerScope. A grant on
-	// another scope does not count. A recipient with Admins set goes to
+	// any order: each enabled principal that holds ActionManage on the
+	// namespace scope, or ActionManageServer for audit.ServerScope. It
+	// returns enabled principals only. A grant on another scope does not
+	// count. A recipient with Admins set goes to
 	// them.
 	Admins(ctx context.Context, scope namespace.Name) ([]string, error)
 }

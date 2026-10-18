@@ -1,6 +1,6 @@
 # 142. A second-person review of each break-glass by the next business day
 
-Status: accepted · 2026-10-18 · supersedes ADR 70 decision 26 in part (see "Superseded decisions")
+Status: accepted · 2026-10-18 · supersedes ADR 70 decision 26 in part (see "Superseded decisions"). Decisions 12 and 15 superseded in part by ADR 149
 
 ## Context
 
@@ -191,12 +191,6 @@ accounts.
 
     A review shows the reason of the use and the audit entries that it
     covers, so the read needs the read action of the audit log.
-    A route with a review ID under `/api/namespaces/{ns}` answers 404 when
-    the namespace of the review is not `{ns}`. A route with a review ID
-    under `/api/break-glass-reviews` answers 404 for a review of a
-    namespace. `Store.Get` takes the scope of the route and answers
-    `ErrNotFound` for a review of another scope, so the answer does not
-    tell whether the review exists in another scope.
 13. **Audit entries.** In the scope of the use:
 
     | Change | Subject | Action | Kind |
@@ -225,8 +219,8 @@ accounts.
 15. **Ports with conformance first.** `breakglass.Store` gets the suite
     `pkg/breakglass/breakglasstest`, with a reference adapter in memory.
     The suite covers a zero fence, the fence of another namespace and a
-    stale fence on each write, a verdict that breaks a rule of
-    decision 9, and a read by ID in another scope.
+    stale fence on each write, and a verdict that breaks a rule of
+    decision 9.
 
 ## Superseded decisions
 

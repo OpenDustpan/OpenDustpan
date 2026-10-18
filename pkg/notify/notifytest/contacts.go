@@ -43,8 +43,8 @@ func RunContacts(t *testing.T, newHarness ContactsFactory) {
 		run  func(t *testing.T, h ContactsHarness)
 	}{
 		{"contacts of a person, and none for a disabled or unknown person", testContactsOf},
-		{"members of a group, and none for an unknown group", testMembers},
-		{"administrators hold the action to manage the notifications of the scope", testAdmins},
+		{"enabled members of a group, and none for an unknown group", testMembers},
+		{"enabled administrators hold the action to manage the notifications of the scope", testAdmins},
 	}
 
 	for _, tc := range cases {
@@ -148,11 +148,24 @@ func testMembers(t *testing.T, h ContactsHarness) {
 		}
 	}
 
+	if err := h.People.AddPerson(t.Context(), "erin", nil); err != nil {
+		t.Fatalf("AddPerson erin: %v", err)
+	}
+
+	if err := h.People.AddGroup(t.Context(), "with-disabled", []string{"alice", "erin"}); err != nil {
+		t.Fatalf("AddGroup with-disabled: %v", err)
+	}
+
+	if err := h.People.Disable(t.Context(), "erin"); err != nil {
+		t.Fatalf("Disable erin: %v", err)
+	}
+
 	cases := []struct {
 		group string
 		want  []string
 	}{
 		{"network", []string{"alice", "bob"}},
+		{"with-disabled", []string{"alice"}},
 		{"empty", nil},
 		{"unknown", nil},
 	}
@@ -183,8 +196,10 @@ func testAdmins(t *testing.T, h ContactsHarness) {
 
 	addPeople(t, h)
 
-	if err := h.People.AddPerson(t.Context(), "dave", nil); err != nil {
-		t.Fatalf("AddPerson dave: %v", err)
+	for _, id := range []string{"dave", "erin"} {
+		if err := h.People.AddPerson(t.Context(), id, nil); err != nil {
+			t.Fatalf("AddPerson %s: %v", id, err)
+		}
 	}
 
 	grants := []struct {
@@ -196,12 +211,19 @@ func testAdmins(t *testing.T, h ContactsHarness) {
 		{"bob", notify.ActionManage, other},
 		{"carol", notify.ActionManageServer, audit.ServerScope},
 		{"dave", notify.ActionManage, shop},
+		{"erin", notify.ActionManage, shop},
 	}
 
 	for _, g := range grants {
 		if err := h.People.Grant(t.Context(), g.id, g.action, g.scope); err != nil {
 			t.Fatalf("Grant %s %s on %s: %v", g.id, g.action, g.scope, err)
 		}
+	}
+
+	// erin holds the action on shop, but a disabled principal is not an
+	// administrator.
+	if err := h.People.Disable(t.Context(), "erin"); err != nil {
+		t.Fatalf("Disable erin: %v", err)
 	}
 
 	cases := []struct {

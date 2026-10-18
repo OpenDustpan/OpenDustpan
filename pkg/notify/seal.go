@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -102,7 +103,10 @@ type InstallationSealer interface {
 // of audit.ServerScope the installation scope of the sink ID. So a value
 // sealed for one sink does not open for another sink or another scope.
 // The sealed value also holds its ref, so a value does not open under
-// another ref of the sink.
+// another ref of the sink. Seal and Open refuse a sink ID that does not
+// start with SinkIDPrefix. The installation scope of a sink is its ID, so
+// the prefix keeps the installation scopes of sinks apart from the other
+// installation scopes.
 type SinkSealer struct {
 	Namespaces   ScopeSealer
 	Installation InstallationSealer
@@ -112,6 +116,10 @@ type SinkSealer struct {
 // seals each value for s. The API calls it before Subscriptions.PutSink,
 // so the store never gets a plaintext value.
 func (b SinkSealer) Seal(ctx context.Context, s Sink, secrets []SinkSecret) ([]SealedSecret, error) {
+	if err := checkSinkID(s); err != nil {
+		return nil, err
+	}
+
 	if err := s.ValidateSecrets(secrets); err != nil {
 		return nil, err
 	}
@@ -138,6 +146,10 @@ func (b SinkSealer) Seal(ctx context.Context, s Sink, secrets []SinkSecret) ([]S
 // sink, and the error of the sealer for a value that does not open for s,
 // which matches secret.ErrDecrypt.
 func (b SinkSealer) Open(ctx context.Context, s Sink, sealed []SealedSecret) ([][]byte, error) {
+	if err := checkSinkID(s); err != nil {
+		return nil, err
+	}
+
 	if len(sealed) != len(s.SecretRefs) {
 		return nil, fmt.Errorf("%w: sink %s has %d secrets, got %d", ErrInvalid, s.ID, len(s.SecretRefs), len(sealed))
 	}
@@ -166,6 +178,16 @@ func (b SinkSealer) Open(ctx context.Context, s Sink, sealed []SealedSecret) ([]
 	}
 
 	return out, nil
+}
+
+// checkSinkID returns ErrInvalid for a sink ID that does not start with
+// SinkIDPrefix.
+func checkSinkID(s Sink) error {
+	if !strings.HasPrefix(s.ID, SinkIDPrefix) {
+		return fmt.Errorf("%w: the sink ID %q does not start with %q", ErrInvalid, s.ID, SinkIDPrefix)
+	}
+
+	return nil
 }
 
 // errNoSealer reports a SinkSealer with no sealer for the scope of a sink.

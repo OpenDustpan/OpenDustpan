@@ -1,6 +1,6 @@
 # 146. ChatOps: three safe actions, linked identities and approval with a fresh authentication
 
-Status: accepted · 2026-10-18
+Status: accepted · 2026-10-18 · decisions 9 and 13 superseded in part by ADR 149
 
 ## Context
 
@@ -163,10 +163,7 @@ a click on it.
    - the chat user of the intent is still linked to the principal of the
      intent (`ErrNotLinked`): the server reads the link with
      `Links.LinkOf` before the check, so a deleted or replaced link stops
-     the intent. A link made after the intent (`LinkedAt` after the
-     `CreatedAt` of the intent) also stops it, so a delete and a new link
-     of the same chat user to the same principal does not bring back the
-     intent,
+     the intent,
    - the job still waits on the same phase and the same gate
      (`ErrGateChanged`), so an intent never approves a later gate of the
      same job, and the plans did not change (`job.ErrPlanChanged`),
@@ -215,12 +212,6 @@ a click on it.
     | `DELETE /api/me/chat-links/{platform}/{workspace}/{user}` | `caller:manage-chat-links` | caller |
     | `DELETE /api/principals/{id}/chat-links/{platform}/{workspace}/{user}` | `server:manage-principals` | principal |
     | `GET /api/chat/intents/{id}` and `POST .../complete` | `job:approve` | unit |
-
-    The read and the complete route of an intent answer 404 when the
-    caller is not the principal of the intent, the same 404 as for an
-    unknown ID (`chatops.VisibleTo`). `chatops.CheckIntent` checks this
-    first, so a caller who is not the principal learns nothing of the
-    intent, also not that it has a use or that it expired.
 
     The action route is on the public list of the route test, because the
     chat tool sends it with no session. The signature of the tool takes
