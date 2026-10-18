@@ -2,13 +2,15 @@
 // store dialect.
 //
 // The write tests run only when DUSTPAN_TEST_BASELINE_IN names a directory
-// that holds the numbered migrations from before the baseline, in
+// that holds the numbered migrations to collapse, in
 // pkg/store/<dialect>/migrations/. scripts/regenerate-baseline.sh sets it up
-// and runs them. For each dialect a write test applies every old migration
-// in order to an empty database, then the statements of
-// testdata/after-<dialect>.sql, and writes one baseline file: the
-// version-table statements below, then the schema and the rows of that
-// database without the version table. It then applies the baseline to a
+// and runs them. For each dialect a write test applies every input
+// migration in order to an empty database. When the input holds no baseline
+// yet, it then applies the statements of testdata/after-<dialect>.sql. It
+// writes one baseline file: the version-table statements below, then the
+// schema and the rows of that database without the version table. The
+// version of the file is above the version of each input migration of both
+// dialects (migrate.CollapseVersion). It then applies the baseline to a
 // second empty database and fails when the schema or the rows of the two
 // databases differ.
 //
@@ -23,7 +25,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -38,7 +42,6 @@ import (
 	_ "modernc.org/sqlite" // The driver of the SQLite adapter.
 
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // Variables that the regeneration script sets.
@@ -97,8 +100,7 @@ func header(dialect, ref, extra string) string {
 	return minimumLine + `
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
 -- from the ` + dialect + ` migrations of ` + ref + `.
--- This baseline replaced every migration before it, as a one-time exception
--- to the rule that an applied migration never changes. No binary opens a
+-- This baseline replaced every migration before it. No binary opens a
 -- database or restores a backup from before it.
 ` + extra
 }
@@ -149,12 +151,51 @@ func dirs(t *testing.T) paths {
 		t.Fatalf("set %s to the root of the repository", envOut)
 	}
 
+	if tagged := taggedDirs(t, out); len(tagged) > 0 {
+		t.Fatalf("tagged migrations exist (%s); collapse only above the last tag is not implemented",
+			strings.Join(tagged, ", "))
+	}
+
 	return paths{in: in, out: out}
 }
 
-// oldMigrations returns the migrations of dialect in the input directory,
-// ordered by version, without a baseline that the input may already hold.
-func oldMigrations(t *testing.T, in, dialect string) []migrate.Migration {
+// taggedDirs returns the tag directories under
+// pkg/store/<dialect>/testdata/tag-migrations of the repository at root. A
+// released tag has one, and a collapse of the migrations would break the
+// upgrade from it.
+func taggedDirs(t *testing.T, root string) []string {
+	t.Helper()
+
+	var found []string
+
+	for _, dialect := range dialects {
+		dir := filepath.Join(root, "pkg", "store", dialect, "testdata", "tag-migrations")
+
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				found = append(found, filepath.Join(dir, entry.Name()))
+			}
+		}
+	}
+
+	return found
+}
+
+// dialects are the store dialects that each get a baseline.
+var dialects = []string{"sqlite", "postgres"} //nolint:gochecknoglobals // A fixed list, read only.
+
+// inputMigrations returns the migrations of dialect in the input directory,
+// ordered by version.
+func inputMigrations(t *testing.T, in, dialect string) []migrate.Migration {
 	t.Helper()
 
 	all, err := migrate.Load(os.DirFS(filepath.Join(in, "pkg", "store", dialect)), "migrations")
@@ -162,12 +203,41 @@ func oldMigrations(t *testing.T, in, dialect string) []migrate.Migration {
 		t.Fatalf("load %s migrations: %v", dialect, err)
 	}
 
-	all = slices.DeleteFunc(all, func(m migrate.Migration) bool { return m.Version >= schema.BaselineVersion })
 	if len(all) == 0 {
-		t.Fatalf("no %s migrations before the baseline in %s", dialect, in)
+		t.Fatalf("no %s migrations in %s", dialect, in)
 	}
 
 	return all
+}
+
+// collapseVersion returns the version of the new baseline: above every
+// input migration of every dialect, so both dialects get one version.
+func collapseVersion(t *testing.T, in string) int64 {
+	t.Helper()
+
+	var versions []int64
+
+	for _, dialect := range dialects {
+		for _, m := range inputMigrations(t, in, dialect) {
+			versions = append(versions, m.Version)
+		}
+	}
+
+	return migrate.CollapseVersion(versions)
+}
+
+// baselineName returns the file name of the baseline with version v.
+func baselineName(v int64) string {
+	return fmt.Sprintf("%04d_baseline.sql", v)
+}
+
+// holdsBaseline reports whether migrations hold a baseline already. Then
+// the statements of testdata/after-<dialect>.sql are in it, and the test
+// does not run them again.
+func holdsBaseline(migrations []migrate.Migration) bool {
+	return slices.ContainsFunc(migrations, func(m migrate.Migration) bool {
+		return strings.HasSuffix(m.Name, "_baseline.sql")
+	})
 }
 
 // after returns the statements that run after the old migrations.
@@ -183,9 +253,17 @@ func after(t *testing.T, dialect string) string {
 	return string(data)
 }
 
-// writeBaseline writes body as the baseline file of dialect, after the
-// header with the extra header lines.
-func writeBaseline(t *testing.T, out, dialect, extra, body string) {
+// target names the baseline file that a write test writes: its dialect,
+// its file name and the extra header lines.
+type target struct {
+	dialect string
+	name    string
+	extra   string
+}
+
+// writeBaseline writes body as the baseline file of to, after the header
+// with the extra header lines.
+func writeBaseline(t *testing.T, out string, to target, body string) {
 	t.Helper()
 
 	ref := os.Getenv(envRef)
@@ -193,9 +271,9 @@ func writeBaseline(t *testing.T, out, dialect, extra, body string) {
 		t.Fatalf("set %s to the Git ref of the old migrations", envRef)
 	}
 
-	path := filepath.Join(out, "pkg", "store", dialect, "migrations", schema.BaselineName)
+	path := filepath.Join(out, "pkg", "store", to.dialect, "migrations", to.name)
 
-	content := header(dialect, ref, extra) + "\n" + body
+	content := header(to.dialect, ref, to.extra) + "\n" + body
 
 	//nolint:gosec // out is the repository root that the regeneration script passes; the test writes only there.
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -216,19 +294,23 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 	dir := dirs(t)
 	ctx := t.Context()
 
+	name := baselineName(collapseVersion(t, dir.in))
+	input := inputMigrations(t, dir.in, "sqlite")
 	old := openSQLite(t)
 
-	for _, m := range oldMigrations(t, dir.in, "sqlite") {
+	for _, m := range input {
 		execSQLite(ctx, t, old, m.Name, m.SQL)
 	}
 
-	execSQLite(ctx, t, old, "after-sqlite.sql", after(t, "sqlite"))
+	if !holdsBaseline(input) {
+		execSQLite(ctx, t, old, "after-sqlite.sql", after(t, "sqlite"))
+	}
 
 	dumped := dumpSQLite(ctx, t, old)
 	body := sqliteSchemaPrefix + dumped
 
 	fresh := openSQLite(t)
-	execSQLite(ctx, t, fresh, schema.BaselineName, body)
+	execSQLite(ctx, t, fresh, name, body)
 
 	if got := dumpSQLite(ctx, t, fresh); got != dumped {
 		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(dumped, got))
@@ -236,7 +318,7 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 
 	checkSQLiteVersionTable(t, old, fresh)
 
-	writeBaseline(t, dir.out, "sqlite", "", body)
+	writeBaseline(t, dir.out, target{dialect: "sqlite", name: name, extra: ""}, body)
 }
 
 func TestWritePostgresBaseline(t *testing.T) {
@@ -263,26 +345,37 @@ func TestWritePostgresBaseline(t *testing.T) {
 			"install postgresql-client-%d and put its pg_dump first in PATH", dumpMajor, server, server)
 	}
 
-	for _, m := range oldMigrations(t, dir.in, "postgres") {
+	name := baselineName(collapseVersion(t, dir.in))
+	input := inputMigrations(t, dir.in, "postgres")
+
+	for _, m := range input {
 		execPostgres(ctx, t, old, m.Name, m.SQL)
 	}
 
-	execPostgres(ctx, t, old, "after-postgres.sql", after(t, "postgres"))
+	if !holdsBaseline(input) {
+		execPostgres(ctx, t, old, "after-postgres.sql", after(t, "postgres"))
+	}
 
-	dumped := dumpPostgres(t, base, oldSchema.name)
+	dumped := postgresBody(t, base, oldSchema.name)
 	body := postgresSchemaPrefix + dumped
 
 	freshSchema := newPostgresSchema(t, base)
 	fresh := connectPostgres(t, freshSchema.url)
-	execPostgres(ctx, t, fresh, schema.BaselineName, body)
+	execPostgres(ctx, t, fresh, name, body)
 
-	if got := dumpPostgres(t, base, freshSchema.name); got != dumped {
+	if got := postgresBody(t, base, freshSchema.name); got != dumped {
 		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(dumped, got))
 	}
 
+	checkPostgresTables(ctx, t, old, fresh)
 	checkPostgresVersionTable(ctx, t, old, fresh)
 
-	writeBaseline(t, dir.out, "postgres", pgDumpLine+strconv.Itoa(dumpMajor)+"\n", body)
+	writeBaseline(
+		t,
+		dir.out,
+		target{dialect: "postgres", name: name, extra: pgDumpLine + strconv.Itoa(dumpMajor) + "\n"},
+		body,
+	)
 }
 
 // serverMajor returns the major version of the PostgreSQL server of conn.
@@ -682,8 +775,11 @@ func newPostgresSchema(t *testing.T, base string) pgSchema {
 			return
 		}
 
-		if _, dropErr := dropper.Exec(ctx, "DROP SCHEMA "+pgx.Identifier{name}.Sanitize()+" CASCADE"); dropErr != nil {
-			t.Errorf("drop schema: %v", dropErr)
+		for _, drop := range []string{name, name + controlSuffix} {
+			stmt := "DROP SCHEMA IF EXISTS " + pgx.Identifier{drop}.Sanitize() + " CASCADE"
+			if _, dropErr := dropper.Exec(ctx, stmt); dropErr != nil {
+				t.Errorf("drop schema: %v", dropErr)
+			}
 		}
 
 		if closeErr := dropper.Close(ctx); closeErr != nil {
@@ -734,6 +830,150 @@ func execPostgres(ctx context.Context, t *testing.T, conn *pgx.Conn, name, state
 	})
 	if err != nil {
 		t.Fatalf("apply %s: %v", name, err)
+	}
+}
+
+// controlSuffix is appended to the name of the live schema to name the
+// control schema, which holds the tables that a restore never renames.
+const controlSuffix = "_control"
+
+// controlTables returns the tables that live in the control schema.
+func controlTables() []string {
+	return []string{"installation", "backups", "restores"}
+}
+
+// postgresBody returns the baseline text of the live schema name and of its
+// control schema. The statements create the control tables in the live
+// schema, where sqlc reads them, and a DO block then moves them to the schema
+// that appends _control to the current schema, as the migration that moved
+// them did.
+func postgresBody(t *testing.T, base, name string) string {
+	t.Helper()
+
+	live := dumpPostgres(t, base, name)
+
+	// A database built from the baseline before the migration that moved
+	// the tables has no control schema.
+	if !postgresSchemaExists(t, base, name+controlSuffix) {
+		return live
+	}
+
+	control := dumpPostgres(t, base, name+controlSuffix)
+
+	var move strings.Builder
+
+	for _, table := range controlTables() {
+		move.WriteString("  EXECUTE format('ALTER TABLE %I." + table + " SET SCHEMA %I', live, ctl);\n")
+	}
+
+	return live + "\n" + control + `
+DO $$
+DECLARE
+  live text := current_schema();
+  ctl text := current_schema() || '` + controlSuffix + `';
+BEGIN
+  EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', ctl);
+` + move.String() + `END $$;
+`
+}
+
+// postgresSchemaExists reports whether the database at base has schema name.
+func postgresSchemaExists(t *testing.T, base, name string) bool {
+	t.Helper()
+
+	conn := connectPostgres(t, base)
+
+	const query = `SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)`
+
+	var found bool
+
+	err := conn.QueryRow(t.Context(), query, name).Scan(&found)
+	if err != nil {
+		t.Fatalf("look for schema %s: %v", name, err)
+	}
+
+	return found
+}
+
+// missingTables returns the entries of want that got lacks.
+func missingTables(want, got []string) []string {
+	var out []string
+
+	for _, name := range want {
+		if !slices.Contains(got, name) {
+			out = append(out, name)
+		}
+	}
+
+	return out
+}
+
+// postgresTables returns schema.table for each table in the current schema
+// of conn and in its control schema.
+func postgresTables(ctx context.Context, t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+
+	rows, err := conn.Query(ctx, `SELECT 'live.' || table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+		UNION ALL
+		SELECT 'control.' || table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() || $1 AND table_type = 'BASE TABLE'
+		ORDER BY 1`, controlSuffix)
+	if err != nil {
+		t.Fatalf("list the tables: %v", err)
+	}
+
+	defer rows.Close()
+
+	var out []string
+
+	for rows.Next() {
+		var name string
+
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			t.Fatalf("list the tables: %v", scanErr)
+		}
+
+		out = append(out, name)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("list the tables: %v", rowsErr)
+	}
+
+	return out
+}
+
+// checkPostgresTables fails t unless the baseline builds each table, in the
+// live schema and in the control schema, that the old migrations built.
+func checkPostgresTables(ctx context.Context, t *testing.T, old, fresh *pgx.Conn) {
+	t.Helper()
+
+	want := postgresTables(ctx, t, old)
+
+	if len(want) == 0 {
+		t.Fatal("the old migrations built no table")
+	}
+
+	if lost := missingTables(want, postgresTables(ctx, t, fresh)); len(lost) > 0 {
+		t.Fatalf("the baseline lacks the tables %v that the old migrations built", lost)
+	}
+}
+
+// TestMissingTables proves that the table check names a table that the
+// baseline lacks, also in the control schema.
+func TestMissingTables(t *testing.T) {
+	t.Parallel()
+
+	want := []string{"live.stacks", "control.backups", "control.installation"}
+
+	if got := missingTables(want, want); len(got) != 0 {
+		t.Fatalf("missing tables of equal lists = %v, want none", got)
+	}
+
+	got := missingTables(want, []string{"live.stacks"})
+	if !slices.Equal(got, []string{"control.backups", "control.installation"}) {
+		t.Fatalf("missing tables = %v, want the two control tables", got)
 	}
 }
 
@@ -844,5 +1084,39 @@ func checkPostgresVersionTable(ctx context.Context, t *testing.T, old, fresh *pg
 
 	if got := postgresVersionShape(ctx, t, fresh); !slices.Equal(got, want) {
 		t.Fatalf("the version table is %v, want the table of the old migrations %v", got, want)
+	}
+}
+
+// TestTaggedDirsRefuseTheCollapse proves that the write tests find a tag
+// directory of either dialect, and ignore the README file next to them.
+func TestTaggedDirsRefuseTheCollapse(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	if got := taggedDirs(t, root); len(got) != 0 {
+		t.Fatalf("tag directories of an empty repository = %v, want none", got)
+	}
+
+	base := filepath.Join(root, "pkg", "store", "postgres", "testdata", "tag-migrations")
+	if err := os.MkdirAll(base, 0o750); err != nil {
+		t.Fatalf("make %s: %v", base, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(base, "README.md"), []byte("notes\n"), 0o600); err != nil {
+		t.Fatalf("write the README: %v", err)
+	}
+
+	if got := taggedDirs(t, root); len(got) != 0 {
+		t.Fatalf("tag directories with a README only = %v, want none", got)
+	}
+
+	tag := filepath.Join(base, "v0.1.0")
+	if err := os.Mkdir(tag, 0o750); err != nil {
+		t.Fatalf("make %s: %v", tag, err)
+	}
+
+	if got := taggedDirs(t, root); !slices.Equal(got, []string{tag}) {
+		t.Fatalf("tag directories = %v, want [%s]", got, tag)
 	}
 }
