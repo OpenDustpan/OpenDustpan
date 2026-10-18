@@ -85,7 +85,7 @@ Facts:
 7. **Text that a person wrote stays as written.** A title, a comment or a
    summary that a person or a tool wrote is never translated. An email puts
    it in an element with `dir="auto"`. A chat message and a subject wrap it
-   in the Unicode isolates U+2068 and U+2069 (ADR 230 decision 6). An
+   in the Unicode isolates U+2068 and U+2069 (ADR 230 decision 9). An
    identifier stays as it is, as in ADR 182 decision 4.
 8. **The same status rules as the console.** Server message files follow
    ADR 231 and ADR 232. A notice in a language with the status

@@ -30,7 +30,7 @@ before 1.0.
 | Option | Cost | Gain |
 | --- | --- | --- |
 | A. English only before 1.0 | None. | The docs change fast before 1.0. Each translation would go stale in days. |
-| B. Machine translation of all docs in the 31 languages, with the note of ADR 231 | A build step, a translation run for each change, and many stale pages. | Readers who do not read English get every page. |
+| B. Machine translation of all docs in the 33 languages, with the note of ADR 231 | A build step, a translation run for each change, and many stale pages. | Readers who do not read English get every page. |
 | C. Machine translation of a small set: the quickstart, the install guide and the pages that the console links | A build step and a run for about 10 pages. | The first steps work in each language. The rest stays English. |
 | D. The languages that the owner reviews (Dutch and Afrikaans) and nothing else | Owner time for each change. | Reviewed text, for few readers. |
 
@@ -46,7 +46,7 @@ list.
 
 | Option | Cost | Gain |
 | --- | --- | --- |
-| A. A large language model, with the inputs in its prompt | An API key in CI or on a maintainer's machine. The output varies between runs. | It reads the description and the glossary as context. It covers all 31 languages. |
+| A. A large language model, with the inputs in its prompt | An API key in CI or on a maintainer's machine. The output varies between runs. | It reads the description and the glossary as context. It covers all 33 languages. |
 | B. DeepL with a glossary for each language | An API key. A glossary holds pairs of terms, not descriptions. | Stable output. Not every language of the set may have glossary support. |
 | C. Google Cloud Translation (Advanced) with glossaries | An API key and a cloud project. | Glossaries for each language. Stable output. |
 | D. People only | No machine. Many languages stay empty for a long time. | No machine errors. |
@@ -104,7 +104,7 @@ decision 2, and the person's own `language` always wins over it.
 
 ### 6. The time axis of charts in right-to-left languages
 
-ADR 230 decision 9 keeps time from left to right until a decision.
+ADR 230 decision 12 keeps time from left to right until a decision.
 
 | Option | Effect |
 | --- | --- |

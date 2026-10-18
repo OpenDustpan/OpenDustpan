@@ -1096,11 +1096,11 @@ _Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user sett
 
 
 **Language** (of a person):
-The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 31 languages of ADR 181 and ADR 230. The language also sets the direction of the page: `ar` and `he` write from right to left. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 33 languages of ADR 181 and ADR 230. The language also sets the direction of the page: `ar` and `he` write from right to left. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
 _Avoid_: Locale (for the language)
 
 **Formatting locale**:
-The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock (`hourCycle`), the date style, the first day of the week and the time zone.
+The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock (`hourCycle`), the date style, the first day of the week, the time zone and the digits. The digits are Western (`latn`) or Arabic-Indic (`arab`), ADR 230.
 _Avoid_: Language (for formats), region
 
 **Message file**:

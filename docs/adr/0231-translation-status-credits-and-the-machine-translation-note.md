@@ -19,7 +19,7 @@ Facts:
 - ADR 181 decision 20 marks high-stakes messages in each message file.
   Decision 21 shows a high-stakes message in English until a native speaker
   reviews it.
-- The owner reads English, Dutch and Afrikaans.
+- The project owner is a native reviewer of English, Dutch and Afrikaans.
 - ADR 74 forbids telemetry. The console sends nothing about a person to the
   project on its own.
 - ADR 214 makes a user-facing feature ship with its docs page.
@@ -114,19 +114,27 @@ Facts:
    description, `GLOSSARY.md` and the term list of the language. The
    machine and its settings are an open question of RFC 78.
 9. **Native speakers where the owner finds them (owner).** The owner asks
-   native speakers who work in tech to review a language. The owner reviews
-   English, Dutch and Afrikaans. A review signs each message that it
-   checks, as in decision 2.
-10. **The review order (owner).** Reviewers check high-stakes messages
+   native speakers who work in tech to review a language. A review signs
+   each message that it checks, as in decision 2.
+10. **The project owner reviews English, Dutch and Afrikaans (owner).** The
+    project owner is the native reviewer of `en`, `nl` and `af`. When the
+    owner checks a message, its status is `native-reviewed`, and its
+    reviewer is `project-owner`. The repository never holds the owner's
+    personal name for this role. The English source has no status of its
+    own (decision 1). Its row in the language status file shows
+    `native-reviewed` after the owner checks it, so that English never
+    shows the note. The credits page names "the project owner" for these
+    three languages.
+11. **The review order (owner).** Reviewers check high-stakes messages
     first. ADR 181 decision 20 lists confirmations of destructive actions,
     approvals, security text and billing text. This decision adds the text
     of secrets and every error message. Then come the screens that people
     use most: sign-in, the unit list, a unit, a plan and a job.
-11. **A high-stakes message shows in English until a review.** ADR 181
+12. **A high-stakes message shows in English until a review.** ADR 181
     decision 21 stays. A high-stakes message that is not `native-reviewed`
     shows its English text, with `lang="en"`. This applies at every status
     of the language.
-12. **A term list can ship as a draft (owner).** ADR 181 decision 18 needs
+13. **A term list can ship as a draft (owner).** ADR 181 decision 18 needs
     a signed-off term list before a language ships. A language now ships
     with a draft term list that the machine translation step makes from the
     shared list of ADR 232. A native reviewer signs off the list. A language
@@ -135,7 +143,7 @@ Facts:
 
 ### Releases
 
-13. **New strings never block a release.** A release ships with the
+14. **New strings never block a release.** A release ships with the
     translations that exist. A new message with no translation shows in
     English, with `lang="en"` (ADR 181 decision 12). A new message with
     only a machine translation shows that translation. If such messages

@@ -50,7 +50,7 @@ Facts:
    because an SVG file can hold a script.
 3. **One name in every language.** The product name and the agent's name
    are the same in every language. Messages never translate them. A name
-   in a right-to-left script renders with `dir="auto"` (ADR 230 decision 6).
+   in a right-to-left script renders with `dir="auto"` (ADR 230 decision 9).
 
 ### Where the names reach
 

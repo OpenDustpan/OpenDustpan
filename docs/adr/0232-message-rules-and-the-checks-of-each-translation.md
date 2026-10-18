@@ -108,7 +108,7 @@ Facts:
 10. **The console check.** The console's check runs decisions 2, 3, 5, 6 and
     7 on every message file, and the status check of ADR 231 decision 3.
     A failure of decisions 2 to 7 fails the check. A missing or stale
-    translation is a report, not a failure (ADR 231 decision 13).
+    translation is a report, not a failure (ADR 231 decision 14).
 11. **The server check.** The server's message files (ADR 233) get the same
     checks in a Go test. The shared term list is one file. The console
     repository holds it, and the server test reads a copy that a script
