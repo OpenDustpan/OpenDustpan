@@ -56,6 +56,7 @@ func newIPAllowlistAPIServer(t *testing.T) *dustpan.Server {
 	}
 
 	created := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC),
 		Name:            "acme",
 		HomeRegion:      region,

@@ -63,6 +63,7 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 
 	for _, name := range []namespace.Name{"acme", "other"} {
 		ns := namespace.Namespace{
+			ID:              namespace.NewID(),
 			CreatedAt:       time.Unix(0, 0),
 			Name:            name,
 			HomeRegion:      region,

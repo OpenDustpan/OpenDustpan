@@ -404,6 +404,7 @@ func otherNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "globex",
 		HomeRegion:      "eu-west",

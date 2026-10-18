@@ -58,6 +58,7 @@ func mustCreateNamespace(t *testing.T, s NamespaceStore, ns namespace.Name) {
 	t.Helper()
 
 	err := s.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: time.Unix(0, 0), Name: ns, HomeRegion: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})

@@ -144,6 +144,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	prod := mustGetStack(t, s, f.ref)
 
 	other := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "other",
 		HomeRegion:      "us-east",

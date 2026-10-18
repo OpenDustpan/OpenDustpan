@@ -87,17 +87,17 @@ func seedPlanNamespaces(t *testing.T, s *Store, n int) {
 func planSeedBatch(start, end int, createdAtMs int64) (string, []any) {
 	var stmt strings.Builder
 
-	stmt.WriteString("INSERT INTO namespaces (name, home_region, failover_version, created_at_ms) VALUES ")
+	stmt.WriteString("INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id) VALUES ")
 
-	args := make([]any, 0, (end-start)*4)
+	args := make([]any, 0, (end-start)*5)
 
 	for i := start; i < end; i++ {
 		if i > start {
 			stmt.WriteString(", ")
 		}
 
-		stmt.WriteString("(?, ?, ?, ?)")
-		args = append(args, fmt.Sprintf("ns-%05d", i), "eu-west", 1, createdAtMs)
+		stmt.WriteString("(?, ?, ?, ?, ?)")
+		args = append(args, fmt.Sprintf("ns-%05d", i), "eu-west", 1, createdAtMs, namespace.NewID().String())
 	}
 
 	return stmt.String(), args

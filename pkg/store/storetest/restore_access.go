@@ -823,6 +823,7 @@ func checkKeepMismatchNamespace(t *testing.T, s RestoreStore) {
 	sink, sum, files := exportPortable(t, ports.stager)
 
 	fresh := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "freshns",
 		HomeRegion:      "eu-west",
@@ -995,6 +996,7 @@ func checkKeepMismatchPrincipal(t *testing.T, s RestoreStore) {
 	sink, sum, files := exportPortable(t, ports.stager)
 
 	fresh := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "freshprn",
 		HomeRegion:      "eu-west",

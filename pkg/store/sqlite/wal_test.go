@@ -70,6 +70,7 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 	})
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",
@@ -408,6 +409,7 @@ func openWALBackupSource(ctx context.Context, t *testing.T, dir string) walBacku
 	})
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",
@@ -1322,6 +1324,7 @@ func openWALBusyStore(
 	})
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",
