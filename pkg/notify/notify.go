@@ -15,6 +15,8 @@ package notify
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -231,9 +233,10 @@ func (n Notification) Validate() error {
 
 // Fit returns n with its text cut to the bounds, so that a notification
 // never fails the domain write that carries it. It cuts the summary, the
-// dedupe key, the link titles and the attribute values at a rune boundary,
-// uses the type as the summary and the ID as the dedupe key when they are
-// empty, drops each link
+// link titles and the attribute values at a rune boundary, replaces a
+// dedupe key above the bound with a prefix of it and the SHA-256 of the
+// full key (see fitKey), uses the type as the summary and the ID as the
+// dedupe key when they are empty, drops each link
 // that is not valid and each attribute with a key that is not valid, and
 // keeps the first MaxLinks links, the MaxAttributes attributes with the
 // lowest keys, and the first MaxRecipients valid recipients. Fit does not
@@ -245,7 +248,7 @@ func (n Notification) Fit() Notification {
 		n.Summary = string(n.Type)
 	}
 
-	n.DedupeKey = cut(cmp.Or(n.DedupeKey, n.ID), MaxAttributeLen)
+	n.DedupeKey = fitKey(cmp.Or(n.DedupeKey, n.ID))
 
 	links := make([]Link, 0, min(len(n.Links), MaxLinks))
 	for _, l := range n.Links {
@@ -276,6 +279,22 @@ func (n Notification) Fit() Notification {
 	n.Recipients = recipients
 
 	return n
+}
+
+// fitKey returns a dedupe key of at most MaxAttributeLen bytes. A key
+// above the bound becomes its first bytes, cut at a rune boundary, then
+// "#" and the hex SHA-256 of the full key. A cut alone would make two keys
+// with the same first bytes one key, and the outbox would then drop the
+// second notification.
+func fitKey(k string) string {
+	if len(k) <= MaxAttributeLen {
+		return k
+	}
+
+	sum := sha256.Sum256([]byte(k))
+	tail := "#" + hex.EncodeToString(sum[:])
+
+	return cut(k, MaxAttributeLen-len(tail)) + tail
 }
 
 // cut returns s cut to at most limit bytes, at a rune boundary.

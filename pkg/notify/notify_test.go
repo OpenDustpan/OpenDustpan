@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -111,6 +112,20 @@ func TestFit(t *testing.T) {
 			"an empty dedupe key becomes the ID", func(n *notify.Notification) { n.DedupeKey = "" },
 			func(n notify.Notification) bool { return n.DedupeKey == "ntf-1" },
 		},
+		{
+			"a dedupe key at the bound stays",
+			func(n *notify.Notification) { n.DedupeKey = strings.Repeat("k", notify.MaxAttributeLen) },
+			func(n notify.Notification) bool { return n.DedupeKey == strings.Repeat("k", notify.MaxAttributeLen) },
+		},
+		{"two long dedupe keys that differ after the bound stay apart", func(n *notify.Notification) {
+			n.DedupeKey = longKey("a")
+		}, func(n notify.Notification) bool {
+			b := sample()
+			b.DedupeKey = longKey("b")
+
+			return n.DedupeKey != b.Fit().DedupeKey && len(n.DedupeKey) <= notify.MaxAttributeLen &&
+				strings.HasPrefix(n.DedupeKey, "bgr-1/") && utf8.ValidString(n.DedupeKey)
+		}},
 		{"an http link stays", func(n *notify.Notification) {
 			n.Links = []notify.Link{{Title: "Wiki", URL: "http://wiki.example.com", Kind: notify.LinkDocs}}
 		}, func(n notify.Notification) bool { return len(n.Links) == 1 }},
@@ -152,6 +167,12 @@ func TestFit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// longKey returns a dedupe key above the bound that ends in tail, with
+// runes of two bytes across the bound.
+func longKey(tail string) string {
+	return "bgr-1/" + strings.Repeat("é", notify.MaxAttributeLen) + tail
 }
 
 func TestSinkValidate(t *testing.T) {

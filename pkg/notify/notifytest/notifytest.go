@@ -16,6 +16,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,6 +75,9 @@ func Run(t *testing.T, newHarness Factory) {
 		{"redeliver of a pending delivery is ErrConflict", testRedeliverPending},
 		{"put subscription refuses an invalid subscription", testSubscriptionValidate},
 		{"an audit entry of another scope changes nothing", testEntryScope},
+		{"each put of a subscription makes its subject the creator", testSubscriptionCreator},
+		{"a change of the target or the secrets of a sink suspends its subscriptions", testSinkChangeSuspends},
+		{"a put of a subscription read before a sink change does not undo the suspend", testSinkChangeRace},
 	}
 
 	for _, tc := range cases {
@@ -120,6 +125,15 @@ func entry(scope namespace.Name) audit.Entry {
 		Sequence:     0,
 		FenceVersion: 0,
 	}
+}
+
+// manageBy returns the audit entry of a change of the principal subject to
+// the notifications of the namespace shop.
+func manageBy(subject string) audit.Entry {
+	e := manage()
+	e.Subject = subject
+
+	return e
 }
 
 // manage returns the audit entry of a change to the notifications of the
@@ -885,7 +899,6 @@ func testSubscriptionValidate(t *testing.T, h Harness) {
 		change func(s *notify.Subscription)
 	}{
 		{"an ID with no prefix", func(s *notify.Subscription) { s.ID = "x-1" }},
-		{"no creator", func(s *notify.Subscription) { s.CreatedBy = "" }},
 		{"an unknown state", func(s *notify.Subscription) { s.State = "bogus" }},
 	}
 
@@ -1234,4 +1247,207 @@ func testFence(t *testing.T, h Harness, w write, f fenceCase) {
 	}
 
 	w.check(t, h, current, scope)
+}
+
+// subscriptionOf returns the stored subscription id of the namespace shop.
+func subscriptionOf(t *testing.T, h Harness, id string) notify.Subscription {
+	t.Helper()
+
+	subs, err := h.Subscriptions.Subscriptions(t.Context(), shop)
+	if err != nil {
+		t.Fatalf("Subscriptions: %v", err)
+	}
+
+	i := slices.IndexFunc(subs, func(s notify.Subscription) bool { return s.ID == id })
+	if i < 0 {
+		t.Fatalf("Subscriptions = %+v, want %s", subs, id)
+	}
+
+	return subs[i]
+}
+
+func testSubscriptionCreator(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	putSink(t, h, fence)
+
+	s := subscription("snk-1")
+	s.CreatedBy = "mallory"
+
+	if err := h.Subscriptions.PutSubscription(t.Context(), s, fence, manage()); err != nil {
+		t.Fatalf("PutSubscription: %v", err)
+	}
+
+	if got := subscriptionOf(t, h, "sub-1"); got.CreatedBy != "alice" {
+		t.Fatalf("CreatedBy after the create = %q, want alice, the subject of the audit entry", got.CreatedBy)
+	}
+
+	s.Version, s.CreatedBy, s.State = 1, "alice", notify.SubscriptionStateSuspended
+	if err := h.Subscriptions.PutSubscription(t.Context(), s, fence, manageBy("bob")); err != nil {
+		t.Fatalf("PutSubscription of bob: %v", err)
+	}
+
+	if got := subscriptionOf(t, h, "sub-1"); got.CreatedBy != "bob" {
+		t.Fatalf("CreatedBy after the change of bob = %q, want bob", got.CreatedBy)
+	}
+
+	s.Version, s.State = 2, notify.SubscriptionStateActive
+	if err := h.Subscriptions.PutSubscription(t.Context(), s, fence, manageBy("carol")); err != nil {
+		t.Fatalf("PutSubscription of carol: %v", err)
+	}
+
+	if got := subscriptionOf(t, h, "sub-1"); got.CreatedBy != "carol" || got.State != notify.SubscriptionStateActive {
+		t.Fatalf("after the resume of carol = %+v, want an active subscription of carol", got)
+	}
+}
+
+func testSinkChangeSuspends(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+
+	if err := h.Subscriptions.PutSink(t.Context(), sink("snk-2", shop), fence, manage()); err != nil {
+		t.Fatalf("PutSink snk-2: %v", err)
+	}
+
+	two := subscription("snk-2")
+	two.ID = "sub-2"
+
+	if err := h.Subscriptions.PutSubscription(t.Context(), two, fence, manage()); err != nil {
+		t.Fatalf("PutSubscription sub-2: %v", err)
+	}
+
+	renamed := sink("snk-1", shop)
+	renamed.Version, renamed.Name = 1, "Ops team"
+
+	if err := h.Subscriptions.PutSink(t.Context(), renamed, fence, manage()); err != nil {
+		t.Fatalf("PutSink with a new name: %v", err)
+	}
+
+	if got := subscriptionOf(t, h, "sub-1"); got.State != notify.SubscriptionStateActive || got.Version != 1 {
+		t.Fatalf("after a new name of the sink = %+v, want active at version 1", got)
+	}
+
+	changeDestination(t, h, fence, renamed)
+
+	if got := subscriptionOf(t, h, "sub-2"); got.State != notify.SubscriptionStateActive {
+		t.Fatalf("subscription of another sink = %+v, want active", got)
+	}
+}
+
+// changeDestination changes the target, then the secrets, of the sink
+// renamed, at version 1 and with the subscription sub-1, and checks after
+// each change that sub-1 is suspended. It resumes sub-1 after each check.
+func changeDestination(t *testing.T, h Harness, fence namespace.Fence, renamed notify.Sink) {
+	t.Helper()
+
+	changes := []struct {
+		name   string
+		change func(s *notify.Sink)
+	}{
+		{"a new target", func(s *notify.Sink) { s.Target = "https://hooks.example.net/ops" }},
+		{"new secrets", func(s *notify.Sink) { s.SecretRefs = []string{"itm-1", "itm-2"} }},
+	}
+
+	for i, tc := range changes {
+		s := renamed
+		s.Version = int64(i) + 2
+		tc.change(&s)
+		renamed = s
+
+		if err := h.Subscriptions.PutSink(t.Context(), s, fence, manage()); err != nil {
+			t.Fatalf("PutSink with %s: %v", tc.name, err)
+		}
+
+		got := subscriptionOf(t, h, "sub-1")
+		if got.State != notify.SubscriptionStateSuspended || got.Reason != notify.ReasonSinkChanged ||
+			got.Version != int64(2*i+2) {
+			t.Fatalf("after %s = %+v, want suspended for the sink change at version %d", tc.name, got, 2*i+2)
+		}
+
+		resume := got
+		resume.State, resume.Reason = notify.SubscriptionStateActive, ""
+
+		if err := h.Subscriptions.PutSubscription(t.Context(), resume, fence, manage()); err != nil {
+			t.Fatalf("resume after %s: %v", tc.name, err)
+		}
+	}
+}
+
+func testSinkChangeRace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+
+	stale := subscription("snk-1")
+	stale.Version, stale.Filter.MinSeverity = 1, notify.SeverityCritical
+
+	changed := sink("snk-1", shop)
+	changed.Version, changed.Target = 1, "https://hooks.example.net/ops"
+
+	if err := h.Subscriptions.PutSink(t.Context(), changed, fence, manage()); err != nil {
+		t.Fatalf("PutSink: %v", err)
+	}
+
+	err := h.Subscriptions.PutSubscription(t.Context(), stale, fence, manageBy("bob"))
+	if !errors.Is(err, notify.ErrConflict) {
+		t.Fatalf("PutSubscription read before the sink change: err = %v, want ErrConflict", err)
+	}
+
+	if got := subscriptionOf(t, h, "sub-1"); got.State != notify.SubscriptionStateSuspended {
+		t.Fatalf("sub-1 after a refused edit = %+v, want suspended", got)
+	}
+
+	for round := 1; round <= 20; round++ {
+		raceSinkChange(t, h, fence, round)
+	}
+}
+
+// raceSinkChange runs a change of the target of a new sink and an edit of
+// its subscription, read before the change, at one time. In each order,
+// the subscription ends suspended: the edit before the change is
+// suspended by it, and the edit after the change gets ErrConflict.
+func raceSinkChange(t *testing.T, h Harness, fence namespace.Fence, round int) {
+	t.Helper()
+
+	id := fmt.Sprintf("snk-%d", round+1)
+	if err := h.Subscriptions.PutSink(t.Context(), sink(id, shop), fence, manage()); err != nil {
+		t.Fatalf("PutSink %s: %v", id, err)
+	}
+
+	read := subscription(id)
+	read.ID = fmt.Sprintf("sub-%d", round+1)
+
+	if err := h.Subscriptions.PutSubscription(t.Context(), read, fence, manage()); err != nil {
+		t.Fatalf("PutSubscription %s: %v", read.ID, err)
+	}
+
+	changed := sink(id, shop)
+	changed.Version, changed.Target = 1, "https://hooks.example.net/ops"
+
+	edit := read
+	edit.Version, edit.Filter.MinSeverity = 1, notify.SeverityCritical
+
+	var wg sync.WaitGroup
+
+	errs := make([]error, 2)
+
+	wg.Go(func() { errs[0] = h.Subscriptions.PutSink(t.Context(), changed, fence, manage()) })
+	wg.Go(func() { errs[1] = h.Subscriptions.PutSubscription(t.Context(), edit, fence, manageBy("bob")) })
+	wg.Wait()
+
+	if errs[0] != nil {
+		t.Fatalf("PutSink %s: %v", id, errs[0])
+	}
+
+	if errs[1] != nil && !errors.Is(errs[1], notify.ErrConflict) {
+		t.Fatalf("PutSubscription %s: err = %v, want nil or ErrConflict", read.ID, errs[1])
+	}
+
+	if got := subscriptionOf(t, h, read.ID); got.State != notify.SubscriptionStateSuspended {
+		t.Fatalf("%s after a sink change and an edit read before it = %+v, want suspended", read.ID, got)
+	}
 }

@@ -191,6 +191,10 @@ func (m *memStore) PutSink(_ context.Context, s notify.Sink, fence namespace.Fen
 			return fmt.Errorf("put sink %s: %w", s.ID, notify.ErrConflict)
 		}
 
+		if ok && destinationChanged(old, s) {
+			m.suspendSubscriptionsOf(s.ID)
+		}
+
 		s.Version++
 		m.sinks[s.ID] = s
 
@@ -232,6 +236,9 @@ func (m *memStore) PutSubscription(
 	fence namespace.Fence,
 	e audit.Entry,
 ) error {
+	// The subject of the write is the creator, so each delivery uses the
+	// access of the person who last approved the subscription.
+	s.CreatedBy = e.Subject
 	if err := s.Validate(); err != nil {
 		return err
 	}
@@ -540,5 +547,24 @@ func (m *memStore) check(d notify.Delivery, add map[string]notify.Delivery) (boo
 		return false, fmt.Errorf("enqueue %s: %w: the ID exists", d.ID, notify.ErrInvalid)
 	default:
 		return false, nil
+	}
+}
+
+// destinationChanged reports whether s sends to another place than old: a
+// new kind, target or secret.
+func destinationChanged(old, s notify.Sink) bool {
+	return old.Kind != s.Kind || old.Target != s.Target || !slices.Equal(old.SecretRefs, s.SecretRefs)
+}
+
+// suspendSubscriptionsOf suspends each active subscription of the sink id
+// and increments its version, so a put that read the subscription before
+// the change gets ErrConflict. The caller holds the mutex of the domain.
+func (m *memStore) suspendSubscriptionsOf(id string) {
+	for sid := range m.subs {
+		if sub := m.subs[sid]; sub.Sink == id && sub.State == notify.SubscriptionStateActive {
+			sub.State, sub.Reason = notify.SubscriptionStateSuspended, notify.ReasonSinkChanged
+			sub.Version++
+			m.subs[sid] = sub
+		}
 	}
 }

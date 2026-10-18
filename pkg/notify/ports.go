@@ -78,7 +78,12 @@ type CursorMove struct {
 // transaction.
 type Subscriptions interface {
 	// PutSink creates s, or replaces it when s.Version is the stored
-	// version. It returns ErrInvalid for a sink that fails Validate or for
+	// version. A replace that changes the kind, the target or the secret
+	// refs of the sink also suspends, in its transaction, each active
+	// subscription of the sink: it sets State to
+	// SubscriptionStateSuspended, Reason to ReasonSinkChanged, and
+	// increments the version of the subscription. A replace that changes
+	// only the name suspends nothing. It returns ErrInvalid for a sink that fails Validate or for
 	// a fence that is not of s.Scope, ErrNotFound when the stored sink
 	// s.ID is in another scope, ErrConflict, namespace.ErrFenced and
 	// namespace.ErrNotFound.
@@ -90,7 +95,9 @@ type Subscriptions interface {
 	// Sinks returns the sinks of scope, ordered by ID.
 	Sinks(ctx context.Context, scope namespace.Name) ([]Sink, error)
 	// PutSubscription creates s, or replaces it when s.Version is the
-	// stored version. It returns ErrInvalid for a subscription that fails
+	// stored version. It sets CreatedBy to e.Subject, the principal of the
+	// write, on each create and each replace, a resume included, and
+	// ignores the CreatedBy of s. It returns ErrInvalid for a subscription that fails
 	// Validate or for a fence that is not of s.Scope, ErrNotFound for a
 	// sink that is not in the scope of s or when the stored subscription
 	// s.ID is in another scope, ErrConflict, namespace.ErrFenced and

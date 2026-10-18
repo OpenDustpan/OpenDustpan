@@ -51,7 +51,11 @@ audit sink.
    `Notification.Fit` before it appends. `Fit` cuts each text to its bound
    at a rune boundary, drops a link or an attribute that is not valid, and
    keeps the first entries up to each count. An empty summary becomes the
-   type, and an empty dedupe key becomes the ID. So a long summary or a bad
+   type, and an empty dedupe key becomes the ID. `Fit` does not cut a
+   dedupe key above its bound of 200 bytes: the key becomes its first
+   bytes, `#` and the hex SHA-256 of the full key. A cut alone makes two
+   keys with the same first 200 bytes one key, and the outbox then drops
+   the second notification with no error. So a long summary or a bad
    link from the context of a unit never fails a job, a freeze or a review.
    `Fit` does not change the ID, the type, the scope, the severity or the
    time. An error in those is an error of the code, and `Validate` refuses
@@ -145,7 +149,21 @@ audit sink.
     This answers RFC 23: subscriptions with filters are enough. A policy
     does not route notifications.
 15. **The creator decides what flows out.** A subscription records its
-    creator. Before each delivery, the dispatcher checks two things:
+    creator. The store sets `CreatedBy` to the subject of the audit entry
+    of each create and each change of the subscription, a resume
+    included, and ignores the `CreatedBy` of the request. So each delivery
+    uses the access of the person who last approved the subscription, and
+    a person who edits a subscription cannot route notifications under
+    the read access of another person. A change of the kind, the target or
+    the secrets of a sink makes a new destination that the creators of its
+    subscriptions did not approve. So in the transaction of that change,
+    `Subscriptions.PutSink` suspends each active subscription of the sink,
+    with the reason `notify.ReasonSinkChanged`, and increments its
+    version. A put of a subscription that a person read before the change
+    then gets `ErrConflict`, so it cannot undo the suspend. A person
+    resumes the subscription and becomes its creator. A change of only the
+    name of a sink suspends nothing. Before each delivery, the dispatcher
+    checks two things:
     - The creator still holds `namespace:manage-notifications` and
       `namespace:read` on the scope. When the creator lost either action,
       the dispatcher suspends the subscription, and sends the notification
@@ -297,6 +315,12 @@ audit sink.
     | `POST /api/namespaces/{ns}/deliveries/{id}/redeliver` | `namespace:manage-notifications` | namespace |
     | `POST /api/namespaces/{ns}/sinks/{id}/test` | `namespace:manage-notifications` | namespace |
     | the same routes under `/api/server/` | `server:observe`, `server:manage-notifications` | server |
+
+    A route with `{id}` answers 404 when the row of the ID is not in
+    `{ns}` (or not in the server scope, under `/api/server/`), as for an
+    unknown ID. The ports read sinks and subscriptions only by scope, and
+    `Deliveries.History` takes the scope, so no read by ID crosses a
+    scope.
 
     The notification list filters the notifications with `notify.Reader`
     for the caller, so a caller sees no notification of a unit that it

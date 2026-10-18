@@ -247,11 +247,18 @@ const (
 	SubscriptionStateSuspended SubscriptionState = "suspended"
 )
 
+// ReasonSinkChanged is the reason of a subscription that the store
+// suspended because a person changed the kind, the target or the secrets
+// of its sink. The creator approved the old destination, not the new one,
+// so the subscription delivers nothing until a person resumes it.
+const ReasonSinkChanged = "the destination of the sink changed"
+
 // Subscription sends the notifications of its scope that match Filter to
 // Sink. A subscription of the server scope receives the notifications of
 // the server scope only. CreatedBy is the principal whose actions the
 // dispatcher checks before each delivery, and the Principal of each of
-// its deliveries.
+// its deliveries. The store sets it to the principal of the last create
+// or change.
 type Subscription struct {
 	ID        string
 	Scope     namespace.Name
