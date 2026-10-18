@@ -7,24 +7,24 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// The actions of context. They are not yet in the action list of package
-// identity. Each one names its object.
+// The actions of context. Package identity holds their strings. Each one
+// names its object.
 const (
 	// ActionUnitSetContext allows setting and deleting the API context of a
 	// unit and of its resources. Its object is the unit.
-	ActionUnitSetContext identity.Action = "unit:set-context"
+	ActionUnitSetContext = identity.ActionUnitSetContext
 	// ActionCollectionSetContext allows setting and deleting the API context
 	// of a collection. Its object is the collection.
-	ActionCollectionSetContext identity.Action = "collection:set-context"
+	ActionCollectionSetContext = identity.ActionCollectionSetContext
 	// ActionNamespaceSetContext allows setting and deleting the API context
 	// of a namespace. Its object is the namespace.
-	ActionNamespaceSetContext identity.Action = "namespace:set-context"
+	ActionNamespaceSetContext = identity.ActionNamespaceSetContext
 	// ActionBlueprintRead allows reading a blueprint and its context. Its
 	// object is the blueprint.
-	ActionBlueprintRead identity.Action = "blueprint:read"
+	ActionBlueprintRead = identity.ActionBlueprintRead
 	// ActionBlueprintSetContext allows setting and deleting the API context
 	// of a blueprint. Its object is the blueprint.
-	ActionBlueprintSetContext identity.Action = "blueprint:set-context"
+	ActionBlueprintSetContext = identity.ActionBlueprintSetContext
 )
 
 // ReadAction returns the action that reads the context of an object of kind

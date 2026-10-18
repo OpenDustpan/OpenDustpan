@@ -76,33 +76,33 @@ var (
 	ErrLimit = errors.New("limit reached")
 )
 
-// The actions of Sweep. They are not yet in the action list of package
-// identity. Each one names its object.
+// The actions of Sweep. Package identity holds their strings. Each one
+// names its object.
 const (
 	// ActionNamespaceReadUnmanaged allows reading the findings, the sweeps,
 	// the sweep targets and the ignore rules of a namespace. Its object is
 	// the namespace. A finding names only the units that the caller can
 	// read, and counts the others.
-	ActionNamespaceReadUnmanaged identity.Action = "namespace:read-unmanaged"
+	ActionNamespaceReadUnmanaged = identity.ActionNamespaceReadUnmanaged
 	// ActionNamespaceTriageUnmanaged allows the actions on a finding:
 	// ignore, stop ignoring, choose an owner, mark for delete, cancel a
 	// pending action, and start an import or code generation. It also
 	// allows the ignore rules. Its
 	// object is the namespace. An action that starts a job also needs the
 	// action of the job on its unit.
-	ActionNamespaceTriageUnmanaged identity.Action = "namespace:triage-unmanaged"
+	ActionNamespaceTriageUnmanaged = identity.ActionNamespaceTriageUnmanaged
 	// ActionNamespaceManageSweeps allows creating, changing and deleting the
 	// sweep targets of a namespace, with their schedule, their runner pool
 	// and the command that their runner starts. Its object is the namespace.
-	ActionNamespaceManageSweeps identity.Action = "namespace:manage-sweeps"
+	ActionNamespaceManageSweeps = identity.ActionNamespaceManageSweeps
 	// ActionNamespaceStartSweep allows starting and canceling a sweep of a
 	// sweep target, or a state check, now. Its object is the namespace.
-	ActionNamespaceStartSweep identity.Action = "namespace:start-sweep"
+	ActionNamespaceStartSweep = identity.ActionNamespaceStartSweep
 	// ActionServerLinkNamespaces allows linking and unlinking two
 	// namespaces, so that the classification of each one reads the units of
 	// the other. Its object is the server: only an installation
 	// administrator holds it.
-	ActionServerLinkNamespaces identity.Action = "server:link-namespaces"
+	ActionServerLinkNamespaces = identity.ActionServerLinkNamespaces
 )
 
 // Kind is the kind of an unmanaged resource.
