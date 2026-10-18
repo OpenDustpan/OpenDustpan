@@ -39,6 +39,7 @@ func setupTakeoverChain(t *testing.T) (*auditChain, audit.ChainChange, durable.O
 	chain := newTestAuditChain(t, audit.ChainOff)
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",

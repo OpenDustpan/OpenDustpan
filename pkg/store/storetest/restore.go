@@ -695,6 +695,10 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("namespaces after apply = %+v, want [%+v] fenced by one", got, ns)
 	}
 
+	if got[0].ID != ns.ID {
+		t.Fatalf("namespace ID after apply = %q, want %q: a restore keeps the ID", got[0].ID, ns.ID)
+	}
+
 	_ = other
 	_ = staged
 
@@ -1193,6 +1197,7 @@ func testRestoreBumpFences(t *testing.T, newStore RestoreFactory) {
 	}
 
 	createErr := s.CreateNamespace(ctx, namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "other",
 		HomeRegion:      "eu-west",

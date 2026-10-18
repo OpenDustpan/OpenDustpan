@@ -42,6 +42,7 @@ func makeNamespace(t *testing.T, s namespace.Store) namespace.Fence {
 	const name namespace.Name = "acme"
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       suiteTime(),
 		Name:            name,
 		HomeRegion:      "local",

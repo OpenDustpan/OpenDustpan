@@ -69,6 +69,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	clk := newClock()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       clk.now,
 		Name:            "acme",
 		HomeRegion:      "local",

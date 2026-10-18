@@ -1,27 +1,27 @@
 -- name: CreateNamespace :execrows
-INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-VALUES ($1, $2, $3, $4)
+INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING;
 
 -- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = $1;
 
 -- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 ORDER BY name;
 
 -- name: PageNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > sqlc.arg('after')
 ORDER BY name
 LIMIT sqlc.arg('lim');
 
 -- name: PageNamespacesByNames :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > sqlc.arg('after') AND name = ANY(sqlc.arg('names')::text[])
 ORDER BY name
@@ -56,7 +56,7 @@ WHERE name = $2;
 -- name: GetNamespaceForShare :one
 -- Reads the namespace row with a shared lock. A switch change waits for the
 -- transaction that reads it, so the switch it reads is the one that commits.
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = $1
 FOR SHARE;

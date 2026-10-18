@@ -38,6 +38,7 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 const (
@@ -1122,6 +1123,7 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 	}
 
 	var doc struct {
+		ID              string `json:"id"`
 		Name            string `json:"name"`
 		HomeRegion      string `json:"homeRegion"`
 		FailoverVersion int64  `json:"failoverVersion"`
@@ -1133,6 +1135,10 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 
 	if doc.Name != name || doc.FailoverVersion != 1 || doc.HomeRegion == "" {
 		t.Fatalf("namespace answers %+v, want %q at version 1 with a region", doc, name)
+	}
+
+	if _, parseErr := namespace.ParseID(doc.ID); parseErr != nil {
+		t.Fatalf("namespace %q answers ID %q: %v", name, doc.ID, parseErr)
 	}
 
 	status, body, err = env.ServerAPIStatus(
