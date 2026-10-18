@@ -45,6 +45,9 @@ type Config struct {
 	Namespaces *namespace.Service
 	Units      coreinventory.Reader
 	Deleted    coreinventory.DeletedReader
+	// History reads the inventory change log for the view at a time. It is
+	// optional: with nil, a request with the at value answers 501.
+	History    coreinventory.HistoryReader
 	Lifecycles map[string]coreinventory.Lifecycle
 	ReadScope  DeletedReadScope
 	// Collections serves the collection routes (ADR 51). It is optional: a nil
@@ -68,6 +71,7 @@ type Handler struct {
 	namespaces  *namespace.Service
 	units       coreinventory.Reader
 	deleted     coreinventory.DeletedReader
+	history     coreinventory.HistoryReader
 	lifecycles  map[string]coreinventory.Lifecycle
 	readScope   DeletedReadScope
 	collections *collection.Service
@@ -112,6 +116,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces:  cfg.Namespaces,
 		units:       cfg.Units,
 		deleted:     cfg.Deleted,
+		history:     cfg.History,
 		lifecycles:  cfg.Lifecycles,
 		readScope:   cfg.ReadScope,
 		collections: cfg.Collections,
@@ -150,7 +155,8 @@ type lockEntry struct {
 
 // unitEntry is one unit as the console reads it. Tool is the tool label of
 // the glossary ("Pulumi" or "OpenTofu"); Reference is the unit reference
-// with the stored lowercase tool code ("pulumi:acme/web/prod"). Name is the
+// with the stored lowercase tool code ("pulumi:acme/web/prod"). UnitID is the
+// stable ID of the unit, which a rename keeps. Name is the
 // tool's own name for the unit. LastChange is the time of the unit's last
 // change in Unix seconds, as lastUpdate is in the stack list. Status is
 // omitted when unknown; ResourceCount is omitted when unknown. Lock is
@@ -163,6 +169,7 @@ type lockEntry struct {
 type unitEntry struct {
 	Tool          string     `json:"tool"`
 	Reference     string     `json:"reference"`
+	UnitID        string     `json:"unitID"`
 	Namespace     string     `json:"namespace"`
 	Name          string     `json:"name"`
 	LastChange    int64      `json:"lastChange"`
@@ -201,6 +208,7 @@ func toUnitEntry(e coreinventory.Entry) unitEntry {
 	return unitEntry{
 		Tool:          toolLabel(e.Tool),
 		Reference:     e.Reference(),
+		UnitID:        e.UnitID,
 		Namespace:     e.Namespace.String(),
 		Name:          e.Name,
 		LastChange:    e.LastChanged.Unix(),
@@ -231,6 +239,19 @@ func (h *Handler) listUnits(
 ) {
 	ctx := r.Context()
 	ns := obj.Namespace()
+
+	at, hasAt, atErr := atQuery(r)
+	if atErr != nil {
+		h.writeError(ctx, w, atErr)
+
+		return
+	}
+
+	if hasAt {
+		h.listUnitsAt(w, r, p, obj, at)
+
+		return
+	}
 
 	if _, err := h.namespaces.Get(ctx, ns); err != nil {
 		h.writeError(ctx, w, err)
@@ -373,6 +394,8 @@ func classifyChange(err error) (int, string) {
 	switch {
 	case errors.Is(err, errInvalidQuery), errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, errNoHistory):
+		return http.StatusNotImplemented, err.Error()
 	case errors.Is(err, coreinventory.ErrInvalidName):
 		return http.StatusBadRequest, "invalid unit name: use the name rules of the tool"
 	case errors.Is(err, coreinventory.ErrNotFound):

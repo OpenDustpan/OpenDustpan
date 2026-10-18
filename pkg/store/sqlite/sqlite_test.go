@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
@@ -120,6 +121,23 @@ func TestSessionConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+// TestSignInFailuresConformance runs the shared failure-budget suite: one
+// SQLite file allows one store, so the suite gets that store for every
+// handle. The store reads its window from its own clock, so it ignores skew.
+func TestSignInFailuresConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunSignInFailures(t, func(t *testing.T) storetest.SignInFailureHarness {
+		t.Helper()
+
+		s := open(t)
+
+		return storetest.SignInFailureHarness{
+			Open: func(*testing.T, time.Duration) authgate.FailureCounter { return s },
+		}
 	})
 }
 
@@ -233,6 +251,26 @@ func TestAuditEntryReaderConformance(t *testing.T) {
 	})
 }
 
+// chainApprovalStore wraps a Store with its path, so the approval cases can
+// break audit appends with direct SQL. It embeds the store, so the suite
+// also reads its chain state, list and durable operations.
+type chainApprovalStore struct {
+	*sqlite.Store
+
+	path string
+}
+
+var (
+	_ audittest.ChainApprover   = (*chainApprovalStore)(nil)
+	_ audittest.ChainBreaker    = (*chainApprovalStore)(nil)
+	_ audittest.ChainOperations = (*chainApprovalStore)(nil)
+)
+
+// BreakAuditAppends implements audittest.ChainBreaker.
+func (s *chainApprovalStore) BreakAuditAppends(ctx context.Context) error {
+	return breakAuditAppends(ctx, s.path)
+}
+
 // TestAuditChainConformance runs the chain switch cases: entries without a
 // hash, runs of chained entries, and the recorded chain state.
 func TestAuditChainConformance(t *testing.T) {
@@ -255,7 +293,7 @@ func TestAuditChainConformance(t *testing.T) {
 		})
 
 		return audittest.ChainTestStore{
-			Store: s,
+			Store: &chainApprovalStore{Store: s, path: path},
 			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
 				t.Helper()
 
@@ -586,6 +624,26 @@ func TestUpdatesConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+func TestStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStateAt(t, func(t *testing.T) storetest.StateAtStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+func TestWorkspaceStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunWorkspaceStateAt(t, func(t *testing.T) storetest.WorkspaceStateAtStore {
+		t.Helper()
+
+		return openAuditedWorkspaces(t)
 	})
 }
 
@@ -952,6 +1010,7 @@ func TestRenameKeepsTags(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "eu-west",

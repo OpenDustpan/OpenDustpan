@@ -53,13 +53,14 @@ type createNamespaceRequest struct {
 	Name string `json:"name"`
 }
 
-// createNamespaceResponse answers a created namespace: its name, home region,
-// failover version and creation time. Times are UTC in RFC 3339 with
+// createNamespaceResponse answers a created namespace: its stable ID, name,
+// home region, failover version and creation time. Times are UTC in RFC 3339 with
 // nanoseconds, the wire form of backup times.
 //
 // Contract: never remove or rename these fields. The command and the console
 // read only this API, and they update on their own schedule.
 type createNamespaceResponse struct {
+	ID              string `json:"id"`
 	Name            string `json:"name"`
 	HomeRegion      string `json:"homeRegion"`
 	FailoverVersion int64  `json:"failoverVersion"`
@@ -130,6 +131,7 @@ func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, p iden
 	}
 
 	h.writeJSON(ctx, w, http.StatusCreated, createNamespaceResponse{
+		ID:              ns.ID.String(),
 		Name:            ns.Name.String(),
 		HomeRegion:      ns.HomeRegion.String(),
 		FailoverVersion: ns.FailoverVersion,
@@ -297,6 +299,7 @@ func (h *Handler) readNamespacePage(
 	}
 	for i := range page {
 		out.Namespaces = append(out.Namespaces, createNamespaceResponse{
+			ID:              page[i].ID.String(),
 			Name:            page[i].Name.String(),
 			HomeRegion:      page[i].HomeRegion.String(),
 			FailoverVersion: page[i].FailoverVersion,

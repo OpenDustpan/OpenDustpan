@@ -47,6 +47,8 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		name string
 	}{
 		{name: "create and read by name and by ID", test: testWorkspaceRoundTrip},
+		{name: "the change log follows the writes of a workspace", test: testWorkspaceChangeLog},
+		{name: "a refused write of a workspace appends no change log row", test: testWorkspaceChangeLogFence},
 		{name: "duplicate workspace name is ErrAlreadyExists", test: testDuplicateWorkspace},
 		{name: "create in a missing namespace is namespace.ErrNotFound", test: testWorkspaceMissingNamespace},
 		{name: "missing workspace is ErrNotFound", test: testMissingWorkspace},
@@ -210,6 +212,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "a purge removes a deleted workspace for good", test: testPurgeWorkspace},
 		{name: "a sweep purge checks the retention of a workspace", test: testSweepPurgeChecksTheRetentionWorkspace},
 		{name: "a purge ends the grants on the workspace", test: testPurgeWorkspaceRevokesItsGrants},
+		{name: "a purge removes the context of the workspace", test: testPurgeWorkspaceDropsItsContext},
 		{name: "an audit entry on a workspace gets its stable ID", test: testAppendFillsWorkspaceID},
 		{name: "a workspace restore and purge race: one wins", test: testRestoreRacesPurgeWorkspace},
 		{
@@ -330,6 +333,7 @@ func newWorkspaceNamespace(t *testing.T, s WorkspaceStore, name string) namespac
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
@@ -666,6 +670,7 @@ func testWorkspaceMissingNamespace(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ghost := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "ghost",
 		HomeRegion:      "eu-west",

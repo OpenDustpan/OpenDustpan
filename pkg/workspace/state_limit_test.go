@@ -41,6 +41,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "local",

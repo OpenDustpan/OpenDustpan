@@ -1,14 +1,15 @@
 ---
 rfc: 29
 title: Using an existing CI as the executor
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 54, 100, 101, 152
 ---
 
 # RFC 29. Using an existing CI as the executor
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: accepted (ADRs 54, 100, 101 and 152). It was a stub opened from the
+competitor review in the research doc "IaC and TACOS landscape".
 
 ## Problem
 
@@ -33,4 +34,15 @@ runners only.
 
 ## Outcome
 
-None yet.
+Accepted on 2026-10-18 through these ADRs:
+
+- ADR 100: an existing CI is not a kind of runner. Write-back is the path
+  for a team that applies in its own CI, and OpenDustpan schedules no work
+  in that CI.
+- ADR 101: the write-back executor, and the verification of the state
+  version that the CI writes.
+- ADR 54: a CI job authenticates with workload identity (OIDC or JWT token
+  exchange), not with a static token.
+- ADR 152: the history policy of the plans and logs of a job.
+
+A question of this RFC that these ADRs do not decide needs a new RFC.

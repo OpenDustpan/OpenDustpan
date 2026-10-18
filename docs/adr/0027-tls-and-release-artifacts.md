@@ -1,6 +1,6 @@
 # 27. TLS and release artifacts
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11. Decision 2 superseded in part by ADR 212
 
 ## Context
 

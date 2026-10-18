@@ -15,6 +15,7 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
@@ -29,6 +30,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -70,17 +72,34 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	tofuHTTP := coverageTofuHTTPRoutes(tb, namespaces)
 	inventory := coverageInventoryRoutes(tb, namespaces)
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
+	contextRoutes := coverageContextRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := make(
-		[]RouteRef, 0,
-		len(pulumi)+len(tfe)+len(tofuHTTP)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount,
+		[]RouteRef,
+		0,
+		len(
+			pulumi,
+		)+len(
+			tfe,
+		)+len(
+			tofuHTTP,
+		)+len(
+			inventory,
+		)+len(
+			auditRoutes,
+		)+len(
+			contextRoutes,
+		)+len(
+			server,
+		)+probeRouteCount,
 	)
 	out = append(out, pulumi...)
 	out = append(out, tfe...)
 	out = append(out, tofuHTTP...)
 	out = append(out, inventory...)
 	out = append(out, auditRoutes...)
+	out = append(out, contextRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -128,6 +147,7 @@ func (coverageNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Nam
 func (coverageNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
 		CreatedAt:       time.Time{},
+		ID:              namespace.NewID(),
 		Name:            name,
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
@@ -562,6 +582,12 @@ func (coverageWorkspaces) ReadResource(
 	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) ReadStateAt(
+	_ context.Context, _ workspace.ID, _ workspace.StateAtRequest,
+) (workspace.StateAtRead, error) {
+	return workspace.StateAtRead{}, workspace.ErrNoStateAt
+}
+
 func (coverageWorkspaces) DiffStates(
 	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
 ) (workspace.StateDiff, error) {
@@ -625,6 +651,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Units:         coverageReader{},
 		Collections:   collections,
 		Deleted:       coverageReader{},
+		History:       nil,
 		Lifecycles:    map[string]coreinventory.Lifecycle{"pulumi": coverageLifecycle{}},
 		ReadScope:     coverageScope{},
 		Authenticator: coverageAuthenticator{},
@@ -638,6 +665,78 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	return inventoryRefs(handler.Routes())
+}
+
+// coverageContextRoutes returns the context adapter's route table.
+func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	writer, err := objectcontext.NewWriter(objectcontext.WriterConfig{
+		Store: coverageContextStore{}, Namespaces: coverageNamespaceStore{}, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("context writer: %v", err)
+	}
+
+	handler, err := contextapi.NewHandler(contextapi.Config{
+		Namespaces:    namespaces,
+		Units:         coverageReader{},
+		Deleted:       coverageReader{},
+		Collections:   nil,
+		Entries:       coverageContextStore{},
+		Writer:        writer,
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
+		Logger:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("context handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageContextStore holds no context. It exists only to build a Handler
+// for its route table; no request is ever served.
+type coverageContextStore struct{}
+
+func (coverageContextStore) Entries(_ context.Context, _ []objectcontext.Ref) ([]objectcontext.Entry, error) {
+	return nil, nil
+}
+
+//nolint:revive // The signature of the objectcontext.Store port.
+func (coverageContextStore) SetAPI(
+	_ context.Context, _ objectcontext.Ref, _ objectcontext.Patch, _ string, _ namespace.Fence, _ audit.Entry,
+) (objectcontext.Entry, error) {
+	return objectcontext.Entry{}, objectcontext.ErrNotFound
+}
+
+func (coverageContextStore) DeleteAPI(_ context.Context, _ objectcontext.Ref, _ namespace.Fence, _ audit.Entry) error {
+	return objectcontext.ErrNotFound
+}
+
+func (coverageContextStore) ReplaceOutput(
+	_ context.Context, _ objectcontext.Ref, _ objectcontext.OutputItem, _ []objectcontext.Entry, _ namespace.Fence,
+) error {
+	return nil
+}
+
+func (coverageContextStore) DropUnit(_ context.Context, _ objectcontext.Ref, _ namespace.Fence) error {
+	return nil
+}
+
+func (coverageContextStore) ByOwner(
+	_ context.Context, _ namespace.Name, _, _ string, _ int,
+) ([]objectcontext.Entry, string, error) {
+	return nil, "", nil
 }
 
 // coverageCollectionStore holds no collection. It exists only so that the
@@ -982,6 +1081,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditChainAllowEntries(),
 		operatorAllowEntries(),
 		stateAllowEntries(),
+		tofuStateAtAllowEntries(),
 		restoreAllowEntries(),
 		journalAllowEntries(),
 		tofuHTTPAllowEntries(),
@@ -1545,6 +1645,22 @@ func operatorAllowEntries() []AllowEntry {
 // instead of a CLI: no CLI version in the matrix calls them.
 const stateCoveringTest = "TestCLIs (pulumiMaskedStateScenario)"
 
+// tofuStateAtAllowEntries returns the OpenTofu console route of the state at a
+// time, which no CLI calls. The harness step of the masked scenario drives it.
+func tofuStateAtAllowEntries() []AllowEntry {
+	const covering = "TestCLIs (tofuMaskedStateScenario)"
+
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/v2/workspaces/{workspace_id}/state-at/{at}",
+			CoveringTest: covering,
+			Reason: "Console route: the CLI never reads the state at a time. " +
+				"The harness step reads it between two applies and before the first, " +
+				"and checks the state version, the masking and the 404 text.",
+		},
+	}
+}
+
 // stateAllowEntries returns the console state routes that no CLI calls. The
 // harness steps of stateCoveringTest drive them directly after two ups.
 func stateAllowEntries() []AllowEntry {
@@ -1566,6 +1682,13 @@ func stateAllowEntries() []AllowEntry {
 			CoveringTest: stateCoveringTest,
 			Reason: "Console route (ADR 41): the CLI never reads masked outputs. " +
 				"The harness step reads them after two ups and checks masking.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state-at/{at}/resources",
+			CoveringTest: "TestCLIs (checkMaskedStateAt)",
+			Reason: "Console route: the CLI never reads the state at a time. " +
+				"The harness step reads the list between two ups and before the first, " +
+				"checks the 404 text, and reads it while a held update runs.",
 		},
 		{
 			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal",

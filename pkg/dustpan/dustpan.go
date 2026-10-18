@@ -46,6 +46,7 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -70,6 +71,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -205,6 +207,9 @@ type settings struct {
 	beforeServe func(ctx context.Context) error
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
+	// durableStore keeps the durable operations and the job schedules, or
+	// is nil without job schedules. See WithDurableStore.
+	durableStore DurableStore
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -262,7 +267,9 @@ func WithWorkspaceStore(s workspace.Store) Option {
 	return func(o *settings) { o.workspaceStore = s }
 }
 
-// WithStateStore sets the state version persistence port. Required.
+// WithStateStore sets the state version persistence port. Required. A store
+// without WorkspaceStateAt (workspace.StateAtReader) is valid at start, but a
+// state-at read fails at request time with workspace.ErrMissingDependency.
 func WithStateStore(s workspace.StateStore) Option {
 	return func(o *settings) { o.stateStore = s }
 }
@@ -526,6 +533,12 @@ type Server struct {
 	// signInProviders binds each provider of the console sign-in to its
 	// issuer at the start, or is the zero value with no console sign-in.
 	signInProviders providerBinding
+	// durable keeps the job schedules, or is nil without them. inactivityEvery
+	// and deletedEvery are the periods of those schedules.
+	durable         DurableStore
+	durableOwner    string
+	inactivityEvery time.Duration
+	deletedEvery    time.Duration
 }
 
 // services holds the domain services that NewServer wires together.
@@ -600,6 +613,7 @@ func defaultSettings() *settings {
 		instanceID:              "",
 		auditShipper:            nil,
 		auditSigner:             nil,
+		durableStore:            nil,
 	}
 }
 
@@ -776,6 +790,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		signInRequests:   adapters.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, adapters.signIn),
+		durable:          cfg.durableStore,
+		durableOwner:     durableOwner(cfg),
+		inactivityEvery:  sweepEvery,
+		deletedEvery:     deletedSweepEvery,
 	}, nil
 }
 
@@ -784,6 +802,7 @@ type adapters struct {
 	pulumi      http.Handler
 	inventory   http.Handler
 	audit       http.Handler
+	context     http.Handler
 	tfe         http.Handler
 	tofuHTTP    http.Handler
 	server      http.Handler
@@ -869,6 +888,7 @@ func newAdapters(
 		pulumi:      api,
 		inventory:   neutral.inventory,
 		audit:       neutral.audit,
+		context:     neutral.context,
 		tfe:         tfeAPI,
 		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
@@ -880,13 +900,16 @@ func newAdapters(
 	}, nil
 }
 
-// neutralHandlers are the tool-neutral inventory API and audit API.
+// neutralHandlers are the tool-neutral inventory API, audit API and context
+// API. context is nil when the store keeps no context.
 type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
+	context   http.Handler
 }
 
-// newNeutralHandlers builds the tool-neutral inventory API and audit API.
+// newNeutralHandlers builds the tool-neutral inventory API, audit API and
+// context API.
 func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 	units, err := newInventoryHandler(svc, cfg)
 	if err != nil {
@@ -898,7 +921,12 @@ func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 		return neutralHandlers{}, err
 	}
 
-	return neutralHandlers{inventory: units, audit: entries}, nil
+	contexts, err := newContextHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	return neutralHandlers{inventory: units, audit: entries, context: contexts}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -1307,12 +1335,14 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	// The first run of the inactivity disable ends before the hook and
-	// before the server serves a request. A slow database delays the start
-	// by firstSweepLimit at most: the hourly runs try again.
-	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
-	s.sweepOnce(firstCtx)
-	stopFirst()
+	if s.durable == nil {
+		// The first run of the inactivity disable ends before the hook and
+		// before the server serves a request. A slow database delays the start
+		// by firstSweepLimit at most: the hourly runs try again.
+		firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+		s.sweepOnce(firstCtx)
+		stopFirst()
+	}
 
 	if s.beforeServe != nil {
 		if hookErr := s.beforeServe(ctx); hookErr != nil {
@@ -1340,9 +1370,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	var sweeps sync.WaitGroup
 
-	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
-	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
-	sweeps.Go(func() { s.pruneSignInRequests(sweepCtx) })
+	if err := s.startSweeps(sweepCtx, &sweeps); err != nil {
+		stopCheck()
+		waitCheck()
+		stopSweeps()
+
+		return errors.Join(err, closeListener(ln))
+	}
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1369,14 +1403,19 @@ const sweepEvery = time.Hour
 // server serves.
 const firstSweepLimit = time.Minute
 
-// sweepInactive runs the inactivity disable of ADR 53 once each
-// sweepEvery, until ctx is done. Run makes the first run before it serves.
+// sweepInactive runs the inactivity disable once each inactivityEvery,
+// until ctx is done. Run makes the first run before it serves.
 func (s *Server) sweepInactive(ctx context.Context) {
 	if s.tokens == nil {
 		return
 	}
 
-	ticker := time.NewTicker(sweepEvery)
+	every := s.inactivityEvery
+	if every <= 0 {
+		every = sweepEvery
+	}
+
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	for {
@@ -1732,6 +1771,49 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// newContextHandler builds the tool-neutral context API on the namespace store
+// when that store also keeps context. A custom store without context gets no
+// context API: its routes are not served and the rest of the API works as
+// before.
+func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
+	store, ok := cfg.namespaceStore.(objectcontext.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No context API: the store keeps no context.
+	}
+
+	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
+	}
+
+	writer, err := objectcontext.NewWriter(objectcontext.WriterConfig{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context writer: %w", err)
+	}
+
+	handler, err := contextapi.NewHandler(contextapi.Config{
+		Namespaces:    svc.namespaces,
+		Units:         cfg.inventoryReader,
+		Deleted:       deleted,
+		Collections:   svc.collections,
+		Entries:       store,
+		Writer:        writer,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
+		Logger:        cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context api: %w", err)
+	}
+
+	return handler, nil
+}
+
 // writeOnceFamilies are the blob key families that the cache keeps: a key in
 // them never holds other bytes, also after a delete. OpenTofu state versions
 // have such keys. Pulumi checkpoints and journal batches do not: a retry or a
@@ -1808,6 +1890,10 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
+	// A reader with no change log still serves the live list; only a request
+	// with the at value fails.
+	history := historyOf(cfg.inventoryReader)
+
 	stacks, workspaces := unitLifecycles(svc, cfg)
 
 	// The move check is the escalation check of the access service. A store
@@ -1826,6 +1912,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
+		History:    history,
 		Lifecycles: map[string]inventory.Lifecycle{
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,
@@ -1844,6 +1931,15 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// historyOf returns the change log reader of r, or nil when r keeps none.
+func historyOf(r inventory.Reader) inventory.HistoryReader { //nolint:ireturn // The optional port of the reader.
+	if history, ok := r.(inventory.HistoryReader); ok {
+		return history
+	}
+
+	return nil
 }
 
 // unitLifecycles returns the restore and purge of each tool. The
@@ -2218,9 +2314,16 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 		return cfg.authenticator, nil
 	}
 
+	// failures shares the failure budget of every instance on one database, or
+	// keeps the budget in the process when the store keeps no counter.
+	var failures authgate.FailureCounter
+	if counter, ok := cfg.namespaceStore.(authgate.FailureCounter); ok {
+		failures = counter
+	}
+
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
-		Failures: nil, Window: 0, CounterErrors: nil,
+		Failures: failures, Window: 0, CounterErrors: nil,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -2453,7 +2556,7 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
-	case strings.HasPrefix(name, "/api/inventory/"):
+	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, "/api/context/"):
 		return "inventory"
 	case strings.HasPrefix(name, "/api/audit/"):
 		return adapterServer
@@ -2680,6 +2783,14 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	// like the installation API: an operator reads the log while the
 	// installation is down for a restore.
 	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
+	// The context API is tool-neutral, as the inventory API is, and refused in
+	// maintenance mode like it.
+	if a.context != nil {
+		mux.Handle(
+			"/api/context/",
+			withCORS(withMaintenance(a.context, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+		)
+	}
 	mux.Handle(
 		"/api/v2/",
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),

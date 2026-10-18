@@ -109,7 +109,11 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 			writeRefusal(r.Context(), w, shape, logger, chainMismatchMessage)
 		case rec.Pending:
 			message := chainPendingMessage
-			if chain.migrating.Load() || chainClaimHolds(rec, chain.chainNow()) {
+			running, err := chain.migrationRunning(r.Context())
+			if err != nil {
+				logger.WarnContext(r.Context(), "audit chain gate could not list migrations",
+					slog.String("error", err.Error()))
+			} else if running {
 				message = chainMigratingMessage
 			}
 
@@ -133,7 +137,7 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		path == "/api/server/maintenance" || strings.HasPrefix(path, "/api/server/maintenance/"):
 		return shapePulumi, false
-	case strings.HasPrefix(path, "/api/inventory/"):
+	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, "/api/context/"):
 		return shapeInventory, true
 	case strings.HasPrefix(path, "/api/v2/"), path == "/.well-known/terraform.json":
 		return shapeTFE, true

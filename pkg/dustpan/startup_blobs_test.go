@@ -115,6 +115,7 @@ func seedNamespaces(t *testing.T, st *sqlite.Store) *namespace.Service {
 	}
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      region,

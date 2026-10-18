@@ -17,8 +17,16 @@ The short name of a tool, as a label in the console, the API and the docs: "Pulu
 _Avoid_: "Pulumi CLI" as a label, "Pulumi Cloud" for the Pulumi CLI, "Terraform" for OpenTofu, tool label
 
 **Namespace**:
-The unit of tenancy that owns units, access rules and secrets. Each tool calls it an organization.
+The unit of tenancy that owns units, access rules and secrets, and the tenant of OpenDustpan Cloud (ADR 215). It has its own fence, home region, audit scope, backup, blueprints, profiles, OIDC issuer, settings and namespace key (ADR 218). With `identity.principalHome: namespace`, it also has its own principals, groups and sign-in. Each tool calls it an organization, and the hosted console calls it an account. A namespace name is unique in the installation.
 _Avoid_: Organization (except when naming a tool's own protocol field), tenant, account, org
+
+**Namespace state**:
+The state of a namespace: `active`, `suspended` (read-only, new work refused), `disabled` (31 days after the suspension) or `deleted` (90 days after the suspension). The write path reads it with the fence (ADR 215 decision 16).
+_Avoid_: Namespace status, account status
+
+**Namespace ID**:
+The stable, opaque identifier of a namespace, with the prefix `ns-`. The server makes it when it creates the namespace, and it never changes. A new namespace with the name of a purged namespace gets a new Namespace ID. So rows that hold the old ID never reach it.
+_Avoid_: Namespace key, org ID, UUID
 
 **Unit**:
 One deployable instance of infrastructure with its own state, in the model of the tool that owns it. A Pulumi stack and an OpenTofu workspace are units.
@@ -61,7 +69,7 @@ The backend or product that holds the state of a unit before an import. Examples
 _Avoid_: Origin, legacy backend
 
 **Installation**:
-One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
+One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path, and its actions have the area `installation:` (ADR 210). The authorization and audit object of the installation keeps the name `@server`. Write `@server` only for that object, and "installation" in each other place.
 _Avoid_: Cluster, instance (one server process), deployment
 
 **Instance**:
@@ -76,9 +84,29 @@ _Avoid_: Whitelist
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value
 
+**Settings resource**:
+The one API resource that holds each setting of a scope: `/api/dustpan/v1/settings` for the installation, and `/api/dustpan/v1/namespaces/{namespace}/settings` for a namespace (ADR 212 decision 7). It has one revision and one `ETag`, and a `PATCH` is a JSON Merge Patch. A policy route, such as `settings/session-policy`, is a view of it.
+_Avoid_: Config API, settings page (that is the console page)
+
+**Idempotency key**:
+The value of the `Idempotency-Key` header that a client sends with a request that changes data (ADR 210 decision 6). The server keeps the first answer for the caller, the route and the key for 24 hours. A retry with the same key and body gets the first answer, and the server does the operation once.
+_Avoid_: Request ID (that names one request in the logs), dedup key
+
 **Layer**:
-A source of the value of a setting: `flag`, `env`, `file` or `default`, in that order of precedence (ADR 63 decision 1). The layer that wins gives the effective value.
+A source of the value of a setting: `flag`, `env`, `file`, `database` or `default`, in that order of precedence (ADR 63 decision 1). The layer that wins gives the effective value.
 _Avoid_: Level, tier
+
+**Optional module**:
+A feature outside the core that has its own routes, its own schedules or both, for example the Catalog or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 211). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
+_Avoid_: Feature flag, plugin, add-on, module (alone)
+
+**Capabilities document**:
+The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 211). `apiVersion` is public, so the console reads it before the sign-in. The module list needs `caller:read`, so the console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
+_Avoid_: Feature list, handshake, capability (alone)
+
+**Forge connection**:
+The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).
+_Avoid_: VCS integration, VCS provider, app (alone)
 
 **Sensitive setting**:
 A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
@@ -95,6 +123,10 @@ _Avoid_: Minimum schema version, compatibility level
 **Backup**:
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
+
+**Namespace backup**:
+The copy of the rows and blobs of one namespace in the portable format (ADR 218 decision 4). It holds the namespace key records, wrapped. It holds the grants of the namespace, and the principals and groups whose home is the namespace. It writes item key blobs only to a backup target that the `backups` table names, so a download holds no item keys. It restores only into its own namespace.
+_Avoid_: Partial backup, namespace export
 
 **Baseline migration**:
 The one migration of each dialect that replaced every migration before it, before the first tag. Its version is 100. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
@@ -113,7 +145,7 @@ A table that a restore does not replace (ADR 72, decision 5). The live rows stay
 
 **Deleted unit**:
 A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
-_Avoid_: Tombstone (except for the stored row), trashed unit, archived unit
+_Avoid_: Tombstone (that is the shred record of a purged unit), trashed unit, archived unit
 
 **Retention period**:
 The time that a deleted unit stays restorable, from the delete to its purge time (`purgeAfter`). `--soft-delete-retention` sets it. The default is 720 hours, and the minimum is one hour.
@@ -127,16 +159,20 @@ _Avoid_: Hard delete, wipe
 The same as a purge. Use "purge" in code and in the API, and "final delete" where a reader needs the plain meaning.
 _Avoid_: Permanent delete
 
-**Retention sweep**:
-The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
-_Avoid_: Garbage collection, reaper
+**Retention expiry**:
+The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/dustpan/v1/deleted-units/sweep` runs it at once. It also finishes the blob purge records. It purges without the dependents check, because the retention period was the recovery window of the team (ADR 153). The end of the retention period of a stored plan or a job log is a redaction with the cause `retention` (ADR 152).
+_Avoid_: Retention sweep, sweep (that is the Sweep feature), garbage collection, reaper
+
+**Orphan cleanup**:
+The task that deletes a key blob with no record (ADR 151 decision 22). It waits a grace period of 24 hours from the write of the blob. So it never deletes the key blob of an item whose transaction has not ended.
+_Avoid_: Orphan sweep, sweep (that is the Sweep feature)
 
 **Blob purge record**:
-A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention sweep deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period.
-_Avoid_: Tombstone
+A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention expiry deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period. It covers the live blob store only. The tombstone of the purge covers the backup targets (ADR 151).
+_Avoid_: Tombstone (that is the shred record of a purged unit)
 
 **Maintenance mode**:
-The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/server/maintenance/enter`. The other state is `normal`.
+The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/dustpan/v1/maintenance/enter`. The other state is `normal`.
 _Avoid_: Downtime, freeze
 
 ### Regions
@@ -164,12 +200,16 @@ _Avoid_: Token, guard
 ### Identity
 
 **Principal**:
-A caller whose identity OpenDustpan checked: a person, a service or a workload. Most principals belong to the whole installation. A principal of a namespace is the exception.
+A caller whose identity OpenDustpan checked: a person, a service or a workload. Each principal has a principal home: the installation or one namespace (ADR 215).
 _Avoid_: User (when the caller can be a machine), actor
 
 **Principal of a namespace**:
-A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation. A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its principals.
+A principal whose home is one namespace. It can only hold grants on its namespace or on an object inside it. It can be a member of a group of its namespace only. A service principal of a namespace is made by a holder of `namespace:manage-principals` (ADR 67). With `identity.principalHome: namespace`, a person who signs in through the identity provider of a namespace is a principal of that namespace (ADR 215). A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its service principals.
 _Avoid_: Namespace service account, local principal
+
+**Principal home**:
+The place where a principal, a group or a custom role belongs: the installation or one namespace (ADR 215). The installation setting `identity.principalHome` chooses the home of new people and groups. A grant never crosses homes: a principal of a namespace holds grants only inside its namespace.
+_Avoid_: Principal scope, tenant, realm
 
 **Principal source**:
 Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal, and through a plain OAuth 2.0 provider an `oauth` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
@@ -219,7 +259,7 @@ A rule in one namespace that matches a JWT from an issuer or a TLS client certif
 _Avoid_: Trust policy, federation rule
 
 **Group**:
-A named set of principals of the whole installation. A principal can be a member of more than one group (ADR 52).
+A named set of principals of one principal home: the installation or one namespace. A group of a namespace holds principals of that namespace only. A principal can be a member of more than one group of its home (ADR 52, ADR 215).
 _Avoid_: Team (except when naming a tool's own protocol field), collection
 
 **Role**:
@@ -338,6 +378,10 @@ _Avoid_: Environment, stack
 A group of workspaces in the TFE-compatible API. It has no effect on names or state.
 _Avoid_: Project (without a qualifier), folder
 
+**Plan**:
+The OpenTofu record of the changes that an apply makes to a workspace. The Pulumi CLI calls its record of planned changes a preview. A plan that a plan phase of a job keeps is a stored plan (ADR 102).
+_Avoid_: Preview (for OpenTofu), dry run, diff (a diff compares two state versions)
+
 **Workspace lock**:
 The lock that one principal holds on a workspace while it changes the state of the workspace. The lock stays until the principal or an administrator releases it.
 _Avoid_: Lease
@@ -381,11 +425,23 @@ The random key that encrypts all secret values of one scope. OpenDustpan stores 
 _Avoid_: DEK, secret key
 
 **Key-encryption key**:
-The key, kept outside the OpenDustpan database, that encrypts data keys.
+The key, kept outside the OpenDustpan database, at the top of the key hierarchy. It wraps each namespace key version, the data keys of the installation scope and the sign-in secrets of each namespace (ADR 217). It is a key file or a KMS key of the operator.
 _Avoid_: Master key, root key, KEK
 
+**Customer key**:
+A key in the key management service (KMS) of a customer that wraps the namespace key versions of one namespace (ADR 217). The server never holds it. It is optional. When the customer disables it, the sealed content of the namespace cannot be opened, and the key state of the namespace is `revoked`.
+_Avoid_: BYOK key, CMK, master key
+
+**Namespace key**:
+The random 256-bit key of one namespace, with the prefix `nk-` and numbered versions. The customer key, when the namespace has one, and the key-encryption key wrap each version. The newest version wraps new data keys and item keys. Older versions only unwrap until a rewrap moves each key to the newest version (ADR 217).
+_Avoid_: Namespace data key (a data key has a scope), namespace KEK
+
+**Key state**:
+The state of the namespace key of a namespace: `active`, `unavailable` (the KMS cannot answer) or `revoked` (the customer disabled its key). The server keeps it in SQL and reads it at each open of a key (ADR 217).
+_Avoid_: Key status, KMS state
+
 **Sealed**:
-Encrypted at rest with the data key of a scope. The server seals OpenTofu state and outputs (ADR 41). The part of the server that seals and opens state is the sealer.
+Encrypted at rest with the data key of a scope, or with the item key of a history item. The server seals each checkpoint blob, event payload and journal batch of a Pulumi update with the item key of the update (ADR 151). It seals the state blob and the outputs document of an OpenTofu state version with the item key of the state version. The part of the server that seals and opens content is the sealer.
 _Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
 
 **Secret value**:
@@ -438,9 +494,696 @@ _Avoid_: Secret count
 
 ### Hosted service
 
-**Hosted distribution**:
-The build of the server and the console that the project runs as its hosted service. It uses the public SDK and the console extension points. It adds only shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59).
-_Avoid_: Fork, enterprise edition, cloud edition
+**OpenDustpan Cloud**:
+The hosted service that the project runs. It is the build of the server and the console with shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59, ADR 77).
+_Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edition with its own features)
+
+**Federation member**:
+One installation in a federation of installations (RFC 79). Federation is opt-in, on a self-hosted installation and on OpenDustpan Cloud. It is not decided: OpenDustpan Cloud is one installation now (ADR 215 decision 21). No API answer, error, ID or host name tells a tenant which member holds its namespace.
+_Avoid_: Shard, cell, pod
+
+**Storage limit**:
+The fair-use limit on the stored bytes of a namespace (ADR 220 decision 13). Its setting is `limits.storageBytes`. At the limit, the server refuses the start of new work, never work in progress.
+_Avoid_: Quota (the catalog quota is another concept), storage quota
+
+### Resources and self-service
+
+**Unmanaged resource**:
+A cloud resource that does not have exactly one unit that manages it. It has three kinds. **Not in any unit**: the state of no unit holds the resource, and only a cloud sweep can find it. **Left behind**: only deleted units hold its resource key. **Managed twice**: two or more live units hold its resource key, from one tool or from both (ADR 163).
+_Avoid_: Orphan (that is a stored file), ghost resource, shadow resource
+
+**Catalog**:
+The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
+_Avoid_: Service catalog, marketplace, portal, inventory
+
+**Catalog request**:
+A declarative JSON document that a principal sends to the Catalog. It states the result that the principal wants, not the steps to get it.
+_Avoid_: Order, ticket, form
+
+**Blueprint**:
+A program that a platform team offers for self-service, with an input schema, platform values and a version. Units made from it are normal stacks or workspaces.
+_Avoid_: Template (Pulumi templates copy code), no-code module, product, offering, golden path
+
+### Jobs and runners
+
+**Job**:
+Work that OpenDustpan asks an executor to do on one unit (ADR 100 decision 19). Its unit is a unit reference with the stable unit ID set, so a rename of the unit keeps its jobs. A change to many units is many jobs. A job has one of four tool-neutral operations: `plan`, `apply`, `destroy` or `refresh`. Each tool maps them to its own commands, and user-facing text keeps the words of the tool. A job is a list of phases. The server fixes the spec of a job at start. A later change of the unit settings or of the branch does not change it.
+_Avoid_: Task, deployment, run (without a tool), operation (alone: name the operation of the job or the durable operation)
+
+**Executor**:
+The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.Executor` names the kind, `write-back` or `runner`, and gives the phases of a spec (ADR 101 decision 1). It also undoes what a job left open after a cancel, a rejection or an expiry. Both executors call the same progress ports, `job.Claimer` and `job.Recorder`. So both meet the same rules for claims, cancel, steps, logs and plans.
+_Avoid_: Launcher (that is the program of a runner that starts each step)
+
+**Phase**:
+The work that one executor does with one claim (ADR 100 decision 4). A phase has one of four kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. `verify` comes after the apply phase of a runner apply job and of a runner destroy job. It holds runner steps that change nothing and check the change (ADR 148 decision 3). A job has a `verify` phase only when the unit settings name its steps. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
+_Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
+
+**Gate**:
+A condition in front of a phase that must open before the phase dispatches (ADR 103 decision 2). A phase can have more than one gate, and it dispatches only when every gate is open. Until then, the job waits in `awaiting-approval`. One rejection of any gate rejects the job. A job that waits longer than the timeout of a gate expires, and the default timeout is 7 days. A gate has one of two types: an approval gate, which comes from the policy decision, or a confirmation gate. For a write-back job, a gate on the deliver phase waits before the commit. The review request then still needs the approvals of the forge (ADR 103 decision 3).
+_Avoid_: Approval (alone: an approval passes an approval gate), check
+
+**Confirmation gate**:
+The gate before each phase that changes, for a job of an agent in approve-first mode or with no mode (ADR 103 decision 2). A write-back job of an agent has it in front of its deliver phase in every mode (ADR 128 decision 4). Only the person who asked the agent can pass it. That person gives one confirmation in a request of their own with no agent. The request comes from an interactive console session, never from an access token (ADR 128 decision 5). It has a fresh authentication. That is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. Its maximum age is the lower of 15 minutes and W when W is above 0, else 15 minutes. W is the token freshness window of the session policy (`job.ConfirmMaxAge`, ADR 128 decision 7). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
+_Avoid_: Approval (an approval passes an approval gate), consent
+
+**Request-changes thread**:
+A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on an approval gate of the job. The status of the gate does not matter. That needs `job:approve` and the groups of that gate. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A change order has its own request-changes threads (ADR 193). A job with a change order origin gets no job thread (ADR 190 decision 16).
+_Avoid_: rejection (a rejection ends the job), review (alone: that is the review request of the forge)
+
+**Dismissal**:
+The resolve of a request-changes thread by a person other than the person who opened it (ADR 128 decision 14). A dismissal needs a reason, and writes an audit entry with that reason.
+_Avoid_: Override (that is a break-glass or a forced write)
+
+**Agent mode**:
+The mode that a user sets for the agent that acts for them: approve-first, review-request or direct (ADR 103 decision 12). `job.CheckAgent` holds the rule at start. Approve-first is the default: each phase that changes gets a confirmation gate. In review-request mode, the agent changes a unit only through a write-back job that delivers as a review request. Its deliver phase still has a confirmation gate (ADR 128 decision 4). In direct mode, a runner job of the agent changes a unit with no confirmation. A write-back job pushes after the confirmation of its delivery. Direct mode needs three switches, each off by default: one of the installation, one of the namespace of the unit and one of the user. A runner job that only plans needs no mode, and it starts in every mode.
+_Avoid_: Autonomy level, agent permission
+
+**Freeze**:
+A change freeze on a namespace (ADR 103 decision 4). While it is active, no phase that changes resources, state or the code in git dispatches. Freezes are opt-in. A namespace has no freeze until a principal with `namespace:manage-freezes` creates one. A freeze has a reason, a start and an optional end. Plans still run, and a phase that runs when the freeze starts runs to its end. A queued job waits with the reason `frozen`, and dispatches after the freeze ends. A freeze never refuses a state write, because it stops only the work that OpenDustpan starts (ADR 103 decision 5).
+_Avoid_: Maintenance mode (that stops the tool APIs of a whole installation), lock
+
+**Manual lock**:
+A lock that a person puts on one unit, one collection or a whole namespace, with a reason (ADR 213 decision 10). It needs `unit:lock`. While it covers a unit, no new job of the unit starts and no queued phase dispatches. A lock request of a tool fails with the holder and the reason. The inventory shows it as the lock flag of the unit, not as a status. A freeze is a schedule for a whole namespace. A manual lock is not a freeze.
+_Avoid_: Freeze, hold, pause
+
+**Write-back**:
+The executor in which OpenDustpan writes a change to git, and the team's existing CI applies it (ADR 100). The change is a direct push or a review request. It runs in the server: each instance claims a deliver phase with a `durable.Runner` (ADR 101 decision 3). It commits through the API of the forge, never with a git client. Each commit has the trailer `Dustpan-Job: <job ID>`. A write-back job does `apply` only, and edits only the config or variable files of the unit. The next final state version of the unit closes the job, after the merge for a review request. A job that sees no such version expires after 14 days by default. OpenDustpan approvals add to the approvals of the forge.
+_Avoid_: Push (alone: a direct push is one of the two deliveries)
+
+**Code location**:
+The code of a unit that a job runs on, as the unit settings name it (ADR 100 decision 5, ADR 125). A start request gives the code location, and the server resolves it at start with the commit. A later change of the head of the branch does not change the job. Each phase of a job runs on one commit. A write-back edit must be a path in the directory of the code location (ADR 101 decision 4). No part of that directory can be CI configuration. A review request needs a code location for the unit (ADR 125).
+_Avoid_: Source (that is the backend of a unit before an import), repository (alone)
+
+**Stored plan**:
+The plan that one plan phase of a job keeps, with an ID that has the prefix `pln-` (ADR 102). It has two parts. `plan-display` is the readable JSON plan that the console shows. `plan-apply` is the plan that the apply phase reads, for example an OpenTofu plan file. Only the runner of the apply phase of the same job reads `plan-apply`, and no person can download it. Each part is one blob with a kind, a size, the SHA-256 of the plaintext and a flag `secret`. The plan records the one state version that it read. It does not change after `PutPlan`. Its own item key seals it, and the server keeps it 400 days from its creation by default (ADR 152). A gate can bind approvals to it. A stale plan never applies: the job goes back to its plan phase. A `pulumi preview` from a workstation is not a stored plan (ADR 152 decision 12).
+_Avoid_: Plan file (that is the `plan-apply` part for OpenTofu), preview, saved plan
+
+**Break-glass (job)**:
+A reason in a start request that lets a job start during an active freeze (ADR 103 decision 6). Without it, the start fails with `ErrFrozen`. It needs `namespace:break-freeze` on the namespace. That action is in another family than `namespace:manage-freezes`, so a principal that can end a freeze does not also get break-glass. The job keeps the break-glass and the freeze ID. The audit entry of the start has the kind `override`. An agent cannot ask for break-glass (ADR 103 decision 7).
+_Avoid_: Freeze override, bypass
+
+**Job token**:
+An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It reads the outputs of another unit only when two checks pass (ADR 213 decision 1). An output-sharing rule names the unit of the job, and the principal can read the outputs. The token of a job that only plans decrypts the secrets of its own unit only when the principal that started the job has `unit:read-secrets`. It also decrypts them when the commit comes from a protected branch. It writes only its lock or lease and the events of the plan (ADR 213 decision 2). It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
+_Avoid_: Runner token (the credential of a runner is the runner key)
+
+**Job-ID claim**:
+The one claim that a job token puts on the principal that it authenticates: the ID of the job (ADR 100 decision 20). The `identity` package holds it in `Principal.JobID`, which is empty for every other credential. The claim adds no action. A state write with the job token reports it as `StateVersion.Job`. So the job record and the history of the unit can show which state version the job wrote.
+_Avoid_: Claim (alone: a claim is also the durable claim of a phase), job claim
+
+**Runner**:
+A long-lived process that the team hosts, of the kind `kubernetes` or `machine` (`runner.Kind`). It registers in one runner pool, claims work for the pool, and starts a launcher for each claim in an isolated place. A runner never runs a step itself, so a runner is a coordinator (ADR 130 decision 1). A runner is not a principal. Its credential is a runner key, and it never calls the REST API (ADR 133 decision 1). Each runner holds one claim at a time by default (ADR 130 decision 6).
+_Avoid_: Agent, worker
+
+**Runner pool**:
+A set of runners that belongs to one namespace (ADR 101 decision 14). A runner belongs to one pool and claims only the durable operations of the kind `job.runner.<pool ID>`. A runner job names its pool at start, and the pool must belong to the namespace of the unit. Else the start fails with `ErrInvalid`. So a runner of one namespace never runs a job of another. The action `runner:claim` acts on a runner pool, a new object kind of the `identity` package (ADR 103 decision 8).
+_Avoid_: Label (labels inside a pool are a later step), runner group
+
+**Pool purpose**:
+The kind of work of a runner pool: `jobs` or `sweeps` (`runner.Purpose`). It never changes after the creation of the pool. A change fails with `runner.ErrImmutable` (ADR 130 decision 3). The server takes the durable kinds that a runner claims from its pool, never from the runner. A runner of a pool for jobs claims only `job.runner.<pool ID>`. A runner of a pool for sweeps claims only `unmanaged.sweep.<pool ID>`. A runner job that names a pool for sweeps fails at start with `runner.ErrPurpose`. A pool for sweeps carries a read-only identity, and `Pool.ReadOnly` is true for it. The server cannot check the role of a host (ADR 130 decision 5). The console labels the purpose "Sweeps".
+_Avoid_: Pool type, pool mode, sweep pool, job pool
+
+**Coordinator**:
+The role of a runner: it claims work and starts one launcher for each claim, and never runs a step itself (ADR 130 decision 1). The Kubernetes coordinator creates one Kubernetes Job for each claim (ADR 136). The machine coordinator starts one sandbox for each claim on its own Linux host (ADR 137). Each replica of the Kubernetes coordinator is a runner of its own, with its own key (ADR 136 decision 8). The ADRs use "the runner (the coordinator)" for one process (ADR 131 decision 1).
+_Avoid_: Controller, scheduler, orchestrator
+
+**Isolation**:
+The kind of isolated place in which a runner starts its launchers (`runner.Isolation`): `kubernetes`, `firecracker`, `gvisor` or `process`. A runner joins with one isolation kind. A Kubernetes runner uses `kubernetes`, and a machine runner uses one of the other three. A pool lists the isolation kinds that its runners may use. An empty list allows every kind except `process`. A pool must list `process` by name to allow it, and the console shows a warning on such a pool (ADR 130 decision 2). The `process` sandbox has no kernel boundary and is for tests and for a developer machine (ADR 137 decision 2).
+_Avoid_: Isolation level, sandbox type, runtime
+
+**Launcher**:
+The static binary `dustpan-launcher` that runs the steps of one claim inside the Kubernetes Job or the sandbox (ADR 130 decision 1, ADR 134). Each claim is of one phase or one sweep. It is pure Go with no cgo, for Linux on each `GOARCH` of the release. It needs no shell, no git and no C library from the image of the team. It starts each step as an argument list, with no shell, in its own process group. It opens the job session and checks the source snapshot before the first step. It gives credentials to the steps of the role `tool` only, and masks secret values in each log. It is also the credentials helper of OpenTofu and the git credential helper of the mode `forge`. The runner never holds a credential of a step (ADR 133 decision 13). The release of a runner is the release of its launcher (ADR 132 decision 1).
+_Avoid_: Executor (that is write-back or runners, ADR 100 decision 19), runner binary, shim
+
+**Runner protocol**:
+The HTTP and JSON protocol under `/runner/v1` for runners and launchers (ADR 131). The runner opens every connection over HTTPS, and the server never connects to a runner. The runner calls the paths of the runner with a proof of its runner key. The launcher calls the paths of the session with a proof of its session key. Each request carries the header `Dustpan-Release`. A server accepts a runner or a launcher of its minor release and of the two minor releases before it (ADR 132 decision 2). The paths are not part of the REST API (ADR 138 decision 6).
+_Avoid_: Runner API, agent protocol
+
+**Assignment**:
+The work of a phase or of a sweep that the launcher reads (ADR 132 decision 6). It holds the steps, the source, the plan and the settings. Its shape has a version (`runner.AssignmentVersion`). A runner sends the highest version that its launcher reads, and the claim never takes an operation above it. A field that changes what a step does raises the version (ADR 132 decision 7).
+_Avoid_: Work (that is the poll answer, which holds no step and no secret, ADR 131 decision 6)
+
+**Join token**:
+A secret that lets one runner join one pool one time (ADR 133 decision 2). A principal with `namespace:manage-runners` creates it. It lives 1 hour by default and 7 days at most (`runner.JoinTTL`). The secret starts with `dpj_`, so secret scanners find it. The server shows the secret once and keeps only its SHA-256. A principal can revoke an unused token. A pool has at most 100 open join tokens (ADR 130 decision 8). Only a join token holds the action `runner:join` (ADR 138 decision 1). A second join with one token fails with `token-used`.
+_Avoid_: Registration token, enrollment token
+
+**Runner key**:
+The credential kind of a runner: an Ed25519 key pair that the runner makes at its join (ADR 133 decisions 1 and 3). The private key never leaves the runner. A runner key holds only `runner:claim` on its pool, and only through the runner protocol. Each request of the runner carries a proof of the key in the header `Dustpan-Proof` (ADR 133 decision 5). A runner key cannot write a step, a log or a plan (ADR 131 decision 1). A key older than 25 days gets `rotateKey` in the heartbeat answer. A key older than 30 days authenticates nothing, and the runner must join again (ADR 133 decision 6).
+_Avoid_: Runner token, runner secret, service token (a runner is not a principal)
+
+**Join again**:
+A join with a name that the pool already has, of a runner that is not retired (ADR 133 decision 3). It keeps the runner ID and replaces the key. It works only for a runner that is offline or has the status `must-rejoin`. A join again of a runner that still sends heartbeats fails with `runner.ErrRunnerOnline`. In its transaction, it expires each live claim of the runner with no job session, and keeps each claim with one. It also clears the previous key. It writes the audit entry `runner-rejoined` (ADR 138 decision 4). A runner whose key is older than 30 days must join again with a new join token (ADR 133 decision 7).
+_Avoid_: Re-register, re-enroll, rejoin (except in the wire values `must-rejoin` and `runner-rejoined`)
+
+**Retire**:
+The act that ends a runner (ADR 133 decision 8). A principal with `namespace:manage-runners` retires a runner with `POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire` (ADR 138 decision 6). A retired runner authenticates nothing. The retire expires the claims of the runner in the same transaction, and the takeover rules apply. It also ends every job session of the runner, so each later request of such a session fails with `retired`. The record stays for the audit log, with the status `retired` (ADR 130 decision 9). A join again does not apply to a retired runner. To retire is not to drain: a draining runner only claims no new work.
+_Avoid_: Delete (a delete of a pool deletes its runners), deregister, revoke
+
+**Handoff token**:
+The credential that a runner gets from the server for one claim and gives to the launcher of that claim (ADR 133 decision 9). The launcher exchanges it one time for a job session. It lives 10 minutes (`runner.HandoffTokenTTL`) and starts with `dph_`. The server keeps only its SHA-256. It never passes through an environment variable, a command-line argument or a file on a disk. A second token for a claim with no session replaces the first. A job token is a different credential: the access token of a tool (ADR 100 decision 20).
+_Avoid_: Job token (that is the access token of a tool), launcher token
+
+**Handoff**:
+The delivery of a handoff token from the runner to its launcher (`runner.HandoffFor`, ADR 133 decision 10). On Kubernetes, the pod pulls it: the launcher sends its projected service account token, and the coordinator checks it with a TokenReview. In a gVisor container, the launcher reads it on its standard input. In a Firecracker microVM, the launcher reads it from a vsock connection. A sandboxed process reads it one time from an inherited pipe, file descriptor 3. The runner keeps no copy after the handoff. The flag `--handoff` of the launcher names the form: `kubernetes`, `stdin`, `vsock` or `pipe` (ADR 134 decision 3).
+_Avoid_: Token injection, bootstrap
+
+**Job session**:
+The session that the launcher of one claim opens with its handoff token (ADR 133 decision 11). The launcher makes an Ed25519 key pair in memory and never writes the private key to a disk. In one transaction, the server uses the handoff token, checks that the claim is live, and stores the session. The session lives as long as the claim. Each later request of the launcher carries a proof of the session key. A session key cannot claim work (ADR 131 decision 1). After the session opens, the launcher renews the claim, not the runner (ADR 131 decision 7). A session of a claim that a takeover replaced authenticates nothing. The launcher of a sweep also opens a job session (ADR 131 decision 3).
+_Avoid_: Session (alone: that is a console session), launcher session
+
+**Source snapshot**:
+The code of one commit of one repository in the blob store (ADR 135 decision 1). It holds the raw git pack with the commit and every tree and blob that the commit reaches. It also holds the allowed submodules and Git LFS objects. Its key is the namespace, the forge connection, the repository, the commit and the hash of the source policy. Two jobs on one commit with one policy share one snapshot. At the start of a runner job, the server gets the pack in a durable operation of the kind `source.fetch`. The launcher reads the snapshot through its job session and checks it before it writes a file. So a runner never connects to the forge for the code (ADR 135 decision 3). The server deletes its blobs 7 days after the end of the last job that names it. A backup does not hold them (ADR 135 decision 9).
+_Avoid_: Snapshot (alone), source (alone: that is the backend before an import), clone, checkout (the files that the launcher writes from a snapshot)
+
+**Source policy**:
+The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Policy`, ADR 135 decision 6). It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the policy does not allow. A change of the policy needs `namespace:manage-runners` and makes a new snapshot key. The routes are `GET` and `PUT /api/dustpan/v1/namespaces/{namespace}/source-policy` (ADR 138 decision 6).
+_Avoid_: Submodule allowlist
+
+### Change orders
+
+**Change order**:
+An object above jobs that holds the plan of one or more units of one namespace, its approvals, its signatures and its threads (ADR 190). Its ID has the prefix `cho-`. Jobs run under it: a plan job for each unit of each plan revision, and an apply job for each unit of the approved revision. The change order owns the approvals of its jobs, so its jobs get no approval gate. Its states are `planning`, `plan-failed`, `in-review`, `approved`, `applying`, `partially-applied`, `applied`, `closed` and `expired`. A person asks for the apply. An agent can only comment and leave blocking comments on it. Version 1 runs runner jobs only.
+_Avoid_: Change request (that is an ITSM record, RFC 51), change set, pull request, merge request, review request (that is of the forge)
+
+**Plan revision**:
+The plan of a change order at one time (ADR 191). It has a number, from 1 and one higher for each attach, and one unit plan for each unit. Only the revision with the highest number is current, and the others are superseded. An attach of a new revision voids every signature of the earlier revisions. A ready revision has a digest.
+_Avoid_: Plan version, patch set, iteration
+
+**Unit plan**:
+The part of a plan revision for one unit (ADR 191). It holds the unit reference, the operation (`apply` or `destroy`), the code location with its commit, and the plan job. It also holds the binding of its stored plan: the plan ID, the hashes of its two parts and the state version that it read. In the console, it is the preview of a Pulumi unit or the plan of an OpenTofu unit (ADR 195).
+_Avoid_: Unit preview (in shared code), sub-plan
+
+**Plan job**:
+A runner job with the operation `plan` that a change order starts for one unit of a plan revision (ADR 190). Its one phase stores one stored plan. It runs as the principal that attached the revision.
+_Avoid_: Preview job, dry run
+
+**Apply job**:
+A runner job with the operation `apply` or `destroy` that a change order starts for one unit of its approved revision (ADR 190). Its spec names the stored plan of the plan job of the same unit (`job.Spec.Plan`), and it has one phase, of the kind `apply`. A stale plan ends it `failed` with the reason `plan-stale`, before any change.
+_Avoid_: Deploy job, run (alone)
+
+**Author (change order)**:
+The principal that created a change order, or that attached a plan revision to it (ADR 190 decision 4). An author never approves, requests changes, rejects, opens a blocking thread or resolves one, also when the author holds `changeorder:approve`. An agent is never an author.
+_Avoid_: Owner (that is a context field), requester (that is of a Catalog request)
+
+**Signature**:
+The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A principal has at most one signature on each revision. A new revision voids it, with the cause `new-plan`. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
+_Avoid_: Sign-off, stamp, approval (alone: an approval is the verdict)
+
+**Approval requirement**:
+One `approve` decision of a policy for a change order: a number of approvals and the groups of the approvers (ADR 192). A change order needs each requirement, and one signature fills one slot of one requirement only. So the approvals across requirements come from distinct people. With no policy, a change order has one requirement of one approval with no groups. Each requirement needs at least 1 approval. A change order always needs at least 1 signature by a principal that is not an author (`MinApprovals`), also when a policy gives the requirements.
+_Avoid_: Quorum, rule (alone)
+
+**Eligible approver**:
+A principal that can approve a change order (ADR 192 decision 5). It holds `changeorder:approve` on each unit, and it is a member of the groups of at least one requirement. It is not an author.
+_Avoid_: Reviewer (alone: any reader can comment)
+
+**Change order review**:
+One submit of one reviewer on one plan revision, with an ID with the prefix `cor-` (ADR 192). Its verdict is `approve`, `request-changes`, `comment` or `reject-and-close`. Request changes keeps the change order open and opens at least one request-changes thread. Reject and close ends the change order `closed`. Both need a reason. Its summary is a comment, so a redaction reaches it. An agent records no verdict: it submits its blocking threads in a review of the verdict `comment`.
+_Avoid_: Review (alone), sign-off
+
+**Draft review**:
+The threads and replies that one reviewer wrote on a change order and did not submit (ADR 193 decision 5). Only its reviewer reads it. The reviewer submits it in one review. A draft write writes no audit entry. No backup holds a draft, and the store deletes it 30 days after its last write.
+_Avoid_: Pending review, draft (alone)
+
+**Thread anchor**:
+What a thread of a change order is about: the whole plan, 1 to 50 resources, or a change group (ADR 193 decision 3). A resource is the unit ID and the key of the resource in the plan of its tool. The key is the URN for Pulumi, and the resource instance address for OpenTofu. A thread follows its anchor into each new plan revision.
+_Avoid_: Target, location, line
+
+**Outdated thread**:
+A thread whose anchor does not map in full to the current plan revision (ADR 193 decision 8). A resource of the anchor has no change in the new plan, or its change group is not in it. An outdated request-changes thread still blocks approval until a person resolves it.
+_Avoid_: Stale thread, orphan thread
+
+**Cause diff**:
+The change of the code that the author of a change order made (ADR 194 decision 2). It is the file diff of each code location from the base commit to the head commit. The review shows it before the effect. The server reads it from the forge at each read and does not store it.
+_Avoid_: Source diff, code diff (alone), state diff (that compares two state versions)
+
+**Needs attention**:
+The section of the review view of a change order that lists each replacement and each delete, one by one (ADR 194 decision 4). It also lists, as a whole, each unit whose plan the server cannot read. It gives a warning for two units of the change order where one reads the outputs of the other. It comes before every change group. A replacement or a delete is never in a group.
+_Avoid_: Dangerous changes, warnings
+
+**Change group**:
+Two or more identical in-place changes in the plan revision of a change order (ADR 194 decision 5). Identical means the same tool, type, value paths and values before and after. A change that touches a secret path is never in a change group, so the key covers no secret value. Its key is a content key, not an ID, with the prefix `cog-`. The key stays the same from one revision to the next for the same change. A thread can have a change group as its anchor, of the kind `change-group`. In Go, it is `changeorder.ChangeGroup`.
+_Avoid_: Group (alone: that is a set of principals), batch, bucket
+
+**Proposed changes**:
+The console heading of a plan of a change order whose units are of more than one tool (ADR 195). For units of one tool, the heading is the word of that tool: "Preview" or "Plan".
+_Avoid_: Plan (for a set of Pulumi units), preview (for OpenTofu units), change set
+
+### Profiles
+
+**Profile**:
+A named set of config, secrets and credential sources in one namespace, which a run of any tool can read (ADR 200). It has an ID with the prefix `prf-` and a name of one or two segments, for example `aws-prod` or `payments/aws-prod`. Each save makes a new profile revision.
+_Avoid_: Environment (except in the paths of the Pulumi Cloud-compatible API), context, config, variable set, vault
+
+**Profile folder**:
+The first segment of a profile name of two segments. It groups profiles in views, and the Pulumi CLI sees it as the ESC project (ADR 202 decision 9).
+_Avoid_: Project (alone)
+
+**Profile revision**:
+One immutable, numbered version of the document of a profile (ADR 202 decision 2). Each revision is a history item with its own item key.
+_Avoid_: Version (alone)
+
+**Revision tag**:
+A name that points to one profile revision, for example `stable`. The tag `latest` always names the newest revision that is not retracted (ADR 202 decision 3).
+_Avoid_: Label (a label is a key and a value for views), version tag
+
+**Entry**:
+A map in the `values` of a profile document whose keys start with `$`, for example `$secret`, `$final` or `$type`. It describes one value (ADR 201 decision 6).
+_Avoid_: Function, fn
+
+**Provider block**:
+A named block under `providers` in a profile document. Its `use` names a profile provider, for example `login/aws` (ADR 201 decision 7).
+_Avoid_: Provider (alone), source, integration
+
+**Profile provider**:
+An adapter that an open of a profile calls, of the kind `login`, `secrets` or `outputs` (ADR 206). The external adapter is one of them.
+_Avoid_: Provider (alone: that is a plugin of OpenTofu or the Pulumi CLI), integration, plugin
+
+**Rotator**:
+An adapter that makes a new credential on a schedule and retires the old one (ADR 206 decision 5). A rotator block of a profile names it.
+_Avoid_: Rotation provider
+
+**Rotation record**:
+The sealed state of one rotator block, with the current, the previous and each `retiring` credential, and the slot of each one. It lives outside the document, so a rollback never brings back a retired credential. The server binds it to a hash of the target inputs of the block, which are static. A change of that hash starts a new record. The old record is `detached` for 30 days, then the server retires its credentials, or keeps it as `orphaned` when a retire fails (ADR 202 decision 8).
+_Avoid_: Rotation state (alone)
+
+**Rotator slot**:
+One place at the remote for one credential of a rotator block, for example one of the two access keys of an IAM user. The spec of a rotator declares its slots. A rotation writes into a slot that holds no `current` credential. It retires the credential of that slot first, and fails with `ErrConflict` while the grace period of that credential has not ended (ADR 202 decision 8).
+_Avoid_: Key slot, version
+
+**Rotation lease**:
+The lease in the store that lets one rotation at a time run for one rotator block. It lasts at most 90 minutes. The record of the outcome must carry its lease token. A manual rotation and a scheduled one take the same lease. The rotation writes the state `pending` before it calls the rotator. A failure keeps `pending` until a later rotation or an abandon (ADR 202 decision 8).
+_Avoid_: Rotation lock
+
+**Exports**:
+The part of a profile document that says what reaches a consumer: `variables`, `files`, `pulumi` and `opentofu` (ADR 201 decision 9).
+_Avoid_: Outputs (outputs belong to a unit or a provider block), environment variables (alone)
+
+**Never store**:
+The mark of a value that no consumer may store in a plan or in state. The data source of OpenTofu refuses it, and only the ephemeral resource reads it (ADR 201 decision 12, ADR 209 decision 3).
+_Avoid_: Ephemeral (alone), transient
+
+**Open**:
+The resolve of a profile for one caller: imports, provider blocks, types and checks, with the secret marks (ADR 203). Each open writes one audit entry. An open needs `profile:open`, or a job token for a profile that the job fixed.
+_Avoid_: Read (a read of a profile gives sealed secrets), decrypt
+
+**Open session**:
+The stored result of an open, with an ID of the prefix `pos-` (ADR 203 decision 3). Only its principal reads it, for at most 12 hours, and each read checks the action of the principal again.
+_Avoid_: Session (alone)
+
+**Profile attachment**:
+A link from a profile to a namespace, a collection or a unit. The jobs of each unit of the object read the profile (ADR 203 decision 5).
+_Avoid_: Binding, assignment (an assignment is a runner term)
+
+**Attachment authority**:
+The principal whose actions an open uses. For a direct open, it is the caller. For a job open, it is the principal who made the attachment. For an attachment of the Catalog, it is the person who published the blueprint version. The server checks the full set of the attach checks again at each open of a job. These are the job start, each step, each token renewal and each read of a session. A person who passes the attach checks can re-authorize an attachment (ADR 203 decision 4).
+_Avoid_: Attachment owner, run-as
+
+**Change rule**:
+The rule of a profile that turns each save into a profile draft that needs approvals (ADR 202 decision 6).
+_Avoid_: Ruleset, change gate
+
+**Routing change**:
+A change of a profile that can change where a provider or rotator block sends secrets. The server decides it from the syntax, with no open. It is one of these: a difference in the text of a `providers` or `rotators` block. A difference in the text of a path of the taint set of a block. A difference in `imports` or `exports`. A rollback, tag move or apply of a draft with such a difference. A change of profile Q can also be a routing change for a referrer of Q. This is true when the referrer follows the changed revision and has a block whose taint set holds a changed path. It needs `profile:open` on the profile and on each such referrer, as well as `profile:write`. The diff compares the evaluated destination hosts, not the text (ADR 202 decision 2).
+_Avoid_: Sensitive change, dangerous change
+
+**Taint set**:
+Each path that an input of a provider or rotator block reads, directly or through expressions. The paths are in the own tree of the profile that holds the block. The server finds it from the syntax tree. A change to a path of a taint set is a routing change (ADR 202 decision 2).
+_Avoid_: Dependencies (alone), inputs (alone)
+
+**Profile draft**:
+A proposed revision of a profile under a change rule, with a base revision and approvals. It applies as a new revision after approval (ADR 202 decision 6).
+_Avoid_: Change request, draft (alone: a draft review belongs to a change order)
+
+**Open rule**:
+The rule of a profile that needs an approved access request before a person opens it (ADR 202 decision 7).
+_Avoid_: Open gate, just-in-time access
+
+**Access request**:
+A request of a person to open a profile for a time, under an open rule (ADR 202 decision 7). It holds a reason.
+_Avoid_: Open request
+
+**Issuer**:
+The OIDC issuer of one namespace, at `https://<issuer host>/oidc/<namespace ID>`, with its own signing keys (ADR 204). The issuer host comes from the installation setting `issuerBaseURL`, else from `publicURL`. When the namespace sets `issuerURL`, `iss` is that URL, and the server signs only with a key that the copy check found at that URL. Its paths `/oidc/<namespace ID>/...` are outside the versioned API. Clouds and other systems trust it.
+_Avoid_: Identity provider (an identity provider signs in people), OIDC provider (alone)
+
+**Issued token**:
+A JWT that the issuer of a namespace signs, with the claims of ADR 205. Its `purpose` is `login` or `adapter`. It lives at most 60 minutes.
+_Avoid_: ID token, access token (an access token authenticates to OpenDustpan)
+
+**Subject template**:
+The list of keys that make the `sub` of an issued token, for example `namespace`, `collection`, `tool`, `unit` and `access` (ADR 205 decision 6).
+_Avoid_: Subject attributes, sub format
+
+**External adapter**:
+A profile provider or a rotator that a team writes and hosts. The server calls it with an HTTPS `POST` and an issued token with the hash of the body (ADR 208).
+_Avoid_: Webhook, plugin, connector
+
+### Agents
+
+**Dusty**:
+The built-in AI agent of OpenDustpan (ADR 120). It is a Go agent loop in each server instance, on durable operations, so a run continues after a restart. It is off until an administrator connects a model. It is not a principal: it holds no grant, no role and no token. No tool of Dusty runs a shell, a command, a script or code that the model writes.
+_Avoid_: Assistant, copilot, bot
+
+**Outside agent**:
+An AI agent that a team brings, which calls the agent tools through the MCP endpoint or the stdio proxy (ADR 123). It gets the same tools, the same act-as and the same audit log as Dusty. It uses no model of the installation, so it pays for its own tokens.
+_Avoid_: External agent, third-party agent, MCP client (that is the program)
+
+**Agent run**:
+One request of a person to Dusty, from a prompt to its end (ADR 120 decision 6). The ADRs call it a run. It ends at a final answer, at a limit, at a cancel or when its credential ends. Each run has its own limits, its own cost and a stop reason. A run is a chain of turns, and holds no claim between turns.
+_Avoid_: Run (alone, where an update or a job can be meant), session, job, task
+
+**Stop reason**:
+The reason that an agent run ended, which the status route of the run gives. Examples are `canceled`, `turn-failed` and `credential-ended` (ADR 120). ADR 129 adds three. `model-quota` is for a used-up plan, quota or credit. `model-rate-limited` is for a wait above 5 minutes. `connection-changed` is for a change of the format, the model or the base address during a run.
+_Avoid_: Exit code, end state, status (alone)
+
+**Turn**:
+One model call and the tool calls of its answer (ADR 120 decision 8). Each turn is one durable operation of the kind `agent.turn`, with the steps `check`, `model`, `tools` and `advance`, in this order. The `advance` step starts the next turn, or ends the run when the answer was final.
+_Avoid_: Step (a turn has steps), iteration, round
+
+**Act-as**:
+The rule that an agent run acts as its person, at the time of each call (ADR 120 decision 13). The run records the subject and the credential ID, never the credential. It resolves the credential at the start of each step and again before each tool call. So a run never has more access than its person, and needs no act-as edge (ADR 120 decision 15).
+_Avoid_: Impersonation, delegation, agent identity
+
+**Agent tool**:
+One of the 12 task-shaped tools that an agent can call (ADR 122). The ADRs call it a tool. Each agent tool declares its action and its object, as an endpoint does (ADR 17). No agent tool takes a command, a script, a query language or code to run.
+_Avoid_: Tool (alone, that is an infrastructure-as-code CLI), function, command, skill
+
+**Agent ref**:
+The reference to the agent that acts for a person (`agent.Ref`, ADR 125 decision 9). It holds the channel, and the run ID or the MCP session ID. `Ref.Validate` refuses a ref with no ID or with the ID of the other channel. The job model holds the same fields in `job.AgentRef` (ADR 128 decision 1). It records the reference on the job, on each approval and on the decision input. Each audit entry of the job holds it in the agent block (ADR 128 decision 17). A job never names an agent by a name only.
+_Avoid_: Agent ID, agent name, agent string
+
+**Channel**:
+The field of an audit entry that names where a request came from. ADR 126 adds three values: `agent` for Dusty, `mcp` for the MCP endpoint and `mcp-proxy` for the stdio proxy (ADR 126 decision 2). The client declares the channel. The MCP endpoint accepts only `mcp` and `mcp-proxy`, never `agent` (ADR 123 decision 8).
+_Avoid_: Transport, source
+
+**Model connection**:
+The one model that an administrator with `installation:manage-agent` connects for the installation (ADR 120 decision 3). Its connection document holds every field. The operator sets each one. The server fills no field with a value for a provider (ADR 129). The only defaults are empty values, the `userAgent` of the release and the `retry-after` header. The credential is a secret item of `@server`. With no model connection, Dusty is off.
+_Avoid_: Model config, provider account, API key
+
+**Connection document**:
+The JSON document `agent.ConnectionSpec` of a model connection, with `version: 1` (ADR 129 decision 2). It holds the wire format, the base address, the model name, the authentication header and its secret reference, and extra headers. It also holds the fields for tools, the transport, reasoning, caching, the conversation key, errors and rate limits. It never holds a secret value.
+_Avoid_: Model config, provider settings, preset
+
+**Wire format**:
+The request and answer format of a model API that a model adapter speaks (ADR 129 decision 5). The values are `chat-completions` (the Chat Completions format), `messages` (the Messages format) and `responses` (the Responses format). One adapter serves every server of its wire format.
+_Avoid_: API type, provider type, flavor
+
+**Secret item**:
+A value that the server seals in a scope with its own data key (ADR 23), and that no route answers again. Examples are the secrets of a sink (ADR 145) and the credential of a model connection (ADR 129 decision 10). A document refers to it by its reference `itm-...`.
+_Avoid_: Secret setting, credential field, sensitive setting
+
+**Conversation key**:
+The identifier that a model adapter sends with each model call of one conversation (ADR 129 decision 18). It goes in the headers and the body field that the connection document names. It is an HMAC of the ID of the first run of the conversation, so it holds no identity of a person. Some model servers use it to route a prompt cache.
+_Avoid_: Session ID, user ID, cache key (alone)
+
+**Secret filter**:
+The filter that takes secret-like text out of prompts, tool results and model answers (`agent.SecretFilter`, ADR 129 decision 24). It runs before the transcript records the text. It is always on, for every model. No setting turns it off. It does not change an opaque reasoning part, which the store keeps sealed and no route answers.
+_Avoid_: Reply filter, output scrubber, redaction (that is a history action), masking (that is for revealed values)
+
+**Capability probe**:
+The durable operation that checks a model connection before the document becomes the connection (ADR 129 decision 29). Its checks are the reach, the authentication, a tool call, a tool result, the transport, the token use, the reasoning parts and the cache. A failure of the first five blocks the connect. The connect route answers at once, and a status route gives the result of each check.
+_Avoid_: Health check, connection test, ping
+
+**Egress allowlist**:
+The list of hosts and CIDR ranges that a model call of the installation can reach (ADR 129 decision 25). A private address or an IP literal needs a CIDR entry with one port, and `http` needs an entry with `"http": true`. No entry overrides the always-denied list of link-local, metadata, unspecified, broadcast and multicast addresses. With no entry, no model call goes out.
+_Avoid_: Egress rule (that is for a job, RFC 16), firewall, IP allowlist (that is for requests to a namespace)
+
+**Reaper**:
+The durable operation that ends each agent run whose turn ended with no step that ends the run (ADR 120 decision 10). Its kind is `agent.KindReap`, and it runs every minute on one instance. It first deletes each sealed reveal past its hard expiry. It then ends each such run as canceled, or as failed with the stop reason `turn-failed`.
+_Avoid_: Retention expiry (that purges deleted units), garbage collector, janitor
+
+**MCP endpoint**:
+The route `/mcp` that serves the agent tools over the Streamable HTTP transport of the Model Context Protocol (ADR 123). It offers tools only: no resources, no prompts and no sampling. It needs no model connection. It is off until an administrator sets `mcpEnabled: true`. It answers 404 while it is off or while the audit log is off.
+_Avoid_: MCP server (as a separate program), agent API
+
+**Stdio proxy**:
+The client command `opendustpan agent mcp` (ADR 123 decision 8). It reads JSON-RPC messages on stdin, forwards each to the MCP endpoint and writes the answers on stdout. It has no tool of its own and no cache. It never opens the database, the blob store or the key-encryption key. Its channel is `mcp-proxy`.
+_Avoid_: MCP proxy, CLI proxy, bridge
+
+**Escape hatch**:
+The one gated path by which an agent reads secret values in plain text: `read_state` with `secretValues: true` (ADR 124 decision 1). It needs `unit:read-secrets` and each stage of the secret gate that applies. By default it is shut, and each agent tool answers masked values.
+_Avoid_: Secret hatch, backdoor, unmask mode
+
+**Secret gate**:
+The list of stages that the server checks before an agent reads secret values (`agent.SecretAccess.Check`, ADR 124 decision 2). The stages, in order: the installation stage, the namespace opt-in, the person opt-in, and the consent for one use (outside agents only). It is in the `Toolset`. No setting of a model, a prompt or a client can open it.
+_Avoid_: Secret switch, secrets toggle
+
+**Maintenance window**:
+The record that groups the instances that start with the secret flag, so that one acceptance covers them all (ADR 124 decision 4). The first instance opens it and puts the installation in maintenance mode, in one transaction. Later instances join it. In code it is `agent.SecretWindow`, in `agent.WindowStore`. The window table is a control table. Maintenance mode is a state of the installation, and the window is the record that puts the installation in that state.
+_Avoid_: Maintenance mode (that is the installation state that a window starts)
+
+**Sealed reveal**:
+The tool result of a secret read of an agent run (`agent.SealedReveal`, ADR 124 decision 9). The server seals it with a data key of its own, in its own table. The key-encryption key wraps the data key. It opens only for the run, the turn and the call that made it. The next model step puts its values into one request and then shreds it. Its hard expiry is its time plus the time limit of the run (`SealedReveal.ExpiresAt`), so it never outlives its run. The table is not in the backup.
+_Avoid_: Reveal (alone, that is a request of a person), secret cache
+
+**Consent**:
+The approval that a person gives in the console for one secret read by an outside agent (ADR 123 decision 10, ADR 124 decision 10). The ADRs also say "consent for one use". It holds for one call, one tool, one unit, one token and one MCP session, for 5 minutes. The person approves it with a console session and a fresh MFA step, never through MCP. A second use is refused.
+_Avoid_: Approval (that is a job gate), opt-in, permission
+
+### History
+
+**History item**:
+One entry with content in the history of a unit (ADR 150). It is one Pulumi update with its checkpoints, events and journal entries, or one OpenTofu state version. It can also be one stored plan or one version of a job log, which the job model owns (ADR 152). Shared code names an item by its item owner, its kind and the ID that the tool gives the item. The kinds are an open set that the server registers (ADR 154): `state`, `plan`, `job-log` and `comment` now. The core never parses the item ID. A preview is not a history item.
+_Avoid_: Revision, version (alone), history entry
+
+**Item owner**:
+The object that a history item belongs to (`history.Owner`, ADR 154). The owner kinds are an open set that the server registers: `unit` for state items, plans and job logs, and `change-order` for comments (ADR 198). The scope of an item key is the namespace and the owner ID. Each owner kind names the object of a read, the action of a redaction and the end of its items.
+_Avoid_: Parent, container, unit (alone, when the owner can be a change order)
+
+**Latest state item**:
+The state item of a unit that no redaction can target (ADR 150, ADR 151). For a stack, it is the update that holds the checkpoint that `stack export` answers. For a workspace, it is the current state version. It also holds the replay base of each update that has not ended or whose journal the server did not replay yet. A request to redact it answers 409 with `history.ErrLatest`.
+_Avoid_: Current item, head
+
+**Item key**:
+The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
+_Avoid_: Version key, derived key, data key (that is the one key of a scope)
+
+**Redaction**:
+The act that destroys the content of one old history item and keeps its metadata (ADR 151). It cannot be undone. The server shreds the item key of the item and deletes its content blobs. It keeps the item row, the hashes, the resource change rows, the redaction record (ID prefix `rdx-`) and the audit entry. A person needs `unit:redact` and gives a reason. The end of the retention period of a plan or a job log is also a redaction, with the cause `retention` (ADR 152). No redaction can target the latest state item. A redaction is not masking: a masked state read hides a secret value and keeps it.
+_Avoid_: Masking, purge (that ends a whole unit), wipe, permanent delete
+
+**Shred**:
+To make an item key unusable, so that nobody can open the content that it sealed (ADR 151). In one fenced transaction, the server marks the key record shredded. From then on, each open of the content fails with `secret.ErrShredded`, on every instance. After the commit, the shred operation deletes the key blob and the content blobs from the live blob store and from each backup target. A redaction shreds the item key of one item. A purge shreds every item key of the unit.
+_Avoid_: Wipe, delete (alone)
+
+**Redaction ledger**:
+The ledger objects that a backup target holds for each redaction and each purge (ADR 151). Before it deletes blobs in a target, the shred operation writes `redactions/<redaction ID>.json` or `tombstones/<tombstone ID>.json` there. A backup also writes each ledger object that its target does not hold yet. A redaction ledger object names the redaction, the cause, the unit, the item, the item key ID and the blob keys. It also holds the time and the hash of the audit entry, and no reason and no name. `backup check` and a restore treat each blob that the ledger names as an expected gap. A restore applies every redaction and every purge of the ledger.
+_Avoid_: Redaction log (that is the port of the redaction records in SQL), shred list
+
+**Tombstone**:
+The durable shred record of a purged unit (`history.Tombstone`, ID prefix `tmb-`, ADR 151). A purge writes one, with the cause `purge`, in its fenced transaction. It names the unit, every item key of the unit and the blob key prefixes of its content. It also holds the actor, the time and the audit entry hash. It has one shred target for the live blob store and one for each backup target. It is in a control table, so a restore does not replace it. It can outlive the unit and its namespace. It is not the stored row of a deleted unit.
+_Avoid_: Purge record, blob purge record (that is the live blob delete of a purge), deleted unit
+
+**Replay base**:
+The checkpoint that a journaled Pulumi update builds on (ADR 151, ADR 43). Some replay bases are part of the latest state item, so no redaction can target them. These are the replay bases of each update that has not ended or whose journal the server did not replay yet. After a replay that fails for good, the replay base stays the latest state item.
+_Avoid_: Base checkpoint, parent checkpoint
+
+**Blame**:
+The record of which history item changed each resource of a unit, with its actor: the principal, the access token and the job (ADR 150). Each tool computes blame for its own state items. After a state item commits, a durable operation compares it with the previous state item of the same unit. It writes one resource change for each resource that the item changed. A blame cursor on each unit names the last item that the operation compared. Blame lags the write by the time of the operation.
+_Avoid_: Attribution, audit (that is the audit log)
+
+**Resource change**:
+One row of blame: one resource that one state item created, updated, replaced or deleted (ADR 150). It names the resource by its URN for Pulumi, or by its resource instance address for OpenTofu. A resource with the same name and a new ID is `replaced`. The row holds the change kind and the count of value paths that changed. It never holds a value or the value path of a secret value. Each tool keeps its rows in its own table. A redaction keeps the rows of the item.
+_Avoid_: Resource event, resource diff, state diff (that compares two versions)
+
+**Point-in-time view**:
+A read of a unit, or of the inventory of a namespace, at a time `at` in Unix milliseconds (ADR 150). For a unit, it answers the masked state read of the state item that was current at that time, with its actor. For a Pulumi stack, the view is per update, not per checkpoint save. The view of a redacted item holds no state, and lists the resources from the resource changes. The inventory view reads the inventory change log. Every view uses the access of the caller now, not the access at the time `at`.
+_Avoid_: Snapshot, time travel, historical state
+
+**Inventory change log**:
+The append-only log of each inventory write (ADR 150). Each tool appends one row in the transaction of each inventory write: `created`, `changed`, `renamed`, `deleted`, `restored` or `purged`. A row holds the fields of the inventory entry at that time, the time of the write and a sequence number. The sequence is per namespace. A counter row of the namespace assigns it in the write transaction, so it follows the order of commits (ADR 154). A purge keeps the rows of the unit, which hold names and counts and never state. The server keeps the log forever, and no setting changes this. A rebuild of the inventory cannot rebuild the log in full.
+_Avoid_: Inventory history, audit log (that records actions)
+
+**Dependency edge**:
+A record that a dependent reads the outputs of a source unit (ADR 153). It holds the source unit, the dependent unit when the server knows it, the principal subject, the kind and the evidence. It also holds the first and the last time seen and a count of reads. The first kind is `output-read`. The evidence is `job`, `lock`, `principal` or `declared`. An edge can link units of two tools or of two namespaces. An edge with the evidence `job`, `lock` or `declared`, last seen within the dependents window, blocks a delete that is not forced. An ambiguous `lock` edge and a `principal` edge never block.
+_Avoid_: Reference, link (that is a namespace link or a context link)
+
+**Dependents window**:
+The time in which a dependency edge counts, from its last time seen (ADR 153). The default is 90 days, and the setting is `--dependents-window` (`DUSTPAN_DEPENDENTS_WINDOW`). The window must be at least the retention period, or the server refuses to start. So the edge of a deleted dependent stays in the window while a team can restore that dependent. The graph uses the same window (ADR 162).
+_Avoid_: Edge TTL, lookback
+
+**Recovery window**:
+The time from the delete of a unit to its purge (ADR 153). It is the retention period, and no second period exists. In this window, `unit:restore` brings the unit back with its ID, state, history, secrets, grants and edges. A read of its outputs through its old name answers 404. When no live unit holds the name, the server counts the read on the deleted unit. The deleted units list answers this count and the last time.
+_Avoid_: Grace period, undo window
+
+### Context, graph and Sweep
+
+**Sweep**:
+The feature that finds unmanaged resources, and one run of it (ADR 163). A sweep is a cloud sweep or a state check. The console shows both kinds together. As the name of the feature, write Sweep. The Go names of `pkg/unmanaged` keep "scan", for example `Scan` and `ScanStore`, because they are internal.
+_Avoid_: Scan (except in the Go names of `pkg/unmanaged`), discovery, crawl, sweep for anything but the Sweep feature (write "retention expiry" or "orphan cleanup")
+
+**Cloud sweep**:
+A sweep that reads the cloud on a runner of the team, never in the server (ADR 164). A runner of a pool of the purpose `sweeps` claims the sweep and runs the command of its sweep target. The command runs with the workload identity of the runner host. The runner uploads a sweep report, and the server matches it against the resource index. Only a cloud sweep can find a resource that is not in any unit. A sweep is not a job, and the server holds no cloud credential for it.
+_Avoid_: Cloud scan, scan job
+
+**Sweep target**:
+The namespace data that tells a cloud sweep what to read (`unmanaged.Target`, ADR 164). It holds a name, a runner pool of the purpose `sweeps`, the account scopes, a command, a schedule and a timeout. An account scope is an AWS account, an Azure subscription, a Google Cloud project or a Kubernetes cluster, with optional regions. The schedule is from 1 hour to 30 days, or none. The timeout is at most 24 hours, and 2 hours by default. A target names no credential, and its command holds no secret. A namespace has at most 100 targets.
+_Avoid_: Scan target, sweep config
+
+**State check**:
+A sweep in the server that finds left-behind and managed-twice resources from the resource index (ADR 163). It needs no runner and no cloud credential. It classifies the contested keys of one namespace and the key of each finding that is not resolved. It writes findings with the evidence `state`. It runs one time each day for each namespace with at least one unit, at a time that a hash of the namespace name gives. It also runs after a soft delete, a restore or a purge of a unit, and on request. It is a sweep of the kind `state`.
+_Avoid_: State scan, index scan
+
+**Sweep report**:
+The JSON Lines file that the command of a cloud sweep writes to the path in `DUSTPAN_SWEEP_REPORT`. The launcher gives that path to the command (ADR 130 decision 4, ADR 134 decision 6). The launcher uploads the report as a stream with `PUT /runner/v1/session/sweep-report`. Only the session key of the claim of the sweep can upload it, and a runner key cannot (ADR 131 decision 3). The upload carries the header `Dustpan-Content-SHA256`, as a log chunk does (ADR 131 decision 10). The upload ends the claim of the sweep, and a sweep has no finish (ADR 131 decision 4). ADR 164 gives the format and the bounds of the report.
+_Avoid_: Sweep result, scan output
+
+**Namespace link**:
+A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. A link is active only when an administrator of each namespace accepts it with `namespace:accept-link`. The operator cannot make one alone (ADR 216). A link is one of the joins between namespaces (ADR 216 decision 8). A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
+_Avoid_: Link (alone), namespace trust, federation
+
+**Context**:
+The facts that describe an object for people and agents (ADR 160). A namespace, a collection, a unit, a resource of a unit and a blueprint carry context. Each object has five fields: `summary` (text, 2 KiB), `runbook` (Markdown, 64 KiB), `owners` (up to 20), `onCall` (500 bytes) and `links` (up to 50). A link has a title, an `http` or `https` URL and a kind: `docs`, `runbook`, `dashboard`, `repository` or `other`. The docs of an object are its runbook and its links of the kind `docs`. An owner is `group:<name>`, `principal:<ID>` or other text. A unit also has the `readme` output as a field. The read API resolves context along the chain of the object: the resource, the unit, the blueprint, the collection and the namespace (ADR 161). Context is data, never instructions.
+_Avoid_: Metadata, annotations, description, label (that is for views and filters), scope (that is the scope of a data key)
+
+**Reserved output**:
+The output `opendustpan` of a unit of any tool, which holds the context of the unit and of its resources (ADR 160). It holds a JSON object, or a string with the JSON of one, with `schemaVersion` 1. The top-level fields describe the unit. The field `resources` describes up to 200 resources of the unit by their key in the state. The encoded value is at most 64 KiB. The parser refuses an unknown field. An output that the tool marks as secret gives no context. For one field of one object, the reserved output wins over the API.
+_Avoid_: Context output, metadata output
+
+**Context source**:
+Where a context entry comes from: `api` or `output` (ADR 160). A person or a client sets `api` context through the context API. A team sets `output` context in the reserved output of a unit. A namespace, a collection and a blueprint have only the API source. A unit and its resources have both. The API refuses to set a field that the output of the same object sets, with 409 `ErrFieldFromCode`. A durable operation projects the outputs after each new latest state item, so a read never parses state.
+_Avoid_: Origin, layer (that is a source of a setting value)
+
+**Provenance**:
+The object and the context source of one resolved context value (ADR 160). The read API answers each resolved value with its provenance. It also answers each entry of each source as it is. The owners and the on-call of an object that the caller cannot read still resolve. Their provenance then keeps only the source and the kind of the object, not its name (ADR 161).
+_Avoid_: Origin, lineage (that is an OpenTofu state history), source (alone)
+
+**Shadowed value**:
+An API context value that the reserved output hides, because the output now sets the same field of the same object (ADR 160). The output wins. The read API lists the API value as shadowed, and the console offers to delete it. The API allows a clear of such a field.
+_Avoid_: Overridden value, stale value
+
+**Graph**:
+The units and the dependency edges between them (ADR 162). A node is a unit, named by namespace, tool and stable unit ID. An edge is a dependency edge that names a dependent unit and was last seen within the dependents window. An edge that names only a principal is not a graph edge. Owners and collections are facts of a node, not edges. A resource is a node only inside its unit. The graph keeps no records of its own: it reads the dependency edges. A query never passes through a unit that the caller cannot read.
+_Avoid_: Topology, dependency map
+
+**Focus view**:
+The view of the graph that the console shows on the page of a unit (ADR 162). It shows the focus unit and its neighbors one hop upstream and one hop downstream. It shows up to 12 neighbors in each direction by default, and 50 at most, the newest edges first. It folds the other neighbors, and the units one hop beyond a shown neighbor, into their collections. It reads no further than two hops.
+_Avoid_: Neighborhood view, full graph
+
+**Fold**:
+The part of the focus view that stands for units of one collection that the view does not show one by one (ADR 162). It names the namespace, the collection and the count of units. For each shown unit, it gives the count of edges to the fold. The console shows a fold as a box with a count, and a click on it opens the units of that collection.
+_Avoid_: Group (that is a set of principals), cluster, bucket
+
+**Blast radius**:
+The units that a walk of the graph reaches in N hops downstream from one unit, to the units that read its outputs (ADR 162). N is 1 to 5, and 2 by default. An answer holds at most 500 units, and 200 by default. A unit that the caller cannot read counts as hidden, and the walk does not follow its edges. The console shows the blast radius before a destroy or a delete, next to the delete check, with the owners of each unit.
+_Avoid_: Impact, dependents (that is one hop downstream)
+
+**Resource index**:
+A tool-neutral projection with one entry for each managed resource of the latest state item of each unit (ADR 163). An entry holds the unit, the key of the resource in its state, the type and its resource keys. A data source is never an entry. A durable operation replaces the entries of a unit after each new latest state item, and writes only the difference. A unit has at most 100,000 entries. A unit with client-encrypted state has no entries.
+_Avoid_: Inventory (that is the list of units), resource catalog
+
+**Projection run**:
+One run of the durable operation `projection.unit` for one unit (ADR 166). It reads the latest state item of the unit with secret values masked. It writes the output entries of context, the entries of the resource index and the deleted marks of resource context. Each transaction that sets a new latest state item starts a run, unless a run of the unit already waits. So state items that arrive while a run waits coalesce into that run. A run is not part of blame.
+_Avoid_: Projection job (a job belongs to the job model), indexer, scan
+
+**Projection table**:
+A table that holds only data that the server can compute again from other tables (ADR 166). The resource index is one. A backup leaves the projection tables out. A restore empties them, and the server builds them again for each namespace. Until the build of a namespace ends, its state check and the match of its sweeps wait. So an index that is not complete never changes a finding.
+_Avoid_: Cache, derived table, control table (a restore keeps its rows)
+
+**Resource key**:
+The provider and the cloud ID of one resource, which the resource index uses to find one cloud resource in several units (ADR 163). For AWS, it is the ARN. For Azure, it is the resource ID. For Google Cloud, it is the full resource name. Two keys name the same cloud resource when they are equal after `unmanaged.NormalizeKey`. A resource with no such attribute has no resource key. It is not the key of a resource in its state, the URN or the address.
+_Avoid_: Resource ID, cloud ID (alone), URN, address
+
+**Holder**:
+A unit whose latest state holds a resource key (ADR 163). The holders of a key for a namespace are units of that namespace and of its live linked namespaces. Two resources of one unit are one holder. A soft-deleted unit stays a holder, marked deleted, until its purge.
+_Avoid_: Owner (that is a context field), manager
+
+**Contested key**:
+A resource key of a namespace with more than one holder (ADR 163). A unit of the namespace holds it, and another distinct live unit of the namespace or of a linked namespace also holds it. A key that only deleted units hold is also contested. A state check reads the contested keys of a namespace in pages of 1,000 (`Index.Contested`).
+_Avoid_: Conflict, duplicate key
+
+**Finding**:
+The record of one unmanaged resource key in one namespace (`unmanaged.Finding`, ADR 165). It holds the kind, the resource key, the cloud type, the account scope, the region, the name and the tags from the last sweep. It also holds up to 20 units of the namespace that hold the key, the evidence (`state` or `sweep`) and the status. The status is `open`, `ignored`, `pending` or `resolved`, and `unmanaged.Next` decides each transition. A finding is namespace data, and it outlives the units that it names. Its actions are `import`, `write-code`, `delete`, `choose-owner`, `ignore` and `cancel`. The server never deletes a cloud resource.
+_Avoid_: Alert, issue, violation, scan result, orphan
+
+**Ignore rule**:
+A rule of a namespace that ignores each new finding that it matches, with its reason (`unmanaged.IgnoreRule`, ADR 165). It selects by provider, account scope, type, a tag key with an optional value, and kinds. Only the provider is required. A type can be exact, or a prefix that ends with `*`. A rule can have an end. A rule never ignores a finding that existed before the rule, and its delete opens no finding. A finding names the rule that ignored it. A namespace has at most 500 rules.
+_Avoid_: Suppression, filter, allowlist
+
+### Console
+
+**Theme**:
+The look of the console that a person selects: `default` or `terminal` (ADR 180). A theme sets the font of the interface and the default of the keyboard settings. The colors come from the color mode and the color scheme.
+_Avoid_: Skin, style
+
+**Terminal theme**:
+The opt-in theme of the console: IBM Plex Mono for all text, dense, keyboard first, with color schemes. "Terminal" is its only name.
+_Avoid_: The name of a terminal emulator or of an editor for it
+
+**Color mode**:
+`system`, `light` or `dark`. `system` follows the color scheme of the operating system.
+_Avoid_: Theme (for light or dark)
+
+**Color scheme**:
+A palette of the Terminal theme, from the Gogh collection, mapped to the color tokens of the console (ADR 180). Its name is a label with credit to its authors, never our name. `opendustpan` is the built-in scheme: the palette of the default theme.
+_Avoid_: Theme (for a palette), skin
+
+**Preset**:
+Branding that an operator sets for the whole installation, for example the palette of OpenDustpan Cloud. A person never selects a preset, and a theme and a color scheme apply on top of it (ADR 180).
+_Avoid_: Scheme, theme (for branding)
+
+**Preferences**:
+The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+_Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user settings
+
+
+**Language** (of a person):
+The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 33 languages of ADR 181 and ADR 231. The language also sets the direction of the page: `ar` and `he` write from right to left. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+_Avoid_: Locale (for the language)
+
+**Formatting locale**:
+The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock (`hourCycle`), the date style, the first day of the week, the time zone and the digits. The digits are Western (`latn`) or Arabic-Indic (`arab`), ADR 231.
+_Avoid_: Language (for formats), region
+
+**Message file**:
+The file that holds the messages of one language in ICU MessageFormat (ADR 181). The console has one for each language, and the server has one for each language of its emails and chat notices (ADR 234). It marks each high-stakes message, which needs native review before it ships. Each translated message carries its translation status and the hash of its English source (ADR 232).
+_Avoid_: Catalog (that is the self-service gateway), translation table
+
+**Term list**:
+The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). It adds to the shared term list, which holds the names of tools and projects, commands and CLI flags for every language (ADR 233). A check fails a translation that changes a term. A language can ship with a draft list. An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
+_Avoid_: Glossary (that is this file), do-not-translate list
+
+**Pseudo-locale**:
+A test language of the console. `en-XA` makes each message longer, adds accents and puts brackets around it (ADR 181). `ar-XB` shows the literal text of each message from right to left and sets the direction to right to left (ADR 231). Its arguments stay as they are. Tests use them to find clipped text, text outside a message file and layout that does not mirror. Release builds do not list them.
+_Avoid_: Test language, fake locale
+
+**Translation status**:
+How far people checked a translated message or a language: `machine-translated`, `community-verified` or `native-reviewed` (ADR 232). A change to the English source makes a translation stale, and a stale translation counts as `machine-translated`. A language has the highest status that 95% of its messages and all its high-stakes messages hold. The check computes it.
+_Avoid_: Quality, completeness (for the status), approved
+
+**Machine-translation note**:
+The note for a language with the status `machine-translated` (ADR 232). The console, the translated docs and each notice show it, in that language and in English. The text: "This text was machine translated. Help us fix and check it. The credits page names each person who helps." A report mode next to it gives each string a link to report it. The credits page names the people who translated or checked each language.
+_Avoid_: Disclaimer, warning (for the note)
+
+**Product name**:
+The name of the application that an operator sets for the installation, `branding.productName` (ADR 235). The default is "OpenDustpan". It reaches the console, emails and chat messages only. Server errors, logs, CLI output and audit entries say "OpenDustpan".
+_Avoid_: Brand, white label (for the name)
+
+**Agent name**:
+The name of the built-in agent that an operator sets, `branding.agentName` (ADR 235). The default is "Dusty". Text that the agent writes to a person uses it. Logs, the audit log and the API keep the fixed agent ID `dusty`.
+_Avoid_: Bot name, persona
+
+**Error code**:
+The stable machine code of an API error, for example `workspace.locked` (ADR 182). It is `errorCode` in the camelCase APIs and the JSON:API `code` member in the TFE-compatible API. A code never changes its meaning. The console selects its message by the code and never parses the English text. Not the `code` field of the camelCase error shapes, which is the HTTP status.
+_Avoid_: Error type, error ID, status code (for the machine code)
+
+### Operations
+
+**Incident**:
+An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.
+_Avoid_: Ticket, outage, alert
+
+**Classification**:
+The record of a person that says whether an incident is major, with the criteria that the person found met (ADR 147 decision 5). Classifications are append-only. The last one is the current classification. The server never classifies an incident.
+_Avoid_: Triage, severity (a severity is a different field)
+
+**Commander**:
+The person who leads the response to an incident (ADR 147 decision 1).
+_Avoid_: Owner, lead
+
+**Cyber threat record**:
+A record of a cyber threat in a namespace, with an ID that has the prefix `thr-` (ADR 148 decision 13). It has a title, a description, the time of detection, links to units and notes. A person records whether the threat is significant, with a reason, and each voluntary notice of the threat to an authority. The server never decides that a threat is significant, and never sends a notice. A person closes the record with a note on the outcome. A cyber threat record is not an incident: the threat did not affect a service.
+_Avoid_: Threat (alone), alert, vulnerability
 
 ## Flagged ambiguities
 
@@ -450,9 +1193,41 @@ _Avoid_: Fork, enterprise edition, cloud edition
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
+- **Lease** names the update lease of the Pulumi CLI, the rotation lease of a rotator block, and a lease of Vault (ADR 207). Name which one.
+- **Orphan** means a stored file, for example a blob that no row names. For a cloud resource that no unit manages, or that two units manage, write "unmanaged resource" and name its kind.
+- **Catalog** is the self-service gateway only. The list of all units is the inventory.
+- **Job** and **operation** are different. A job is work that OpenDustpan asks an executor to do on one unit. Each phase of a job is one durable operation (ADR 100). The operation of a job is `plan`, `apply`, `destroy` or `refresh`. Name which one.
 - **Migration** means a SQL schema migration only. For the move of a unit into OpenDustpan, write "import".
 - **Restore** has three meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). A restore of a deleted unit brings the unit back before its purge (ADR 47). Name which one.
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
-- **Break-glass** has two meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. Name which one.
+- **Break-glass** has three meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. A break-glass of a job starts a job during an active freeze (ADR 103). Name which one.
+- **Sweep** names the Sweep feature only: a cloud sweep or a state check. The task that purges deleted units is the retention expiry. The delete of key blobs with no record is the orphan cleanup (ADR 151). The Go name `inventory.Sweeper` is older than this rule.
+- **Source** has two meanings. The term **Source** is the backend of a unit before an import. A source snapshot and the source policy name the code of a commit for a runner job (ADR 135). The unit setting that names that code is the code location (ADR 100). Never write "source" alone for the code.
+- **Snapshot** is the source snapshot only (ADR 135). Do not use it for state, a backup, a checkpoint or a state version.
+- **Session** has three meanings: the console session of a person, a job session of a launcher (ADR 133), and an MCP session (ADR 123). Name which one.
+- **Job token** and **handoff token** are different. A job token is the access token of a tool for the unit of a job (ADR 100). A handoff token opens one job session (ADR 133).
+- **Executor** and **launcher** are different. An executor is the way a job runs: write-back or runners (ADR 100). The launcher runs the steps of one claim (ADR 134).
+- **Plan** has six meanings. They are the operation `plan` of a job, the phase kind `plan` and a stored plan. They are also the OpenTofu plan, a plan revision and a unit plan (ADR 195). Name which one.
+- **Signature** has three meanings. A webhook delivery has one (ADR 145), a signed audit segment has one (RFC 71), and a change order has signatures (ADR 191). Name which one.
+- **Review** has four meanings: a review request of the forge, a break-glass review, an incident review and a change order review (ADR 192). Name which one.
+- **Group** is a set of principals. A change group is a set of identical changes in a change order (ADR 194). Write "change group" for the second.
+- **Claim** has two meanings. The durable claim of a phase gives one executor the right to run it. The job-ID claim is a field of a principal that a job token authenticates (ADR 100). Name which one.
+- **Approval**, **confirmation** and **consent** are different. An approval passes an approval gate (ADR 103). A confirmation passes a confirmation gate. A consent allows one secret read of an outside agent (ADR 124).
+- **Tool** is an infrastructure-as-code CLI. An agent tool is one of the tools of an agent (ADR 122). Write "agent tool" for the second.
+- **Key** has many meanings: a data key, an item key, a resource key, a runner key, a blob key and a tag key. Name which one.
+- **Scope** has three meanings: the namespace and unit of a data key, an audit scope, and an account scope of a sweep target. Write "account scope" for the third.
+- **Holder** has three meanings: the holder of a lock, the holder of an action, and the holder of a resource key. Name which one.
+- **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
+- **Module** has three meanings: an OpenTofu module, a Go module and an optional module of the server (ADR 211). Write "optional module" for the third.
+- **Capability** has four meanings. They are an upload capability, a capability probe (ADR 129), the capability list of the Pulumi CLI and the capabilities document (ADR 211). Name which one.
+- **`@server`** is the name of the authorization and audit object of the installation, and of the installation scope of a secret. It is not an action area and not a path. The action area is `installation:`, and no path of the API holds the word `server` (ADR 210).
+- **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
+- **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
+- **Provider** has two meanings. A provider of OpenTofu or the Pulumi CLI is a plugin of the tool, for example a provider wrapper (ADR 170). A profile provider is an adapter that an open calls (ADR 206). Write "profile provider" or "provider block" for the second.
+- **Environment** is the word of the Pulumi CLI for a profile, in the paths of the Pulumi Cloud-compatible API (ADR 209). Everywhere else, write "profile". An environment variable is a variable of a process.
+- **Open session** and the other sessions are different: an open session holds the result of one open of a profile (ADR 203).
+- **Access** is also a claim of an issued token: `read`, `write`, `rotate` or `open` (ADR 205). An access token authenticates to OpenDustpan. Name which one.
+- **Tag** has two meanings: a tag that a tool sends for a unit, and a revision tag of a profile. The key and value pairs of a profile are labels. Name which one.
+- **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.

@@ -310,6 +310,7 @@ func checkWorkspaceRoute(t *testing.T, handler *tfe.Handler, tc workspaceRouteCa
 	req.SetPathValue("organization", "acme")
 	req.SetPathValue("workspace", "web")
 	req.SetPathValue("id", "ws-test123")
+	req.SetPathValue("workspace_id", "ws-test123")
 	req.SetPathValue("state_version_id", "sv-test123")
 	req.SetPathValue("output_id", "sv-test123.greeting")
 
@@ -771,6 +772,12 @@ func (p pagingWorkspaces) ReadResource(
 	_ context.Context, _ workspace.StateVersionID, _ string,
 ) (workspace.StateDetail, error) {
 	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) ReadStateAt(
+	_ context.Context, _ workspace.ID, _ workspace.StateAtRequest,
+) (workspace.StateAtRead, error) {
+	return workspace.StateAtRead{}, workspace.ErrNoStateAt
 }
 
 func (p pagingWorkspaces) DiffStates(
