@@ -87,4 +87,10 @@ on 2026-10-18, as the project manager decided under the owner's decision rule: o
 `/api/dustpan/v1/` for every tool-neutral route, resource-oriented paths,
 `<area>:<verb>` action names with `installation:` for `server:`, a major
 version in the path after 1.0, and one JSON style guide. The tool-compatible
-APIs keep their own paths.
+APIs and each protocol endpoint that an external system stores keep paths
+outside `/api/dustpan/v1`. Unit paths hold the unit ID. The decision also
+closes the points that were left: reads across namespaces use the wildcard
+`-` (`namespaces/-`), custom methods use a sub-path segment, deprecation
+uses the `Deprecation` and `Sunset` headers with a release-notes entry, and
+every route that changes data takes an `Idempotency-Key` header (owner
+decision 2026-10-18). No question of this RFC stays open.

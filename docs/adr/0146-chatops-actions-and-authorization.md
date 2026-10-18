@@ -1,6 +1,6 @@
 # 146. ChatOps: three safe actions, linked identities and approval with a fresh authentication
 
-Status: accepted · 2026-10-18 · decisions 9 and 13 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210
+Status: accepted · 2026-10-18. Decisions 9 and 13 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 

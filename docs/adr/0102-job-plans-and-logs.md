@@ -1,6 +1,6 @@
 # 102. Job plans and logs: parts, chunks, uploads and reads
 
-Status: accepted · 2026-10-17 · decisions 2, 7 and 8 superseded in part by ADR 190 · decision 2 extended by ADR 194. Route paths superseded in part by ADR 210
+Status: accepted · 2026-10-17. Decisions 2, 7 and 8 superseded in part by ADR 190. Decision 2 extended by ADR 194. Route paths superseded in part by ADR 210
 
 ## Context
 

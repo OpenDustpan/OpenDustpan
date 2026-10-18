@@ -46,7 +46,7 @@ a change order to the digest of all its stored plans, on 2026-10-18.
 ADR 194 (the review view of a big plan) shows a stored plan to a reviewer,
 on 2026-10-18.
 
-ADR 213 decision 2: a plan with no change ends `succeeded` with no apply and
+ADR 213 decision 3: a plan with no change ends `succeeded` with no apply and
 needs no signature, on 2026-10-18, as the project manager decided under the owner's decision rule.
 
 Closed on 2026-10-18. A question of this RFC that these ADRs do not decide

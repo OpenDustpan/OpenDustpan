@@ -1,6 +1,6 @@
 # 143. On-call schedules, handoffs and runbooks
 
-Status: accepted · 2026-10-18 · decisions 1, 3 and 15 superseded in part by ADR 149. Route paths superseded in part by ADR 210
+Status: accepted · 2026-10-18. Decisions 1, 3 and 15 superseded in part by ADR 149. Route paths superseded in part by ADR 210
 
 ## Context
 

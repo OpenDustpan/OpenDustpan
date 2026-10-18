@@ -151,6 +151,10 @@ worked into the proposal above.
 ## Outcome
 
 Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
-decision 1 on 2026-10-18: a job token reads only the outputs whose sharing
-rule names the unit of the job, intersected with the grants of the principal
-that started the job. The other questions stay open.
+decision 1 on 2026-10-18: a job reads the outputs of another unit on two
+paths, each with two checks at each read. A read by the tool with the job
+token needs a sharing rule that names the unit of the job and the grants of
+the principal that started the job. A profile block `outputs/opendustpan`
+needs the sharing rule and the `unit:read` of the authority of the profile
+attachment. The server answers a job-token read with the root outputs only,
+and records the edge with the evidence `job`. The other questions stay open.

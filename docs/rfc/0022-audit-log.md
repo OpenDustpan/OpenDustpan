@@ -156,5 +156,6 @@ Project manager decisions on 2026-10-18, under the owner's decision rule
 - Decision 4 records the trusted-proxy rule that the code has: named
   proxies, one named header, and a walk from the right. It supersedes in
   part ADR 27 decision 2.
-- Decision 5: a restore writes one audit entry in `@server` with the backup
-  ID and the SHA-256 of the manifest.
+- Decision 5: a restore writes audit entries in `@server` at its start, at
+  its end and at a failure, each with the backup ID and the SHA-256 of the
+  manifest.

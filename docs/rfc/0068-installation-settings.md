@@ -891,4 +891,8 @@ the owner's approval.
 
 Accepted in part as [ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
 decision 3 on 2026-10-18: a setting change that reduces security needs a
-fresh MFA step (open question 4). The other questions stay open.
+fresh MFA step (open question 4). A value from the static layer needs no
+step, and an access token gets a refusal that names the console page.
+Decision 7 (owner decision) makes the "API shape" of this RFC one settings
+resource for each scope, with one revision, JSON Merge Patch and ETags.
+The policy routes become views of it. The other questions stay open.

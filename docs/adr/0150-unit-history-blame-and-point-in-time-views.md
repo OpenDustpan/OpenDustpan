@@ -1,6 +1,6 @@
 # 150. Unit history: blame and point-in-time views
 
-Status: accepted · 2026-10-17 · supersedes part of ADR 13 (see "What this ADR replaces"). Decisions 14, 15 and 16 superseded in part by ADR 154. ADR 199 changes decision 1. Route paths superseded in part by ADR 210
+Status: accepted · 2026-10-17. Supersedes part of ADR 13 (see "What this ADR replaces"). Decisions 14, 15 and 16 superseded in part by ADR 154. ADR 199 changes decision 1. Route paths superseded in part by ADR 210
 
 ## Context
 

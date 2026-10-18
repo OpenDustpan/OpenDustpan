@@ -1,6 +1,6 @@
 # 148. A source check of the DORA mapping of incident and change records
 
-Status: accepted · 2026-10-18 · supersedes ADR 147 in part. Route paths and `server:` action names superseded in part by ADR 210
+Status: accepted · 2026-10-18. Supersedes ADR 147 in part. Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 

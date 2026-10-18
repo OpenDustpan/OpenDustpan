@@ -61,20 +61,20 @@ both together.
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
-| [13](0013-policy-and-approvals.md) | Policy and approvals | draft; the policy input of a job start accepted (ADR 213) |
+| [13](0013-policy-and-approvals.md) | Policy and approvals | draft; the policy input of a job start accepted (ADR 213), fresh MFA for approvals (ADR 212) |
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | accepted |
-| [15](0015-output-sharing.md) | Output sharing between units | draft; output reads of a job token accepted (ADR 213) |
+| [15](0015-output-sharing.md) | Output sharing between units | draft; output reads of a job, on two paths, accepted (ADR 213) |
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
 | [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
-| [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted |
+| [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted; the manual lock (ADR 213) |
 | [19](0019-users-teams-roles.md) | Users, teams and roles | discussing; groups, grants and export accepted (ADR 52), the planner role (ADR 212) |
 | [20](0020-access-tokens.md) | Access tokens and machine identity | discussing; token life cycle and workload identity accepted (ADR 53, ADR 54), SMTP settings (ADR 212) |
 | [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing; MFA, sign-in methods, MFA freshness and break-glass accepted (ADR 46, ADR 55, ADR 56, ADR 57) |
-| [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entry (ADR 212) |
+| [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entries (ADR 212) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
 | [25](0025-drift-detection.md) | Drift detection and remediation | draft |
-| [26](0026-unit-status.md) | Unit status in the inventory | draft; a lock is a flag (ADR 213) |
+| [26](0026-unit-status.md) | Unit status in the inventory | draft; a lock is a flag, with manual locks (ADR 213) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
 | [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | accepted |
 | [29](0029-existing-ci.md) | Using an existing CI as the executor | accepted |
@@ -116,7 +116,7 @@ both together.
 | [65](0065-opentofu-http-backend.md) | OpenTofu through the http backend too | accepted |
 | [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft |
 | [67](0067-spend-and-cost-tool-integration.md) | Integration with spend and cost tools (FinOps) | draft |
-| [68](0068-installation-settings.md) | Installation settings: inventory, settings through the API, and live reload | draft; fresh MFA for weaker settings accepted (ADR 212) |
+| [68](0068-installation-settings.md) | Installation settings: inventory, settings through the API, and live reload | draft; fresh MFA for weaker settings and one settings API accepted (ADR 212) |
 | [69](0069-community-channels.md) | Community channels: announce list, Discussions, and a later chat | discussing |
 | [70](0070-authorization-model-findings.md) | Authorization model findings: act-as reach, restores, trust rules and a model checker | accepted |
 | [71](0071-signed-audit-log-segments.md) | Export signed audit log segments to the blob store for offline verification | draft |

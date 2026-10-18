@@ -73,5 +73,6 @@ key (RFC 8).
 ## Outcome
 
 Accepted in part as [ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
-decision 6 on 2026-10-18: the branding preset is an installation setting
-with a REST endpoint. The rest of the white-label mechanism stays open.
+decision 6 on 2026-10-18: the branding preset is an installation setting,
+changed through the settings resource, and the public answer of the
+sign-in page holds it. The rest of the white-label mechanism stays open.

@@ -1,6 +1,6 @@
 # 122. Twelve task-shaped tools, each with its action and object
 
-Status: accepted · 2026-10-17 · decision 1 (the row `cancel_change`) narrowed by ADR 128. The `server:` action names superseded in part by ADR 210
+Status: accepted · 2026-10-17. Decision 1 (the row `cancel_change`) narrowed by ADR 128. The `server:` action names superseded in part by ADR 210
 
 ## Context
 

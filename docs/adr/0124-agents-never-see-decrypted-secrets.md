@@ -1,6 +1,6 @@
 # 124. Agents never see decrypted secrets, with one gated escape hatch
 
-Status: accepted · 2026-10-17 · decision 12 superseded in part by ADR 128. Route paths and `server:` action names superseded in part by ADR 210
+Status: accepted · 2026-10-17. Decision 12 superseded in part by ADR 128. Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 
