@@ -239,6 +239,32 @@ type Namespace struct {
 	ID                  string
 }
 
+type ObjectContext struct {
+	NamespaceID         string
+	ObjectKind          string
+	ObjectID            string
+	Tool                string
+	ResourceKey         string
+	Source              string
+	Fields              string
+	Warning             string
+	ItemID              string
+	ItemSeq             int64
+	ResourceDeletedAtMs pgtype.Int8
+	MarksSeq            int64
+	UpdatedAtMs         int64
+	UpdatedBy           string
+}
+
+type ObjectContextOwner struct {
+	NamespaceID string
+	Owner       string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
+}
+
 type OidcProvider struct {
 	ProviderID  string
 	Issuer      string
