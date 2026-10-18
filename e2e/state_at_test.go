@@ -19,10 +19,12 @@ import (
 
 // stateAtResponse is the answer of the resource list at a time.
 type stateAtResponse struct {
-	Resources []maskedStateItem `json:"resources"`
-	Version   int               `json:"version"`
-	EndedAt   int64             `json:"endedAt"`
-	Running   int               `json:"running"`
+	Resources   []maskedStateItem `json:"resources"`
+	Version     int               `json:"version"`
+	EndedAt     int64             `json:"endedAt"`
+	Running     int               `json:"running"`
+	NameAtTime  string            `json:"nameAtTime"`
+	CurrentName string            `json:"currentName"`
 }
 
 // stateAtPath returns the route of the resource list at the time at.
@@ -72,6 +74,10 @@ func checkMaskedStateAt(
 			)
 		}
 
+		if namesErr := checkUnrenamedNames(got); namesErr != nil {
+			return namesErr
+		}
+
 		pinned, err := maskedStateGet(ctx, env, base+"/state/1/resources")
 		if err != nil {
 			return err
@@ -83,6 +89,20 @@ func checkMaskedStateAt(
 
 		return checkStateAtBeforeFirst(ctx, env, base, times.before)
 	}
+}
+
+// checkUnrenamedNames proves that a stack that was never renamed has one name
+// at every time.
+func checkUnrenamedNames(got stateAtResponse) error {
+	wantName := e2e.Project + "/masked"
+	if got.NameAtTime != wantName || got.CurrentName != wantName {
+		return fmt.Errorf(
+			"%w: names of the list between the ups = %q and %q, want %q twice",
+			errUnexpected, got.NameAtTime, got.CurrentName, wantName,
+		)
+	}
+
+	return nil
 }
 
 // decodeStateAt decodes the answer of the resource list at a time.
@@ -150,6 +170,37 @@ func checkStateAtBeforeFirst(ctx context.Context, env *e2e.Env, base string, bef
 	return nil
 }
 
+// checkNamesAfterRename proves that the state at a time answers the name of
+// the stack at that time and its new name after a rename. The stack answers
+// under newName, and the time is a time before the rename.
+func checkNamesAfterRename(
+	ctx context.Context, env *e2e.Env, org, newName string, at time.Time,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		base := fmt.Sprintf("/api/stacks/%s/%s/%s", org, e2e.Project, newName)
+
+		body, err := maskedStateGet(ctx, env, stateAtPath(base, at))
+		if err != nil {
+			return err
+		}
+
+		got, err := decodeStateAt(body)
+		if err != nil {
+			return err
+		}
+
+		oldName, current := e2e.Project+"/masked", e2e.Project+"/"+newName
+		if got.NameAtTime != oldName || got.CurrentName != current {
+			return fmt.Errorf(
+				"%w: names after a rename = %q and %q, want %q and %q",
+				errUnexpected, got.NameAtTime, got.CurrentName, oldName, current,
+			)
+		}
+
+		return nil
+	}
+}
+
 // checkStateAtRunning proves that a time while an update runs answers the
 // state before it and names the update. It holds an update through the API,
 // as a running up would, then ends it.
@@ -190,6 +241,8 @@ type stateAtData struct {
 type stateAtMeta struct {
 	RequestedBy string `json:"requested-by"` //nolint:tagliatelle // The wire name of this API.
 	FinalizedAt int64  `json:"finalized-at"` //nolint:tagliatelle // The wire name of this API.
+	NameAtTime  string `json:"name-at-time"` //nolint:tagliatelle // The wire name of this API.
+	CurrentName string `json:"current-name"` //nolint:tagliatelle // The wire name of this API.
 	Opaque      bool   `json:"opaque"`
 }
 
@@ -238,7 +291,7 @@ func checkOpaqueStateAt(body string) error {
 // checkStateAtVersion returns the check of one state-at answer: the state
 // version wantID with masked resources and no secret in plain text. It stores
 // the finalize time of the answer in finalized.
-func checkStateAtVersion(name, wantID string, finalized *int64) func(string) error {
+func checkStateAtVersion(name, wantID, wantName string, finalized *int64) func(string) error {
 	return func(body string) error {
 		var doc stateAtDoc
 		if err := json.Unmarshal([]byte(body), &doc); err != nil {
@@ -251,6 +304,13 @@ func checkStateAtVersion(name, wantID string, finalized *int64) func(string) err
 
 		if strings.Contains(body, maskedSecretV1) || strings.Contains(body, maskedSecretV2) {
 			return fmt.Errorf("%w: state at %s holds a secret in plain text", errUnexpected, name)
+		}
+
+		if doc.Meta.NameAtTime != wantName || doc.Meta.CurrentName != wantName {
+			return fmt.Errorf(
+				"%w: names of the state at %s = %q and %q, want %q twice",
+				errUnexpected, name, doc.Meta.NameAtTime, doc.Meta.CurrentName, wantName,
+			)
 		}
 
 		*finalized = doc.Meta.FinalizedAt
@@ -285,7 +345,7 @@ func maskedStateAtChecks(ctx context.Context, t *testing.T, env *e2e.Env, in sta
 
 	for _, spec := range []e2e.APIStepSpec{
 		{
-			Check:     checkStateAtVersion("a time between two applies", in.first, &firstAt),
+			Check:     checkStateAtVersion("a time between two applies", in.first, in.workspace, &firstAt),
 			Name:      "masked state at a time between two applies",
 			Method:    http.MethodGet,
 			Path:      stateAtPathTofu(wsID, in.between),
@@ -295,7 +355,7 @@ func maskedStateAtChecks(ctx context.Context, t *testing.T, env *e2e.Env, in sta
 			Scheme:    "",
 		},
 		{
-			Check:     checkStateAtVersion("now", in.second, &secondAt),
+			Check:     checkStateAtVersion("now", in.second, in.workspace, &secondAt),
 			Name:      "masked state at a time now",
 			Method:    http.MethodGet,
 			Path:      stateAtPathTofu(wsID, time.Now()),
@@ -321,4 +381,32 @@ func maskedStateAtChecks(ctx context.Context, t *testing.T, env *e2e.Env, in sta
 	if secondAt <= firstAt {
 		t.Fatalf("finalize times = %d ms then %d ms, want the second after the first", firstAt, secondAt)
 	}
+}
+
+// pulumiRenameNamesSteps renames the masked stack, proves that the state at
+// a time before the rename and the inventory at that time name the stack by
+// the name it had then and by its new name, and renames it back, so that the
+// later steps find it under its first name. between is a time when the stack
+// existed under its first name.
+func pulumiRenameNamesSteps(ctx context.Context, t *testing.T, env *e2e.Env, org string, between time.Time) {
+	t.Helper()
+
+	const renamed = "masked-new"
+
+	qualified := fmt.Sprintf("%s/%s/masked", org, e2e.Project)
+	newQualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, renamed)
+	names := unitAtNames{tool: "pulumi", atTime: e2e.Project + "/masked", current: e2e.Project + "/" + renamed}
+
+	env.Step(ctx, t, step("stack rename masked", nil, "stack", "rename", newQualified, "--stack", qualified))
+	env.Step(ctx, t, step(
+		"masked state at a time names the stack by both names",
+		checkNamesAfterRename(ctx, env, org, renamed, between),
+		"stack", "--show-name", "--stack", newQualified,
+	))
+	env.Step(ctx, t, step(
+		"the inventory at a time names the renamed stack by both names",
+		checkUnitAtRenamed(ctx, env, org, between, names),
+		"stack", "--show-name", "--stack", newQualified,
+	))
+	env.Step(ctx, t, step("stack rename masked back", nil, "stack", "rename", qualified, "--stack", newQualified))
 }

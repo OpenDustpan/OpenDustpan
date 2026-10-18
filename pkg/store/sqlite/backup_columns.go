@@ -20,6 +20,7 @@ const (
 	backupColName        = "name"
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
+	backupColNamespaceID = "namespace_id"
 	backupColSequence    = "sequence"
 	backupColSize        = "size"
 	backupColStackID     = "stack_id"
@@ -221,7 +222,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table: "object_context",
 			columns: []string{
-				"namespace_id",
+				backupColNamespaceID,
 				backupColObjectKind,
 				backupColObjectID,
 				backupColTool,
@@ -240,7 +241,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table: "object_context_owners",
 			columns: []string{
-				"namespace_id", "owner", backupColObjectKind, backupColObjectID, "resource_key", backupColSource,
+				backupColNamespaceID, "owner", backupColObjectKind, backupColObjectID, "resource_key", backupColSource,
 			},
 		},
 		{
@@ -252,6 +253,18 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColName,
 				backupColDeletedAtMs,
 				"purge_after_ms",
+			},
+		},
+		{
+			table:   "inventory_change_heads",
+			columns: []string{backupColNamespaceID, "last_seq"},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				backupColNamespaceID, "seq", "at_ms", backupColTool, backupColUnitID, backupColName,
+				backupColDisplayName,
+				backupColStatus, "collection", backupColKind, "resource_count",
 			},
 		},
 		{

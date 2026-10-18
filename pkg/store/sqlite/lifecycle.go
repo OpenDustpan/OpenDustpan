@@ -108,7 +108,12 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishStackInventory(ctx, q, ref, id.String(), e.At.UnixMilli())
+	return publishStackInventory(
+		ctx,
+		q,
+		ref,
+		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
+	)
 }
 
 // PurgeStack implements stack.Store. In one fenced transaction with the
@@ -273,7 +278,12 @@ func restoreWorkspaceRow(
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishWorkspaceInventory(ctx, q, ref, id.String(), e.At.UnixMilli())
+	return publishWorkspaceInventory(
+		ctx,
+		q,
+		ref,
+		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
+	)
 }
 
 // PurgeWorkspace implements workspace.Store. In one fenced transaction with
@@ -416,6 +426,15 @@ func (s *Store) purgeUnit(
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		e.ObjectID = u.id
 
+		// The purge row names the unit as the delete left it. The read
+		// comes first, because rows deletes the deleted inventory entry.
+		deleted, nameErr := q.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
+			Namespace: fence.Namespace.String(), Tool: u.tool, UnitID: u.id,
+		})
+		if nameErr != nil && !errors.Is(nameErr, sql.ErrNoRows) {
+			return fmt.Errorf("select deleted inventory entry: %w", nameErr)
+		}
+
 		if err := rows(q); err != nil {
 			return err
 		}
@@ -431,7 +450,18 @@ func (s *Store) purgeUnit(
 			return fmt.Errorf("record blob purge: %w", err)
 		}
 
-		return revokeUnitGrants(ctx, q, u.id, e)
+		if revokeErr := revokeUnitGrants(ctx, q, u.id, e); revokeErr != nil {
+			return revokeErr
+		}
+
+		purged := unitChange(
+			fence.Namespace,
+			u.tool,
+			deleted.Name,
+			unitWrite{unitID: u.id, atMs: codec.Millis(e.At), kind: inventory.ChangePurged},
+		)
+
+		return appendInventoryChange(ctx, q, purged)
 	})
 }
 

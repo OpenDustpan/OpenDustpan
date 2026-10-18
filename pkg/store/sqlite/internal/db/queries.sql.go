@@ -3760,6 +3760,21 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	return name, err
 }
 
+const getUnitCollectionName = `-- name: GetUnitCollectionName :one
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?
+`
+
+// The name of the collection that holds the unit, for a change log row.
+func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getUnitCollectionName, unitID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
 const getUnitOutputSeq = `-- name: GetUnitOutputSeq :one
 SELECT item_seq
 FROM object_context
@@ -4433,6 +4448,44 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 		arg.Name,
 		arg.Result,
 		arg.DoneAtMs,
+	)
+	return err
+}
+
+const insertInventoryChange = `-- name: InsertInventoryChange :exec
+INSERT INTO inventory_changes (
+    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertInventoryChangeParams struct {
+	NamespaceID   string
+	Seq           int64
+	AtMs          int64
+	Tool          string
+	UnitID        string
+	Name          string
+	DisplayName   string
+	Status        string
+	Collection    string
+	Kind          string
+	ResourceCount sql.NullInt64
+}
+
+func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventoryChangeParams) error {
+	_, err := q.db.ExecContext(ctx, insertInventoryChange,
+		arg.NamespaceID,
+		arg.Seq,
+		arg.AtMs,
+		arg.Tool,
+		arg.UnitID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Status,
+		arg.Collection,
+		arg.Kind,
+		arg.ResourceCount,
 	)
 	return err
 }
@@ -5877,6 +5930,233 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 	return items, nil
 }
 
+const listInventoryChangeBounds = `-- name: ListInventoryChangeBounds :many
+WITH RECURSIVE units(tool, unit_id) AS (
+    SELECT seed.tool, seed.unit_id
+    FROM (
+        SELECT f.tool, f.unit_id
+        FROM inventory_changes AS f
+        WHERE f.namespace_id = ?1
+        ORDER BY f.tool, f.unit_id
+        LIMIT 1
+    ) AS seed
+    UNION ALL
+    SELECT n.tool, n.unit_id
+    FROM units AS u
+    JOIN inventory_changes AS n ON n.rowid = coalesce(
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = ?1 AND s.tool = u.tool AND s.unit_id > u.unit_id
+         ORDER BY s.unit_id
+         LIMIT 1),
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = ?1 AND s.tool > u.tool
+         ORDER BY s.tool, s.unit_id
+         LIMIT 1))
+)
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT a.rowid
+        FROM inventory_changes AS a
+        WHERE a.namespace_id = ?1 AND a.tool = u.tool AND a.unit_id = u.unit_id
+          AND a.at_ms <= ?2
+        ORDER BY a.seq DESC
+        LIMIT 1)
+    UNION
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT l.rowid
+        FROM inventory_changes AS l
+        WHERE l.namespace_id = ?1 AND l.tool = u.tool AND l.unit_id = u.unit_id
+        ORDER BY l.seq DESC
+        LIMIT 1)
+)
+ORDER BY seq
+`
+
+type ListInventoryChangeBoundsParams struct {
+	NamespaceID string
+	AtMs        int64
+}
+
+// For each unit of a namespace, the row with the highest sequence among the
+// rows at or before the time, and the row with the highest sequence of all.
+// ReplayAt and ReplayView need no other row. A skip scan on the index finds
+// each unit once, then two lookups on the index read its rows. The lookup at
+// the time reads the rows of the unit after the time, so the cost follows the
+// count of units and of the rows after the time.
+func (q *Queries) ListInventoryChangeBounds(ctx context.Context, arg ListInventoryChangeBoundsParams) ([]InventoryChange, error) {
+	rows, err := q.db.QueryContext(ctx, listInventoryChangeBounds, arg.NamespaceID, arg.AtMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryChange
+	for rows.Next() {
+		var i InventoryChange
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.Seq,
+			&i.AtMs,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Status,
+			&i.Collection,
+			&i.Kind,
+			&i.ResourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryChanges = `-- name: ListInventoryChanges :many
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM inventory_changes
+WHERE namespace_id = ?1
+  AND at_ms <= ?2
+  AND seq > ?3
+ORDER BY seq
+LIMIT ?4
+`
+
+type ListInventoryChangesParams struct {
+	NamespaceID string
+	UntilMs     int64
+	AfterSeq    int64
+	PageLimit   int64
+}
+
+// One page of the change log of a namespace in the order of the sequence.
+func (q *Queries) ListInventoryChanges(ctx context.Context, arg ListInventoryChangesParams) ([]InventoryChange, error) {
+	rows, err := q.db.QueryContext(ctx, listInventoryChanges,
+		arg.NamespaceID,
+		arg.UntilMs,
+		arg.AfterSeq,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryChange
+	for rows.Next() {
+		var i InventoryChange
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.Seq,
+			&i.AtMs,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Status,
+			&i.Collection,
+			&i.Kind,
+			&i.ResourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryUnitBounds = `-- name: ListInventoryUnitBounds :many
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+           a.kind, a.resource_count
+    FROM inventory_changes AS a
+    WHERE a.namespace_id = ?1 AND a.tool = ?2 AND a.unit_id = ?3
+      AND a.at_ms <= ?4
+    ORDER BY a.seq DESC
+    LIMIT 1
+)
+UNION
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+           l.kind, l.resource_count
+    FROM inventory_changes AS l
+    WHERE l.namespace_id = ?1 AND l.tool = ?2 AND l.unit_id = ?3
+    ORDER BY l.seq DESC
+    LIMIT 1
+)
+ORDER BY seq
+`
+
+type ListInventoryUnitBoundsParams struct {
+	NamespaceID string
+	Tool        string
+	UnitID      string
+	AtMs        int64
+}
+
+// The rows of ListInventoryChangeBounds for one unit.
+func (q *Queries) ListInventoryUnitBounds(ctx context.Context, arg ListInventoryUnitBoundsParams) ([]InventoryChange, error) {
+	rows, err := q.db.QueryContext(ctx, listInventoryUnitBounds,
+		arg.NamespaceID,
+		arg.Tool,
+		arg.UnitID,
+		arg.AtMs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryChange
+	for rows.Next() {
+		var i InventoryChange
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.Seq,
+			&i.AtMs,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Status,
+			&i.Collection,
+			&i.Kind,
+			&i.ResourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJournalOperations = `-- name: ListJournalOperations :many
 SELECT operation_ids FROM update_journal
 WHERE stack_id = ? AND update_id = ?
@@ -6724,6 +7004,23 @@ func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const nextInventoryChangeSeq = `-- name: NextInventoryChangeSeq :one
+INSERT INTO inventory_change_heads (namespace_id, last_seq)
+VALUES (?, 1)
+ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+RETURNING last_seq
+`
+
+// Takes the next number of the change log of one namespace. The statement runs
+// last in the transaction of the write, after every other row lock, so the
+// order of the numbers is the order of the commits of the namespace.
+func (q *Queries) NextInventoryChangeSeq(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextInventoryChangeSeq, namespaceID)
+	var last_seq int64
+	err := row.Scan(&last_seq)
+	return last_seq, err
 }
 
 const nextJournalArrival = `-- name: NextJournalArrival :one

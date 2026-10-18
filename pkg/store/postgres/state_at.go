@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -65,6 +66,7 @@ func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.S
 		CreatedBy: row.CreatedBy,
 		Version:   int(row.Version),
 		Running:   int(running),
+		Names:     inventory.Names{AtTime: "", Current: ""},
 	}, nil
 }
 

@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// InventoryTool is the tool code of the Pulumi CLI in the inventory and its
+// change log.
+const InventoryTool = "pulumi"
+
 // ExportAt returns the checkpoint that held the state of the stack at the time
 // at, and the StateAt that names its update. A time before the first
 // checkpoint returns ErrNoStateAt, and its text names the end time of the
@@ -41,6 +45,13 @@ func (s *Updates) ExportAt(ctx context.Context, ref Ref, at time.Time) (Checkpoi
 
 	if err != nil {
 		return Checkpoint{}, StateAt{}, fmt.Errorf("state of %s at %s: %w", ref, at.UTC().Format(time.RFC3339), err)
+	}
+
+	if s.names != nil {
+		found.Names, err = s.names.UnitNames(ctx, ref.Namespace, InventoryTool, st.ID.String(), at)
+		if err != nil {
+			return Checkpoint{}, StateAt{}, fmt.Errorf("names of %s at %s: %w", ref, at.UTC().Format(time.RFC3339), err)
+		}
 	}
 
 	cp, err := s.ExportVersion(ctx, ref, int64(found.Version))

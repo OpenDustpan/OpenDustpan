@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -714,6 +715,7 @@ func stubReadStateAt(ctx context.Context, req workspace.StateAtRequest) (workspa
 		Page:    workspace.StatePage{Resources: nil, NextCursor: "", Incomplete: false},
 		Version: sv,
 		State:   workspace.StateAt{FinalizedAt: time.UnixMilli(finalized).UTC(), By: "alice", StateVersion: id},
+		Names:   inventory.Names{AtTime: "", Current: ""},
 		Opaque:  false,
 	}
 
