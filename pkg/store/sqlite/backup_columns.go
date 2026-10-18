@@ -35,6 +35,8 @@ const (
 	backupColSubject     = "subject"
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"
+	backupColObjectKind  = "object_kind"
+	backupColObjectID    = "object_id"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
 )
@@ -214,6 +216,31 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "collection_members",
 			columns: []string{
 				"unit_id", backupColNamespace, "collection_key", "assigned_at_ms",
+			},
+		},
+		{
+			table: "object_context",
+			columns: []string{
+				"namespace_id",
+				backupColObjectKind,
+				backupColObjectID,
+				backupColTool,
+				"resource_key",
+				backupColSource,
+				"fields",
+				"warning",
+				"item_id",
+				"item_seq",
+				"resource_deleted_at_ms",
+				"marks_seq",
+				backupColUpdatedAtMs,
+				"updated_by",
+			},
+		},
+		{
+			table: "object_context_owners",
+			columns: []string{
+				"namespace_id", "owner", backupColObjectKind, backupColObjectID, "resource_key", backupColSource,
 			},
 		},
 		{

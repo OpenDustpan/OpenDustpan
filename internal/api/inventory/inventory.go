@@ -155,7 +155,8 @@ type lockEntry struct {
 
 // unitEntry is one unit as the console reads it. Tool is the tool label of
 // the glossary ("Pulumi" or "OpenTofu"); Reference is the unit reference
-// with the stored lowercase tool code ("pulumi:acme/web/prod"). Name is the
+// with the stored lowercase tool code ("pulumi:acme/web/prod"). UnitID is the
+// stable ID of the unit, which a rename keeps. Name is the
 // tool's own name for the unit. LastChange is the time of the unit's last
 // change in Unix seconds, as lastUpdate is in the stack list. Status is
 // omitted when unknown; ResourceCount is omitted when unknown. Lock is
@@ -168,6 +169,7 @@ type lockEntry struct {
 type unitEntry struct {
 	Tool          string     `json:"tool"`
 	Reference     string     `json:"reference"`
+	UnitID        string     `json:"unitID"`
 	Namespace     string     `json:"namespace"`
 	Name          string     `json:"name"`
 	LastChange    int64      `json:"lastChange"`
@@ -206,6 +208,7 @@ func toUnitEntry(e coreinventory.Entry) unitEntry {
 	return unitEntry{
 		Tool:          toolLabel(e.Tool),
 		Reference:     e.Reference(),
+		UnitID:        e.UnitID,
 		Namespace:     e.Namespace.String(),
 		Name:          e.Name,
 		LastChange:    e.LastChanged.Unix(),

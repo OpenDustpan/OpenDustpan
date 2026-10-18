@@ -90,6 +90,8 @@ var Tables = []string{
 	"inventory_changes",
 	"collections",
 	"collection_members",
+	"object_context",
+	"object_context_owners",
 	"blob_purges",
 	"workspaces",
 	"state_versions",

@@ -46,6 +46,7 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -70,6 +71,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -800,6 +802,7 @@ type adapters struct {
 	pulumi      http.Handler
 	inventory   http.Handler
 	audit       http.Handler
+	context     http.Handler
 	tfe         http.Handler
 	tofuHTTP    http.Handler
 	server      http.Handler
@@ -885,6 +888,7 @@ func newAdapters(
 		pulumi:      api,
 		inventory:   neutral.inventory,
 		audit:       neutral.audit,
+		context:     neutral.context,
 		tfe:         tfeAPI,
 		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
@@ -896,13 +900,16 @@ func newAdapters(
 	}, nil
 }
 
-// neutralHandlers are the tool-neutral inventory API and audit API.
+// neutralHandlers are the tool-neutral inventory API, audit API and context
+// API. context is nil when the store keeps no context.
 type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
+	context   http.Handler
 }
 
-// newNeutralHandlers builds the tool-neutral inventory API and audit API.
+// newNeutralHandlers builds the tool-neutral inventory API, audit API and
+// context API.
 func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 	units, err := newInventoryHandler(svc, cfg)
 	if err != nil {
@@ -914,7 +921,12 @@ func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 		return neutralHandlers{}, err
 	}
 
-	return neutralHandlers{inventory: units, audit: entries}, nil
+	contexts, err := newContextHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	return neutralHandlers{inventory: units, audit: entries, context: contexts}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -1759,6 +1771,49 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// newContextHandler builds the tool-neutral context API on the namespace store
+// when that store also keeps context. A custom store without context gets no
+// context API: its routes are not served and the rest of the API works as
+// before.
+func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
+	store, ok := cfg.namespaceStore.(objectcontext.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No context API: the store keeps no context.
+	}
+
+	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
+	}
+
+	writer, err := objectcontext.NewWriter(objectcontext.WriterConfig{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context writer: %w", err)
+	}
+
+	handler, err := contextapi.NewHandler(contextapi.Config{
+		Namespaces:    svc.namespaces,
+		Units:         cfg.inventoryReader,
+		Deleted:       deleted,
+		Collections:   svc.collections,
+		Entries:       store,
+		Writer:        writer,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
+		Logger:        cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context api: %w", err)
+	}
+
+	return handler, nil
+}
+
 // writeOnceFamilies are the blob key families that the cache keeps: a key in
 // them never holds other bytes, also after a delete. OpenTofu state versions
 // have such keys. Pulumi checkpoints and journal batches do not: a retry or a
@@ -2501,7 +2556,7 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
-	case strings.HasPrefix(name, "/api/inventory/"):
+	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, "/api/context/"):
 		return "inventory"
 	case strings.HasPrefix(name, "/api/audit/"):
 		return adapterServer
@@ -2728,6 +2783,14 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	// like the installation API: an operator reads the log while the
 	// installation is down for a restore.
 	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
+	// The context API is tool-neutral, as the inventory API is, and refused in
+	// maintenance mode like it.
+	if a.context != nil {
+		mux.Handle(
+			"/api/context/",
+			withCORS(withMaintenance(a.context, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+		)
+	}
 	mux.Handle(
 		"/api/v2/",
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),

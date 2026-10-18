@@ -60,6 +60,10 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
+	pgColNamespaceID = "namespace_id"
+	pgColObjectKind  = "object_kind"
+	pgColObjectID    = "object_id"
+	pgColResourceKey = "resource_key"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
 	pgColProviderID  = "provider_id"
@@ -219,6 +223,33 @@ func pgCopyScopeTables() []pgCopyTable {
 				pgColUnitID, pgColNamespace, "collection_key", "assigned_at_ms",
 			},
 			orderBy: []string{pgColUnitID},
+		},
+		{
+			table: "object_context",
+			columns: []string{
+				pgColNamespaceID,
+				pgColObjectKind,
+				pgColObjectID,
+				pgColTool,
+				pgColResourceKey,
+				pgColSource,
+				"fields",
+				"warning",
+				"item_id",
+				"item_seq",
+				"resource_deleted_at_ms",
+				"marks_seq",
+				"updated_at_ms",
+				"updated_by",
+			},
+			orderBy: []string{pgColNamespaceID, pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
+		},
+		{
+			table: "object_context_owners",
+			columns: []string{
+				pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource,
+			},
+			orderBy: []string{pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
 		},
 		{
 			table:   "blob_purges",

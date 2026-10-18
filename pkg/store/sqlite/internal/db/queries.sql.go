@@ -409,6 +409,27 @@ func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) erro
 	return err
 }
 
+const contextUnitExists = `-- name: ContextUnitExists :one
+SELECT CAST(EXISTS (SELECT 1 FROM inventory AS i WHERE i.namespace = ?1 AND i.tool = ?2 AND i.unit_id = ?3)
+    OR EXISTS (SELECT 1 FROM inventory_deleted AS d WHERE d.namespace = ?1 AND d.tool = ?2 AND d.unit_id = ?3) AS INTEGER) AS present
+`
+
+type ContextUnitExistsParams struct {
+	Namespace string
+	Tool      string
+	UnitID    string
+}
+
+// Whether the namespace holds the unit in its live inventory or in its deleted
+// units. A context write checks it in its own transaction, so a purge that
+// committed before the write refuses the write.
+func (q *Queries) ContextUnitExists(ctx context.Context, arg ContextUnitExistsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, contextUnitExists, arg.Namespace, arg.Tool, arg.UnitID)
+	var present int64
+	err := row.Scan(&present)
+	return present, err
+}
+
 const countAccessToken = `-- name: CountAccessToken :one
 SELECT COUNT(*) FROM access_tokens WHERE id = ?
 `
@@ -1811,6 +1832,58 @@ func (q *Queries) DeleteMissingCollectionMembership(ctx context.Context, unitID 
 	return err
 }
 
+const deleteObjectContext = `-- name: DeleteObjectContext :execrows
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ? AND source = ?
+`
+
+type DeleteObjectContextParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
+}
+
+// Deletes one entry. The owner rows of the entry go with it.
+func (q *Queries) DeleteObjectContext(ctx context.Context, arg DeleteObjectContextParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteObjectContext,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+		arg.Source,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteObjectOwners = `-- name: DeleteObjectOwners :exec
+DELETE FROM object_context_owners
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ? AND source = ?
+`
+
+type DeleteObjectOwnersParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
+}
+
+func (q *Queries) DeleteObjectOwners(ctx context.Context, arg DeleteObjectOwnersParams) error {
+	_, err := q.db.ExecContext(ctx, deleteObjectOwners,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+		arg.Source,
+	)
+	return err
+}
+
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = ?
 WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL
@@ -1902,6 +1975,38 @@ WHERE workspace_id = ?
 // Removes every state version of one workspace, pending and finalized.
 func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceID string) error {
 	_, err := q.db.ExecContext(ctx, deleteStateVersionsOfWorkspace, workspaceID)
+	return err
+}
+
+const deleteUnitContext = `-- name: DeleteUnitContext :exec
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind IN ('unit', 'resource') AND object_id = ?
+`
+
+type DeleteUnitContextParams struct {
+	NamespaceID string
+	ObjectID    string
+}
+
+// Deletes the entries of a unit and of its resources, both sources.
+func (q *Queries) DeleteUnitContext(ctx context.Context, arg DeleteUnitContextParams) error {
+	_, err := q.db.ExecContext(ctx, deleteUnitContext, arg.NamespaceID, arg.ObjectID)
+	return err
+}
+
+const deleteUnitOutputContext = `-- name: DeleteUnitOutputContext :exec
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind IN ('unit', 'resource') AND object_id = ? AND source = 'output'
+`
+
+type DeleteUnitOutputContextParams struct {
+	NamespaceID string
+	ObjectID    string
+}
+
+// Deletes the output entries of a unit and of its resources.
+func (q *Queries) DeleteUnitOutputContext(ctx context.Context, arg DeleteUnitOutputContextParams) error {
+	_, err := q.db.ExecContext(ctx, deleteUnitOutputContext, arg.NamespaceID, arg.ObjectID)
 	return err
 }
 
@@ -2671,6 +2776,24 @@ func (q *Queries) GetCollection(ctx context.Context, arg GetCollectionParams) (G
 	return i, err
 }
 
+const getCollectionNameByID = `-- name: GetCollectionNameByID :one
+SELECT name
+FROM collections
+WHERE namespace = ? AND id = ?
+`
+
+type GetCollectionNameByIDParams struct {
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) GetCollectionNameByID(ctx context.Context, arg GetCollectionNameByIDParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getCollectionNameByID, arg.Namespace, arg.ID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
@@ -3063,6 +3186,20 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRo
 		&i.ID,
 	)
 	return i, err
+}
+
+const getNamespaceID = `-- name: GetNamespaceID :one
+SELECT id
+FROM namespaces
+WHERE name = ?
+`
+
+// The stable ID of the namespace that has the name now.
+func (q *Queries) GetNamespaceID(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNamespaceID, name)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getNamespaceID = `-- name: GetNamespaceID :one
@@ -3651,6 +3788,25 @@ func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (str
 	var name string
 	err := row.Scan(&name)
 	return name, err
+}
+
+const getUnitOutputSeq = `-- name: GetUnitOutputSeq :one
+SELECT item_seq
+FROM object_context
+WHERE namespace_id = ? AND object_kind = 'unit' AND object_id = ? AND resource_key = '' AND source = 'output'
+`
+
+type GetUnitOutputSeqParams struct {
+	NamespaceID string
+	ObjectID    string
+}
+
+// The order of the state item that the output entries of a unit come from.
+func (q *Queries) GetUnitOutputSeq(ctx context.Context, arg GetUnitOutputSeqParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getUnitOutputSeq, arg.NamespaceID, arg.ObjectID)
+	var item_seq int64
+	err := row.Scan(&item_seq)
+	return item_seq, err
 }
 
 const getUpdate = `-- name: GetUpdate :one
@@ -4450,6 +4606,33 @@ type InsertOIDCProviderParams struct {
 // keeps the record.
 func (q *Queries) InsertOIDCProvider(ctx context.Context, arg InsertOIDCProviderParams) error {
 	_, err := q.db.ExecContext(ctx, insertOIDCProvider, arg.ProviderID, arg.Issuer, arg.CreatedAtMs)
+	return err
+}
+
+const insertObjectOwner = `-- name: InsertObjectOwner :exec
+INSERT INTO object_context_owners (namespace_id, owner, object_kind, object_id, resource_key, source)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type InsertObjectOwnerParams struct {
+	NamespaceID string
+	Owner       string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
+}
+
+func (q *Queries) InsertObjectOwner(ctx context.Context, arg InsertObjectOwnerParams) error {
+	_, err := q.db.ExecContext(ctx, insertObjectOwner,
+		arg.NamespaceID,
+		arg.Owner,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+		arg.Source,
+	)
 	return err
 }
 
@@ -6138,6 +6321,70 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 	return items, nil
 }
 
+const listObjectContext = `-- name: ListObjectContext :many
+SELECT tool, source, fields, warning, item_id, item_seq, updated_at_ms, updated_by
+FROM object_context
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ?
+ORDER BY source
+`
+
+type ListObjectContextParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+}
+
+type ListObjectContextRow struct {
+	Tool        string
+	Source      string
+	Fields      string
+	Warning     string
+	ItemID      string
+	ItemSeq     int64
+	UpdatedAtMs int64
+	UpdatedBy   string
+}
+
+// The entries of one object, both sources, API first. The caller checks the
+// fence of the namespace in the same transaction for a write.
+func (q *Queries) ListObjectContext(ctx context.Context, arg ListObjectContextParams) ([]ListObjectContextRow, error) {
+	rows, err := q.db.QueryContext(ctx, listObjectContext,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListObjectContextRow
+	for rows.Next() {
+		var i ListObjectContextRow
+		if err := rows.Scan(
+			&i.Tool,
+			&i.Source,
+			&i.Fields,
+			&i.Warning,
+			&i.ItemID,
+			&i.ItemSeq,
+			&i.UpdatedAtMs,
+			&i.UpdatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -6916,6 +7163,88 @@ func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesB
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
 			&i.ID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pageObjectContextByOwner = `-- name: PageObjectContextByOwner :many
+SELECT c.object_kind, c.object_id, c.tool, c.resource_key, c.source, c.fields, c.warning, c.item_id,
+       c.item_seq, c.updated_at_ms, c.updated_by
+FROM object_context_owners o
+JOIN object_context c
+    ON c.namespace_id = o.namespace_id AND c.object_kind = o.object_kind AND c.object_id = o.object_id
+   AND c.resource_key = o.resource_key AND c.source = o.source
+WHERE o.namespace_id = ?1 AND o.owner = ?2
+  AND (o.object_kind, o.object_id, o.resource_key, o.source) > (?3, ?4, ?5, ?6)
+ORDER BY o.object_kind, o.object_id, o.resource_key, o.source
+LIMIT ?7
+`
+
+type PageObjectContextByOwnerParams struct {
+	NamespaceID string
+	Owner       string
+	AfterKind   string
+	AfterID     string
+	AfterKey    string
+	AfterSource string
+	PageLimit   int64
+}
+
+type PageObjectContextByOwnerRow struct {
+	ObjectKind  string
+	ObjectID    string
+	Tool        string
+	ResourceKey string
+	Source      string
+	Fields      string
+	Warning     string
+	ItemID      string
+	ItemSeq     int64
+	UpdatedAtMs int64
+	UpdatedBy   string
+}
+
+// One page of the entries that name an owner, read from the owner index and
+// joined by the primary key of the entries.
+func (q *Queries) PageObjectContextByOwner(ctx context.Context, arg PageObjectContextByOwnerParams) ([]PageObjectContextByOwnerRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageObjectContextByOwner,
+		arg.NamespaceID,
+		arg.Owner,
+		arg.AfterKind,
+		arg.AfterID,
+		arg.AfterKey,
+		arg.AfterSource,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageObjectContextByOwnerRow
+	for rows.Next() {
+		var i PageObjectContextByOwnerRow
+		if err := rows.Scan(
+			&i.ObjectKind,
+			&i.ObjectID,
+			&i.Tool,
+			&i.ResourceKey,
+			&i.Source,
+			&i.Fields,
+			&i.Warning,
+			&i.ItemID,
+			&i.ItemSeq,
+			&i.UpdatedAtMs,
+			&i.UpdatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -8700,6 +9029,57 @@ func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams
 		arg.LastChangedMs,
 		arg.Status,
 		arg.ResourceCount,
+	)
+	return err
+}
+
+const upsertObjectContext = `-- name: UpsertObjectContext :exec
+INSERT INTO object_context (
+    namespace_id, object_kind, object_id, tool, resource_key, source, fields, warning,
+    item_id, item_seq, resource_deleted_at_ms, marks_seq, updated_at_ms, updated_by
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+ON CONFLICT (namespace_id, object_kind, object_id, resource_key, source) DO UPDATE
+SET tool = excluded.tool,
+    fields = excluded.fields,
+    warning = excluded.warning,
+    item_id = excluded.item_id,
+    item_seq = excluded.item_seq,
+    updated_at_ms = excluded.updated_at_ms,
+    updated_by = excluded.updated_by
+`
+
+type UpsertObjectContextParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	Tool        string
+	ResourceKey string
+	Source      string
+	Fields      string
+	Warning     string
+	ItemID      string
+	ItemSeq     int64
+	UpdatedAtMs int64
+	UpdatedBy   string
+}
+
+// Writes one entry. The deleted mark of a resource and its order stay as
+// they are on a conflict.
+func (q *Queries) UpsertObjectContext(ctx context.Context, arg UpsertObjectContextParams) error {
+	_, err := q.db.ExecContext(ctx, upsertObjectContext,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.Tool,
+		arg.ResourceKey,
+		arg.Source,
+		arg.Fields,
+		arg.Warning,
+		arg.ItemID,
+		arg.ItemSeq,
+		arg.UpdatedAtMs,
+		arg.UpdatedBy,
 	)
 	return err
 }

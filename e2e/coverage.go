@@ -15,6 +15,7 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
@@ -29,6 +30,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -70,17 +72,34 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	tofuHTTP := coverageTofuHTTPRoutes(tb, namespaces)
 	inventory := coverageInventoryRoutes(tb, namespaces)
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
+	contextRoutes := coverageContextRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := make(
-		[]RouteRef, 0,
-		len(pulumi)+len(tfe)+len(tofuHTTP)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount,
+		[]RouteRef,
+		0,
+		len(
+			pulumi,
+		)+len(
+			tfe,
+		)+len(
+			tofuHTTP,
+		)+len(
+			inventory,
+		)+len(
+			auditRoutes,
+		)+len(
+			contextRoutes,
+		)+len(
+			server,
+		)+probeRouteCount,
 	)
 	out = append(out, pulumi...)
 	out = append(out, tfe...)
 	out = append(out, tofuHTTP...)
 	out = append(out, inventory...)
 	out = append(out, auditRoutes...)
+	out = append(out, contextRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -646,6 +665,78 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	return inventoryRefs(handler.Routes())
+}
+
+// coverageContextRoutes returns the context adapter's route table.
+func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	writer, err := objectcontext.NewWriter(objectcontext.WriterConfig{
+		Store: coverageContextStore{}, Namespaces: coverageNamespaceStore{}, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("context writer: %v", err)
+	}
+
+	handler, err := contextapi.NewHandler(contextapi.Config{
+		Namespaces:    namespaces,
+		Units:         coverageReader{},
+		Deleted:       coverageReader{},
+		Collections:   nil,
+		Entries:       coverageContextStore{},
+		Writer:        writer,
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
+		Logger:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("context handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageContextStore holds no context. It exists only to build a Handler
+// for its route table; no request is ever served.
+type coverageContextStore struct{}
+
+func (coverageContextStore) Entries(_ context.Context, _ []objectcontext.Ref) ([]objectcontext.Entry, error) {
+	return nil, nil
+}
+
+//nolint:revive // The signature of the objectcontext.Store port.
+func (coverageContextStore) SetAPI(
+	_ context.Context, _ objectcontext.Ref, _ objectcontext.Patch, _ string, _ namespace.Fence, _ audit.Entry,
+) (objectcontext.Entry, error) {
+	return objectcontext.Entry{}, objectcontext.ErrNotFound
+}
+
+func (coverageContextStore) DeleteAPI(_ context.Context, _ objectcontext.Ref, _ namespace.Fence, _ audit.Entry) error {
+	return objectcontext.ErrNotFound
+}
+
+func (coverageContextStore) ReplaceOutput(
+	_ context.Context, _ objectcontext.Ref, _ objectcontext.OutputItem, _ []objectcontext.Entry, _ namespace.Fence,
+) error {
+	return nil
+}
+
+func (coverageContextStore) DropUnit(_ context.Context, _ objectcontext.Ref, _ namespace.Fence) error {
+	return nil
+}
+
+func (coverageContextStore) ByOwner(
+	_ context.Context, _ namespace.Name, _, _ string, _ int,
+) ([]objectcontext.Entry, string, error) {
+	return nil, "", nil
 }
 
 // coverageCollectionStore holds no collection. It exists only so that the

@@ -35,6 +35,10 @@ const (
 	portColDigest       = "digest"
 	portColSink         = "sink"
 	portColExpiresAtMs  = "expires_at_ms"
+	portColNamespaceID  = "namespace_id"
+	portColObjectKind   = "object_kind"
+	portColObjectID     = "object_id"
+	portColResourceKey  = "resource_key"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -262,6 +266,51 @@ func portableSpec() []PortableTable {
 				{Name: portColNamespace, Kind: KindText},
 				{Name: "collection_key", Kind: KindText},
 				{Name: "assigned_at_ms", Kind: KindTime},
+			},
+		},
+		{
+			Table: "object_context",
+			OrderBy: []string{
+				portColNamespaceID,
+				portColObjectKind,
+				portColObjectID,
+				portColResourceKey,
+				portColSource,
+			},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: portColObjectKind, Kind: KindText},
+				{Name: portColObjectID, Kind: KindText},
+				{Name: portColTool, Kind: KindText},
+				{Name: portColResourceKey, Kind: KindText},
+				{Name: portColSource, Kind: KindText},
+				{Name: "fields", Kind: KindText},
+				{Name: "warning", Kind: KindText},
+				{Name: "item_id", Kind: KindText},
+				{Name: "item_seq", Kind: KindInteger},
+				{Name: "resource_deleted_at_ms", Kind: KindTime},
+				{Name: "marks_seq", Kind: KindInteger},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: "updated_by", Kind: KindText},
+			},
+		},
+		{
+			Table: "object_context_owners",
+			OrderBy: []string{
+				portColNamespaceID,
+				"owner",
+				portColObjectKind,
+				portColObjectID,
+				portColResourceKey,
+				portColSource,
+			},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "owner", Kind: KindText},
+				{Name: portColObjectKind, Kind: KindText},
+				{Name: portColObjectID, Kind: KindText},
+				{Name: portColResourceKey, Kind: KindText},
+				{Name: portColSource, Kind: KindText},
 			},
 		},
 		{

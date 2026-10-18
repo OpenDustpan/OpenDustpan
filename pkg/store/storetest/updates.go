@@ -67,6 +67,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "a purge removes a deleted stack for good", test: testPurgeStack},
 		{name: "a sweep purge checks the retention in its transaction", test: testSweepPurgeChecksTheRetention},
 		{name: "a purge ends the grants on the stack", test: testPurgeStackRevokesItsGrants},
+		{name: "a purge removes the context of the stack", test: testPurgeStackDropsItsContext},
 		{name: "an audit entry on a stack gets its stable ID", test: testAppendFillsStackID},
 		{
 			name: "a restore or a purge with the fence of another namespace changes nothing",
