@@ -115,7 +115,7 @@ type Layer struct {
 
 // Override is an on-call override: it puts Principal on call from Start
 // to End, over every layer. CreatedBy is the principal that added it, at
-// CreatedAt.
+// CreatedAt. The store sets CreatedAt from the time of its transaction.
 type Override struct {
 	ID        string
 	Principal string
@@ -269,28 +269,12 @@ func (h Hours) valid() bool {
 
 // ValidZone reports whether zone is a name of the IANA time zone
 // database, for example "Europe/Berlin" or "UTC", that the server can
-// load. It refuses "Local", which names the zone of the host and so can
-// change with the host, and a path.
+// load with calendar.LoadZone. It refuses the names that follow the zone
+// of the host, for example "Local", "localtime" and "/etc/localtime".
 func ValidZone(zone string) bool {
-	if zone == "" || zone == "Local" || zone[0] == '/' || strings.Contains(zone, "..") || !zoneChars(zone) {
-		return false
-	}
+	_, err := calendar.LoadZone(zone)
 
-	loc, err := time.LoadLocation(zone)
-
-	return err == nil && loc.String() == zone
-}
-
-// zoneChars reports whether zone has only the characters of the names of
-// the IANA time zone database.
-func zoneChars(zone string) bool {
-	for _, r := range zone {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("/_+-", r) {
-			return false
-		}
-	}
-
-	return true
+	return err == nil
 }
 
 // validNamespace reports whether ns is the name of a namespace. The

@@ -57,6 +57,9 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an estimate replaces the estimate of its subject", testEstimateReplace},
 		{"an estimate from a client appends an entry, a scheduled one none", testEstimateAudit},
 		{"pending estimates are those of open jobs", testPending},
+		{"an estimate of one origin never replaces the other", testEstimateOrigins},
+		{"pending estimates are those of the highest phase of a job", testPendingPhase},
+		{"a write refuses an audit entry of another namespace", testEntryNamespace},
 		{"an estimate of a blueprint of the installation takes a zero fence", testServerEstimate},
 		{"a subject keeps the namespace of its estimate", testEstimateNamespace},
 		{"every write refuses a wrong or stale fence", testFences},
@@ -153,12 +156,13 @@ func testEstimateReplace(t *testing.T, h Harness) {
 	put(t, h, fence, estimate(t, "est-1", "job-1", 10))
 	put(t, h, fence, estimate(t, "est-2", "job-1", 31))
 
-	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"))
+	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginEstimator)
 	if err != nil || got.ID != "est-2" || got.After != eur(31) {
 		t.Fatalf("GetEstimate = %+v (%v), want est-2 with +31", got, err)
 	}
 
-	if _, err := h.Estimates.GetEstimate(t.Context(), subject("job-none")); !errors.Is(err, cost.ErrNotFound) {
+	_, err = h.Estimates.GetEstimate(t.Context(), subject("job-none"), cost.OriginEstimator)
+	if !errors.Is(err, cost.ErrNotFound) {
 		t.Fatalf("GetEstimate unknown: err = %v, want ErrNotFound", err)
 	}
 }
@@ -203,6 +207,106 @@ func testPending(t *testing.T, h Harness) {
 	}
 }
 
+// testEstimateOrigins stores an estimate of an Estimator adapter and an
+// estimate from a client for one subject, and reads back both. A second
+// estimate of the adapter replaces only the first one of the adapter.
+func testEstimateOrigins(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	put(t, h, fence, estimate(t, "est-1", "job-1", 10))
+
+	pushed := estimate(t, "est-2", "job-1", 31)
+	pushed.Source = cost.SourceAPI
+	put(t, h, fence, pushed)
+	put(t, h, fence, estimate(t, "est-3", "job-1", 12))
+
+	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginEstimator)
+	if err != nil || got.ID != "est-3" {
+		t.Fatalf("GetEstimate of the adapter = %+v (%v), want est-3", got, err)
+	}
+
+	got, err = h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginAPI)
+	if err != nil || got.ID != "est-2" || got.After != eur(31) {
+		t.Fatalf("GetEstimate of the client = %+v (%v), want est-2 with +31", got, err)
+	}
+}
+
+// testPendingPhase stores estimates of the phases 0 and 2 of one open
+// job. Only the estimates of phase 2 are pending, one of each origin.
+func testPendingPhase(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	if err := h.Domain.SetJobOpen(t.Context(), shop, "job-1", true); err != nil {
+		t.Fatalf("SetJobOpen: %v", err)
+	}
+
+	first := estimate(t, "est-1", "job-1", 10)
+	later := estimate(t, "est-2", "job-1", 31)
+	later.Subject.Phase = 2
+	pushed := estimate(t, "est-3", "job-1", 40)
+	pushed.Subject.Phase, pushed.Source = 2, cost.SourceAPI
+
+	for _, e := range []*cost.Estimate{&later, &first, &pushed} {
+		put(t, h, fence, *e)
+	}
+
+	got, err := h.Estimates.PendingEstimates(t.Context(), shop)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("PendingEstimates = %+v (%v), want est-2 and est-3", got, err)
+	}
+
+	for i := range got {
+		if got[i].ID != "est-2" && got[i].ID != "est-3" {
+			t.Fatalf("PendingEstimates holds %s of phase %d, want only phase 2", got[i].ID, got[i].Subject.Phase)
+		}
+	}
+}
+
+// testEntryNamespace runs each write that takes an audit entry with the
+// good fence and an entry in the namespace other. Each write returns
+// ErrInvalid and changes nothing, in shop and in other.
+func testEntryNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	createOther(t, h)
+
+	if err := h.Budgets.CreateBudget(t.Context(), budget(), fence, entry("namespace:manage-budgets")); err != nil {
+		t.Fatalf("CreateBudget: %v", err)
+	}
+
+	e := entry("namespace:manage-budgets")
+	e.Namespace = other
+	b := budget()
+	b.Version, b.Amount = 1, eur(5000)
+	created := budget()
+	created.ID = "bgt-9"
+
+	writes := map[string]func() error{
+		"PutEstimate": func() error {
+			return h.Estimates.PutEstimate(t.Context(), estimate(t, "est-9", "job-9", 10), fence, &e)
+		},
+		"CreateBudget": func() error { return h.Budgets.CreateBudget(t.Context(), created, fence, e) },
+		"UpdateBudget": func() error { return h.Budgets.UpdateBudget(t.Context(), b, fence, e) },
+		"DeleteBudget": func() error { return h.Budgets.DeleteBudget(t.Context(), "bgt-1", fence, e) },
+	}
+
+	for name, write := range writes {
+		if err := write(); !errors.Is(err, cost.ErrInvalid) {
+			t.Fatalf("%s with an entry of other: err = %v, want ErrInvalid", name, err)
+		}
+	}
+
+	assertUnchanged(t, h)
+
+	entries, err := h.Domain.AuditEntries(t.Context(), other)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("audit entries of other = %d (%v), want none", len(entries), err)
+	}
+}
+
 func blueprintEstimate(t *testing.T) cost.Estimate {
 	t.Helper()
 
@@ -235,7 +339,7 @@ func testServerEstimate(t *testing.T, h Harness) {
 
 	put(t, h, namespace.Fence{Namespace: "", FailoverVersion: 0}, e)
 
-	got, err := h.Estimates.GetEstimate(t.Context(), e.Subject)
+	got, err := h.Estimates.GetEstimate(t.Context(), e.Subject, cost.OriginEstimator)
 	if err != nil || got.ID != "est-b" {
 		t.Fatalf("GetEstimate = %+v (%v), want est-b", got, err)
 	}
@@ -245,7 +349,7 @@ func testEstimateNamespace(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := setup(t, h)
-	otherFence := create(t, h, other)
+	otherFence := createOther(t, h)
 	put(t, h, fence, estimate(t, "est-1", "job-1", 10))
 
 	e := estimate(t, "est-2", "job-1", 20)
@@ -255,18 +359,19 @@ func testEstimateNamespace(t *testing.T, h Harness) {
 		t.Fatalf("PutEstimate of a subject of shop in other: err = %v, want ErrInvalid", err)
 	}
 
-	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"))
+	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginEstimator)
 	if err != nil || got.ID != "est-1" {
 		t.Fatalf("GetEstimate = %+v (%v), want est-1", got, err)
 	}
 }
 
-func create(t *testing.T, h Harness, ns namespace.Name) namespace.Fence {
+// createOther creates the namespace other and returns its fence.
+func createOther(t *testing.T, h Harness) namespace.Fence {
 	t.Helper()
 
-	fence, err := h.Domain.CreateNamespace(t.Context(), ns)
+	fence, err := h.Domain.CreateNamespace(t.Context(), other)
 	if err != nil {
-		t.Fatalf("CreateNamespace %s: %v", ns, err)
+		t.Fatalf("CreateNamespace %s: %v", other, err)
 	}
 
 	return fence
@@ -299,8 +404,21 @@ type fenceWrite struct {
 func fenceWrites() []fenceWrite {
 	manage := entry("namespace:manage-budgets")
 	status := cost.Status{
-		Budget: "bgt-1", Period: cost.PeriodOf(now()), Actual: eur(1), Forecast: eur(1), Pending: eur(0),
-		Projected: eur(1), Percent: 0, Crossed: nil, Warned: nil, Skipped: 0, Level: cost.LevelOK, AsOf: now(),
+		Budget:   "bgt-1",
+		Period:   cost.PeriodOf(now()),
+		Actual:   eur(1),
+		Forecast: eur(1),
+		Pending:  eur(0),
+		Projected: eur(
+			1,
+		),
+		Percent:         0,
+		Crossed:         nil,
+		Warned:          nil,
+		Skipped:         0,
+		SkippedNegative: 0,
+		Level:           cost.LevelOK,
+		AsOf:            now(),
 	}
 
 	return []fenceWrite{
@@ -345,7 +463,7 @@ func testFences(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := setup(t, h)
-	otherFence := create(t, h, other)
+	otherFence := createOther(t, h)
 
 	if err := h.Budgets.CreateBudget(t.Context(), budget(), fence, entry("namespace:manage-budgets")); err != nil {
 		t.Fatalf("CreateBudget: %v", err)
@@ -380,7 +498,7 @@ func assertUnchanged(t *testing.T, h Harness) {
 		t.Fatalf("Budgets = %+v (%v), want bgt-1 at version 1 only", got, err)
 	}
 
-	_, err = h.Estimates.GetEstimate(t.Context(), subject("job-9"))
+	_, err = h.Estimates.GetEstimate(t.Context(), subject("job-9"), cost.OriginEstimator)
 	if !errors.Is(err, cost.ErrNotFound) {
 		t.Fatalf("GetEstimate after refused writes: err = %v, want ErrNotFound", err)
 	}
@@ -436,7 +554,7 @@ func testBudgetNamespace(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := setup(t, h)
-	create(t, h, other)
+	createOther(t, h)
 	manage := entry("namespace:manage-budgets")
 
 	if err := h.Budgets.CreateBudget(t.Context(), budget(), fence, manage); err != nil {
@@ -468,8 +586,19 @@ func testStatus(t *testing.T, h Harness) {
 
 	p := cost.PeriodOf(now())
 	st := cost.Status{
-		Budget: "bgt-1", Period: p, Actual: eur(3300), Forecast: eur(3300), Pending: eur(0), Projected: eur(3300),
-		Percent: 82, Crossed: []int{80}, Warned: []int{80}, Skipped: 0, Level: cost.LevelWarning, AsOf: now(),
+		Budget:          "bgt-1",
+		Period:          p,
+		Actual:          eur(3300),
+		Forecast:        eur(3300),
+		Pending:         eur(0),
+		Projected:       eur(3300),
+		Percent:         82,
+		Crossed:         []int{80},
+		Warned:          []int{80},
+		Skipped:         0,
+		SkippedNegative: 0,
+		Level:           cost.LevelWarning,
+		AsOf:            now(),
 	}
 
 	if err := h.Budgets.SaveStatus(t.Context(), st, 0, fence); err != nil {
@@ -533,8 +662,19 @@ func testWarned(t *testing.T, h Harness) {
 
 	p := cost.PeriodOf(now())
 	high := cost.Status{
-		Budget: "bgt-1", Period: p, Actual: eur(3400), Forecast: eur(3400), Pending: eur(0), Projected: eur(3400),
-		Percent: 85, Crossed: []int{80}, Warned: nil, Skipped: 0, Level: cost.LevelWarning, AsOf: now(),
+		Budget:          "bgt-1",
+		Period:          p,
+		Actual:          eur(3400),
+		Forecast:        eur(3400),
+		Pending:         eur(0),
+		Projected:       eur(3400),
+		Percent:         85,
+		Crossed:         []int{80},
+		Warned:          nil,
+		Skipped:         0,
+		SkippedNegative: 0,
+		Level:           cost.LevelWarning,
+		AsOf:            now(),
 	}
 
 	high, warn := cost.MarkWarned(nil, high)

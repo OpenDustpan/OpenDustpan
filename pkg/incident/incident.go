@@ -75,6 +75,16 @@ const (
 	StateClosed State = "closed"
 )
 
+// known reports whether s is a known state of an incident.
+func (s State) known() bool {
+	switch s {
+	case StateOpen, StateAcknowledged, StateMitigated, StateResolved, StateClosed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Severity is the severity that the team gives, from 1, the highest, to 4.
 type Severity int
 
@@ -180,9 +190,17 @@ func (in Incident) Classification() (Classification, bool) {
 	return in.Classifications[len(in.Classifications)-1], true
 }
 
-// Validate returns ErrInvalid for an incident that breaks a bound.
+// Validate returns ErrInvalid for an incident that breaks a bound, or
+// whose state and step times do not agree: an unknown state, a state
+// with no time of its step, a time of a later step than the state, or a
+// time of a step before OpenedAt. A closed incident needs ClosedAt, a
+// root cause and lessons.
 func (in Incident) Validate() error {
 	if err := in.validateFields(); err != nil {
+		return err
+	}
+
+	if err := in.validateState(); err != nil {
 		return err
 	}
 
@@ -207,6 +225,54 @@ func (in Incident) ValidateNew() error {
 	}
 }
 
+// validateState returns ErrInvalid for an unknown state, for step times
+// that the state does not allow, and for a closed incident with no review.
+func (in Incident) validateState() error {
+	for _, at := range []time.Time{in.AcknowledgedAt, in.MitigatedAt, in.ResolvedAt, in.ClosedAt} {
+		if !at.IsZero() && at.Before(in.OpenedAt) {
+			return fmt.Errorf("%w: the time of a step is at or after the open", ErrInvalid)
+		}
+	}
+
+	if in.State == StateClosed && (strings.TrimSpace(in.RootCause) == "" || strings.TrimSpace(in.Lessons) == "") {
+		return fmt.Errorf("%w: a closed incident has a root cause and lessons", ErrInvalid)
+	}
+
+	if !in.State.known() {
+		return fmt.Errorf("%w: unknown state %q", ErrInvalid, in.State)
+	}
+
+	if !in.stepTimesAgree() {
+		return fmt.Errorf("%w: the step times do not agree with the state %s", ErrInvalid, in.State)
+	}
+
+	return nil
+}
+
+// stepTimesAgree reports whether the step times agree with the state: the
+// state has the time of its step, and no time of a step that only a later
+// state has. It returns false for an unknown state.
+func (in Incident) stepTimesAgree() bool {
+	if in.State != StateClosed && !in.ClosedAt.IsZero() {
+		return false
+	}
+
+	switch in.State {
+	case StateOpen:
+		return in.ResolvedAt.IsZero()
+	case StateAcknowledged:
+		return !in.AcknowledgedAt.IsZero() && in.ResolvedAt.IsZero()
+	case StateMitigated:
+		return !in.MitigatedAt.IsZero() && in.ResolvedAt.IsZero()
+	case StateResolved:
+		return !in.ResolvedAt.IsZero()
+	case StateClosed:
+		return !in.ResolvedAt.IsZero() && !in.ClosedAt.IsZero()
+	default:
+		return false
+	}
+}
+
 // validateFields returns ErrInvalid for an ID, a namespace, a title, a
 // severity or a time of the incident that breaks a bound.
 func (in Incident) validateFields() error {
@@ -221,6 +287,8 @@ func (in Incident) validateFields() error {
 		return fmt.Errorf("%w: a severity is %d to %d", ErrInvalid, SeverityHighest, SeverityLowest)
 	case in.OpenedAt.IsZero() || in.DetectedAt.IsZero() || in.DetectedAt.After(in.OpenedAt):
 		return fmt.Errorf("%w: an incident is detected at or before it opens", ErrInvalid)
+	case in.OpenedBy == "":
+		return fmt.Errorf("%w: an incident needs the principal who opened it", ErrInvalid)
 	default:
 		return nil
 	}

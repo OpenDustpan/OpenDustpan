@@ -23,7 +23,7 @@ func TestMemConformance(t *testing.T) {
 	costtest.Run(t, func(*testing.T) costtest.Harness {
 		db := &memStore{
 			Domain:    opsmem.New(),
-			estimates: map[cost.Subject]estimateRow{},
+			estimates: map[estimateKey]estimateRow{},
 			jobs:      map[string]bool{},
 			budgets:   map[string]cost.Budget{},
 			statuses:  map[statusKey]statusRow{},
@@ -31,6 +31,11 @@ func TestMemConformance(t *testing.T) {
 
 		return costtest.Harness{Estimates: db, Budgets: db, Domain: db}
 	})
+}
+
+type estimateKey struct {
+	subject cost.Subject
+	origin  cost.Origin
 }
 
 type estimateRow struct {
@@ -53,7 +58,7 @@ type statusRow struct {
 type memStore struct {
 	*opsmem.Domain
 
-	estimates map[cost.Subject]estimateRow
+	estimates map[estimateKey]estimateRow
 	jobs      map[string]bool
 	budgets   map[string]cost.Budget
 	statuses  map[statusKey]statusRow
@@ -85,27 +90,29 @@ func (m *memStore) PutEstimate(_ context.Context, est cost.Estimate, fence names
 	}
 
 	return scoped(m.Write(fence, opsmem.Scope(est.Namespace), entries, func() error {
-		if old, ok := m.estimates[est.Subject]; ok && old.ns != est.Namespace {
-			return fmt.Errorf(
-				"estimate %s: %w: the subject has an estimate in another namespace",
-				est.ID,
-				cost.ErrInvalid,
-			)
+		for k := range m.estimates {
+			if k.subject == est.Subject && m.estimates[k].ns != est.Namespace {
+				return fmt.Errorf(
+					"estimate %s: %w: the subject has an estimate in another namespace",
+					est.ID,
+					cost.ErrInvalid,
+				)
+			}
 		}
 
-		m.estimates[est.Subject] = estimateRow{ns: est.Namespace, e: est}
+		m.estimates[estimateKey{subject: est.Subject, origin: est.Origin()}] = estimateRow{ns: est.Namespace, e: est}
 
 		return nil
 	}), cost.ErrInvalid)
 }
 
-func (m *memStore) GetEstimate(_ context.Context, s cost.Subject) (cost.Estimate, error) {
+func (m *memStore) GetEstimate(_ context.Context, s cost.Subject, o cost.Origin) (cost.Estimate, error) {
 	var (
 		r  estimateRow
 		ok bool
 	)
 
-	m.Read(func() { r, ok = m.estimates[s] })
+	m.Read(func() { r, ok = m.estimates[estimateKey{subject: s, origin: o}] })
 
 	if !ok {
 		return cost.Estimate{}, fmt.Errorf("estimate of %s: %w", s.Job, cost.ErrNotFound)
@@ -118,9 +125,11 @@ func (m *memStore) PendingEstimates(_ context.Context, ns namespace.Name) ([]cos
 	var out []cost.Estimate
 
 	m.Read(func() {
-		for s := range m.estimates {
-			if r := m.estimates[s]; r.ns == ns && s.Job != "" && m.jobs[ns.String()+"/"+s.Job] {
-				out = append(out, r.e)
+		top := m.topPhases(ns)
+
+		for k := range m.estimates {
+			if p, ok := top[k.subject.Job]; ok && m.estimates[k].ns == ns && p == k.subject.Phase {
+				out = append(out, m.estimates[k].e)
 			}
 		}
 	})
@@ -150,7 +159,7 @@ func (m *memStore) UpdateBudget(_ context.Context, b cost.Budget, fence namespac
 		return err
 	}
 
-	return scoped(m.Write(fence, m.budgetScope(b.ID), []audit.Entry{e}, func() error {
+	return scoped(m.WriteEntries(fence, m.budgetScope(b.ID), m.plan(b.ID, e, func() error {
 		old := m.budgets[b.ID]
 		if old.Namespace != b.Namespace {
 			return fmt.Errorf("update %s: %w: the namespace of a budget does not change", b.ID, cost.ErrInvalid)
@@ -164,16 +173,16 @@ func (m *memStore) UpdateBudget(_ context.Context, b cost.Budget, fence namespac
 		m.budgets[b.ID] = b
 
 		return nil
-	}), cost.ErrNotFound)
+	})), cost.ErrNotFound)
 }
 
 func (m *memStore) DeleteBudget(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
-	return scoped(m.Write(fence, m.budgetScope(id), []audit.Entry{e}, func() error {
+	return scoped(m.WriteEntries(fence, m.budgetScope(id), m.plan(id, e, func() error {
 		delete(m.budgets, id)
 		maps.DeleteFunc(m.statuses, func(k statusKey, _ statusRow) bool { return k.budget == id })
 
 		return nil
-	}), cost.ErrNotFound)
+	})), cost.ErrNotFound)
 }
 
 func (m *memStore) Budgets(_ context.Context, ns namespace.Name) ([]cost.Budget, error) {
@@ -221,6 +230,19 @@ func (m *memStore) LastStatus(_ context.Context, id string, p cost.Period) (cost
 	return r.st, r.version, nil
 }
 
+// plan returns the plan of a write of the stored budget id with the audit
+// entry e. It runs after the fence check, so an entry of another namespace
+// than the budget returns ErrInvalid, and a wrong fence ErrNotFound.
+func (m *memStore) plan(id string, e audit.Entry, change func() error) func() ([]audit.Entry, func() error, error) {
+	return func() ([]audit.Entry, func() error, error) {
+		if e.Namespace != m.budgets[id].Namespace {
+			return nil, nil, fmt.Errorf("budget %s: %w: the audit entry is in another namespace", id, cost.ErrInvalid)
+		}
+
+		return []audit.Entry{e}, change, nil
+	}
+}
+
 // budgetScope returns a scope function that finds the namespace of the
 // stored budget id, under the mutex of the write.
 func (m *memStore) budgetScope(id string) func() (namespace.Name, error) {
@@ -232,4 +254,23 @@ func (m *memStore) budgetScope(id string) func() (namespace.Name, error) {
 
 		return b.Namespace, nil
 	}
+}
+
+// topPhases returns the highest phase with an estimate of each open job of
+// ns, under the mutex of the domain.
+func (m *memStore) topPhases(ns namespace.Name) map[string]int {
+	top := map[string]int{}
+
+	for k := range m.estimates {
+		s := k.subject
+		if m.estimates[k].ns != ns || s.Job == "" || !m.jobs[ns.String()+"/"+s.Job] {
+			continue
+		}
+
+		if p, ok := top[s.Job]; !ok || s.Phase > p {
+			top[s.Job] = s.Phase
+		}
+	}
+
+	return top
 }

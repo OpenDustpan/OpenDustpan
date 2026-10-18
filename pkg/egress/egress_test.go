@@ -37,6 +37,14 @@ func TestCheckAddr(t *testing.T) {
 		{"64:ff9b::a9fe:a9fe", false},
 		{"2002:a9fe:a9fe::1", false},
 		{"255.255.255.255", false},
+		{"::127.0.0.1", false},
+		{"::a9fe:a9fe", false},
+		{"::ffff:0:7f00:1", false},
+		{"::ffff:0:a9fe:a9fe", false},
+		{"192.0.2.1", false},
+		{"198.51.100.1", false},
+		{"203.0.113.1", false},
+		{"2001:db8::1", false},
 	}
 
 	for _, tt := range tests {
@@ -80,6 +88,13 @@ func TestCheckURL(t *testing.T) {
 		{"does not parse", "https://%zz", egress.HTTPSOnly, false},
 		{"too long", "https://a.example.com/" + strings.Repeat("a", egress.MaxURLBytes), egress.HTTPSOnly, false},
 		{"public address", "https://93.184.215.14/", egress.HTTPSOnly, true},
+		{"hexadecimal loopback", "https://0x7f000001/", egress.HTTPSOnly, false},
+		{"decimal loopback", "https://2130706433/", egress.HTTPSOnly, false},
+		{"short loopback", "https://127.1/", egress.HTTPSOnly, false},
+		{"octal loopback", "https://0177.0.0.1/", egress.HTTPSOnly, false},
+		{"mixed hexadecimal", "https://0x7f.0.0.0x1/", egress.HTTPSOnly, false},
+		{"name with a number label", "https://1.example.com/", egress.HTTPSOnly, true},
+		{"name that starts with 0x", "https://0xdead.example.com/", egress.HTTPSOnly, true},
 	}
 
 	for _, tt := range tests {

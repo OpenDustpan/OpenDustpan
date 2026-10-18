@@ -49,6 +49,22 @@ const (
 	MaxNoteLen = 500
 	// MaxSourceLen caps the name of the source of an estimate.
 	MaxSourceLen = 100
+	// SourceAPI is the source of an estimate that a client sent through
+	// the API. An Estimator adapter never names itself SourceAPI.
+	SourceAPI = "api"
+)
+
+// Origin is how an estimate came in: from a client through the API, or
+// from an Estimator adapter. A subject keeps one estimate of each origin,
+// so an estimate of one origin never replaces an estimate of the other.
+type Origin string
+
+// Origins of an estimate.
+const (
+	// OriginAPI is an estimate that a client sent, with Source SourceAPI.
+	OriginAPI Origin = "api"
+	// OriginEstimator is an estimate of an Estimator adapter.
+	OriginEstimator Origin = "estimator"
 )
 
 // Action is what a planned change does to a resource.
@@ -149,6 +165,16 @@ func Summed(e Estimate) (Estimate, error) {
 	return e, e.Validate()
 }
 
+// Origin returns OriginAPI for an estimate with Source SourceAPI, and
+// OriginEstimator for every other estimate.
+func (e Estimate) Origin() Origin {
+	if e.Source == SourceAPI {
+		return OriginAPI
+	}
+
+	return OriginEstimator
+}
+
 // Delta returns After minus Before: the change of the cost of a month,
 // "+EUR 31.20 a month" in the work order and the Catalog. It returns
 // ErrCurrencyMismatch when the sums are in two currencies, and ErrInvalid
@@ -173,8 +199,9 @@ func (e Estimate) Unpriced() int {
 }
 
 // Validate returns ErrInvalid for an estimate that breaks a bound, whose
-// sums do not match its resources, or with an unpriced resource that has
-// an amount.
+// sums do not match its resources or are above MaxMicros, or with an
+// unpriced resource that has an amount. So the delta of a valid estimate
+// is from -MaxMicros to MaxMicros.
 func (e Estimate) Validate() error {
 	if err := e.validateFields(); err != nil {
 		return err
@@ -271,6 +298,14 @@ func (e Estimate) validateSums() error {
 
 	if before != e.Before || after != e.After {
 		return fmt.Errorf("%w: the sums do not match the resources", ErrInvalid)
+	}
+
+	if err := e.Before.ValidateCost(); err != nil {
+		return fmt.Errorf("sum before: %w", err)
+	}
+
+	if err := e.After.ValidateCost(); err != nil {
+		return fmt.Errorf("sum after: %w", err)
 	}
 
 	return nil

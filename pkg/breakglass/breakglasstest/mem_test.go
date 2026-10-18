@@ -38,7 +38,7 @@ type memStore struct {
 func (m *memStore) Open(
 	_ context.Context, r breakglass.Review, fence namespace.Fence, e audit.Entry,
 ) (breakglass.Review, error) {
-	if err := r.Use.Validate(); err != nil {
+	if err := r.ValidateOpen(); err != nil {
 		return breakglass.Review{}, err
 	}
 
@@ -57,17 +57,23 @@ func (m *memStore) Open(
 		return r.Use.Scope, nil
 	}
 
-	err := m.WriteEntries(fence, scope, func() ([]audit.Entry, error) {
+	err := m.WriteEntries(fence, scope, func() ([]audit.Entry, func() error, error) {
 		if ok {
 			out = old
 
-			return nil, nil
+			return nil, nil, nil
 		}
 
-		r.Version = 1
-		m.reviews[r.ID], out = r, r
+		if _, taken := m.reviews[r.ID]; taken {
+			return nil, nil, fmt.Errorf("open %s: another use holds the ID: %w", r.ID, breakglass.ErrInvalid)
+		}
 
-		return []audit.Entry{e}, nil
+		return []audit.Entry{e}, func() error {
+			r.Version = 1
+			m.reviews[r.ID], out = r, r
+
+			return nil
+		}, nil
 	})
 	if errors.Is(err, opsmem.ErrScope) {
 		return breakglass.Review{}, fmt.Errorf("open %s: %w: %w", r.ID, breakglass.ErrInvalid, err)
@@ -105,7 +111,7 @@ func (m *memStore) List(_ context.Context, f breakglass.Filter) ([]breakglass.Re
 			switch {
 			case f.Scope != "" && r.Use.Scope != f.Scope,
 				f.State != "" && r.State != f.State,
-				!f.DueBefore.IsZero() && (r.DueAt.IsZero() || !r.DueAt.Before(f.DueBefore)),
+				!f.DueBefore.IsZero() && (r.DueAt.IsZero() || r.DueAt.After(f.DueBefore)),
 				f.After != "" && id <= f.After:
 				continue
 			default:
@@ -123,21 +129,36 @@ func (m *memStore) List(_ context.Context, f breakglass.Filter) ([]breakglass.Re
 }
 
 func (m *memStore) Record(_ context.Context, r breakglass.Review, fence namespace.Fence, e audit.Entry) error {
-	err := m.Write(fence, m.scope(r.ID), []audit.Entry{e}, func() error {
+	err := m.WriteEntries(fence, m.scope(r.ID), func() ([]audit.Entry, func() error, error) {
 		old, err := m.current(r)
 		if err != nil {
-			return err
+			return nil, nil, err
+		}
+
+		if e.Namespace != old.Use.Scope {
+			return nil, nil, fmt.Errorf(
+				"record %s: the audit entry is in another scope: %w", r.ID, breakglass.ErrInvalid,
+			)
 		}
 
 		if err := breakglass.CheckVerdict(old, r.State, r.Verdict); err != nil {
-			return fmt.Errorf("record %s: %w", r.ID, err)
+			return nil, nil, fmt.Errorf("record %s: %w", r.ID, err)
 		}
 
-		old.State, old.Verdict, old.NextNoticeAt = r.State, r.Verdict, time.Time{}
-		old.Version++
-		m.reviews[r.ID] = old
+		// The mutex stands for the transaction, and the clock of the
+		// host for its time.
+		if r.Verdict.ReviewedAt.After(time.Now().Add(breakglass.MaxClockSkew)) {
+			return nil, nil, fmt.Errorf("record %s: the verdict is in the future: %w", r.ID, breakglass.ErrInvalid)
+		}
 
-		return nil
+		return []audit.Entry{e}, func() error {
+			old.State, old.Verdict, old.NextNoticeAt = r.State, r.Verdict, time.Time{}
+			old.Verdict.ActAs = slices.Clone(r.Verdict.ActAs)
+			old.Version++
+			m.reviews[r.ID] = old
+
+			return nil
+		}, nil
 	})
 
 	return notFound(r.ID, err)

@@ -139,7 +139,14 @@ accounts.
    - the reviewer is not one of the people of the use: the person, the
      owner of the break-glass account, or a principal that can act as the
      person (the subjects compare with no case): `ErrSelfReview`,
-   - a session is past its time limit: `ErrInUse`,
+   - the reviewer did not hold an act-as edge to the person at a time
+     from the start to the end of the use (the time limit of a session,
+     the verdict for a freeze break): `ErrSelfReview`. The server takes
+     these principals from the grant history and gives them in
+     `Reviewer.ActAs`, because a principal that gets an edge during the
+     use is not in `Use.People`. For example, a break-glass account can
+     grant act-as to a colleague during its session,
+   - a verdict on a session before its time limit: `ErrInUse`,
    - the request has a fresh authentication, at most 15 minutes old, of the
      kind of ADR 103 decision 2 (MFA step or SSO with a maximum age):
      `ErrAuthStale`.
@@ -148,10 +155,16 @@ accounts.
    time from the console session of the request, never from the body of
    the request. `Store.Record` checks the verdict again against the stored
    review with `breakglass.CheckVerdict`: the state is a verdict, the
-   review names a reviewer who is not one of the people of the stored use, the
-   authentication was fresh at the time of the verdict, and a dispute has
-   a note. So a caller cannot record a verdict that `CheckReviewer` would
-   refuse.
+   review names a reviewer who is not one of the people of the stored use
+   or of `Verdict.ActAs`, the time of the verdict is not before the use or
+   the opening of the review, the authentication was fresh at the time of
+   the verdict, and a dispute has a note. The store also refuses a verdict
+   whose time is more than one minute after the time of its transaction.
+   The store cannot check the console session, the access token or the
+   agent of the request, and it cannot check `ActAs` against the grant
+   history: `CheckReviewer` checks them in the server before the write.
+   `Store.Open` refuses a review that is not new: a state other than
+   `pending`, a verdict, a notice step sent, or times that do not agree.
 
    A review replaces the approval of a manager before use. A fresh
    authentication makes sure that the second person is present.

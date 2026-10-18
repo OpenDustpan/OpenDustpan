@@ -137,16 +137,13 @@ func (w Weekly) validate() error {
 	return nil
 }
 
-// location loads w.Zone. It refuses the empty zone and "Local", because
-// both depend on the host of the server.
+// location loads w.Zone with calendar.LoadZone. It refuses the empty zone
+// and each name that follows the zone of the host, for example "Local" or
+// "localtime".
 func (w Weekly) location() (*time.Location, error) {
-	if w.Zone == "" || w.Zone == "Local" {
-		return nil, fmt.Errorf("%w: a weekly rule needs an IANA zone, not %q", ErrInvalid, w.Zone)
-	}
-
-	loc, err := time.LoadLocation(w.Zone)
+	loc, err := calendar.LoadZone(w.Zone)
 	if err != nil {
-		return nil, fmt.Errorf("%w: unknown zone %q", ErrInvalid, w.Zone)
+		return nil, fmt.Errorf("%w: a weekly rule needs an IANA zone: %w", ErrInvalid, err)
 	}
 
 	return loc, nil

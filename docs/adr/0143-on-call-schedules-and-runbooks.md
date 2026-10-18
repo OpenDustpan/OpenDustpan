@@ -41,8 +41,10 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
 
    A schedule never belongs to the server scope. The time zone is a name
    of the IANA time zone database that the server can load, for example
-   `Europe/Berlin` or `UTC` (`oncall.ValidZone`). The server refuses
-   `Local`, because it names the zone of the host, and a path. The server
+   `Europe/Berlin` or `UTC` (`oncall.ValidZone`), of the form
+   Area/Location or `UTC`. The server refuses the names that follow the
+   zone of the host, for example `Local`, `localtime`, `posixrules` and
+   `/etc/localtime`. The server
    cannot tell a canonical name from an alias of the database, so it
    accepts an alias such as `US/Pacific`.
 2. **On-call layers.** A local schedule has 1 to 5 on-call layers. An
@@ -52,13 +54,16 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
    wall time of the start plus k turns. So a turn of 12 hours from 08:00
    changes at 08:00 and 20:00 all year, and a turn of 7 days from Monday
    09:00 changes on Monday at 09:00, also over a change to or from summer
-   time. At a change of the clock:
-   - A turn that starts in the hour that a change to summer time skips
-     starts at the end of that hour. A turn that lies fully in that hour
-     is empty, and its member has no turn that day.
-   - A turn that ends in the hour that a change to winter time repeats
+   time. At a change of the clock, the server resolves the wall time
+   itself, also in zones west of UTC and in zones that change by 30
+   minutes:
+   - A turn that starts in the time that a change to summer time skips
+     starts at the instant of the change, the end of the skipped time. A
+     turn that lies fully in that time is empty, and its member has no
+     turn that day.
+   - A turn that ends in the time that a change to winter time repeats
      ends at the second occurrence of its end. So the turn before it is
-     one hour longer.
+     longer by the repeated time.
 
    An on-call layer can cover some hours of some days only, for example
    the working hours of a team. A later on-call layer wins over an earlier
@@ -68,10 +73,11 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
    principal that added it and the time of the add. The last on-call
    override wins over an earlier one. Two people can add on-call overrides
    at one time: `AddOverride` does not check the version of the schedule.
-   A schedule holds at most 200 on-call overrides. In the transaction of
-   each add, the store first deletes the on-call overrides whose end is
-   not after the time of the add, so the cap counts only those that did
-   not end. The audit entry of each add keeps a deleted on-call override.
+   A schedule holds at most 200 on-call overrides. The time of the add is
+   the time of the transaction of the store, never a time from the
+   request. In the transaction of each add, the store first deletes the
+   on-call overrides whose end is not after the time of the add, so the
+   cap counts only those that did not end. The audit entry of each add keeps a deleted on-call override.
    The timeline of a past range does not show it.
 4. **The timeline is pure.** `Schedule.Timeline(from, to)` answers the
    shifts of a range of at most 92 days. A range that starts before the
@@ -200,6 +206,9 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
     `change`, in the scope of the namespace. The entry holds the schedule
     ID and the changed fields, or the on-call override with its principal,
     times and reason. The copy of an external schedule writes no entry.
+    The store refuses an entry of another namespace than the row with
+    `ErrInvalid`, so a write cannot append to the audit chain of another
+    namespace.
 17. **Ports with conformance first, and the fence of the row.** Each
     write of `oncall.Store` and `oncall.Handoffs` carries the fence of the namespace of its schedule,
     and the store checks it in the transaction of the write. A zero fence

@@ -12,8 +12,9 @@ import (
 type Filter struct {
 	Scope namespace.Name
 	State State
-	// DueBefore selects the reviews with a deadline before it, for the
-	// list of overdue reviews.
+	// DueBefore selects the reviews with a deadline at or before it, for
+	// the list of overdue reviews: the reviews that Review.Overdue reports
+	// at DueBefore, when State is pending.
 	DueBefore time.Time
 	// After is the ID of the last review of the previous page.
 	After string
@@ -33,15 +34,18 @@ type Filter struct {
 // namespace.ErrFenced.
 //
 // Open and Record append the audit entry e in their transaction, and a
-// failed write changes nothing and appends nothing.
+// failed write changes nothing and appends nothing. The Namespace of e is
+// the scope of the review. An entry in another scope gives ErrInvalid, so
+// a write cannot append to the audit chain of another namespace.
 type Store interface {
 	// Open persists r with version 1, or returns the review that already
 	// exists for the kind and the reference of r.Use, unchanged. So an
 	// open that runs again after a crash makes no second review. It
-	// returns ErrInvalid for a review whose use fails Validate, and for a
-	// fence that does not belong to r.Use.Scope (a zero fence for a
-	// namespace, a fence for audit.ServerScope, or the fence of another
-	// namespace), or to the scope of the review that exists. It returns
+	// returns ErrInvalid for a review that fails Review.ValidateOpen, for
+	// an ID that another review holds, and for a fence that does not
+	// belong to r.Use.Scope (a zero fence for a namespace, a fence for
+	// audit.ServerScope, or the fence of another namespace), or to the
+	// scope of the review that exists. It ignores r.Version. It returns
 	// namespace.ErrNotFound and namespace.ErrFenced as the Store
 	// describes. It appends e only when it creates the review.
 	Open(ctx context.Context, r Review, fence namespace.Fence, e audit.Entry) (Review, error)
@@ -51,7 +55,10 @@ type Store interface {
 	List(ctx context.Context, f Filter) ([]Review, error)
 	// Record stores the verdict of r when r.Version is the stored version,
 	// and increments the version. It checks the verdict against the stored
-	// review with CheckVerdict, not against r.Use. It returns ErrNotFound
+	// review with CheckVerdict, not against r.Use, and returns ErrInvalid
+	// for a ReviewedAt after the time of its transaction plus
+	// MaxClockSkew. It cannot check the session, the access token or the
+	// agent of the request: CheckReviewer checks them. It returns ErrNotFound
 	// for an unknown review and for a fence that does not belong to the
 	// scope of the stored review, ErrConflict for an older version, the
 	// errors of CheckVerdict (ErrReviewed, ErrSelfReview, ErrInUse,

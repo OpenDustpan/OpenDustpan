@@ -76,6 +76,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a not-modified feed read keeps the holidays and the ETag", testFeedNotModified},
 		{"a feed status holds an error class only", testFeedErrorClass},
 		{"writes of a group or the installation append to the server scope", testServerScopeEntries},
+		{"a feed read of an old URL is ErrConflict and changes nothing", testFeedURLChanged},
+		{"an audit entry of another namespace is refused and changes nothing", testEntryOtherNamespace},
 	}
 
 	fence := fenceCases()
@@ -188,7 +190,10 @@ func fromFeed(d calendar.Date, name string) calendar.Holiday {
 	return calendar.Holiday{Date: d, Name: name, Source: calendar.SourceFeed, Feed: feedID}
 }
 
-const feedURL = "https://calendar.example.com/ical/t0ken/basic.ics"
+const (
+	feedURL  = "https://calendar.example.com/ical/t0ken/basic.ics"
+	otherURL = "https://calendar.example.com/ical/other/basic.ics"
+)
 
 // sample returns a calendar of owner with one manual holiday and one feed.
 func sample(id calendar.ID, owner calendar.Scope) calendar.Calendar {
@@ -239,11 +244,16 @@ func goodStatus(n int, etag string) calendar.FeedStatus {
 	return calendar.FeedStatus{ReadAt: now(), Holidays: n, Skipped: 1, Error: "", ETag: etag}
 }
 
+// status is a read of the feed feedID of feedURL with no new holidays.
+func status(feedID string, s calendar.FeedStatus) calendar.FeedRead {
+	return calendar.FeedRead{Feed: feedID, URL: feedURL, Holidays: nil, Status: s}
+}
+
 // replace records a good read of feed-1 of id with holidays.
 func replace(t *testing.T, h Harness, fence namespace.Fence, id calendar.ID, holidays ...calendar.Holiday) {
 	t.Helper()
 
-	read := calendar.FeedRead{Feed: feedID, Holidays: holidays, Status: goodStatus(len(holidays), "v1")}
+	read := calendar.FeedRead{Feed: feedID, URL: feedURL, Holidays: holidays, Status: goodStatus(len(holidays), "v1")}
 
 	err := h.Store.ReplaceFeedHolidays(t.Context(), id, read, fence)
 	if err != nil {
@@ -394,7 +404,7 @@ func testUpdateDropsFeed(t *testing.T, h Harness) {
 	replace(t, h, f.shop, "cal-berlin", fromFeed(date(12, 25), "Christmas Day"))
 
 	c := get(t, h, "cal-berlin")
-	c.Feeds[0].URL = "https://calendar.example.com/ical/other/basic.ics"
+	c.Feeds[0].URL = otherURL
 
 	if err := h.Store.Update(t.Context(), c, f.shop, nsEntry()); err != nil {
 		t.Fatalf("Update with a new URL: %v", err)
@@ -406,7 +416,15 @@ func testUpdateDropsFeed(t *testing.T, h Harness) {
 			len(got.Holidays), got.Feeds[0].Status)
 	}
 
-	replace(t, h, f.shop, "cal-berlin", fromFeed(date(12, 25), "Christmas Day"))
+	read := calendar.FeedRead{
+		Feed:     feedID,
+		URL:      otherURL,
+		Holidays: []calendar.Holiday{fromFeed(date(12, 25), "Christmas Day")},
+		Status:   goodStatus(1, "v1"),
+	}
+	if err := h.Store.ReplaceFeedHolidays(t.Context(), "cal-berlin", read, f.shop); err != nil {
+		t.Fatalf("ReplaceFeedHolidays of the new URL: %v", err)
+	}
 
 	c = get(t, h, "cal-berlin")
 	c.Feeds = nil
@@ -705,7 +723,7 @@ func testReplaceBounds(t *testing.T, h Harness) {
 
 	for i := range cases {
 		tc := &cases[i]
-		read := calendar.FeedRead{Feed: tc.feed, Holidays: tc.holidays, Status: tc.status}
+		read := calendar.FeedRead{Feed: tc.feed, URL: feedURL, Holidays: tc.holidays, Status: tc.status}
 
 		err := h.Store.ReplaceFeedHolidays(t.Context(), "cal-berlin", read, f.shop)
 		wantErr(t, tc.name, err, tc.want)
@@ -715,7 +733,7 @@ func testReplaceBounds(t *testing.T, h Harness) {
 		t.Fatalf("holidays = %d, want the holidays of the last good read and the manual one", len(got.Holidays))
 	}
 
-	none := calendar.FeedRead{Feed: feedID, Holidays: nil, Status: goodStatus(0, "")}
+	none := calendar.FeedRead{Feed: feedID, URL: feedURL, Holidays: nil, Status: goodStatus(0, "")}
 
 	err := h.Store.ReplaceFeedHolidays(t.Context(), "cal-none", none, f.shop)
 	wantErr(t, "an unknown calendar", err, calendar.ErrNotFound)
@@ -735,7 +753,7 @@ func testFeedKeepsLastGood(t *testing.T, h Harness) {
 		Error:    calendar.FeedUnreachable,
 		ETag:     "",
 	}
-	if err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", feedID, failed, f.shop); err != nil {
+	if err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status(feedID, failed), f.shop); err != nil {
 		t.Fatalf("RecordFeedStatus: %v", err)
 	}
 
@@ -755,10 +773,10 @@ func testFeedKeepsLastGood(t *testing.T, h Harness) {
 		t.Fatalf("feed status = %+v, want %+v", got.Feeds[0].Status, want)
 	}
 
-	err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", "feed-none", failed, f.shop)
+	err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status("feed-none", failed), f.shop)
 	wantErr(t, "unknown feed", err, calendar.ErrNotFound)
 
-	err = h.Store.RecordFeedStatus(t.Context(), "cal-none", feedID, failed, f.shop)
+	err = h.Store.RecordFeedStatus(t.Context(), "cal-none", status(feedID, failed), f.shop)
 	wantErr(t, "unknown calendar", err, calendar.ErrNotFound)
 }
 
@@ -776,12 +794,12 @@ func testFeedNotModified(t *testing.T, h Harness) {
 		Error:    calendar.FeedTimeout,
 		ETag:     "",
 	}
-	if err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", feedID, failed, f.shop); err != nil {
+	if err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status(feedID, failed), f.shop); err != nil {
 		t.Fatalf("RecordFeedStatus of a failed read: %v", err)
 	}
 
 	unchanged := calendar.FeedStatus{ReadAt: now().Add(2 * time.Hour), Holidays: 0, Skipped: 0, Error: "", ETag: ""}
-	if err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", feedID, unchanged, f.shop); err != nil {
+	if err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status(feedID, unchanged), f.shop); err != nil {
 		t.Fatalf("RecordFeedStatus of a not-modified read: %v", err)
 	}
 
@@ -810,7 +828,7 @@ func testFeedErrorClass(t *testing.T, h Harness) {
 		ETag:     "",
 	}
 
-	err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", feedID, raw, f.shop)
+	err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status(feedID, raw), f.shop)
 	wantErr(t, "RecordFeedStatus with a raw error text", err, calendar.ErrInvalid)
 
 	if got := get(t, h, "cal-berlin"); got.Feeds[0].Status != unread() {
@@ -889,7 +907,7 @@ func fenceWrites() []fenceWrite {
 
 			hs := []calendar.Holiday{fromFeed(date(12, 25), "Christmas Day")}
 
-			read := calendar.FeedRead{Feed: feedID, Holidays: hs, Status: goodStatus(1, "v9")}
+			read := calendar.FeedRead{Feed: feedID, URL: feedURL, Holidays: hs, Status: goodStatus(1, "v9")}
 
 			return h.Store.ReplaceFeedHolidays(t.Context(), id, read, fence)
 		}
@@ -900,7 +918,7 @@ func fenceWrites() []fenceWrite {
 
 			s := calendar.FeedStatus{ReadAt: now(), Holidays: 0, Skipped: 0, Error: calendar.FeedTimeout, ETag: ""}
 
-			return h.Store.RecordFeedStatus(t.Context(), id, feedID, s, fence)
+			return h.Store.RecordFeedStatus(t.Context(), id, status(feedID, s), fence)
 		}
 	}
 
@@ -1018,4 +1036,75 @@ func fenceCases() []testCase {
 	}
 
 	return cases
+}
+
+func testFeedURLChanged(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setup(t, h)
+	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
+	replace(t, h, f.shop, "cal-berlin", fromFeed(date(12, 25), "Christmas Day"))
+
+	// An update gives the feed a new URL while a read of the old URL runs.
+	c := get(t, h, "cal-berlin")
+	c.Feeds[0].URL = otherURL
+
+	if err := h.Store.Update(t.Context(), c, f.shop, nsEntry()); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	before := get(t, h, "cal-berlin")
+
+	old := calendar.FeedRead{
+		Feed:     feedID,
+		URL:      feedURL,
+		Holidays: []calendar.Holiday{fromFeed(date(12, 26), "Boxing Day")},
+		Status:   goodStatus(1, "v2"),
+	}
+
+	err := h.Store.ReplaceFeedHolidays(t.Context(), "cal-berlin", old, f.shop)
+	wantErr(t, "ReplaceFeedHolidays of the old URL", err, calendar.ErrConflict)
+
+	failed := calendar.FeedStatus{ReadAt: now(), Holidays: 0, Skipped: 0, Error: calendar.FeedTimeout, ETag: ""}
+
+	err = h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status(feedID, failed), f.shop)
+	wantErr(t, "RecordFeedStatus of the old URL", err, calendar.ErrConflict)
+
+	after := get(t, h, "cal-berlin")
+	if len(after.Holidays) != len(before.Holidays) || after.Feeds[0].Status != before.Feeds[0].Status {
+		t.Fatalf("calendar = %+v, want no change from %+v", after, before)
+	}
+}
+
+func testEntryOtherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setup(t, h)
+	other := entry(lab, nsAction)
+
+	err := h.Store.Create(t.Context(), sample("cal-berlin", nsScope(shop)), f.shop, other)
+	wantErr(t, "Create with an entry of lab", err, calendar.ErrInvalid)
+
+	_, err = h.Store.Get(t.Context(), "cal-berlin")
+	wantErr(t, "Get after a refused create", err, calendar.ErrNotFound)
+
+	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
+
+	c := get(t, h, "cal-berlin")
+	c.Name = "Changed"
+
+	err = h.Store.Update(t.Context(), c, f.shop, other)
+	wantErr(t, "Update with an entry of lab", err, calendar.ErrNotFound)
+
+	if got := get(t, h, "cal-berlin"); got.Name == "Changed" || got.Version != 1 {
+		t.Fatalf("calendar = %+v, want no change", got)
+	}
+
+	if n := auditCount(t, h, lab); n != 0 {
+		t.Fatalf("lab audit entries = %d, want 0", n)
+	}
+
+	if n := auditCount(t, h, shop); n != 1 {
+		t.Fatalf("shop audit entries = %d, want 1 for the good create", n)
+	}
 }

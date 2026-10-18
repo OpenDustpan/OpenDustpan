@@ -33,7 +33,8 @@ var (
 	// ErrWorkspace reports a workspace of a chat tool that is not on the
 	// allowlist of the installation.
 	ErrWorkspace = errors.New("chat workspace is not allowed")
-	// ErrNotLinked reports a chat user with no link to a principal.
+	// ErrNotLinked reports a chat user with no link to a principal, or an
+	// intent whose chat user is no longer linked to its principal.
 	ErrNotLinked = errors.New("chat user is not linked")
 	// ErrNotFound reports an unknown link, link request or intent.
 	ErrNotFound = errors.New("chat data not found")
@@ -124,8 +125,11 @@ type Target struct {
 }
 
 // Request is one action from a chat tool, after the Verifier checked it.
-// DeliveryID is the ID that the chat tool gives the request: the server
-// drops a second request with the same ID within SignatureMaxAge.
+// Platform is the chat tool of the Verifier that checked the request,
+// never a value of the body. DeliveryID is the ID that the chat tool
+// gives the request. A repeated request is safe: an acknowledge changes
+// nothing the second time, and an approve makes a new intent that only a
+// new fresh authentication of the linked person completes.
 type Request struct {
 	Platform   string
 	Workspace  string
@@ -359,12 +363,17 @@ type Auth struct {
 // CheckIntent returns nil when auth can complete in at now, for the job
 // whose current state is current: the kind and the ID of the job, the
 // index of the phase that waits, the type of the gate that waits, and the
-// binding of the stored plans of that phase. It returns, in this order:
+// binding of the stored plans of that phase. link is the current link of
+// the chat user of the request of in (Links.LinkOf), or nil when that
+// chat user has no link. It returns, in this order:
 //   - ErrUsed for an intent with a use,
 //   - ErrExpired after its expiry,
 //   - ErrNeedsSession for a request with an access token or with no
 //     console session,
 //   - ErrDenied for another principal, an agent, or a break-glass session,
+//   - ErrNotLinked when link is nil, is the link of another chat user, or
+//     names another principal than in, so an intent stops when its link
+//     is deleted or replaced,
 //   - ErrGateChanged when the job waits on another phase or gate than in,
 //   - job.ErrPlanChanged when the plans changed since the message,
 //   - ErrAuthStale for an authentication that is missing, of an unknown
@@ -372,7 +381,7 @@ type Auth struct {
 //
 // An authentication from before the button never counts: the person
 // authenticates for this approval.
-func CheckIntent(in Intent, auth Auth, current Target, now time.Time) error {
+func CheckIntent(in Intent, link *Link, auth Auth, current Target, now time.Time) error {
 	switch {
 	case !in.UsedAt.IsZero():
 		return ErrUsed
@@ -382,6 +391,10 @@ func CheckIntent(in Intent, auth Auth, current Target, now time.Time) error {
 
 	if err := checkCaller(in, auth); err != nil {
 		return err
+	}
+
+	if link == nil || !sameUser(*link, in.Request) || link.Principal != in.Principal {
+		return fmt.Errorf("%w: the chat user of the intent is no longer linked to %s", ErrNotLinked, in.Principal)
 	}
 
 	if err := checkTarget(in.Request.Target, current); err != nil {
@@ -438,12 +451,15 @@ func CheckTimestamp(at, now time.Time) error {
 // each tool implements it and runs the suite chatopstest.RunVerifier. The
 // adapter compares the signature in constant time (hmac.Equal), signs the
 // timestamp with the body, and checks the timestamp with CheckTimestamp.
-// The Request that it returns has At set to the signed time and
-// DeliveryID set to the ID that the tool gives the request. It returns
-// ErrSignature for a request with a missing header, a signature that does
-// not match the body, or a timestamp outside the bounds, and ErrInvalid
-// for a signed body that it cannot parse or that fails
-// Request.Validate. It checks the signature before it parses the body.
+// The Request that it returns has At set to the signed time, Platform set
+// to the chat tool of the adapter, and DeliveryID set to the ID that the
+// tool gives the request. A platform in the body never counts, so an
+// adapter of one tool can never act for the link of a user of another
+// tool. It returns ErrSignature for a request with a missing header, a
+// signature that does not match the body, or a timestamp outside the
+// bounds, also when the body does not parse, and ErrInvalid for a signed
+// body that it cannot parse or that fails Request.Validate. It checks the
+// signature before it parses the body.
 type Verifier interface {
 	Verify(ctx context.Context, headers map[string][]string, body []byte, now time.Time) (Request, error)
 }

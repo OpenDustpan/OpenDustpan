@@ -11,7 +11,8 @@ import (
 // Links is the persistence port for chat links. Links are in the server
 // scope (audit.ServerScope): each write takes the zero fence, returns
 // ErrInvalid for any other fence, and appends the audit entry e in its
-// transaction. A failed write appends nothing.
+// transaction. It returns ErrInvalid for an entry e whose Namespace is not
+// audit.ServerScope. A failed write appends nothing and changes nothing.
 type Links interface {
 	// PutLink stores l. previous is the principal of the link of the same
 	// chat user that the person saw on the accept page, or empty when the
@@ -22,7 +23,12 @@ type Links interface {
 	// fails Link.Validate.
 	PutLink(ctx context.Context, fence namespace.Fence, l Link, previous string, e audit.Entry) error
 	// DeleteLink deletes the link of the chat user u. It returns
-	// ErrNotFound for a chat user with no link.
+	// ErrNotFound for a chat user with no link. The intents of u are rows
+	// of the namespaces of their jobs, so DeleteLink does not delete them:
+	// the server then deletes each intent of u with no use through
+	// Intents.IntentsOf and Intents.DeleteIntent, with the fence of its
+	// namespace. Until then CheckIntent refuses them, because the link is
+	// gone.
 	DeleteLink(ctx context.Context, fence namespace.Fence, u ChatUser, e audit.Entry) error
 	// LinkOf returns the link of the chat user u, or ErrNotFound. The IDs
 	// match exactly.
@@ -61,8 +67,9 @@ type LinkRequests interface {
 type Intents interface {
 	// CreateIntent stores in and appends the audit entry e in its
 	// transaction. It returns ErrInvalid for an intent that fails
-	// Intent.Validate, for an intent with a use, and for a fence of
-	// another namespace or the zero fence, namespace.ErrFenced for a
+	// Intent.Validate, for an intent with a use, for an entry e whose
+	// Namespace is not the namespace of in, and for a fence of another
+	// namespace or the zero fence, namespace.ErrFenced for a
 	// stale fence, and ErrConflict for an ID that exists. It never
 	// replaces an intent.
 	CreateIntent(ctx context.Context, fence namespace.Fence, in Intent, e audit.Entry) error
@@ -76,4 +83,14 @@ type Intents interface {
 	// not in one transaction: the use comes first, so a second request can
 	// never approve twice.
 	UseIntent(ctx context.Context, fence namespace.Fence, id string, now time.Time) error
+	// IntentsOf returns the intents whose request names the chat user u,
+	// in every namespace. The IDs match exactly.
+	IntentsOf(ctx context.Context, u ChatUser) ([]Intent, error)
+	// DeleteIntent deletes the intent id, which has no use. It returns
+	// ErrNotFound for an unknown intent and for a fence of another
+	// namespace or the zero fence, namespace.ErrFenced for a stale fence,
+	// and ErrUsed for an intent with a use: the use stays as a record.
+	// The delete of the link of the chat user appends the audit entry, so
+	// DeleteIntent appends none.
+	DeleteIntent(ctx context.Context, fence namespace.Fence, id string) error
 }

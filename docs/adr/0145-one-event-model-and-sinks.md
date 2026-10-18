@@ -100,8 +100,12 @@ audit sink.
 10. **Delivery order is not guaranteed.** Retries and claims by more than
     one instance can deliver a later notification first. A receiver orders
     the notifications of a scope by `sequence`.
-11. **Retention.** The server keeps notifications and the delivery history
-    for 30 days. A durable schedule deletes older rows.
+11. **Retention.** The server keeps notifications for 32 days and the
+    delivery history for 30 days. A durable schedule deletes older rows.
+    The dedupe key of a notification holds while the notification is
+    kept. A domain that appends a notification with its dedupe key first
+    and then saves its own status (ADR 144 decision 12) makes no second
+    notification when it repeats the write within a month.
 
 ### Fences
 
@@ -125,10 +129,14 @@ audit sink.
     - `webhook`: an `https` URL that receives the notification as JSON,
       signed.
 
-    The secrets of a sink (the signing keys of a webhook, the token of a
-    chat webhook) are secret items of the scope (ADR 23). The server makes
-    the signing key of a webhook and answers it once, at the create. The
-    API never answers it again.
+    The secrets of a sink are secret items of the scope (ADR 23): the
+    signing keys of a webhook, and the URL of a chat webhook. The URL of a
+    chat webhook holds its token, so the whole URL is the secret. The
+    `Target` of a chat sink holds only the host of the URL
+    (`notify.ChatHost`), and the chat sender sends only to a URL whose host
+    is that `Target`. The server makes the signing key of a webhook and
+    answers it once, at the create. The API never answers a secret
+    again.
 14. **A subscription routes notifications.** `notify.Subscription` sends
     the notifications of its scope that match its filter to one sink. A
     filter selects by type (`job.failed` or `job.*`), by object (a unit
@@ -144,23 +152,38 @@ audit sink.
       `subscription.suspended` to the administrators of the scope. A
       suspended subscription delivers nothing until a person with the
       action resumes it.
-    - The creator can read the object of the notification, through the
-      `notify.Reader` port. For a unit, this is the read action of the unit
-      with its unit and collection grants. When the creator cannot read
-      the object, the subscription skips that notification. So a grant
-      that hides a unit also hides its notifications. `notify.Route`
-      applies the check when the dispatcher routes, and the delivery
-      operation calls the port again before each attempt.
+    - The creator can read the notification, through the `notify.Reader`
+      port: the actions of `notify.ScopeActions` on the scope, and for a
+      unit the read action of the unit with its unit and collection
+      grants. A cost or budget notification also needs
+      `namespace:read-cost`. When the creator cannot read the
+      notification, the subscription skips it. So a grant that hides a
+      unit also hides its notifications. `notify.Route` applies the check
+      when the dispatcher routes.
 
     A notice to a person has the same rule: `notify.Readers` keeps only the
-    recipients that can read the object.
+    recipients that can read the notification.
+
+    Each delivery records its principal (`Delivery.Principal`): the
+    creator of the subscription, or the recipient of a notice. Access can
+    change between the route and an attempt, and a notice can wait for
+    quiet hours. So before each attempt the delivery operation calls
+    `notify.BeforeAttempt`. It calls `Reader.CanRead` for the principal
+    and, for a delivery to a contact, `Contacts.ContactsOf`. When the
+    principal can no longer read the notification, or the contact is no
+    longer a contact of the principal, the operation records the delivery
+    as `skipped` and sends nothing. When a port cannot decide, the
+    operation tries again later, as for `ErrTemporary`.
 
 ### Delivery
 
 16. **At least once.** The dispatcher enqueues one delivery for each
     matching subscription (`Deliveries.Enqueue`), and for each personal
-    contact of each recipient. A second enqueue of the same notification,
-    subscription and contact makes no second delivery. A receiver can get a notification
+    contact of each recipient. A second enqueue of the same scope,
+    notification, subscription and contact makes no second delivery. An
+    enqueue of a delivery ID that exists fails: with `ErrInvalid` in the
+    scope of the fence, and with `ErrNotFound` in another scope, so it never
+    replaces a delivery. A receiver can get a notification
     twice, so each delivery carries the notification ID, and the dedupe key
     names the fact.
 17. **Claims.** A delivery operation takes the due deliveries of a scope
@@ -168,16 +191,23 @@ audit sink.
     operation: in one transaction, with an owner, a lease and a new
     version. A claim whose lease passed is not live, so another instance
     takes the delivery when its holder stopped. `Deliveries.Record` stores
-    the result only for the version of the live claim, so a holder that
-    lost its claim cannot overwrite the result of the next one.
+    the result only for the owner and the version of a live claim, so a
+    holder that lost its claim cannot overwrite the result of the next
+    one. It changes only the state, the count of attempts, the next
+    attempt, the class of the last error and the time of delivery. It
+    never moves a delivery to another subscription, contact or principal.
 18. **Retries.** A failed attempt with `ErrTemporary` retries after 30
     seconds, then doubles the wait up to 1 hour, for at most 15 attempts.
     When the receiver sends `Retry-After`, the sender returns a
     `notify.RetryAfterError`, and the next attempt waits at least that
-    long, up to 24 hours. An attempt with `ErrPermanent` (an unknown
+    long, up to 24 hours. `notify.ParseRetryAfter` reads the header: a
+    count of seconds or an HTTP date. It caps the wait at 24 hours, makes
+    a past date no wait, and ignores a negative or unparsable value. An attempt with `ErrPermanent` (an unknown
     address, or a 4xx other than 408 and 429) or with `egress.ErrRefused`
-    stops at once. The state of a stopped delivery becomes `abandoned`. A person can send it
-    again (`Deliveries.Redeliver`). This answers RFC 23: at least once,
+    stops at once. The state of a stopped delivery becomes `abandoned`. A
+    person can send a delivered, abandoned or skipped delivery again
+    (`Deliveries.Redeliver`). A pending delivery fails with `ErrConflict`,
+    because a live claim can hold it. This answers RFC 23: at least once,
     with retries, a delivery history and a redeliver.
 19. **A sink that fails for a day.** When every delivery of a subscription
     failed for 24 hours, the dispatcher suspends it, with the class of the
@@ -199,7 +229,7 @@ audit sink.
     - A delivery stores only the class of its last error (`refused`,
       `permanent` or `temporary`, from `notify.Class`). It never stores the
       address, the text of the network error, the body of the answer or a
-      secret.
+      secret. The store refuses any other text.
 
 ### The signed webhook
 
@@ -239,12 +269,15 @@ audit sink.
     email address, and the chat identity that the person linked (ADR 146).
     A chat sink of the kind `chat` cannot send a direct message through an
     incoming webhook. A personal chat notice needs a chat adapter that can
-    send one. Without it, personal notices go by email.
+    send one. Without it, personal notices go by email. The delivery
+    operation reads the contacts again before each attempt (decision 15).
 25. **Quiet hours.** A personal notice of the severity `info` or `warning`
     waits for the business hours of the calendar of the person (ADR 140
     decision 4). A `critical` notice goes at once. A delivery to a
     subscription goes at once: the team that made the subscription chose
-    its channel. `notify.Quiet` holds the rule.
+    its channel. `notify.Quiet` holds the rule. A notice that waits is
+    checked again before it goes (decision 15), so it never reaches a
+    person who lost access while it waited.
 26. **Reminders and escalations.** The features that need them (ADR 142)
     compute their steps on the business calendar and write one
     notification for each step, with recipients and a dedupe key such as
@@ -260,15 +293,19 @@ audit sink.
     | `GET /api/namespaces/{ns}/notifications?after=&type=` | `namespace:read` | namespace |
     | `GET /api/namespaces/{ns}/sinks[/{id}]`, `.../subscriptions[/{id}]` | `namespace:read` | namespace |
     | `POST`, `PUT`, `DELETE` of sinks and subscriptions of a namespace | `namespace:manage-notifications` | namespace |
-    | `GET /api/namespaces/{ns}/subscriptions/{id}/deliveries` | `namespace:read` | namespace |
+    | `GET /api/namespaces/{ns}/subscriptions/{id}/deliveries` | `namespace:read` | namespace (`Deliveries.History` reads only the deliveries of `{ns}`) |
     | `POST /api/namespaces/{ns}/deliveries/{id}/redeliver` | `namespace:manage-notifications` | namespace |
     | `POST /api/namespaces/{ns}/sinks/{id}/test` | `namespace:manage-notifications` | namespace |
     | the same routes under `/api/server/` | `server:observe`, `server:manage-notifications` | server |
 
-    The notification list filters the notifications by the read action of
-    the caller on each object, so a caller sees no notification of a unit
-    that it cannot read. The delivery history of a subscription shows
-    only the notification ID and the class of the error, not the summary.
+    The notification list filters the notifications with `notify.Reader`
+    for the caller, so a caller sees no notification of a unit that it
+    cannot read, and no cost or budget notification without
+    `namespace:read-cost`. A read of a sink shows its kind, its name and
+    its target: the address of an email sink, the URL of a webhook, and
+    only the host of a chat webhook. It never shows a secret. The delivery
+    history of a subscription shows only the notification ID and the
+    class of the error, not the summary.
 28. **Audit entries.** A create, a change and a delete of a sink or a
     subscription, a redeliver and a test write one entry each, of the kind
     `change`, in the scope of the sink. The entry never holds a secret of a
@@ -287,7 +324,9 @@ audit sink.
   audit entry, with the fence of the change.
 - **Identity.** The actions `namespace:manage-notifications` and
   `server:manage-notifications` are new. The identity package implements
-  `notify.Reader` and `notify.Contacts`.
+  `notify.Reader` and `notify.Contacts`. `Reader.CanRead` checks each
+  action of `notify.ScopeActions`, which includes `namespace:read-cost`
+  (ADR 144) for a cost or budget notification.
 - **Audit (ADR 60).** No change. Notification sinks and log sinks stay
   apart.
 

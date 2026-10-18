@@ -18,7 +18,9 @@ import (
 // row's namespace at an older failover version returns
 // namespace.ErrFenced. Every write of a person appends the audit entry e
 // in its transaction, and a failed write changes nothing and appends
-// nothing.
+// nothing. The entry belongs to the namespace of the row: a write whose
+// entry names another namespace returns ErrInvalid, so a write cannot
+// append to the audit chain of another namespace.
 type Store interface {
 	// Create persists s with version 1. It returns ErrInvalid for a
 	// schedule that fails Validate, that has copied shifts or a sync
@@ -44,9 +46,10 @@ type Store interface {
 	Delete(ctx context.Context, ref Ref, fence namespace.Fence, e audit.Entry) error
 	// AddOverride adds o to the schedule ref names, and increments the
 	// version, with no check of the version: two people can add overrides
-	// at one time. In the same transaction, it first deletes each
-	// override of the schedule whose end is not after o.CreatedAt, so
-	// the cap counts only the overrides that did not end. It returns
+	// at one time. It sets o.CreatedAt to the time of its transaction and
+	// ignores the CreatedAt of the request. In the same transaction, it
+	// first deletes each override of the schedule whose end is not after
+	// that time, so the cap counts only the overrides that did not end. It returns
 	// ErrNotFound for an unknown schedule or a schedule of another
 	// namespace than fence, ErrInvalid for an override that fails
 	// Validate or when MaxOverrides overrides that did not end are

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,8 +166,8 @@ func (m *memStore) ReplaceScheduled(
 			want[f.ID] = f
 		}
 
-		m.refresh(freeze.Subject(stored.ID), want)
-		m.add(freeze.Subject(stored.ID), want)
+		m.refresh(stored.Namespace, freeze.Subject(stored.ID), want)
+		m.add(stored.Namespace, freeze.Subject(stored.ID), want)
 
 		return nil
 	})
@@ -182,10 +183,8 @@ func (m *memStore) DeleteScheduled(_ context.Context, id string, fence namespace
 			return "", fmt.Errorf("delete freezes of %s: %w", id, freeze.ErrExists)
 		}
 
-		for _, f := range m.freezes {
-			if f.CreatedBy == subject {
-				return f.Namespace, nil
-			}
+		if fence.Namespace == "" {
+			return "", fmt.Errorf("delete freezes of %s: %w", id, opsmem.ErrScope)
 		}
 
 		return fence.Namespace, nil
@@ -193,7 +192,8 @@ func (m *memStore) DeleteScheduled(_ context.Context, id string, fence namespace
 
 	err := m.Write(fence, scope, nil, func() error {
 		for fid, f := range m.freezes {
-			if f.CreatedBy == subject && f.EndedBy == "" && f.StartsAt.After(m.now) {
+			if f.Namespace == fence.Namespace && f.CreatedBy == subject && f.EndedBy == "" &&
+				f.StartsAt.After(m.now) {
 				delete(m.freezes, fid)
 			}
 		}
@@ -210,7 +210,15 @@ func (m *memStore) CreateFreeze(_ context.Context, f job.Freeze, fence namespace
 		return err
 	}
 
+	if strings.HasPrefix(f.CreatedBy, freeze.SubjectPrefix) {
+		return fmt.Errorf("%w: a person cannot create a freeze as a schedule", job.ErrInvalid)
+	}
+
 	err := m.Write(fence, opsmem.Scope(f.Namespace), []audit.Entry{e}, func() error {
+		if _, ok := m.freezes[f.ID]; ok {
+			return fmt.Errorf("%w: freeze %s exists", job.ErrInvalid, f.ID)
+		}
+
 		m.freezes[f.ID] = &f
 
 		return nil
@@ -277,11 +285,11 @@ func (m *memStore) schedule(id string, got *freeze.Schedule) func() (namespace.N
 	}
 }
 
-// refresh changes the stored freezes of subject toward want. The caller
-// holds the mutex of the domain.
-func (m *memStore) refresh(subject string, want map[string]job.Freeze) {
+// refresh changes the stored freezes of subject in ns toward want. The
+// caller holds the mutex of the domain.
+func (m *memStore) refresh(ns namespace.Name, subject string, want map[string]job.Freeze) {
 	for fid, f := range m.freezes {
-		if f.CreatedBy != subject || f.EndedBy != "" {
+		if f.Namespace != ns || f.CreatedBy != subject || f.EndedBy != "" {
 			continue
 		}
 
@@ -301,9 +309,9 @@ func (m *memStore) refresh(subject string, want map[string]job.Freeze) {
 }
 
 // add stores each freeze of want that has no row. A freeze that started is
-// added only when no freeze of subject overlaps it. The caller holds the
-// mutex of the domain.
-func (m *memStore) add(subject string, want map[string]job.Freeze) {
+// added only when no freeze of subject in ns overlaps it. The caller holds
+// the mutex of the domain.
+func (m *memStore) add(ns namespace.Name, subject string, want map[string]job.Freeze) {
 	for fid := range want {
 		if _, ok := m.freezes[fid]; ok {
 			continue
@@ -311,7 +319,7 @@ func (m *memStore) add(subject string, want map[string]job.Freeze) {
 
 		w := want[fid]
 
-		if !w.StartsAt.After(m.now) && m.overlaps(subject, w) {
+		if !w.StartsAt.After(m.now) && m.overlaps(ns, subject, w) {
 			continue
 		}
 
@@ -319,9 +327,10 @@ func (m *memStore) add(subject string, want map[string]job.Freeze) {
 	}
 }
 
-func (m *memStore) overlaps(subject string, w job.Freeze) bool {
+func (m *memStore) overlaps(ns namespace.Name, subject string, w job.Freeze) bool {
 	for _, f := range m.freezes {
-		if f.CreatedBy == subject && f.StartsAt.Before(w.EndsAt) && (f.EndsAt.IsZero() || w.StartsAt.Before(f.EndsAt)) {
+		if f.Namespace == ns && f.CreatedBy == subject && f.StartsAt.Before(w.EndsAt) &&
+			(f.EndsAt.IsZero() || w.StartsAt.Before(f.EndsAt)) {
 			return true
 		}
 	}

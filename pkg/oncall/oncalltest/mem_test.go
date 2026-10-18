@@ -23,9 +23,9 @@ func TestMemConformance(t *testing.T) {
 	t.Parallel()
 
 	oncalltest.Run(t, func(*testing.T) oncalltest.Harness {
-		db := &memStore{Domain: opsmem.New(), schedules: map[string]oncall.Schedule{}, handoffs: nil}
+		db := &memStore{Domain: opsmem.New(), schedules: map[string]oncall.Schedule{}, handoffs: nil, now: time.Time{}}
 
-		return oncalltest.Harness{Schedules: db, Handoffs: db, Domain: db}
+		return oncalltest.Harness{Schedules: db, Handoffs: db, Domain: db, SetClock: db.setClock}
 	})
 }
 
@@ -36,6 +36,26 @@ type memStore struct {
 
 	schedules map[string]oncall.Schedule
 	handoffs  []oncall.Handoff
+	// now is the time of each transaction, as the clock of a database
+	// gives it.
+	now time.Time
+}
+
+// entryIn returns scope with a check that e belongs to the namespace of
+// the row: an entry of another namespace is ErrInvalid.
+func entryIn(e audit.Entry, scope func() (namespace.Name, error)) func() (namespace.Name, error) {
+	return func() (namespace.Name, error) {
+		ns, err := scope()
+		if err != nil {
+			return ns, err
+		}
+
+		if e.Namespace != ns {
+			return "", fmt.Errorf("%w: the audit entry belongs to %s, not to %s", oncall.ErrInvalid, e.Namespace, ns)
+		}
+
+		return ns, nil
+	}
 }
 
 // translate returns err with opsmem.ErrScope replaced by scoped, the
@@ -58,7 +78,7 @@ func (m *memStore) Create(_ context.Context, s oncall.Schedule, fence namespace.
 		return fmt.Errorf("create %s: %w: only a copy sets the copied shifts", s.ID, oncall.ErrInvalid)
 	}
 
-	return translate(m.Write(fence, opsmem.Scope(s.Namespace), []audit.Entry{e}, func() error {
+	return translate(m.Write(fence, entryIn(e, opsmem.Scope(s.Namespace)), []audit.Entry{e}, func() error {
 		if _, ok := m.schedules[s.ID]; ok {
 			return fmt.Errorf("create %s: %w", s.ID, oncall.ErrExists)
 		}
@@ -103,7 +123,7 @@ func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.
 		return old.Namespace, nil
 	}
 
-	return translate(m.Write(fence, scope, []audit.Entry{e}, func() error {
+	return translate(m.Write(fence, entryIn(e, scope), []audit.Entry{e}, func() error {
 		old := m.schedules[s.ID]
 
 		if s.Namespace != old.Namespace {
@@ -127,7 +147,7 @@ func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.
 }
 
 func (m *memStore) Delete(_ context.Context, ref oncall.Ref, fence namespace.Fence, e audit.Entry) error {
-	return translate(m.Write(fence, m.refScope("delete", ref), []audit.Entry{e}, func() error {
+	return translate(m.Write(fence, entryIn(e, m.refScope("delete", ref)), []audit.Entry{e}, func() error {
 		s, _ := m.byRef(ref)
 		delete(m.schedules, s.ID)
 
@@ -138,11 +158,14 @@ func (m *memStore) Delete(_ context.Context, ref oncall.Ref, fence namespace.Fen
 func (m *memStore) AddOverride(
 	_ context.Context, ref oncall.Ref, o oncall.Override, fence namespace.Fence, e audit.Entry,
 ) error {
-	if err := o.Validate(); err != nil {
-		return err
-	}
+	return translate(m.Write(fence, entryIn(e, m.refScope("add override to", ref)), []audit.Entry{e}, func() error {
+		// The store sets the time of the add from its own transaction, so
+		// a time in the request cannot decide which overrides ended.
+		o.CreatedAt = m.now
+		if err := o.Validate(); err != nil {
+			return err
+		}
 
-	return translate(m.Write(fence, m.refScope("add override to", ref), []audit.Entry{e}, func() error {
 		s, _ := m.byRef(ref)
 
 		live := slices.DeleteFunc(slices.Clone(s.Overrides), func(x oncall.Override) bool {
@@ -210,7 +233,7 @@ func (m *memStore) AddHandoff(_ context.Context, h oncall.Handoff, fence namespa
 		return s.Namespace, nil
 	}
 
-	return translate(m.Write(fence, scope, []audit.Entry{e}, func() error {
+	return translate(m.Write(fence, entryIn(e, scope), []audit.Entry{e}, func() error {
 		m.handoffs = append(m.handoffs, h)
 
 		return nil
@@ -283,3 +306,5 @@ func (m *memStore) refScope(op string, ref oncall.Ref) func() (namespace.Name, e
 		return s.Namespace, nil
 	}
 }
+
+func (m *memStore) setClock(t time.Time) { m.Read(func() { m.now = t }) }

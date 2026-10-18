@@ -87,25 +87,29 @@ func Scope(ns namespace.Name) func() (namespace.Name, error) {
 // namespace: a row in audit.ServerScope needs a zero fence, every other
 // row needs the fence of its own namespace (ErrScope), at the current
 // failover version (namespace.ErrFenced). When change returns nil, Write
-// appends entries, each to the scope of its namespace.
+// appends entries to the scope of the row. An entry whose Namespace is not
+// the scope of the row stops the write with ErrScope and changes nothing,
+// so a write cannot append to the audit chain of another namespace.
 func (d *Domain) Write(
 	fence namespace.Fence,
 	scope func() (namespace.Name, error),
 	entries []audit.Entry,
 	change func() error,
 ) error {
-	return d.WriteEntries(fence, scope, func() ([]audit.Entry, error) {
-		return entries, change()
+	return d.WriteEntries(fence, scope, func() ([]audit.Entry, func() error, error) {
+		return entries, change, nil
 	})
 }
 
 // WriteEntries is Write for a change that decides its audit entries
 // itself, for example a create that appends an entry only when the row
-// is new.
+// is new. plan returns the entries and the change; it must not change a
+// row itself. WriteEntries checks the entries before it runs the change,
+// so a refused entry changes nothing.
 func (d *Domain) WriteEntries(
 	fence namespace.Fence,
 	scope func() (namespace.Name, error),
-	change func() ([]audit.Entry, error),
+	plan func() ([]audit.Entry, func() error, error),
 ) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -120,14 +124,25 @@ func (d *Domain) WriteEntries(
 		return err
 	}
 
-	entries, err := change()
+	entries, change, err := plan()
 	if err != nil {
 		return err
 	}
 
 	for i := range entries {
-		d.audit[entries[i].Namespace] = append(d.audit[entries[i].Namespace], entries[i])
+		if entries[i].Namespace != ns {
+			return fmt.Errorf("write: audit entry %d: %w", i, ErrScope)
+		}
 	}
+
+	if change != nil {
+		err = change()
+		if err != nil {
+			return err
+		}
+	}
+
+	d.audit[ns] = append(d.audit[ns], entries...)
 
 	return nil
 }

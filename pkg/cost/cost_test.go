@@ -208,7 +208,9 @@ func TestEstimateAmounts(t *testing.T) {
 		{"a negative amount", one(0, -1), cost.ErrInvalid},
 		{"an amount above the cap", one(0, cost.MaxMicros+1), cost.ErrInvalid},
 		{"the int64 maximum and a second amount", append(one(0, math.MaxInt64), one(0, 2)...), cost.ErrInvalid},
-		{"the most resources at the cap", big(cost.MaxResources), nil},
+		{"sums at the cap", append(one(0, cost.MaxMicros/2), one(0, cost.MaxMicros/2)...), nil},
+		{"a sum above the cap", big(2), cost.ErrInvalid},
+		{"the most resources at the cap", big(cost.MaxResources), cost.ErrInvalid},
 	}
 
 	for _, tc := range cases {
@@ -288,6 +290,13 @@ func unsummed(id, currency string, resources []cost.ResourceCost) cost.Estimate 
 	}
 }
 
+// pushed returns e as an estimate that a client sent.
+func pushed(e cost.Estimate) cost.Estimate {
+	e.ID, e.Source = "est-2", cost.SourceAPI
+
+	return e
+}
+
 // crossed returns a status of the budget bgt-1 in p that crossed the
 // thresholds th.
 func crossed(p cost.Period, th ...int) cost.Status {
@@ -314,6 +323,8 @@ func TestEvaluate(t *testing.T) {
 		level   cost.Level
 		crossed []int
 		skipped int
+		// negative is the part of skipped with a negative amount.
+		negative int
 	}{
 		{
 			"below every threshold",
@@ -322,6 +333,7 @@ func TestEvaluate(t *testing.T) {
 			25,
 			cost.LevelOK,
 			nil,
+			0,
 			0,
 		},
 		{
@@ -332,6 +344,7 @@ func TestEvaluate(t *testing.T) {
 			cost.LevelWarning,
 			[]int{80},
 			0,
+			0,
 		},
 		{
 			"a pending change counts",
@@ -341,6 +354,7 @@ func TestEvaluate(t *testing.T) {
 			cost.LevelExceeded,
 			[]int{80, 100},
 			0,
+			0,
 		},
 		{
 			"a change that saves money lowers the projection",
@@ -349,6 +363,7 @@ func TestEvaluate(t *testing.T) {
 			77,
 			cost.LevelOK,
 			nil,
+			0,
 			0,
 		},
 		{
@@ -362,6 +377,7 @@ func TestEvaluate(t *testing.T) {
 			cost.LevelWarning,
 			[]int{80},
 			1,
+			0,
 		},
 		{
 			"an estimate in another currency is skipped and the warning stays",
@@ -371,6 +387,37 @@ func TestEvaluate(t *testing.T) {
 			cost.LevelWarning,
 			[]int{80},
 			1,
+			0,
+		},
+		{
+			"a negative spend is skipped with its own reason",
+			[]cost.SpendLine{line(eur(3300, 0), cost.Zero("EUR")), line(eur(-3000, 0), cost.Zero("EUR"))},
+			nil,
+			82,
+			cost.LevelWarning,
+			[]int{80},
+			1,
+			1,
+		},
+		{
+			"a negative forecast is skipped with its own reason",
+			[]cost.SpendLine{line(eur(3300, 0), cost.Zero("EUR")), line(eur(1, 0), eur(-5, 0))},
+			nil,
+			82,
+			cost.LevelWarning,
+			[]int{80},
+			1,
+			1,
+		},
+		{
+			"a change with two estimates counts once, with the larger delta",
+			[]cost.SpendLine{line(eur(3000, 0), cost.Zero("EUR"))},
+			[]cost.Estimate{pushed(estimate(t, eur(200, 0))), estimate(t, eur(400, 0))},
+			85,
+			cost.LevelWarning,
+			[]int{80},
+			0,
+			0,
 		},
 	}
 
@@ -384,10 +431,11 @@ func TestEvaluate(t *testing.T) {
 			}
 
 			if st.Percent != tc.percent || st.Level != tc.level || !slices.Equal(st.Crossed, tc.crossed) ||
-				st.Skipped != tc.skipped {
+				st.Skipped != tc.skipped || st.SkippedNegative != tc.negative {
 				t.Fatalf(
-					"Evaluate = %d%%, %s, crossed %v, skipped %d; want %d%%, %s, %v, %d",
-					st.Percent, st.Level, st.Crossed, st.Skipped, tc.percent, tc.level, tc.crossed, tc.skipped,
+					"Evaluate = %d%%, %s, crossed %v, skipped %d (%d negative); want %d%%, %s, %v, %d (%d)",
+					st.Percent, st.Level, st.Crossed, st.Skipped, st.SkippedNegative,
+					tc.percent, tc.level, tc.crossed, tc.skipped, tc.negative,
 				)
 			}
 		})
@@ -403,14 +451,6 @@ func TestEvaluateRefusesBadSpend(t *testing.T) {
 		lines []cost.SpendLine
 	}{
 		{
-			"a negative spend",
-			[]cost.SpendLine{{Unit: "u", Actual: eur(-1, 0), Forecast: cost.Zero("EUR"), AsOf: time.Now()}},
-		},
-		{
-			"a negative forecast",
-			[]cost.SpendLine{{Unit: "u", Actual: eur(1, 0), Forecast: eur(-5, 0), AsOf: time.Now()}},
-		},
-		{
 			"a spend above the cap",
 			[]cost.SpendLine{{
 				Unit: "u", Actual: cost.Money{Currency: "EUR", Micros: cost.MaxMicros + 1},
@@ -423,6 +463,44 @@ func TestEvaluateRefusesBadSpend(t *testing.T) {
 		if _, err := cost.Evaluate(budget(), p, tc.lines, nil, time.Now()); !errors.Is(err, cost.ErrInvalid) {
 			t.Fatalf("%s: err = %v, want ErrInvalid", tc.name, err)
 		}
+	}
+}
+
+// TestPercentDoesNotWrap evaluates a projection whose percent does not fit
+// an int64. The percent stays at its maximum and the budget is exceeded.
+func TestPercentDoesNotWrap(t *testing.T) {
+	t.Parallel()
+
+	b := budget()
+	b.Amount = cost.Money{Currency: "EUR", Micros: 1}
+
+	lines := make([]cost.SpendLine, 100)
+	for i := range lines {
+		lines[i] = cost.SpendLine{
+			Unit: "u", Actual: cost.Money{Currency: "EUR", Micros: cost.MaxMicros}, Forecast: cost.Zero("EUR"),
+			AsOf: time.Now(),
+		}
+	}
+
+	st, err := cost.Evaluate(b, cost.Period{Year: 2026, Month: time.October}, lines, nil, time.Now())
+	if err != nil || st.Percent != math.MaxInt64 || st.Level != cost.LevelExceeded {
+		t.Fatalf("Evaluate = %d%%, %s (%v); want %d%%, exceeded", st.Percent, st.Level, err, int64(math.MaxInt64))
+	}
+}
+
+func TestThresholdKey(t *testing.T) {
+	t.Parallel()
+
+	oct := cost.Period{Year: 2026, Month: time.October}
+	keys := map[string]bool{
+		cost.ThresholdKey("bgt-1", oct, 80):                                           true,
+		cost.ThresholdKey("bgt-1", oct, 100):                                          true,
+		cost.ThresholdKey("bgt-1", cost.Period{Year: 2026, Month: time.November}, 80): true,
+		cost.ThresholdKey("bgt-2", oct, 80):                                           true,
+	}
+
+	if len(keys) != 4 || cost.ThresholdKey("bgt-1", oct, 80) != "budget.threshold:bgt-1:2026-10:80" {
+		t.Fatalf("ThresholdKey gives %d distinct keys, want 4: %v", len(keys), keys)
 	}
 }
 

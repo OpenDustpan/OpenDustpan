@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -44,8 +45,8 @@ type Scheme int
 const (
 	// HTTPSOnly accepts https URLs only, for example a webhook.
 	HTTPSOnly Scheme = iota
-	// HTTPOrHTTPS also accepts http URLs, for example a public iCal feed
-	// that has no TLS.
+	// HTTPOrHTTPS also accepts http URLs. No use in the server accepts
+	// http now: the webhook and the iCal feed both use HTTPSOnly.
 	HTTPOrHTTPS
 )
 
@@ -54,18 +55,24 @@ const (
 // unspecified, multicast).
 func blocked() []netip.Prefix {
 	return []netip.Prefix{
-		netip.MustParsePrefix("0.0.0.0/8"),      // this network
-		netip.MustParsePrefix("100.64.0.0/10"),  // shared address space (carrier-grade NAT)
-		netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments
-		netip.MustParsePrefix("198.18.0.0/15"),  // benchmarking
-		netip.MustParsePrefix("240.0.0.0/4"),    // reserved, and the limited broadcast
-		netip.MustParsePrefix("fc00::/7"),       // unique local
-		netip.MustParsePrefix("64:ff9b::/96"),   // NAT64
-		netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
-		netip.MustParsePrefix("2002::/16"),      // 6to4, which embeds an IPv4 address
-		netip.MustParsePrefix("2001::/32"),      // Teredo, which embeds an IPv4 address
-		netip.MustParsePrefix("100::/64"),       // discard
-		netip.MustParsePrefix("fec0::/10"),      // deprecated site-local
+		netip.MustParsePrefix("0.0.0.0/8"),       // this network
+		netip.MustParsePrefix("100.64.0.0/10"),   // shared address space (carrier-grade NAT)
+		netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+		netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
+		netip.MustParsePrefix("240.0.0.0/4"),     // reserved, and the limited broadcast
+		netip.MustParsePrefix("fc00::/7"),        // unique local
+		netip.MustParsePrefix("64:ff9b::/96"),    // NAT64
+		netip.MustParsePrefix("64:ff9b:1::/48"),  // local-use NAT64
+		netip.MustParsePrefix("2002::/16"),       // 6to4, which embeds an IPv4 address
+		netip.MustParsePrefix("2001::/32"),       // Teredo, which embeds an IPv4 address
+		netip.MustParsePrefix("100::/64"),        // discard
+		netip.MustParsePrefix("fec0::/10"),       // deprecated site-local
+		netip.MustParsePrefix("::/96"),           // IPv4-compatible, which embeds an IPv4 address
+		netip.MustParsePrefix("::ffff:0:0:0/96"), // IPv4-translated, which embeds an IPv4 address
+		netip.MustParsePrefix("192.0.2.0/24"),    // documentation (TEST-NET-1)
+		netip.MustParsePrefix("198.51.100.0/24"), // documentation (TEST-NET-2)
+		netip.MustParsePrefix("203.0.113.0/24"),  // documentation (TEST-NET-3)
+		netip.MustParsePrefix("2001:db8::/32"),   // documentation
 	}
 }
 
@@ -101,8 +108,11 @@ func CheckAddr(a netip.Addr) error {
 // CheckURL returns ErrRefused for a URL that the rules refuse: a URL that
 // does not parse, that is longer than MaxURLBytes, that has a scheme
 // outside s, no host, user information, or a fragment, or whose host is an
-// IP address that CheckAddr refuses, or the name localhost. A host name
-// passes: the adapter checks the resolved address of each connection.
+// IP address that CheckAddr refuses, the name localhost, or a host whose
+// labels are all decimal or 0x-hexadecimal numbers (for example 127.1,
+// 2130706433 or 0x7f000001), which some resolvers read as an IPv4
+// address. A host name passes: the adapter checks the resolved address of
+// each connection.
 func CheckURL(raw string, s Scheme) error {
 	if len(raw) > MaxURLBytes {
 		return fmt.Errorf("%w: the URL is longer than %d bytes", ErrRefused, MaxURLBytes)
@@ -142,7 +152,27 @@ func checkHost(host string) error {
 		return CheckAddr(a)
 	}
 
+	if !slices.ContainsFunc(strings.Split(host, "."), func(l string) bool { return !numericLabel(l) }) {
+		return fmt.Errorf("%w: the host is a number, not a name", ErrRefused)
+	}
+
 	return nil
+}
+
+// numericLabel reports whether l is a decimal number or a number with the
+// prefix 0x, which a resolver can read as a part of an IPv4 address.
+func numericLabel(l string) bool {
+	digits := "0123456789"
+
+	if rest, ok := strings.CutPrefix(l, "0x"); ok {
+		l, digits = rest, "0123456789abcdef"
+
+		if l == "" {
+			return true
+		}
+	}
+
+	return l != "" && strings.Trim(l, digits) == ""
 }
 
 // CheckRedirect returns ErrRefused for a redirect from the URL from to the

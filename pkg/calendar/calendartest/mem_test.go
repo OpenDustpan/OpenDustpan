@@ -224,7 +224,7 @@ func (m *memStore) ReplaceFeedHolidays(
 	}
 
 	err := m.Write(fence, m.rowScope(id), nil, func() error {
-		r, i, err := m.feed(id, feedID)
+		r, i, err := m.feed(id, feedID, read.URL)
 		if err != nil {
 			return err
 		}
@@ -240,14 +240,20 @@ func (m *memStore) ReplaceFeedHolidays(
 }
 
 func (m *memStore) RecordFeedStatus(
-	_ context.Context, id calendar.ID, feedID string, status calendar.FeedStatus, fence namespace.Fence,
+	_ context.Context, id calendar.ID, read calendar.FeedRead, fence namespace.Fence,
 ) error {
+	status := read.Status
+
 	if !status.Error.Valid() {
 		return fmt.Errorf("record feed status: %w: unknown error class", calendar.ErrInvalid)
 	}
 
+	if len(read.Holidays) > 0 {
+		return fmt.Errorf("record feed status: %w: a read with holidays", calendar.ErrInvalid)
+	}
+
 	err := m.Write(fence, m.rowScope(id), nil, func() error {
-		r, i, err := m.feed(id, feedID)
+		r, i, err := m.feed(id, read.Feed, read.URL)
 		if err != nil {
 			return err
 		}
@@ -281,8 +287,9 @@ func (m *memStore) rowScope(id calendar.ID) func() (namespace.Name, error) {
 }
 
 // feed returns the row of the calendar id and the index of its feed
-// feedID, or ErrNotFound. The caller holds the mutex of the domain.
-func (m *memStore) feed(id calendar.ID, feedID string) (*row, int, error) {
+// feedID, ErrNotFound, or ErrConflict when the feed has a URL other than
+// url. The caller holds the mutex of the domain.
+func (m *memStore) feed(id calendar.ID, feedID, url string) (*row, int, error) {
 	r, ok := m.cals[id]
 	if !ok {
 		return nil, 0, fmt.Errorf("calendar %s: %w", id, calendar.ErrNotFound)
@@ -291,6 +298,12 @@ func (m *memStore) feed(id calendar.ID, feedID string) (*row, int, error) {
 	i := slices.IndexFunc(r.cal.Feeds, func(f calendar.Feed) bool { return f.ID == feedID })
 	if i < 0 {
 		return nil, 0, fmt.Errorf("feed %s of %s: %w", feedID, id, calendar.ErrNotFound)
+	}
+
+	if r.cal.Feeds[i].URL != url {
+		return nil, 0, fmt.Errorf(
+			"feed %s of %s: %w: the URL changed during the read", feedID, id, calendar.ErrConflict,
+		)
 	}
 
 	return r, i, nil

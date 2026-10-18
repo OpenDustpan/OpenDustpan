@@ -65,8 +65,12 @@ operations and their schedules.
    calendar. So the check stays one indexed read in the transaction of the
    dispatch, as ADR 103 decision 4 requires.
 4. **Stable IDs.** The freeze of an occurrence has the ID
-   `freeze.OccurrenceID(schedule, start)`: `frz-`, the schedule ID with no
-   prefix, and the start in Unix milliseconds. `Occurrences` never cuts an
+   `freeze.OccurrenceID(namespace, schedule, start)`: `frz-`, the schedule
+   ID with no prefix, the start in Unix milliseconds, and 16 hex digits of
+   the SHA-256 of the namespace. A schedule ID that is free again after a
+   delete can name a schedule in another namespace, and the hash keeps the
+   freezes of one start in two namespaces apart. `CreateFreeze` refuses an
+   ID that exists, in any namespace, with `ErrInvalid` and changes nothing. `Occurrences` never cuts an
    occurrence at the start or the end of its range. For a calendar rule, it
    reads back and forward over each day that the rule freezes whole, for
    at most `calendar.MaxSearchDays` days in each direction. So a second run
@@ -88,6 +92,13 @@ operations and their schedules.
    schedule ID as `CreatedBy`. That subject is not a principal. It marks
    the freeze as a freeze of the schedule (`freeze.ScheduleOf`), so
    `job.Freeze` needs no new field. The freeze passes `job.Freeze.Validate`.
+   The freezes of a schedule are the freezes with its subject in the
+   namespace of the fence of the write. A schedule ID that is free again
+   after a delete can name a schedule in another namespace, so the writes
+   of a schedule match a freeze by its creator and its namespace, and never
+   change a freeze of another namespace. `CreateFreeze` refuses a
+   `CreatedBy` that starts with `@schedule:` with `ErrInvalid`, so a person
+   cannot make a freeze that the writes of a schedule take as their own.
    The schedule store and the freeze store are one database, because a
    replace reads the stored schedule in its transaction.
 7. **Replace, but never rewrite the past.** `Sink.ReplaceScheduled` takes
@@ -131,7 +142,11 @@ operations and their schedules.
     its row. A zero fence or the fence of another namespace fails: with
     `ErrInvalid` for a create, and with `ErrNotFound` for every write that
     names an existing schedule or freeze. A stale fence fails with
-    `namespace.ErrFenced`.
+    `namespace.ErrFenced`. `Sink.DeleteScheduled` deletes the freezes of
+    the namespace of its fence only, and fails with `ErrNotFound` for a
+    zero fence. The audit entry of a write must be in the namespace of its
+    row. An entry of another namespace fails as the fence of another
+    namespace does, and the write changes nothing.
 11. **Freezes of a schedule are freezes.** Every rule of ADR 103 applies to
     a freeze of a schedule: plans still run, a running phase runs to its
     end, a queued job waits with the reason `frozen`, a state write of a
@@ -177,9 +192,11 @@ operations and their schedules.
 
 - **Job model (ADR 103).** The store of the job model implements
   `freeze.Sink` on the freeze table, with the rules of decisions 6 to 10,
-  and runs `pkg/freeze/freezetest`. An index on the creator and the start
-  of a freeze serves the writes of a schedule. `job.Freeze` and
-  `job.FreezeStore` do not change.
+  and runs `pkg/freeze/freezetest`. An index on the namespace, the
+  creator and the start of a freeze serves the writes of a schedule.
+  `job.Freeze` and the methods of `job.FreezeStore` do not change. Its
+  `CreateFreeze` refuses a `CreatedBy` that starts with `@schedule:`
+  (decision 6).
 
 ## Consequences
 

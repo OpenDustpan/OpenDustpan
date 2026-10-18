@@ -293,8 +293,12 @@ func TestOccurrenceIDIsStable(t *testing.T) {
 	t.Parallel()
 
 	start := time.Date(2026, 10, 16, 13, 0, 0, 0, time.UTC)
-	if got := freeze.OccurrenceID("fzs-weekend", start); got != "frz-weekend-1792155600000" {
+	if got := freeze.OccurrenceID("shop", "fzs-weekend", start); got != "frz-weekend-1792155600000-8d9001d32c6a703d" {
 		t.Fatalf("OccurrenceID = %q", got)
+	}
+
+	if freeze.OccurrenceID("shop", "fzs-weekend", start) == freeze.OccurrenceID("other", "fzs-weekend", start) {
+		t.Fatal("OccurrenceID is the same in two namespaces, want two IDs")
 	}
 }
 
@@ -309,7 +313,7 @@ func TestFreezeOf(t *testing.T) {
 	}
 
 	f := s.FreezeOf(o)
-	if f.ID != freeze.OccurrenceID(s.ID, o.Start) || f.Namespace != s.Namespace || f.Reason != s.Reason ||
+	if f.ID != freeze.OccurrenceID(s.Namespace, s.ID, o.Start) || f.Namespace != s.Namespace || f.Reason != s.Reason ||
 		f.CreatedBy != "@schedule:fzs-weekend" || f.EndedBy != "" {
 		t.Fatalf("FreezeOf = %+v", f)
 	}
@@ -381,6 +385,22 @@ func TestValidate(t *testing.T) {
 		{"a weekly rule in the zone Local", func(s *freeze.Schedule) {
 			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
 			s.Weekly.Zone = "Local"
+		}, false},
+		{"a weekly rule in the zone localtime", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = "localtime"
+		}, false},
+		{"a weekly rule in the zone posixrules", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = "posixrules"
+		}, false},
+		{"a weekly rule in the zone /etc/localtime", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = "/etc/localtime"
+		}, false},
+		{"a weekly rule in the zone Factory", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = "Factory"
 		}, false},
 		{"a weekly rule with no zone", func(s *freeze.Schedule) {
 			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)

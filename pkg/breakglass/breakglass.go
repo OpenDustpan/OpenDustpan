@@ -15,6 +15,7 @@ package breakglass
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,6 +59,9 @@ const (
 	// Freshness is the maximum age of the authentication of a verdict. It
 	// is the same number as for the confirmation of a job.
 	Freshness = 15 * time.Minute
+	// MaxClockSkew is the time that the ReviewedAt of a verdict can be
+	// after the time of the transaction of the store that records it.
+	MaxClockSkew = time.Minute
 )
 
 // Kind is the kind of a break-glass use.
@@ -213,9 +217,53 @@ type Verdict struct {
 	Auth       AuthKind
 	AuthAt     time.Time
 	ReviewedAt time.Time
+	// ActAs is Reviewer.ActAs at the verdict, so that the store checks the
+	// verdict again against it.
+	ActAs []string
 }
 
-// Overdue reports whether r is pending after its deadline at now.
+// empty reports whether v is the verdict of a pending review.
+func (v Verdict) empty() bool {
+	return v.Reviewer == "" && v.Note == "" && v.Auth == "" && v.AuthAt.IsZero() &&
+		v.ReviewedAt.IsZero() && len(v.ActAs) == 0
+}
+
+// ValidateOpen returns ErrInvalid for a review that a store cannot open:
+// a use that fails Validate, an ID without IDPrefix, a state that is not
+// pending, a verdict, a notice step already sent, or times that do not
+// agree. The times agree when CreatedAt is set and not before Use.At, and
+// DueAt and NextNoticeAt are each zero or not before CreatedAt.
+func (r Review) ValidateOpen() error {
+	if err := r.Use.Validate(); err != nil {
+		return err
+	}
+
+	switch {
+	case !strings.HasPrefix(r.ID, IDPrefix) || len(r.ID) == len(IDPrefix):
+		return fmt.Errorf("%w: a review ID starts with %s", ErrInvalid, IDPrefix)
+	case r.State != StatePending || !r.Verdict.empty() || r.Step != 0:
+		return fmt.Errorf("%w: a new review is pending, with no verdict and no notice sent", ErrInvalid)
+	default:
+		return validateOpenTimes(r)
+	}
+}
+
+// validateOpenTimes returns ErrInvalid when the times of the new review r
+// do not agree.
+func validateOpenTimes(r Review) error {
+	switch {
+	case r.CreatedAt.IsZero() || r.CreatedAt.Before(r.Use.At):
+		return fmt.Errorf("%w: a review opens at or after its use", ErrInvalid)
+	case (!r.DueAt.IsZero() && r.DueAt.Before(r.CreatedAt)) ||
+		(!r.NextNoticeAt.IsZero() && r.NextNoticeAt.Before(r.CreatedAt)):
+		return fmt.Errorf("%w: the deadline and the next notice of a review are not before its opening", ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+// Overdue reports whether r is pending at or after its deadline at now. A
+// Filter with DueBefore set to now selects the same reviews.
 func (r Review) Overdue(now time.Time) bool {
 	return r.State == StatePending && !r.DueAt.IsZero() && !now.Before(r.DueAt)
 }
@@ -235,14 +283,21 @@ type Reviewer struct {
 	TokenID string
 	Auth    AuthKind
 	AuthAt  time.Time
+	// ActAs are the principals that held an act-as edge to the subject of
+	// the use at a time from Use.At to the end of the use (Use.Until for a
+	// session, the verdict for a freeze break). The server fills it from
+	// the grant history, because a principal that gets an edge during the
+	// use is not in Use.People. For example, a break-glass account can
+	// grant act-as to a colleague during its session.
+	ActAs []string
 }
 
 // CheckReviewer returns nil when rev can record a verdict on r at now. It
 // returns ErrReviewed for a review with a verdict, ErrInvalid for a
 // reviewer with no subject, ErrAgentDenied when an agent acts,
 // ErrNeedsSession for a request with no console session or with an access
-// token, ErrSelfReview when the reviewer is one of r.Use.People or the
-// subject of the use, ErrInUse for a break-glass session before its time
+// token, ErrSelfReview when the reviewer is one of r.Use.People, of
+// rev.ActAs, or the subject of the use, ErrInUse for a break-glass session before its time
 // limit, and ErrAuthStale for an authentication that is missing, of an
 // unknown kind, in the future, or older than Freshness. The caller checks
 // the action of the reviewer first.
@@ -256,7 +311,7 @@ func CheckReviewer(r Review, rev Reviewer, now time.Time) error {
 		return fmt.Errorf("%w: agent %s", ErrAgentDenied, rev.Agent)
 	case rev.Session == "" || rev.TokenID != "":
 		return ErrNeedsSession
-	case strings.EqualFold(rev.Subject, r.Use.Subject) || hasPerson(r.Use.People, rev.Subject):
+	case excluded(r.Use, rev.ActAs, rev.Subject):
 		return ErrSelfReview
 	case now.Before(r.Use.Until):
 		return fmt.Errorf("%w: review it after %s", ErrInUse, r.Use.Until.UTC().Format(time.RFC3339))
@@ -265,6 +320,12 @@ func CheckReviewer(r Review, rev Reviewer, now time.Time) error {
 	default:
 		return nil
 	}
+}
+
+// excluded reports whether reviewer is the subject of u, one of u.People,
+// or one of actAs, with no case.
+func excluded(u Use, actAs []string, reviewer string) bool {
+	return strings.EqualFold(reviewer, u.Subject) || hasPerson(u.People, reviewer) || hasPerson(actAs, reviewer)
 }
 
 // fresh reports whether an authentication of the kind kind, at the time
@@ -277,11 +338,13 @@ func fresh(kind AuthKind, at, now time.Time) bool {
 // that a store can record on the stored review r. A store calls it with
 // the review that it holds, not with the review of the caller. It returns
 // ErrReviewed for a stored review with a verdict, ErrSelfReview for a
-// reviewer that is one of r.Use.People or the subject of the use, ErrInUse
-// for a verdict before the time limit of a session, and ErrInvalid for a
-// state that is not a verdict, a verdict with no reviewer, a note above
+// reviewer that is one of r.Use.People, of v.ActAs, or the subject of the
+// use, ErrInUse for a verdict before the time limit of a session, and
+// ErrInvalid for a state that is not a verdict, a verdict with no
+// reviewer, a ReviewedAt before Use.At or before CreatedAt, a note above
 // MaxNoteLen, a dispute with no note, or an authentication that was not
-// fresh at ReviewedAt.
+// fresh at ReviewedAt. It cannot check a time against the clock: a store
+// also refuses a ReviewedAt after its own time plus MaxClockSkew.
 func CheckVerdict(r Review, state State, v Verdict) error {
 	switch {
 	case r.State != StatePending:
@@ -290,10 +353,12 @@ func CheckVerdict(r Review, state State, v Verdict) error {
 		return fmt.Errorf("%w: unknown verdict %q", ErrInvalid, state)
 	case strings.TrimSpace(v.Reviewer) == "" || v.ReviewedAt.IsZero():
 		return fmt.Errorf("%w: a verdict needs a reviewer and a time", ErrInvalid)
-	case strings.EqualFold(v.Reviewer, r.Use.Subject) || hasPerson(r.Use.People, v.Reviewer):
+	case excluded(r.Use, v.ActAs, v.Reviewer):
 		return ErrSelfReview
 	case v.ReviewedAt.Before(r.Use.Until):
 		return fmt.Errorf("%w: review it after %s", ErrInUse, r.Use.Until.UTC().Format(time.RFC3339))
+	case v.ReviewedAt.Before(r.Use.At) || v.ReviewedAt.Before(r.CreatedAt):
+		return fmt.Errorf("%w: a verdict is not before its use or its review", ErrInvalid)
 	default:
 		return checkNoteAndAuth(state, v)
 	}
@@ -335,7 +400,10 @@ func record(r Review, rev Reviewer, state State, note string, now time.Time) (Re
 		return Review{}, err
 	}
 
-	v := Verdict{Reviewer: rev.Subject, Note: note, Auth: rev.Auth, AuthAt: rev.AuthAt, ReviewedAt: now}
+	v := Verdict{
+		Reviewer: rev.Subject, Note: note, Auth: rev.Auth, AuthAt: rev.AuthAt, ReviewedAt: now,
+		ActAs: slices.Clone(rev.ActAs),
+	}
 	if err := CheckVerdict(r, state, v); err != nil {
 		return Review{}, err
 	}

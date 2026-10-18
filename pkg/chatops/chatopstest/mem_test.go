@@ -259,3 +259,41 @@ func (m *memStore) UseIntent(_ context.Context, fence namespace.Fence, id string
 
 	return scopeErr("use intent "+id, err, chatops.ErrNotFound)
 }
+
+func (m *memStore) IntentsOf(_ context.Context, u chatops.ChatUser) ([]chatops.Intent, error) {
+	var out []chatops.Intent
+
+	m.Read(func() {
+		for id := range m.intents {
+			r := m.intents[id].Request
+			if r.Platform == u.Platform && r.Workspace == u.Workspace && r.User == u.User {
+				out = append(out, m.intents[id])
+			}
+		}
+	})
+
+	return out, nil
+}
+
+func (m *memStore) DeleteIntent(_ context.Context, fence namespace.Fence, id string) error {
+	scope := func() (namespace.Name, error) {
+		in, ok := m.intents[id]
+		if !ok {
+			return "", chatops.ErrNotFound
+		}
+
+		return in.Namespace, nil
+	}
+
+	err := m.Write(fence, scope, nil, func() error {
+		if !m.intents[id].UsedAt.IsZero() {
+			return chatops.ErrUsed
+		}
+
+		delete(m.intents, id)
+
+		return nil
+	})
+
+	return scopeErr("delete intent "+id, err, chatops.ErrNotFound)
+}

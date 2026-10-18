@@ -166,6 +166,31 @@ func TestAddBusinessTime(t *testing.T) {
 	}
 }
 
+// TestAddBusinessTimeSkippedHours checks a date on which a zone change
+// skips all working hours: on 2027-03-28 Berlin moves from 02:00 to 03:00,
+// so working hours from 02:30 to 03:00 hold no time on that date.
+func TestAddBusinessTimeSkippedHours(t *testing.T) {
+	t.Parallel()
+
+	loc := berlinZone(t)
+
+	c := berlin()
+	c.WorkingDays = calendar.Weekdays(time.Monday, time.Tuesday, time.Wednesday, time.Thursday,
+		time.Friday, time.Saturday, time.Sunday)
+	c.DayStart = calendar.ClockOf(2, 30)
+	c.DayEnd = calendar.ClockOf(3, 0)
+
+	got, err := c.AddBusinessTime(time.Date(2027, 3, 28, 0, 0, 0, 0, loc), 30*time.Minute)
+	if err != nil {
+		t.Fatalf("AddBusinessTime: %v", err)
+	}
+
+	want := time.Date(2027, 3, 29, 3, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("AddBusinessTime = %s, want %s", got, want)
+	}
+}
+
 func TestNoBusinessDay(t *testing.T) {
 	t.Parallel()
 

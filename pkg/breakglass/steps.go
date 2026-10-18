@@ -314,5 +314,5 @@ func (n *Notice) join(st Step) {
 
 // noVerdict returns the verdict of a review that is pending.
 func noVerdict() Verdict {
-	return Verdict{Reviewer: "", Note: "", Auth: "", AuthAt: time.Time{}, ReviewedAt: time.Time{}}
+	return Verdict{Reviewer: "", Note: "", Auth: "", AuthAt: time.Time{}, ReviewedAt: time.Time{}, ActAs: nil}
 }

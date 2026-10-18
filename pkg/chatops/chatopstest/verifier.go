@@ -13,8 +13,13 @@ type VerifierHarness struct {
 	// Verifier is the adapter, with the signing secret of the
 	// installation.
 	Verifier chatops.Verifier
+	// Platform is the chat tool of the adapter. Verify sets
+	// Request.Platform to it, whatever the body says.
+	Platform string
 	// Encode returns the body that the chat tool sends for req. The
-	// signed time is not in it.
+	// signed time is not in it. When the body of the tool can name a
+	// platform, Encode puts req.Platform in it, so that the suite can
+	// check that Verify ignores it.
 	Encode func(req chatops.Request) []byte
 	// Sign returns the headers that the chat tool sends with body, signed
 	// at the time at with the signing secret of Verifier.
@@ -22,6 +27,10 @@ type VerifierHarness struct {
 	// SignOther returns the headers that Sign returns, signed with another
 	// secret.
 	SignOther func(body []byte, at time.Time) map[string][]string
+	// Retime returns a copy of headers from Sign with the timestamp set
+	// to at and the signature kept, as an attacker who replays an old
+	// request with a new timestamp does.
+	Retime func(headers map[string][]string, at time.Time) map[string][]string
 	// Unparsable is a body that the adapter cannot parse, or that has
 	// none of the fields of a request.
 	Unparsable []byte
@@ -81,10 +90,37 @@ func RunVerifier(t *testing.T, newHarness VerifierFactory) {
 			nil, chatops.ErrSignature,
 		},
 		{
+			"an old signature with a new timestamp",
+			func(h VerifierHarness) map[string][]string {
+				old := h.Sign(h.Encode(req), now().Add(-chatops.SignatureMaxAge-time.Minute))
+
+				return h.Retime(old, signed)
+			},
+			nil, chatops.ErrSignature,
+		},
+		{
 			"a signed body that does not parse",
 			func(h VerifierHarness) map[string][]string { return h.Sign(h.Unparsable, signed) },
 			func(h VerifierHarness) []byte { return h.Unparsable },
 			chatops.ErrInvalid,
+		},
+		{
+			"an unsigned body that does not parse",
+			func(VerifierHarness) map[string][]string { return nil },
+			func(h VerifierHarness) []byte { return h.Unparsable },
+			chatops.ErrSignature,
+		},
+		{
+			"a body that does not parse, signed with another secret",
+			func(h VerifierHarness) map[string][]string { return h.SignOther(h.Unparsable, signed) },
+			func(h VerifierHarness) []byte { return h.Unparsable },
+			chatops.ErrSignature,
+		},
+		{
+			"a signed body that names another chat tool",
+			func(h VerifierHarness) map[string][]string { return h.Sign(h.Encode(otherPlatform(req)), signed) },
+			func(h VerifierHarness) []byte { return h.Encode(otherPlatform(req)) },
+			nil,
 		},
 	}
 
@@ -107,7 +143,7 @@ func RunVerifier(t *testing.T, newHarness VerifierFactory) {
 			}
 
 			want := req
-			want.At = signed
+			want.At, want.Platform = signed, h.Platform
 
 			if err != nil || !got.At.Equal(signed) {
 				t.Fatalf("Verify = %+v (%v), want the signed time %v", got, err, signed)
@@ -119,6 +155,14 @@ func RunVerifier(t *testing.T, newHarness VerifierFactory) {
 			}
 		})
 	}
+}
+
+// otherPlatform returns req as a body that names another chat tool than
+// the adapter.
+func otherPlatform(req chatops.Request) chatops.Request {
+	req.Platform = "chat-other"
+
+	return req
 }
 
 func verifierRequest() chatops.Request {

@@ -167,8 +167,15 @@ func TestSinkValidate(t *testing.T) {
 	email := webhook("ops@example.com")
 	email.Kind = notify.SinkEmail
 
-	chat := webhook("https://chat.example.com/hook/1")
+	chat := webhook("chat.example.com", "itm-1")
 	chat.Kind = notify.SinkChat
+
+	chatWith := func(target string, refs ...string) notify.Sink {
+		s := chat
+		s.Target, s.SecretRefs = target, refs
+
+		return s
+	}
 
 	cases := []struct {
 		name    string
@@ -187,6 +194,14 @@ func TestSinkValidate(t *testing.T) {
 		{"localhost", webhook("https://localhost/hook", "itm-1"), false, true},
 		{"user information", webhook("https://user:pw@hooks.example.com/", "itm-1"), false, true},
 		{"a chat webhook", chat, true, false},
+		{"a chat webhook with a port", chatWith("chat.example.com:8443", "itm-1"), true, false},
+		{"a chat webhook with the URL as target", chatWith("https://chat.example.com/hook/1", "itm-1"), false, false},
+		{"a chat host with a path", chatWith("chat.example.com/hook/1", "itm-1"), false, false},
+		{"a chat host in upper case", chatWith("Chat.example.com", "itm-1"), false, false},
+		{"a chat webhook with no secret item", chatWith("chat.example.com"), false, false},
+		{"a chat webhook with two secret items", chatWith("chat.example.com", "itm-1", "itm-2"), false, false},
+		{"a chat host on localhost", chatWith("localhost", "itm-1"), false, true},
+		{"a chat host on a private address", chatWith("10.0.0.5", "itm-1"), false, true},
 		{"an email address", email, true, false},
 		{"an email address with a name", func() notify.Sink {
 			s := email
@@ -505,5 +520,200 @@ func TestQuiet(t *testing.T) {
 
 	if got, err := notify.Quiet(notify.SeverityWarning, now, next); err != nil || !got.Equal(monday) {
 		t.Fatalf("warning: %s (%v), want Monday", got, err)
+	}
+}
+
+func TestChatHost(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		url  string
+		want string
+		err  error
+	}{
+		{"https://hooks.example.com/services/T0/B0/secret", "hooks.example.com", nil},
+		{"https://Hooks.Example.com:8443/x", "hooks.example.com:8443", nil},
+		{"http://hooks.example.com/x", "", egress.ErrRefused},
+		{"https://user:pw@hooks.example.com/x", "", egress.ErrRefused},
+		{"https://169.254.169.254/x", "", egress.ErrRefused},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.url, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := notify.ChatHost(tc.url)
+			if got != tc.want || !errors.Is(err, tc.err) {
+				t.Fatalf("ChatHost = %q (%v), want %q (%v)", got, err, tc.want, tc.err)
+			}
+		})
+	}
+}
+
+func TestScopeActions(t *testing.T) {
+	t.Parallel()
+
+	withType := func(typ notify.Type, scope namespace.Name) notify.Notification {
+		n := sample()
+		n.Type, n.Scope = typ, scope
+
+		return n
+	}
+
+	cases := []struct {
+		name string
+		n    notify.Notification
+		want string
+	}{
+		{"a job notification", withType(notify.JobFailed, "shop"), "[namespace:read]"},
+		{"a cost estimate", withType(notify.CostEstimated, "shop"), "[namespace:read namespace:read-cost]"},
+		{"a budget threshold", withType(notify.BudgetThreshold, "shop"), "[namespace:read namespace:read-cost]"},
+		{"a notification of the server", withType(notify.SubscriptionSuspended, "@server"), "[server:observe]"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := fmt.Sprint(notify.ScopeActions(tc.n)); got != tc.want {
+				t.Fatalf("ScopeActions = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// contacts is a notify.Contacts that holds the addresses of each
+// principal, and fails for the principal "lost".
+type contacts map[string][]string
+
+func (c contacts) ContactsOf(_ context.Context, id string) ([]notify.Contact, error) {
+	if id == "lost" {
+		return nil, errCheck
+	}
+
+	out := make([]notify.Contact, 0, len(c[id]))
+	for _, a := range c[id] {
+		out = append(out, notify.Contact{Kind: notify.SinkEmail, Address: a})
+	}
+
+	return out, nil
+}
+
+func (contacts) Members(context.Context, string) ([]string, error) { return nil, nil }
+
+func TestBeforeAttempt(t *testing.T) {
+	t.Parallel()
+
+	d := func(principal, contact string) notify.Delivery {
+		return notify.Delivery{
+			ID: "dlv-1", Notification: "ntf-1", Scope: "shop", Subscription: "sub-1", Sink: "snk-1",
+			Contact: contact, Principal: principal, State: notify.DeliveryPending, Attempts: 1,
+			NextAt: time.Time{}, LastError: "", DeliveredAt: time.Time{}, Owner: "i-1", LeaseUntil: time.Time{},
+			Version: 2,
+		}
+	}
+
+	r := reader{"alice": true, "lost": true}
+	c := contacts{"alice": {"alice@example.com"}}
+
+	cases := []struct {
+		name string
+		d    notify.Delivery
+		want error
+	}{
+		{"the creator can still read", d("alice", ""), nil},
+		{"the creator lost access", d("bob", ""), notify.ErrNoAccess},
+		{"the contact is still a contact", d("alice", "alice@example.com"), nil},
+		{"the contact is gone", d("alice", "old@example.com"), notify.ErrNoAccess},
+		{"the read check fails", d("broken", ""), errCheck},
+		{"the contact check fails", d("lost", "lost@example.com"), errCheck},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := notify.BeforeAttempt(t.Context(), tc.d, sample(), r, c)
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatalf("BeforeAttempt = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name string
+		h    string
+		want time.Duration
+		ok   bool
+	}{
+		{"seconds", "120", 2 * time.Minute, true},
+		{"zero", "0", 0, true},
+		{"a huge count", "99999999999999999999999", notify.SuspendAfter, true},
+		{"more than a day", "172800", notify.SuspendAfter, true},
+		{"a negative count", "-5", 0, false},
+		{"a signed count", "+5", 0, false},
+		{"a date", "Tue, 20 Oct 2026 10:05:00 GMT", 5 * time.Minute, true},
+		{"a past date", "Mon, 19 Oct 2026 10:00:00 GMT", 0, true},
+		{"a date far ahead", "Fri, 20 Oct 2028 10:00:00 GMT", notify.SuspendAfter, true},
+		{"text", "soon", 0, false},
+		{"empty", "", 0, false},
+		{"a fraction", "1.5", 0, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := notify.ParseRetryAfter(tc.h, now)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("ParseRetryAfter(%q) = %s, %t, want %s, %t", tc.h, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestAttemptValidate(t *testing.T) {
+	t.Parallel()
+
+	ok := notify.Attempt{
+		ID: "dlv-1", Owner: "i-1", Version: 2, Now: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+		State: notify.DeliveryAbandoned, Attempts: 1, NextAt: time.Time{}, LastError: notify.ClassPermanent,
+		DeliveredAt: time.Time{},
+	}
+
+	cases := []struct {
+		name   string
+		change func(a *notify.Attempt)
+		valid  bool
+	}{
+		{"a class", func(*notify.Attempt) {}, true},
+		{
+			"the text of an error",
+			func(a *notify.Attempt) { a.LastError = "dial tcp 10.0.0.1: https://user:pw@x" },
+			false,
+		},
+		{"an unknown state", func(a *notify.Attempt) { a.State = "bogus" }, false},
+		{"no owner", func(a *notify.Attempt) { a.Owner = "" }, false},
+		{"no time", func(a *notify.Attempt) { a.Now = time.Time{} }, false},
+		{"negative attempts", func(a *notify.Attempt) { a.Attempts = -1 }, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := ok
+			tc.change(&a)
+
+			if err := a.Validate(); tc.valid != (err == nil) || (!tc.valid && !errors.Is(err, notify.ErrInvalid)) {
+				t.Fatalf("Validate = %v, want valid %t", err, tc.valid)
+			}
+		})
 	}
 }

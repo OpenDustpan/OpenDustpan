@@ -98,6 +98,9 @@ gives durable operations and schedules.
     the form Area/Location, for example `Europe/Berlin`. The server refuses
     `Local`, because it is the zone of the host and not of the team, and
     refuses every other name that the time zone database does not hold.
+    `calendar.LoadZone` holds this check, and each package that stores a
+    zone name uses it, so the server also refuses `localtime`, `posixrules`
+    and `/etc/localtime`.
 11. **A bound on each search.** A search for a business day stops after 400
     days with `ErrNoBusinessDay`. A calendar whose holidays cover 400 days is
     a mistake. The error makes the mistake visible instead of a loop.
@@ -138,6 +141,10 @@ gives durable operations and schedules.
       (`RecordFeedStatus`), change only the time of the read and the error.
       They keep the holidays, the counts and the `ETag` of the last good
       read. A "not modified" read clears the error.
+
+    Both writes carry the URL of the read. When an update gave
+    the feed a new URL during the read, the store refuses the write with
+    `ErrConflict`, so the holidays of an old URL never go to a new one.
 
     The status of a feed holds the time, the error class and the counts.
     The calendar page and the read API show it, so a stale feed is
@@ -266,7 +273,7 @@ gives durable operations and schedules.
 - Which group calendar applies to a person in two teams with two calendars?
   This ADR takes the group with the lowest name. A setting of the person may
   be better.
-- iCal parser: our own parser of the subset in decision 11, or a library?
+- iCal parser: our own parser of the subset in decision 13, or a library?
   A library is a new dependency, and needs the approval of the owner.
 - Does a namespace need half days, for example a short working day before a
   holiday? This ADR has whole days only.

@@ -66,6 +66,13 @@ func Run(t *testing.T, newHarness Factory) {
 		{"claim takes due deliveries once until the lease passes", testClaim},
 		{"record after a later claim is ErrConflict", testRecordConflict},
 		{"redeliver makes a delivery pending again", testRedeliver},
+		{"append refuses a repeated notification ID", testAppendRepeatedID},
+		{"enqueue refuses a repeated or invalid delivery", testEnqueueID},
+		{"history shows only the deliveries of its scope", testHistoryScope},
+		{"record needs a live claim and changes only the result", testRecordClaim},
+		{"redeliver of a pending delivery is ErrConflict", testRedeliverPending},
+		{"put subscription refuses an invalid subscription", testSubscriptionValidate},
+		{"an audit entry of another scope changes nothing", testEntryScope},
 	}
 
 	for _, tc := range cases {
@@ -159,19 +166,35 @@ func sink(id string, scope namespace.Name) notify.Sink {
 	}
 }
 
-func subscription(sinkID string) notify.Subscription {
+func subscription(sinkID string) notify.Subscription { return subscriptionIn(shop, sinkID) }
+
+func subscriptionIn(scope namespace.Name, sinkID string) notify.Subscription {
 	return notify.Subscription{
-		ID: "sub-1", Scope: shop, Sink: sinkID,
+		ID: "sub-1", Scope: scope, Sink: sinkID,
 		Filter: notify.Filter{Types: []string{"job.*"}, Objects: nil, MinSeverity: 0},
 		State:  notify.SubscriptionStateActive, Reason: "", CreatedBy: "alice", Version: 0,
 	}
 }
 
-func delivery(id, ntf string, next time.Time) notify.Delivery {
+func delivery(id, ntf string, next time.Time) notify.Delivery { return deliveryIn(shop, id, ntf, next) }
+
+func deliveryIn(scope namespace.Name, id, ntf string, next time.Time) notify.Delivery {
 	return notify.Delivery{
-		ID: id, Notification: ntf, Scope: shop, Subscription: "sub-1", Sink: "snk-1", Contact: "",
-		State: notify.DeliveryPending, Attempts: 0, NextAt: next, LastError: "", DeliveredAt: time.Time{},
-		Owner: "", LeaseUntil: time.Time{}, Version: 0,
+		ID:           id,
+		Notification: ntf,
+		Scope:        scope,
+		Subscription: "sub-1",
+		Sink:         "snk-1",
+		Contact:      "",
+		Principal:    "alice",
+		State:        notify.DeliveryPending,
+		Attempts:     0,
+		NextAt:       next,
+		LastError:    "",
+		DeliveredAt:  time.Time{},
+		Owner:        "",
+		LeaseUntil:   time.Time{},
+		Version:      0,
 	}
 }
 
@@ -212,12 +235,36 @@ func claim(t *testing.T, h Harness, fence namespace.Fence, at time.Time, limit i
 	return got
 }
 
-func move(from, to int64) notify.CursorMove {
-	return notify.CursorMove{Name: "dispatch", Scope: shop, From: from, To: to}
+func move(from, to int64) notify.CursorMove { return moveIn(shop, from, to) }
+
+func moveIn(scope namespace.Name, from, to int64) notify.CursorMove {
+	return notify.CursorMove{Name: "dispatch", Scope: scope, From: from, To: to}
 }
 
-func claimAt(at time.Time, limit int) notify.ClaimRequest {
-	return notify.ClaimRequest{Scope: shop, Owner: owner, Now: at, Lease: lease, Limit: limit}
+func claimAt(at time.Time, limit int) notify.ClaimRequest { return claimIn(shop, at, limit) }
+
+func claimIn(scope namespace.Name, at time.Time, limit int) notify.ClaimRequest {
+	return notify.ClaimRequest{Scope: scope, Owner: owner, Now: at, Lease: lease, Limit: limit}
+}
+
+// attempt returns the result of an attempt of the claimed delivery d at
+// the time at: delivered at its first attempt.
+func attempt(d notify.Delivery, at time.Time) notify.Attempt {
+	return notify.Attempt{
+		ID: d.ID, Owner: d.Owner, Version: d.Version, Now: at, State: notify.DeliveryDone, Attempts: 1,
+		NextAt: time.Time{}, LastError: "", DeliveredAt: at,
+	}
+}
+
+func history(t *testing.T, h Harness, scope namespace.Name) []notify.Delivery {
+	t.Helper()
+
+	got, err := h.Deliveries.History(t.Context(), scope, "sub-1", 10)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+
+	return got
 }
 
 func ids(ds []notify.Delivery) string {
@@ -568,27 +615,40 @@ func testRecordConflict(t *testing.T, h Harness) {
 		t.Fatalf("Claim after the lease = %s, want one", ids(live))
 	}
 
-	d := lost[0]
-	d.State, d.Attempts, d.DeliveredAt = notify.DeliveryDone, 1, now()
-
-	if err := h.Deliveries.Record(t.Context(), fence, d); !errors.Is(err, notify.ErrConflict) {
+	at := now().Add(lease)
+	if err := h.Deliveries.Record(t.Context(), fence, attempt(lost[0], at)); !errors.Is(err, notify.ErrConflict) {
 		t.Fatalf("Record by the lost claim: err = %v, want ErrConflict", err)
 	}
 
-	d = live[0]
-	d.State, d.Attempts, d.DeliveredAt = notify.DeliveryDone, 1, now()
-
-	if err := h.Deliveries.Record(t.Context(), fence, d); err != nil {
+	if err := h.Deliveries.Record(t.Context(), fence, attempt(live[0], at)); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
-	if err := h.Deliveries.Record(t.Context(), fence, d); !errors.Is(err, notify.ErrConflict) {
+	if err := h.Deliveries.Record(t.Context(), fence, attempt(live[0], at)); !errors.Is(err, notify.ErrConflict) {
 		t.Fatalf("second Record: err = %v, want ErrConflict", err)
 	}
 
-	hist, err := h.Deliveries.History(t.Context(), "sub-1", 10)
-	if err != nil || len(hist) != 1 || hist[0].State != notify.DeliveryDone || hist[0].Owner != "" {
-		t.Fatalf("History = %+v (%v), want one delivered with no claim", hist, err)
+	hist := history(t, h, shop)
+	if len(hist) != 1 || hist[0].State != notify.DeliveryDone || hist[0].Owner != "" {
+		t.Fatalf("History = %+v, want one delivered with no claim", hist)
+	}
+}
+
+// abandon claims the delivery dlv-1 and records it as abandoned.
+func abandon(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name) {
+	t.Helper()
+
+	got, err := h.Deliveries.Claim(t.Context(), fence, claimIn(scope, now(), 1))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Claim = %s (%v), want one", ids(got), err)
+	}
+
+	a := attempt(got[0], now())
+	a.State, a.Attempts, a.LastError, a.DeliveredAt = notify.DeliveryAbandoned, notify.MaxAttempts,
+		notify.ClassTemporary, time.Time{}
+
+	if err := h.Deliveries.Record(t.Context(), fence, a); err != nil {
+		t.Fatalf("Record: %v", err)
 	}
 }
 
@@ -597,24 +657,13 @@ func testRedeliver(t *testing.T, h Harness) {
 
 	fence := setup(t, h)
 	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
-
-	got := claim(t, h, fence, now(), 1)
-	if len(got) != 1 {
-		t.Fatalf("Claim = %s, want one", ids(got))
-	}
-
-	d := got[0]
-	d.State, d.Attempts, d.LastError = notify.DeliveryAbandoned, notify.MaxAttempts, notify.ClassTemporary
-
-	if err := h.Deliveries.Record(t.Context(), fence, d); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
+	abandon(t, h, fence, shop)
 
 	if err := h.Deliveries.Redeliver(t.Context(), "dlv-1", fence, manage()); err != nil {
 		t.Fatalf("Redeliver: %v", err)
 	}
 
-	got = claim(t, h, fence, now().Add(time.Minute), 10)
+	got := claim(t, h, fence, now().Add(time.Minute), 10)
 	if len(got) != 1 || got[0].Attempts != 0 || got[0].State != notify.DeliveryPending {
 		t.Fatalf("Claim after Redeliver = %+v, want one pending with no attempts", got)
 	}
@@ -624,101 +673,520 @@ func testRedeliver(t *testing.T, h Harness) {
 	}
 }
 
+func testAppendRepeatedID(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	otherFence, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	appendOne(t, h, fence, sample("ntf-1", shop))
+
+	again := sample("ntf-1", shop)
+	again.DedupeKey = "another-fact"
+
+	elsewhere := sample("ntf-1", other)
+	elsewhere.DedupeKey = "another-fact"
+
+	twice := sample("ntf-2", shop)
+	twiceAgain := sample("ntf-2", shop)
+	twiceAgain.DedupeKey = "another-fact"
+
+	cases := []struct {
+		name  string
+		fence namespace.Fence
+		ns    []notify.Notification
+	}{
+		{"a stored ID with another dedupe key", fence, []notify.Notification{again}},
+		{"a stored ID in another scope", otherFence, []notify.Notification{elsewhere}},
+		{"one ID twice in a call", fence, []notify.Notification{twice, twiceAgain}},
+	}
+
+	for _, tc := range cases {
+		if err := h.Outbox.Append(t.Context(), tc.fence, tc.ns); !errors.Is(err, notify.ErrInvalid) {
+			t.Fatalf("Append of %s: err = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+
+	for _, scope := range []namespace.Name{shop, other} {
+		all, err := h.Outbox.After(t.Context(), scope, 0, 10)
+		if err != nil || (scope == shop) != (len(all) == 1) || (scope == other) != (len(all) == 0) {
+			t.Fatalf("After(%s) = %+v (%v), want ntf-1 in shop only", scope, all, err)
+		}
+	}
+}
+
+func testEnqueueID(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	otherFence, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	theirs := deliveryIn(other, "dlv-1", "ntf-9", now())
+	err = h.Deliveries.Enqueue(
+		t.Context(),
+		otherFence,
+		[]notify.Delivery{theirs},
+	)
+	if !errors.Is(err, notify.ErrNotFound) {
+		t.Fatalf("Enqueue of an ID of another scope: err = %v, want ErrNotFound", err)
+	}
+
+	bad := invalidDeliveries()
+	for i := range bad {
+		err := h.Deliveries.Enqueue(t.Context(), fence, []notify.Delivery{bad[i].d, delivery("dlv-8", "ntf-8", now())})
+		if !errors.Is(err, notify.ErrInvalid) {
+			t.Fatalf("Enqueue of %s: err = %v, want ErrInvalid", bad[i].name, err)
+		}
+	}
+
+	hist := history(t, h, shop)
+	if len(hist) != 1 || hist[0].Notification != "ntf-1" || hist[0].Scope != shop {
+		t.Fatalf("History = %+v, want dlv-1 of ntf-1 in shop only", hist)
+	}
+
+	if got, err := h.Deliveries.History(t.Context(), other, "sub-1", 10); err != nil || len(got) != 0 {
+		t.Fatalf("History(other) = %+v (%v), want none", got, err)
+	}
+}
+
+func invalidDeliveries() []struct {
+	name string
+	d    notify.Delivery
+} {
+	change := func(f func(d *notify.Delivery)) notify.Delivery {
+		d := delivery("dlv-2", "ntf-2", now())
+		f(&d)
+
+		return d
+	}
+
+	return []struct {
+		name string
+		d    notify.Delivery
+	}{
+		{"a stored ID", change(func(d *notify.Delivery) { d.ID = "dlv-1" })},
+		{"an ID with no prefix", change(func(d *notify.Delivery) { d.ID = "x-2" })},
+		{"no principal", change(func(d *notify.Delivery) { d.Principal = "" })},
+		{"no subscription and no contact", change(func(d *notify.Delivery) { d.Subscription = "" })},
+		{"an unknown state", change(func(d *notify.Delivery) { d.State = "bogus" })},
+		{"a delivered state", change(func(d *notify.Delivery) { d.State = notify.DeliveryDone })},
+		{"the text of an error", change(func(d *notify.Delivery) { d.LastError = "dial tcp 10.0.0.1" })},
+	}
+}
+
+func testHistoryScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), other); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	subscribe(t, h, fence)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	if got, err := h.Deliveries.History(t.Context(), other, "sub-1", 10); !errors.Is(err, notify.ErrNotFound) {
+		t.Fatalf("History of a subscription of another scope = %+v (%v), want ErrNotFound", got, err)
+	}
+
+	if got := history(t, h, shop); ids(got) != "[dlv-1]" {
+		t.Fatalf("History(shop) = %s, want [dlv-1]", ids(got))
+	}
+}
+
+func testRecordClaim(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	unclaimed := attempt(delivery("dlv-1", "ntf-1", now()), now())
+	unclaimed.Owner, unclaimed.Version = owner, 1
+
+	if err := h.Deliveries.Record(t.Context(), fence, unclaimed); !errors.Is(err, notify.ErrConflict) {
+		t.Fatalf("Record with no claim: err = %v, want ErrConflict", err)
+	}
+
+	d := claim(t, h, fence, now(), 1)[0]
+
+	stranger := attempt(d, now())
+	stranger.Owner = "instance-2"
+
+	leak := attempt(d, now())
+	leak.State, leak.LastError = notify.DeliveryAbandoned, "dial tcp 10.0.0.1: https://user:pw@x"
+
+	cases := []struct {
+		name string
+		a    notify.Attempt
+		want error
+	}{
+		{"another owner", stranger, notify.ErrConflict},
+		{"a passed lease", attempt(d, now().Add(lease)), notify.ErrConflict},
+		{"the text of an error", leak, notify.ErrInvalid},
+	}
+
+	for i := range cases {
+		if err := h.Deliveries.Record(t.Context(), fence, cases[i].a); !errors.Is(err, cases[i].want) {
+			t.Fatalf("Record with %s: err = %v, want %v", cases[i].name, err, cases[i].want)
+		}
+	}
+
+	if err := h.Deliveries.Record(t.Context(), fence, attempt(d, now())); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	got := history(t, h, shop)
+	if len(got) != 1 || got[0].Notification != "ntf-1" || got[0].Subscription != "sub-1" ||
+		got[0].Sink != "snk-1" || got[0].Principal != "alice" || got[0].State != notify.DeliveryDone ||
+		got[0].LastError != "" {
+		t.Fatalf("History = %+v, want dlv-1 delivered with its notification, subscription and principal", got)
+	}
+}
+
+func testRedeliverPending(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+	claim(t, h, fence, now(), 1)
+
+	if err := h.Deliveries.Redeliver(t.Context(), "dlv-1", fence, manage()); !errors.Is(err, notify.ErrConflict) {
+		t.Fatalf("Redeliver of a pending delivery: err = %v, want ErrConflict", err)
+	}
+
+	if again := claim(t, h, fence, now().Add(lease/2), 1); len(again) != 0 {
+		t.Fatalf("Claim under the live claim after Redeliver = %s, want none", ids(again))
+	}
+
+	if entries, err := h.Domain.AuditEntries(t.Context(), shop); err != nil || len(entries) != 0 {
+		t.Fatalf("audit entries = %d (%v), want none", len(entries), err)
+	}
+}
+
+func testSubscriptionValidate(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	putSink(t, h, fence)
+
+	cases := []struct {
+		name   string
+		change func(s *notify.Subscription)
+	}{
+		{"an ID with no prefix", func(s *notify.Subscription) { s.ID = "x-1" }},
+		{"no creator", func(s *notify.Subscription) { s.CreatedBy = "" }},
+		{"an unknown state", func(s *notify.Subscription) { s.State = "bogus" }},
+	}
+
+	for _, tc := range cases {
+		s := subscription("snk-1")
+		tc.change(&s)
+
+		if err := h.Subscriptions.PutSubscription(t.Context(), s, fence, manage()); !errors.Is(err, notify.ErrInvalid) {
+			t.Fatalf("PutSubscription with %s: err = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+
+	if subs, err := h.Subscriptions.Subscriptions(t.Context(), shop); err != nil || len(subs) != 0 {
+		t.Fatalf("Subscriptions = %+v (%v), want none", subs, err)
+	}
+}
+
+func testEntryScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), other); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	err := h.Subscriptions.PutSink(
+		t.Context(),
+		sink("snk-2", shop),
+		fence,
+		entry(other),
+	)
+	if !errors.Is(err, notify.ErrInvalid) {
+		t.Fatalf("PutSink with an audit entry of another scope: err = %v, want ErrInvalid", err)
+	}
+
+	putSink(t, h, fence)
+
+	err = h.Subscriptions.DeleteSink(
+		t.Context(),
+		"snk-1",
+		fence,
+		entry(other),
+	)
+	if !errors.Is(err, notify.ErrInvalid) {
+		t.Fatalf("DeleteSink with an audit entry of another scope: err = %v, want ErrInvalid", err)
+	}
+
+	if sinks, err := h.Subscriptions.Sinks(t.Context(), shop); err != nil || len(sinks) != 1 || sinks[0].ID != "snk-1" {
+		t.Fatalf("Sinks = %+v (%v), want snk-1 only", sinks, err)
+	}
+
+	for _, scope := range []namespace.Name{shop, other} {
+		entries, err := h.Domain.AuditEntries(t.Context(), scope)
+		if err != nil || len(entries) != map[namespace.Name]int{shop: 1, other: 0}[scope] {
+			t.Fatalf("audit entries of %s = %d (%v), want the entry of the one sink in shop", scope, len(entries), err)
+		}
+	}
+}
+
 // write is one write method of the ports, for the fence cases. prepare
-// makes the rows that the write needs, with the good fence. do runs the
-// write with fence. scopeErr is the error of a fence of another scope.
+// makes the rows of scope that the write needs, with the good fence. do
+// runs the write on the rows of scope with fence. check verifies, with
+// the good fence, that the refused write changed nothing. scopeErr is the
+// error of a fence of another scope.
 type write struct {
 	name     string
-	prepare  func(t *testing.T, h Harness, fence namespace.Fence)
-	do       func(ctx context.Context, h Harness, fence namespace.Fence) error
+	prepare  func(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name)
+	do       func(ctx context.Context, h Harness, fence namespace.Fence, scope namespace.Name) error
+	check    func(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name)
 	scopeErr error
 }
 
-func writes() []write {
-	none := func(*testing.T, Harness, namespace.Fence) {}
-	queued := func(t *testing.T, h Harness, fence namespace.Fence) {
-		t.Helper()
-		enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
-	}
+func putSinkIn(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name) {
+	t.Helper()
 
-	return []write{
-		{"Append", none, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Outbox.Append(ctx, f, []notify.Notification{sample("ntf-1", shop)})
-		}, notify.ErrInvalid},
-		{"MoveCursor", none, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Outbox.MoveCursor(ctx, f, move(0, 1))
-		}, notify.ErrInvalid},
-		{"PutSink", none, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Subscriptions.PutSink(ctx, sink("snk-1", shop), f, manage())
-		}, notify.ErrInvalid},
-		{"DeleteSink", putSink, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Subscriptions.DeleteSink(ctx, "snk-1", f, manage())
-		}, notify.ErrNotFound},
-		{"PutSubscription", putSink, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Subscriptions.PutSubscription(ctx, subscription("snk-1"), f, manage())
-		}, notify.ErrInvalid},
-		{"DeleteSubscription", subscribe, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Subscriptions.DeleteSubscription(ctx, "sub-1", f, manage())
-		}, notify.ErrNotFound},
-		{"Enqueue", none, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Deliveries.Enqueue(ctx, f, []notify.Delivery{delivery("dlv-1", "ntf-1", now())})
-		}, notify.ErrInvalid},
-		{"Claim", queued, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			_, err := h.Deliveries.Claim(ctx, f, claimAt(now(), 1))
-
-			return err
-		}, notify.ErrInvalid},
-		{"Record", queued, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			d := delivery("dlv-1", "ntf-1", now())
-			d.Version = 1
-
-			return h.Deliveries.Record(ctx, f, d)
-		}, notify.ErrNotFound},
-		{"Redeliver", queued, func(ctx context.Context, h Harness, f namespace.Fence) error {
-			return h.Deliveries.Redeliver(ctx, "dlv-1", f, manage())
-		}, notify.ErrNotFound},
+	if err := h.Subscriptions.PutSink(t.Context(), sink("snk-1", scope), fence, entry(scope)); err != nil {
+		t.Fatalf("PutSink: %v", err)
 	}
 }
 
-// fenceCase is one kind of wrong fence: fence returns it, and want
-// returns the error that a write w returns for it.
+func subscribeIn(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name) {
+	t.Helper()
+	putSinkIn(t, h, fence, scope)
+
+	err := h.Subscriptions.PutSubscription(
+		t.Context(),
+		subscriptionIn(scope, "snk-1"),
+		fence,
+		entry(scope),
+	)
+	if err != nil {
+		t.Fatalf("PutSubscription: %v", err)
+	}
+}
+
+func enqueueIn(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name) {
+	t.Helper()
+
+	err := h.Deliveries.Enqueue(
+		t.Context(),
+		fence,
+		[]notify.Delivery{deliveryIn(scope, "dlv-1", "ntf-1", now())},
+	)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+}
+
+func claimedIn(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name) {
+	t.Helper()
+	enqueueIn(t, h, fence, scope)
+
+	if got, err := h.Deliveries.Claim(t.Context(), fence, claimIn(scope, now(), 1)); err != nil || len(got) != 1 {
+		t.Fatalf("Claim = %s (%v), want one", ids(got), err)
+	}
+}
+
+func abandonedIn(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name) {
+	t.Helper()
+	enqueueIn(t, h, fence, scope)
+	abandon(t, h, fence, scope)
+}
+
+// checkSinks returns a check that scope holds n sinks.
+func checkSinks(n int) func(*testing.T, Harness, namespace.Fence, namespace.Name) {
+	return func(t *testing.T, h Harness, _ namespace.Fence, scope namespace.Name) {
+		t.Helper()
+
+		if got, err := h.Subscriptions.Sinks(t.Context(), scope); err != nil || len(got) != n {
+			t.Fatalf("Sinks = %+v (%v), want %d", got, err, n)
+		}
+	}
+}
+
+// checkSubscriptions returns a check that scope holds n subscriptions.
+func checkSubscriptions(n int) func(*testing.T, Harness, namespace.Fence, namespace.Name) {
+	return func(t *testing.T, h Harness, _ namespace.Fence, scope namespace.Name) {
+		t.Helper()
+
+		if got, err := h.Subscriptions.Subscriptions(t.Context(), scope); err != nil || len(got) != n {
+			t.Fatalf("Subscriptions = %+v (%v), want %d", got, err, n)
+		}
+	}
+}
+
+// checkDelivery returns a check that dlv-1 is the one delivery of scope,
+// in the state want, with the claim of holder ("" for no claim).
+func checkDelivery(
+	want notify.DeliveryState,
+	holder string,
+) func(*testing.T, Harness, namespace.Fence, namespace.Name) {
+	return func(t *testing.T, h Harness, _ namespace.Fence, scope namespace.Name) {
+		t.Helper()
+
+		got := history(t, h, scope)
+		if len(got) != 1 || got[0].State != want || got[0].Owner != holder {
+			t.Fatalf("History = %+v, want dlv-1 %s, claim of %q", got, want, holder)
+		}
+	}
+}
+
+func checkNoDelivery(t *testing.T, h Harness, _ namespace.Fence, scope namespace.Name) {
+	t.Helper()
+
+	if got := history(t, h, scope); len(got) != 0 {
+		t.Fatalf("History = %s, want none", ids(got))
+	}
+}
+
+func checkCursorZero(t *testing.T, h Harness, _ namespace.Fence, scope namespace.Name) {
+	t.Helper()
+
+	if c, err := h.Outbox.Cursor(t.Context(), "dispatch", scope); err != nil || c != 0 {
+		t.Fatalf("Cursor = %d (%v), want 0", c, err)
+	}
+}
+
+// checkClaimable checks that the good fence can still claim dlv-1.
+func checkClaimable(t *testing.T, h Harness, fence namespace.Fence, scope namespace.Name) {
+	t.Helper()
+
+	got, err := h.Deliveries.Claim(t.Context(), fence, claimIn(scope, now(), 1))
+	if err != nil || ids(got) != "[dlv-1]" {
+		t.Fatalf("Claim with the good fence = %s (%v), want [dlv-1]", ids(got), err)
+	}
+}
+
+func writes() []write {
+	none := func(*testing.T, Harness, namespace.Fence, namespace.Name) {}
+
+	return []write{
+		{"Append", none, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			return h.Outbox.Append(ctx, f, []notify.Notification{sample("ntf-1", s)})
+		}, none, notify.ErrInvalid},
+		{"MoveCursor", none, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			return h.Outbox.MoveCursor(ctx, f, moveIn(s, 0, 1))
+		}, checkCursorZero, notify.ErrInvalid},
+		{"PutSink", none, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			return h.Subscriptions.PutSink(ctx, sink("snk-1", s), f, entry(s))
+		}, checkSinks(0), notify.ErrInvalid},
+		{"DeleteSink", putSinkIn, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			return h.Subscriptions.DeleteSink(ctx, "snk-1", f, entry(s))
+		}, checkSinks(1), notify.ErrNotFound},
+		{"PutSubscription", putSinkIn, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			return h.Subscriptions.PutSubscription(ctx, subscriptionIn(s, "snk-1"), f, entry(s))
+		}, checkSubscriptions(0), notify.ErrInvalid},
+		{
+			"DeleteSubscription",
+			subscribeIn,
+			func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+				return h.Subscriptions.DeleteSubscription(ctx, "sub-1", f, entry(s))
+			},
+			checkSubscriptions(1),
+			notify.ErrNotFound,
+		},
+		{"Enqueue", none, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			return h.Deliveries.Enqueue(ctx, f, []notify.Delivery{deliveryIn(s, "dlv-1", "ntf-1", now())})
+		}, checkNoDelivery, notify.ErrInvalid},
+		{"Claim", enqueueIn, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			_, err := h.Deliveries.Claim(ctx, f, claimIn(s, now(), 1))
+
+			return err
+		}, checkClaimable, notify.ErrInvalid},
+		{"Record", claimedIn, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			d := deliveryIn(s, "dlv-1", "ntf-1", now())
+			d.Owner, d.Version = owner, 2
+
+			return h.Deliveries.Record(ctx, f, attempt(d, now()))
+		}, checkDelivery(notify.DeliveryPending, owner), notify.ErrNotFound},
+		{"Redeliver", abandonedIn, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
+			return h.Deliveries.Redeliver(ctx, "dlv-1", f, entry(s))
+		}, checkDelivery(notify.DeliveryAbandoned, ""), notify.ErrNotFound},
+	}
+}
+
+// fenceCase is one kind of wrong fence. server is true for a row of the
+// server scope, whose good fence is the zero fence. fence returns the
+// wrong fence for the good fence of the namespace shop, and the good fence
+// of the row after it, and want returns the error that a write w returns
+// for it.
 type fenceCase struct {
-	name  string
-	fence func(t *testing.T, h Harness, good namespace.Fence) namespace.Fence
-	want  func(w write) error
+	name   string
+	server bool
+	fence  func(t *testing.T, h Harness, good namespace.Fence) (bad, current namespace.Fence)
+	want   func(w write) error
 }
 
 func fenceCases() []fenceCase {
 	return []fenceCase{
 		{
-			"a zero fence", func(*testing.T, Harness, namespace.Fence) namespace.Fence { return zeroFence() },
+			"a zero fence", false,
+			func(_ *testing.T, _ Harness, good namespace.Fence) (namespace.Fence, namespace.Fence) {
+				return zeroFence(), good
+			},
 			func(w write) error { return w.scopeErr },
 		},
-		{"the fence of another namespace", func(t *testing.T, h Harness, _ namespace.Fence) namespace.Fence {
-			t.Helper()
+		{
+			"the fence of another namespace",
+			false,
+			func(t *testing.T, h Harness, good namespace.Fence) (namespace.Fence, namespace.Fence) {
+				t.Helper()
 
-			f, err := h.Domain.CreateNamespace(t.Context(), other)
-			if err != nil {
-				t.Fatalf("CreateNamespace: %v", err)
-			}
+				f, err := h.Domain.CreateNamespace(t.Context(), other)
+				if err != nil {
+					t.Fatalf("CreateNamespace: %v", err)
+				}
 
-			return f
-		}, func(w write) error { return w.scopeErr }},
-		{"a stale fence", func(t *testing.T, h Harness, good namespace.Fence) namespace.Fence {
-			t.Helper()
+				return f, good
+			},
+			func(w write) error { return w.scopeErr },
+		},
+		{
+			"a stale fence",
+			false,
+			func(t *testing.T, h Harness, good namespace.Fence) (namespace.Fence, namespace.Fence) {
+				t.Helper()
 
-			if _, err := h.Domain.BumpFence(t.Context(), good); err != nil {
-				t.Fatalf("BumpFence: %v", err)
-			}
+				bumped, err := h.Domain.BumpFence(t.Context(), good)
+				if err != nil {
+					t.Fatalf("BumpFence: %v", err)
+				}
 
-			return good
-		}, func(write) error { return namespace.ErrFenced }},
+				return good, bumped
+			},
+			func(write) error { return namespace.ErrFenced },
+		},
+		{
+			"a namespace fence on a row of the server scope", true,
+			func(_ *testing.T, _ Harness, good namespace.Fence) (namespace.Fence, namespace.Fence) {
+				return good, zeroFence()
+			},
+			func(w write) error { return w.scopeErr },
+		},
 	}
 }
 
 // runFences runs every write with a zero fence, the fence of another
-// namespace and a stale fence, and checks that each fails with nothing
-// written.
+// namespace and a stale fence on a row of a namespace, and with a
+// namespace fence on a row of the server scope, and checks that each
+// fails with nothing written.
 func runFences(t *testing.T, newHarness Factory) {
 	t.Helper()
 
@@ -735,25 +1203,35 @@ func runFences(t *testing.T, newHarness Factory) {
 func testFence(t *testing.T, h Harness, w write, f fenceCase) {
 	t.Helper()
 
-	good := setup(t, h)
-	w.prepare(t, h, good)
+	shopFence := setup(t, h)
 
-	before, err := h.Domain.AuditEntries(t.Context(), shop)
+	scope, good := shop, shopFence
+	if f.server {
+		scope, good = audit.ServerScope, zeroFence()
+	}
+
+	w.prepare(t, h, good, scope)
+
+	before, err := h.Domain.AuditEntries(t.Context(), scope)
 	if err != nil {
 		t.Fatalf("AuditEntries: %v", err)
 	}
 
-	if werr := w.do(t.Context(), h, f.fence(t, h, good)); !errors.Is(werr, f.want(w)) {
+	bad, current := f.fence(t, h, shopFence)
+
+	if werr := w.do(t.Context(), h, bad, scope); !errors.Is(werr, f.want(w)) {
 		t.Fatalf("%s: err = %v, want %v", w.name, werr, f.want(w))
 	}
 
-	after, err := h.Domain.AuditEntries(t.Context(), shop)
+	after, err := h.Domain.AuditEntries(t.Context(), scope)
 	if err != nil || len(after) != len(before) {
 		t.Fatalf("audit entries = %d (%v), want %d", len(after), err, len(before))
 	}
 
-	all, err := h.Outbox.After(t.Context(), shop, 0, 10)
+	all, err := h.Outbox.After(t.Context(), scope, 0, 10)
 	if err != nil || len(all) != 0 {
 		t.Fatalf("After = %d notifications (%v), want none", len(all), err)
 	}
+
+	w.check(t, h, current, scope)
 }

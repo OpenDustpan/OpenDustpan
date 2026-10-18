@@ -114,6 +114,37 @@ func TestValidate(t *testing.T) {
 			r := incident.Report{Kind: "initial", Reference: "REF-1", SentAt: now(), By: "carol"}
 			in.Reports = slices.Repeat([]incident.Report{r}, incident.MaxRecords+1)
 		}},
+		{"no opener", func(in *incident.Incident) { in.OpenedBy = "" }},
+		{"an unknown state", func(in *incident.Incident) { in.State = "bogus" }},
+		{"acknowledged with no time", func(in *incident.Incident) { in.State = incident.StateAcknowledged }},
+		{"mitigated with no time", func(in *incident.Incident) { in.State = incident.StateMitigated }},
+		{"resolved with no time", func(in *incident.Incident) { in.State = incident.StateResolved }},
+		{"open with a time of resolve", func(in *incident.Incident) { in.ResolvedAt = now() }},
+		{"acknowledged with a time of close", func(in *incident.Incident) {
+			in.State, in.AcknowledgedAt, in.ClosedAt = incident.StateAcknowledged, now(), now()
+		}},
+		{"resolved with a time of close", func(in *incident.Incident) {
+			in.State, in.ResolvedAt, in.ClosedAt = incident.StateResolved, now(), now()
+		}},
+		{"a step before the open", func(in *incident.Incident) {
+			in.State, in.AcknowledgedAt = incident.StateAcknowledged, now().Add(-time.Minute)
+		}},
+		{"closed with no time of close", func(in *incident.Incident) {
+			closed(in)
+			in.ClosedAt = time.Time{}
+		}},
+		{"closed with no time of resolve", func(in *incident.Incident) {
+			closed(in)
+			in.ResolvedAt = time.Time{}
+		}},
+		{"closed with no root cause", func(in *incident.Incident) {
+			closed(in)
+			in.RootCause = " "
+		}},
+		{"closed with no lessons", func(in *incident.Incident) {
+			closed(in)
+			in.Lessons = ""
+		}},
 	}
 
 	for _, tc := range cases {
@@ -125,6 +156,45 @@ func TestValidate(t *testing.T) {
 
 			if err := in.Validate(); !errors.Is(err, incident.ErrInvalid) {
 				t.Fatalf("Validate: err = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+// closed makes in a closed incident that passes Validate.
+func closed(in *incident.Incident) {
+	in.State, in.ResolvedAt, in.ClosedAt = incident.StateClosed, now(), now()
+	in.RootCause, in.Lessons = "A bad route table", "Plan route changes in a freeze-free window"
+}
+
+func TestValidateStates(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		change func(in *incident.Incident)
+	}{
+		{"open", func(*incident.Incident) {}},
+		{"open again after a reopen", func(in *incident.Incident) { in.AcknowledgedAt = now() }},
+		{"acknowledged", func(in *incident.Incident) {
+			in.State, in.AcknowledgedAt = incident.StateAcknowledged, now()
+		}},
+		{"mitigated with no acknowledge", func(in *incident.Incident) {
+			in.State, in.MitigatedAt = incident.StateMitigated, now()
+		}},
+		{"resolved", func(in *incident.Incident) { in.State, in.ResolvedAt = incident.StateResolved, now() }},
+		{"closed", closed},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := sample()
+			tc.change(&in)
+
+			if err := in.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
 			}
 		})
 	}

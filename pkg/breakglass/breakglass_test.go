@@ -143,6 +143,10 @@ func TestOpenSetsTheDeadline(t *testing.T) {
 		t.Fatalf("NextNoticeAt = %s, want %s", r.NextNoticeAt, want)
 	}
 
+	if verr := r.ValidateOpen(); verr != nil {
+		t.Fatalf("ValidateOpen of an opened review: %v", verr)
+	}
+
 	if r.Calendar != "cal-berlin" || r.CalendarFrom.Namespace != "shop" {
 		t.Fatalf("calendar = %s from %s, want cal-berlin from the namespace", r.Calendar, r.CalendarFrom)
 	}
@@ -272,7 +276,7 @@ func TestAcceptAndDispute(t *testing.T) {
 	now := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	fresh := breakglass.Reviewer{
 		Subject: "bob", Agent: "", Session: "ses-bob", TokenID: "",
-		Auth: breakglass.AuthMFA, AuthAt: now.Add(-time.Minute),
+		Auth: breakglass.AuthMFA, AuthAt: now.Add(-time.Minute), ActAs: nil,
 	}
 	pending := pendingReview(use(now.Add(-time.Hour)))
 	ended := pendingReview(session(now.Add(-3 * time.Hour)))
@@ -354,6 +358,22 @@ func TestAcceptAndDispute(t *testing.T) {
 			breakglass.Accept,
 			"",
 			breakglass.ErrSelfReview,
+		},
+		{
+			"a person who got an act-as edge during the use cannot review",
+			ended,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.ActAs = []string{"dave", "BOB"}; return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrSelfReview,
+		},
+		{
+			"an act-as edge of another person does not stop a review",
+			ended,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.ActAs = []string{"dave"}; return r },
+			breakglass.Accept,
+			"",
+			nil,
 		},
 		{
 			"the owner of the break-glass account cannot review",
@@ -482,7 +502,11 @@ func TestCheckVerdict(t *testing.T) {
 
 	now := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	pending := pendingReview(use(now.Add(-time.Hour)))
-	good := breakglass.Verdict{Reviewer: "bob", Note: "", Auth: breakglass.AuthSSO, AuthAt: now, ReviewedAt: now}
+	good := breakglass.Verdict{
+		Reviewer: "bob", Note: "", Auth: breakglass.AuthSSO, AuthAt: now, ReviewedAt: now, ActAs: nil,
+	}
+	opened := pending
+	opened.CreatedAt = now.Add(-time.Minute)
 
 	cases := []struct {
 		name   string
@@ -519,6 +543,15 @@ func TestCheckVerdict(t *testing.T) {
 		{"no kind of authentication", pending, breakglass.StateAccepted, func(v *breakglass.Verdict) {
 			v.Auth = ""
 		}, breakglass.ErrInvalid},
+		{"a verdict before the use", pending, breakglass.StateAccepted, func(v *breakglass.Verdict) {
+			v.ReviewedAt, v.AuthAt = now.Add(-2*time.Hour), now.Add(-2*time.Hour)
+		}, breakglass.ErrInvalid},
+		{"a verdict before the opening of the review", opened, breakglass.StateAccepted, func(v *breakglass.Verdict) {
+			v.ReviewedAt, v.AuthAt = now.Add(-2*time.Minute), now.Add(-2*time.Minute)
+		}, breakglass.ErrInvalid},
+		{"a reviewer with an act-as edge in the use", pending, breakglass.StateAccepted, func(v *breakglass.Verdict) {
+			v.ActAs = []string{"Bob"}
+		}, breakglass.ErrSelfReview},
 		{
 			"a session in its time limit",
 			pendingReview(session(now.Add(-time.Hour))),
@@ -547,5 +580,70 @@ func TestCheckVerdict(t *testing.T) {
 				t.Fatalf("CheckVerdict: err = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidateOpen(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	good := pendingReview(use(at))
+	good.CreatedAt, good.DueAt, good.NextNoticeAt = at, at.Add(24*time.Hour), at
+
+	cases := []struct {
+		name   string
+		change func(r *breakglass.Review)
+		want   error
+	}{
+		{"a new review", func(*breakglass.Review) {}, nil},
+		{"no deadline and no notice", func(r *breakglass.Review) {
+			r.DueAt, r.NextNoticeAt = time.Time{}, time.Time{}
+		}, nil},
+		{"an accepted state", func(r *breakglass.Review) { r.State = breakglass.StateAccepted }, breakglass.ErrInvalid},
+		{"a verdict by the subject", func(r *breakglass.Review) {
+			r.State, r.Verdict.Reviewer = breakglass.StateAccepted, "alice"
+		}, breakglass.ErrInvalid},
+		{"a verdict note", func(r *breakglass.Review) { r.Verdict.Note = "ok" }, breakglass.ErrInvalid},
+		{"act-as names", func(r *breakglass.Review) { r.Verdict.ActAs = []string{"dave"} }, breakglass.ErrInvalid},
+		{"a step sent", func(r *breakglass.Review) { r.Step = 1 }, breakglass.ErrInvalid},
+		{"no opening time", func(r *breakglass.Review) { r.CreatedAt = time.Time{} }, breakglass.ErrInvalid},
+		{"an opening before the use", func(r *breakglass.Review) {
+			r.CreatedAt = at.Add(-time.Second)
+		}, breakglass.ErrInvalid},
+		{"a deadline before the opening", func(r *breakglass.Review) {
+			r.DueAt = at.Add(-time.Second)
+		}, breakglass.ErrInvalid},
+		{"a notice before the opening", func(r *breakglass.Review) {
+			r.NextNoticeAt = at.Add(-time.Second)
+		}, breakglass.ErrInvalid},
+		{"an ID without the prefix", func(r *breakglass.Review) { r.ID = "x-1" }, breakglass.ErrInvalid},
+		{"only the prefix", func(r *breakglass.Review) { r.ID = breakglass.IDPrefix }, breakglass.ErrInvalid},
+		{"a use that fails validation", func(r *breakglass.Review) { r.Use.Reason = "" }, breakglass.ErrInvalid},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := good
+			tc.change(&r)
+
+			err := r.ValidateOpen()
+			if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("ValidateOpen: err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestOverdueAtTheDeadline(t *testing.T) {
+	t.Parallel()
+
+	due := time.Date(2026, 10, 21, 17, 0, 0, 0, time.UTC)
+	r := pendingReview(use(due.Add(-time.Hour)))
+	r.DueAt = due
+
+	if r.Overdue(due.Add(-time.Nanosecond)) || !r.Overdue(due) {
+		t.Fatal("Overdue: want false before the deadline and true at it")
 	}
 }

@@ -89,10 +89,6 @@ func (m *memStore) Get(_ context.Context, id string) (incident.Incident, error) 
 }
 
 func (m *memStore) Update(_ context.Context, in incident.Incident, fence namespace.Fence, e audit.Entry) error {
-	if err := in.Validate(); err != nil {
-		return err
-	}
-
 	err := m.Write(fence, m.scopeOf("update", in.ID), []audit.Entry{e}, func() error {
 		old := m.incidents[in.ID]
 
@@ -105,7 +101,15 @@ func (m *memStore) Update(_ context.Context, in incident.Incident, fence namespa
 			return fmt.Errorf("update %s: %w: the incident is closed", in.ID, incident.ErrTransition)
 		}
 
+		in.State, in.OpenedAt, in.OpenedBy = old.State, old.OpenedAt, old.OpenedBy
+		in.AcknowledgedAt, in.MitigatedAt, in.ResolvedAt, in.ClosedAt = old.AcknowledgedAt, old.MitigatedAt,
+			old.ResolvedAt, old.ClosedAt
 		in.Classifications, in.Reports = old.Classifications, old.Reports
+
+		if err := in.Validate(); err != nil {
+			return fmt.Errorf("update %s: %w", in.ID, err)
+		}
+
 		in.Units = slices.Clone(in.Units)
 		in.Jobs = slices.Clone(in.Jobs)
 		in.Reviews = slices.Clone(in.Reviews)
@@ -116,6 +120,46 @@ func (m *memStore) Update(_ context.Context, in incident.Incident, fence namespa
 	})
 
 	return translate(err, incident.ErrNotFound)
+}
+
+func (m *memStore) Step(
+	_ context.Context,
+	r incident.StepRequest,
+	fence namespace.Fence,
+	e audit.Entry,
+) (incident.Incident, error) {
+	var out incident.Incident
+
+	id := r.ID
+
+	err := m.Write(fence, m.scopeOf("step", id), []audit.Entry{e}, func() error {
+		old := m.incidents[id]
+		if old.Version != r.Version {
+			return fmt.Errorf("step %s: %w", id, incident.ErrConflict)
+		}
+
+		in, err := incident.Apply(old, r.Step, r.By, r.At)
+		if err != nil {
+			return fmt.Errorf("step %s: %w", id, err)
+		}
+
+		if err := in.Validate(); err != nil {
+			return fmt.Errorf("step %s: %w", id, err)
+		}
+
+		in.Version++
+		m.incidents[id], out = in, in
+
+		return nil
+	})
+	if err != nil {
+		return incident.Incident{}, translate(err, incident.ErrNotFound)
+	}
+
+	out.Classifications = slices.Clone(out.Classifications)
+	out.Reports = slices.Clone(out.Reports)
+
+	return out, nil
 }
 
 func (m *memStore) SetClassification(

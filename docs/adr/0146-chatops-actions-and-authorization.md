@@ -64,9 +64,12 @@ a click on it.
      of the URL, so that no access log holds it.
    - The person opens the URL in the console and signs in. The accept
      page names the chat tool, the workspace and the chat user of the
-     request, says that each action of that chat user will act as the
-     person, and shows the principal of the current link of that chat
-     user, if any.
+     request, shows the principal that is signed in and that the link
+     will name, says that each action of that chat user will act as
+     that principal, and shows the principal of the current link of
+     that chat user, if any. So a person whom an attacker signed in to
+     the attacker's own account (login cross-site request forgery) sees
+     the wrong principal before the accept.
    - The person accepts with a `POST` of the session that carries the
      token of the session against cross-site requests. A link of the
      request never comes from the `POST`: the server takes the chat user
@@ -76,6 +79,10 @@ a click on it.
      `LinkRequests.UseLinkRequest`, and stores the link with
      `Links.PutLink`. The use comes first, so one token never makes two
      links.
+   - The server sends a direct message, through the chat tool, to the
+     chat user of each new link. The message names the principal of the
+     link and tells the chat user how to delete it. So a chat user whose link names a
+     principal that the chat user does not know sees it at once.
 4. **A link names one workspace, and the IDs are exact.** A user ID of
    another workspace of the same tool does not match. Two IDs that differ
    only in case are two users. A link of a disabled principal does not
@@ -98,7 +105,12 @@ a click on it.
    When somebody tricks a person into an accept of the link request of
    another chat user, the person gets the notification at once. Until the person deletes the link,
    the other chat user can acknowledge as that person, and it cannot
-   approve: an approval needs a fresh authentication of the person
+   approve without the person's fresh authentication (decision 9).
+
+   The server deletes the intents of a chat user with no use when it
+   deletes the link of that chat user: `Intents.IntentsOf` finds them,
+   and `Intents.DeleteIntent` deletes each one with the fence of the
+   namespace of its job. Until then `chatops.CheckIntent` refuses them
    (decision 9).
 7. **The chat tool signs its requests.** The `chatops.Verifier` port
    checks the signature of each request with the signing secret of the
@@ -110,13 +122,18 @@ a click on it.
      the future (`chatops.SignatureMaxSkew`) fails
      (`chatops.CheckTimestamp`),
    - a request with a missing header or a signature that does not match
-     is `ErrSignature`, and the server answers 401. A signed body that
-     does not parse is `ErrInvalid`,
+     is `ErrSignature`, also when its body does not parse, and the server
+     answers 401. A signed body that does not parse is `ErrInvalid`,
+   - the adapter sets the chat tool of the request (`Request.Platform`)
+     to its own tool and ignores a tool that the body names. So a
+     request signed for one tool never acts for the link of a user of
+     another tool,
    - the request carries the ID that the chat tool gives it
-     (`Request.DeliveryID`). The server drops a second request with the
-     same ID within 5 minutes. A repeat is safe also without this: an
-     acknowledge changes nothing the second time, and an approve makes a
-     new intent that only the linked person can complete.
+     (`Request.DeliveryID`). A repeated request is safe: an acknowledge
+     changes nothing the second time, and an approve makes a new intent
+     that only a new fresh authentication of the linked person completes.
+     The used intent of the first request does not change. A case of the
+     suite `chatopstest.Run` covers this.
 
 ### Approval from chat
 
@@ -143,6 +160,10 @@ a click on it.
      the last fresh authentication. No client gives them,
    - only the principal of the intent can use it, and no agent and no
      break-glass session can (`ErrDenied`),
+   - the chat user of the intent is still linked to the principal of the
+     intent (`ErrNotLinked`): the server reads the link with
+     `Links.LinkOf` before the check, so a deleted or replaced link stops
+     the intent,
    - the job still waits on the same phase and the same gate
      (`ErrGateChanged`), so an intent never approves a later gate of the
      same job, and the plans did not change (`job.ErrPlanChanged`),
@@ -224,12 +245,16 @@ a click on it.
     fence and refuse any other fence with `ErrInvalid`. An intent is in
     the namespace of its job: its writes take the fence of that namespace
     and check it in their transaction. `CreateIntent` returns
-    `ErrConflict` for an ID that exists and never replaces an intent.
+    `ErrConflict` for an ID that exists and never replaces an intent. A
+    write refuses an audit entry of another scope than its row.
+    `UseLinkRequest` and `UseIntent` are single-use under concurrent
+    requests: of many requests at the same time, exactly one succeeds.
     `chatops.Verifier` gets the suite `chatopstest.RunVerifier`, which a
     fake adapter with HMAC-SHA256 runs in the tests of the suite: a
     signature with another secret, a changed body, a missing header, a
-    timestamp too old or in the future, and a signed body that does not
-    parse.
+    timestamp too old or in the future, an old signature with a new
+    timestamp, a body that names another chat tool, a signed body that
+    does not parse, and an unsigned body that does not parse.
 
 ## Requests to other designs
 

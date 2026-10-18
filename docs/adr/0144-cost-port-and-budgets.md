@@ -55,7 +55,9 @@ document. A policy decides at the start of a job and can gate a phase (ADR
    estimate as unpriced, with a note. The work order shows the count of
    unpriced resources next to the delta, because the delta does not count
    them. `cost.Summed` computes the sums, and `Validate` refuses an
-   estimate whose sums do not match its resources. `Estimate.Namespace` is
+   estimate whose sums do not match its resources, or whose sum `Before`
+   or `After` is above `cost.MaxMicros`. So a delta is from minus to plus
+   `cost.MaxMicros`. `Estimate.Namespace` is
    the namespace of the row: the namespace of the unit of a plan, or of
    the blueprint. A blueprint of the installation has its estimate in the
    server scope `@server`.
@@ -77,13 +79,22 @@ document. A policy decides at the start of a job and can gate a phase (ADR
      The step authenticates with the job token, which only a step of the
      role `tool` gets (ADR 133 decision 12). A hook step and a pipeline
      outside the runners cannot push. Their way in is an adapter of the
-     `Estimator` port.
+     `Estimator` port. The route accepts a push only for the phase `n`
+     that runs now. A push for a phase that waits or that ended returns
+     409, so a step cannot change the estimate of a plan that a person
+     already read or approved.
 
    Both write through `cost.EstimateStore.PutEstimate`, with the fence of
-   the namespace of the estimate. A second estimate of one subject
-   replaces the first. This answers the option "generic
-   extension points" of RFC 67 for estimates: the server keeps the shape,
-   and any tool can fill it.
+   the namespace of the estimate. A subject keeps one estimate of each
+   origin (`cost.Origin`): the pushed estimate and the estimate of the
+   `Estimator` port. An estimate replaces only the estimate of its own
+   origin, so a push never replaces the estimate of the port silently, and
+   the port never replaces a push. A second push writes a second audit
+   entry. The work order shows both estimates when both exist, each with
+   its source. A budget counts the change once, with the larger delta
+   (decision 11). This answers the option "generic extension points" of
+   RFC 67 for estimates: the server keeps the shape, and any tool can fill
+   it.
 6. **No estimator in the binary now.** The binary has no built-in
    estimator. An adapter of the `Estimator` port is a separate package, and
    a dependency needs the approval of the owner. RFC 45 keeps the choice of
@@ -115,7 +126,8 @@ document. A policy decides at the start of a job and can gate a phase (ADR
     - `Actual`: the spend so far,
     - `Forecast`: the larger of `Actual` and the forecasts of the tool,
     - `Pending`: the sum of the deltas of the plans of the jobs that wait
-      or run,
+      or run: for each job, the estimate of its highest phase with an
+      estimate, and of two estimates of that phase the larger delta,
     - `Projected`: `Forecast` plus `Pending`, and its percent of the
       amount.
 
@@ -124,20 +136,29 @@ document. A policy decides at the start of a job and can gate a phase (ADR
     warning comes early, never late.
 
     A spend line or a pending estimate in another currency than the budget
-    does not count, and `Status.Skipped` counts it. The console shows the
-    count next to the status. So one estimate in another currency never
-    stops the warnings of a budget. A spend amount below 0 or above the cap
-    fails the evaluation with `ErrInvalid`, because it is an error of the
-    adapter.
+    does not count, and `Status.Skipped` counts it. A spend line with a
+    negative spend or forecast, for example a credit, does not count
+    either. `Status.Skipped` counts it, and `Status.SkippedNegative` counts
+    it as its own reason. The console shows each count next to the status.
+    So one estimate in another currency or one credit never stops the
+    warnings of a budget. A spend amount above the cap fails the evaluation
+    with `ErrInvalid`, because it is an error of the adapter. A percent that
+    does not fit an int64 stays at the int64 maximum.
 12. **A warning, once.** The status that the store keeps holds the
     thresholds that warned in its month (`Status.Warned`).
     `cost.MarkWarned` gives the thresholds that the new status crossed and
     that no status of the same month warned about, and adds them to
-    `Warned`. The server sends the notification `budget.threshold` for each
-    of them to the owners of the namespace (ADR 145), and saves the status.
-    So each threshold warns once a month, also when the projection goes
-    from 85 to 70 and to 85 percent again. A new month starts with no
-    warned threshold.
+    `Warned`. The server first appends the notification `budget.threshold`
+    for each of them to the owners of the namespace (ADR 145), with the
+    dedupe key `cost.ThresholdKey`: the budget, the month and the
+    threshold. Then it saves the status with `SaveStatus`. When the save
+    fails, or the server stops between the two writes, the next evaluation
+    appends the same notification again, and the outbox skips it because
+    the key is the same. The outbox keeps a notification for 32 days, more
+    than one month, so the key dedupes for the whole month. So the server
+    loses no warning and sends none twice. Each threshold warns once a month,
+    also when the projection goes from 85 to 70 and to 85 percent again. A
+    new month starts with no warned threshold.
 13. **A budget never blocks.** No budget refuses a start, a dispatch or a
     state write. The work order shows the impact of the change:
     `cost.ImpactOf` gives the percent before and after the delta, "budget
@@ -166,7 +187,7 @@ document. A policy decides at the start of a job and can gate a phase (ADR
 
     The first route answers the sums, the delta, the currency, the source
     and the unpriced count, which are metadata of the plan, as `job:read`
-    allows (ADR 102). The cost of each resource names the keys and the
+    allows (ADR 102). It answers one estimate of each origin that exists. The cost of each resource names the keys and the
     types of the resources of the plan. That is content of the plan, so
     the second route needs `job:read-plans`.
 
@@ -192,7 +213,10 @@ document. A policy decides at the start of a job and can gate a phase (ADR
     returns `ErrInvalid`. A write of a stored budget or of its status with
     a fence of another namespace returns `ErrNotFound`, so a caller cannot
     learn of a budget in a namespace that it does not hold. A stale fence
-    returns `namespace.ErrFenced`.
+    returns `namespace.ErrFenced`. A write with an audit entry whose
+    namespace is not the namespace of its row returns `ErrInvalid` and
+    changes nothing, so a write never appends to the audit log of another
+    namespace.
 18. **Ports with conformance first.** `cost.EstimateStore` and
     `cost.BudgetStore` get the suite `pkg/cost/costtest`, with a reference
     adapter in memory. The suite runs a zero, a cross-namespace and a stale
@@ -216,11 +240,12 @@ document. A policy decides at the start of a job and can gate a phase (ADR
   claim adds no action. Decision 15 of this ADR needs the job token to hold
   `job:write-cost` on the unit of its job, and the route to compare the
   job ID with the claim.
-- **Notifications (ADR 145).** ADR 145 appends a notification in the
-  transaction of its change. `BudgetStore.SaveStatus` takes no
-  notification yet, so that the cost package does not depend on the
-  notification package. The notification design adds the notifications of
-  `budget.threshold` to that transaction.
+- **Notifications (ADR 145).** `BudgetStore.SaveStatus` takes no
+  notification, so that the cost package does not depend on the
+  notification package. Decision 12 appends the notifications of
+  `budget.threshold` before the save, with a dedupe key, so the two writes
+  need no shared transaction. This needs the outbox to keep a dedupe key
+  for at least 32 days.
 - **Context read API (ADR 161).** Its open question 3 asks whether cost is
   a section. This ADR gives the data: the last estimate of a unit and the
   status of each budget.

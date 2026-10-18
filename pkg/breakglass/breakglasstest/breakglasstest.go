@@ -63,6 +63,12 @@ func Run(t *testing.T, newHarness Factory) {
 		{"each write refuses a fence of another scope", testFenceScope},
 		{"record refuses a verdict that fails the rules of a review", testRecordInvalid},
 		{"record checks the stored use, not the use of the caller", testRecordStoredUse},
+		{"open refuses a review that is not new", testOpenInvalid},
+		{"open refuses an ID that another use holds", testOpenTakenID},
+		{"each write refuses an audit entry of another scope", testEntryScope},
+		{"record refuses a verdict at a time before the review or in the future", testRecordTimes},
+		{"record refuses a reviewer that held an act-as edge in the use", testRecordActAs},
+		{"a deadline filter selects the reviews that are overdue at its time", testListOverdue},
 	}
 
 	for _, tc := range cases {
@@ -78,7 +84,9 @@ const (
 	other = namespace.Name("other")
 )
 
-func now() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
+// now returns the time of the host, because a store refuses a verdict
+// after the time of its transaction.
+func now() time.Time { return time.Now().UTC() }
 
 // entry returns a valid audit entry of the kind change in scope.
 func entry(scope namespace.Name, action string) audit.Entry {
@@ -127,11 +135,11 @@ func review(id, ref string, next time.Time) breakglass.Review {
 		ID: id,
 		Use: breakglass.Use{
 			Kind: breakglass.KindFreezeBreak, Ref: ref, Scope: shop, Object: "opentofu:shop/network",
-			Subject: "alice", People: []string{"alice", "carol"}, Reason: "Roll back", At: now(),
+			Subject: "alice", People: []string{"alice", "carol"}, Reason: "Roll back", At: now().Add(-3 * time.Hour),
 			Until: time.Time{},
 		},
 		State:        breakglass.StatePending,
-		CreatedAt:    now(),
+		CreatedAt:    now().Add(-3 * time.Hour),
 		DueAt:        now().Add(31 * time.Hour),
 		Calendar:     calendar.DefaultID,
 		CalendarFrom: calendar.Scope{Namespace: "", Group: ""},
@@ -143,6 +151,7 @@ func review(id, ref string, next time.Time) breakglass.Review {
 			Auth:       "",
 			AuthAt:     time.Time{},
 			ReviewedAt: time.Time{},
+			ActAs:      nil,
 		},
 		Version: 0,
 	}
@@ -165,6 +174,7 @@ func session(id, ref string) breakglass.Review {
 	r := review(id, ref, now())
 	r.Use.Kind, r.Use.Scope, r.Use.Object = breakglass.KindAccountSession, audit.ServerScope, ""
 	r.Use.At, r.Use.Until = now().Add(-2*time.Hour), now().Add(-time.Hour)
+	r.CreatedAt = r.Use.At
 
 	return r
 }
@@ -181,7 +191,7 @@ func openAction(r breakglass.Review) string {
 func accept(r breakglass.Review) breakglass.Review {
 	r.State = breakglass.StateAccepted
 	r.Verdict = breakglass.Verdict{
-		Reviewer: "bob", Note: "", Auth: breakglass.AuthMFA, AuthAt: now(), ReviewedAt: now(),
+		Reviewer: "bob", Note: "", Auth: breakglass.AuthMFA, AuthAt: now(), ReviewedAt: now(), ActAs: nil,
 	}
 	r.NextNoticeAt = time.Time{}
 
@@ -581,6 +591,183 @@ func testRecordStoredUse(t *testing.T, h Harness) {
 	got, err := h.Store.Get(t.Context(), "bgr-1")
 	if err != nil || got.Use.Subject != "alice" || got.State != breakglass.StatePending {
 		t.Fatalf("Get = %+v (%v), want the pending review of alice", got, err)
+	}
+}
+
+func testOpenInvalid(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	cases := []struct {
+		name   string
+		change func(r *breakglass.Review)
+	}{
+		{"an accepted state with the subject as reviewer", func(r *breakglass.Review) {
+			*r = accept(*r)
+			r.Verdict.Reviewer = r.Use.Subject
+		}},
+		{"a verdict on a pending review", func(r *breakglass.Review) { r.Verdict.Reviewer = "bob" }},
+		{"a notice step already sent", func(r *breakglass.Review) { r.Step = 1 }},
+		{"an opening before the use", func(r *breakglass.Review) { r.CreatedAt = r.Use.At.Add(-time.Minute) }},
+		{"no opening time", func(r *breakglass.Review) { r.CreatedAt = time.Time{} }},
+		{"a deadline before the opening", func(r *breakglass.Review) { r.DueAt = r.CreatedAt.Add(-time.Minute) }},
+		{"a notice before the opening", func(r *breakglass.Review) {
+			r.NextNoticeAt = r.CreatedAt.Add(-time.Minute)
+		}},
+		{"an ID without the prefix", func(r *breakglass.Review) { r.ID = "job-1" }},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+		r := review("bgr-1", "job-1", now())
+		tc.change(&r)
+
+		_, err := h.Store.Open(t.Context(), r, fence, entry(shop, openAction(r)))
+		if !errors.Is(err, breakglass.ErrInvalid) {
+			t.Fatalf("%s: Open: err = %v, want ErrInvalid", tc.name, err)
+		}
+
+		if _, err := h.Store.Get(t.Context(), r.ID); !errors.Is(err, breakglass.ErrNotFound) {
+			t.Fatalf("%s: Get: err = %v, want ErrNotFound", tc.name, err)
+		}
+	}
+
+	if entries, err := h.Domain.AuditEntries(t.Context(), shop); err != nil || len(entries) != 0 {
+		t.Fatalf("audit entries = %d (%v), want 0", len(entries), err)
+	}
+}
+
+func testOpenTakenID(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	first := open(t, h, fence, review("bgr-1", "job-1", now()))
+
+	s := session("bgr-1", "ses-2")
+	if _, err := h.Store.Open(t.Context(), s, zero(), entry(audit.ServerScope, openAction(s))); !errors.Is(
+		err, breakglass.ErrInvalid,
+	) {
+		t.Fatalf("Open of a session with the ID of a freeze break: err = %v, want ErrInvalid", err)
+	}
+
+	again := review("bgr-1", "job-2", now())
+	if _, err := h.Store.Open(t.Context(), again, fence, entry(shop, openAction(again))); !errors.Is(
+		err, breakglass.ErrInvalid,
+	) {
+		t.Fatalf("Open of another job with the same ID: err = %v, want ErrInvalid", err)
+	}
+
+	got, err := h.Store.Get(t.Context(), "bgr-1")
+	if err != nil || got.Use.Ref != "job-1" || got.Use.Scope != shop || got.Version != first.Version {
+		t.Fatalf("Get = %+v (%v), want the review of job-1 unchanged", got, err)
+	}
+
+	unchanged(t, h, first, shop)
+
+	if entries, err := h.Domain.AuditEntries(t.Context(), audit.ServerScope); err != nil || len(entries) != 0 {
+		t.Fatalf("server audit entries = %d (%v), want 0", len(entries), err)
+	}
+}
+
+func testEntryScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), other); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	fresh := review("bgr-2", "job-2", now())
+	if _, err := h.Store.Open(t.Context(), fresh, fence, entry(other, openAction(fresh))); !errors.Is(
+		err, breakglass.ErrInvalid,
+	) {
+		t.Fatalf("Open with an entry of %s: err = %v, want ErrInvalid", other, err)
+	}
+
+	if _, err := h.Store.Get(t.Context(), "bgr-2"); !errors.Is(err, breakglass.ErrNotFound) {
+		t.Fatalf("Get bgr-2: err = %v, want ErrNotFound", err)
+	}
+
+	r := open(t, h, fence, review("bgr-1", "job-1", now()))
+
+	err := h.Store.Record(t.Context(), accept(r), fence, entry(other, "namespace:review-break-glass"))
+	if !errors.Is(err, breakglass.ErrInvalid) {
+		t.Fatalf("Record with an entry of %s: err = %v, want ErrInvalid", other, err)
+	}
+
+	unchanged(t, h, r, shop)
+
+	if entries, err := h.Domain.AuditEntries(t.Context(), other); err != nil || len(entries) != 0 {
+		t.Fatalf("audit entries of %s = %d (%v), want 0", other, len(entries), err)
+	}
+}
+
+func testRecordTimes(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	late := review("bgr-1", "job-1", now())
+	late.CreatedAt = now().Add(-time.Hour)
+	r := open(t, h, fence, late)
+
+	cases := []struct {
+		name string
+		at   time.Time
+	}{
+		{"a verdict before the use", now().Add(-4 * time.Hour)},
+		{"a verdict before the opening of the review", now().Add(-2 * time.Hour)},
+		{"a verdict in the future", now().Add(time.Hour)},
+	}
+
+	for _, tc := range cases {
+		v := accept(r)
+		v.Verdict.ReviewedAt, v.Verdict.AuthAt = tc.at, tc.at
+
+		err := h.Store.Record(t.Context(), v, fence, entry(shop, "namespace:review-break-glass"))
+		if !errors.Is(err, breakglass.ErrInvalid) {
+			t.Fatalf("%s: Record: err = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+
+	unchanged(t, h, r, shop)
+}
+
+func testRecordActAs(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	r := open(t, h, fence, review("bgr-1", "job-1", now()))
+	v := accept(r)
+	v.Verdict.ActAs = []string{"BOB"}
+
+	err := h.Store.Record(t.Context(), v, fence, entry(shop, "namespace:review-break-glass"))
+	if !errors.Is(err, breakglass.ErrSelfReview) {
+		t.Fatalf("Record: err = %v, want ErrSelfReview", err)
+	}
+
+	unchanged(t, h, r, shop)
+}
+
+func testListOverdue(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	at := review("bgr-1", "job-1", now())
+	at.DueAt = now()
+	at = open(t, h, fence, at)
+	open(t, h, fence, review("bgr-2", "job-2", now()))
+
+	got, err := h.Store.List(t.Context(), breakglass.Filter{
+		Scope: shop, State: breakglass.StatePending, DueBefore: now(), After: "", Limit: 0,
+	})
+	if err != nil || len(got) != 1 || got[0].ID != "bgr-1" {
+		t.Fatalf("List = %v (%v), want bgr-1", ids(got), err)
+	}
+
+	if !at.Overdue(now()) {
+		t.Fatal("Overdue at the deadline = false, want true as the filter selects it")
 	}
 }
 

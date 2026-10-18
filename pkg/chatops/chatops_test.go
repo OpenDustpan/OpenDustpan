@@ -266,6 +266,13 @@ func TestCheckIntent(t *testing.T) {
 			func(i chatops.Intent) chatops.Intent { i.UsedAt = now(); return i },
 			nil, nil, at, chatops.ErrUsed,
 		},
+		{
+			"the intent of a repeated request, with the authentication of the first",
+			func(i chatops.Intent) chatops.Intent {
+				return chatops.NewIntent("cin-2", i.Namespace, i.Principal, i.Request, now().Add(90*time.Second))
+			},
+			nil, nil, at, chatops.ErrAuthStale,
+		},
 	}
 
 	for _, tc := range cases {
@@ -285,7 +292,49 @@ func TestCheckIntent(t *testing.T) {
 				c = tc.current(c)
 			}
 
-			check(t, "CheckIntent", chatops.CheckIntent(i, a, c, tc.at), tc.want)
+			l := chatops.Link{Platform: "chat-a", Workspace: "T1", User: "U1", Principal: "alice", LinkedAt: now()}
+			check(t, "CheckIntent", chatops.CheckIntent(i, &l, a, c, tc.at), tc.want)
+		})
+	}
+}
+
+func TestCheckIntentLink(t *testing.T) {
+	t.Parallel()
+
+	in := chatops.NewIntent("cin-1", "shop", "alice", request(chatops.ActionApprove, target(chatops.TargetJob)), now())
+	fresh := chatops.Auth{
+		Principal: "alice", Agent: "", Session: "ses-1", TokenID: "", BreakGlass: false, Kind: job.ConfirmAuthSSO,
+		At: now().Add(time.Minute),
+	}
+	linked := chatops.Link{Platform: "chat-a", Workspace: "T1", User: "U1", Principal: "alice", LinkedAt: now()}
+
+	cases := []struct {
+		name string
+		link func(l chatops.Link) *chatops.Link
+		want error
+	}{
+		{"the link of the intent", func(l chatops.Link) *chatops.Link { return &l }, nil},
+		{"a deleted link", func(chatops.Link) *chatops.Link { return nil }, chatops.ErrNotLinked},
+		{
+			"a link replaced by another principal",
+			func(l chatops.Link) *chatops.Link { l.Principal = "bob"; return &l }, chatops.ErrNotLinked,
+		},
+		{
+			"the link of another chat user",
+			func(l chatops.Link) *chatops.Link { l.User = "u1"; return &l }, chatops.ErrNotLinked,
+		},
+		{
+			"the link of a user of another chat tool",
+			func(l chatops.Link) *chatops.Link { l.Platform = "chat-b"; return &l }, chatops.ErrNotLinked,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := chatops.CheckIntent(in, tc.link(linked), fresh, target(chatops.TargetJob), now().Add(2*time.Minute))
+			check(t, "CheckIntent", err, tc.want)
 		})
 	}
 }

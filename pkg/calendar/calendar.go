@@ -492,19 +492,26 @@ func (c Calendar) Validate() error {
 // utc is the one zone name with no area.
 const utc = "UTC"
 
-// Location loads the time zone of the calendar. It returns ErrUnknownZone
-// for a name that is not "UTC" or of the IANA form Area/Location (for
-// example "Europe/Berlin" or "America/Argentina/Buenos_Aires"), and for a
-// name that the time zone database does not hold. So "Local", which is the
-// zone of the host, is refused.
+// Location loads the time zone of the calendar with LoadZone.
 func (c Calendar) Location() (*time.Location, error) {
-	if !validZoneName(c.Zone) {
-		return nil, fmt.Errorf("%w: %q is not an IANA name of the form Area/Location", ErrUnknownZone, c.Zone)
+	return LoadZone(c.Zone)
+}
+
+// LoadZone loads the time zone name. It returns ErrUnknownZone for a name
+// that is not "UTC" or of the IANA form Area/Location (for example
+// "Europe/Berlin" or "America/Argentina/Buenos_Aires"), and for a name that
+// the time zone database does not hold. So the names that follow the zone
+// of the host, for example "Local", "localtime", "posixrules" and
+// "/etc/localtime", are refused. Every package that stores a zone name
+// loads it with LoadZone.
+func LoadZone(name string) (*time.Location, error) {
+	if !validZoneName(name) {
+		return nil, fmt.Errorf("%w: %q is not an IANA name of the form Area/Location", ErrUnknownZone, name)
 	}
 
-	loc, err := time.LoadLocation(c.Zone)
+	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownZone, c.Zone)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownZone, name)
 	}
 
 	return loc, nil

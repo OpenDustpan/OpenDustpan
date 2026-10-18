@@ -23,9 +23,9 @@ func (s Schedule) Timeline(from, to time.Time) ([]Shift, error) {
 		return nil, fmt.Errorf("%w: a timeline covers more than 0 and at most %s", ErrInvalid, MaxRange)
 	}
 
-	loc, err := time.LoadLocation(s.Zone)
+	loc, err := calendar.LoadZone(s.Zone)
 	if err != nil {
-		return nil, fmt.Errorf("%w: unknown zone %q", ErrInvalid, s.Zone)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
 	cuts := s.boundaries(from, to, loc)
@@ -262,10 +262,7 @@ type turn struct {
 
 // turnAt returns the turn that covers t. It returns false before the start
 // of the layer. Turns follow the wall clock of loc: turn k starts at the
-// wall time of Start plus k turns. A turn that starts in the hour that a
-// change to summer time skips starts at the end of that hour, so a turn
-// that lies fully in that hour is empty. A turn that ends in the hour that
-// a change to winter time repeats ends at the second occurrence of its end.
+// wall time of Start plus k turns, resolved with inZone.
 func (l Layer) turnAt(t time.Time, loc *time.Location) (turn, bool) {
 	if t.Before(l.Start) {
 		return turn{member: "", start: time.Time{}, end: time.Time{}}, false
@@ -294,9 +291,56 @@ func (l Layer) turnStart(k int, loc *time.Location) time.Time {
 		return l.Start
 	}
 
-	w := wall(l.Start, loc).Add(time.Duration(k) * l.Turn)
+	return inZone(wall(l.Start, loc).Add(time.Duration(k)*l.Turn), loc)
+}
 
-	return time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), w.Minute(), w.Second(), w.Nanosecond(), loc)
+// inZone returns the instant of the wall clock w, given as a time in UTC,
+// in loc. time.Date does not define the instant of a wall time that a
+// change of the clock skips or repeats, so inZone resolves both itself:
+//   - A wall time that a change to summer time skips resolves to the
+//     instant of the change, the end of the skipped time. So a turn that
+//     lies fully in the skipped time is empty.
+//   - A wall time that a change to winter time repeats resolves to its
+//     second occurrence. So the turn that ends there is longer, and the
+//     turn that starts there is not.
+func inZone(w time.Time, loc *time.Location) time.Time {
+	// A zone changes its offset at most once in two days, so the offsets
+	// of the two days around w hold every offset that w can have.
+	const (
+		span = 48 * time.Hour
+		step = 24 * time.Hour
+	)
+
+	var best time.Time
+
+	for d := -span; d <= span; d += step {
+		_, off := w.Add(d).In(loc).Zone()
+
+		c := w.Add(-time.Duration(off) * time.Second)
+		if wall(c, loc).Equal(w) && c.After(best) {
+			best = c
+		}
+	}
+
+	if !best.IsZero() {
+		return best
+	}
+
+	// No offset gives w, so the change of the clock skips it. The
+	// candidate of the offset before the change lies after the change,
+	// and its zone starts at the change.
+	for d := -span; d <= span; d += step {
+		_, off := w.Add(d).In(loc).Zone()
+
+		c := w.Add(-time.Duration(off) * time.Second)
+		if wall(c, loc).After(w) {
+			if start, _ := c.In(loc).ZoneBounds(); !start.IsZero() && (best.IsZero() || start.Before(best)) {
+				best = start
+			}
+		}
+	}
+
+	return best
 }
 
 // wall returns the wall clock of t in loc as a time in UTC, so that the
@@ -310,5 +354,5 @@ func wall(t time.Time, loc *time.Location) time.Time {
 func clockAt(d calendar.Date, c calendar.Clock, loc *time.Location) time.Time {
 	const minutesPerHour = 60
 
-	return time.Date(d.Year, d.Month, d.Day, int(c)/minutesPerHour, int(c)%minutesPerHour, 0, 0, loc)
+	return inZone(time.Date(d.Year, d.Month, d.Day, int(c)/minutesPerHour, int(c)%minutesPerHour, 0, 0, time.UTC), loc)
 }

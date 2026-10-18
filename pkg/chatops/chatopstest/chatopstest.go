@@ -15,7 +15,9 @@ package chatopstest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,6 +76,9 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a second intent with the same ID is a conflict", testIntentConflict},
 		{"an invalid intent is refused", testIntentInvalid},
 		{"intent writes take the fence of the namespace of the job", testIntentFences},
+		{"an audit entry of another scope stops the write", testEntryScope},
+		{"a repeated approve request changes no stored intent", testRepeatedRequest},
+		{"the intents of a deleted link are deleted with the fence of their namespace", testDeleteIntents},
 	}
 
 	for _, tc := range cases {
@@ -321,17 +326,16 @@ func testLinkRequestOnce(t *testing.T, h Harness) {
 		t.Fatalf("GetLinkRequest = %+v (%v), want the request of U1 with no use", got, err)
 	}
 
-	used, err := h.LinkRequests.UseLinkRequest(t.Context(), zero(), r.TokenSHA256, "alice", now().Add(time.Minute))
-	if err != nil || used.UsedBy != "alice" || !used.UsedAt.Equal(now().Add(time.Minute)) || used.User != "U1" {
-		t.Fatalf("UseLinkRequest = %+v (%v), want a use by alice", used, err)
+	used, winner := useConcurrently(t, func(principal string) (chatops.LinkRequest, error) {
+		return h.LinkRequests.UseLinkRequest(t.Context(), zero(), r.TokenSHA256, principal, now().Add(time.Minute))
+	})
+	if used.UsedBy != winner || !used.UsedAt.Equal(now().Add(time.Minute)) || used.User != "U1" {
+		t.Fatalf("UseLinkRequest = %+v, want a use by %s", used, winner)
 	}
 
-	_, err = h.LinkRequests.UseLinkRequest(t.Context(), zero(), r.TokenSHA256, "bob", now().Add(time.Minute))
-	wantErr(t, "second UseLinkRequest", err, chatops.ErrUsed)
-
 	got, err = h.LinkRequests.GetLinkRequest(t.Context(), r.TokenSHA256)
-	if err != nil || got.UsedBy != "alice" {
-		t.Fatalf("GetLinkRequest = %+v (%v), want the use by alice", got, err)
+	if err != nil || got.UsedBy != winner {
+		t.Fatalf("GetLinkRequest = %+v (%v), want the use by %s", got, err, winner)
 	}
 
 	_, err = h.LinkRequests.UseLinkRequest(t.Context(), zero(), chatops.HashLinkToken("none"), "alice", now())
@@ -339,6 +343,60 @@ func testLinkRequestOnce(t *testing.T, h Harness) {
 
 	_, err = h.LinkRequests.GetLinkRequest(t.Context(), chatops.HashLinkToken("none"))
 	wantErr(t, "GetLinkRequest of an unknown hash", err, chatops.ErrNotFound)
+}
+
+// racers is the number of concurrent requests of a single-use case.
+const racers = 16
+
+// useConcurrently calls use from racers goroutines, each with another
+// principal. Exactly one call must succeed and every other call must
+// return ErrUsed. It returns the result and the principal of that call.
+func useConcurrently[T any](t *testing.T, use func(principal string) (T, error)) (T, string) {
+	t.Helper()
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		won     T
+		winners []string
+		others  []error
+	)
+
+	start := make(chan struct{})
+
+	for i := range racers {
+		principal := fmt.Sprintf("p%d", i)
+
+		wg.Go(func() {
+			<-start
+
+			got, err := use(principal)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err == nil {
+				won, winners = got, append(winners, principal)
+
+				return
+			}
+
+			others = append(others, err)
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	if len(winners) != 1 {
+		t.Fatalf("%d of %d concurrent uses succeeded (%v), want exactly 1", len(winners), racers, winners)
+	}
+
+	for _, err := range others {
+		wantErr(t, "concurrent use", err, chatops.ErrUsed)
+	}
+
+	return won, winners[0]
 }
 
 func testLinkRequestExpired(t *testing.T, h Harness) {
@@ -453,12 +511,9 @@ func testIntentOnce(t *testing.T, h Harness) {
 	createIntent(t, h, f)
 	wantEntries(t, h, shop, 1)
 
-	if err := h.Intents.UseIntent(t.Context(), f, "cin-1", now().Add(time.Minute)); err != nil {
-		t.Fatalf("UseIntent: %v", err)
-	}
-
-	wantErr(t, "second UseIntent", h.Intents.UseIntent(t.Context(), f, "cin-1", now().Add(time.Minute)),
-		chatops.ErrUsed)
+	useConcurrently(t, func(string) (struct{}, error) {
+		return struct{}{}, h.Intents.UseIntent(t.Context(), f, "cin-1", now().Add(time.Minute))
+	})
 
 	got, err := h.Intents.GetIntent(t.Context(), "cin-1")
 	if err != nil || got.UsedAt.IsZero() || got.Request.Target.Phase != 1 ||
@@ -570,4 +625,144 @@ func testIntentFences(t *testing.T, h Harness) {
 	wantEntries(t, h, shop, 1)
 	wantEntries(t, h, bank, 0)
 	wantEntries(t, h, audit.ServerScope, 0)
+}
+
+func testEntryScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := shopFence(t, h)
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), bank); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	err := h.Links.PutLink(t.Context(), zero(), link("U1", "alice"), "", entry(bank, "caller:manage-chat-links"))
+	wantErr(t, "PutLink with an entry of a namespace", err, chatops.ErrInvalid)
+
+	_, err = h.Links.LinkOf(t.Context(), chatUser("T1", "U1"))
+	wantErr(t, "LinkOf after a refused PutLink", err, chatops.ErrNotFound)
+
+	put(t, h, link("U1", "alice"), "")
+
+	err = h.Links.DeleteLink(t.Context(), zero(), chatUser("T1", "U1"), entry(bank, "caller:manage-chat-links"))
+	wantErr(t, "DeleteLink with an entry of a namespace", err, chatops.ErrInvalid)
+	wantPrincipal(t, h, "U1", "alice")
+
+	err = h.Intents.CreateIntent(t.Context(), f, intent("cin-1", shop), intentEntry(bank))
+	wantErr(t, "CreateIntent with an entry of another namespace", err, chatops.ErrInvalid)
+
+	_, err = h.Intents.GetIntent(t.Context(), "cin-1")
+	wantErr(t, "GetIntent after a refused create", err, chatops.ErrNotFound)
+
+	wantEntries(t, h, audit.ServerScope, 1)
+	wantEntries(t, h, shop, 0)
+	wantEntries(t, h, bank, 0)
+}
+
+func testRepeatedRequest(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := shopFence(t, h)
+	createIntent(t, h, f)
+
+	usedAt := now().Add(time.Minute)
+	if err := h.Intents.UseIntent(t.Context(), f, "cin-1", usedAt); err != nil {
+		t.Fatalf("UseIntent: %v", err)
+	}
+
+	// The chat tool sends the same request again, with the same delivery
+	// ID. The server makes a new intent; the used one stays as it is.
+	repeat := intent("cin-2", shop)
+	if err := h.Intents.CreateIntent(t.Context(), f, repeat, intentEntry(shop)); err != nil {
+		t.Fatalf("CreateIntent of the repeat: %v", err)
+	}
+
+	first, err := h.Intents.GetIntent(t.Context(), "cin-1")
+	if err != nil || !first.UsedAt.Equal(usedAt) || first.Request != repeat.Request {
+		t.Fatalf("GetIntent cin-1 = %+v (%v), want the use at %v to stay", first, err, usedAt)
+	}
+
+	second, err := h.Intents.GetIntent(t.Context(), "cin-2")
+	if err != nil || !second.UsedAt.IsZero() {
+		t.Fatalf("GetIntent cin-2 = %+v (%v), want no use", second, err)
+	}
+
+	wantErr(t, "UseIntent of the used intent", h.Intents.UseIntent(t.Context(), f, "cin-1", usedAt),
+		chatops.ErrUsed)
+
+	again, err := h.Intents.GetIntent(t.Context(), "cin-1")
+	if err != nil || again != first {
+		t.Fatalf("GetIntent cin-1 = %+v (%v), want %+v", again, err, first)
+	}
+
+	wantEntries(t, h, shop, 2)
+}
+
+func testDeleteIntents(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := namespaceFences(t, h)
+
+	other, err := h.Domain.CreateNamespace(t.Context(), bank)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	createIntent(t, h, f.current)
+
+	err = h.Intents.CreateIntent(t.Context(), f.current, intent("cin-2", shop), intentEntry(shop))
+	if err != nil {
+		t.Fatalf("CreateIntent: %v", err)
+	}
+
+	err = h.Intents.UseIntent(t.Context(), f.current, "cin-2", now())
+	if err != nil {
+		t.Fatalf("UseIntent: %v", err)
+	}
+
+	of := intent("cin-3", shop)
+	of.Request.User = "u1"
+
+	err = h.Intents.CreateIntent(t.Context(), f.current, of, intentEntry(shop))
+	if err != nil {
+		t.Fatalf("CreateIntent: %v", err)
+	}
+
+	got, err := h.Intents.IntentsOf(t.Context(), chatUser("T1", "U1"))
+	if err != nil || len(got) != 2 {
+		t.Fatalf("IntentsOf U1 = %+v (%v), want cin-1 and cin-2", got, err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		fence namespace.Fence
+		want  error
+	}{
+		{"the zero fence", zero(), chatops.ErrNotFound},
+		{"the fence of another namespace", other, chatops.ErrNotFound},
+		{"a stale fence", f.stale, namespace.ErrFenced},
+	} {
+		wantErr(t, "DeleteIntent with "+tc.name, h.Intents.DeleteIntent(t.Context(), tc.fence, "cin-1"), tc.want)
+	}
+
+	wantErr(t, "DeleteIntent of a used intent", h.Intents.DeleteIntent(t.Context(), f.current, "cin-2"),
+		chatops.ErrUsed)
+
+	err = h.Intents.DeleteIntent(t.Context(), f.current, "cin-1")
+	if err != nil {
+		t.Fatalf("DeleteIntent: %v", err)
+	}
+
+	_, err = h.Intents.GetIntent(t.Context(), "cin-1")
+	wantErr(t, "GetIntent after DeleteIntent", err, chatops.ErrNotFound)
+	wantErr(t, "second DeleteIntent", h.Intents.DeleteIntent(t.Context(), f.current, "cin-1"), chatops.ErrNotFound)
+
+	for _, id := range []string{"cin-2", "cin-3"} {
+		_, err = h.Intents.GetIntent(t.Context(), id)
+		if err != nil {
+			t.Fatalf("GetIntent %s: %v, want it to stay", id, err)
+		}
+	}
+
+	wantEntries(t, h, shop, 3)
 }

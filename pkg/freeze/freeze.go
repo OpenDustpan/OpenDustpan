@@ -10,6 +10,8 @@
 package freeze
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -164,13 +166,22 @@ type Occurrence struct {
 	End      time.Time
 }
 
-// OccurrenceID returns the ID of the freeze of the occurrence of schedule that
-// starts at start. The ID is stable, so that a second run of Plan never
-// makes a second freeze for one occurrence.
-func OccurrenceID(schedule string, start time.Time) string {
+// OccurrenceID returns the ID of the freeze of the occurrence of schedule in
+// ns that starts at start. The ID is stable, so that a second run of Plan
+// never makes a second freeze for one occurrence. It ends with 16 hex
+// digits of the SHA-256 of ns, because a schedule ID that is free again
+// after a delete can name a schedule in another namespace, and the two
+// freezes of one start must not share an ID.
+func OccurrenceID(ns namespace.Name, schedule string, start time.Time) string {
+	sum := sha256.Sum256([]byte(ns))
+
 	return FreezeIDPrefix + strings.TrimPrefix(schedule, IDPrefix) + "-" +
-		strconv.FormatInt(start.UnixMilli(), 10)
+		strconv.FormatInt(start.UnixMilli(), 10) + "-" + hex.EncodeToString(sum[:nsHashBytes])
 }
+
+// nsHashBytes is the number of bytes of the hash of the namespace in an
+// occurrence ID.
+const nsHashBytes = 8
 
 // Subject returns the subject that creates the freezes of the schedule
 // id: SubjectPrefix and the schedule ID. The job model records it as
@@ -192,13 +203,13 @@ func ScheduleOf(f job.Freeze) (string, bool) {
 }
 
 // FreezeOf returns the freeze of the job model for the occurrence o of s:
-// the ID OccurrenceID(s.ID, o.Start), the namespace and the reason of s,
+// the ID OccurrenceID(s.Namespace, s.ID, o.Start), the namespace and the reason of s,
 // the start and the end of o, and the creator Subject(s.ID). For a valid
 // schedule and an occurrence with an end after its start, the freeze
 // passes job.Freeze.Validate.
 func (s Schedule) FreezeOf(o Occurrence) job.Freeze {
 	return job.Freeze{
-		ID:        OccurrenceID(s.ID, o.Start),
+		ID:        OccurrenceID(s.Namespace, s.ID, o.Start),
 		Namespace: s.Namespace,
 		Reason:    s.Reason,
 		StartsAt:  o.Start.UTC(),

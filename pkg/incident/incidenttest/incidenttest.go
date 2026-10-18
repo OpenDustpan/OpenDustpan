@@ -13,6 +13,8 @@ package incidenttest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +55,12 @@ func Run(t *testing.T, newHarness Factory) {
 		{"create refuses an incident that is not new", testCreateNotNew},
 		{"update on an older version is ErrConflict", testUpdateConflict},
 		{"update keeps the namespace, the classifications and the reports", testUpdateKeeps},
+		{"update keeps the state, the step times and the opener", testUpdateKeepsState},
+		{"update refuses a result that fails Validate", testUpdateInvalid},
+		{"step applies the step in the transaction", testStep},
+		{"step refuses a step that the stored state does not allow", testStepRefused},
+		{"concurrent steps on one version: exactly one wins", testStepOnce},
+		{"each write refuses an audit entry of another namespace", testEntryScope},
 		{"a closed incident takes notes, classifications and reports only", testClosed},
 		{"classifications and reports append, oldest first", testAppend},
 		{"list filters by state and unit, newest first", testList},
@@ -184,17 +192,18 @@ func get(t *testing.T, h Harness, id string) incident.Incident {
 	return in
 }
 
-// step reads the incident id, applies step to it and stores the result.
+// step runs the step s on the stored version of the incident id.
 func step(t *testing.T, h Harness, fence namespace.Fence, id string, s incident.Step) {
 	t.Helper()
 
-	in, err := incident.Apply(get(t, h, id), s, "bob", now())
+	_, err := h.Store.Step(
+		t.Context(),
+		incident.StepRequest{ID: id, Version: get(t, h, id).Version, Step: s, By: "bob", At: now()},
+		fence,
+		entry(),
+	)
 	if err != nil {
-		t.Fatalf("Apply %s: %v", s, err)
-	}
-
-	if err := h.Store.Update(t.Context(), in, fence, entry()); err != nil {
-		t.Fatalf("Update after %s: %v", s, err)
+		t.Fatalf("Step %s: %v", s, err)
 	}
 }
 
@@ -296,21 +305,335 @@ func testUpdateConflict(t *testing.T, h Harness) {
 	fence := setup(t, h)
 	create(t, h, fence, sample("inc-1", now()))
 
-	acked, err := incident.Apply(get(t, h, "inc-1"), incident.StepAcknowledge, "bob", now())
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
+	in := get(t, h, "inc-1")
+	in.Commander = "bob"
 
-	if err := h.Store.Update(t.Context(), acked, fence, entry()); err != nil {
+	if err := h.Store.Update(t.Context(), in, fence, entry()); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	if err := h.Store.Update(t.Context(), acked, fence, entry()); !errors.Is(err, incident.ErrConflict) {
+	in.Commander = "carol"
+
+	if err := h.Store.Update(t.Context(), in, fence, entry()); !errors.Is(err, incident.ErrConflict) {
 		t.Fatalf("stale Update: err = %v, want ErrConflict", err)
 	}
 
 	if got := get(t, h, "inc-1"); got.Version != 2 || got.Commander != "bob" {
 		t.Fatalf("Get = version %d, commander %q, want 2 and bob", got.Version, got.Commander)
+	}
+}
+
+func testUpdateKeepsState(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, fence, sample("inc-1", now()))
+
+	in := get(t, h, "inc-1")
+	in.Title = "Checkout down"
+	in.State, in.AcknowledgedAt, in.MitigatedAt = incident.StateClosed, now(), now()
+	in.ResolvedAt, in.ClosedAt = now(), now()
+	in.OpenedAt, in.OpenedBy = now().Add(-time.Hour), "mallory"
+
+	if err := h.Store.Update(t.Context(), in, fence, entry()); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got := get(t, h, "inc-1")
+
+	switch {
+	case got.Title != "Checkout down", got.State != incident.StateOpen, !got.AcknowledgedAt.IsZero(),
+		!got.MitigatedAt.IsZero(), !got.ResolvedAt.IsZero(), !got.ClosedAt.IsZero(),
+		!got.OpenedAt.Equal(now()), got.OpenedBy != "alice", got.ID != "inc-1", got.Namespace != shop:
+		t.Fatalf("Get = %+v, want the new title and the stored state, step times and opener", got)
+	default:
+		// Update changed the title only.
+	}
+}
+
+func testUpdateInvalid(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, fence, sample("inc-1", now()))
+
+	stored := get(t, h, "inc-1")
+
+	cases := []struct {
+		name   string
+		change func(in *incident.Incident)
+	}{
+		{"no title", func(in *incident.Incident) { in.Title = "" }},
+		{"a severity of 0", func(in *incident.Incident) { in.Severity = 0 }},
+		{"detected after the stored open", func(in *incident.Incident) { in.DetectedAt = now().Add(time.Minute) }},
+	}
+
+	for _, tc := range cases {
+		in := stored
+		tc.change(&in)
+
+		if err := h.Store.Update(t.Context(), in, fence, entry()); !errors.Is(err, incident.ErrInvalid) {
+			t.Fatalf("Update with %s: err = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+
+	if got := get(t, h, "inc-1"); got.Version != stored.Version || got.Title != stored.Title {
+		t.Fatalf("Get = %+v, want the incident as created", got)
+	}
+
+	if n := auditCount(t, h, shop); n != 1 {
+		t.Fatalf("audit entries = %d, want 1", n)
+	}
+}
+
+func testStep(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, fence, sample("inc-1", now()))
+
+	later := now().Add(time.Minute)
+
+	got, err := h.Store.Step(
+		t.Context(),
+		incident.StepRequest{ID: "inc-1", Version: 1, Step: incident.StepAcknowledge, By: "bob", At: later},
+		fence,
+		entry(),
+	)
+	if err != nil || got.State != incident.StateAcknowledged || got.Commander != "bob" ||
+		!got.AcknowledgedAt.Equal(later) || got.Version != 2 {
+		t.Fatalf("Step = %+v (%v), want acknowledged by bob at version 2", got, err)
+	}
+
+	if stored := get(t, h, "inc-1"); stored.State != incident.StateAcknowledged || stored.Version != 2 {
+		t.Fatalf("Get = %+v, want the acknowledged incident", stored)
+	}
+
+	_, err = h.Store.Step(
+		t.Context(),
+		incident.StepRequest{ID: "inc-1", Version: 1, Step: incident.StepMitigate, By: "bob", At: later},
+		fence,
+		entry(),
+	)
+	if !errors.Is(err, incident.ErrConflict) {
+		t.Fatalf("Step on an older version: err = %v, want ErrConflict", err)
+	}
+
+	_, err = h.Store.Step(
+		t.Context(),
+		incident.StepRequest{ID: "inc-none", Version: 1, Step: incident.StepMitigate, By: "bob", At: later},
+		fence,
+		entry(),
+	)
+	if !errors.Is(err, incident.ErrNotFound) {
+		t.Fatalf("Step on an unknown incident: err = %v, want ErrNotFound", err)
+	}
+
+	if n := auditCount(t, h, shop); n != 2 {
+		t.Fatalf("audit entries = %d, want 2", n)
+	}
+}
+
+func testStepRefused(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, fence, sample("inc-1", now()))
+
+	cases := []struct {
+		name string
+		step incident.Step
+		at   time.Time
+		want error
+	}{
+		{"close an open incident", incident.StepClose, now(), incident.ErrTransition},
+		{"reopen an open incident", incident.StepReopen, now(), incident.ErrTransition},
+		{"an unknown step", incident.Step("bogus"), now(), incident.ErrTransition},
+		{"acknowledge before the open", incident.StepAcknowledge, now().Add(-time.Minute), incident.ErrInvalid},
+	}
+
+	for _, tc := range cases {
+		_, err := h.Store.Step(
+			t.Context(),
+			incident.StepRequest{ID: "inc-1", Version: 1, Step: tc.step, By: "bob", At: tc.at},
+			fence,
+			entry(),
+		)
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("Step %s: err = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+
+	step(t, h, fence, "inc-1", incident.StepResolve)
+
+	_, err := h.Store.Step(
+		t.Context(),
+		incident.StepRequest{ID: "inc-1", Version: 2, Step: incident.StepClose, By: "bob", At: now()},
+		fence,
+		entry(),
+	)
+	if !errors.Is(err, incident.ErrInvalid) {
+		t.Fatalf("Step close with no review: err = %v, want ErrInvalid", err)
+	}
+
+	if got := get(t, h, "inc-1"); got.State != incident.StateResolved || got.Version != 2 {
+		t.Fatalf("Get = %+v, want the resolved incident at version 2", got)
+	}
+
+	if n := auditCount(t, h, shop); n != 2 {
+		t.Fatalf("audit entries = %d, want 2", n)
+	}
+}
+
+func testStepOnce(t *testing.T, h Harness) {
+	t.Helper()
+
+	const n = 8
+
+	fence := setup(t, h)
+	create(t, h, fence, sample("inc-1", now()))
+
+	var (
+		wg   sync.WaitGroup
+		errs [n]error
+	)
+
+	for i := range n {
+		wg.Go(func() {
+			_, errs[i] = h.Store.Step(
+				context.WithoutCancel(t.Context()),
+				incident.StepRequest{
+					ID:      "inc-1",
+					Version: 1,
+					Step:    incident.StepAcknowledge,
+					By:      principal(i),
+					At:      now(),
+				},
+				fence,
+				entry(),
+			)
+		})
+	}
+
+	wg.Wait()
+
+	winner := oneWinner(t, errs[:])
+
+	got := get(t, h, "inc-1")
+	if winner == "" || got.Version != 2 || got.Commander != winner {
+		t.Fatalf("Get = version %d, commander %q, want 2 and the one winner %q", got.Version, got.Commander, winner)
+	}
+
+	if c := auditCount(t, h, shop); c != 2 {
+		t.Fatalf("audit entries = %d, want 2", c)
+	}
+}
+
+// oneWinner returns the principal of the one step in errs that succeeded,
+// and fails t when none or more than one succeeded, or when a step failed
+// with another error than ErrConflict or ErrTransition.
+func oneWinner(t *testing.T, errs []error) string {
+	t.Helper()
+
+	winner := ""
+
+	for i, err := range errs {
+		switch {
+		case err == nil && winner == "":
+			winner = principal(i)
+		case err == nil:
+			t.Fatalf("Step %d: a second step won", i)
+		case !errors.Is(err, incident.ErrConflict) && !errors.Is(err, incident.ErrTransition):
+			t.Fatalf("Step %d: err = %v, want ErrConflict or ErrTransition", i, err)
+		default:
+			// Another step won first.
+		}
+	}
+
+	if winner == "" {
+		t.Fatal("no step won")
+	}
+
+	return winner
+}
+
+// principal returns the name of the principal i of a concurrent case.
+func principal(i int) string { return fmt.Sprintf("user-%d", i) }
+
+// testEntryScope runs each write with the fence of shop and an audit entry
+// that names lab, and checks that no write changes a row or appends an
+// entry.
+func testEntryScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, fence, sample("inc-1", now()))
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), lab); err != nil {
+		t.Fatalf("CreateNamespace %s: %v", lab, err)
+	}
+
+	stored := get(t, h, "inc-1")
+
+	for _, w := range entryWrites(t, h, stored) {
+		if got := w.write(fence); !errors.Is(got, w.scope) {
+			t.Fatalf("%s with an entry of %s: err = %v, want %v", w.name, lab, got, w.scope)
+		}
+	}
+
+	checkUnchanged(t, h, stored)
+}
+
+// labEntry returns entryFor(action) in the scope of lab.
+func labEntry(action string) audit.Entry {
+	e := entryFor(action)
+	e.Namespace, e.Object = lab, lab.String()
+
+	return e
+}
+
+// entryWrites returns each write of the store on the incident stored, and
+// a create of the incident inc-2, each with an audit entry of lab.
+func entryWrites(t *testing.T, h Harness, stored incident.Incident) []fenceWrite {
+	t.Helper()
+
+	return []fenceWrite{
+		{"Create", incident.ErrInvalid, func(f namespace.Fence) error {
+			return h.Store.Create(t.Context(), sample("inc-2", now()), f, labEntry(actionRespond))
+		}},
+		{"Update", incident.ErrNotFound, func(f namespace.Fence) error {
+			in := stored
+			in.Title = "Changed"
+
+			return h.Store.Update(t.Context(), in, f, labEntry(actionRespond))
+		}},
+		{"Step", incident.ErrNotFound, func(f namespace.Fence) error {
+			_, err := h.Store.Step(
+				t.Context(),
+				incident.StepRequest{
+					ID:      stored.ID,
+					Version: stored.Version,
+					Step:    incident.StepAcknowledge,
+					By:      "bob",
+					At:      now(),
+				},
+				f,
+				labEntry(actionRespond),
+			)
+
+			return err
+		}},
+		{"SetClassification", incident.ErrNotFound, func(f namespace.Fence) error {
+			c := classification(true, "carol")
+
+			return h.Store.SetClassification(t.Context(), stored.ID, c, f, labEntry(actionClassify))
+		}},
+		{"AddReport", incident.ErrNotFound, func(f namespace.Fence) error {
+			return h.Store.AddReport(t.Context(), stored.ID, report("initial"), f, labEntry(actionClassify))
+		}},
+		{"AddNote", incident.ErrNotFound, func(f namespace.Fence) error {
+			return h.Store.AddNote(t.Context(), note(stored.ID, "text"), f, labEntry(actionRespond))
+		}},
 	}
 }
 
@@ -552,6 +875,22 @@ func fenceWrites(t *testing.T, h Harness, stored incident.Incident) []fenceWrite
 			in.Title = "Changed"
 
 			return h.Store.Update(t.Context(), in, f, entry())
+		}},
+		{"Step", incident.ErrNotFound, func(f namespace.Fence) error {
+			_, err := h.Store.Step(
+				t.Context(),
+				incident.StepRequest{
+					ID:      stored.ID,
+					Version: stored.Version,
+					Step:    incident.StepAcknowledge,
+					By:      "bob",
+					At:      now(),
+				},
+				f,
+				entry(),
+			)
+
+			return err
 		}},
 		{"SetClassification", incident.ErrNotFound, func(f namespace.Fence) error {
 			c := classification(true, "carol")

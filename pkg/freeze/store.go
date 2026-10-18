@@ -15,7 +15,11 @@ import (
 // fence and namespace.ErrNotFound for a namespace that does not exist. A
 // zero fence, or the fence of another namespace, fails with the error that
 // each method names. Every write appends the audit entry e in its
-// transaction, and a failed write appends nothing.
+// transaction, and a failed write appends nothing. The namespace of e must
+// be the namespace of the row: a write with an entry of another namespace
+// fails with the error of a fence of another namespace and changes
+// nothing, so a write never appends to the audit log of another
+// namespace.
 type Store interface {
 	// Create persists s with version 1. It returns ErrInvalid for a
 	// schedule that fails Validate, or whose namespace is not the
@@ -52,7 +56,19 @@ type Store interface {
 // freeze. The Sink and the Store use one database, because
 // ReplaceScheduled reads the stored schedule in its transaction.
 //
-// The freeze of an occurrence o of the schedule s is s.FreezeOf(o). A
+// The freeze of an occurrence o of the schedule s is s.FreezeOf(o). The
+// freezes of a schedule are the freezes with the creator Subject(s.ID) in
+// the namespace of the fence: each write of a schedule matches a freeze by
+// its creator and its namespace, and never reads or changes a freeze of
+// another namespace. A schedule ID that is free again after a delete can
+// be the ID of a schedule in another namespace, so a creator alone does
+// not name the freezes of one schedule. CreateFreeze returns ErrInvalid of
+// the job model for a freeze whose CreatedBy starts with SubjectPrefix, so
+// a person cannot make a freeze that the Sink takes as a freeze of a
+// schedule. It returns ErrInvalid of the job model for a freeze ID that
+// exists, in any namespace, and changes nothing: the job model has no
+// sentinel for an existing freeze. It returns the error of a fence of another namespace for an
+// audit entry of another namespace than the freeze. A
 // freeze started when its start is at or before now on the clock of the
 // store. The Sink never changes, deletes or adds again a freeze whose
 // EndedBy is set: only a person ends a freeze early, and the person
@@ -84,11 +100,11 @@ type Sink interface {
 	// ErrInvalid for an occurrence of another schedule or with an end
 	// that is not after its start. On an error it changes nothing.
 	ReplaceScheduled(ctx context.Context, s Schedule, occs []Occurrence, fence namespace.Fence) error
-	// DeleteScheduled deletes each freeze of the schedule id that did not
-	// start and that no person ended. It is for a schedule that no longer
-	// exists: it returns ErrExists when the schedule id exists. It returns
-	// ErrNotFound when a freeze of the schedule is in another namespace
-	// than fence, and for a zero fence. With no freeze to delete it
-	// returns nil.
+	// DeleteScheduled deletes each freeze of the schedule id in the
+	// namespace of fence that did not start and that no person ended. It
+	// is for a schedule that no longer exists: it returns ErrExists when
+	// the schedule id exists, in any namespace. It returns ErrNotFound for
+	// a zero fence. It never deletes a freeze of another namespace. With
+	// no freeze to delete it returns nil.
 	DeleteScheduled(ctx context.Context, id string, fence namespace.Fence) error
 }

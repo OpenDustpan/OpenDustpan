@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strconv"
 	"testing"
 	"time"
@@ -24,13 +25,15 @@ func TestFakeVerifierConformance(t *testing.T) {
 
 	chatopstest.RunVerifier(t, func(*testing.T) chatopstest.VerifierHarness {
 		secret, other := []byte("secret-of-the-installation"), []byte("secret-of-another-installation")
-		v := fakeVerifier{secret: secret}
+		v := fakeVerifier{platform: "chat-a", secret: secret}
 
 		return chatopstest.VerifierHarness{
 			Verifier:   v,
+			Platform:   "chat-a",
 			Encode:     encode,
 			Sign:       func(body []byte, at time.Time) map[string][]string { return sign(secret, body, at) },
 			SignOther:  func(body []byte, at time.Time) map[string][]string { return sign(other, body, at) },
+			Retime:     retime,
 			Unparsable: []byte("{not a request"),
 		}
 	})
@@ -43,8 +46,12 @@ const (
 
 // fakeVerifier is an adapter of a fake chat tool. The tool signs
 // "v0:<unix seconds>:<body>" with HMAC-SHA256 and sends the timestamp and
-// the signature in two headers, as many chat tools do.
-type fakeVerifier struct{ secret []byte }
+// the signature in two headers, as many chat tools do. The body names a
+// platform, which the adapter ignores.
+type fakeVerifier struct {
+	platform string
+	secret   []byte
+}
 
 func (f fakeVerifier) Verify(_ context.Context, headers map[string][]string, body []byte, now time.Time) (
 	chatops.Request, error,
@@ -75,6 +82,7 @@ func (f fakeVerifier) Verify(_ context.Context, headers map[string][]string, bod
 	}
 
 	req := w.request(at)
+	req.Platform = f.platform
 
 	if err := req.Validate(); err != nil {
 		return chatops.Request{}, fmt.Errorf("verify: %w", err)
@@ -150,4 +158,12 @@ func sign(secret, body []byte, at time.Time) map[string][]string {
 		headerTimestamp: {ts},
 		headerSignature: {hex.EncodeToString(mac(secret, ts, body))},
 	}
+}
+
+func retime(headers map[string][]string, at time.Time) map[string][]string {
+	out := maps.Clone(headers)
+
+	out[headerTimestamp] = []string{strconv.FormatInt(at.Unix(), 10)}
+
+	return out
 }

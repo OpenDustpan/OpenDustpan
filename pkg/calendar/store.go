@@ -43,7 +43,10 @@ type Resolved struct {
 // Every write through the API appends the audit entry e in its
 // transaction, and a failed write changes nothing and appends nothing. The
 // writes of a scheduled feed read (ReplaceFeedHolidays and
-// RecordFeedStatus) append no entry.
+// RecordFeedStatus) append no entry. A write refuses an audit entry whose
+// Namespace is not the scope of its row, with the error of a fence that
+// does not belong to that scope, so that a write cannot append to the
+// audit chain of another namespace.
 //
 // Get and Resolve return the full URL of each feed, for the server and the
 // HolidaySource adapter. A read through the API returns Calendar.Masked.
@@ -93,27 +96,37 @@ type Store interface {
 	// and the status of the feed with read.Status, with Status.Holidays set
 	// to the number of holidays, in one transaction. It returns ErrNotFound for
 	// an unknown calendar or feed and for a fence that does not belong to
-	// the scope of the calendar, ErrInvalid for more than MaxHolidays
-	// holidays, for a holiday that fails Holiday.Validate or is not of
-	// SourceFeed with the feed read.Feed, and for a status with an error,
-	// and namespace.ErrFenced for a stale fence.
+	// the scope of the calendar, ErrConflict when read.URL is not the
+	// stored URL of the feed (an update changed the URL during the read),
+	// ErrInvalid for more than MaxHolidays holidays, for a holiday that
+	// fails Holiday.Validate or is not of SourceFeed with the feed
+	// read.Feed, and for a status with an error, and namespace.ErrFenced
+	// for a stale fence.
 	ReplaceFeedHolidays(ctx context.Context, id ID, read FeedRead, fence namespace.Fence) error
-	// RecordFeedStatus records a read of the feed feedID of the calendar id
-	// that gave no new holidays: a read that failed (status.Error holds the
-	// class), or a read that answered ErrNotModified (status.Error is
-	// empty). It sets ReadAt and Error of the stored status from status,
-	// and keeps the holidays of the feed and the Holidays, Skipped and ETag
-	// of the stored status. It returns ErrNotFound for an unknown calendar
-	// or feed and for a fence that does not belong to the scope of the
-	// calendar, ErrInvalid for an error that is not a valid FeedError, and
+	// RecordFeedStatus records a read of the feed read.Feed of the
+	// calendar id that gave no new holidays: a read that failed
+	// (read.Status.Error holds the class), or a read that answered
+	// ErrNotModified (read.Status.Error is empty). It sets ReadAt and Error
+	// of the stored status from read.Status, and keeps the holidays of the
+	// feed and the Holidays, Skipped and ETag of the stored status. It
+	// returns ErrNotFound for an unknown calendar or feed and for a fence
+	// that does not belong to the scope of the calendar, ErrConflict when
+	// read.URL is not the stored URL of the feed, ErrInvalid for an error
+	// that is not a valid FeedError and for a read with holidays, and
 	// namespace.ErrFenced for a stale fence.
-	RecordFeedStatus(ctx context.Context, id ID, feedID string, status FeedStatus, fence namespace.Fence) error
+	RecordFeedStatus(ctx context.Context, id ID, read FeedRead, fence namespace.Fence) error
 }
 
-// FeedRead is a good read of one feed, for Store.ReplaceFeedHolidays.
+// FeedRead is one read of one feed: a good read for
+// Store.ReplaceFeedHolidays, or a read with no new holidays for
+// Store.RecordFeedStatus.
 type FeedRead struct {
 	// Feed is the ID of the feed.
 	Feed string
+	// URL is the URL that the read fetched. The store refuses the read
+	// when the feed now has another URL, so that the holidays or the
+	// status of an old URL never go to a new one.
+	URL string
 	// Holidays are the holidays of the read, of SourceFeed with the ID
 	// Feed.
 	Holidays []Holiday

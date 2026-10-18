@@ -131,6 +131,9 @@ func TestLocation(t *testing.T) {
 		{"utc", calendar.ErrUnknownZone},
 		{"Europe/../Berlin", calendar.ErrUnknownZone},
 		{"/etc/localtime", calendar.ErrUnknownZone},
+		{"localtime", calendar.ErrUnknownZone},
+		{"posixrules", calendar.ErrUnknownZone},
+		{"Factory", calendar.ErrUnknownZone},
 		{"Europe/Berlin ", calendar.ErrUnknownZone},
 		{"Mars/Olympus", calendar.ErrUnknownZone},
 	}
@@ -149,6 +152,11 @@ func TestLocation(t *testing.T) {
 
 			if tc.want != nil && !errors.Is(err, tc.want) {
 				t.Fatalf("Location(%q): err = %v, want %v", tc.zone, err, tc.want)
+			}
+
+			_, err = calendar.LoadZone(tc.zone)
+			if (tc.want == nil) != (err == nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("LoadZone(%q): err = %v, want %v", tc.zone, err, tc.want)
 			}
 		})
 	}

@@ -27,6 +27,9 @@ type Harness struct {
 	Schedules oncall.Store
 	Handoffs  oncall.Handoffs
 	Domain    Domain
+	// SetClock sets the time of the transactions of the store from now
+	// on, as the clock of a database gives it.
+	SetClock func(now time.Time)
 }
 
 // Domain makes the rows that a schedule needs and that other ports own,
@@ -65,6 +68,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"create with copied shifts is ErrInvalid", testCreateWithCopy},
 		{"update to another namespace is ErrInvalid", testUpdateMove},
 		{"handoff notes list newest first", testHandoffs},
+		{"the time of an add is the time of the store", testOverrideTime},
 	}
 
 	for _, tc := range cases {
@@ -77,6 +81,11 @@ func Run(t *testing.T, newHarness Factory) {
 	t.Run("each write refuses a fence that is not of the row", func(t *testing.T) {
 		t.Parallel()
 		testFenceScope(t, newHarness)
+	})
+
+	t.Run("each write refuses an audit entry of another namespace", func(t *testing.T) {
+		t.Parallel()
+		testEntryScope(t, newHarness)
 	})
 }
 
@@ -101,6 +110,8 @@ func entry(ns namespace.Name) audit.Entry {
 
 func setup(t *testing.T, h Harness, ns namespace.Name) namespace.Fence {
 	t.Helper()
+
+	h.SetClock(now())
 
 	fence, err := h.Domain.CreateNamespace(t.Context(), ns)
 	if err != nil {
@@ -371,7 +382,9 @@ type write struct {
 	name string
 	// scoped is the error for a fence that does not belong to the row.
 	scoped error
-	run    func(t *testing.T, h Harness, fence namespace.Fence) error
+	// audited is false for a write that appends no audit entry.
+	audited bool
+	run     func(t *testing.T, h Harness, fence namespace.Fence, e audit.Entry) error
 }
 
 func writes() []write {
@@ -379,41 +392,56 @@ func writes() []write {
 	feed := oncall.Ref{Namespace: shop, Name: "feed"}
 
 	return []write{
-		{"Create", oncall.ErrInvalid, func(t *testing.T, h Harness, fence namespace.Fence) error {
+		{"Create", oncall.ErrInvalid, true, func(t *testing.T, h Harness, fence namespace.Fence, e audit.Entry) error {
 			t.Helper()
 
-			return h.Schedules.Create(t.Context(), sample("ocs-9", shop, "edge", "alice"), fence, entry(shop))
+			return h.Schedules.Create(t.Context(), sample("ocs-9", shop, "edge", "alice"), fence, e)
 		}},
-		{"Update", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
+		{"Update", oncall.ErrNotFound, true, func(t *testing.T, h Harness, fence namespace.Fence, e audit.Entry) error {
 			t.Helper()
 
 			s := getNetwork(t, h)
 			s.Layers[0].Members = []string{"bob"}
 
-			return h.Schedules.Update(t.Context(), s, fence, entry(shop))
+			return h.Schedules.Update(t.Context(), s, fence, e)
 		}},
-		{"Delete", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
+		{"Delete", oncall.ErrNotFound, true, func(t *testing.T, h Harness, fence namespace.Fence, e audit.Entry) error {
 			t.Helper()
 
-			return h.Schedules.Delete(t.Context(), network, fence, entry(shop))
+			return h.Schedules.Delete(t.Context(), network, fence, e)
 		}},
-		{"AddOverride", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
-			t.Helper()
+		{
+			"AddOverride",
+			oncall.ErrNotFound,
+			true,
+			func(t *testing.T, h Harness, fence namespace.Fence, e audit.Entry) error {
+				t.Helper()
 
-			return h.Schedules.AddOverride(t.Context(), network, override("ovr-9", "bob"), fence, entry(shop))
-		}},
-		{"ReplaceCopy", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
-			t.Helper()
+				return h.Schedules.AddOverride(t.Context(), network, override("ovr-9", "bob"), fence, e)
+			},
+		},
+		{
+			"ReplaceCopy",
+			oncall.ErrNotFound,
+			false,
+			func(t *testing.T, h Harness, fence namespace.Fence, _ audit.Entry) error {
+				t.Helper()
 
-			return h.Schedules.ReplaceCopy(t.Context(), feed, nil, now(), fence)
-		}},
-		{"AddHandoff", oncall.ErrNotFound, func(t *testing.T, h Harness, fence namespace.Fence) error {
-			t.Helper()
+				return h.Schedules.ReplaceCopy(t.Context(), feed, nil, now(), fence)
+			},
+		},
+		{
+			"AddHandoff",
+			oncall.ErrNotFound,
+			true,
+			func(t *testing.T, h Harness, fence namespace.Fence, e audit.Entry) error {
+				t.Helper()
 
-			hd := oncall.Handoff{Schedule: "ocs-1", At: now(), From: "alice", To: "bob", Note: "Quiet", By: "alice"}
+				hd := oncall.Handoff{Schedule: "ocs-1", At: now(), From: "alice", To: "bob", Note: "Quiet", By: "alice"}
 
-			return h.Handoffs.AddHandoff(t.Context(), hd, fence, entry(shop))
-		}},
+				return h.Handoffs.AddHandoff(t.Context(), hd, fence, e)
+			},
+		},
 	}
 }
 
@@ -476,7 +504,7 @@ func checkFence(
 
 	before := getNetwork(t, h)
 
-	if err := w.run(t, h, fence(t, h, own, other)); !errors.Is(err, want) {
+	if err := w.run(t, h, fence(t, h, own, other), entry(shop)); !errors.Is(err, want) {
 		t.Fatalf("%s: err = %v, want %v", w.name, err, want)
 	}
 
@@ -515,8 +543,10 @@ func testEndedOverrides(t *testing.T, h Harness) {
 	// Every override so far ends one hour after now(). Two hours later
 	// they all ended, so they do not count.
 	later := now().Add(2 * time.Hour)
+	h.SetClock(later)
+
 	o := override("ovr-later", "carol")
-	o.Start, o.End, o.CreatedAt = later, later.Add(time.Hour), later
+	o.Start, o.End = later, later.Add(time.Hour)
 
 	if err := h.Schedules.AddOverride(t.Context(), ref, o, fence, entry(shop)); err != nil {
 		t.Fatalf("AddOverride after the others ended: %v", err)
@@ -608,5 +638,117 @@ func testUpdateMove(t *testing.T, h Harness) {
 
 	if err := h.Schedules.Update(t.Context(), s, fence, entry(shop)); !errors.Is(err, oncall.ErrInvalid) {
 		t.Fatalf("Update to another namespace: err = %v, want ErrInvalid", err)
+	}
+}
+
+// testEntryScope runs each write that appends an audit entry with the
+// fence of the row and an entry of another namespace, and checks that it
+// fails with ErrInvalid and changes nothing, so that a write cannot append
+// to the audit chain of another namespace.
+func testEntryScope(t *testing.T, newHarness Factory) {
+	t.Helper()
+
+	for _, w := range writes() {
+		if !w.audited {
+			continue
+		}
+
+		t.Run(w.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			own := setup(t, h, shop)
+			setup(t, h, platform)
+			create(t, h, own, sample("ocs-1", shop, "network", "alice"))
+			create(t, h, own, external("ocs-2", "feed"))
+
+			before := getNetwork(t, h)
+
+			if err := w.run(t, h, own, entry(platform)); !errors.Is(err, oncall.ErrInvalid) {
+				t.Fatalf("%s: err = %v, want ErrInvalid", w.name, err)
+			}
+
+			checkNoEntryWrite(t, h, w.name, before)
+		})
+	}
+}
+
+// checkNoEntryWrite checks that the refused write name left the schedule
+// network as before, added no handoff and appended no audit entry.
+func checkNoEntryWrite(t *testing.T, h Harness, name string, before oncall.Schedule) {
+	t.Helper()
+
+	after := getNetwork(t, h)
+	if after.Version != before.Version || len(after.Overrides) != len(before.Overrides) {
+		t.Fatalf("%s changed the schedule: version %d, want %d", name, after.Version, before.Version)
+	}
+
+	got, err := h.Handoffs.Handoffs(t.Context(), "ocs-1", now().Add(-time.Hour), now().Add(time.Hour))
+	if err != nil || len(got) != 0 {
+		t.Fatalf("%s: handoffs = %d (%v), want none", name, len(got), err)
+	}
+
+	for ns, n := range map[namespace.Name]int{shop: 2, platform: 0} {
+		entries, err := h.Domain.AuditEntries(t.Context(), ns)
+		if err != nil || len(entries) != n {
+			t.Fatalf("%s: audit entries of %s = %d (%v), want %d", name, ns, len(entries), err, n)
+		}
+	}
+}
+
+// testOverrideTime checks that the store, not the request, gives the time
+// of an add: a time far ahead does not delete the overrides of others, and
+// a time far back does not keep ended overrides in the cap.
+func testOverrideTime(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h, shop)
+	create(t, h, fence, sample("ocs-1", shop, "network", "alice"))
+	ref := oncall.Ref{Namespace: shop, Name: "network"}
+
+	if err := h.Schedules.AddOverride(t.Context(), ref, override("ovr-bob", "bob"), fence, entry(shop)); err != nil {
+		t.Fatalf("AddOverride: %v", err)
+	}
+
+	ahead := override("ovr-ahead", "carol")
+	ahead.CreatedAt = now().AddDate(1, 0, 0)
+
+	if err := h.Schedules.AddOverride(t.Context(), ref, ahead, fence, entry(shop)); err != nil {
+		t.Fatalf("AddOverride with a time a year ahead: %v", err)
+	}
+
+	got := getNetwork(t, h)
+	if len(got.Overrides) != 2 {
+		t.Fatalf("Get = %d overrides, want 2: a time in the request deleted an override", len(got.Overrides))
+	}
+
+	for i := range got.Overrides {
+		if o := &got.Overrides[i]; !o.CreatedAt.Equal(now()) {
+			t.Fatalf("override %s created at %s, want the time of the store %s", o.ID, o.CreatedAt, now())
+		}
+	}
+
+	for i := range oncall.MaxOverrides - len(got.Overrides) {
+		o := override(fmt.Sprintf("ovr-%d", i), "bob")
+		if err := h.Schedules.AddOverride(t.Context(), ref, o, fence, entry(shop)); err != nil {
+			t.Fatalf("AddOverride %d: %v", i, err)
+		}
+	}
+
+	// Every override ends one hour after now(). Two hours later they all
+	// ended, so a time a year back in the request does not keep them in
+	// the cap.
+	h.SetClock(now().Add(2 * time.Hour))
+
+	back := override("ovr-back", "dave")
+	back.Start, back.End = now().Add(2*time.Hour), now().Add(3*time.Hour)
+	back.CreatedAt = now().AddDate(-1, 0, 0)
+
+	if err := h.Schedules.AddOverride(t.Context(), ref, back, fence, entry(shop)); err != nil {
+		t.Fatalf("AddOverride with a time a year back: %v", err)
+	}
+
+	if got := getNetwork(t, h); len(got.Overrides) != 1 {
+		t.Fatalf("Get = %d overrides, want only the one that did not end", len(got.Overrides))
 	}
 }

@@ -242,6 +242,9 @@ func TestValidate(t *testing.T) {
 		"the zone of the host":        func(s *oncall.Schedule) { s.Zone = "Local" },
 		"an empty zone":               func(s *oncall.Schedule) { s.Zone = "" },
 		"a zone path":                 func(s *oncall.Schedule) { s.Zone = "/etc/localtime" },
+		"the localtime zone":          func(s *oncall.Schedule) { s.Zone = "localtime" },
+		"the posixrules zone":         func(s *oncall.Schedule) { s.Zone = "posixrules" },
+		"the Factory zone":            func(s *oncall.Schedule) { s.Zone = "Factory" },
 		"a zone with dots":            func(s *oncall.Schedule) { s.Zone = "../zoneinfo/UTC" },
 		"the server scope":            func(s *oncall.Schedule) { s.Namespace = "@server" },
 		"no namespace":                func(s *oncall.Schedule) { s.Namespace = "" },
@@ -391,6 +394,108 @@ func TestTurnsFollowTheWallClock(t *testing.T) {
 			if got.Principal != tc.who || !got.Start.Equal(tc.start) || !got.End.Equal(tc.end) {
 				t.Fatalf("At(%s) = %s from %s to %s, want %s from %s to %s",
 					tc.t, got.Principal, got.Start, got.End, tc.who, tc.start, tc.end)
+			}
+		})
+	}
+}
+
+// rotationIn returns rotation with turns of one hour in the zone of start.
+func rotationIn(t *testing.T, start time.Time, members ...string) oncall.Schedule {
+	t.Helper()
+
+	s := rotation(t, start, time.Hour, members...)
+	s.Zone = start.Location().String()
+
+	return s
+}
+
+func zone(t *testing.T, name string) *time.Location {
+	t.Helper()
+
+	l, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatalf("load zone: %v", err)
+	}
+
+	return l
+}
+
+// TestTurnsAtAChangeOfTheClock checks the turns at a change of the clock
+// in zones west of UTC and with a change of 30 minutes, where time.Date
+// alone gives another instant for a skipped or a repeated wall time.
+func TestTurnsAtAChangeOfTheClock(t *testing.T) {
+	t.Parallel()
+
+	ny, lh := zone(t, "America/New_York"), zone(t, "Australia/Lord_Howe")
+	utc := func(m time.Month, d, h, mi int) time.Time { return time.Date(2026, m, d, h, mi, 0, 0, time.UTC) }
+	abc := []string{"alice", "bob", "carol"}
+
+	cases := []struct {
+		name       string
+		s          oncall.Schedule
+		t          time.Time
+		who        string
+		start, end time.Time
+	}{
+		{
+			"New York: the turn before the skipped hour keeps its hour",
+			rotationIn(t, time.Date(2026, 3, 8, 0, 0, 0, 0, ny), abc...),
+			utc(3, 8, 6, 30), "bob", utc(3, 8, 6, 0), utc(3, 8, 7, 0),
+		},
+		{
+			"New York: the turn after the skipped hour starts at 03:00",
+			rotationIn(t, time.Date(2026, 3, 8, 0, 0, 0, 0, ny), abc...),
+			utc(3, 8, 7, 30), "alice", utc(3, 8, 7, 0), utc(3, 8, 8, 0),
+		},
+		{
+			"New York: a turn from 02:30 starts at 03:00",
+			rotationIn(t, time.Date(2026, 3, 7, 22, 30, 0, 0, ny), abc...),
+			utc(3, 8, 7, 10), "bob", utc(3, 8, 7, 0), utc(3, 8, 7, 30),
+		},
+		{
+			"New York: the turn that ends in the repeated hour gets the extra hour",
+			rotationIn(t, time.Date(2026, 11, 1, 0, 0, 0, 0, ny), abc...),
+			utc(11, 1, 5, 30), "alice", utc(11, 1, 4, 0), utc(11, 1, 6, 0),
+		},
+		{
+			"New York: the turn from the repeated hour starts at its second occurrence",
+			rotationIn(t, time.Date(2026, 11, 1, 0, 0, 0, 0, ny), abc...),
+			utc(11, 1, 6, 30), "bob", utc(11, 1, 6, 0), utc(11, 1, 7, 0),
+		},
+		{
+			"Lord Howe: a turn from the skipped half hour starts at its end",
+			rotationIn(t, time.Date(2026, 10, 4, 0, 0, 0, 0, lh), abc...),
+			utc(10, 3, 15, 45), "carol", utc(10, 3, 15, 30), utc(10, 3, 16, 0),
+		},
+		{
+			"Lord Howe: the turn before the skipped half hour ends at the change",
+			rotationIn(t, time.Date(2026, 10, 4, 0, 0, 0, 0, lh), abc...),
+			utc(10, 3, 15, 0), "bob", utc(10, 3, 14, 30), utc(10, 3, 15, 30),
+		},
+		{
+			"Lord Howe: a turn that ends at 01:30 gets the repeated half hour",
+			rotationIn(t, time.Date(2026, 4, 4, 23, 30, 0, 0, lh), abc...),
+			utc(4, 4, 14, 45), "bob", utc(4, 4, 13, 30), utc(4, 4, 15, 0),
+		},
+		{
+			"Lord Howe: a turn from 01:30 starts at its second occurrence",
+			rotationIn(t, time.Date(2026, 4, 4, 23, 30, 0, 0, lh), abc...),
+			utc(4, 4, 15, 10), "carol", utc(4, 4, 15, 0), utc(4, 4, 16, 0),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tc.s.At(tc.t)
+			if err != nil {
+				t.Fatalf("At: %v", err)
+			}
+
+			if got.Principal != tc.who || !got.Start.Equal(tc.start) || !got.End.Equal(tc.end) {
+				t.Fatalf("At(%s) = %s from %s to %s, want %s from %s to %s",
+					tc.t, got.Principal, got.Start.UTC(), got.End.UTC(), tc.who, tc.start, tc.end)
 			}
 		})
 	}

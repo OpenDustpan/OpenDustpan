@@ -105,6 +105,19 @@ func (c Calendar) AddBusinessTime(t time.Time, d time.Duration) (time.Time, erro
 
 	for range MaxSearchDays {
 		end := c.DayEnd.at(DateOf(at, loc), loc)
+		if !end.After(at) {
+			// A zone change can skip the start of the working hours and
+			// leave no business time on this date: go to the next day.
+			next, nerr := c.businessDayFrom(DateOf(at, loc).AddDays(1))
+			if nerr != nil {
+				return time.Time{}, nerr
+			}
+
+			at = c.DayStart.at(next, loc)
+
+			continue
+		}
+
 		left := end.Sub(at)
 		if d <= left {
 			return at.Add(d), nil

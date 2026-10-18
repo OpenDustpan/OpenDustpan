@@ -47,6 +47,9 @@ var (
 	// ErrTemporary reports a delivery that may work later, for example a
 	// receiver that does not answer. The dispatcher tries it again.
 	ErrTemporary = errors.New("delivery failed for now")
+	// ErrNoAccess reports a delivery whose principal can no longer read
+	// the notification, or whose contact is gone. The dispatcher skips it.
+	ErrNoAccess = errors.New("the principal of the delivery can no longer read the notification")
 )
 
 // Bounds of a notification.

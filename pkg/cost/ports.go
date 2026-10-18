@@ -102,22 +102,30 @@ type SpendSource interface {
 // and carries the fence of that namespace. A zero fence is valid only for
 // an estimate in audit.ServerScope, the estimate of a blueprint of the
 // installation, and a fence is refused for such an estimate.
+//
+// A subject keeps one estimate of each origin (Estimate.Origin): the
+// estimate that a client sent and the estimate of an Estimator adapter.
+// An estimate replaces only the estimate of its subject and its origin,
+// so an estimate of one origin never replaces the other silently.
 type EstimateStore interface {
 	// PutEstimate stores est and replaces the estimate of the same
-	// subject. It appends the audit entry when the estimate came from a
-	// client through the API, and appends nothing when entry is nil. It
-	// returns ErrInvalid for an estimate that fails Validate, for a fence
-	// of another namespace than est.Namespace, for a zero fence of an
-	// estimate in a namespace, for a fence of an estimate in
-	// audit.ServerScope, and for a subject whose stored estimate is in
-	// another namespace. It returns namespace.ErrFenced for a stale fence
-	// and namespace.ErrNotFound for an unknown namespace.
+	// subject and origin. It appends the audit entry when the estimate
+	// came from a client through the API, and appends nothing when entry
+	// is nil. It returns ErrInvalid for an estimate that fails Validate,
+	// for a fence of another namespace than est.Namespace, for a zero
+	// fence of an estimate in a namespace, for a fence of an estimate in
+	// audit.ServerScope, for a subject whose stored estimate is in another
+	// namespace, and for an entry whose Namespace is not est.Namespace. It
+	// returns namespace.ErrFenced for a stale fence and
+	// namespace.ErrNotFound for an unknown namespace.
 	PutEstimate(ctx context.Context, est Estimate, fence namespace.Fence, entry *audit.Entry) error
-	// GetEstimate returns the estimate of s, or ErrNotFound.
-	GetEstimate(ctx context.Context, s Subject) (Estimate, error)
-	// PendingEstimates returns the estimates of the newest plan of each
-	// job of ns that waits or runs and that has not applied its plan. The
-	// budget of the namespace counts them as pending.
+	// GetEstimate returns the estimate of s and o, or ErrNotFound.
+	GetEstimate(ctx context.Context, s Subject, o Origin) (Estimate, error)
+	// PendingEstimates returns the estimates of the plans of the jobs of
+	// ns that wait or run and that have not applied their plan: for each
+	// job, the estimates of its highest phase with an estimate, one of
+	// each origin. The budget of the namespace counts them as pending,
+	// each job once.
 	PendingEstimates(ctx context.Context, ns namespace.Name) ([]Estimate, error)
 }
 
@@ -129,7 +137,10 @@ type EstimateStore interface {
 // stored budget, found by its ID, returns ErrNotFound when the fence
 // belongs to another namespace than the budget, so that a caller cannot
 // learn of a budget in a namespace that it does not hold. A stale fence
-// returns namespace.ErrFenced.
+// returns namespace.ErrFenced. A write with an audit entry returns
+// ErrInvalid for an entry whose Namespace is not the namespace of the
+// budget, and changes nothing, so a write never appends to the audit log
+// of another namespace.
 type BudgetStore interface {
 	// CreateBudget persists b with version 1 and appends the audit entry
 	// e in its transaction. It returns ErrInvalid for a budget that fails

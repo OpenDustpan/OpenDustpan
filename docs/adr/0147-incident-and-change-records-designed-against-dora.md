@@ -71,10 +71,17 @@ the docs must never say that it does.
    classifications and reports (decisions 4 to 6), because a final report
    and a late classification can come after the close. A create stores an
    incident only in the state `open`: `Incident.ValidateNew` refuses every
-   other state and every time of a later step.
+   other state and every time of a later step. `Incident.Validate` refuses
+   an unknown state, a state without the time of its step, a time of a
+   later step than the state, and a closed incident without `ClosedAt`, a
+   root cause and lessons. `Store.Step` runs `incident.Apply` on the
+   stored incident in the transaction of the write, so a step always
+   starts from the stored state. `Store.Update` keeps the stored ID,
+   namespace, state, step times, `OpenedAt` and `OpenedBy`, so an edit
+   cannot change the state or the person who opened the incident.
 3. **The review after an incident.** An incident closes only with a root
-   cause and lessons. This is the review that Article 13 asks for, as we
-   read it. The close is a step of a person with
+   cause and lessons. This is designed against Article 13 (source check
+   pending). The close is a step of a person with
    `namespace:respond-incidents`.
 4. **A timeline.** Each incident has an append-only timeline of notes. A
    step, a link of a job and a change of the classification add a note by
@@ -169,7 +176,10 @@ the docs must never say that it does.
     incident with such a fence fails with `ErrNotFound`, so the answer does
     not tell whether the incident exists in another namespace. A stale
     fence fails with `namespace.ErrFenced`. The suite runs each write with
-    the three fences.
+    the three fences. The store also refuses a write whose audit entry
+    names another namespace, with the error of a fence of another
+    namespace, so a write cannot append to the audit log of another
+    namespace.
 
 ### The actions of the operations ADRs
 
