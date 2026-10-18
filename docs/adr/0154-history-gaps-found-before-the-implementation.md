@@ -62,8 +62,8 @@ The facts on `main` that the decisions build on:
    The row lock lasts until the commit. So a second transaction of the same
    namespace waits, and gets the next number only after the first commits.
    The order of the sequences is the order of the commits in the namespace.
-   This needs write transactions at `READ COMMITTED` (the PostgreSQL default
-   and the level of the adapter), because a stricter level can fail the
+   This needs write transactions at `READ COMMITTED` (the PostgreSQL default,
+   which the adapter does not change), because a stricter level can fail the
    transaction that waited instead of giving it the next number.
    A transaction that rolls back also rolls back its number.
 2. **The sequence is per namespace, not per installation.** This replaces
@@ -188,9 +188,11 @@ The facts on `main` that the decisions build on:
     - The escape hatch for development is
       `--generate-key-encryption-key`. On the first start, the server makes
       a local key file. The server logs the warning below on each start
-      whose key comes from a key file that `serve` made, by this flag or by
-      the terminal prompt. It never logs it when the key comes from
-      DUSTPAN_KEY_ENCRYPTION_KEY or from a file that the operator supplied.
+      when it uses the default key file path and no
+      `--key-encryption-key-file` is set. That is the file that `serve`
+      makes, by this flag or by the terminal prompt. It never logs it when
+      the key comes from DUSTPAN_KEY_ENCRYPTION_KEY or from a file that the
+      operator supplied.
       The warning: `the key-encryption key is a local file that this
       server made: for production, set --key-encryption-key-file or
       DUSTPAN_KEY_ENCRYPTION_KEY`.
@@ -210,7 +212,8 @@ The facts on `main` that the decisions build on:
     The store checks that `key.Ref` names the item that it creates (owner,
     kind and item ID), and returns `secret.ErrInvalidItemRef` otherwise. A
     create that finds the item already stored keeps the stored record and
-    returns the stored item. The prepared blob is then an orphan.
+    returns the stored item, with `ErrShredded` when the stored key is
+    shredded. The prepared blob is then an orphan.
 12. **`ItemKeyIndex.CreateItemKey` leaves the port.** Only the create ports
     write a key record. `ItemKeyIndex` keeps `GetItemKey`, `ShredItemKey`,
     `ListItemKeys` and `ListItemKeyWrapperIDs`. `secrettest.RunItemKeys`
@@ -381,8 +384,9 @@ The facts on `main` that the decisions build on:
     in the namespace of the path, and answers 404 when it finds none or
     when the caller does not have the action. Grants stay until the purge
     (ADR 47), so this check works for a soft-deleted unit.
-23. **The tool routes stay.** The routes of ADR 150 decision 15 stay, by
-    name, for live units only. Each tool CLI and each tool shape keep them.
+23. **The tool routes stay.** The routes of ADR 150 decision 15 stay, for
+    live units only. The Pulumi state-at route goes by name. The TFE route
+    goes by workspace ID. Each tool CLI and each tool shape keep them.
 
 ### G7. The conformance suite of the inventory change log
 
@@ -428,7 +432,9 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   sequence is now per namespace, and a counter row in the write transaction
   assigns it (decisions 1 to 7).
 - **ADR 150, decisions 14 and 15:** a request names the unit by its current
-  name or its ID, and the routes take a name. The by-ID form is now the
+  name or its ID, and the routes take a name. The Pulumi state-at route
+  still goes by name and the TFE route by workspace ID, both for live units
+  only (decision 23). The by-ID form is now the
   inventory route of decision 20, which also reaches a soft-deleted unit.
 - **ADR 150, Consequences, open work item 5:** the inventory change log gets
   its suite, `inventorytest.RunHistory` (decisions 24 and 25).
@@ -441,6 +447,9 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
 - **ADR 151, decision 8, in part:** the tombstone names an owner, not only
   a unit, so `history.Tombstone` changes (decision 18). The purge of a unit
   still writes its tombstone as ADR 151 decision 8 says.
+- **ADR 151, decision 29, in part:** the read of a redaction record also
+  needs `namespace:read`, and for a change-order owner it needs
+  `changeorder:read` on each unit (decisions 9 and 18).
 - **ADR 151, decision 28:** `GET /api/inventory/redactions/{redaction_id}` is
   now `GET /api/inventory/namespaces/{namespace}/redactions/{redaction_id}`
   (decisions 8 and 9).
@@ -477,5 +486,6 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   5. `SealNested` and `OpenNested` with a test that seals under two item
      keys, shreds one, and fails to open.
   6. The blame rule for opaque items, with its three situations.
-  7. The routes of decisions 8 and 20, with the port
+  7. The adapter sets `ReadCommitted` explicitly for write transactions.
+  8. The routes of decisions 8 and 20, with the port
      `inventory.UnitStateAt` of each tool.
