@@ -126,7 +126,7 @@ table.
     license notice ships in the build of the console. A scheme with a
     license that is not clear stays out, and the table lists it. The name
     of a scheme is its label, with credit to its authors. It is never our
-    name. The first set has 15 schemes from 10 projects:
+    name. The first set has 16 schemes from 11 projects:
 
     | Schemes | Upstream | License |
     | --- | --- | --- |
@@ -140,11 +140,17 @@ table.
     | Tomorrow Night | `chriskempson/tomorrow-theme` | MIT |
     | One Dark | `atom/one-dark-syntax` | MIT |
     | Kanagawa | `rebelot/kanagawa.nvim` | MIT |
+    | Nord | `nordtheme/alacritty` | MIT |
 
-    Two schemes of the owner's list stay out for now. Nord lists two
-    licenses, Apache-2.0 and CC BY-SA 4.0, and does not say which part
-    each covers. For Monokai, we found no license for the original scheme,
-    and Monokai Pro is a commercial product.
+    The owner decided that Nord and Monokai come in only in a version
+    with a permissive license that the upstream project states in a
+    license file or in its text (owner). Nord comes from the official Nord
+    port for Alacritty, which has an MIT license file. Its colors are the
+    same as the Gogh palette. The Nord project has no light variant, so
+    Nord Light stays out. Monokai stays out: no Monokai scheme in Gogh has
+    a clear license. The schemes from monokai.com give no license, Monokai
+    Pro is a commercial product, and Monokai Soda and Monokai Vivid have
+    no license file and no license statement.
 
 ### Branding
 
@@ -260,11 +266,3 @@ table.
   outside Gogh needs a new decision.
 - The generator of the console imports TypeScript, so it needs Node 22.18
   or later.
-
-## Open questions
-
-- Nord: can the owner ask the Nord project which license covers the
-  palette, or accept Apache-2.0 for it? Until then, Nord stays out.
-- Monokai: is a scheme in the Monokai family with a clear license
-  acceptable, for example "Monokai Remastered" or "Monokai Soda" in Gogh,
-  each with its upstream license checked?
