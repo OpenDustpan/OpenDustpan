@@ -8,81 +8,74 @@ ADR 120 decision 3 lets an administrator connect one model for the
 installation: an adapter, a base address, a model name and a credential.
 ADR 121 gives the agent a provider-neutral model port, `agent.Model`, and
 plans two adapters. ADR 121 also leaves open prompt caching and how a
-connection names the details of each provider.
+connection names the details of each model server.
 
 The project owner decided on 2026-10-18, through the project manager:
 
 - No default model yet. No benchmark shows yet that a small model is fit
   for the work of Dusty.
+- The product does not document or name a specific model provider. It
+  makes configurable each setting that a provider can need. The choice of
+  a provider, and the terms of that provider, are the decision of the
+  operator.
 - For now, the operator sets every field: the base address, the wire
   format, the model name, the authentication, extra headers, and the
-  fields of each provider for tools, a stream and prompt caching.
+  fields for tools, a stream, reasoning, prompt caching and errors.
 - The authentication names a header and a secret reference. The
   configuration never holds a secret value.
-- Every persona is first class: a homelab with a local model server or a
-  subscription plan, a startup with a provider account, and an enterprise
-  with a gateway.
-- The connection supports the model provider of OpenCode fully: a
-  header with an identifier that stays the same for one conversation, and a
-  user agent that the operator sets, with no identity of a person.
+- Every persona is first class: a homelab with a local model server, a
+  startup with a hosted account, and an enterprise with a gateway.
+- The worked examples are generic, and the examples of a homelab come
+  first.
 
 The project manager also reported a result of the agent benchmark: models
 repeated tokens that a person pasted into a prompt.
 
-The research note
-[`docs/research/model-providers.md`](../research/model-providers.md)
-records the request rules of 16 providers, gateways and model servers. It
-marks each claim as verified, with its source, or as unverified. These
-rules from the note shaped the design:
+Model servers, gateways and hosted APIs differ in these mechanisms. The
+design makes each one a field of the connection document:
 
-- Most model servers and gateways serve the OpenAI Chat Completions
-  format. Ollama, vLLM, llama.cpp, LM Studio, LiteLLM, OpenRouter, Groq,
-  Together, DeepInfra, Mistral, Azure OpenAI (v1 path), Vertex AI and
-  Bedrock all have a Chat Completions endpoint.
-- Anthropic serves the Anthropic Messages format. OpenCode Go, Bedrock,
-  vLLM, llama.cpp, LM Studio and LiteLLM also serve it.
-- The output token field differs. OpenAI deprecates `max_tokens` for
-  `max_completion_tokens`. Ollama and LM Studio document only
-  `max_tokens`. Anthropic requires `max_tokens`.
-- `tool_choice` support differs. Ollama does not support it. llama.cpp
-  accepts only three strings. The newest Anthropic models refuse a forced
-  tool. So Dusty never forces a tool.
-- vLLM gives tool calls only when its operator starts it with
-  `--enable-auto-tool-choice` and a tool call parser. A model can also
-  answer with no tool call at all. So a probe at connect time must check
-  tool calls.
-- Prompt caching is automatic at OpenAI, Gemini, vLLM and llama.cpp, and
-  explicit (`cache_control`) at Anthropic and for Anthropic models through
-  OpenRouter and Bedrock. OpenAI, DeepInfra, Together and Mistral route
-  the cache with `prompt_cache_key`. OpenRouter routes requests of one
-  conversation to one provider by `session_id` or the header
-  `x-session-id`.
-- OpenCode Go answers 400 to a request with no `x-opencode-session`
-  header. Its docs ask for a stable identifier for each conversation, for
-  routing and prompt caching. They also ask a client to send its own user
-  agent. The OpenCode client sends the same identifier also in
-  `prompt_cache_key` and in `x-session-affinity`.
-- OpenAI, Anthropic and OpenCode Go each name a field that identifies an
-  end user (`safety_identifier`, `metadata.user_id`). None requires it.
-- Thinking signatures (Anthropic) and thought signatures (Gemini) must go
-  back unchanged in the next request, or the provider refuses it.
-- Rate-limit hints have four forms: `retry-after` in seconds or as an
-  HTTP date, `retry-after-ms`, durations such as `6m0s` (OpenAI), and
-  RFC 3339 times (Anthropic). OpenCode reports a used-up plan as a 429 or
-  402 that is not a throttle.
-- Bedrock now accepts API keys as a bearer token, and has a Chat
-  Completions endpoint. Vertex AI accepts only OAuth access tokens, which
-  expire after 1 hour. Azure OpenAI accepts an `api-key` header.
+- Most model servers and gateways serve the Chat Completions format. Some
+  serve the Messages format, and some serve both.
+- The name of the field for the output token limit differs between servers
+  of one format.
+- Support for `tool_choice` differs. Some servers refuse the field, some
+  accept only some values, and some models refuse a forced tool. So Dusty
+  never forces a tool.
+- Some model servers give tool calls only when their operator turns tool
+  calls on. A model can also answer with no tool call at all. So a probe
+  at connect time must check tool calls.
+- Prompt caching is automatic at some servers and explicit at others,
+  with `cache_control` breakpoints. Some servers route a cache by a body
+  field or a header that holds a stable identifier for each conversation.
+- Some gateways refuse a request with no identifier for each
+  conversation. Some ask each client to send its own user agent.
+- Some formats define a field that identifies an end user. No server that
+  the design must support requires it.
+- Some servers answer reasoning parts with a signature, in a field whose
+  path differs. The next request must send the part back unchanged, or the
+  server refuses it.
+- Rate-limit hints have many forms: `retry-after` in seconds or as an HTTP
+  date, a header in milliseconds, durations such as `6m0s`, and RFC 3339
+  times. The header names differ.
+- Some servers report a used-up plan or quota as a 429 or a 402 that is
+  not a throttle. Only an error type or code in the body tells the cases
+  apart, and its values differ.
+- Most hosted APIs accept a static key in a header. The header name and
+  the prefix differ. Some APIs accept only signed requests or short-lived
+  OAuth tokens.
 
 ## Decision
 
 ### No default
 
 1. **No default model, no default provider, no preset.** The server
-   fills no field of a connection. The console shows no recommended model,
-   and the docs give worked examples (decision 30), not a default. With
-   no connection, Dusty is off (ADR 120 decision 3). A default needs a
-   benchmark result and a new ADR.
+   fills no field of a connection with a value for a provider. The
+   defaults are empty values, the `userAgent` of the release (decision
+   12) and the `retry-after` header of RFC 9110 (decision 23). The
+   console shows no recommended model, and the docs give generic worked
+   examples (decision 36), not a default. With no connection, Dusty is
+   off (ADR 120 decision 3). A default needs a benchmark result and a new
+   ADR.
 
 ### The connection document
 
@@ -96,329 +89,477 @@ rules from the note shaped the design:
 
    | Field | What it holds | Default |
    | --- | --- | --- |
-   | `format` | the wire format (decision 4) | none |
-   | `baseURL` | the address before the path of the format | none |
+   | `format` | the wire format (decision 5) | none |
+   | `baseURL` | the address before the path of the format (decision 4) | none |
    | `model` | the model name that the request sends, as is | none |
-   | `auth` | the header and the secret reference (decision 8) | none |
-   | `headers` | extra headers (decision 10) | empty |
-   | `query` | extra query parameters, for example `api-version` | empty |
-   | `userAgent` | the `User-Agent` header (decision 11) | `OpenDustpan/<release>` |
-   | `outputTokens` | the field name and the limit for each call (decision 12) | none |
+   | `auth` | the header and the secret reference (decision 9) | none |
+   | `headers` | extra headers (decision 11) | empty |
+   | `query` | extra query parameters (decision 11) | empty |
+   | `userAgent` | the `User-Agent` header (decision 12) | `OpenDustpan/<release>` |
+   | `outputTokens` | the field name and the limit for each call (decision 13) | none |
    | `contextTokens` | the context window of the model | none |
-   | `tools` | the tool fields (decision 13) | none |
-   | `transport` | `whole` or `stream` (decision 14) | none |
-   | `reasoning` | how the adapter keeps reasoning parts (decision 15) | none |
-   | `cache` | the caching mode (decision 16) | none |
-   | `conversationKey` | where the conversation key goes (decision 17) | empty |
-   | `providerFields` | extra fields of the request body (decision 18) | empty |
+   | `tools` | the tool fields (decision 14) | none |
+   | `transport` | `whole` or `stream` (decision 15) | none |
+   | `reasoning` | the reasoning parts to keep (decision 16) | empty |
+   | `cache` | the caching mode (decision 17) | none |
+   | `conversationKey` | where the conversation key goes (decision 18) | empty |
+   | `providerFields` | extra fields of the request body (decision 21) | empty |
+   | `errors` | the error types or codes for a quota and for a long context (decision 22) | empty |
+   | `rateLimit` | the headers that hold a wait (decision 23) | `["retry-after"]` |
+   | `requestIDHeaders` | the headers that hold the request ID of the server (decision 22) | empty |
 
-   The adapter appends the path of its format to `baseURL`:
+   A path in a field is a dotted path into a JSON object, for example
+   `metadata.session`. It has 1 to 8 segments and at most 128 bytes. A
+   segment is a decimal index, or a name of letters, digits and `_` that
+   does not start with a digit.
+4. **The base address.** `baseURL` is an absolute URL of at most 2048
+   bytes. Validation refuses user information, a query string (`query`
+   holds query parameters), a fragment, and a path that ends in the path
+   of the format. The adapter appends the path of its format to `baseURL`:
    `/chat/completions`, `/messages` or `/responses`. A server that uses
-   another path is not supported in version 1.
+   another path is not supported in version 1. The plain-secret check of
+   decision 11 also runs on the path, because some gateways put a key in
+   the path. The scheme and the host follow the URL check of decision 26.
+   The adapter never puts a URL in an error or a log: it replaces each
+   `*url.Error` with its operation and the class of its inner error.
 
 ### Wire formats
 
-4. **Three formats, two first.** `format` takes one of these values:
+5. **Three formats, two first.** `format` takes one of these values:
 
    | Value | The format | Support |
    | --- | --- | --- |
-   | `openai-chat-completions` | the Chat Completions API that OpenAI defined | first adapter change |
-   | `anthropic-messages` | the Anthropic Messages API | first adapter change |
-   | `openai-responses` | the Responses API that OpenAI defined | a later change |
+   | `chat-completions` | the Chat Completions format | first adapter change |
+   | `messages` | the Messages format | first adapter change |
+   | `responses` | the Responses format | a later change |
 
-   Chat Completions comes first because every local model server and
-   every gateway of the note serves it. Messages comes first too, because
-   ADR 120 planned it and its caching is explicit. A connection with
-   `openai-responses` fails validation with `ErrFormatNotSupported` until
-   its adapter ships. The newest OpenAI models call tools only through
-   Responses.
-5. **No native format of a cloud.** The server has no adapter for the
-   Gemini `generateContent` format, the Bedrock Converse format or the
-   Ollama `/api/chat` format. Each of these providers also serves Chat
-   Completions. An operator who needs a native format puts a gateway such
-   as LiteLLM in front of it.
-6. **No request signing and no token exchange.** The server does not
-   sign requests with AWS SigV4. It does not get or refresh an OAuth
-   access token, for example for Vertex AI or for Azure with Entra ID. A
-   credential is one static secret. An operator who must use SigV4 or a
-   short-lived token runs a gateway that does it. Bedrock API keys and
-   Azure `api-key` keys are static, so they work with no gateway.
-7. **The adapter of each format.** Each adapter is in its own package
-   under `pkg/agent/model/`, with `net/http` and `encoding/json` only
-   (ADR 121 decision 8). One adapter serves every provider of its format.
-   No adapter has a code path for the name of a provider. A difference
-   between providers is a field of the document, never a check of the host
-   name.
+   Chat Completions comes first because most local model servers and
+   gateways serve it. Messages comes first too, because ADR 120 planned
+   it and its caching is explicit. A connection with `responses` fails
+   validation with `ErrFormatNotSupported` until its adapter ships.
+6. **No other format.** The server has no adapter for a format of one
+   provider or one model server. An operator who needs such a format puts
+   a gateway in front of it that serves one of the formats of decision 5.
+7. **No request signing and no token exchange.** The server does not sign
+   requests. It does not get or refresh an OAuth access token. A
+   credential is one static secret. An operator who must use signed
+   requests or a short-lived token runs a gateway that does it.
+8. **The adapter of each format.** Each adapter is in its own package
+   under `pkg/modeladapter/`, for example `pkg/modeladapter/chatcompletions`
+   and `pkg/modeladapter/messages`. An adapter imports `net/http`, so it is
+   outside `pkg/agent/`, which the depguard rule for domain packages
+   covers. `pkg/agent` keeps the port and imports no transport. Each
+   adapter uses `net/http` and `encoding/json` only (ADR 121 decision 8).
+   One adapter serves every server of its format. No adapter has a code
+   path for the name of a provider or a host. A difference between servers
+   is a field of the document.
 
 ### Authentication and secrets
 
-8. **`auth` names a header and a secret item.** The form is:
+9. **`auth` names a header and a secret item.** The form is:
 
    ```json
    "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-..." }
    ```
 
    The adapter sends the header `header` with the value `prefix` and the
-   value of the secret item. `prefix` can be empty, for example for
-   `x-api-key` or `api-key`. `auth` can also be `{"none": true}`, for a
-   model server that takes no key. The document has no field for a plain
-   value. Validation refuses a `secret` that is not a reference to a
-   secret item of the connection.
-9. **The secret is a secret item of the scope `@server`.** A secret item
-   is a value that the server seals in a scope with its own data key
-   (ADR 23), as the secrets of a sink (ADR 145 decision 13).
-   `secret.InstallationSecrets` seals it in the installation scope. These
-   routes manage the secret items of the connection, with the action
-   `server:manage-agent` on `@server`:
+   value of the secret item. `prefix` can be empty, for a server that
+   takes the key alone in a header such as `x-api-key`. `auth` can also be
+   `{"none": true}`, for a model server that takes no key. The document has
+   no field for a plain value. Validation refuses a `secret` that is not a
+   reference to a secret item of the connection. `header` follows the
+   name rules of decision 11.
+10. **The secret is a secret item of the scope `@server`.** A secret item
+    is a value that the server seals in a scope with its own data key
+    (ADR 23), as the secrets of a sink (ADR 145 decision 13).
+    `secret.InstallationSecrets` seals it in the installation scope. These
+    routes manage the secret items of the connection, with the action
+    `server:manage-agent` on `@server`:
 
-   | Route | What it does |
-   | --- | --- |
-   | `POST /api/agent/secrets` | stores a value and answers its reference `itm-...` |
-   | `PUT /api/agent/secrets/{ref}` | replaces the value of the item, for a rotation |
-   | `GET /api/agent/secrets` | lists the references, with the times of create, change and last use |
-   | `DELETE /api/agent/secrets/{ref}` | removes the item, or answers 409 while the connection uses it |
+    | Route | What it does |
+    | --- | --- |
+    | `POST /api/agent/secrets` | stores a value and answers its reference `itm-...` |
+    | `PUT /api/agent/secrets/{ref}` | replaces the value of the item, for a rotation |
+    | `GET /api/agent/secrets` | lists the references, with the times of create, change and last use |
+    | `DELETE /api/agent/secrets/{ref}` | removes the item, or answers 409 while the connection uses it |
 
-   No route answers a value. A rotation takes effect at the next model
-   call. The value is never in a log, an audit entry, a metric, an error
-   or a transcript. The audit log is on for the agent (ADR 120 decision
-   5), so each write of a secret item writes an entry (decision 27).
-10. **Extra headers.** `headers` maps a header name to `{"value": "..."}`
-    or `{"secret": "itm-..."}`. It holds at most 16 headers, and each
-    value at most 1 KiB. Examples are `anthropic-version`,
-    `anthropic-beta`, and the attribution headers of OpenRouter. Validation
-    refuses these names:
-    - the headers that the transport owns: `Host`, `Content-Length`,
-      `Content-Type`, `Transfer-Encoding`, `Connection`, `TE`, `Upgrade`,
-      `Cookie`, and each name that starts with `Proxy-`,
-    - the header of `auth`, `User-Agent`, and each header of
-      `conversationKey`, because their own fields set them.
+    The `DELETE` checks the use and removes the item in one transaction,
+    and a connection write that adds a reference checks the item in its
+    own transaction. So a `DELETE` and a `PUT` of the connection cannot
+    both pass. No route answers a value. A rotation takes effect at the
+    next model call. The value is never in a log, an audit entry, a
+    metric, an error or a transcript. The audit log is on for the agent
+    (ADR 120 decision 5), so each write of a secret item writes an entry
+    (decision 33).
+11. **Extra headers and query parameters.** `headers` maps a header name
+    to `{"value": "..."}` or `{"secret": "itm-..."}`. `query` maps a
+    parameter name to the same two forms. Each holds at most 16 entries,
+    and each value at most 1 KiB. These rules apply:
+    - A header name is a token of RFC 9110: letters, digits and
+      ``!#$%&'*+-.^_`|~``, with no space and no `:`. Validation compares
+      names with no regard to case, and refuses two names that differ
+      only in case.
+    - A value holds visible ASCII, space and tab only.
+    - Validation refuses these header names: the headers that the
+      transport owns (`Host`, `Content-Length`, `Content-Type`,
+      `Transfer-Encoding`, `Connection`, `TE`, `Upgrade`, `Cookie`, and
+      each name that starts with `Proxy-`), the header of `auth`,
+      `User-Agent`, and each header of `conversationKey`.
+    - Validation refuses a plain value with `ErrPlainSecret` when the
+      name holds `token`, `key`, `secret`, `auth`, `session`, `cookie`,
+      `password` or `signature`, with no regard to case. It also refuses a
+      plain value that the secret filter (decision 24) finds secret-like.
+      The error names the field and tells the operator to store the value
+      as a secret item.
+    - The console makes each new header and query parameter a secret
+      item by default. The operator changes it to a plain value.
 
-    A plain value that the reply filter (decision 22) finds secret-like
-    fails validation with `ErrPlainSecret`. The error names the field and
-    tells the operator to store the value as a secret item. The same rule
-    applies to `query` and to `providerFields`.
-11. **The user agent.** `userAgent` sets the `User-Agent` header of each
+    The plain-secret check also runs on the keys and string values of
+    `providerFields` (decision 21). `providerFields` has no secret form in
+    version 1.
+12. **The user agent.** `userAgent` sets the `User-Agent` header of each
     request. The default is `OpenDustpan/` and the release, for example
-    `OpenDustpan/0.9.0`. A value is printable ASCII, at most 200 bytes. The
-    value stays the same between the requests of a release, because some
-    providers use it to route a cache.
+    `OpenDustpan/0.9.0`. A value is printable ASCII, at most 200 bytes.
+    The value stays the same between the requests of a release, because
+    some servers use it to route a cache.
 
 ### Fields of the request
 
-12. **The output token limit.** `outputTokens` holds `field` and `max`.
-    For `openai-chat-completions`, `field` is `max_tokens` or
-    `max_completion_tokens`, and the operator chooses it: OpenAI and Azure
-    reasoning models need the second, and Ollama and LM Studio document
-    only the first. For `anthropic-messages` it is `max_tokens`, and for
-    `openai-responses` it is `max_output_tokens`. `max` is the limit for
-    each call. The adapter sends the lower of `max` and the output tokens
-    that remain in the run (ADR 120 decision 16). The adapter sends no
-    `temperature`, `top_p` or other sampling field of its own, because
-    reasoning models refuse them.
-13. **Tools.** `tools` holds `choice` and `parallel`:
+13. **The output token limit.** `outputTokens` holds `field` and `max`.
+    `field` is the name of the body field of the limit, for example
+    `max_tokens`, `max_completion_tokens` or `max_output_tokens`. The
+    operator sets the name that the server documents. Validation refuses
+    a name that is not a segment of decision 3, and a name that the
+    adapter owns (decision 21). `max` is the limit for each call. The
+    adapter sends the lower of `max` and the output tokens that remain in
+    the run (ADR 120 decision 16). The adapter sends no `temperature`,
+    `top_p` or other sampling field of its own, because some reasoning
+    models refuse them.
+14. **Tools.** `tools` holds `choice` and `parallel`:
     - `choice` is `omit` or `auto`. With `omit`, the request has no
-      `tool_choice` field. Ollama and some gateways need it. The adapter
-      never forces a tool.
+      `tool_choice` field, for a server that refuses it. The adapter never
+      forces a tool.
     - `parallel` is `omit`, `true` or `false`. It sets
-      `parallel_tool_calls` or `disable_parallel_tool_use`. llama.cpp
-      needs `true` for more than one call in a turn.
+      `parallel_tool_calls` or `disable_parallel_tool_use`. Some servers
+      need `true` for more than one call in a turn.
 
     The adapter sends the tool catalog (ADR 122) in the order of the
     catalog, with each JSON Schema in canonical JSON. So the bytes of the
     tools stay the same between requests, as a cache needs.
-14. **Transport.** With `whole`, the adapter asks for one whole answer.
+15. **Transport.** With `whole`, the adapter asks for one whole answer.
     With `stream`, it asks for a stream, reads it to the end, and builds
     one whole answer. The port keeps no stream (ADR 121 decision 6). A
-    stream helps when a gateway or a provider closes an idle connection
-    on a long answer. With `stream` on Chat Completions, the adapter sets
+    stream helps when a gateway or a server closes an idle connection on a
+    long answer. With `stream` on Chat Completions, the adapter sets
     `stream_options.include_usage`, so the last event holds the token use.
-    A provider that refuses that field fails the `transport` check of the
-    probe, and the operator then sets `whole`.
-    The adapter ignores SSE comment lines, for example the keep-alive
-    lines of OpenRouter. An error event in a stream with the status 200 is
-    an error of the call, with the mapping of decision 21.
-15. **Reasoning parts.** `reasoning` is `drop` or `keep`:
-    - With `keep`, the adapter keeps each reasoning part of an answer as
-      an opaque part (decision 31), with its signature, and sends it back
-      unchanged in the next request of the run. Anthropic needs it for
-      thinking with tools, and Gemini needs its thought signatures.
-    - With `drop`, the adapter sends no reasoning part back.
+    A server that refuses that field fails the `transport` check of the
+    probe, and the operator then sets `whole`. The adapter ignores SSE
+    comment lines, for example keep-alive lines. An error event in a
+    stream with the status 200 is an error of the call, with the mapping
+    of decision 22.
+16. **Reasoning parts.** `reasoning` holds `keep`, a list of up to 8
+    entries. With an empty list, the adapter sends no reasoning part back.
+    - For `chat-completions` and `responses`, an entry is a path
+      (decision 3) in the assistant message of the answer, for example
+      `reasoning_details`.
+    - For `messages`, an entry is a type of content block, for example
+      `thinking`.
 
-    The fields that turn reasoning on and set its effort differ for each
-    provider: `reasoning_effort`, `reasoning`, `thinking`,
-    `output_config`, `think` or `chat_template_kwargs`. The operator sets
-    them in `providerFields`.
-16. **Caching.** `cache` holds `mode` and `ttl`:
+    The adapter keeps the value of each entry, with its signature, as an
+    opaque part (decision 37). It sends the part back unchanged in the next
+    request of the run, at the same path or as the same block. Validation
+    refuses an entry that the adapter owns, for example `content`,
+    `tool_calls` or `role`. The fields that turn reasoning on and set its
+    effort differ for each server. The operator sets them in
+    `providerFields`.
+17. **Caching.** `cache` holds `mode` and `ttl`:
     - `none`: the adapter adds no cache field.
-    - `automatic`: the provider caches by itself, for example OpenAI,
-      Gemini, vLLM and llama.cpp. The adapter adds no cache field. It
-      keeps the prefix stable (decision 19).
+    - `automatic`: the server caches by itself. The adapter adds no cache
+      field. It keeps the prefix stable (decision 20).
     - `breakpoints`: the adapter adds `cache_control` blocks, for the
-      Messages format and for Anthropic models through a Chat Completions
-      gateway such as OpenRouter. It puts one block at the end of the
-      tools, one at the end of the system prompt, and one at the last
-      message. That is 3 of the 4 blocks that Anthropic allows.
-    - `ttl` is `5m` or `1h`, and applies only to `breakpoints`.
+      Messages format and for a Chat Completions gateway that takes them.
+      It puts one block at the end of the tools, one at the end of the
+      system prompt, and one at the last message. Three blocks stay below
+      the limit of 4 that the Messages format sets.
+    - `ttl` is empty or a duration such as `5m` or `1h`, at most 8 bytes.
+      The adapter sends it as is in each block. It applies only to
+      `breakpoints`.
 
-    The answer reports the cache read and cache write tokens of each call,
-    and the token ledger records them (ADR 120 decision 20). So an
-    operator can see whether the cache works.
+    The adapter acts the same with `none` and with `automatic`. Only the
+    `cache` check of the probe differs: it runs for `automatic` and
+    `breakpoints`, and not for `none`. The answer reports the cache read
+    and cache write tokens of each call, and the token ledger records them
+    (ADR 120 decision 20). So an operator can see whether the cache works.
 
 ### The conversation key
 
-17. **One key for each conversation, in the fields that the operator
+18. **One key for each conversation, in the fields that the operator
     names.** A conversation is a chain of agent runs (ADR 120 decision
     6). The conversation key is the same for each model call of one
     conversation, and differs for each conversation. `conversationKey`
     holds the places where the adapter sends it:
-    - `headers`: up to 4 header names, for example
-      `["x-opencode-session", "x-session-affinity"]`.
-    - `bodyField`: one top-level field of the request body, for example
-      `prompt_cache_key` for OpenAI, or empty.
-    - `prefix`: text before the key, up to 16 bytes, for example `ses_`.
+    - `headers`: up to 4 header names, for example `["x-session-id"]`.
+      Each follows the name rules of decision 11.
+    - `bodyField`: one path (decision 3) in the request body, for example
+      `prompt_cache_key` or `metadata.session`, or empty.
+    - `prefix`: text before the key, up to 16 bytes, for example `conv_`.
 
     With all fields empty, the adapter sends no key.
-18. **The key has no identity of a person.** The key is the first 26
+19. **The key has no identity of a person.** The key is the first 26
     characters, in lower-case base32, of HMAC-SHA256 over the ID of the
-    first run of the conversation. The HMAC key is a random 32-byte secret
-    item of `@server` that the server makes at the first connect. So:
+    first run of the conversation. 26 characters hold 130 bits. So:
     - the key stays the same for every run, turn and retry of the
       conversation, also after a takeover by another instance,
-    - a provider cannot get a run ID, a subject, a namespace or a name
-      from the key,
-    - two conversations of one person have two keys that a provider cannot
+    - a server cannot get a run ID, a subject, a namespace or a name from
+      the key,
+    - two conversations of one person have two keys that a server cannot
       link by the key.
+
+    The HMAC key is one random 32-byte value for the installation, sealed
+    in the scope `@server` (ADR 23). It is not a secret item of decision
+    10: the secrets routes do not list, replace or remove it, and no route
+    answers it. The server makes it in the transaction that stores the
+    first connection. Two instances that store a first connection at the
+    same time cannot make two keys, because the second transaction finds
+    the key of the first. The HMAC key is in the table list of a backup
+    (ADR 30), sealed. No route rotates it in version 1. A new key changes
+    the conversation key of each running conversation. The only cost is
+    one cache miss for each conversation.
 
     The adapter never sends an end-user field: `user`,
     `safety_identifier`, `metadata.user_id`, or a header with a subject,
     an email address or a name. Validation refuses these names in
-    `providerFields` and in `headers`. A provider can still link requests
-    by the credential and by the address of the server.
-19. **A stable prefix.** A cache matches a prefix of exact bytes. So:
+    `providerFields` and in `headers`. A server can still link requests by
+    the credential and by the address of the server.
+20. **A stable prefix.** A cache matches a prefix of exact bytes. So:
     - The system prompt has a version, and has no time, date, name of a
       person, namespace or run ID (ADR 120 decision 23).
     - The catalog has a fixed order, and its JSON is canonical (decision
-      13).
+      14).
     - The loop only appends to the transcript of a run, and a follow-up
       run starts with the transcript of its parent.
     - The user agent and the headers are the same for each call of a
-      release (decision 11).
+      release (decision 12).
 
     A revealed value (ADR 124 decision 9) changes the bytes of one tool
     result in one call. The cache misses for the rest of that request
     only.
 
-### Request body fields of a provider
+### Request body fields
 
-20. **`providerFields` is a JSON object of extra fields.** The adapter
+21. **`providerFields` is a JSON object of extra fields.** The adapter
     merges it into the top level of each request body. It holds at most
-    8 KiB. Examples are the `provider` routing object of OpenRouter, the
-    reasoning fields of decision 15, and `options.num_ctx` of Ollama.
-    Validation refuses each key that the adapter owns:
+    8 KiB and at most 8 levels. Examples are a routing object of a
+    gateway, the reasoning fields of decision 16, and a context size
+    option of a local model server. Validation refuses each key that the
+    adapter owns:
     - `model`, `messages`, `system`, `input`, `tools`, `tool_choice`,
-      `parallel_tool_calls`, `stream`, `stream_options`, and each output
-      token field,
-    - `cache_control` and the `bodyField` of `conversationKey`,
-    - the end-user fields of decision 18.
+      `parallel_tool_calls`, `disable_parallel_tool_use`, `stream`,
+      `stream_options`, and the `field` of `outputTokens`,
+    - `cache_control`, and the path of `conversationKey.bodyField`,
+    - the end-user fields of decision 19.
 
     The server does not check the meaning of the other keys. The probe of
-    decision 24 shows whether the provider accepts them.
+    decision 29 shows whether the server accepts them.
 
-### Errors, limits and the network
+### Errors
 
-21. **The error mapping.** Each adapter maps a status and an error body
-    to a sentinel of ADR 121 decision 4. It reads the error type or code of
-    the body, never its text, to choose a sentinel:
+22. **The error mapping.** Each adapter maps a status and an error body
+    to a sentinel of ADR 121 decision 4. It reads the fields `error.type`
+    and `error.code` of the body, never its text. `errors` holds two lists
+    of these values, each with up to 16 strings of at most 64 bytes:
+    `errors.quota` and `errors.contextTooLong`. Both are empty by default.
 
     | Answer | Sentinel |
     | --- | --- |
     | 401, 403 | `ErrModelAuth` |
-    | 402, or a 429 that names a used-up plan or quota | `ErrModelQuota` (new, decision 31) |
-    | 429 | `ErrModelRateLimited`, with the wait |
+    | 402, or a 429 with a type or code in `errors.quota` | `ErrModelQuota` (new, decision 37) |
+    | other 429 | `ErrModelRateLimited`, with the wait of decision 23 |
     | 408, 409, 500, 502, 503, 504, 529, a broken stream | `ErrModelUnavailable` |
-    | 400 or 413 with a context-length type or code | `ErrContextTooLong` |
+    | 400 or 413 with a type or code in `errors.contextTooLong` | `ErrContextTooLong` |
     | other 4xx | `ErrModelRequest` |
 
-    The wait comes from `retry-after-ms`, `retry-after` (seconds or an
-    HTTP date), the OpenAI reset durations, or the Anthropic reset times,
-    in this order. With no hint, the loop uses its backoff. A wait above
-    5 minutes stops the run with `model-quota`, because a turn must not
-    hold a claim that long. The ledger row of a call keeps the request ID
-    of the provider (`x-request-id` or `request-id`), for support.
-22. **The reply filter is always on.** `agent.ReplyFilter` removes text
+    `requestIDHeaders` lists up to 4 header names. The ledger row of a call
+    keeps the value of the first of these headers that the answer has, for
+    support.
+23. **The wait of a rate limit.** `rateLimit.waitHeaders` lists up to 8
+    header names. The default is `["retry-after"]`. The adapter reads them
+    in order, and uses the first value that parses. It parses each value
+    in the same way, whatever the header:
+    - a decimal number is seconds, or milliseconds when the header name
+      ends in `-ms`,
+    - a duration such as `6m0s`, `1.5s` or `250ms`,
+    - an HTTP date,
+    - an RFC 3339 time.
+
+    The adapter computes the wait of a time with its own clock. With no
+    hint, the loop uses its backoff. A wait above 5 minutes stops the run
+    with the stop reason `model-rate-limited`, because a turn must not hold
+    a claim
+    that long. `ErrModelQuota` stops the run with `model-quota`.
+
+### The secret filter
+
+24. **The secret filter is always on.** `agent.SecretFilter` removes text
     that looks like a secret. No setting, flag or connection field turns
-    it off. It runs:
+    it off. It runs on readable text:
     - on the prompt of a person, before the prompt is in the transcript or
       reaches a model. The run answer tells the person how many values the
-      filter removed.
+      filter removed,
+    - on each tool result, before the transcript records it and before it
+      reaches a model. A revealed value of ADR 124 decision 9 is the one
+      exception: the model gets it in one call, and the transcript gets it
+      masked,
     - on each answer of the model, before the model step records it: the
-      text, the arguments of each tool call, and each reasoning part.
-    - on each error of the probe (decision 24).
+      text, the arguments of each tool call, and the readable copy of each
+      reasoning part,
+    - on each error of the probe (decision 29).
 
-    It removes the exact value of each secret item of the connection, and
-    each match of a list of patterns in the binary: known key and token
-    prefixes, PEM private key blocks, JSON web tokens, the
+    An opaque reasoning part (decision 37) must go back unchanged, so the
+    filter does not change it. The store seals it, no route answers it,
+    and the console never shows it. If the format also gives a readable
+    copy of the part, the transcript holds that copy, filtered. Each
+    record in readable form goes through the filter. The record of an
+    opaque part in readable form is its size and its format only.
+
+    The filter removes the exact value of each secret item of the
+    connection, and each match of a list of patterns in the binary: known
+    key and token prefixes, PEM private key blocks, JSON web tokens, the
     `Authorization` header form, and a value after a name such as
     `password` or `secret`. The list has no rule on entropy alone, because
     resource IDs and hashes of infrastructure match one. A test corpus of
     secrets and of IDs from state checks the list. Each match becomes
     `[removed: secret-like text]`. ADR 124 decision 9 still masks each
-    revealed value. The filter is a second defense that does not depend
-    on the model.
-23. **Egress.** A model call goes through `pkg/egress` and
-    `egresshttp`, with these changes for model connections:
-    - The host of `baseURL` must match an entry of the egress allowlist
-      of the installation. With no entry, no model call goes out.
-    - The allowlist is a setting with the action `server:manage-settings`
-      on `@server`, at `GET` and `PUT /api/server/egress-allowlist`. An
-      entry is a host name, a `*.` suffix, or a CIDR range with a port.
-    - The dial guard refuses a private, loopback or link-local address
-      unless a CIDR entry holds it. So a homelab can allow
-      `192.168.1.20/32` port 11434 for Ollama.
-    - The client uses `http` only to an address in a CIDR entry with
+    revealed value. The filter is a second defense that does not depend on
+    the model.
+
+### Egress
+
+25. **The egress allowlist.** A model call goes through `pkg/egress` and
+    `egresshttp`. The allowlist is a setting with the action
+    `server:manage-settings` on `@server`, at `GET` and `PUT
+    /api/server/egress-allowlist`. With no entry, no model call goes out.
+    An entry is one of these:
+    - a host name, or a `*.` suffix,
+    - a CIDR range with one port, and `"http": true` to allow plain
+      `http`.
+
+    Validation refuses a CIDR entry that:
+    - is wider than `/24` for IPv4 or `/64` for IPv6, `/0` included,
+    - has no port, or more than one port,
+    - is in a range that embeds an IPv4 address (`::ffff:0:0/96`, `::/96`,
+      `64:ff9b::/96`, `64:ff9b:1::/48`, `2002::/16`, `2001::/32`). The
+      operator writes the IPv4 range instead,
+    - overlaps the always-denied list.
+
+    The always-denied list is in the binary, and no entry overrides it:
+    `0.0.0.0/8`, `169.254.0.0/16`, `255.255.255.255/32`,
+    `100.100.100.200/32`, `224.0.0.0/4`, `::/128`, `fe80::/10`,
+    `fd00:ec2::254/128` and `ff00::/8`. It holds the link-local range, the
+    metadata addresses of clouds, the unspecified addresses, broadcast and
+    multicast. Each check unmaps an IPv4-mapped IPv6 address with
+    `Unmap()` first, and then checks the IPv4 address.
+
+    The server flag `--egress-public-only` makes the server refuse each
+    CIDR entry: a `PUT` of the allowlist with one answers 422. So a model
+    call reaches public addresses only. OpenDustpan Cloud sets this flag.
+    A self-hosted operator can set it too, so the hosted service has no
+    path of its own (ADR 59). A change of the flag needs a restart.
+26. **The URL check of a model connection.** `egress.CheckModelURL` checks
+    `baseURL` against the allowlist, at validation and before each call:
+    - A host name must match a host entry or a `*.` suffix entry. Its
+      scheme must be `https`. Validation refuses plain `http` with a host
+      name.
+    - An IP literal must be in a CIDR entry, with the port of the URL or
+      the default port of the scheme. The check refuses an IP literal that
+      no CIDR entry holds, also a public one. The check also refuses a
+      host that `egress.CheckURL` reads as an IPv4 address in a short or
+      numeric form, for example `127.1`.
+    - The scheme can be `http` only for an IP literal in a CIDR entry with
       `"http": true`. A public address always needs `https`.
-    - The client follows no redirect and uses no proxy from the
-      environment. It uses the outbound proxy of the installation when the
-      operator sets one, and the dial guard then checks the proxy address.
+27. **The dial guard.** The guard checks each resolved address of each
+    connection. It refuses an address in the always-denied list first. It
+    then allows a public address, and an address in a CIDR entry on the
+    port of that entry. It refuses each other address. So an allowed host
+    name that resolves to an address in a CIDR entry connects. This
+    accepts DNS rebinding of an allowed `https` host name to an address
+    that a CIDR entry allows. The design accepts it for these reasons:
+    - A homelab often serves a model on an internal host name with an
+      internal certificate, on an address that a CIDR entry allows.
+    - The operator allowed both the name and the range. A rebinding
+      reaches only an address and a port that the operator allowed.
+    - TLS must check the certificate for the allowed name, so a rebinding
+      to a server with no such certificate fails.
+
+    A change of the allowlist takes effect at the next connection. A call
+    in flight ends on its open connection. The client closes its idle
+    connections after a change, so each new connection reads the new list.
+28. **No proxy, and the limits of a call.**
+    - The client follows no redirect.
+    - The client uses no proxy. It reads no proxy from the environment.
+      The server has no outbound proxy setting for model calls in version
+      1, and the egress proxy of jobs (RFC 16) does not apply. With a
+      proxy, the dial guard could check only the address of the proxy,
+      and the proxy would resolve the target. An operator who must send
+      model calls through a proxy runs a gateway behind that proxy, and
+      allows the gateway.
     - A model call takes up to 10 minutes, and a stream with no byte for 2
       minutes fails. The body of an answer is at most 4 MiB.
 
-    On OpenDustpan Cloud, the operator of the service refuses CIDR
-    entries, so an account can reach public addresses only.
-
 ### The probe
 
-24. **A capability probe at connect time.** `PUT /api/agent/connection`
-    runs the probe before it stores the connection. `POST
-    /api/agent/connection/probe` runs it on a document without a store.
-    The probe makes these calls, in order, and stops at the first failure:
+29. **The capability probe is a durable operation.** The probe runs as a
+    durable operation of the kind `agent.probe` (ADR 72 decision 1), so a
+    route never waits on a model:
+    - `PUT /api/agent/connection` checks the document, stores it as the
+      pending document, starts a probe, and answers 202 at once with the
+      probe ID. When the probe passes, its last step makes the pending
+      document the connection, in the transaction of its own write. That
+      step checks the version of `If-Match` again. When the probe fails,
+      the connection stays as it was.
+    - `POST /api/agent/connection/probe` starts a probe of a document with
+      no store, and answers 202 with the probe ID.
+    - `GET /api/agent/connection/probes/{id}` answers the state of the
+      probe and of each check: `pending`, `running`, `passed`, `warning`,
+      `failed` or `skipped`. For each check it gives the time it took, the
+      tokens it used, and for a failure the status class of the answer,
+      the sentinel and an error in strict STE.
+    - A check has a timeout of 2 minutes, and `reach` 10 seconds. The
+      probe has a total timeout of 10 minutes. A timeout fails the check.
+30. **The checks.** The probe makes these checks, in order, and stops at
+    the first failure:
 
     | Check | What it does | A failure |
     | --- | --- | --- |
-    | `reach` | connects to the host with the egress rules | blocks the connect |
+    | `reach` | opens a TCP connection, and a TLS handshake for `https`, with the egress rules. It sends no HTTP request | blocks the connect |
     | `auth` | sends one short text request | blocks the connect |
-    | `tools` | offers one probe tool and asks the model to call it | blocks the connect |
+    | `tools` | offers one probe tool and asks the model to call it, with up to 2 attempts | blocks the connect |
     | `tool-result` | sends the tool result back and asks for a text answer | blocks the connect |
-    | `transport` | with `stream`, reads a stream to its end | blocks the connect |
+    | `transport` | with `stream`, reads the streams of the earlier checks to their end | blocks the connect |
     | `usage` | checks that the answers report input and output tokens | a warning |
-    | `cache` | with a cache mode, repeats a request and reads the cache tokens | a warning |
+    | `cache` | with `automatic` or `breakpoints`, sends a fixed prefix of at least 2,048 tokens two times and reads the cache tokens | a warning |
 
-    Dusty needs tool calls, so a model that answers the `tools` check
-    with no tool call fails it. A failure answers 422 with the name of the
-    check and an error in strict STE. The error names the field of the
-    document to look at. It never holds the error text of the provider.
-    Examples:
-    - "The model gave no tool call. Make sure that the model server has
-      tool calls on. For vLLM, start it with --enable-auto-tool-choice."
-    - "The provider refused the field max_tokens. Set outputTokens.field
-      to max_completion_tokens."
-25. **The probe costs tokens, and the ledger records them.** Each probe
-    call writes a ledger row with the origin `probe` and no run. The
-    probe route allows 6 probes in each minute for the installation.
+    Dusty needs tool calls. A small local model can answer one attempt
+    with no tool call, so the `tools` check makes a second attempt. A
+    model that answers both attempts with no tool call fails the check.
+    Some servers cache only a prefix above a minimum size, so the `cache`
+    warning says that a short prefix can show no cache. A failure gives
+    the name of the check and an error in strict STE. The error names the
+    field of the document to look at. It never holds the error text of
+    the server. Examples:
+    - "The model gave no tool call in 2 attempts. Make sure that the
+      model server has tool calls on."
+    - "The server refused the field max_tokens. Set outputTokens.field to
+      the name of the output token field that the server documents."
+31. **The probe costs tokens, and the ledger records them.** A full probe
+    uses about 6,000 input tokens and at most 400 output tokens. Each
+    probe call writes a ledger row with the origin `probe` and no run.
+    The installation can start 6 probes in each minute. A `PUT` of the
+    connection and a `POST` of the probe route both count.
 
 ### Routes
 
-26. **The connection routes.** Each route declares its action and its
+32. **The connection routes.** Each route declares its action and its
     object (ADR 17). They replace the connection routes of ADR 120
     decision 7:
 
@@ -427,6 +568,7 @@ rules from the note shaped the design:
     | `GET /api/agent/connection` | `server:manage-agent` | `@server` |
     | `PUT /api/agent/connection` | `server:manage-agent` | `@server` |
     | `POST /api/agent/connection/probe` | `server:manage-agent` | `@server` |
+    | `GET /api/agent/connection/probes/{id}` | `server:manage-agent` | `@server` |
     | `DELETE /api/agent/connection` | `server:manage-agent` | `@server` |
     | `GET /api/agent/formats` | `server:manage-agent` | `@server` |
     | `POST /api/agent/secrets` | `server:manage-agent` | `@server` |
@@ -436,16 +578,16 @@ rules from the note shaped the design:
     | `GET /api/server/egress-allowlist` | `server:manage-settings` | `@server` |
     | `PUT /api/server/egress-allowlist` | `server:manage-settings` | `@server` |
 
-    The read answers the document with references only, its version, and
-    the result of its last probe. A `PUT` takes `If-Match` with the
-    version, so two administrators cannot overwrite each other. The
-    formats route lists each format, its support state and the values of
-    each field, for the console form. Each change passes the policy check
-    (ADR 17).
+    The read answers the document with references only, its version, the
+    pending document if there is one, and the result of its last probe. A
+    `PUT` takes `If-Match` with the version, so two administrators cannot
+    overwrite each other. The formats route lists each format, its support
+    state and the values of each field, for the console form. Each change
+    passes the policy check (ADR 17).
 
 ### Audit
 
-27. **The audit entries.** Each of these writes an entry of the kind
+33. **The audit entries.** Each of these writes an entry of the kind
     `change` on `@server`, as ADR 126 decision 7 asks for a connect:
     - a connect, a change and a disconnect: `changes` holds the old and
       the new document, with references only, and the probe result,
@@ -455,12 +597,12 @@ rules from the note shaped the design:
     - a change of the egress allowlist: the old and the new list.
 
     The end entry of a run (ADR 126 decision 6) also holds the count of
-    values that the reply filter removed. No entry holds a value, a
-    prompt, an answer or an error text of a provider.
+    values that the secret filter removed. No entry holds a value, a
+    prompt, an answer or an error text of a server.
 
 ### OpenDustpan Cloud later
 
-28. **A managed connection can come later, with no break.** OpenDustpan
+34. **A managed connection can come later, with no break.** OpenDustpan
     Cloud may later offer a connection that the service runs. It is a
     connection document like any other, with a secret item that the
     service owns and an account cannot read. It adds the field `managed`,
@@ -469,162 +611,175 @@ rules from the note shaped the design:
     installation, so the hosted service has no feature that the server
     lacks (ADR 59). A managed default model needs the benchmark result
     and a new ADR (decision 1).
-29. **Version 1 stays valid.** A new format is a new value of `format`. A
+35. **Version 1 stays valid.** A new format is a new value of `format`. A
     new field gets a default that keeps the behavior of version 1. A
     connection for each namespace or account (ADR 121 decision 9) is a
     list of documents, each in version 1.
 
 ### Worked examples
 
-30. **The docs give these examples.** Each is a full document. The
-    values `itm-...` are references that the secrets route answered.
+36. **The docs give these generic examples.** Each is a full document.
+    The values `itm-...` are references that the secrets route answered.
+    The host names, model names, header names and error codes show the
+    form only. They are not a recommendation, and they name no provider.
 
-    A homelab with Ollama on the local network. The egress allowlist has
-    `{"cidr": "192.168.1.20/32", "port": 11434, "http": true}`:
+    A homelab with a local model server on a private address over plain
+    `http`, with no key. The egress allowlist has `{"cidr":
+    "192.168.1.20/32", "port": 8080, "http": true}`:
 
     ```json
     {
       "version": 1,
-      "format": "openai-chat-completions",
-      "baseURL": "http://192.168.1.20:11434/v1",
-      "model": "qwen3-coder:30b",
+      "format": "chat-completions",
+      "baseURL": "http://192.168.1.20:8080/v1",
+      "model": "example-model",
       "auth": { "none": true },
       "outputTokens": { "field": "max_tokens", "max": 8192 },
       "contextTokens": 65536,
       "tools": { "choice": "omit", "parallel": "omit" },
       "transport": "stream",
-      "reasoning": "drop",
       "cache": { "mode": "automatic" },
-      "providerFields": { "options": { "num_ctx": 65536 } }
+      "providerFields": { "options": { "context_size": 65536 } }
     }
     ```
 
-    A homelab with llama.cpp on the same host as the server, with an API
-    key. The allowlist has `{"cidr": "127.0.0.1/32", "port": 9931,
+    A homelab with a local model server on the same host as the server,
+    with a key. The allowlist has `{"cidr": "127.0.0.1/32", "port": 8081,
     "http": true}`:
 
     ```json
     {
       "version": 1,
-      "format": "openai-chat-completions",
-      "baseURL": "http://127.0.0.1:9931/v1",
-      "model": "local",
+      "format": "chat-completions",
+      "baseURL": "http://127.0.0.1:8081/v1",
+      "model": "example-model",
       "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-..." },
       "outputTokens": { "field": "max_tokens", "max": 8192 },
       "contextTokens": 65536,
       "tools": { "choice": "auto", "parallel": true },
       "transport": "stream",
-      "reasoning": "drop",
       "cache": { "mode": "automatic" }
     }
     ```
 
-    A homelab on the OpenCode Go plan. The allowlist has `opencode.ai`:
+    A homelab with a hosted gateway that needs a header for each
+    conversation, and that reports a used-up plan as a 429. The allowlist
+    has `gateway.example.net`:
 
     ```json
     {
       "version": 1,
-      "format": "openai-chat-completions",
-      "baseURL": "https://opencode.ai/inference/go/openai/v1",
-      "model": "kimi-k3",
+      "format": "chat-completions",
+      "baseURL": "https://gateway.example.net/v1",
+      "model": "example-model",
       "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-..." },
-      "userAgent": "OpenDustpan/0.9.0",
       "outputTokens": { "field": "max_tokens", "max": 16000 },
       "contextTokens": 200000,
       "tools": { "choice": "auto", "parallel": "omit" },
       "transport": "stream",
-      "reasoning": "keep",
+      "reasoning": { "keep": ["reasoning_details"] },
       "cache": { "mode": "automatic" },
-      "conversationKey": { "headers": ["x-opencode-session"], "prefix": "ses_" }
+      "conversationKey": { "headers": ["x-conversation-id"], "prefix": "conv_" },
+      "errors": { "quota": ["plan_exhausted"] },
+      "rateLimit": { "waitHeaders": ["retry-after-ms", "retry-after"] }
     }
     ```
 
-    A team on OpenRouter with an Anthropic model, only providers with zero
-    data retention, and no fallback:
+    A startup with a hosted API in the Messages format and a bearer key,
+    with explicit caching. The allowlist has `api.example.com`:
 
     ```json
     {
       "version": 1,
-      "format": "openai-chat-completions",
-      "baseURL": "https://openrouter.ai/api/v1",
-      "model": "anthropic/claude-sonnet-5.5",
+      "format": "messages",
+      "baseURL": "https://api.example.com/v1",
+      "model": "example-large",
       "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-..." },
-      "headers": {
-        "HTTP-Referer": { "value": "https://opendustpan.example.com/" },
-        "X-OpenRouter-Title": { "value": "OpenDustpan" }
-      },
-      "outputTokens": { "field": "max_completion_tokens", "max": 16000 },
-      "contextTokens": 200000,
-      "tools": { "choice": "auto", "parallel": "omit" },
-      "transport": "stream",
-      "reasoning": "keep",
-      "cache": { "mode": "breakpoints", "ttl": "5m" },
-      "conversationKey": { "headers": ["x-session-id"] },
-      "providerFields": {
-        "provider": { "only": ["anthropic"], "allow_fallbacks": false, "zdr": true }
-      }
-    }
-    ```
-
-    A company with the Anthropic API, and with Azure OpenAI on the v1 path:
-
-    ```json
-    {
-      "version": 1,
-      "format": "anthropic-messages",
-      "baseURL": "https://api.anthropic.com/v1",
-      "model": "claude-sonnet-5-5",
-      "auth": { "header": "x-api-key", "prefix": "", "secret": "itm-..." },
-      "headers": { "anthropic-version": { "value": "2023-06-01" } },
+      "headers": { "x-api-version": { "value": "2026-01-01" } },
       "outputTokens": { "field": "max_tokens", "max": 16000 },
       "contextTokens": 200000,
       "tools": { "choice": "auto", "parallel": "omit" },
       "transport": "stream",
-      "reasoning": "keep",
+      "reasoning": { "keep": ["thinking"] },
       "cache": { "mode": "breakpoints", "ttl": "1h" },
-      "providerFields": { "thinking": { "type": "adaptive" } }
+      "errors": { "contextTooLong": ["context_too_long"] },
+      "requestIDHeaders": ["request-id"]
     }
     ```
+
+    A team with a hosted API in the Chat Completions format that routes
+    its cache by a body field, and a routing object for a gateway. The
+    allowlist has `*.example.org`:
 
     ```json
     {
       "version": 1,
-      "format": "openai-chat-completions",
-      "baseURL": "https://example-resource.openai.azure.com/openai/v1",
-      "model": "my-deployment",
-      "auth": { "header": "api-key", "prefix": "", "secret": "itm-..." },
+      "format": "chat-completions",
+      "baseURL": "https://models.example.org/api/v1",
+      "model": "example-large",
+      "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-..." },
       "outputTokens": { "field": "max_completion_tokens", "max": 16000 },
       "contextTokens": 400000,
       "tools": { "choice": "auto", "parallel": "omit" },
       "transport": "whole",
-      "reasoning": "drop",
       "cache": { "mode": "automatic" },
-      "conversationKey": { "bodyField": "prompt_cache_key" }
+      "conversationKey": { "bodyField": "metadata.conversation" },
+      "providerFields": { "routing": { "allowFallbacks": false } },
+      "requestIDHeaders": ["x-request-id"]
     }
     ```
 
-    The model names of the examples show the form only. The docs say that
-    they are not a recommendation.
+    An enterprise with an internal gateway that takes the key in a header
+    of its own, and a version as a query parameter. The allowlist has
+    `llm.corp.example`:
+
+    ```json
+    {
+      "version": 1,
+      "format": "chat-completions",
+      "baseURL": "https://llm.corp.example/v1",
+      "model": "example-deployment",
+      "auth": { "header": "x-gateway-key", "prefix": "", "secret": "itm-..." },
+      "query": { "api-version": { "value": "2026-01-01" } },
+      "outputTokens": { "field": "max_completion_tokens", "max": 16000 },
+      "contextTokens": 128000,
+      "tools": { "choice": "auto", "parallel": "omit" },
+      "transport": "whole",
+      "cache": { "mode": "none" }
+    }
+    ```
 
 ### Changes to the model port
 
-31. **The port gets one part kind and one error.**
+37. **The port gets one part kind, one error and three stop reasons.**
     - A message part can be `opaque`: bytes of the format of the
       connection, with the name of the format. The loop stores it in the
-      transcript and gives it back to the adapter unchanged. An adapter
-      sends an opaque part only to a connection of the same format and
-      model. After a change of the connection, the loop drops the opaque
-      parts of older turns. The console never shows an opaque part.
-    - `ErrModelQuota`: the account has no plan or credit left.
+      transcript, sealed as ADR 124 decision 9 seals a reveal, and gives
+      it back to the adapter unchanged. The run, the turn and the part are
+      the additional data of the seal. No route answers an opaque part,
+      and the console never shows one.
+    - A run uses the format and the model of the connection at its first
+      turn. The `check` step of a later turn ends the run with the stop
+      reason `connection-changed` when the format or the model changed.
+      So no tool turn sends an opaque part to another format or model. A
+      follow-up run starts on the new connection, and drops the opaque
+      parts of the transcript of its parent. A change of another field
+      takes effect at the next model call of the run.
+    - `ErrModelQuota`: the account has no plan, quota or credit left.
       The loop stops the run with the stop reason `model-quota`, and the
       status route says so.
+    - A wait above 5 minutes (decision 23) stops the run with the stop
+      reason `model-rate-limited`.
 
-    `agenttest.RunModel` gets cases for each rule of decisions 12 to 21:
-    each output token field, `choice: omit`, the conversation key in each
-    place, no end-user field, each cache mode, an opaque part that comes
-    back unchanged, an error event in a stream with the status 200, each
-    form of a wait, a 402, and a canary secret in an answer that the reply
-    filter removes.
+    `agenttest.RunModel` gets cases for each rule of decisions 13 to 23:
+    each output token field name, `choice: omit`, the conversation key in
+    each place and at a dotted path, no end-user field, each cache mode,
+    each entry form of `reasoning.keep`, an opaque part that comes back
+    unchanged, an error event in a stream with the status 200, each form
+    of a wait, a 402, each list of `errors`, and a canary secret in an
+    answer that the secret filter removes. It also gets a canary secret in
+    an opaque reasoning part: the part comes back unchanged, byte for
+    byte, and the canary is in no readable record.
 
 ## What this ADR replaces
 
@@ -632,60 +787,66 @@ rules from the note shaped the design:
   model name and the credential. The credential is a sensitive setting.
   The server seals it with the key-encryption key (ADR 23)". The
   connection is the document of decision 2, and the credential is a
-  secret item of `@server` (decision 9).
+  secret item of `@server` (decision 10).
 - **ADR 120, decision 7:** the rows `PUT /api/agent/connection` and
-  `DELETE /api/agent/connection`. Decision 26 gives the routes of the
+  `DELETE /api/agent/connection`. Decision 32 gives the routes of the
   connection.
+- **ADR 120, stop reasons:** the stop reasons of a run get
+  `model-quota`, `model-rate-limited` and `connection-changed` (decision
+  37).
 - **ADR 121, decision 2:** "A part is text, a tool call ... or a tool
-  result". A part can also be opaque (decision 31).
-- **ADR 121, decision 4:** the table gets `ErrModelQuota` (decision 31).
-- **ADR 121, decision 8:** "an adapter for OpenAI-compatible APIs later".
-  Both adapters come in the first adapter change (decision 4). The rule on
-  the egress proxy of RFC 16 in that decision changes too: decision 23
-  gives the egress rules.
+  result". A part can also be opaque (decision 37).
+- **ADR 121, decision 4:** the table gets `ErrModelQuota` (decision 37).
+- **ADR 121, decision 8:** "Two adapters come in a later change, each in
+  its own package under `pkg/agent/model/`". Both adapters come in the
+  first adapter change (decision 5), in packages under `pkg/modeladapter/`
+  (decision 8). The rule on the egress proxy of RFC 16 in that decision
+  changes too: decision 28 gives the proxy rule.
 - **ADR 121, decision 9:** "The connection holds the adapter, the base
   address, the model name, the credential and an optional output token
   limit". The connection holds the fields of decision 3.
 - **ADR 121, "Not decided here":** "Prompt caching across runs, and
-  whether the loop asks for it". Decisions 16 to 19 decide it.
+  whether the loop asks for it". Decisions 17 to 20 decide it.
 
 ## Consequences
 
 - `pkg/agent` gets `ConnectionSpec`, `ConnectionSpec.Validate`,
-  `ReplyFilter`, `ConversationKey`, `ErrFormatNotSupported`,
-  `ErrPlainSecret`, `ErrModelQuota` and the opaque part. `agent.Connection`
-  holds the document.
-- `pkg/agent/model/openaichat` and `pkg/agent/model/anthropic` are the
-  first two adapters. Each runs `agenttest.RunModel` against a fake server
-  that follows the note.
-- `pkg/egress` gets the egress allowlist, the CIDR entries and the
-  `http` rule. The webhook and the iCal feed keep their rules: they do
-  not read the allowlist.
-- Each SQL store gets the tables of the connection document, the secret
-  items of the connection and the egress allowlist. The ledger gets the
-  columns `origin` and `providerRequestID`.
+  `SecretFilter`, `ConversationKey`, `ErrFormatNotSupported`,
+  `ErrPlainSecret`, `ErrModelQuota`, the opaque part and the probe kind.
+  `agent.Connection` holds the document.
+- `pkg/modeladapter/chatcompletions` and `pkg/modeladapter/messages` are
+  the first two adapters. Each runs `agenttest.RunModel` against a fake
+  server for each mechanism of decisions 13 to 23.
+- `pkg/egress` gets the egress allowlist, the always-denied list, the CIDR
+  entries, `CheckModelURL`, the `http` rule and the flag
+  `--egress-public-only`. The webhook and the iCal feed keep their rules:
+  they do not read the allowlist.
+- Each SQL store gets the tables of the connection document, the pending
+  document, the probes, the secret items of the connection, the HMAC key
+  and the egress allowlist. The backup table list gets the same tables.
+  The ledger gets the columns `origin` and `providerRequestID`.
 - An operator writes more fields than with a preset. The docs and the
   formats route make each field visible, and the probe tells what is
   wrong before Dusty uses the connection.
-- OpenCode Go says that it is for coding agents, and that it monitors
-  traffic for abuse. The traffic of Dusty is not the traffic of a coding
-  agent, so the plan may limit it. The free models of OpenCode answer 403
-  to every client that is not OpenCode. The docs say both.
-- A local model in a homelab is as easy to connect as a hosted provider:
-  one allowlist entry and one document.
-- The reply filter can remove text that is not a secret, for example a
+- The docs name no provider. The operator reads the documentation and the
+  terms of the server that they choose.
+- A local model in a homelab is as easy to connect as a hosted API: one
+  allowlist entry and one document.
+- The secret filter can remove text that is not a secret, for example a
   long ID that starts like a key. The person sees the removal in the
   answer. A false positive is safer than a leak.
 - `GLOSSARY.md` gets the terms Connection document, Wire format, Secret
-  item, Conversation key, Reply filter, Capability probe and Egress
-  allowlist. The term Model connection changes.
+  item, Conversation key, Secret filter, Capability probe, Egress
+  allowlist and Stop reason. The term Model connection changes.
 
 ## Not decided here
 
 - A default model, for self-hosted servers and for OpenDustpan Cloud.
-- A hashed end-user identifier for providers that ask for one, for
-  example the `safety_identifier` of OpenAI.
-- AWS SigV4 signing and OAuth token refresh in the server.
-- The native formats of Gemini, Bedrock and Ollama.
-- A path of a format other than the fixed path of decision 3.
+- A hashed end-user identifier for servers that ask for one.
+- Request signing and OAuth token refresh in the server.
+- A format of one provider or one model server.
+- A path of a format other than the fixed path of decision 4.
+- A secret form for `providerFields`.
+- An outbound proxy for model calls.
+- A route that rotates the HMAC key of the conversation key.
 - A connection for each namespace or account.

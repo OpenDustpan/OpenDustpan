@@ -604,6 +604,10 @@ _Avoid_: External agent, third-party agent, MCP client (that is the program)
 One request of a person to Dusty, from a prompt to its end (ADR 120 decision 6). The ADRs call it a run. It ends at a final answer, at a limit, at a cancel or when its credential ends. Each run has its own limits, its own cost and a stop reason. A run is a chain of turns, and holds no claim between turns.
 _Avoid_: Run (alone, where an update or a job can be meant), session, job, task
 
+**Stop reason**:
+The reason that an agent run ended, which the status route of the run gives. Examples are `canceled`, `turn-failed` and `credential-ended` (ADR 120). ADR 129 adds three. `model-quota` is for a used-up plan, quota or credit. `model-rate-limited` is for a wait above 5 minutes. `connection-changed` is for a change of the format or the model during a run.
+_Avoid_: Exit code, end state, status (alone)
+
 **Turn**:
 One model call and the tool calls of its answer (ADR 120 decision 8). Each turn is one durable operation of the kind `agent.turn`, with the steps `check`, `model`, `tools` and `advance`, in this order. The `advance` step starts the next turn, or ends the run when the answer was final.
 _Avoid_: Step (a turn has steps), iteration, round
@@ -625,35 +629,35 @@ The field of an audit entry that names where a request came from. ADR 126 adds t
 _Avoid_: Transport, source
 
 **Model connection**:
-The one model that an administrator with `server:manage-agent` connects for the installation (ADR 120 decision 3). Its connection document holds every field. The operator sets each one, and no field has a provider default (ADR 129). The credential is a secret item of `@server`. With no model connection, Dusty is off.
+The one model that an administrator with `server:manage-agent` connects for the installation (ADR 120 decision 3). Its connection document holds every field. The operator sets each one. The server fills no field with a value for a provider (ADR 129). The only defaults are empty values, the `userAgent` of the release and the `retry-after` header. The credential is a secret item of `@server`. With no model connection, Dusty is off.
 _Avoid_: Model config, provider account, API key
 
 **Connection document**:
-The JSON document `agent.ConnectionSpec` of a model connection, with `version: 1` (ADR 129 decision 2). It holds the wire format, the base address, the model name, the authentication header and its secret reference, and extra headers. It also holds the fields for tools, the transport, reasoning, caching and the conversation key. It never holds a secret value.
+The JSON document `agent.ConnectionSpec` of a model connection, with `version: 1` (ADR 129 decision 2). It holds the wire format, the base address, the model name, the authentication header and its secret reference, and extra headers. It also holds the fields for tools, the transport, reasoning, caching, the conversation key, errors and rate limits. It never holds a secret value.
 _Avoid_: Model config, provider settings, preset
 
 **Wire format**:
-The request and answer format of a model API that a model adapter speaks: `openai-chat-completions`, `anthropic-messages` or `openai-responses` (ADR 129 decision 4). One adapter serves every provider of its wire format.
+The request and answer format of a model API that a model adapter speaks (ADR 129 decision 5). The values are `chat-completions` (the Chat Completions format), `messages` (the Messages format) and `responses` (the Responses format). One adapter serves every server of its wire format.
 _Avoid_: API type, provider type, flavor
 
 **Secret item**:
-A value that the server seals in a scope with its own data key (ADR 23), and that no route answers again. Examples are the secrets of a sink (ADR 145) and the credential of a model connection (ADR 129 decision 9). A document refers to it by its reference `itm-...`.
+A value that the server seals in a scope with its own data key (ADR 23), and that no route answers again. Examples are the secrets of a sink (ADR 145) and the credential of a model connection (ADR 129 decision 10). A document refers to it by its reference `itm-...`.
 _Avoid_: Secret setting, credential field, sensitive setting
 
 **Conversation key**:
-The identifier that a model adapter sends with each model call of one conversation (ADR 129 decision 17). It goes in the headers and the body field that the connection document names. It is an HMAC of the ID of the first run of the conversation, so it holds no identity of a person. Providers use it to route a prompt cache, for example in `x-opencode-session` or `prompt_cache_key`.
+The identifier that a model adapter sends with each model call of one conversation (ADR 129 decision 18). It goes in the headers and the body field that the connection document names. It is an HMAC of the ID of the first run of the conversation, so it holds no identity of a person. Some model servers use it to route a prompt cache.
 _Avoid_: Session ID, user ID, cache key (alone)
 
-**Reply filter**:
-The filter that takes secret-like text out of prompts and model answers (`agent.ReplyFilter`, ADR 129 decision 22). It runs before the transcript records the text. It is always on, for every model. No setting turns it off.
-_Avoid_: Output scrubber, redaction (that is a history action), masking (that is for revealed values)
+**Secret filter**:
+The filter that takes secret-like text out of prompts, tool results and model answers (`agent.SecretFilter`, ADR 129 decision 24). It runs before the transcript records the text. It is always on, for every model. No setting turns it off. It does not change an opaque reasoning part, which the store keeps sealed and no route answers.
+_Avoid_: Reply filter, output scrubber, redaction (that is a history action), masking (that is for revealed values)
 
 **Capability probe**:
-The calls that the server makes to a model connection before it stores it (ADR 129 decision 24). They check the reach, the authentication, a tool call, a tool result, the transport, the token use and the cache. A failure of the first five blocks the connect.
+The durable operation that checks a model connection before the server stores it (ADR 129 decision 29). Its checks are the reach, the authentication, a tool call, a tool result, the transport, the token use and the cache. A failure of the first five blocks the connect. The connect route answers at once, and a status route gives the result of each check.
 _Avoid_: Health check, connection test, ping
 
 **Egress allowlist**:
-The list of hosts and CIDR ranges that a model call of the installation can reach (ADR 129 decision 23). A private address needs a CIDR entry, and `http` needs an entry with `"http": true`. With no entry, no model call goes out.
+The list of hosts and CIDR ranges that a model call of the installation can reach (ADR 129 decision 25). A private address or an IP literal needs a CIDR entry with one port, and `http` needs an entry with `"http": true`. No entry overrides the always-denied list of link-local, metadata, unspecified, broadcast and multicast addresses. With no entry, no model call goes out.
 _Avoid_: Egress rule (that is for a job, RFC 16), firewall, IP allowlist (that is for requests to a namespace)
 
 **Reaper**:
