@@ -811,7 +811,7 @@ _Avoid_: Suppression, filter, allowlist
 ### Console
 
 **Language** (of a person):
-The language of the words that the console shows to a person, one of the 28 tags of ADR 181. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 28 languages of ADR 181. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
 _Avoid_: Locale (for the language)
 
 **Formatting locale**:

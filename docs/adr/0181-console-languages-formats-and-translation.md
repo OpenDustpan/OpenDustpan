@@ -96,10 +96,10 @@ Facts:
    formatting locale and change only the order of the parts. The console
    builds them from `Intl.DateTimeFormat.prototype.formatToParts`, not from
    its own format strings. The first day of the week sets the calendar
-   controls of the console. If neither `Intl.Locale.prototype.getWeekInfo()` nor the older
-   `weekInfo` property is available, the default is Monday. UTC is one choice away in the time
-   zone list, because operators often compare times with logs in UTC. If
-   `Intl` rejects a stored time zone, the console falls back to the
+   controls of the console. If neither `Intl.Locale.prototype.getWeekInfo()`
+   nor the older `weekInfo` property is available, the default is Monday.
+   UTC is one choice away in the time zone list, because operators often
+   compare times with logs in UTC. If `Intl` rejects a stored time zone, the console falls back to the
    browser's time zone and says so in settings.
 6. **A live example.** Settings shows an example next to each choice, for
    example "Sunday 18 October 2026, 15:33 · 1.234,56". The person sees the

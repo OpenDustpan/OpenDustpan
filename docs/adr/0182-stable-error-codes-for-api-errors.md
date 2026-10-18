@@ -23,8 +23,8 @@ Facts:
   for an error object.
 - The tool-compatible APIs must match what each supported version of the
   real CLI expects. Before 1.0, the tool-neutral APIs can change (ADR 73).
-- Each HTTP adapter maps domain sentinels to a status and a message in one
-  `classify` function.
+- Each HTTP adapter maps domain sentinels to a status and a message in its
+  `classify` functions.
 
 ## Decision
 
@@ -56,12 +56,13 @@ Facts:
    camelCase shapes stays the HTTP status. The new fields are additions. A
    change to a tool-compatible API lands only after `make e2e` shows that
    each supported CLI version accepts the added fields.
-4. **Arguments, not text.** A name that the English text holds, for
-   example the name of a stack or of a field, and that this decision allows
-   in an argument, is also in the arguments, as a JSON object. The registry
-   of decision 7 declares the argument keys of each code and the type of
-   each key. The keys are camelCase and part of the contract of the code. A test rejects an error that has a key that its
-   code does not declare. These limits apply:
+4. **Arguments, not text.** When the English text holds a name that this
+   decision allows in an argument, the arguments hold it too, as a JSON
+   object. An example is the name of a stack or of a field. The registry of
+   decision 7 declares the argument keys of each code and the type of each
+   key. The keys are camelCase and part of the contract of the code. A test
+   rejects an error that has a key that its code does not declare. These
+   limits apply:
 
    - An error has at most 8 keys.
    - A string is at most 256 characters.
@@ -89,13 +90,13 @@ Facts:
 6. **An unknown code.** The console shows the English text of the server
    for a code that it does not know, with `lang="en"` on its element. An
    error with no code, from a proxy or from an older server, is the same
-   case. A 500 that no `classify` branch handles has the code
+   case. A 500 that no `classify` function handles has the code
    `server.internal`. A classified 500 keeps its own code. The text of a 500
    says nothing more than ADR 32 allows.
 7. **One registry of codes.** One registry in `internal/` (not in a shared
    domain package) declares each code, its meaning and its arguments with
    their kinds. Each adapter declares the subset of codes that it uses, next
-   to its `classify` function. Tests fail on:
+   to its `classify` functions. Tests fail on:
 
    - a classified error without a code,
    - two meanings for one code, in a test that runs across all APIs of this
