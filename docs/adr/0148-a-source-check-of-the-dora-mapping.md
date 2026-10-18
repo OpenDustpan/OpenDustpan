@@ -61,7 +61,7 @@ support" for each interpretation. A user document keeps that hedge.
    | DORA Article 6(5) | a review of the ICT risk management framework, also after a major ICT-related incident | may support: the review after a major incident (decision 9) gives facts to that review. That review stays outside OpenDustpan |
    | DORA Article 8(1), 8(3), 8(4) | identify and document ICT assets and their links and dependencies, and assess the risk at each major change | may support: the resource index (ADR 163) and the unit graph (ADR 162) document assets and dependencies. The risk assessment field of a change (decision 2) links an assessment |
    | DORA Article 9(4)(c), 9(4)(d) | limit access to what a role needs, and use strong authentication | may support: groups, roles, grants and the access review (ADR 52), and MFA (ADR 46). Also the life cycle of access tokens (ADR 53) and workload identity (ADR 54) |
-   | DORA Article 9(4)(e) and RTS 2024/1774 Article 17(1)(b) and (d) to (g) (Article 38 for an entity under DORA Article 16) | documented ICT change management: record, test, assess, approve and implement each change, and check it after. Rules for emergency changes | supports: the job is the change record (ADR 147 decision 9). It gets the change fields (decision 2), the `verify` phase (decision 3) and independent approval (decision 4). Break-glass with its review is the emergency change (decision 5) |
+   | DORA Article 9(4)(e) and RTS 2024/1774 Article 17(1)(a) to (g) (Article 38 for an entity under DORA Article 16) | documented ICT change management: record, test, assess, approve and implement each change, and check it after. Rules for emergency changes | supports (b) and (d) to (g), and may support (a) and (c): the job is the change record (ADR 147 decision 9). It gets the change fields (decision 2), the `verify` phase (decision 3) and independent approval (decision 4). Break-glass with its review is the emergency change (decision 5) |
    | RTS 2024/1774 Article 12(2)(c)(iii), 12(2)(d) | log changes, and protect the logs against change and unauthorized access | may support: the audit log with the audit chain (ADR 64), on by default |
    | DORA Article 11(2)(b), 11(2)(c), 11(3), 11(8) and RTS 2024/1774 Article 26(1)(d) | response and recovery plans, and a record of what the entity did in an incident | may support: runbooks on each unit (ADR 143 decision 13) and the timeline of each incident (ADR 147 decision 4) |
    | DORA Article 11(10) | an estimate of the yearly costs and losses of major ICT-related incidents | may support: the cost entries of an incident (decision 15) and their yearly sum. The cost port (ADR 144) gives the actual cloud spend as information only |
@@ -69,12 +69,12 @@ support" for each interpretation. A user document keeps that hedge.
    | DORA Article 13(2) | a review "after a major ICT-related incident disrupts their core activities" that checks the response, the forensic analysis, the escalation and the communication | supports: the review after a major incident (decision 9) |
    | DORA Article 17(1), 17(2) | a process to detect, manage and notify ICT-related incidents, a record of each incident and each significant cyber threat, and the root cause | supports: incident records (ADR 147 decision 1), the root cause at each close (decision 7) and cyber threat records (decision 13) |
    | DORA Article 17(3)(c), 17(3)(d) and RTS 2024/1774 Article 23(1), 23(2)(c) | roles for incident response, and the plans to communicate and to escalate | may support: on-call schedules and paging (ADR 143, ADR 147 decision 7) |
-   | DORA Article 17(3)(e) | a report of at least each major incident to the senior management and the management body | supports: the record of a notice to the management body (decision 12) |
+   | DORA Article 17(3)(e) | a report of at least each major incident to the senior management and the management body | supports: the record of a notice to the senior management and the management body (decision 12) |
    | RTS 2024/1774 Article 22, RTS 2024/1774 Article 23(4), RTS 2024/1772 Article 3(1) and ITS 2025/302 fields 2.2 and 3.2 | the incident management policy: evidence kept safe for a limited period. The time of detection (field 2.2) and the time of occurrence (field 3.2) of an incident | may support: the retention period of incidents (decision 14) and the time of occurrence (decision 6). Article 23(4) may support the times, for anomalous activities |
    | DORA Article 18(1)(a) to (f) and RTS 2024/1772 Articles 1 to 9 | classify each incident by criteria, and find a major incident by thresholds | supports: the default criteria (decision 10), which follow RTS 2024/1772 Articles 1 to 7, and the record of the classification of a person. The server never decides |
    | DORA Article 19(1), 19(4), RTS 2025/301 and ITS 2025/302 | reports of a major incident to the authority, with their content and time limits | supports: records of the reports that a person made (decision 11). The server never sends a report |
    | DORA Article 19(2) | a voluntary notice of a significant cyber threat | supports: the notice records of a cyber threat (decision 13) |
-   | DORA Article 19(3), first subparagraph, and second subparagraph | a notice to clients of a major incident, and, for a significant cyber threat, a notice to the clients that the threat may affect | supports: the record of a client notice of an incident (decision 12) and the client notice step of a cyber threat record (decision 13) |
+   | DORA Article 19(3), first subparagraph, and second subparagraph | a notice to clients of a major incident that has an impact on the financial interests of clients. For a significant cyber threat, a notice to the clients that the threat may affect | supports: the record of a client notice of an incident (decision 12) and the client notice step of a cyber threat record (decision 13) |
 
    **Out of scope.** OpenDustpan does not help with these parts, and the
    docs do not name them as features:
@@ -149,8 +149,8 @@ support" for each interpretation. A user document keeps that hedge.
    of the last 6 months that have the same root-cause category. This is
    information only. RTS 2024/1772 Article 8(2) counts recurring incidents
    as one major incident in some cases. For a recurring incident, the
-   specific apparent root cause counts, not the broad category (ITS
-   2025/302 field 4.2). So the same category is a hint, and the console
+   specific apparent root cause counts, not the broad category (RTS
+   2024/1772 Article 8(2)(b)). ITS 2025/302 field 4.2 may help. So the same category is a hint, and the console
    says so. The person decides whether the case applies.
 9. **The review after a major incident.** When the current classification
    of a person says major, the close needs four more texts, one for each
@@ -175,7 +175,7 @@ support" for each interpretation. A user document keeps that hedge.
       condition, not a threshold of Article 9,
     - the economic impact (Article 7).
 
-    A classification also records the field `article95b`: whether the
+    A classification also records the field `maliciousAccess` (boolean): whether the
     person found that the threshold of RTS 2024/1772 Article 9(5)(b) is
     met. That threshold is met when "any successful, malicious and
     unauthorised access not covered by point (a) occurs to network and
@@ -196,9 +196,10 @@ support" for each interpretation. A user document keeps that hedge.
     - the final report: 1 month from the last intermediate report.
 
     For a late classification, the initial notice is due 4 hours from the
-    classification (RTS 2025/301 Article 5(2)). A time limit that ends on a
-    weekend or a bank holiday moves to noon of the next working day, with
-    some exceptions (RTS 2025/301 Article 5(5) and 5(6)). The page cannot
+    classification (RTS 2025/301 Article 5(2)). When a time
+    limit ends on a weekend day or a bank holiday, the entity may submit by
+    noon of the next working day (RTS 2025/301 Article 5(4)), with
+    exceptions (Article 5(5) and 5(6)). The page cannot
     compute the bank holidays of each entity. So it labels each time that
     it shows "Article 5(1) only", and a person applies Article 5(2) and
     5(4) to 5(6).
