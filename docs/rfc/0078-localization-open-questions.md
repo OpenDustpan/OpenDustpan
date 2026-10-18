@@ -11,12 +11,14 @@ Status: discussing.
 
 ## Problem
 
-ADRs 230 to 235 decide the languages, the direction, the translation
+ADRs 231 to 236 decide the languages, the direction, the translation
 statuses, the message checks, the server text, the branding and the
-accessibility gates. Seven questions stay open. The project owner has not
-decided the first one. The others have no single answer that Google, AWS,
-Mozilla and GitLab share, or they need a dependency, which needs the
-owner's approval.
+accessibility gates. Seven questions stayed open. They had no single
+answer that Google, AWS, Mozilla and GitLab share, or they needed a
+dependency, which needs the owner's approval. On 18 October 2026 the owner
+answered each of them. Two parts stay open: a date form for each locale in
+notices (question 3), and the time axis of charts in right-to-left
+languages (question 6), which waits for research.
 
 ## Questions, options and proposals
 
@@ -24,23 +26,27 @@ owner's approval.
 
 The user documentation is `README.md`, `docs/guides/`, `docs/reference/`
 and `docs/explanation/` (ADR 66). It changes in each pull request of a
-feature (ADR 214). The owner has not decided whether it gets translations
-before 1.0.
+feature (ADR 214). The question was whether it gets translations before
+1.0.
 
 | Option | Cost | Gain |
 | --- | --- | --- |
 | A. English only before 1.0 | None. | The docs change fast before 1.0. Each translation would go stale in days. |
-| B. Machine translation of all docs in the 33 languages, with the note of ADR 231 | A build step, a translation run for each change, and many stale pages. | Readers who do not read English get every page. |
+| B. Machine translation of all docs in the 33 languages, with the note of ADR 232 | A build step, a translation run for each change, and many stale pages. | Readers who do not read English get every page. |
 | C. Machine translation of a small set: the quickstart, the install guide and the pages that the console links | A build step and a run for about 10 pages. | The first steps work in each language. The rest stays English. |
 | D. The languages that the owner reviews (Dutch and Afrikaans) and nothing else | Owner time for each change. | Reviewed text, for few readers. |
 
-Proposal: A. This is the recommendation of the project manager. The docs
-say in each language of the console that they are in English. Option C can
-come after 1.0, when the pages change less often.
+Proposal: A. This was the recommendation of the project manager.
+
+Decision (owner): B, now, with the same process as the console. ADRs,
+RFCs, `GLOSSARY.md`, `CLAUDE.md` and `CONTRIBUTING.md` stay in English. A
+translation never blocks a change: a feature ships with its English page,
+and a missing or stale translation is a report. ADR 232 decisions 16 to 18
+record it. The site generator is not decided.
 
 ### 2. The translation machine
 
-ADR 231 decision 8 makes a machine translation for each new string. Its
+ADR 232 decision 8 makes a machine translation for each new string. Its
 inputs are the English message, its description, `GLOSSARY.md` and the term
 list.
 
@@ -51,14 +57,22 @@ list.
 | C. Google Cloud Translation (Advanced) with glossaries | An API key and a cloud project. | Glossaries for each language. Stable output. |
 | D. People only | No machine. Many languages stay empty for a long time. | No machine errors. |
 
-Proposal: A, run by a maintainer, with the checks of ADR 232 as the gate.
+Proposal: A, run by a maintainer, with the checks of ADR 233 as the gate.
 The checks catch the errors that a machine makes: a translated term, a
 lost argument, a lost plural category. The strings are public in the
 repository, so the provider sees nothing secret.
 
+Decision (owner): A. An AI translation agent with the full context of the
+console and access to the internet translates, after the owner proof-reads
+the English source and the Afrikaans text. A second agent reviews, and the
+two loop until the review is clean. A translation that fails the checks is
+never committed. The repository pins the prompts and names no model. A
+maintainer runs the step, and CI holds no API key. ADR 232 decision 9
+records it.
+
 ### 3. The Go formatter of server messages
 
-ADR 233 decision 11 needs ICU MessageFormat on the server, with the plural
+ADR 234 decision 11 needs ICU MessageFormat on the server, with the plural
 rules of CLDR. `golang.org/x/text` is an indirect dependency today. Its
 package `feature/plural` holds the CLDR plural rules. Its package `message`
 uses its own format, not ICU MessageFormat.
@@ -67,15 +81,24 @@ uses its own format, not ICU MessageFormat.
 | --- | --- | --- |
 | A. A small ICU subset in `internal/`: plain text, arguments, `plural`, `select` and named formats, with `x/text/feature/plural` | About 500 lines and a test suite against the FormatJS results. `x/text` becomes a direct dependency. | One message format in both repositories. No new module. |
 | B. A third-party Go library for ICU MessageFormat | A new module. The ones known to the author have few maintainers. | Less code to write. |
-| C. `x/text/message` with its own format | Two formats in the project. The checks of ADR 232 run twice. | A maintained module. |
+| C. `x/text/message` with its own format | Two formats in the project. The checks of ADR 233 run twice. | A maintained module. |
 | D. Notices stay in English | No code. | Nothing for the recipient. |
 
 Proposal: A. It needs the owner's approval to make `golang.org/x/text` a
 direct dependency.
 
+Decision (owner): A. `golang.org/x/text` is a direct dependency, for
+language matching, plural rules and number formatting. Dates and times in
+notices use one fixed form in every language, for example
+`2026-10-18 15:33 UTC`, in the time zone and the digits of the person. ADR
+234 decisions 6 and 11 record it.
+
+Still open: a date form for each locale in notices. It needs the date data
+of CLDR, which `golang.org/x/text` does not format today.
+
 ### 4. The product name in chat messages
 
-ADR 234 decision 4 records the owner's rule: the product name reaches the
+ADR 235 decision 4 records the owner's rule: the product name reaches the
 console and emails only. Chat messages are not in the rule.
 
 | Option | Effect |
@@ -87,9 +110,11 @@ console and emails only. Chat messages are not in the rule.
 Proposal: A, if the owner agrees that "emails" in the rule stands for
 notices to people.
 
+Decision (owner): A. ADR 235 decision 4 records it.
+
 ### 5. The language of a person who never set one
 
-ADR 233 decision 5 uses the installation default when `language` is
+ADR 234 decision 5 uses the installation default when `language` is
 `null`. The console uses the browser for such a person, so the console and
 the emails can differ.
 
@@ -102,9 +127,13 @@ the emails can differ.
 Proposal: B. Its value is the result of the browser match of ADR 181
 decision 2, and the person's own `language` always wins over it.
 
+Decision (owner): B. Emails use the person's `language`, then
+`resolvedLanguage`, then the installation default. ADR 234 decision 5
+records it.
+
 ### 6. The time axis of charts in right-to-left languages
 
-ADR 230 decision 12 keeps time from left to right until a decision.
+ADR 231 decision 12 keeps time from left to right until a decision.
 
 | Option | Effect |
 | --- | --- |
@@ -114,9 +143,13 @@ ADR 230 decision 12 keeps time from left to right until a decision.
 Proposal: ask the native reviewers of Arabic and Hebrew, then decide. Keep
 A until then.
 
+Decision (owner): research the precedent first: what other products do,
+and what their users find easy to read. Keep A until then. ADR 231
+decision 12 records it. The question stays open.
+
 ### 7. A report of one string from the page
 
-ADR 231 decision 5 reports a wrong string through a form that has the page,
+ADR 232 decision 5 reports a wrong string through a form that has the page,
 not the message.
 
 | Option | Effect |
@@ -127,6 +160,16 @@ not the message.
 Proposal: A for now. B when the number of reports shows that A is too
 slow.
 
+Decision (owner): a report of one string now, not a form of the page. ADR
+232 decision 5 records it: a report mode gives each translated string its
+own link.
+
 ## Outcome
 
-Empty until the owner answers.
+Accepted in part on 2026-10-18. ADR 232 records questions 1, 2 and 7. ADR
+234 records questions 3 and 5. ADR 235 records question 4. ADR 231 decision
+12 records the interim rule of question 6. The owner also approved
+`@axe-core/playwright` and `axe-core` for the console (ADR 236).
+
+Open: a date form for each locale in notices, and the time axis of charts
+in right-to-left languages after the research.

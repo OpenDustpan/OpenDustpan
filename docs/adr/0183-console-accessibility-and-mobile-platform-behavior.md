@@ -1,6 +1,6 @@
 # 183. Console accessibility and mobile platform behavior
 
-Status: accepted · 2026-10-18 · adds to ADR 58 decision 9 · decisions 1 to 3 extended by ADRs 230 and 235
+Status: accepted · 2026-10-18 · adds to ADR 58 decision 9 · decisions 1 to 3 extended by ADRs 231 and 236
 
 ## Context
 

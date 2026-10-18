@@ -1,4 +1,4 @@
-# 230. New languages, right-to-left text, digits, mirroring rules and fonts for each script
+# 231. New languages, right-to-left text, digits, mirroring rules and fonts for each script
 
 Status: accepted · 2026-10-18. Supersedes in part ADR 181 decisions 1, 14 and 16. Extends ADR 181 decisions 2, 3, 5, 8 and 22, and ADR 183 decision 3
 
@@ -10,7 +10,7 @@ right-to-left language can come later without a change to each component.
 On 18 October 2026 the project owner added Arabic and Hebrew, and planned
 them now, not when a volunteer comes. The owner also added Afrikaans,
 Ukrainian and Russian. The owner reviews English, Dutch and Afrikaans as a
-native reviewer (ADR 231). This ADR records these decisions of the owner with the label
+native reviewer (ADR 232). This ADR records these decisions of the owner with the label
 "(owner)", and the design decisions that follow from them. The project
 manager decided the design decisions under the owner's decision rule:
 follow what Google, AWS, Mozilla or GitLab do. Each such decision has a
@@ -26,8 +26,8 @@ Facts:
 - Arabic has six plural categories in CLDR: `zero`, `one`, `two`, `few`,
   `many` and `other`. Hebrew has more than two.
 - IBM Plex has families for Arabic, Hebrew, Japanese and Korean under the
-  SIL Open Font License 1.1. A Simplified Chinese family was not released
-  when ADR 181 was written. Noto Sans SC is under the same license.
+  SIL Open Font License 1.1. IBM released no Simplified Chinese family
+  before the project wrote ADR 181. Noto Sans SC is under the same license.
 - Ukrainian and Russian use the Cyrillic script, as Bulgarian does. Both
   have the plural categories `one`, `few`, `many` and `other`.
 - Arabic text can use Western digits (0 to 9) or Arabic-Indic digits
@@ -68,6 +68,9 @@ Facts:
    | Field | Values | Default |
    | --- | --- | --- |
    | `digits` | `latn` (Western digits) or `arab` (Arabic-Indic digits), or `null` | `null`: the formatting locale decides |
+
+   The list of values can grow when a new language uses other digits, for
+   example `deva` for Devanagari digits. A new value needs no new field.
 
    The console gives the value to `Intl` as the `numberingSystem` option of
    each number, date and time format. The rules of ADR 181 decision 8 apply
@@ -121,7 +124,7 @@ Facts:
     | --- | --- |
     | Diff glyphs `+`, `~`, `-` and `+-`, and the diff block | A diff is machine-made text. The block has `dir="ltr"` and keeps its gutter on the left. |
     | Code, state, logs, CLI output, plans and paths | Machine-made text, with `dir="ltr"` (ADR 181 decision 13). |
-    | Shortcut hints `[a]`, `‹a›` and inverse (ADR 180 decision 3) | They name a key. `‹a›` keeps U+2039 before the key and U+203A after it. |
+    | Shortcut hints `[a]`, `‹a›` and inverse (ADR 180 decision 3) | They name a key. A hint renders in an element with `dir="ltr"`, because the bidirectional algorithm mirrors `[`, `]`, `‹` and `›` in right-to-left text. `‹a›` keeps U+2039 before the key and U+203A after it. |
     | The check mark, the cross, the search glass, a clock, a lock | They do not point in a direction. |
     | Media controls: play and pause | They name a direction of tape, not of reading. |
     | Logos and the mark of a tool | A mark of another project keeps its own form. |
@@ -131,10 +134,12 @@ Facts:
     icons that point in a direction, and keeps media controls, clocks and
     check marks as they are. Apple's Human Interface Guidelines ask to flip
     only the images that show a direction.
-12. **Charts with a time axis.** The direction of time in a chart in a
-    right-to-left language is an open question of RFC 78. Until a decision,
-    a chart keeps time from left to right, with `dir="ltr"` on its plot
-    area. Its labels and its legend follow the language.
+12. **Charts with a time axis (owner).** The direction of time in a chart
+    in a right-to-left language needs research first: what other products
+    do, and what their users find easy to read. RFC 78 keeps the question
+    open until that research. Until a decision, a chart keeps time from
+    left to right, with `dir="ltr"` on its plot area. Its labels and its
+    legend follow the language.
 
 ### Fonts
 
@@ -163,16 +168,20 @@ Facts:
 14. **Type rules for each script.** The console sets `font-synthesis: none`,
     so that a browser never makes a false italic or bold of a CJK, Arabic or
     Hebrew font. Emphasis in these scripts uses weight, not italics. Arabic
-    text gets a line height of at least 1.6. CJK text does not break inside
-    a word that `Intl.Segmenter` keeps together, and the console sets
-    `word-break: keep-all` for Korean.
+    text gets a line height of at least 1.6. Japanese text gets
+    `word-break: auto-phrase` where the browser supports it, so that a line
+    breaks between phrases. Korean text gets `word-break: keep-all`, because
+    Korean puts spaces between words. Other line breaks follow the browser.
 
 ### Tests
 
 15. **A right-to-left pseudo-locale.** Test builds get the pseudo-locale
-    `ar-XB`, next to `en-XA`. It reverses the order of the letters of each
-    message, wraps it in the right-to-left marks U+202E and U+202C, and sets
-    `dir="rtl"`. Arguments keep their order and their direction. The console
+    `ar-XB`, next to `en-XA`. It wraps each literal part of a message in
+    U+202E (right-to-left override) and U+202C (pop directional
+    formatting), so that Latin letters show from right to left as Arabic
+    letters do. It does not wrap the arguments, so that each argument keeps
+    its order and its direction, as a real value does in Arabic text. The
+    page gets `dir="rtl"`. The console
     e2e suite runs its screens in `ar-XB`. It fails on text that a container
     clips, and on a machine-made value without `dir="ltr"`. A reviewer
     checks the screenshots of the run for a layout that does not mirror.
@@ -182,6 +191,8 @@ Facts:
     test.
 16. **The axe gate runs in both directions.** The axe gate of ADR 183
     decision 3 also runs in `ar-XB`, and in `ar` and `he` when they ship.
+    The gate uses `@axe-core/playwright`, which the owner approved
+    (ADR 236).
 
 ## Consequences
 
@@ -198,11 +209,11 @@ Facts:
 - `OpenDustpan/console` gets these changes. This ADR does not change that
   repository.
   - The message files `ar`, `he`, `af`, `uk` and `ru`, with their term lists
-    (ADR 232).
+    (ADR 233).
   - The font files and license entries of decision 13.
   - The `ar-XB` builder and its e2e run.
   - A review of each icon against decisions 10 and 11. Each icon component
     declares whether it mirrors.
 - The server needs no change for the language list, because it checks only
   the shape of a tag (ADR 181 decision 8). Server text in these languages
-  follows ADR 233.
+  follows ADR 234.

@@ -1,4 +1,4 @@
-# 232. Message rules and the checks of each translation: terms, arguments, plurals and formats
+# 233. Message rules and the checks of each translation: terms, arguments, plurals and formats
 
 Status: accepted · 2026-10-18. Extends ADR 181 decisions 7, 10, 11, 13 and 17
 
@@ -7,7 +7,7 @@ Status: accepted · 2026-10-18. Extends ADR 181 decisions 7, 10, 11, 13 and 17
 ADR 181 decides the rules for messages: ICU MessageFormat with named
 arguments, every plural category of a language, no selection by gender,
 machine-made values in arguments, and a term list for each language. It
-does not say how a check enforces them. Machine translation (ADR 231) makes
+does not say how a check enforces them. Machine translation (ADR 232) makes
 many messages that no person reads first, so the checks must find the
 errors that a machine makes. On 18 October 2026 the project owner approved
 FormatJS for ICU MessageFormat in the console. The project manager decided
@@ -41,8 +41,10 @@ Facts:
    the two lists in the English text, as a whole word and with no regard to
    case. The translation must hold the same term in the same spelling. A
    term in a list can name its allowed forms in that language, for example
-   the plural "Stacks" in German. A message can name an exception, with the
-   term and a reason. A reviewer checks each exception.
+   the plural "Stacks" in German. A term can be marked as a noun only, for
+   example "plan", so that the check skips the verb with the same
+   spelling. A message can name an exception, with the term and a reason.
+   A reviewer checks each exception.
 
    Benchmark: the glossaries of Google Cloud Translation and of AWS
    Translate hold terms that the machine must not translate. Mozilla's
@@ -57,7 +59,7 @@ Facts:
 4. **The product name and the agent's name are arguments.** A message never
    holds "OpenDustpan" or "Dusty" as text when it names the product or the
    agent of this installation. It uses the arguments `productName` and
-   `agentName`. An operator can change both (ADR 234). "OpenDustpan" stays
+   `agentName`. An operator can change both (ADR 235). "OpenDustpan" stays
    as text only where it names the project for a legal reason, for example
    in the license notice.
 
@@ -73,7 +75,7 @@ Facts:
    category that `Intl.PluralRules` gives for its language, and `other`.
    Arabic needs six. A missing category fails the check. A category that
    the language does not use fails the check too, because a machine adds
-   it by mistake. Exact matches such as `=0` are allowed in every language.
+   it by mistake. Every language can use exact matches such as `=0`.
 
    Benchmark: Mozilla's `compare-locales` checks the plural forms of each
    locale against the CLDR rules of that locale.
@@ -84,15 +86,18 @@ Facts:
 
 ### Formats
 
-8. **Words from the language, numbers from the formatting locale.** One
-   wrapper of FormatJS formats each message. It selects the plural form with
-   the plural rules of the language. It formats each number, date, time and
-   duration with `Intl` and the formatting locale, with the overrides of the
-   person (ADR 181 decision 5). A message never formats a date with its own
-   pattern. It uses a named format of the wrapper, for example
-   `{at, date, short}`. If FormatJS cannot take two locales, the wrapper
-   formats the values first and gives them to the message as identifiers,
-   with the count as a separate argument for `plural`.
+8. **Words from the language, numbers from the formatting locale.**
+   FormatJS formats a message with one locale. So one wrapper of FormatJS
+   formats each number, date, time and duration first, with `Intl`, the
+   formatting locale and the overrides of the person (ADR 181 decision 5).
+   It gives the results to the message as plain arguments. The message
+   formats only words, with the language. A `plural` gets its count as a
+   separate number argument, and selects the form with the plural rules of
+   the language. A message never uses `#` in a plural, because `#` formats
+   the count with the language and not with the formatting locale. The
+   check fails on `#`. A message never formats a date with its own
+   pattern. For example, the wrapper formats `{at}` with its named format
+   `short`, and the message holds only `{at}`.
 9. **Units and relative times.** A unit of measure, for example bytes or
    seconds, goes through `Intl.NumberFormat` with `style: "unit"`. A
    relative time goes through `Intl.RelativeTimeFormat`. Each time that the
@@ -105,15 +110,21 @@ Facts:
 
 ### Where the checks run
 
-10. **The console check.** The console's check runs decisions 2, 3, 5, 6 and
-    7 on every message file, and the status check of ADR 231 decision 3.
-    A failure of decisions 2 to 7 fails the check. A missing or stale
-    translation is a report, not a failure (ADR 231 decision 14).
-11. **The server check.** The server's message files (ADR 233) get the same
+10. **The console check.** The console's check runs decisions 2 to 7 on
+    every message file, and the status check of ADR 232 decision 3. A
+    failure of one of them fails the check. For decision 4, the check fails
+    on an English message that holds "OpenDustpan" or "Dusty" as text,
+    except legal text. The translation step never commits a translation
+    that fails the check: the message stays missing, the console shows its
+    English text, and the check reports it (ADR 232 decision 9). A missing
+    or stale translation is a report, not a failure (ADR 232 decision
+    15).
+11. **The server check.** The server's message files (ADR 234) get the same
     checks in a Go test. The shared term list is one file. The console
     repository holds it, and the server test reads a copy that a script
-    updates. The test fails when the copy differs from the version that it
-    names.
+    updates. The copy names the commit of the console that it comes from
+    and the SHA-256 of its content. The test fails when the content of the
+    copy does not match that SHA-256.
 
 ## Consequences
 
