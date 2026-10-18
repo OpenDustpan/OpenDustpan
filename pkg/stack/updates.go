@@ -178,6 +178,7 @@ type Updates struct {
 	maxCheckpoints int
 	journal        *JournalEntries
 	replayer       JournalReplayer
+	stateAt        StateAtReader
 }
 
 // TokenChecker answers whether an access token still works. It is the port of
@@ -218,6 +219,12 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		maxCheckpoints: cfg.MaxCheckpointBytes,
 		journal:        cfg.Journal,
 		replayer:       cfg.Replayer,
+		stateAt:        nil,
+	}
+
+	// An update store that also finds the state at a time enables ExportAt.
+	if reader, ok := cfg.Updates.(StateAtReader); ok {
+		s.stateAt = reader
 	}
 
 	if s.now == nil {

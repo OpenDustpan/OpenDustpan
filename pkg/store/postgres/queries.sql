@@ -249,6 +249,43 @@ WHERE c.stack_id = $1
 ORDER BY u.version DESC
 LIMIT 1;
 
+-- name: StackExistsByID :one
+SELECT id FROM stacks WHERE id = $1;
+
+-- name: StateAtUpdate :one
+SELECT u.version, u.ended_at_ms, u.created_by
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0 AND u.ended_at_ms <= $2
+ORDER BY u.version DESC
+LIMIT 1;
+
+-- name: FirstStateUpdateEnd :one
+SELECT u.ended_at_ms
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0
+ORDER BY u.version ASC
+LIMIT 1;
+
+-- name: RunningUpdateAt :one
+SELECT u.version
+FROM updates AS u
+WHERE u.stack_id = $1
+  AND u.version > $3
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.started_at_ms <= $2
+  AND (u.ended_at_ms = 0 OR u.ended_at_ms > $2)
+ORDER BY u.version DESC
+LIMIT 1;
+
 -- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features, saved_at_ms,
@@ -497,6 +534,40 @@ FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
 LIMIT $2 OFFSET $3;
+
+-- name: WorkspaceExistsByID :one
+-- A workspace by its ID, a soft-deleted one included.
+SELECT id FROM workspaces WHERE id = $1;
+
+-- name: WorkspaceStateAt :one
+-- The finalized state version with the latest finalize time at or before a
+-- time. A finalize stamps a time after every earlier finalize of the
+-- workspace, so the version that became current last has the latest finalize
+-- time, and a read at the present agrees with the current pointer. Ties break
+-- by ID, as in the state version list; only rows that the stamp did not write
+-- can tie. The index on (workspace_id, finalized_at_ms DESC) serves the order.
+SELECT id, finalized_at_ms, holder
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized' AND finalized_at_ms <= $2
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT 1;
+
+-- name: LatestWorkspaceStateFinalize :one
+-- The latest finalize time of the finalized state versions of a workspace. A
+-- finalize stamps a later time than this one, in the same transaction.
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms DESC
+LIMIT 1;
+
+-- name: FirstWorkspaceStateFinalize :one
+-- The finalize time of the first finalized state version of a workspace.
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms ASC, id ASC
+LIMIT 1;
 
 -- name: CountStateVersions :one
 SELECT COUNT(*)

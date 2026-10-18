@@ -199,7 +199,7 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
 		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound),
-		errors.Is(err, workspace.ErrResourceNotFound):
+		errors.Is(err, workspace.ErrResourceNotFound), errors.Is(err, workspace.ErrNoStateAt):
 		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: err.Error()}
 	case errors.Is(err, workspace.ErrClientEncrypted),
 		errors.Is(err, workspace.ErrAlreadyExists),
