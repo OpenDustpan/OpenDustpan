@@ -670,6 +670,7 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 		"{stack}", "prod",
 		"{update}", "update0123456789abcdef",
 		"{version}", "1",
+		"{at}", "1760000000000",
 		"{urn}", "urn:pulumi:dev::web::custom:resource:Type::res1",
 	).Replace(route.Path)
 

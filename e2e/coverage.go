@@ -1568,6 +1568,13 @@ func stateAllowEntries() []AllowEntry {
 				"The harness step reads them after two ups and checks masking.",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state-at/{at}/resources",
+			CoveringTest: "TestCLIs (checkMaskedStateAt)",
+			Reason: "Console route: the CLI never reads the state at a time. " +
+				"The harness step reads the list between two ups and before the first, " +
+				"checks the 404 text, and reads it while a held update runs.",
+		},
+		{
 			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal",
 			CoveringTest: "TestCLIs (checkMaskedReveal)",
 			Reason: "Console route (ADR 41): the CLI never reveals a secret value. " +

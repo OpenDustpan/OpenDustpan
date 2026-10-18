@@ -98,6 +98,7 @@ type Inner interface {
 	stack.EventStore
 	stack.JournalStore
 	stack.BuiltCheckpointStore
+	stack.StateAtReader
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
@@ -387,6 +388,16 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	}
 
 	return s.inner.ReferencedCheckpointKeys(ctx, ref)
+}
+
+// StateAt returns the update that held the state of the stack at a time,
+// unless a fault fires first.
+func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.StateAt, error) {
+	if err := s.before(ctx, "StateAt"); err != nil {
+		return stack.StateAt{}, err
+	}
+
+	return s.inner.StateAt(ctx, id, at)
 }
 
 // AppendEvents stores the batch's events, unless a fault fires first.

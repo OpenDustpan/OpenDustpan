@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -22,6 +25,7 @@ func statePatterns() []string {
 		"GET /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources/{urn}",
 		"GET /api/stacks/{namespace}/{project}/{stack}/state/{version}/outputs",
 		"GET /api/stacks/{namespace}/{project}/{stack}/state/diff",
+		"GET /api/stacks/{namespace}/{project}/{stack}/state-at/{at}/resources",
 	}
 }
 
@@ -175,6 +179,7 @@ func stateTargets() []string {
 		"/api/stacks/acme/web/prod/state/latest/resources/" + stateURNRef,
 		"/api/stacks/acme/web/prod/state/latest/outputs",
 		"/api/stacks/acme/web/prod/state/diff?from=1&to=2",
+		"/api/stacks/acme/web/prod/state-at/" + stateAtFuture() + "/resources",
 	}
 }
 
@@ -1047,5 +1052,119 @@ func TestStateListFilterKeepsIncomplete(t *testing.T) {
 
 	if len(doc.Resources) != 1 || doc.Resources[0].URN != stateURNStack {
 		t.Fatalf("filtered list = %+v, want only the stack resource", doc)
+	}
+}
+
+// stateAtFuture is a time after every update of a fixture, in Unix
+// milliseconds.
+func stateAtFuture() string {
+	return strconv.FormatInt(time.Now().Add(time.Hour).UnixMilli(), 10)
+}
+
+// stateAtDoc is the wire shape of the resource list at a time in tests.
+type stateAtDoc struct {
+	stateListDoc
+
+	Version int   `json:"version"`
+	EndedAt int64 `json:"endedAt"`
+	Running int   `json:"running"`
+}
+
+// startRunningUpdate starts an update of the fixture stack and leaves it
+// running.
+func startRunningUpdate(t *testing.T, f updateFixture) {
+	t.Helper()
+
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := f.updates.Start(t.Context(), f.ref, u.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+}
+
+// TestStateAtResources proves the resource list at a time answers the update
+// that held the state, and names an update that is still running.
+func TestStateAtResources(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		running     bool
+		wantRunning int
+	}{
+		{name: "after the last update", running: false, wantRunning: 0},
+		{name: "while an update runs", running: true, wantRunning: 3},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdateFixture(t, allowAll())
+			seedStateVersions(t, f)
+
+			if tc.running {
+				startRunningUpdate(t, f)
+			}
+
+			target := "/api/stacks/acme/web/prod/state-at/" + stateAtFuture() + "/resources"
+
+			var doc stateAtDoc
+			if err := json.Unmarshal([]byte(getStateOK(t, f, target)), &doc); err != nil {
+				t.Fatalf("decode list at a time: %v", err)
+			}
+
+			if doc.Version != 2 || doc.Running != tc.wantRunning || len(doc.Resources) != 2 || doc.EndedAt == 0 {
+				t.Errorf("list = %+v, want version 2, running %d, 2 resources", doc, tc.wantRunning)
+			}
+		})
+	}
+}
+
+// TestStateAtRefusals proves the refusals of the resource list at a time: a
+// time before the first update names the time of that update, and a bad time
+// answers a clear error.
+func TestStateAtRefusals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		target  string
+		want    int
+		message *regexp.Regexp
+	}{
+		{
+			name:   "before the first update",
+			target: "/api/stacks/acme/web/prod/state-at/1/resources",
+			want:   http.StatusNotFound,
+			message: regexp.MustCompile(
+				`no state at that time: the first state of acme/web/prod is at \S+ \(\d{13} ms\)`,
+			),
+		},
+		{
+			name:    "a time that is not Unix milliseconds",
+			target:  "/api/stacks/acme/web/prod/state-at/yesterday/resources",
+			want:    http.StatusBadRequest,
+			message: regexp.MustCompile(`is not Unix milliseconds`),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdateFixture(t, allowAll())
+			seedStateVersions(t, f)
+
+			status, body := f.doUpdate(t, accessRequest(http.MethodGet, tc.target, ""))
+			if status != tc.want || !tc.message.MatchString(body) {
+				t.Errorf("answer = %d %s, want %d matching %q", status, body, tc.want, tc.message)
+			}
+		})
 	}
 }

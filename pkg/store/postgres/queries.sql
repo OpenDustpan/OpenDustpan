@@ -249,6 +249,40 @@ WHERE c.stack_id = $1
 ORDER BY u.version DESC
 LIMIT 1;
 
+-- name: StackExistsByID :one
+SELECT id FROM stacks WHERE id = $1;
+
+-- name: StateAtUpdate :one
+SELECT u.version, u.ended_at_ms
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.ended_at_ms > 0 AND u.ended_at_ms <= $2
+ORDER BY u.version DESC
+LIMIT 1;
+
+-- name: FirstStateUpdateEnd :one
+SELECT u.ended_at_ms
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.ended_at_ms > 0
+ORDER BY u.version ASC
+LIMIT 1;
+
+-- name: RunningUpdateAt :one
+SELECT u.version
+FROM updates AS u
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.started_at_ms <= $2
+  AND (u.ended_at_ms = 0 OR u.ended_at_ms > $2)
+ORDER BY u.version DESC
+LIMIT 1;
+
 -- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features, saved_at_ms,

@@ -97,6 +97,8 @@ type StateAtReader interface {
 	// StateAt returns the update that held the state of the stack id at the
 	// time at. It returns ErrNoStateAt when no update that saved a
 	// checkpoint ended at or before at, and ErrNotFound for an unknown
-	// stack. A soft-deleted stack answers as before its delete.
+	// stack. With ErrNoStateAt, the EndedAt of the result holds the end time
+	// of the first update that saved a checkpoint, or the zero time when the
+	// stack has none. A soft-deleted stack answers as before its delete.
 	StateAt(ctx context.Context, id ID, at time.Time) (StateAt, error)
 }
