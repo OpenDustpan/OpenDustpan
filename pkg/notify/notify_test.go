@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -58,8 +61,14 @@ func TestValidate(t *testing.T) {
 		{"an attribute key", func(n *notify.Notification) { n.Attributes = map[string]string{"Job ID": "x"} }, false},
 		{"no severity", func(n *notify.Notification) { n.Severity = 0 }, false},
 		{"a recipient of two kinds", func(n *notify.Notification) {
-			n.Recipients = []notify.Recipient{{Principal: "a", Group: "b"}}
+			n.Recipients = []notify.Recipient{{Principal: "a", Group: "b", Admins: false}}
 		}, false},
+		{"a recipient of a principal and the administrators", func(n *notify.Notification) {
+			n.Recipients = []notify.Recipient{{Principal: "a", Group: "", Admins: true}}
+		}, false},
+		{"the administrators of the scope", func(n *notify.Notification) {
+			n.Recipients = []notify.Recipient{{Principal: "", Group: "", Admins: true}}
+		}, true},
 	}
 
 	for _, tc := range cases {
@@ -111,6 +120,20 @@ func TestFit(t *testing.T) {
 			"an empty dedupe key becomes the ID", func(n *notify.Notification) { n.DedupeKey = "" },
 			func(n notify.Notification) bool { return n.DedupeKey == "ntf-1" },
 		},
+		{
+			"a dedupe key at the bound stays",
+			func(n *notify.Notification) { n.DedupeKey = strings.Repeat("k", notify.MaxAttributeLen) },
+			func(n notify.Notification) bool { return n.DedupeKey == strings.Repeat("k", notify.MaxAttributeLen) },
+		},
+		{"two long dedupe keys that differ after the bound stay apart", func(n *notify.Notification) {
+			n.DedupeKey = longKey("a")
+		}, func(n notify.Notification) bool {
+			b := sample()
+			b.DedupeKey = longKey("b")
+
+			return n.DedupeKey != b.Fit().DedupeKey && len(n.DedupeKey) <= notify.MaxAttributeLen &&
+				strings.HasPrefix(n.DedupeKey, "bgr-1/") && utf8.ValidString(n.DedupeKey)
+		}},
 		{"an http link stays", func(n *notify.Notification) {
 			n.Links = []notify.Link{{Title: "Wiki", URL: "http://wiki.example.com", Kind: notify.LinkDocs}}
 		}, func(n notify.Notification) bool { return len(n.Links) == 1 }},
@@ -131,7 +154,9 @@ func TestFit(t *testing.T) {
 			return len(n.Attributes) == 1 && len(n.Attributes["job.id"]) == notify.MaxAttributeLen
 		}},
 		{"a bad recipient is dropped", func(n *notify.Notification) {
-			n.Recipients = []notify.Recipient{{Principal: "", Group: ""}, {Principal: "alice", Group: ""}}
+			n.Recipients = []notify.Recipient{
+				{Principal: "", Group: "", Admins: false}, {Principal: "alice", Group: "", Admins: false},
+			}
 		}, func(n notify.Notification) bool { return len(n.Recipients) == 1 }},
 	}
 
@@ -152,6 +177,12 @@ func TestFit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// longKey returns a dedupe key above the bound that ends in tail, with
+// runes of two bytes across the bound.
+func longKey(tail string) string {
+	return "bgr-1/" + strings.Repeat("é", notify.MaxAttributeLen) + tail
 }
 
 func TestSinkValidate(t *testing.T) {
@@ -187,6 +218,11 @@ func TestSinkValidate(t *testing.T) {
 		{"a webhook with two secrets", webhook("https://hooks.example.com/ops", "itm-1", "itm-2"), true, false},
 		{"a webhook with three secrets", webhook("https://hooks.example.com/ops", "a", "b", "c"), false, false},
 		{"a webhook with no secret", webhook("https://hooks.example.com/ops"), false, false},
+		{"a ref with a zero byte", webhook("https://hooks.example.com/ops", "itm-1\x00"), false, false},
+		{"a ref with a slash", webhook("https://hooks.example.com/ops", "itm/1"), false, false},
+		{"an empty ref", webhook("https://hooks.example.com/ops", ""), false, false},
+		{"a ref above the bound", webhook("https://hooks.example.com/ops", strings.Repeat("r", 101)), false, false},
+		{"a ref at the bound", webhook("https://hooks.example.com/ops", strings.Repeat("r", 100)), true, false},
 		{"an http webhook", webhook("http://hooks.example.com/ops", "itm-1"), false, true},
 		{"the metadata address", webhook("https://169.254.169.254/", "itm-1"), false, true},
 		{"IPv6 loopback", webhook("https://[::1]:8443/", "itm-1"), false, true},
@@ -559,6 +595,12 @@ func TestScopeActions(t *testing.T) {
 
 		return n
 	}
+	withObject := func(object string, scope namespace.Name) notify.Notification {
+		n := withType(notify.SubscriptionSuspended, scope)
+		n.Object = object
+
+		return n
+	}
 
 	cases := []struct {
 		name string
@@ -569,6 +611,19 @@ func TestScopeActions(t *testing.T) {
 		{"a cost estimate", withType(notify.CostEstimated, "shop"), "[namespace:read namespace:read-cost]"},
 		{"a budget threshold", withType(notify.BudgetThreshold, "shop"), "[namespace:read namespace:read-cost]"},
 		{"a notification of the server", withType(notify.SubscriptionSuspended, "@server"), "[server:observe]"},
+		{
+			"a notice about the notifications of a namespace", withObject(notify.NotificationsObject("shop"), "shop"),
+			"[namespace:read namespace:manage-notifications]",
+		},
+		{
+			"a notice about the notifications of the server",
+			withObject(notify.NotificationsObject("@server"), "@server"),
+			"[server:observe server:manage-notifications]",
+		},
+		{
+			"a notice about the notifications of another namespace",
+			withObject(notify.NotificationsObject("other"), "shop"), "[namespace:read]",
+		},
 	}
 
 	for _, tc := range cases {
@@ -601,6 +656,8 @@ func (c contacts) ContactsOf(_ context.Context, id string) ([]notify.Contact, er
 
 func (contacts) Members(context.Context, string) ([]string, error) { return nil, nil }
 
+func (contacts) Admins(context.Context, namespace.Name) ([]string, error) { return nil, nil }
+
 func TestBeforeAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -613,27 +670,70 @@ func TestBeforeAttempt(t *testing.T) {
 		}
 	}
 
-	r := reader{"alice": true, "lost": true}
-	c := contacts{"alice": {"alice@example.com"}}
+	access := struct {
+		reader
+		contacts
+	}{reader{"alice": true, "lost": true}, contacts{"alice": {"alice@example.com"}}}
+
+	var gone notify.Subscription
+
+	// sub returns the subscription of a delivery of principal, changed by
+	// change.
+	sub := func(principal string, change func(s *notify.Subscription)) notify.Subscription {
+		s := notify.Subscription{
+			ID: "sub-1", Scope: "shop", Sink: "snk-1", Filter: notify.Filter{Types: nil, Objects: nil, MinSeverity: 0},
+			State: notify.SubscriptionStateActive, Reason: "", CreatedBy: principal, Version: 3,
+		}
+		if change != nil {
+			change(&s)
+		}
+
+		return s
+	}
+
+	notice := d("alice", "alice@example.com")
+	notice.Subscription = ""
 
 	cases := []struct {
 		name string
 		d    notify.Delivery
+		sub  notify.Subscription
 		want error
 	}{
-		{"the creator can still read", d("alice", ""), nil},
-		{"the creator lost access", d("bob", ""), notify.ErrNoAccess},
-		{"the contact is still a contact", d("alice", "alice@example.com"), nil},
-		{"the contact is gone", d("alice", "old@example.com"), notify.ErrNoAccess},
-		{"the read check fails", d("broken", ""), errCheck},
-		{"the contact check fails", d("lost", "lost@example.com"), errCheck},
+		{"the creator can still read", d("alice", ""), sub("alice", nil), nil},
+		{"the creator lost access", d("bob", ""), sub("bob", nil), notify.ErrNoAccess},
+		{"the contact is still a contact", d("alice", "alice@example.com"), sub("alice", nil), nil},
+		{"the contact is gone", d("alice", "old@example.com"), sub("alice", nil), notify.ErrNoAccess},
+		{"the read check fails", d("broken", ""), sub("broken", nil), errCheck},
+		{"the contact check fails", d("lost", "lost@example.com"), sub("lost", nil), errCheck},
+		{
+			"a subscription that a sink change suspended", d("alice", ""),
+			sub("alice", func(s *notify.Subscription) {
+				s.State, s.Reason = notify.SubscriptionStateSuspended, notify.ReasonSinkChanged
+			}),
+			notify.ErrNoAccess,
+		},
+		{
+			"a subscription that another person resumed", d("alice", ""),
+			sub("bob", nil), notify.ErrNoAccess,
+		},
+		{
+			"a subscription that sends to another sink now", d("alice", ""),
+			sub("alice", func(s *notify.Subscription) { s.Sink = "snk-2" }), notify.ErrNoAccess,
+		},
+		{"a subscription that is gone", d("alice", ""), gone, notify.ErrNoAccess},
+		{
+			"another subscription", d("alice", ""),
+			sub("alice", func(s *notify.Subscription) { s.ID = "sub-2" }), notify.ErrNoAccess,
+		},
+		{"a notice with no subscription", notice, gone, nil},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := notify.BeforeAttempt(t.Context(), tc.d, sample(), r, c)
+			err := notify.BeforeAttempt(t.Context(), tc.d, tc.sub, sample(), access)
 			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
 				t.Fatalf("BeforeAttempt = %v, want %v", err, tc.want)
 			}
@@ -715,5 +815,98 @@ func TestAttemptValidate(t *testing.T) {
 				t.Fatalf("Validate = %v, want valid %t", err, tc.valid)
 			}
 		})
+	}
+}
+
+func TestValidateSecrets(t *testing.T) {
+	t.Parallel()
+
+	s := notify.Sink{
+		ID: "snk-1", Scope: "shop", Kind: notify.SinkWebhook, Name: "Ops", Target: "https://hooks.example.com/ops",
+		SecretRefs: []string{"itm-1", "itm-2"}, CreatedBy: "alice", Version: 0,
+	}
+	key := func(ref string, n int) notify.SinkSecret {
+		return notify.SinkSecret{Ref: ref, Value: []byte(strings.Repeat("k", n))}
+	}
+
+	cases := []struct {
+		name    string
+		secrets []notify.SinkSecret
+		ok      bool
+	}{
+		{"no new secret", nil, true},
+		{"one value for each ref", []notify.SinkSecret{key("itm-1", 32), key("itm-2", 32)}, true},
+		{"a value at the bound", []notify.SinkSecret{key("itm-1", notify.MaxSecretLen)}, true},
+		{"a ref that the sink does not name", []notify.SinkSecret{key("itm-3", 32)}, false},
+		{"two values for one ref", []notify.SinkSecret{key("itm-1", 32), key("itm-1", 32)}, false},
+		{"an empty ref", []notify.SinkSecret{key("", 32)}, false},
+		{"an empty value", []notify.SinkSecret{key("itm-1", 0)}, false},
+		{"a value above the bound", []notify.SinkSecret{key("itm-1", notify.MaxSecretLen+1)}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := s.ValidateSecrets(tc.secrets)
+			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, notify.ErrInvalid)) {
+				t.Fatalf("ValidateSecrets = %v, want valid %t", err, tc.ok)
+			}
+		})
+	}
+}
+
+func TestSinkChangedNotice(t *testing.T) {
+	t.Parallel()
+
+	sub := notify.Subscription{
+		ID: "sub-1", Scope: "shop", Sink: "snk-1", Filter: notify.Filter{Types: nil, Objects: nil, MinSeverity: 0},
+		State: notify.SubscriptionStateActive, Reason: "", CreatedBy: "alice", Version: 3,
+	}
+	e := audit.Entry{
+		At: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), Namespace: "shop", Subject: "bob", IDPSubject: "",
+		TokenID: "", Action: "namespace:manage-notifications", Object: "shop", Version: "", ValuePath: "",
+		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
+		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
+		Sequence: 0, FenceVersion: 0,
+	}
+
+	n := notify.SinkChangedNotice(sub, 4, e)
+	if err := n.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want a valid notice", err)
+	}
+
+	want := []notify.Recipient{
+		{Principal: "", Group: "", Admins: true},
+		{Principal: "alice", Group: "", Admins: false},
+	}
+	if n.Type != notify.SubscriptionSuspended || n.ObjectID != "sub-1" || n.Subject != "bob" ||
+		!n.At.Equal(e.At) || !slices.Equal(n.Recipients, want) || n.DedupeKey != "sub-1/sink-changed/4" {
+		t.Fatalf("SinkChangedNotice = %+v, want the suspend of sub-1 by bob at sink version 4, "+
+			"to the administrators and alice", n)
+	}
+
+	checkNoticeKeys(t, sub, e, n)
+}
+
+// checkNoticeKeys checks the object and the dedupe key of n, the notice
+// of sub at the sink version 4: only a manager reads it, a repeat has the
+// same dedupe key and a new ID, and a later change has its own key.
+func checkNoticeKeys(t *testing.T, sub notify.Subscription, e audit.Entry, n notify.Notification) {
+	t.Helper()
+
+	if n.Object != notify.NotificationsObject("shop") ||
+		!slices.Contains(notify.ScopeActions(n), "namespace:manage-notifications") {
+		t.Fatalf("SinkChangedNotice object = %s, want the notifications of shop, which only a manager reads", n.Object)
+	}
+
+	again := notify.SinkChangedNotice(sub, 4, e)
+	if again.ID == n.ID || again.DedupeKey != n.DedupeKey {
+		t.Fatalf("a repeat of the notice = %s %s, want a new ID and the dedupe key %s", again.ID, again.DedupeKey,
+			n.DedupeKey)
+	}
+
+	if later := notify.SinkChangedNotice(sub, 5, e); later.DedupeKey == n.DedupeKey {
+		t.Fatalf("a later change has the dedupe key %s, want its own key", later.DedupeKey)
 	}
 }

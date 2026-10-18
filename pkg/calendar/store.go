@@ -59,9 +59,14 @@ type Store interface {
 	// does not belong to the scope of c.Owner, ErrExists for a used ID and
 	// for DefaultID, and namespace.ErrFenced for a stale fence.
 	Create(ctx context.Context, c Calendar, fence namespace.Fence, e audit.Entry) error
-	// Get returns the calendar id, or ErrNotFound. Get of DefaultID
-	// returns Default until an administrator changes it.
-	Get(ctx context.Context, id ID) (Calendar, error)
+	// Get returns the calendar id of scope, the write scope of its owner
+	// (Scope.WriteScope): the namespace of a calendar of a namespace, or
+	// audit.ServerScope for a calendar of a group or of the installation.
+	// It returns ErrNotFound for an unknown ID and for a calendar of
+	// another scope, so that a read in one namespace does not tell whether
+	// a calendar of another scope exists. Get of DefaultID in
+	// audit.ServerScope returns Default until an administrator changes it.
+	Get(ctx context.Context, scope namespace.Name, id ID) (Calendar, error)
 	// Update replaces the name, the zone, the working days, the working
 	// hours, the manual holidays and the feeds of c.ID when c.Version is
 	// the stored version, and increments the version. The feeds follow

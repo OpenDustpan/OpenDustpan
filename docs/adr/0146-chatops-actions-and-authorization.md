@@ -1,6 +1,6 @@
 # 146. ChatOps: three safe actions, linked identities and approval with a fresh authentication
 
-Status: accepted · 2026-10-18
+Status: accepted · 2026-10-18 · decisions 9 and 13 superseded in part by ADR 149
 
 ## Context
 
