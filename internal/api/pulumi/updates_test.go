@@ -200,6 +200,77 @@ func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _
 	return nil
 }
 
+// StateAt implements stack.StateAtReader for the one stack that the fixture
+// holds, so it ignores the stack ID. It compares times in milliseconds, as
+// the SQL stores do.
+func (m *memUpdateStore) StateAt(_ context.Context, _ stack.ID, at time.Time) (stack.StateAt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	atMs := at.UnixMilli()
+
+	var best, first, running stack.Update
+
+	for id := range m.updates {
+		u := m.updates[id]
+		if !u.Mutates() || u.Status == stack.StatusNotStarted {
+			continue
+		}
+
+		if _, saved := m.checkpoints[id]; saved && !u.EndedAt.IsZero() {
+			first = lowerVersion(first, u)
+
+			if u.EndedAt.UnixMilli() <= atMs {
+				best = higherVersion(best, u)
+			}
+		}
+
+		if u.StartedAt.UnixMilli() <= atMs && (u.EndedAt.IsZero() || u.EndedAt.UnixMilli() > atMs) {
+			running = higherVersion(running, u)
+		}
+	}
+
+	if best.Version == 0 {
+		return stack.StateAt{}, &stack.NoStateAtError{First: first.EndedAt}
+	}
+
+	return stack.StateAt{
+		EndedAt:   best.EndedAt,
+		CreatedBy: best.CreatedBy,
+		Version:   int(best.Version),
+		Running:   runningAbove(running, best),
+	}, nil
+}
+
+// runningAbove returns the version of running when it is above that of best,
+// or 0.
+func runningAbove(running, best stack.Update) int {
+	if running.Version <= best.Version {
+		return 0
+	}
+
+	return int(running.Version)
+}
+
+// lowerVersion returns the update with the lower version; the zero update
+// has none yet.
+func lowerVersion(a, b stack.Update) stack.Update {
+	if a.Version == 0 || b.Version < a.Version {
+		return b
+	}
+
+	return a
+}
+
+// higherVersion returns the update with the higher version.
+func higherVersion(a, b stack.Update) stack.Update {
+	if b.Version > a.Version {
+		return b
+	}
+
+	return a
+}
+
 func (m *memUpdateStore) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
