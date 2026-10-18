@@ -202,8 +202,15 @@ func (s *recordingStackStore) UpdateStackTags(
 	return nil
 }
 
+// unknownStackName is the one stack name that GetStack reports as not found.
+const unknownStackName = "absent"
+
 func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, error) {
 	var out stack.Stack
+
+	if string(ref.Stack) == unknownStackName {
+		return out, stack.ErrNotFound
+	}
 
 	out.Ref = ref
 	out.ID = "stk-test"
@@ -670,6 +677,7 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 		"{stack}", "prod",
 		"{update}", "update0123456789abcdef",
 		"{version}", "1",
+		"{at}", "1760000000000",
 		"{urn}", "urn:pulumi:dev::web::custom:resource:Type::res1",
 	).Replace(route.Path)
 
