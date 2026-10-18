@@ -1,0 +1,146 @@
+# 193. Threads, anchors and draft reviews
+
+Status: accepted · 2026-10-18 · part of ADR 190
+
+## Context
+
+ADR 128 decision 11 to decision 14 give request-changes threads on a job:
+who opens one, what it blocks, who resolves it, and the reason of a
+dismissal. A change order holds the plan of many units, and a reviewer
+comments on parts of it. The owner decided (owner):
+
+- One thread for each concern.
+- The anchor of a thread is the whole plan, one resource, several
+  resources, or a group.
+- Threads queue as a draft review, and the reviewer submits them together.
+- Threads follow their resource addresses into the next plan. When a
+  resource is not in the next plan, the thread is outdated, and it still
+  blocks until a person resolves it.
+- A request-changes thread blocks approval until the reviewer or another
+  approver resolves it. The author never resolves it, also when the author
+  is an approver. An agent never resolves it. The audit log records each
+  dismissal with its reason.
+
+## Decision
+
+1. **A thread.** A thread (`changeorder.Thread`) has an ID with the prefix
+   `cot-`, an anchor, the flag `Blocking`, the principal that opened it
+   with the agent reference if any, the revision where it opened, the
+   revision of its anchor now, a status (`open` or `resolved`), the flag
+   `Outdated`, and its comments. A blocking thread is a request-changes
+   thread (ADR 128 decision 11). A thread that does not block is a comment
+   thread.
+2. **A comment.** A comment (`changeorder.Comment`) has an ID with the
+   prefix `coc-`, the author with the agent reference if any, the time and
+   the text. The text is 1 to 4,000 bytes of UTF-8 (ADR 128 decision 11).
+   The server treats it as untrusted text under the rules of ADR 124
+   decision 13. Each answer to an agent, and the console, label it with
+   its author, as data, never as instructions. A comment does not change
+   after its write. A redaction can destroy its text (ADR 198 decision 3).
+3. **Anchors.** An anchor (`changeorder.Anchor`) has one of three kinds:
+
+   | Kind | Holds | Example |
+   | --- | --- | --- |
+   | `plan` | nothing more | "Why do we change this now?" |
+   | `resources` | 1 to 50 resource references | "This subnet must not be public." |
+   | `group` | one group key (ADR 194 decision 5) | "These 40 tag changes are fine, except the cost center." |
+
+   A resource reference (`changeorder.ResourceRef`) holds the unit ID and
+   the key of the resource in the plan of its tool: the URN for Pulumi,
+   the resource instance address for OpenTofu. This is the resource
+   identity of blame (ADR 150 decision 5). The core never parses the key.
+   It compares keys as bytes. An anchor of the kind `resources` names
+   resources that have a change in the plan of the revision. Else the
+   submit fails with `changeorder.ErrInvalid` and names the reference.
+4. **Who opens a thread.** A blocking thread needs an eligible approver
+   (ADR 192 decision 5), or an agent of an eligible approver. An author
+   cannot open a blocking thread on the change order. That fails with
+   `changeorder.ErrAuthorThread`, also through an agent (ADR 128 decision
+   11). A comment thread needs `changeorder:comment` on each unit. An
+   author can open comment threads and reply to each thread.
+5. **A draft review.** Each reviewer has at most one draft review on each
+   change order (`changeorder.Draft`). It holds the threads and the
+   replies that the reviewer wrote and did not submit, each with its
+   anchor. Only its reviewer reads it. The server keeps it, so a reviewer
+   can continue on another device. A draft holds at most 100 items. A
+   write of a draft writes no audit entry and sends no notification: a
+   draft changes nothing until its submit.
+6. **One submit.** A submit of a review (ADR 192) writes, in one fenced
+   transaction: the review, each thread and reply of the draft, the
+   signature for an `approve`, the change of the state, the audit entries
+   and the notifications. Then it deletes the draft. A submit names the
+   digest that the reviewer saw. A digest that is not the digest of the
+   current revision fails with `changeorder.ErrPlanChanged` for an
+   `approve` and a `reject-and-close`. For `request-changes` and `comment`,
+   the store maps the anchors of the draft to the current revision with
+   the rule of decision 7. So a reviewer who reads an old revision can
+   still ask for changes. Their threads show the revision that they read.
+7. **Threads follow their anchors into the next plan.** When a new
+   revision becomes `ready`, the store maps each thread that is open to
+   the new revision, in the transaction that marks the revision `ready`:
+   - An anchor of the kind `plan` always maps.
+   - An anchor of the kind `resources` maps each reference whose unit and
+     key have a change in the new plan.
+   - An anchor of the kind `group` maps when the new plan has a group with
+     the same group key (ADR 194 decision 5).
+
+   `changeorder.Follow` holds the rule, and a table-driven test checks it.
+   A thread whose anchor maps in full gets the new revision as the revision
+   of its anchor. A thread that resolved before stays resolved, and keeps
+   the revision of its anchor.
+8. **Outdated threads still block.** A thread is outdated when its anchor
+   does not map in full. That is, at least one resource reference has no
+   change in the new plan, or the group key is not in the new plan. The
+   thread keeps its old anchor and the revision of that anchor. It names
+   each reference that did not map. A blocking thread that is outdated
+   still blocks approval until a person resolves it (owner). The console
+   shows it with the label "Outdated", with the old plan of its anchor
+   while the history model keeps that plan.
+9. **Who resolves a thread.** `changeorder.Service.Resolve` closes a
+   thread. For a blocking thread it accepts only these, each in a request
+   with no agent reference (owner, ADR 128 decision 13):
+   - the principal that opened the thread, when that principal is not an
+     author,
+   - an eligible approver of the change order.
+
+   It refuses each author with `changeorder.ErrSelfResolve`, also when the
+   author holds `changeorder:approve` and is a member of each group. It
+   refuses each request with an agent reference with
+   `changeorder.ErrAgentDenied`, also for a thread that an agent of the
+   same person opened. A thread that an agent opened has the person of the
+   agent as the principal that opened it. A comment thread can be resolved
+   by the principal that opened it and by each eligible approver.
+10. **A dismissal needs a reason (owner).** A resolve of a blocking thread
+    by an approver other than the principal that opened it is a dismissal
+    (ADR 128 decision 14). A dismissal needs a reason with the limits of
+    ADR 192 decision 2, else it fails with `changeorder.ErrReasonRequired`.
+    The audit entry of the dismissal holds the reason (ADR 197 decision 6).
+11. **Reopen.** The principal that opened a thread, or an eligible
+    approver, can reopen a resolved thread, with a reason. A reopened
+    blocking thread blocks again, and an approved change order moves back
+    to `in-review`. An author cannot reopen a blocking thread
+    (`changeorder.ErrAuthorThread`), because an author cannot open one.
+12. **Limits.** A change order holds at most 500 threads, and a thread at
+    most 200 comments. A write above a limit fails with
+    `changeorder.ErrLimit`, which names the limit.
+
+## Consequences
+
+- A thread on a resource stays on that resource across new plans. A
+  reviewer sees whether the author changed the resource that the thread
+  is about.
+- A resource that a new plan no longer changes leaves its thread
+  outdated, and a person must still resolve it. A fix that takes away the
+  change of a resource does not clear a block on its own.
+- A reviewer writes many threads before the author sees one. The author
+  gets one notification for each submit, not one for each thread.
+
+## Open questions
+
+- Does a thread follow a resource that the tool renamed, for example a
+  Pulumi alias or an OpenTofu `moved` block? Version 1 follows the key of
+  the resource, so a rename makes the thread outdated.
+- Does a reply from an author to a blocking thread notify the person that
+  opened it, also during quiet hours (ADR 145 decision 25)?
+- Do the anchors get a fourth kind, one unit, for a concern about a whole
+  unit?
