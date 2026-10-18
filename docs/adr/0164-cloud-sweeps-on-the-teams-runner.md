@@ -1,6 +1,6 @@
 # 164. Cloud sweeps on the team's runner, with the runner's read-only identity
 
-Status: accepted · 2026-10-17 · adds to ADR 101 (runner pools and the runner protocol). Decisions 14, 15 and 19 superseded in part by ADR 166
+Status: accepted · 2026-10-17. Adds to ADR 101 (runner pools and the runner protocol). Decisions 14, 15 and 19 superseded in part by ADR 166. Route paths superseded in part by ADR 210
 
 ## Context
 

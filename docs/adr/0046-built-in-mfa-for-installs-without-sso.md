@@ -1,6 +1,6 @@
 # 46. Built-in MFA for installs with no SSO identity provider
 
-Status: accepted · 2026-10-12
+Status: accepted · 2026-10-12. Decision 8 extended by ADR 212 decision 3
 
 ## Context
 

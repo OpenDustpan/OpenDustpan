@@ -65,7 +65,7 @@ The backend or product that holds the state of a unit before an import. Examples
 _Avoid_: Origin, legacy backend
 
 **Installation**:
-One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
+One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path, and its actions have the area `installation:` (ADR 210). The authorization and audit object of the installation keeps the name `@server`. Write `@server` only for that object, and "installation" in each other place.
 _Avoid_: Cluster, instance (one server process), deployment
 
 **Instance**:
@@ -80,9 +80,29 @@ _Avoid_: Whitelist
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value
 
+**Settings resource**:
+The one API resource that holds each setting of a scope: `/api/dustpan/v1/settings` for the installation, and `/api/dustpan/v1/namespaces/{namespace}/settings` for a namespace (ADR 212 decision 7). It has one revision and one `ETag`, and a `PATCH` is a JSON Merge Patch. A policy route, such as `settings/session-policy`, is a view of it.
+_Avoid_: Config API, settings page (that is the console page)
+
+**Idempotency key**:
+The value of the `Idempotency-Key` header that a client sends with a request that changes data (ADR 210 decision 6). The server keeps the first answer for the caller, the route and the key for 24 hours. A retry with the same key and body gets the first answer, and the server does the operation once.
+_Avoid_: Request ID (that names one request in the logs), dedup key
+
 **Layer**:
-A source of the value of a setting: `flag`, `env`, `file` or `default`, in that order of precedence (ADR 63 decision 1). The layer that wins gives the effective value.
+A source of the value of a setting: `flag`, `env`, `file`, `database` or `default`, in that order of precedence (ADR 63 decision 1). The layer that wins gives the effective value.
 _Avoid_: Level, tier
+
+**Optional module**:
+A feature outside the core that has its own routes, its own schedules or both, for example the Catalog or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 211). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
+_Avoid_: Feature flag, plugin, add-on, module (alone)
+
+**Capabilities document**:
+The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 211). `apiVersion` is public, so the console reads it before the sign-in. The module list needs `caller:read`, so the console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
+_Avoid_: Feature list, handshake, capability (alone)
+
+**Forge connection**:
+The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).
+_Avoid_: VCS integration, VCS provider, app (alone)
 
 **Sensitive setting**:
 A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
@@ -132,7 +152,7 @@ The same as a purge. Use "purge" in code and in the API, and "final delete" wher
 _Avoid_: Permanent delete
 
 **Retention expiry**:
-The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records. It purges without the dependents check, because the retention period was the recovery window of the team (ADR 153). The end of the retention period of a stored plan or a job log is a redaction with the cause `retention` (ADR 152).
+The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/dustpan/v1/deleted-units/sweep` runs it at once. It also finishes the blob purge records. It purges without the dependents check, because the retention period was the recovery window of the team (ADR 153). The end of the retention period of a stored plan or a job log is a redaction with the cause `retention` (ADR 152).
 _Avoid_: Retention sweep, sweep (that is the Sweep feature), garbage collection, reaper
 
 **Orphan cleanup**:
@@ -144,7 +164,7 @@ A row that a purge writes for a unit whose blobs may still exist. A save that st
 _Avoid_: Tombstone (that is the shred record of a purged unit)
 
 **Maintenance mode**:
-The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/server/maintenance/enter`. The other state is `normal`.
+The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/dustpan/v1/maintenance/enter`. The other state is `normal`.
 _Avoid_: Downtime, freeze
 
 ### Regions
@@ -461,7 +481,7 @@ A cloud resource that does not have exactly one unit that manages it. It has thr
 _Avoid_: Orphan (that is a stored file), ghost resource, shadow resource
 
 **Catalog**:
-The self-service gateway of OpenDustpan, at the API path `/api/catalog`. A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
+The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
 _Avoid_: Service catalog, marketplace, portal, inventory
 
 **Catalog request**:
@@ -510,6 +530,10 @@ _Avoid_: Autonomy level, agent permission
 A change freeze on a namespace (ADR 103 decision 4). While it is active, no phase that changes resources, state or the code in git dispatches. Freezes are opt-in. A namespace has no freeze until a principal with `namespace:manage-freezes` creates one. A freeze has a reason, a start and an optional end. Plans still run, and a phase that runs when the freeze starts runs to its end. A queued job waits with the reason `frozen`, and dispatches after the freeze ends. A freeze never refuses a state write, because it stops only the work that OpenDustpan starts (ADR 103 decision 5).
 _Avoid_: Maintenance mode (that stops the tool APIs of a whole installation), lock
 
+**Manual lock**:
+A lock that a person puts on one unit, one collection or a whole namespace, with a reason (ADR 213 decision 10). It needs `unit:lock`. While it covers a unit, no new job of the unit starts and no queued phase dispatches. A lock request of a tool fails with the holder and the reason. The inventory shows it as the lock flag of the unit, not as a status. A freeze is a schedule for a whole namespace. A manual lock is not a freeze.
+_Avoid_: Freeze, hold, pause
+
 **Write-back**:
 The executor in which OpenDustpan writes a change to git, and the team's existing CI applies it (ADR 100). The change is a direct push or a review request. It runs in the server: each instance claims a deliver phase with a `durable.Runner` (ADR 101 decision 3). It commits through the API of the forge, never with a git client. Each commit has the trailer `Dustpan-Job: <job ID>`. A write-back job does `apply` only, and edits only the config or variable files of the unit. The next final state version of the unit closes the job, after the merge for a review request. A job that sees no such version expires after 14 days by default. OpenDustpan approvals add to the approvals of the forge.
 _Avoid_: Push (alone: a direct push is one of the two deliveries)
@@ -527,7 +551,7 @@ A reason in a start request that lets a job start during an active freeze (ADR 1
 _Avoid_: Freeze override, bypass
 
 **Job token**:
-An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
+An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It reads the outputs of another unit only when two checks pass (ADR 213 decision 1). An output-sharing rule names the unit of the job, and the principal can read the outputs. The token of a job that only plans decrypts the secrets of its own unit only when the principal that started the job has `unit:read-secrets`. It also decrypts them when the commit comes from a protected branch. It writes only its lock or lease and the events of the plan (ADR 213 decision 2). It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
 _Avoid_: Runner token (the credential of a runner is the runner key)
 
 **Job-ID claim**:
@@ -579,7 +603,7 @@ A join with a name that the pool already has, of a runner that is not retired (A
 _Avoid_: Re-register, re-enroll, rejoin (except in the wire values `must-rejoin` and `runner-rejoined`)
 
 **Retire**:
-The act that ends a runner (ADR 133 decision 8). A principal with `namespace:manage-runners` retires a runner with `POST /api/runners/{namespace}/runners/{runner}/retire` (ADR 138 decision 6). A retired runner authenticates nothing. The retire expires the claims of the runner in the same transaction, and the takeover rules apply. It also ends every job session of the runner, so each later request of such a session fails with `retired`. The record stays for the audit log, with the status `retired` (ADR 130 decision 9). A join again does not apply to a retired runner. To retire is not to drain: a draining runner only claims no new work.
+The act that ends a runner (ADR 133 decision 8). A principal with `namespace:manage-runners` retires a runner with `POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire` (ADR 138 decision 6). A retired runner authenticates nothing. The retire expires the claims of the runner in the same transaction, and the takeover rules apply. It also ends every job session of the runner, so each later request of such a session fails with `retired`. The record stays for the audit log, with the status `retired` (ADR 130 decision 9). A join again does not apply to a retired runner. To retire is not to drain: a draining runner only claims no new work.
 _Avoid_: Delete (a delete of a pool deletes its runners), deregister, revoke
 
 **Handoff token**:
@@ -599,7 +623,7 @@ The code of one commit of one repository in the blob store (ADR 135 decision 1).
 _Avoid_: Snapshot (alone), source (alone: that is the backend before an import), clone, checkout (the files that the launcher writes from a snapshot)
 
 **Source policy**:
-The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Policy`, ADR 135 decision 6). It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the policy does not allow. A change of the policy needs `namespace:manage-runners` and makes a new snapshot key. The routes are `GET` and `PUT /api/runners/{namespace}/source-policy` (ADR 138 decision 6).
+The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Policy`, ADR 135 decision 6). It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the policy does not allow. A change of the policy needs `namespace:manage-runners` and makes a new snapshot key. The routes are `GET` and `PUT /api/dustpan/v1/namespaces/{namespace}/source-policy` (ADR 138 decision 6).
 _Avoid_: Submodule allowlist
 
 ### Change orders
@@ -821,7 +845,7 @@ The field of an audit entry that names where a request came from. ADR 126 adds t
 _Avoid_: Transport, source
 
 **Model connection**:
-The one model that an administrator with `server:manage-agent` connects for the installation (ADR 120 decision 3). Its connection document holds every field. The operator sets each one. The server fills no field with a value for a provider (ADR 129). The only defaults are empty values, the `userAgent` of the release and the `retry-after` header. The credential is a secret item of `@server`. With no model connection, Dusty is off.
+The one model that an administrator with `installation:manage-agent` connects for the installation (ADR 120 decision 3). Its connection document holds every field. The operator sets each one. The server fills no field with a value for a provider (ADR 129). The only defaults are empty values, the `userAgent` of the release and the `retry-after` header. The credential is a secret item of `@server`. With no model connection, Dusty is off.
 _Avoid_: Model config, provider account, API key
 
 **Connection document**:
@@ -857,7 +881,7 @@ The durable operation that ends each agent run whose turn ended with no step tha
 _Avoid_: Retention expiry (that purges deleted units), garbage collector, janitor
 
 **MCP endpoint**:
-The route `/api/agent/mcp` that serves the agent tools over the Streamable HTTP transport of the Model Context Protocol (ADR 123). It offers tools only: no resources, no prompts and no sampling. It needs no model connection. It is off until an administrator sets `mcpEnabled: true`. It answers 404 while it is off or while the audit log is off.
+The route `/mcp` that serves the agent tools over the Streamable HTTP transport of the Model Context Protocol (ADR 123). It offers tools only: no resources, no prompts and no sampling. It needs no model connection. It is off until an administrator sets `mcpEnabled: true`. It answers 404 while it is off or while the audit log is off.
 _Avoid_: MCP server (as a separate program), agent API
 
 **Stdio proxy**:
@@ -973,7 +997,7 @@ The JSON Lines file that the command of a cloud sweep writes to the path in `DUS
 _Avoid_: Sweep result, scan output
 
 **Namespace link**:
-A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. An installation administrator with `server:link-namespaces` makes the link. A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
+A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. An installation administrator with `installation:link-namespaces` makes the link. A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
 _Avoid_: Link (alone), namespace trust, federation
 
 **Context**:
@@ -1067,7 +1091,7 @@ Branding that an operator sets for the whole installation, for example the palet
 _Avoid_: Scheme, theme (for branding)
 
 **Preferences**:
-The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
 _Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user settings
 
 
@@ -1148,6 +1172,9 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Scope** has three meanings: the namespace and unit of a data key, an audit scope, and an account scope of a sweep target. Write "account scope" for the third.
 - **Holder** has three meanings: the holder of a lock, the holder of an action, and the holder of a resource key. Name which one.
 - **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
+- **Module** has three meanings: an OpenTofu module, a Go module and an optional module of the server (ADR 211). Write "optional module" for the third.
+- **Capability** has four meanings. They are an upload capability, a capability probe (ADR 129), the capability list of the Pulumi CLI and the capabilities document (ADR 211). Name which one.
+- **`@server`** is the name of the authorization and audit object of the installation, and of the installation scope of a secret. It is not an action area and not a path. The action area is `installation:`, and no path of the API holds the word `server` (ADR 210).
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
 - **Provider** has two meanings. A provider of OpenTofu or the Pulumi CLI is a plugin of the tool, for example a provider wrapper (ADR 170). A profile provider is an adapter that an open calls (ADR 206). Write "profile provider" or "provider block" for the second.
