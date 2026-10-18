@@ -46,7 +46,8 @@ signatures (ADR 191).
    the item key is the namespace and the owner ID, which is the change
    order ID (ADR 154 decision 17). The server writes the wrapped key
    blob first, then the comment and the key record in one fenced
-   transaction (ADR 151 decision 3). So a person who pastes a secret in a
+   transaction (ADR 151 decision 3). The create port of the comment store
+   takes the prepared record as a parameter (ADR 154 decision 11). So a person who pastes a secret in a
    comment can have it destroyed, also in each backup target:
    - A redaction of a comment needs `unit:redact` on each unit of the
      change order, and a reason (ADR 151 decision 27). It shreds the item
