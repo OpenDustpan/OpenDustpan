@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
@@ -42,6 +43,8 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
+	pgColNamespaceID = "namespace_id"
+	pgColSeq         = "seq"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
@@ -57,6 +60,9 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
+	pgColObjectKind  = "object_kind"
+	pgColObjectID    = "object_id"
+	pgColResourceKey = "resource_key"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
 	pgColProviderID  = "provider_id"
@@ -86,6 +92,7 @@ type pgCopyTable struct {
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
+	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
@@ -101,7 +108,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "namespaces",
 			columns: []string{
 				pgColName, "home_region", "failover_version", pgColCreatedAtMs,
-				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist",
+				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist", "id",
 			},
 			orderBy: []string{pgColName},
 		},
@@ -165,6 +172,25 @@ func pgCopyStackTables() []pgCopyTable {
 	}
 }
 
+// pgInventoryChangeTables holds the COPY columns of the inventory change log.
+func pgInventoryChangeTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table:   "inventory_change_heads",
+			columns: []string{pgColNamespaceID, "last_seq"},
+			orderBy: []string{pgColNamespaceID},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
+				pgColStatus, "collection", "kind", "resource_count",
+			},
+			orderBy: []string{pgColNamespaceID, pgColSeq},
+		},
+	}
+}
+
 // pgCopyScopeTables holds the COPY columns of the secret and inventory
 // tables, in foreign-key order.
 func pgCopyScopeTables() []pgCopyTable {
@@ -205,6 +231,33 @@ func pgCopyScopeTables() []pgCopyTable {
 			orderBy: []string{pgColUnitID},
 		},
 		{
+			table: "object_context",
+			columns: []string{
+				pgColNamespaceID,
+				pgColObjectKind,
+				pgColObjectID,
+				pgColTool,
+				pgColResourceKey,
+				pgColSource,
+				"fields",
+				"warning",
+				"item_id",
+				"item_seq",
+				"resource_deleted_at_ms",
+				"marks_seq",
+				"updated_at_ms",
+				"updated_by",
+			},
+			orderBy: []string{pgColNamespaceID, pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
+		},
+		{
+			table: "object_context_owners",
+			columns: []string{
+				pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource,
+			},
+			orderBy: []string{pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
+		},
+		{
 			table:   "blob_purges",
 			columns: []string{pgColTool, pgColUnitID, pgColNamespace, "purged_at_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
@@ -212,9 +265,8 @@ func pgCopyScopeTables() []pgCopyTable {
 	}
 }
 
-// pgCopyWorkspaceTables holds the COPY columns of the workspace, backup and
-// installation tables, in foreign-key order. The installation table has no
-// references, so it loads last.
+// pgCopyWorkspaceTables holds the COPY columns of the workspace tables, in
+// foreign-key order.
 func pgCopyWorkspaceTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
@@ -256,13 +308,47 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{pgColSink, "holder", pgColExpiresAtMs},
 			orderBy: []string{pgColSink},
 		},
+	}
+}
+
+// pgControlTables lists the column list of every table of
+// backup.ControlTables: the durable tables live in the live schema, the
+// installation, backups and restores tables in the control schema. CheckCoverage
+// compares each list with the live columns, so a migration that adds a column
+// fails until its author adds the column here.
+func pgControlTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
-			table:   "backups",
+			table: backup.TableDurableOperations,
+			columns: []string{
+				"id", "start_key", "kind", "input", "version", "state", "attempt", "expiries", "failures",
+				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
+				"not_before_ms", "created_at_ms", "updated_at_ms",
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableDurableSteps,
+			columns: []string{"operation_id", pgColName, pgColSeq, "result", "done_at_ms"},
+			orderBy: []string{"operation_id", pgColSeq},
+		},
+		{
+			table:   backup.TableDurableSchedules,
+			columns: []string{pgColName, "interval_ms", "next_run_at_ms", "last_claimed_at_ms"},
+			orderBy: []string{pgColName},
+		},
+		{
+			table:   backup.TableSignInFailures,
+			columns: []string{"source", "window_end_ms", "count"},
+			orderBy: []string{"source", "window_end_ms"},
+		},
+		{
+			table:   backup.TableBackups,
 			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},
 		},
 		{
-			table: "restores",
+			table: backup.TableRestores,
 			columns: []string{
 				"id", pgColState, "backup_id", "pre_backup_id", "requested_by",
 				pgColStartedAtMs, pgColEndedAtMs, "error",
@@ -270,7 +356,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			orderBy: []string{pgColStartedAtMs, "id"},
 		},
 		{
-			table:   "installation",
+			table:   backup.TableInstallation,
 			columns: []string{"id", pgColState},
 			orderBy: []string{"id"},
 		},
@@ -428,10 +514,23 @@ func pgCopySpec(table string) (pgCopyTable, error) {
 	return pgCopyTable{}, fmt.Errorf("backup table %q has no COPY column list: %w", table, backup.ErrCoverage)
 }
 
+// pgControlSpec returns the column list of table, which must be in
+// backup.ControlTables.
+func pgControlSpec(table string) (pgCopyTable, error) {
+	for _, spec := range pgControlTables() {
+		if spec.table == table {
+			return spec, nil
+		}
+	}
+
+	return pgCopyTable{}, fmt.Errorf("control table %q has no column list: %w", table, backup.ErrCoverage)
+}
+
 // CheckCoverage implements backup.Coverage: it compares the COPY column list of
-// each table of backup.Tables with the columns that the current schema holds for
-// the table (ADR 42, decision 5). A table without a list, or a column that
-// differs, fails with backup.ErrCoverage.
+// each table of backup.Tables and the column list of each table of
+// backup.ControlTables with the columns that the schema holds for the table.
+// A table without a list, a column that differs, or a live table in neither
+// list fails with backup.ErrCoverage.
 func (s *Store) CheckCoverage(ctx context.Context) error {
 	for _, table := range backup.Tables {
 		spec, err := pgCopySpec(table)
@@ -449,7 +548,54 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		}
 	}
 
+	for _, table := range backup.ControlTables {
+		spec, err := pgControlSpec(table)
+		if err != nil {
+			return err
+		}
+
+		live, liveErr := s.liveColumns(ctx, table)
+		if liveErr != nil {
+			return liveErr
+		}
+
+		if checkErr := backup.CheckColumns(table, spec.columns, live); checkErr != nil {
+			return checkErr
+		}
+	}
+
+	if err := s.checkNoUnknownTables(ctx); err != nil {
+		return err
+	}
+
 	return s.checkPortableColumns(ctx)
+}
+
+// checkNoUnknownTables fails with ErrCoverage when the schema holds a data
+// table in neither backup.Tables nor backup.ControlTables.
+func (s *Store) checkNoUnknownTables(ctx context.Context) error {
+	live, err := s.SchemaTables(ctx)
+	if err != nil {
+		return err
+	}
+
+	known := make(map[string]bool, len(backup.Tables)+len(backup.ControlTables))
+	for _, table := range backup.Tables {
+		known[table] = true
+	}
+
+	for _, table := range backup.ControlTables {
+		known[table] = true
+	}
+
+	for _, table := range live {
+		if !known[table] {
+			return fmt.Errorf("schema holds table %q in neither the backup nor the control list: %w",
+				table, backup.ErrCoverage)
+		}
+	}
+
+	return nil
 }
 
 // checkPortableColumns compares the portable spec with the live columns of each
@@ -476,12 +622,14 @@ func (s *Store) checkPortableColumns(ctx context.Context) error {
 	return nil
 }
 
-// liveColumns returns the column names of table in the current schema, in
-// ordinal order.
+// liveColumns returns the column names of table in the live or the control
+// schema, in ordinal order. The control schema appends _control to the
+// current schema, so each live schema keeps its own control tables.
 func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT column_name FROM information_schema.columns`+
-			` WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position`,
+			` WHERE table_schema IN (current_schema(), current_schema() || '_control')`+
+			` AND table_name = $1 ORDER BY ordinal_position`,
 		table,
 	)
 	if err != nil {
@@ -659,6 +807,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 
 	if sealedErr := checkStagedSealedState(ctx, s.pool, in.staging); sealedErr != nil {
 		return backup.Summary{}, sealedErr
+	}
+
+	if idsErr := checkStagedNamespaceIDs(ctx, s.pool, in.staging); idsErr != nil {
+		return backup.Summary{}, idsErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
@@ -873,6 +1025,35 @@ func checkStagedSealedState(ctx context.Context, pool *pgxpool.Pool, staging str
 	return nil
 }
 
+// checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is
+// not a valid namespace ID. It returns ErrCorrupt.
+func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	rows, err := pool.Query(ctx, "SELECT name, id FROM "+stagingTable(staging, "namespaces"))
+	if err != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, id string
+
+		if scanErr := rows.Scan(&name, &id); scanErr != nil {
+			return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+		}
+
+		if _, parseErr := namespace.ParseID(id); parseErr != nil {
+			return fmt.Errorf("staged namespace %q has an invalid ID: %w: %w", name, parseErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
 // stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
 // of the installation keys in the staging schema, ordered, never nil.
 func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
@@ -1031,8 +1212,9 @@ func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
 	return nil
 }
 
-// dropStagingSchema removes the staging schema with its tables. The name comes
-// from newStagingSchema, never from the network; the prefix check keeps a
+// dropStagingSchema removes the staging schema with its tables and the
+// control schema that its migration made. The name comes from
+// newStagingSchema, never from the network; the prefix check keeps a
 // programming error from dropping a live schema.
 func (s *Store) dropStagingSchema(ctx context.Context, staging string) error {
 	if !strings.HasPrefix(staging, stagingSchemaPrefix) {
@@ -1041,6 +1223,10 @@ func (s *Store) dropStagingSchema(ctx context.Context, staging string) error {
 
 	if _, err := s.pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging)+" CASCADE"); err != nil {
 		return fmt.Errorf("drop staging schema: %w", err)
+	}
+
+	if _, err := s.pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
+		return fmt.Errorf("drop staging control schema: %w", err)
 	}
 
 	return nil
@@ -1211,13 +1397,15 @@ func backupEndedAt(endedAt time.Time) pgtype.Int8 {
 	return pgtype.Int8{Int64: codec.Millis(endedAt), Valid: true}
 }
 
-// SchemaTables implements backup.Inspector: it reads the table catalog, so a
-// table missing from backup.Tables fails the conformance suite. Bookkeeping
+// SchemaTables implements backup.Inspector: it reads the table catalog of
+// the live and the control schemas, so a table missing from backup.Tables
+// and backup.ControlTables fails the conformance suite. Bookkeeping
 // (schema_migrations, and audit_chain_state, the chain state of this
 // installation) is not data and stays out.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables`+
-		` WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'`+
+		` WHERE table_schema IN (current_schema(), current_schema() || '_control')`+
+		` AND table_type = 'BASE TABLE'`+
 		` AND table_name NOT IN ('schema_migrations', 'audit_chain_state') ORDER BY table_name`)
 	if err != nil {
 		return nil, fmt.Errorf("select schema tables: %w", err)

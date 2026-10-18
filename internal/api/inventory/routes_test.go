@@ -49,6 +49,7 @@ func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) 
 
 func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       changeTime(),
 		Name:            "acme",
 		HomeRegion:      "test-region",
@@ -85,6 +86,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Deleted:       seededDeleted(),
+		History:       nil,
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: stubAuthenticator{},
@@ -118,6 +120,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Deleted:       seededDeleted(),
+		History:       nil,
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},

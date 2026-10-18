@@ -2,6 +2,7 @@ package audittest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -19,6 +21,34 @@ type ChainStore interface {
 	audit.ServerStore
 	audit.ChainStore
 	audit.ScopesChecker
+}
+
+// ChainApprover is the test-only approval port the approval cases use: it
+// appends an approval entry and starts its migration operation in one
+// transaction.
+type ChainApprover interface {
+	// ApproveChainChange appends e and starts fixed, or the operation of
+	// retryKey when fixed names an ended operation, in one transaction. It
+	// returns audit.ErrNoChainChange when no change waits,
+	// audit.ErrChainMigrating while a migration can run, and
+	// durable.ErrKeyConflict when the fixed key names an operation of
+	// another kind.
+	ApproveChainChange(
+		ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+	) (durable.Operation, error)
+}
+
+// ChainBreaker breaks audit appends for the rollback case.
+type ChainBreaker interface {
+	// BreakAuditAppends breaks every later audit append. It returns an error
+	// when the break hook fails.
+	BreakAuditAppends(ctx context.Context) error
+}
+
+// ChainOperations answers the durable operations for the approval cases.
+type ChainOperations interface {
+	// DurableOperationsPort answers the durable operations of the store.
+	DurableOperationsPort() durable.Store
 }
 
 // ChainTestStore is one fresh, empty store with the tamper hook of
@@ -89,6 +119,10 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 			test: testChainAppendAfterFailedMigration,
 		},
 		{name: "a second handle follows the stored state", test: testChainSecondHandle},
+		{name: "one approval writes one approval entry and one operation", test: testChainApproveOne},
+		{name: "a conflicting start key writes no entry", test: testChainApproveConflictingKey},
+		{name: "no pending change answers its sentinel error", test: testChainApproveNoChange},
+		{name: "a failed audit append leaves no entry and no operation", test: testChainApproveRollback},
 	}
 
 	for _, tc := range cases {
@@ -946,4 +980,226 @@ func testChainSecondHandle(t *testing.T, ts ChainTestStore) {
 	}
 
 	wantValid(t, check(t, ts.Store, tl.ns.Name))
+}
+
+// approvalKind names the durable operation of a chain approval.
+const approvalKind = durable.Kind("audit-chain-migration")
+
+// approvalKey is the fixed start key of a chain approval.
+const approvalKey = "audit-chain-migration"
+
+// approvalVersion is the version of the migration operation.
+const approvalVersion = 1
+
+// approvalRetryKey is the start key of a retry after an ended operation.
+const approvalRetryKey = "audit-chain-migration-retry"
+
+// approvalPorts answers the approval, break and durable ports of s. It fails
+// the test when the store misses one: every adapter runs the approval cases.
+//
+//nolint:ireturn // The approval cases need the three test ports together.
+func approvalPorts(t *testing.T, s ChainStore) (ChainApprover, ChainBreaker, durable.Store) {
+	t.Helper()
+
+	approver, ok := s.(ChainApprover)
+	if !ok {
+		t.Fatal("the store does not approve chain changes")
+	}
+
+	breaker, ok := s.(ChainBreaker)
+	if !ok {
+		t.Fatal("the store does not break audit appends")
+	}
+
+	holder, ok := s.(ChainOperations)
+	if !ok {
+		t.Fatal("the store keeps no durable operations")
+	}
+
+	return approver, breaker, holder.DurableOperationsPort()
+}
+
+// saveApprovalWait stores a waiting change to off.
+func saveApprovalWait(t *testing.T, s ChainStore) {
+	t.Helper()
+
+	err := s.SaveChainRecord(t.Context(), audit.ChainRecord{
+		ChangedAt: now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+	})
+	if err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+}
+
+// approvalCaller answers the caller entry of the approval cases.
+func approvalCaller() audit.Entry {
+	return audit.Entry{
+		At: now(), Namespace: audit.ServerScope, Subject: "alice", IDPSubject: "", TokenID: "tok-1",
+		Action: audit.ActionSetChain, Object: audit.ServerScope.String(), ObjectID: "",
+		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
+		UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "req-1", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
+	}
+}
+
+// approvalFixed answers the start request of change under the fixed key.
+func approvalFixed(t *testing.T, change audit.ChainChange) durable.StartRequest {
+	t.Helper()
+
+	input, err := json.Marshal(change)
+	if err != nil {
+		t.Fatalf("encode change: %v", err)
+	}
+
+	return durable.StartRequest{Key: approvalKey, Kind: approvalKind, Version: approvalVersion, Input: input}
+}
+
+// approvalEntryCount answers the count of approval entries in the server
+// scope: entries with the action that records an approved chain change.
+func approvalEntryCount(t *testing.T, s ChainStore) int {
+	t.Helper()
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list server scope: %v", err)
+	}
+
+	var count int
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == audit.ActionSetChain {
+			count++
+		}
+	}
+
+	return count
+}
+
+// approvalOperationCount answers the count of migration operations.
+func approvalOperationCount(t *testing.T, ops durable.Store) int {
+	t.Helper()
+
+	found, err := ops.List(t.Context(), durable.Filter{Kind: approvalKind, States: nil, Limit: 0})
+	if err != nil {
+		t.Fatalf("list migration operations: %v", err)
+	}
+
+	return len(found)
+}
+
+// testChainApproveOne proves that one approval of a waiting change writes one
+// approval entry and starts one operation.
+func testChainApproveOne(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	approver, _, ops := approvalPorts(t, ts.Store)
+	saveApprovalWait(t, ts.Store)
+
+	change := audit.ChainChange{At: now(), By: "alice", To: audit.ChainStateOff}
+	entry := audit.ChainSetEntry(approvalCaller(), change)
+	fixed := approvalFixed(t, change)
+
+	_, err := approver.ApproveChainChange(t.Context(), entry, fixed, approvalRetryKey)
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	if got := approvalEntryCount(t, ts.Store); got != 1 {
+		t.Fatalf("approval entries = %d, want 1", got)
+	}
+
+	if got := approvalOperationCount(t, ops); got != 1 {
+		t.Fatalf("migration operations = %d, want 1", got)
+	}
+}
+
+// testChainApproveConflictingKey proves that an approval whose fixed key names
+// an operation of another kind writes no entry and starts no operation.
+func testChainApproveConflictingKey(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	approver, _, ops := approvalPorts(t, ts.Store)
+	saveApprovalWait(t, ts.Store)
+
+	conflict := durable.StartRequest{Key: approvalKey, Kind: "other-kind", Version: 1, Input: nil}
+
+	_, _, err := ops.Start(t.Context(), conflict)
+	if err != nil {
+		t.Fatalf("start conflicting operation: %v", err)
+	}
+
+	change := audit.ChainChange{At: now(), By: "alice", To: audit.ChainStateOff}
+	entry := audit.ChainSetEntry(approvalCaller(), change)
+	fixed := approvalFixed(t, change)
+
+	_, err = approver.ApproveChainChange(t.Context(), entry, fixed, approvalRetryKey)
+	if !errors.Is(err, durable.ErrKeyConflict) {
+		t.Fatalf("approve with a conflicting start key: %v, want ErrKeyConflict", err)
+	}
+
+	if got := approvalEntryCount(t, ts.Store); got != 0 {
+		t.Fatalf("approval entries after a failed start = %d, want none", got)
+	}
+
+	if got := approvalOperationCount(t, ops); got != 0 {
+		t.Fatalf("migration operations after a failed start = %d, want none", got)
+	}
+}
+
+// testChainApproveNoChange proves that an approval with no waiting change
+// answers the sentinel error and writes nothing.
+func testChainApproveNoChange(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	approver, _, ops := approvalPorts(t, ts.Store)
+
+	change := audit.ChainChange{At: now(), By: "alice", To: audit.ChainStateOff}
+	entry := audit.ChainSetEntry(approvalCaller(), change)
+	fixed := approvalFixed(t, change)
+
+	_, err := approver.ApproveChainChange(t.Context(), entry, fixed, approvalRetryKey)
+	if !errors.Is(err, audit.ErrNoChainChange) {
+		t.Fatalf("approve with nothing waiting: %v, want ErrNoChainChange", err)
+	}
+
+	if got := approvalEntryCount(t, ts.Store); got != 0 {
+		t.Fatalf("approval entries with nothing waiting = %d, want none", got)
+	}
+
+	if got := approvalOperationCount(t, ops); got != 0 {
+		t.Fatalf("migration operations with nothing waiting = %d, want none", got)
+	}
+}
+
+// testChainApproveRollback proves that when the durable start succeeds but
+// the audit append fails, neither the entry nor the operation exists: the
+// transaction rolled back.
+func testChainApproveRollback(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	approver, breaker, ops := approvalPorts(t, ts.Store)
+	saveApprovalWait(t, ts.Store)
+
+	if err := breaker.BreakAuditAppends(t.Context()); err != nil {
+		t.Fatalf("break audit appends: %v", err)
+	}
+
+	change := audit.ChainChange{At: now(), By: "alice", To: audit.ChainStateOff}
+	entry := audit.ChainSetEntry(approvalCaller(), change)
+	fixed := approvalFixed(t, change)
+
+	_, err := approver.ApproveChainChange(t.Context(), entry, fixed, approvalRetryKey)
+	if err == nil {
+		t.Fatal("approve with a broken audit append succeeded, want an error")
+	}
+
+	if got := approvalEntryCount(t, ts.Store); got != 0 {
+		t.Fatalf("approval entries after a broken append = %d, want none", got)
+	}
+
+	if got := approvalOperationCount(t, ops); got != 0 {
+		t.Fatalf("migration operations after a broken append = %d, want none", got)
+	}
 }

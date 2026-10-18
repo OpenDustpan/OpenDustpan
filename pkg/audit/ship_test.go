@@ -39,6 +39,7 @@ func newMemFeed(counts map[namespace.Name]int) *memFeed {
 		}
 
 		f.nss = append(f.nss, namespace.Namespace{
+			ID:              namespace.NewID(),
 			CreatedAt:       time.Unix(0, 0),
 			Name:            name,
 			HomeRegion:      "eu-west",

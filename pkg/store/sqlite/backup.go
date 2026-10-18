@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -165,24 +166,48 @@ func backupFromRow(row db.Backup) (backup.Record, error) {
 	})
 }
 
-// CheckCoverage implements backup.Coverage: it compares the column list of each
-// table of backup.Tables with the columns that the schema holds for the table
-// (ADR 42, decision 5). A table without a list, or a column that differs, fails
-// with backup.ErrCoverage.
+// CheckCoverage implements backup.Coverage: it compares the column list of
+// each table of backup.Tables and of backup.ControlTables with the columns
+// that the schema holds for the table. A table without a list, a column that
+// differs, or a live table in neither list fails with backup.ErrCoverage.
 func (s *Store) CheckCoverage(ctx context.Context) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	lists := make(map[string][]string, len(backup.Tables))
+	lists := make(map[string][]string, len(backup.Tables)+len(backup.ControlTables))
 
 	for _, spec := range sqliteBackupTables() {
 		lists[spec.table] = spec.columns
 	}
 
-	for _, table := range backup.Tables {
+	for _, spec := range sqliteControlTables() {
+		lists[spec.table] = spec.columns
+	}
+
+	if err := s.checkListedTables(ctx, backup.Tables, lists, "backup"); err != nil {
+		return err
+	}
+
+	if err := s.checkListedTables(ctx, backup.ControlTables, lists, "control"); err != nil {
+		return err
+	}
+
+	if err := s.checkNoUnknownTables(ctx, lists); err != nil {
+		return err
+	}
+
+	return s.checkPortableColumns(ctx)
+}
+
+// checkListedTables checks the column lists of tables in one coverage list.
+// The caller holds the store read lock.
+func (s *Store) checkListedTables(
+	ctx context.Context, tables []string, lists map[string][]string, kind string,
+) error {
+	for _, table := range tables {
 		listed, ok := lists[table]
 		if !ok {
-			return fmt.Errorf("backup table %q has no column list: %w", table, backup.ErrCoverage)
+			return fmt.Errorf("%s table %q has no column list: %w", kind, table, backup.ErrCoverage)
 		}
 
 		live, err := s.liveColumns(ctx, table)
@@ -195,7 +220,46 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		}
 	}
 
-	return s.checkPortableColumns(ctx)
+	return nil
+}
+
+// checkNoUnknownTables fails with ErrCoverage when the schema holds a data
+// table in neither the backup nor the control list. The caller holds the
+// store read lock.
+func (s *Store) checkNoUnknownTables(ctx context.Context, lists map[string][]string) error {
+	const query = `SELECT name FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations', 'audit_chain_state')
+		ORDER BY name`
+
+	rows, err := s.conn.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("select schema tables: %w", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	for rows.Next() {
+		var table string
+
+		if scanErr := rows.Scan(&table); scanErr != nil {
+			return fmt.Errorf("scan schema table: %w", scanErr)
+		}
+
+		if _, ok := lists[table]; !ok {
+			return fmt.Errorf("schema holds table %q in neither the backup nor the control list: %w",
+				table, backup.ErrCoverage)
+		}
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		return fmt.Errorf("read schema tables: %w", iterErr)
+	}
+
+	return nil
 }
 
 // checkPortableColumns compares the portable spec with the live columns of each
@@ -376,29 +440,13 @@ func (s *Store) capture(ctx context.Context) (string, error) {
 	return snap, nil
 }
 
-// swapDatabase replaces the destination file with the staged file and reopens
-// the store on it. The staged file passed every check, and the destination is
-// empty, so the rename cannot mix two installations. It removes the stale
-// write-ahead log first, so the reopened store never recovers it. It holds
-// the store lock exclusive, so concurrent readers wait out the rename instead
-// of reading a closed handle.
-func (s *Store) swapDatabase(ctx context.Context, temp string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.swapDatabaseLocked(ctx, temp)
-}
-
-// swapDatabaseLocked is swapDatabase with the store lock already held: the
+// swapDatabaseLocked replaces the destination file with the staged file with
+// the store lock already held: the
 // keep-access apply holds the write lock from the live snapshot through the
-// swap, so it swaps without taking the lock again.
+// swap, so it swaps without taking the lock again. The fence transaction
+// already copied the control tables into the staged file, so the rename
+// keeps the live control rows with no further copy.
 func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
-	// The lock holds every durable operation write out, so the copy has
-	// the last committed rows of the control tables.
-	if err := keepControlTables(ctx, temp, s.path); err != nil {
-		return err
-	}
-
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}
@@ -468,6 +516,10 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 
 	if sealedErr := checkSealedStateVersions(ctx, conn); sealedErr != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sealedErr)
+	}
+
+	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)
@@ -560,6 +612,37 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 
 	if len(tables) > 0 {
 		return fmt.Errorf("backup breaks foreign keys of %q: %w", tables, backup.ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is
+// not a valid namespace ID. It returns ErrCorrupt.
+func checkStagedNamespaceIDs(ctx context.Context, conn *sql.DB) error {
+	rows, err := conn.QueryContext(ctx, `SELECT name, id FROM namespaces`)
+	if err != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+	}
+
+	defer func() {
+		_ = rows.Close() //nolint:errcheck // Read-only check handle.
+	}()
+
+	for rows.Next() {
+		var name, id string
+
+		if scanErr := rows.Scan(&name, &id); scanErr != nil {
+			return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+		}
+
+		if _, parseErr := namespace.ParseID(id); parseErr != nil {
+			return fmt.Errorf("staged namespace %q has an invalid ID: %w: %w", name, parseErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
 	}
 
 	return nil

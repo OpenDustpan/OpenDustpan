@@ -96,7 +96,7 @@ func TestPostgresBaselineRoundTrip(t *testing.T) {
 
 	execPostgres(ctx, t, conn, schema.BaselineName, body)
 
-	if got := dumpPostgres(t, base, fresh.name); got != want {
+	if got := postgresBody(t, base, fresh.name); got != want {
 		t.Fatalf("the committed baseline differs from the dump of its schema; "+
 			"run make regenerate-baseline, do not edit the file:\n%s", firstDifference(want, got))
 	}

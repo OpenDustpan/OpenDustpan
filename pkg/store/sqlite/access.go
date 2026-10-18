@@ -431,13 +431,20 @@ func validateCreatorGrantEntries(
 }
 
 // insertNamespaceRow inserts the namespace row. The namespace did not exist
-// before, so no fence check runs.
+// before, so no fence check runs. A row without a valid ID is
+// namespace.ErrInvalidID, and a taken name or ID is
+// namespace.ErrAlreadyExists.
 func insertNamespaceRow(ctx context.Context, q *db.Queries, row codec.NamespaceRow) error {
+	if _, err := namespace.ParseID(row.ID); err != nil {
+		return err
+	}
+
 	n, err := q.CreateNamespace(ctx, db.CreateNamespaceParams{
 		Name:            row.Name,
 		HomeRegion:      row.HomeRegion,
 		FailoverVersion: row.FailoverVersion,
 		CreatedAtMs:     row.CreatedAtMs,
+		ID:              row.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("insert namespace: %w", err)

@@ -8,8 +8,8 @@ created: 2026-10-10
 
 # RFC 39. Reading state contents
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: accepted (ADR 41). It was a stub opened from the competitor review in
+the research doc "IaC and TACOS landscape".
 
 ## Problem
 

@@ -283,6 +283,7 @@ func applyLeaseDefaults(cfg *ShipperConfig) error {
 func serverScope() namespace.Namespace {
 	return namespace.Namespace{
 		CreatedAt:       time.Time{},
+		ID:              "",
 		Name:            ServerScope,
 		HomeRegion:      "",
 		FailoverVersion: 0,

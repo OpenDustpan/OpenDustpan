@@ -43,6 +43,8 @@ Consider a change done only when `make check` passes with zero findings:
   `goleak.VerifyTestMain`, which fails the package if a goroutine continues
   to run after the tests. Add this file to each new test package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
+- A feature that a user can see has its page in the user documentation in
+  the same pull request (ADR 214).
 
 Do not report work as finished if any of these fail. Say what fails instead.
 
@@ -61,11 +63,22 @@ pkg/                   the public SDK (ADR 35)
   identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
   blob/                port: object storage; blob/fs and blob/s3 adapters; blob/blobtest suite
   backup/              domain: backup ports (export, import, registry) and the table list
+  history/             domain: unit history, redaction, item keys of history items, tombstones, retention
+  dependency/          domain: dependency edges between units, dependents window, safe delete
+  job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
+  runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
+  launcher/            domain: the launcher contract (a static binary that runs the steps of one claim)
+  source/              domain: source snapshots, the source policy and checks of fetched code
+  agent/               domain: Dusty, the built-in agent: runs, turns, tools, the MCP endpoint
+  objectcontext/       domain: context on every object and the context read API
+  graph/               domain: the unit graph, blast radius and focus view
+  unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
+  api/objectcontext/   HTTP adapter for the tool-neutral context API (also used by the console)
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   metrics/, token/...  helpers shared across packages
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
@@ -98,7 +111,9 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 ## Backend rules (Go)
 
-- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`) never import
+- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
+  `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
+  `unmanaged`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.
@@ -111,9 +126,13 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   the same transaction. Never add a write path that skips the fence.
 - SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
   and generate them with sqlc. Dynamic queries are hand-written in the adapter.
-  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`. Never
-  edit an applied migration. TestFrozenMigrations in each store adapter holds
-  the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
+  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`.
+  Never edit a migration file that a tag shipped. An applied file that no tag
+  shipped stays frozen until the collapse before the next tag, which merges
+  all such files into one (ADR 73). Give the collapsed file a version number
+  above every file that it replaces, so that the migration check refuses a
+  database from an untagged build with `ErrSchemaDiverged`. TestFrozenMigrations in each store adapter
+  holds the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
@@ -122,17 +141,24 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   we can implement from. Any endpoint change must be checked against the real
   CLI with `make e2e`.
 
-## The APIs are contracts
+## The tool-compatible APIs are contracts
 
-Every tool's CLI depends on its API, and the console, which ships from another
-repository on its own schedule, depends on them too.
+The real CLIs depend on the tool-compatible APIs, and we cannot change the
+CLIs. Until 1.0, everything else can break (ADR 73).
 
-- Never remove or rename a field, endpoint or status code that a released
-  console or a supported CLI version uses. Add new fields. Deprecate old ones first.
+- The Pulumi Cloud-compatible API, the TFE-compatible API and the OpenTofu
+  HTTP backend must match what each supported version of the real CLI sends
+  and expects. Never break them. Check each change with `make e2e`.
 - Each API keeps the shapes its tool expects. The Pulumi Cloud-compatible API:
   camelCase JSON, errors `{"code": <status>, "message": "..."}`. The
   TFE-compatible API: JSON:API documents and errors.
-- An API change the console needs lands here first, released, then in the console.
+- Before 1.0, the console and the tool-neutral APIs can change and break.
+  Do not deprecate first. When a change breaks an API that the console uses,
+  merge the console change before the next server tag. Between the two
+  merges, `main` of either repository can be broken.
+- Do not write compatibility code, aliases or data conversions for a shape
+  that no tag shipped. A shape that a tag shipped keeps its upgrade path
+  (ADR 72).
 - Give every feature a REST API (ADR 17). The console, the CLI and all other
   clients use only that API. Do not add a feature that only the console, a CLI
   or a configuration file can use.
@@ -175,6 +201,13 @@ skill (ADR 14):
 ## Working in this repo
 
 - Ask before adding a dependency. Prefer the standard library.
+- Never add telemetry code, also not code that is off by default (ADR 74).
+- AI-assisted changes follow `CONTRIBUTING.md` (ADR 76): disclose the tool,
+  sign off each commit, understand all of it, and pass `make check`. Until
+  the push ends on 2026-10-22, an agent signs off with its own commit author
+  identity (`git commit -s`).
+- An agent pastes the output of its checks into the description of each pull
+  request that it opens (ADR 76).
 - Keep changes small and reviewable, with one concern per change.
 - If you are unsure of the intent, ask rather than guess.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,

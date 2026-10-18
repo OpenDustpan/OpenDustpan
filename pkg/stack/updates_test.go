@@ -590,6 +590,7 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       clk.now,
 		Name:            "acme",
 		HomeRegion:      "local",

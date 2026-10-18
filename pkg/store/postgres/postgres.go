@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,9 +75,37 @@ var (
 	_ stack.Store     = (*Store)(nil)
 )
 
+// liveSchemaName returns the live schema of a search_path setting: the first
+// schema, or public when the setting is empty. The control schema appends
+// _control to it, so each live schema keeps its own control tables.
+func liveSchemaName(searchPath string) string {
+	for part := range strings.SplitSeq(searchPath, ",") {
+		if name := strings.Trim(strings.TrimSpace(part), `"`); name != "" {
+			return name
+		}
+	}
+
+	return "public"
+}
+
 // Open connects to the database at url and migrates it.
 func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres pool: %w", err)
+	}
+
+	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
+	ctl := live + "_control"
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
+			return fmt.Errorf("set postgres search path: %w", execErr)
+		}
+
+		return nil
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
 	}
@@ -140,23 +169,7 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
-	row := codec.ToNamespaceRow(ns)
-
-	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
-		Name:            row.Name,
-		HomeRegion:      row.HomeRegion,
-		FailoverVersion: row.FailoverVersion,
-		CreatedAtMs:     row.CreatedAtMs,
-	})
-	if err != nil {
-		return fmt.Errorf("insert namespace: %w", err)
-	}
-
-	if n == 0 {
-		return namespace.ErrAlreadyExists
-	}
-
-	return nil
+	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
 }
 
 // GetNamespace implements namespace.Store.
@@ -231,7 +244,12 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			return err
 		}
 
-		return publishStackInventory(ctx, q, st.Ref, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			st.Ref,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+		)
 	})
 }
 
@@ -302,7 +320,12 @@ func (s *Store) UpdateStackTags(
 			return err
 		}
 
-		return publishStackInventory(ctx, q, ref, id, codec.Millis(updatedAt))
+		return publishStackInventory(
+			ctx,
+			q,
+			ref,
+			unitWrite{unitID: id, atMs: codec.Millis(updatedAt), kind: inventory.ChangeChanged},
+		)
 	})
 }
 
@@ -383,7 +406,12 @@ func (s *Store) RenameStack(
 			return fmt.Errorf("read renamed stack: %w", err)
 		}
 
-		return publishStackInventory(ctx, q, newRef, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			newRef,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeRenamed},
+		)
 	})
 }
 

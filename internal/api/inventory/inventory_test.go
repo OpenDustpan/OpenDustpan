@@ -70,6 +70,7 @@ func seedNamespace(t *testing.T, nsStore *memNamespaceStore) {
 	}
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            n,
 		HomeRegion:      "test-region",
@@ -245,6 +246,7 @@ func newBehaviorHandlerWith(
 		Namespaces:    namespaces,
 		Units:         reader,
 		Deleted:       seededDeleted(),
+		History:       nil,
 		Lifecycles:    wiring.lifecycles,
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
@@ -280,6 +282,7 @@ func authorizedGet(
 type unitBody struct {
 	Tool          string    `json:"tool"`
 	Reference     string    `json:"reference"`
+	UnitID        string    `json:"unitID"`
 	Namespace     string    `json:"namespace"`
 	Name          string    `json:"name"`
 	LastChange    int64     `json:"lastChange"`
@@ -332,6 +335,7 @@ func changeTime() time.Time {
 func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 	ns := namespace.Name("acme")
 	nsStore.namespaces[ns] = namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       changeTime(),
 		Name:            ns,
 		HomeRegion:      "test-region",
@@ -438,6 +442,7 @@ func TestListUnitsBothTools(t *testing.T) {
 		{
 			Tool:          "OpenTofu",
 			Reference:     "opentofu:acme/network",
+			UnitID:        "ws-1",
 			Namespace:     "acme",
 			Name:          "network",
 			LastChange:    changeTime().Unix(),
@@ -448,6 +453,7 @@ func TestListUnitsBothTools(t *testing.T) {
 		{
 			Tool:          "Pulumi",
 			Reference:     "pulumi:acme/api/dev",
+			UnitID:        "stk-2",
 			Namespace:     "acme",
 			Name:          "api/dev",
 			LastChange:    changeTime().Unix(),
@@ -458,6 +464,7 @@ func TestListUnitsBothTools(t *testing.T) {
 		{
 			Tool:          "Pulumi",
 			Reference:     "pulumi:acme/web/prod",
+			UnitID:        "stk-1",
 			Namespace:     "acme",
 			Name:          "web/prod",
 			LastChange:    changeTime().Unix(),
@@ -480,6 +487,7 @@ func checkUnit(t *testing.T, got, want unitBody, i int) {
 
 	if got.Tool != want.Tool ||
 		got.Reference != want.Reference ||
+		got.UnitID != want.UnitID ||
 		got.Namespace != want.Namespace ||
 		got.Name != want.Name ||
 		got.LastChange != want.LastChange ||
@@ -913,6 +921,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Namespaces:    namespaces,
 		Units:         reader,
 		Deleted:       seededDeleted(),
+		History:       nil,
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},

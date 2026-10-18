@@ -690,7 +690,7 @@ infrastructure. So a limit refuses the start of new work, never its end.
   - a blob that a running backup can still copy (ADR 28 decision 8, ADR
     30).
 
-  The rows go first. The blobs become orphans for the orphan sweep. Each
+  The rows go first. The blobs become orphans for the orphan cleanup. Each
   prune writes one audit entry for each unit in the scope `@server` or the
   namespace (ADR 60). The job runs on one instance at a time. Open: how it
   chooses that instance (RFC 36).
@@ -889,4 +889,25 @@ the owner's approval.
 
 ## Outcome
 
-None yet.
+Decided in part on 2026-10-18 (owner decisions):
+
+- "Multi-tenancy" and open question 10: OpenDustpan Cloud is multitenant,
+  and the namespace is the tenant
+  ([ADR 215](../adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md)).
+  The server gets no tenant layer above namespaces and no new settings
+  scope. Option A and option B of that section are not taken.
+- "Storage quota": the key is `limits.storageBytes`, shown as "storage
+  limit" ([ADR 220](../adr/0220-isolation-between-namespaces-on-shared-infrastructure.md)
+  decision 13).
+- Open question 11: a lock in the static layer can turn a feature off
+  ([ADR 219](../adr/0219-a-static-lock-can-turn-a-feature-off.md)).
+- "API request rate": the namespace bucket, and shares of shared resources
+  for each namespace (ADR 220).
+
+Accepted in part as [ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
+decision 3 on 2026-10-18: a setting change that reduces security needs a
+fresh MFA step (open question 4). A value from the static layer needs no
+step, and an access token gets a refusal that names the console page.
+Decision 7 (owner decision) makes the "API shape" of this RFC one settings
+resource for each scope, with one revision, JSON Merge Patch and ETags.
+The policy routes become views of it. The other questions stay open.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
@@ -155,6 +156,32 @@ func TestSessionConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t, base)
+	})
+}
+
+// TestSignInFailuresConformance runs the shared failure-budget suite: both
+// handles open one schema, as two servers open one database. The store reads
+// its window from its own clock, so it ignores skew.
+func TestSignInFailuresConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunSignInFailures(t, func(t *testing.T) storetest.SignInFailureHarness {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return storetest.SignInFailureHarness{
+			Open: func(t *testing.T, _ time.Duration) authgate.FailureCounter {
+				t.Helper()
+
+				return openURL(t, schemaURL)
+			},
+		}
 	})
 }
 
@@ -402,6 +429,26 @@ func TestAuditEntryReaderConformance(t *testing.T) {
 	})
 }
 
+// chainApprovalStore wraps a Store with its schema URL, so the approval
+// cases can break audit appends with direct SQL. It embeds the store, so the
+// suite also reads its chain state, list and durable operations.
+type chainApprovalStore struct {
+	*postgres.Store
+
+	url string
+}
+
+var (
+	_ audittest.ChainApprover   = (*chainApprovalStore)(nil)
+	_ audittest.ChainBreaker    = (*chainApprovalStore)(nil)
+	_ audittest.ChainOperations = (*chainApprovalStore)(nil)
+)
+
+// BreakAuditAppends implements audittest.ChainBreaker.
+func (s *chainApprovalStore) BreakAuditAppends(ctx context.Context) error {
+	return breakAuditAppends(ctx, s.url)
+}
+
 // TestAuditChainConformance runs the chain switch cases: entries without a
 // hash, runs of chained entries, and the recorded chain state.
 func TestAuditChainConformance(t *testing.T) {
@@ -425,7 +472,7 @@ func TestAuditChainConformance(t *testing.T) {
 		t.Cleanup(s.Close)
 
 		return audittest.ChainTestStore{
-			Store: s,
+			Store: &chainApprovalStore{Store: s, url: schemaURL},
 			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
 				t.Helper()
 
@@ -597,6 +644,36 @@ func TestUpdateHistoryConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t, base)
+	})
+}
+
+func TestStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunStateAt(t, func(t *testing.T) storetest.StateAtStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+func TestWorkspaceStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunWorkspaceStateAt(t, func(t *testing.T) storetest.WorkspaceStateAtStore {
+		t.Helper()
+
+		return openAuditedWorkspaces(t, base)
 	})
 }
 
@@ -1216,6 +1293,19 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 		}
 	}()
 
+	parsed, parseErr := url.Parse(schemaURL)
+	if parseErr != nil {
+		t.Fatalf("parse schema URL: %v", parseErr)
+	}
+
+	live := parsed.Query().Get("search_path")
+	control := live + "_control"
+	setPath := "SET search_path TO " + pgx.Identifier{live}.Sanitize() + ", " + pgx.Identifier{control}.Sanitize()
+
+	if _, execErr := conn.Exec(ctx, setPath); execErr != nil {
+		t.Fatalf("set search path: %v", execErr)
+	}
+
 	const dropStateCheck = `ALTER TABLE installation DROP CONSTRAINT installation_state_check`
 
 	if _, execErr := conn.Exec(ctx, dropStateCheck); execErr != nil {
@@ -1274,6 +1364,19 @@ func TestMissingStateRowIsUnavailable(t *testing.T) {
 		}
 	}()
 
+	parsed, parseErr := url.Parse(schemaURL)
+	if parseErr != nil {
+		t.Fatalf("parse schema URL: %v", parseErr)
+	}
+
+	live := parsed.Query().Get("search_path")
+	control := live + "_control"
+	setPath := "SET search_path TO " + pgx.Identifier{live}.Sanitize() + ", " + pgx.Identifier{control}.Sanitize()
+
+	if _, execErr := conn.Exec(ctx, setPath); execErr != nil {
+		t.Fatalf("set search path: %v", execErr)
+	}
+
 	if _, execErr := conn.Exec(ctx, `DELETE FROM installation`); execErr != nil {
 		t.Fatalf("delete installation row: %v", execErr)
 	}
@@ -1312,6 +1415,7 @@ func TestRenameKeepsTags(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "eu-west",

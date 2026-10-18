@@ -1,27 +1,27 @@
 -- name: CreateNamespace :execrows
-INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-VALUES (?, ?, ?, ?)
+INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = ?;
 
 -- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 ORDER BY name;
 
 -- name: PageNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > sqlc.arg('after')
 ORDER BY name
 LIMIT sqlc.arg('lim');
 
 -- name: PageNamespacesByNames :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > sqlc.arg('after') AND name IN (SELECT value FROM json_each(sqlc.arg('names')))
 ORDER BY name
@@ -220,6 +220,43 @@ WHERE c.stack_id = ?
 ORDER BY u.version DESC
 LIMIT 1;
 
+-- name: StackExistsByID :one
+SELECT id FROM stacks WHERE id = ?;
+
+-- name: StateAtUpdate :one
+SELECT u.version, u.ended_at_ms, u.created_by
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ?
+  AND u.dry_run = 0 AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0 AND u.ended_at_ms <= ?
+ORDER BY u.version DESC
+LIMIT 1;
+
+-- name: FirstStateUpdateEnd :one
+SELECT u.ended_at_ms
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ?
+  AND u.dry_run = 0 AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0
+ORDER BY u.version ASC
+LIMIT 1;
+
+-- name: RunningUpdateAt :one
+SELECT u.version
+FROM updates AS u
+WHERE u.stack_id = ?
+  AND u.version > ?
+  AND u.dry_run = 0 AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.started_at_ms <= ?
+  AND (u.ended_at_ms = 0 OR u.ended_at_ms > ?)
+ORDER BY u.version DESC
+LIMIT 1;
+
 -- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features_json, saved_at_ms,
@@ -361,6 +398,118 @@ LIMIT sqlc.arg(page_limit);
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
+-- name: NextInventoryChangeSeq :one
+-- Takes the next number of the change log of one namespace. The statement runs
+-- last in the transaction of the write, after every other row lock, so the
+-- order of the numbers is the order of the commits of the namespace.
+INSERT INTO inventory_change_heads (namespace_id, last_seq)
+VALUES (?, 1)
+ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+RETURNING last_seq;
+
+-- name: InsertInventoryChange :exec
+INSERT INTO inventory_changes (
+    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetUnitCollectionName :one
+-- The name of the collection that holds the unit, for a change log row.
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?;
+
+-- name: ListInventoryChanges :many
+-- One page of the change log of a namespace in the order of the sequence.
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM inventory_changes
+WHERE namespace_id = sqlc.arg(namespace_id)
+  AND at_ms <= sqlc.arg(until_ms)
+  AND seq > sqlc.arg(after_seq)
+ORDER BY seq
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListInventoryChangeBounds :many
+-- For each unit of a namespace, the row with the highest sequence among the
+-- rows at or before the time, and the row with the highest sequence of all.
+-- ReplayAt and ReplayView need no other row. A skip scan on the index finds
+-- each unit once, then two lookups on the index read its rows. The lookup at
+-- the time reads the rows of the unit after the time, so the cost follows the
+-- count of units and of the rows after the time.
+WITH RECURSIVE units(tool, unit_id) AS (
+    SELECT seed.tool, seed.unit_id
+    FROM (
+        SELECT f.tool, f.unit_id
+        FROM inventory_changes AS f
+        WHERE f.namespace_id = sqlc.arg(namespace_id)
+        ORDER BY f.tool, f.unit_id
+        LIMIT 1
+    ) AS seed
+    UNION ALL
+    SELECT n.tool, n.unit_id
+    FROM units AS u
+    JOIN inventory_changes AS n ON n.rowid = coalesce(
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = sqlc.arg(namespace_id) AND s.tool = u.tool AND s.unit_id > u.unit_id
+         ORDER BY s.unit_id
+         LIMIT 1),
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = sqlc.arg(namespace_id) AND s.tool > u.tool
+         ORDER BY s.tool, s.unit_id
+         LIMIT 1))
+)
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT a.rowid
+        FROM inventory_changes AS a
+        WHERE a.namespace_id = sqlc.arg(namespace_id) AND a.tool = u.tool AND a.unit_id = u.unit_id
+          AND a.at_ms <= sqlc.arg(at_ms)
+        ORDER BY a.seq DESC
+        LIMIT 1)
+    UNION
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT l.rowid
+        FROM inventory_changes AS l
+        WHERE l.namespace_id = sqlc.arg(namespace_id) AND l.tool = u.tool AND l.unit_id = u.unit_id
+        ORDER BY l.seq DESC
+        LIMIT 1)
+)
+ORDER BY seq;
+
+-- name: ListInventoryUnitBounds :many
+-- The rows of ListInventoryChangeBounds for one unit.
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+           a.kind, a.resource_count
+    FROM inventory_changes AS a
+    WHERE a.namespace_id = sqlc.arg(namespace_id) AND a.tool = sqlc.arg(tool) AND a.unit_id = sqlc.arg(unit_id)
+      AND a.at_ms <= sqlc.arg(at_ms)
+    ORDER BY a.seq DESC
+    LIMIT 1
+)
+UNION
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+           l.kind, l.resource_count
+    FROM inventory_changes AS l
+    WHERE l.namespace_id = sqlc.arg(namespace_id) AND l.tool = sqlc.arg(tool) AND l.unit_id = sqlc.arg(unit_id)
+    ORDER BY l.seq DESC
+    LIMIT 1
+)
+ORDER BY seq;
+
 -- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
@@ -447,6 +596,40 @@ FROM state_versions
 WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
 LIMIT ? OFFSET ?;
+
+-- name: WorkspaceExistsByID :one
+-- A workspace by its ID, a soft-deleted one included.
+SELECT id FROM workspaces WHERE id = ?;
+
+-- name: WorkspaceStateAt :one
+-- The finalized state version with the latest finalize time at or before a
+-- time. A finalize stamps a time after every earlier finalize of the
+-- workspace, so the version that became current last has the latest finalize
+-- time, and a read at the present agrees with the current pointer. Ties break
+-- by ID, as in the state version list; only rows that the stamp did not write
+-- can tie. The index on (workspace_id, finalized_at_ms DESC) serves the order.
+SELECT id, finalized_at_ms, holder
+FROM state_versions
+WHERE workspace_id = ? AND status = 'finalized' AND finalized_at_ms <= ?
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT 1;
+
+-- name: LatestWorkspaceStateFinalize :one
+-- The latest finalize time of the finalized state versions of a workspace. A
+-- finalize stamps a later time than this one, in the same transaction.
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = ? AND status = 'finalized'
+ORDER BY finalized_at_ms DESC
+LIMIT 1;
+
+-- name: FirstWorkspaceStateFinalize :one
+-- The finalize time of the first finalized state version of a workspace.
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = ? AND status = 'finalized'
+ORDER BY finalized_at_ms ASC, id ASC
+LIMIT 1;
 
 -- name: CountStateVersions :one
 SELECT COUNT(*)
@@ -1322,6 +1505,13 @@ SELECT unit_id
 FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
+-- name: ContextUnitExists :one
+-- Whether the namespace holds the unit in its live inventory or in its deleted
+-- units. A context write checks it in its own transaction, so a purge that
+-- committed before the write refuses the write.
+SELECT CAST(EXISTS (SELECT 1 FROM inventory AS i WHERE i.namespace = ?1 AND i.tool = ?2 AND i.unit_id = ?3)
+    OR EXISTS (SELECT 1 FROM inventory_deleted AS d WHERE d.namespace = ?1 AND d.tool = ?2 AND d.unit_id = ?3) AS INTEGER) AS present;
+
 -- name: GetUnitCollection :one
 -- The collection of one unit by its ID, as written.
 SELECT c.name
@@ -1795,6 +1985,12 @@ SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, 
     claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = ?;
 
+-- name: CountRunnableDurableOperations :one
+-- The count of operations of one kind that can run now: pending or running.
+-- An approval of an audit chain change reads it in the transaction of its
+-- own start, so a second approval waits for the first and refuses.
+SELECT COUNT(*) FROM durable_operations WHERE kind = ? AND state IN ('pending', 'running');
+
 -- name: UpdateDurableOperation :exec
 -- Writes every column that changes after the start of an operation.
 UPDATE durable_operations
@@ -1841,3 +2037,100 @@ SET next_run_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER) + interval_ms,
     last_claimed_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER)
 WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
     AND next_run_at_ms <= CAST(sqlc.arg('now_ms') AS INTEGER);
+
+-- Sign-in failure budget. The upsert is one atomic write, so concurrent adds
+-- each count once. The window comes from DatabaseNowMs, the clock of the
+-- store, read in the same transaction as the write, so the clock of an
+-- instance never moves the window.
+
+-- name: AddSignInFailure :one
+-- Adds one miss of source in the window that ends at window_end_ms, and
+-- answers the count of that window after the add.
+INSERT INTO sign_in_failures (source, window_end_ms, count)
+VALUES (?, ?, 1)
+ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
+RETURNING count;
+
+-- name: PruneSignInFailures :execrows
+-- Deletes every window that ended at or before threshold_ms.
+DELETE FROM sign_in_failures WHERE window_end_ms <= ?;
+
+-- name: GetNamespaceID :one
+-- The stable ID of the namespace that has the name now.
+SELECT id
+FROM namespaces
+WHERE name = ?;
+
+-- name: GetCollectionNameByID :one
+SELECT name
+FROM collections
+WHERE namespace = ? AND id = ?;
+
+-- name: ListObjectContext :many
+-- The entries of one object, both sources, API first. The caller checks the
+-- fence of the namespace in the same transaction for a write.
+SELECT tool, source, fields, warning, item_id, item_seq, updated_at_ms, updated_by
+FROM object_context
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ?
+ORDER BY source;
+
+-- name: UpsertObjectContext :exec
+-- Writes one entry. The deleted mark of a resource and its order stay as
+-- they are on a conflict.
+INSERT INTO object_context (
+    namespace_id, object_kind, object_id, tool, resource_key, source, fields, warning,
+    item_id, item_seq, resource_deleted_at_ms, marks_seq, updated_at_ms, updated_by
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+ON CONFLICT (namespace_id, object_kind, object_id, resource_key, source) DO UPDATE
+SET tool = excluded.tool,
+    fields = excluded.fields,
+    warning = excluded.warning,
+    item_id = excluded.item_id,
+    item_seq = excluded.item_seq,
+    updated_at_ms = excluded.updated_at_ms,
+    updated_by = excluded.updated_by;
+
+-- name: DeleteObjectContext :execrows
+-- Deletes one entry. The owner rows of the entry go with it.
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ? AND source = ?;
+
+-- name: DeleteObjectOwners :exec
+DELETE FROM object_context_owners
+WHERE namespace_id = ? AND object_kind = ? AND object_id = ? AND resource_key = ? AND source = ?;
+
+-- name: InsertObjectOwner :exec
+INSERT INTO object_context_owners (namespace_id, owner, object_kind, object_id, resource_key, source)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetUnitOutputSeq :one
+-- The order of the state item that the output entries of a unit come from.
+SELECT item_seq
+FROM object_context
+WHERE namespace_id = ? AND object_kind = 'unit' AND object_id = ? AND resource_key = '' AND source = 'output';
+
+-- name: DeleteUnitOutputContext :exec
+-- Deletes the output entries of a unit and of its resources.
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind IN ('unit', 'resource') AND object_id = ? AND source = 'output';
+
+-- name: DeleteUnitContext :exec
+-- Deletes the entries of a unit and of its resources, both sources.
+DELETE FROM object_context
+WHERE namespace_id = ? AND object_kind IN ('unit', 'resource') AND object_id = ?;
+
+-- name: PageObjectContextByOwner :many
+-- One page of the entries that name an owner, read from the owner index and
+-- joined by the primary key of the entries.
+SELECT c.object_kind, c.object_id, c.tool, c.resource_key, c.source, c.fields, c.warning, c.item_id,
+       c.item_seq, c.updated_at_ms, c.updated_by
+FROM object_context_owners o
+JOIN object_context c
+    ON c.namespace_id = o.namespace_id AND c.object_kind = o.object_kind AND c.object_id = o.object_id
+   AND c.resource_key = o.resource_key AND c.source = o.source
+WHERE o.namespace_id = sqlc.arg(namespace_id) AND o.owner = sqlc.arg(owner)
+  AND (o.object_kind, o.object_id, o.resource_key, o.source) > (sqlc.arg(after_kind), sqlc.arg(after_id), sqlc.arg(after_key), sqlc.arg(after_source))
+ORDER BY o.object_kind, o.object_id, o.resource_key, o.source
+LIMIT sqlc.arg(page_limit);
