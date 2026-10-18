@@ -55,6 +55,7 @@ func (s *Service) releaseWithFence(
 	size, err := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
+		version:   string(sv.ID),
 		key:       sv.Content,
 		want:      sv.MD5,
 		content:   bytes.NewReader(content),
@@ -114,7 +115,7 @@ func (s *Service) buildFence(
 		Lineage:         lineage,
 		Status:          StatusPending,
 		Content:         "",
-		Outputs:         cur.Outputs,
+		Outputs:         nil,
 		MD5:             md5.Sum(content), //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 		Serial:          cur.Serial + 1,
 		Size:            0,
@@ -133,7 +134,38 @@ func (s *Service) buildFence(
 
 	sv.Content = key
 
+	// The outputs of cur are sealed under the ID of cur, so the fence keeps
+	// them sealed again under its own ID.
+	outputs, err := s.resealOutputs(ctx, w, cur, sv.ID)
+	if err != nil {
+		return StateVersion{}, nil, err
+	}
+
+	sv.Outputs = outputs
+
 	return sv, content, nil
+}
+
+// resealOutputs opens the sealed outputs of cur and seals them again under the
+// state version ID id. It returns nil when cur keeps no outputs.
+func (s *Service) resealOutputs(
+	ctx context.Context, w Workspace, cur StateVersion, id StateVersionID,
+) ([]byte, error) {
+	if len(cur.Outputs) == 0 {
+		return nil, nil
+	}
+
+	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(cur.ID), cur.Outputs)
+	if err != nil {
+		return nil, sanitizeOpenError(cur.ID, err)
+	}
+
+	sealed, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(id), plain)
+	if err != nil {
+		return nil, fmt.Errorf("seal outputs of %s: %w", id, err)
+	}
+
+	return sealed, nil
 }
 
 // openCurrentPlain returns the plain content of the current version. The

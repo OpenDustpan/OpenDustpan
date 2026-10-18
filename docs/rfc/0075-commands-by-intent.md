@@ -1,13 +1,14 @@
 ---
 rfc: 75
 title: "Commands by intent: a dev server with no setup, and a serve command that needs decisions"
-status: draft
+status: accepted
 created: 2026-10-18
+adr: 237, 238
 ---
 
 # RFC 75. Commands by intent: a dev server with no setup, and a serve command that needs decisions
 
-Status: draft.
+Status: accepted (ADRs 237 and 238).
 
 ## Problem
 
@@ -1017,4 +1018,22 @@ state, and its values stay true for an SDK embedder.
 
 ## Outcome
 
-Empty until the owner accepts or drops the RFC.
+Accepted on 2026-10-18 as [ADR 237](../adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md)
+(the `dev` command and the installation kind) and
+[ADR 238](../adr/0238-opendustpan-serve-needs-decisions-key-generate-and-doctor.md)
+(`serve`, `key generate`, `doctor`, the container default and the start gate
+of the SDK). The owner chose option 3 and answered the open questions:
+
+- Open question 1: a directory for each user by default, for example
+  `$XDG_DATA_HOME/opendustpan/dev`. A `--ephemeral` flag writes to a
+  temporary directory, with a warning.
+- Open question 3: HTTP by default, and a `--tls` flag with a self-signed
+  leaf and no change to a trust store.
+- Open question 4: `dev` creates the namespace `dev`.
+- Open question 5: the marker is the _installation kind_, with the values
+  `dev` and `production`. The owner rejected "mode", "purpose" and "origin".
+
+The owner also decided that the first run of `dev` prints a one-time
+sign-in link and writes the credentials of the CLIs to `dev.env` and
+`dev.tfrc`. The banner never prints the admin token. The decisions of the
+product manager stay as written above.
