@@ -92,8 +92,14 @@ service, a namespace also holds its own principals, groups and sign-in.
      for the installation (ADR 38 decision 4), and the restore adds one to
      the failover version of the namespace (ADR 4). So a late write of an
      old writer fails at the fence.
-   - A grant whose holder no longer exists does not restore. The restore
-     record lists each one.
+   - A restore never replaces the principals, tokens, sessions or sign-in
+     settings of the namespace. It keeps the current ones. It restores a
+     grant only for a principal that exists now and is not disabled. The
+     restore record lists each grant that it skips.
+   - A restore applies each redaction and tombstone that the live
+     installation holds (ADR 151), and keeps each namespace key version and
+     the current customer key setting of the live namespace. It never
+     replaces them with the records of the backup.
    - ADR 204 decision 4 applies: a restore into the same installation
      keeps the issuer keys. The sign-in secrets of the namespace stay
      wrapped by the key-encryption key (ADR 217 decision 6), so they

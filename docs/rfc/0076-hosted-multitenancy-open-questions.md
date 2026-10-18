@@ -14,7 +14,7 @@ Status: draft.
 ADRs 215 to 221 record the owner decisions of 2026-10-18: OpenDustpan Cloud
 is multitenant, the namespace is the tenant, and each namespace can bring
 its own key. Those ADRs leave these questions open. Each one has options
-and a recommendation. The owner decides. RFC 77 holds the questions of
+and a recommendation. The owner decides. RFC 79 holds the questions of
 federation and geo-replication.
 
 ## 1. A path prefix for each namespace in the CLI backend URL
@@ -73,8 +73,9 @@ ADR 215 decision 16 sends notices at the suspension, 7 days before the
 
 - **Question:** are these days right? Who can resume a `disabled`
   namespace: the operator only, or also a namespace administrator after the
-  cause ends? The owner gave the periods of 30, 31 and 90 days. The notice
-  days are a proposal.
+  cause ends? Do exports work in the `disabled` state, so that a tenant can
+  take its data before the delete? The owner gave the periods of 30, 31 and
+  90 days. The notice days are a proposal.
 
 ## 5. The open parts of a namespace backup
 
@@ -89,8 +90,16 @@ ADR 218 decision 4 lets a namespace back up and restore in place.
 - **An export to the tenant.** A download holds no item keys (ADR 218
   decision 4), so it opens only on its installation. A tenant that leaves
   reads its data with the tool CLIs (`pulumi stack export`, `tofu state
-  pull`). Recommendation: document that path, and add an export with item
-  keys later only with a customer key that wraps them.
+  pull`).
+  - **Option A. Document the CLI path only.**
+  - **Option B. An export with item keys** only with a customer key that
+    wraps them.
+  - **Option C. A decrypted export of each history item of each unit**,
+    with a fresh MFA step (ADR 56) and an audit entry in the scope of the
+    namespace.
+
+  Recommendation: document the CLI path now, and add the decrypted export
+  of option C before OpenDustpan Cloud opens.
 
 ## 6. The client of each KMS adapter
 
@@ -137,7 +146,11 @@ configuration.
   ciphertexts still open with the old key until the team writes them
   again.
 
-**Recommendation: A**, and test the steps with `make e2e`.
+**Recommendation: B.** New Pulumi ciphertexts are tagged with a key
+version, so the server knows which data key opens each one. A stays as the
+docs for a compromise: the steps that write each secret again. `make e2e`
+must show that each supported version of the Pulumi CLI keeps the tagged
+ciphertexts unchanged.
 
 ## 8. `identity.principalHome: namespace` on SQLite
 
@@ -172,9 +185,23 @@ The owner did not decide billing. ADR 215 decision 18 gives the server no
 billing object and no usage counter for billing. This RFC asks nothing about
 billing now. A later RFC asks it.
 
+## 11. One cookie jar on one host
+
+ADR 215 decision 4 puts each namespace on one host. A browser keeps one
+cookie jar for each host. A person with principals in two namespaces
+(ADR 215 decision 12) cannot keep two sessions in one cookie of that host.
+
+- **Option A. A session cookie for each principal home**, with the name of
+  the cookie bound to the namespace ID, for example one cookie for each
+  namespace ID. The console sends the cookie of the namespace of the path.
+- **Option B. One active namespace for each browser session.** A change of
+  namespace signs the person in again.
+
+**Recommendation: A**, with one cookie for each namespace ID.
+
 ## Open questions
 
-1. Which option for each of the sections 1 to 3 and 5 to 9?
+1. Which option for each of the sections 1 to 3, 5 to 9 and 11?
 2. The notice days and the resume of section 4.
 
 ## Outcome

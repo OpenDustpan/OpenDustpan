@@ -14,7 +14,7 @@ for data residency is to self-host.
 
 An earlier draft of this ADR also decided "no routing and no reads across
 installations". The owner reversed that part: routing between
-installations is allowed as an opt-in capability. RFC 77 designs it. This
+installations is allowed as an opt-in capability. RFC 79 designs it. This
 ADR keeps only the bucket decision.
 
 ## Decision

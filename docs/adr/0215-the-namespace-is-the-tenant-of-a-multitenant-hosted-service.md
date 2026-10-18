@@ -85,8 +85,10 @@ namespace is the natural tenant.
    does on other hosted products.
 6. **Reserved names.** The server refuses a namespace name that is equal to
    a first path segment that the server or the console serves, for example
-   `api`, `oidc`, `tofu`, `runner`, `sign-in`, `mcp`, `metrics`, `chat` and
-   `.well-known`. The list is a constant in `pkg/namespace`. The route test
+   `api`, `oidc`, `tofu`, `runner`, `sign-in`, `mcp`, `metrics`, `chat`,
+   `.well-known`, `health` (the probe paths `/health/live` and
+   `/health/ready`) and `webhooks` (the prefix of each route that receives
+   a webhook). The list is a constant in `pkg/namespace`. The route test
    fails when a new first path segment is not in the list. The console
    repository adds its own first path segments to the list.
 7. **The issuer does not change.** ADR 204 decision 1 applies as written.
@@ -138,6 +140,14 @@ namespace is the natural tenant.
     the installation. It makes no copy and no move. RFC 76 asks whether a
     move of one principal into a namespace is needed. No tag shipped a
     principal row, so the server keeps no conversion code (ADR 73).
+    - A change from `namespace` back to `installation` keeps each
+      principal, group, role and sign-in of each namespace. Only the sign-in
+      of new persons changes: a new person becomes a principal of the
+      installation.
+    - A self-hosted operator who then sets
+      `access.installationGrantsReachNamespaces: false` ends the access
+      of each person of the installation in a namespace, except a support
+      grant of decision 11 of ADR 216 (RFC 76 section 2).
 12. **One person in two namespaces has two principals (owner).** Each
     principal is in one home. A person who works in two namespaces of
     OpenDustpan Cloud has two principals, two sign-ins and two sets of
@@ -161,8 +171,8 @@ namespace is the natural tenant.
     OpenDustpan Cloud tell a person in two namespaces to do one of these:
     - Run `pulumi login` or `tofu login` again when the person changes
       namespace.
-    - Set the token of each namespace in the environment of its working
-      directory: `PULUMI_ACCESS_TOKEN` for the Pulumi CLI, and
+    - Set the token of each namespace in the shell of each project, for
+      example with direnv: `PULUMI_ACCESS_TOKEN` for the Pulumi CLI, and
       `TF_TOKEN_app_opendustpan_com` for OpenTofu. Each tool reads its
       variable before its stored login.
 
@@ -180,8 +190,8 @@ namespace is the natural tenant.
     | State | From | What works | What the server refuses |
     | --- | --- | --- | --- |
     | `active` | creation, or a resume | everything | nothing |
-    | `suspended` | an operator action (ADR 216) | sign-in, reads, exports and the end of work in progress | the start of new work and each other write |
-    | `disabled` | 31 days after the suspension | sign-in of the namespace administrators, and the read of the namespace state and of its notices | each other request |
+    | `suspended` | an operator action (ADR 216) | sign-in, reads, exports, the end of work in progress, and deprovisioning | the start of new work and each other write |
+    | `disabled` | 31 days after the suspension | sign-in of the namespace administrators, the read of the namespace state and of its notices, and deprovisioning | each other request |
     | `deleted` | 90 days after the suspension | nothing. The purge of ADR 47 runs. | each request |
 
     - **Work in progress runs to its end (owner).** A Pulumi update with a
@@ -189,7 +199,13 @@ namespace is the natural tenant.
       namespace can write until they end. In a `disabled` namespace, the
       server refuses them, but no work of a suspended namespace is still
       running by then in the usual case. RFC 68 "A limit never stops work in
-      progress" gives the rule.
+      progress" gives the rule. Work in progress is a lease, lock or job
+      phase that existed at the suspension. It writes for at most
+      `namespaces.suspension.inFlightHours` (24 by default).
+    - **Deprovisioning always works.** Deprovisioning is the removal of a
+      member, the revocation of a token, a session or a grant, and the
+      deprovisioning calls of the identity provider. No state except
+      `deleted` refuses a write that ends access.
     - **Notices (owner).** The server sends a notification (ADR 145) to the
       administrators of the namespace at the suspension, 7 days before the
       `disabled` state, and 7 days and 1 day before the delete. Each notice
@@ -236,13 +252,13 @@ namespace is the natural tenant.
     works as OpenDustpan Cloud does (ADR 59 decision 2). Each namespace
     administrator sets the sign-in of the namespace.
 
-### Shards and other installations
+### Federation and other installations
 
 21. **One installation that scales out.** OpenDustpan Cloud is one
     installation with many instances on one database (ADR 72). More than one
     installation behind `app.opendustpan.com` needs a route from a
     namespace to its installation. The owner allows routing between
-    installations as an opt-in capability. RFC 77 designs it, and nothing
+    installations as an opt-in capability. RFC 79 designs it, and nothing
     in this ADR depends on it.
 
 ## Benchmarks

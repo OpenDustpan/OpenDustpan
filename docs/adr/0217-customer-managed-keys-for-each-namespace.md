@@ -122,10 +122,20 @@ What exists:
 
 ### Setting the customer key
 
-8. **A namespace administrator sets it.** `namespace:manage-key` (ADR 216)
-   sets, changes and clears the customer key of the namespace. Each of
-   these needs a fresh MFA step (ADR 56) and writes an entry in the audit
-   scope of the namespace. The request names the key: an AWS KMS key ARN, a
+8. **A namespace administrator sets it.** New actions, in the
+   administration family, held by the namespace role `admin`:
+   - `namespace:manage-key` sets, changes and clears the customer key and
+     rotates the namespace key.
+   - `namespace:re-encrypt` starts a full re-encryption.
+   - `namespace:read-key` reads the key state, the KMS identity and the
+     progress of a rotation or re-encryption.
+
+   The operator
+   action `installation:re-encrypt-namespace` (operator family) starts a
+   re-encryption after a compromise of a key of the installation, and ADR
+   216 decision 4 lists it. Each of these actions, except
+   `namespace:read-key`, needs a fresh MFA step (ADR 56) and writes an
+   entry in the audit scope of the namespace. The request names the key: an AWS KMS key ARN, a
    Google Cloud KMS key resource name, an Azure Key Vault key URL, or a
    Vault Transit mount and key name.
 9. **One identity for each namespace at the KMS.** The server calls the KMS
@@ -136,10 +146,20 @@ What exists:
 
    | KMS | Identity of one namespace | What the key policy names |
    | --- | --- | --- |
-   | AWS KMS | one IAM role for each namespace. The server assumes it with the namespace ID as the external ID. | the role, and the condition `kms:EncryptionContext:opendustpan:namespace` equal to the namespace ID |
+   | AWS KMS | one IAM role for each namespace, in the account of the operator. The server assumes it. | the role, and the condition `kms:EncryptionContext:opendustpan:namespace` equal to the namespace ID |
    | Google Cloud KMS | one service account for each namespace. The server impersonates it. | the service account, with the role that allows encrypt and decrypt on the key |
    | Azure Key Vault | one application for each namespace, with a federated credential | the application, with the role that allows wrap and unwrap on the key |
    | Vault Transit | one JWT auth role for each namespace, bound to the namespace ID as the subject. The server signs the JWT. | a policy that allows `encrypt`, `decrypt` and `rewrap` on the key for that role |
+
+   The role is in the account of the operator, and only the server assumes
+   it, so the role has no external ID. The key policy of the customer
+   names the role and the encryption context instead.
+
+   The JWT for Vault and the token for the Azure federated credential are
+   signed by an issuer of the installation. Its keys are wrapped by the
+   key-encryption key directly, as decision 6 does for sign-in secrets,
+   never by a key of the namespace. A namespace key never depends on a key
+   that it wraps.
 
 10. **Checks before the change.** The server changes nothing until each
     check passes:
@@ -155,6 +175,9 @@ What exists:
       tenant.
     - Then, in one transaction, it writes the new wrap of each namespace
       key version. The old wraps stay until the new ones commit.
+    - The first set of a customer key, and each change to another key, also
+      rotates the namespace key (decision 18). So no version that the new
+      customer key wraps was ever wrapped without it.
 11. **The probe runs again at each rewrap.** The daily rewrap of decision
     17 runs the probe of decision 10 again. When the probe now passes for
     the random ID, the server keeps the key in use, writes an audit entry
@@ -233,6 +256,15 @@ What exists:
     - the audit entries, the job records and the dependency edges,
     - the principals, groups, roles and grants of the namespace.
 
+    The crypto-shred does not reach: a copy of the database that the
+    operator made before the customer key was set or changed (a dump, a
+    replica, a write-ahead log archive), because it holds a namespace key
+    version and data keys under the key-encryption key only, or under the
+    earlier customer key. It also does not reach a backup that holds such a
+    version, until the server destroys that version (decision 18). A data key of a Pulumi stack
+    never changes, so such a copy opens its secret values. The docs of the
+    customer key list these cases.
+
     The docs of the customer key list these, so that no customer reads
     "crypto-shred" as a delete of all data.
 16. **Errors in the tool-compatible APIs.** The Pulumi Cloud-compatible API
@@ -257,11 +289,17 @@ What exists:
     - A durable operation (ADR 72) then wraps each data key and each item
       key of the namespace again under the new version. The keys and the
       content do not change. Only their wrap changes.
-    - An item key blob is written again under the same name
-      `item-keys/<item key ID>`. This replaces "written one time" in ADR
-      151 decision 2. The next backup to each target copies the new blob
-      over the one object of that target, so one delete still reaches each
-      backup in the target.
+    - The rewrap writes each item key as a new blob,
+      `item-keys/<item key ID>/v<namespace key version>`, and the key record
+      names the current blob. The server never writes one blob name two
+      times, so "written one time" in ADR 151 decision 2 stays. Before the
+      write, the rewrap reads the key record and stops if the record has a
+      shred time. After the write, it reads the record again. If a shred
+      committed in between, it deletes the new blob. The next backup to each
+      target copies the new blob. The old blob stays in the live store and
+      in each target until the server destroys its namespace key version. A
+      shred deletes every blob under `item-keys/<item key ID>/` in the live
+      store and in each target.
     - The server destroys an old version when no wrapped key in the live
       store uses it, and no object in a backup target that the `backups`
       table names uses it. Until then the version only unwraps.
@@ -290,7 +328,9 @@ What exists:
     - It lists each backup that still holds content under an old item key.
 21. **The key-encryption key.** The rewrap command of ADR 23 decision 4
     wraps each namespace key version and each sign-in secret again. It does
-    not touch customer keys.
+    not touch customer keys. A restore of a backup made before a
+    rotation of the key-encryption key needs the old key-encryption key,
+    because the backup holds the wraps under it.
 
 ### Backup and restore
 

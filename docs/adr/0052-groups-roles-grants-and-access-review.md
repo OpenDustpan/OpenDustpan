@@ -1,6 +1,6 @@
 # 52. Groups, roles, grants and the access-review export
 
-Status: accepted · 2026-10-13. The built-in planner role added by ADR 212. Decisions 1 and 2 superseded in part by ADR 215: a principal and a group can belong to one namespace, by a setting
+Status: accepted · 2026-10-13. The built-in planner role added by ADR 212. Decisions 1 and 2 superseded in part by ADR 215: a principal and a group can belong to one namespace, by a setting. Decision 5 superseded in part by ADR 216: a setting decides whether a grant on the installation reaches a namespace
 
 ## Context
 

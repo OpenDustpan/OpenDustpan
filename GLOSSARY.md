@@ -498,9 +498,9 @@ _Avoid_: Secret count
 The hosted service that the project runs. It is the build of the server and the console with shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59, ADR 77).
 _Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edition with its own features)
 
-**Shard**:
-One installation of OpenDustpan Cloud in a federation of installations (RFC 77). It is not decided: OpenDustpan Cloud is one installation now (ADR 215 decision 21). No API answer, error, ID or host name tells a tenant which shard holds its namespace.
-_Avoid_: Cell, pod, cluster, region
+**Federation member**:
+One installation in a federation of installations (RFC 79). Federation is opt-in, on a self-hosted installation and on OpenDustpan Cloud. It is not decided: OpenDustpan Cloud is one installation now (ADR 215 decision 21). No API answer, error, ID or host name tells a tenant which member holds its namespace.
+_Avoid_: Shard, cell, pod
 
 **Storage limit**:
 The fair-use limit on the stored bytes of a namespace (ADR 220 decision 13). Its setting is `limits.storageBytes`. At the limit, the server refuses the start of new work, never work in progress.
@@ -955,7 +955,7 @@ The state item of a unit that no redaction can target (ADR 150, ADR 151). For a 
 _Avoid_: Current item, head
 
 **Item key**:
-The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `item-keys/<item key ID>`, and writes it again under the same name only at a rewrap. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
+The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
 _Avoid_: Version key, derived key, data key (that is the one key of a scope)
 
 **Redaction**:
@@ -1029,7 +1029,7 @@ The JSON Lines file that the command of a cloud sweep writes to the path in `DUS
 _Avoid_: Sweep result, scan output
 
 **Namespace link**:
-A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. A link is active only when an administrator of each namespace accepts it with `namespace:accept-link`. The operator cannot make one alone (ADR 216). A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
+A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. A link is active only when an administrator of each namespace accepts it with `namespace:accept-link`. The operator cannot make one alone (ADR 216). A link is one of the joins between namespaces (ADR 216 decision 8). A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
 _Avoid_: Link (alone), namespace trust, federation
 
 **Context**:

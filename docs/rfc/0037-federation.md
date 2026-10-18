@@ -15,7 +15,7 @@ nothing.
 
 On 2026-10-18 the owner decided parts of it. See "Outcome": the hosted
 service is multitenant with the namespace as the tenant (ADR 215), and
-routing between installations is an opt-in capability (RFC 77).
+routing between installations is an opt-in capability (RFC 79).
 
 ## Problem
 
@@ -413,8 +413,8 @@ Decided in part on 2026-10-18 (owner decisions):
   A (one installation for each customer) is not taken. ADR 215 decision 5
   keeps a namespace name unique in the installation.
 - Routing, forwarding and replication between installations are allowed as
-  an opt-in capability. [RFC 77](0077-opt-in-federation-routing-and-geo-replication.md)
+  an opt-in capability. [RFC 79](0079-opt-in-federation-routing-and-geo-replication.md)
   designs it from design points 1 to 6 of this RFC. An earlier draft of
   ADR 221 that said "no routing across installations" is reversed.
 
-The other design points and open questions stay open, here and in RFC 77.
+The other design points and open questions stay open, here and in RFC 79.

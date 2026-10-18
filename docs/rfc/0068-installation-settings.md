@@ -898,7 +898,7 @@ Decided in part on 2026-10-18 (owner decisions):
   scope. Option A and option B of that section are not taken.
 - "Storage quota": the key is `limits.storageBytes`, shown as "storage
   limit" ([ADR 220](../adr/0220-isolation-between-namespaces-on-shared-infrastructure.md)
-  decision 12).
+  decision 13).
 - Open question 11: a lock in the static layer can turn a feature off
   ([ADR 219](../adr/0219-a-static-lock-can-turn-a-feature-off.md)).
 - "API request rate": the namespace bucket, and shares of shared resources

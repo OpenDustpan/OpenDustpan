@@ -65,6 +65,13 @@ account, so this ADR isolates namespaces.
      for `namespaces/-` the namespaces where the caller has a grant (ADR
      216 decision 10). `SET LOCAL` ends with the transaction, so a pooled
      connection never keeps the value of another request.
+   - The lookups that find the namespaces of a request run before the
+     value is set: a token or a session by its hash, a namespace by its
+     name, an object by its ID, and the namespaces where a principal holds
+     a grant. Each is a `SECURITY DEFINER` function, owned by the migration
+     role, that answers only IDs (namespace, principal, home). The request
+     role can execute these functions and reads no table outside the
+     policy. The test of decision 18 checks the list of these functions.
    - A transaction that sets no value sees no namespace row. So a query
      that forgets the namespace answers nothing, never the rows of another
      namespace.
@@ -88,7 +95,7 @@ account, so this ADR isolates namespaces.
 
 7. **A prefix for each namespace.** Each blob key of a namespace starts with
    `namespaces/<namespace ID>/`. The item key blobs of ADR 151 go to
-   `namespaces/<namespace ID>/item-keys/<item key ID>`. No tag shipped a
+   `namespaces/<namespace ID>/item-keys/<item key ID>/v<version>`. No tag shipped a
    blob key (ADR 73), so the server keeps no old layout and no conversion.
 8. **A scoped view of the blob port.** A domain service of a namespace gets
    a view of the blob store for that namespace. The view refuses each key
@@ -168,7 +175,10 @@ account, so this ADR isolates namespaces.
     `queries.sql` in a transaction with no namespace set, and checks that it
     answers no namespace row. A second test checks that the request role
     owns no table and has no `BYPASSRLS`, and that each table with a
-    namespace ID has `FORCE ROW LEVEL SECURITY`.
+    namespace ID has `FORCE ROW LEVEL SECURITY`. A third test compares
+    the `SECURITY DEFINER` functions that the request role can execute
+    with the list of decision 3, and fails for each function that is not
+    on the list.
 19. **A foreign key test.** A test inserts a row of namespace A that names
     a row of namespace B, and checks that each dialect refuses it.
 20. **A blob scope test.** A test calls each blob read of each domain

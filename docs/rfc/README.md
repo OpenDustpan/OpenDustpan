@@ -85,7 +85,7 @@ both together.
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
 | [35](0035-packaging.md) | Packaging and installation | draft |
 | [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
-| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 77 |
+| [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
@@ -125,4 +125,4 @@ both together.
 | [74](0074-snapshots-of-files-with-no-git-commit.md) | Snapshots of files that have no git commit | draft |
 | [75](0075-commands-by-intent.md) | Commands by intent: a dev server with no setup, and a serve command that needs decisions | draft |
 | [76](0076-hosted-multitenancy-open-questions.md) | Hosted multitenancy, the open questions after the namespace decisions | draft |
-| [77](0077-opt-in-federation-routing-and-geo-replication.md) | Opt-in federation of installations, routing and geo-replication | draft |
+| [79](0079-opt-in-federation-routing-and-geo-replication.md) | Opt-in federation of installations, routing and geo-replication | draft |

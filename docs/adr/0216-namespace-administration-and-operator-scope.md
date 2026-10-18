@@ -1,6 +1,6 @@
 # 216. Namespace administration and operator scope: where each installation action goes (owner)
 
-Status: accepted · 2026-10-18 · supersedes in part ADRs 65, 70, 124 and 163 (see decisions 3, 8, 11 and 17)
+Status: accepted · 2026-10-18 · supersedes in part ADRs 52, 65, 70, 124 and 163 (see decisions 3, 7, 8, 11 and 17)
 
 ## Context
 
@@ -56,7 +56,7 @@ The installation actions in the code and in accepted ADRs are: `backup`,
    | `installation:maintenance` | operator | none | It stops writes in every namespace. |
    | `installation:observe` | operator | none | The metrics of the installation (ADR 32). |
    | `installation:read-audit` | operator | `namespace:read-audit` (exists) | The `@server` scope (ADR 65). |
-   | `installation:manage-settings`, `installation:read-settings` | operator | `namespace:manage-settings`, `namespace:read-settings` (exist) | One settings resource for each scope (ADR 212 decision 7). |
+   | `installation:manage-settings`, `installation:read-settings` | operator | `namespace:manage-settings`, `namespace:read-settings` (ADR 212) | One settings resource for each scope (ADR 212 decision 7). |
    | `installation:set-audit-chain`, `installation:disable-audit-chain` | operator | none | The chain covers the whole log (ADR 64). |
    | `installation:manage-audit` | both | `namespace:manage-audit` (new) | The installation sinks and checkpoints, or the sinks of one namespace. |
    | `installation:read-principals`, `installation:manage-principals` | operator | `namespace:manage-principals` (exists) | The installation directory: the principals of the installation. |
@@ -75,6 +75,7 @@ The installation actions in the code and in accepted ADRs are: `backup`,
    | `installation:review-break-glass` | both | `namespace:review-break-glass` (exists) | The break-glass accounts of each home. |
    | `installation:manage-notifications` | both | `namespace:manage-notifications` (exists) | The rules of the installation, or of one namespace (ADR 145). |
    | `installation:manage-calendars` | both | `namespace:manage-calendars` (exists) | The calendars of the installation, or of one namespace (ADR 140). |
+   | none | namespace | `namespace:manage-key`, `namespace:re-encrypt`, `namespace:read-key` (new) | The customer key, the namespace key and a full re-encryption of one namespace (ADR 217 decision 8). |
 
 4. **New operator actions.** These act on namespaces as objects of the
    installation. They have operator scope and the operator family:
@@ -87,6 +88,14 @@ The installation actions in the code and in accepted ADRs are: `backup`,
    - `installation:read-namespaces`: lists the ID, the name, the state and
      the creation time of each namespace. It never reads a unit, a
      principal, a grant or content of a namespace.
+   - `installation:re-encrypt-namespace`: starts a full re-encryption of
+     one namespace after a compromise of a key of the installation (ADR 217
+     decisions 8 and 20).
+   - `installation:recover-namespace-access`: the recovery of a
+     locked-out namespace (decision 12). Two operator persons must approve
+     it, each with a fresh MFA step (ADR 56). The server sends a
+     notification to each administrator of the namespace and writes an
+     entry in the audit scope of the namespace.
 5. **A test for the table.** A test in `pkg/access` iterates each action
    constant of the area `installation:` (and of the old area `server:`
    while the code has it). It fails for each constant that the table of
@@ -143,6 +152,12 @@ The installation actions in the code and in accepted ADRs are: `backup`,
     - The grant has an end time of at most 72 hours. The server refuses a
       grant to a principal of the installation with no end time or with a
       later end time, when decision 7 is `false`.
+    - With decision 7 `false`, the policy check ignores each grant on a
+      namespace or an object in it that a principal of the installation
+      holds, when the grant has no end time or ends more than 72 hours
+      after its start. It converts no row. The admin access report (ADR 70
+      decision 29) and the member list of the namespace list each such
+      grant as inactive.
     - The grant needs a fresh MFA step of the namespace administrator (ADR
       56).
     - The grant, each action of the support principal under it, and its end

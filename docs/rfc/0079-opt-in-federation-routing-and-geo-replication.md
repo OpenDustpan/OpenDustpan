@@ -1,11 +1,11 @@
 ---
-rfc: 77
+rfc: 79
 title: Opt-in federation of installations, routing and geo-replication
 status: draft
 created: 2026-10-18
 ---
 
-# RFC 77. Opt-in federation of installations, routing and geo-replication
+# RFC 79. Opt-in federation of installations, routing and geo-replication
 
 Status: draft. It decides nothing.
 
@@ -57,11 +57,18 @@ replication and moves.
 - A route with no namespace in the path, for example a TFE route with a
   `ws-` ID, finds the namespace by the ID. IDs are random and unique (ADR
   19), so the directory can hold a map from a unit ID to its namespace.
-  RFC 37 design point 4 gives the options.
+  RFC 37 design point 4 gives the options. The home of the namespace writes
+  the map row, and it replicates. A member that does not find an ID asks
+  each member before it answers 404.
 - When the home member of the namespace is another member, the member
   forwards the request there, with the token of the caller. The home member
   checks the token and the authorization again. It never trusts a decision
   of the member that forwarded the request.
+- A request with a session (the console) forwards a short-lived assertion,
+  signed by the federation CA, that names the principal of the session. The
+  home checks the principal again. The sign-in failure budget is kept at
+  the home of the principal, and each member forwards a sign-in attempt
+  there.
 - Members trust each other through mutual TLS with a federation CA. A member
   never forwards to a host that is not in the federation. RFC 37 design
   point 3 gives the options.
@@ -80,11 +87,15 @@ Replication is asynchronous (ADR 4). Each row has one writer.
 | Data | Writer | Replicated to | Note |
 | --- | --- | --- | --- |
 | Rows of a namespace (units, history records, grants, principals and groups whose home is the namespace, key records) | the home region of the namespace | each standby region of the namespace | wrapped keys only, never an open key |
-| Blobs of a namespace (state, checkpoints, logs, item key blobs) | the home region | each standby region | an item key blob changes only at a rewrap (ADR 217 decision 18) |
+| Blobs of a namespace (state, checkpoints, logs, item key blobs) | the home region | each standby region | a blob never changes. A rewrap writes a new item key blob (ADR 217 decision 18). |
 | Rows of the installation scope (principals, groups and roles of the installation, installation settings, the namespace directory) | the control home | each member | |
-| Audit entries | the region that writes the entry | each region of its scope | the chain of ADR 64 has one writer for each scope |
-| Sessions, the sign-in failure budget, caches, rate buckets | nobody | not replicated | regional state |
+| Audit entries | the home region of the namespace for a namespace scope, the control home for `@server`. Another region forwards its entry to that writer. | each region of its scope | the chain of ADR 64 has one writer for each scope |
+| The sign-in failure budget | the home of the principal | not replicated | each member forwards a sign-in attempt to that home (section 2) |
+| Sessions, caches, rate buckets | nobody | not replicated | regional state |
 | Durable operations and schedules (ADR 72) | the home region of their namespace | not replicated | only the home region runs them |
+
+The server destroys an old namespace key version only after each standby
+region reports the new blobs and records.
 
 **Open:** the key-encryption key in each region. Options: the same key in
 each region, or one key for each region and one wrap of each namespace key
@@ -99,7 +110,9 @@ record, and the docs tell a customer to use a multi-Region key.
 1. **One writer for each row.** A row of a namespace is written only in the
    home region of the namespace. A row of the installation scope is written
    only in the control home. There is no multi-writer replication and no
-   last-writer-wins rule.
+   last-writer-wins rule. An operator action on a namespace row, and each
+   key state write of ADR 217 decision 14, are forwarded to the home of the
+   namespace. A standby keeps the key state in memory only.
 2. **Order and the fence.** Each replicated change carries the failover
    version of its namespace and a sequence number. A replica applies the
    changes in order. It refuses a change with a lower failover version than
@@ -112,13 +125,17 @@ record, and the docs tell a customer to use a multi-Region key.
    decision 5). A new namespace takes its name in the directory at the
    control home, in one synchronous call. A creation fails when the control
    home cannot answer. This is the only synchronous call across regions,
-   and namespace creation is rare. A unit name is unique in its namespace,
+   and namespace creation is rare. A claim ends after 10 minutes unless
+   the namespace row replicates. A unit name is unique in its namespace,
    and only the home region writes it.
-5. **Revocation lag.** A revoked token, an ended grant or a disabled
-   principal reaches a standby region after the replication lag. The
-   standby forwards each write and each request of a tool API to the home
-   region (section 2), so the lag reaches only console reads of the
-   replica. The docs state the measured lag.
+5. **Revocation lag.** A revocation of a row of a namespace is current at
+   the home of the namespace. A revocation of a row of the installation
+   scope (a principal, token or grant of the installation) reaches each
+   member after the replication lag, also the home of a namespace. So a
+   principal of the installation that acts inside a namespace is checked at
+   the control home, in one synchronous call cached for at most 30 seconds,
+   or the request is refused when the control home cannot answer. An end
+   time is evaluated locally and has no lag.
 
 ## 5. The fence and the failover version
 
@@ -127,11 +144,21 @@ record, and the docs tell a customer to use a multi-Region key.
   transaction.
 - The home member and the home region are in the namespace row, so a
   promotion is one fenced write, and it replicates as one change.
+- **A promotion while the old home cannot answer.** The fence is local. A
+  home holds a home lease, renewed at the control home every
+  `federation.homeLeaseSeconds` (30 by default). A home refuses writes and
+  signatures when its last renewal is older than the lease. A promotion of
+  a standby waits until the lease of the old home has ended. The data that
+  the old home wrote after its last replicated change is lost, and the docs
+  state that window as the replication lag at the promotion. Option: a
+  promotion only after an operator confirms that the old home is stopped.
+- The control home has its own failover version, and its promotion follows
+  the same rule.
 - **A move between members is a promotion.** When the namespace already
   replicates to the target member, a move is a promotion of the target. It
-  needs no export and no import. Without replication, a move uses the
-  namespace backup of ADR 218, and the failover version goes up by one at
-  the import.
+  needs no export and no import. Without replication, a move is not
+  possible yet. The namespace backup of ADR 218 restores only into its own
+  installation. RFC 66 asks how units move.
 
 ## 6. The OIDC issuer under replication and moves
 
@@ -148,12 +175,13 @@ The issuer URL never changes (ADR 204 decision 1, one-way door).
   namespace. A former home signs nothing after a promotion.
 - A rotation publishes the `next` key before it uses it. The time between
   the two steps must be at least the replication lag plus the cache time of
-  the JWKS (300 seconds). Between `af-south-1` and `ap-southeast-4`, the
+  the JWKS (300 seconds). The home uses the `next` key only after each
+  member has acknowledged it, and not before 24 hours. Between `af-south-1` and `ap-southeast-4`, the
   docs give the measured lag.
 - A move keeps the issuer keys. ADR 204 decision 4 has two cases: a restore
   into the same installation keeps the keys, and a copy does not. A move in
-  a federation is a third case that keeps the keys. The fence makes sure
-  that two members never sign with one key at the same time.
+  a federation is a third case that keeps the keys. With the home lease,
+  two members never sign with one key at the same time.
 
 ## 7. Horizontal scale
 
@@ -176,9 +204,10 @@ regions.
   own rows, in its own home region, under its own fence. No row of a join
   belongs to two namespaces, and no row has two homes.
 - A join is active in a region when that region holds both halves.
-- A read across the join (the units for a classification, the outputs of a
-  unit) reads the replica of the other namespace in the region of the
-  reader. The answer holds the time of that data. It never opens a
+- A read across a join (the units for a classification, the outputs of a
+  unit) is forwarded to the home of the other namespace, or uses a replica
+  only in a region that the other namespace lists as its standby. The
+  answer holds the time of that data. It never opens a
   transaction across two namespaces.
 - When the data of the other namespace is not in the region yet, the read
   answers that the join is not available, never an error of the reader.
@@ -187,7 +216,7 @@ regions.
 - On one installation with no federation, the replication lag is zero, so
   the same rules hold with no extra code.
 
-So a join holds nothing that needs a synchronous call between regions.
+So a join holds no row that needs a synchronous write between regions.
 
 ## 9. A federation of self-hosted installations
 
