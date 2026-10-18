@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "namespace": "payments",
+  "name": "orders-db",
+  "blueprint": { "name": "postgres", "version": 3 },
+  "ensure": "present",
+  "inputs": {
+    "size": "small",
+    "network": "net-0a1b2c",
+    "subnetGroup": "orders-private"
+  },
+  "home": {
+    "kind": "git",
+    "repository": "payments/infra",
+    "ref": "main",
+    "delivery": "review-request"
+  }
+}
