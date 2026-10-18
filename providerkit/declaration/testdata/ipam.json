@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "provider": {
+    "name": "ipam",
+    "description": "Address allocations from the IPAM API.",
+    "config": [
+      {"name": "endpoint", "type": "string", "mode": "required", "description": "The base URL of the IPAM API."},
+      {"name": "token", "type": "string", "mode": "required", "sensitive": true, "description": "An API token."}
+    ]
+  },
+  "http": {
+    "baseURL": "{config.endpoint}",
+    "auth": {"kind": "bearer", "token": "{config.token}"},
+    "retry": {"maxAttempts": 4, "statuses": [429, 502, 503, 504], "maxWait": "30s"},
+    "timeout": "30s",
+    "openAPI": "ipam.openapi.json"
+  },
+  "resources": [
+    {
+      "name": "allocation",
+      "attributes": [
+        {"name": "id", "type": "string", "mode": "computed"},
+        {"name": "prefix_id", "type": "string", "mode": "required", "replace": true},
+        {"name": "description", "type": "string", "mode": "optional"},
+        {"name": "address", "type": "string", "mode": "computed"}
+      ],
+      "create": {"request": {
+        "method": "POST", "path": "/prefixes/{prefix_id}/allocations",
+        "body": {"/description": "{description}"},
+        "response": {"id": "/id", "address": "/address", "description": "/description"}
+      }},
+      "read": {"request": {
+        "method": "GET", "path": "/allocations/{id}",
+        "response": {"prefix_id": "/prefix/id", "address": "/address", "description": "/description"}
+      }},
+      "update": {"request": {
+        "method": "PATCH", "path": "/allocations/{id}",
+        "body": {"/description": "{description}"},
+        "response": {"description": "/description"}
+      }},
+      "delete": {"request": {"method": "DELETE", "path": "/allocations/{id}"}}
+    }
+  ],
+  "dataSources": [
+    {
+      "name": "prefix",
+      "attributes": [
+        {"name": "cidr", "type": "string", "mode": "required"},
+        {"name": "id", "type": "string", "mode": "computed"},
+        {"name": "free", "type": "number", "mode": "computed"}
+      ],
+      "read": {"request": {
+        "method": "GET", "path": "/prefixes",
+        "list": {"items": "/items", "match": {"/cidr": "{cidr}"}, "pages": "cursor", "cursorParam": "after", "cursor": "/next"},
+        "response": {"id": "/id", "free": "/free"}
+      }}
+    }
+  ]
+}

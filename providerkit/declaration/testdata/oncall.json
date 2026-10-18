@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "provider": {
+    "name": "oncall",
+    "description": "Schedules and the person on call, through the team's oncall command.",
+    "config": [
+      {"name": "team", "type": "string", "mode": "required"},
+      {"name": "api_key", "type": "string", "mode": "required", "sensitive": true}
+    ]
+  },
+  "cli": {
+    "program": "oncall",
+    "env": {"ONCALL_TEAM": "{config.team}", "ONCALL_KEY_FILE": "{file:config.api_key}"},
+    "timeout": "1m"
+  },
+  "resources": [
+    {
+      "name": "override",
+      "attributes": [
+        {"name": "id", "type": "string", "mode": "computed"},
+        {"name": "schedule", "type": "string", "mode": "required", "replace": true},
+        {"name": "person", "type": "string", "mode": "required"},
+        {"name": "until", "type": "string", "mode": "required"}
+      ],
+      "create": {"command": {
+        "args": ["override", "create", "--schedule", "{schedule}", "--output=json"],
+        "stdin": {"/person": "{person}", "/until": "{until}"},
+        "output": {"id": "/id"}
+      }},
+      "read": {"command": {
+        "args": ["override", "show", "{id}", "--output=json"],
+        "output": {"schedule": "/schedule", "person": "/person", "until": "/until"},
+        "notFound": [4]
+      }},
+      "update": {"command": {
+        "args": ["override", "update", "{id}", "--output=json"],
+        "stdin": {"/person": "{person}", "/until": "{until}"},
+        "output": {"person": "/person", "until": "/until"},
+        "notFound": [4]
+      }},
+      "delete": {"command": {"args": ["override", "delete", "{id}"], "notFound": [4]}}
+    }
+  ],
+  "dataSources": [
+    {
+      "name": "current",
+      "attributes": [
+        {"name": "schedule", "type": "string", "mode": "required"},
+        {"name": "person", "type": "string", "mode": "computed"},
+        {"name": "phone", "type": "string", "mode": "computed", "sensitive": true}
+      ],
+      "read": {"command": {
+        "args": ["now", "--schedule={schedule}", "--output=json"],
+        "output": {"person": "/person/name", "phone": "/person/phone"}
+      }}
+    }
+  ]
+}
