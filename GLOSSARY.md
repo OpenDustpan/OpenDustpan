@@ -808,6 +808,32 @@ _Avoid_: Alert, issue, violation, scan result, orphan
 A rule of a namespace that ignores each new finding that it matches, with its reason (`unmanaged.IgnoreRule`, ADR 165). It selects by provider, account scope, type, a tag key with an optional value, and kinds. Only the provider is required. A type can be exact, or a prefix that ends with `*`. A rule can have an end. A rule never ignores a finding that existed before the rule, and its delete opens no finding. A finding names the rule that ignored it. A namespace has at most 500 rules.
 _Avoid_: Suppression, filter, allowlist
 
+### Console
+
+**Theme**:
+The look of the console that a person selects: `default` or `terminal` (ADR 180). A theme sets the font of the interface and the default of the keyboard settings. The colors come from the color mode and the color scheme.
+_Avoid_: Skin, style
+
+**Terminal theme**:
+The opt-in theme of the console: IBM Plex Mono for all text, dense, keyboard first, with color schemes. "Terminal" is its only name.
+_Avoid_: The name of a terminal emulator or of an editor for it
+
+**Color mode**:
+`system`, `light` or `dark`. `system` follows the color scheme of the operating system.
+_Avoid_: Theme (for light or dark)
+
+**Color scheme**:
+A palette of the Terminal theme, from the Gogh collection, mapped to the color tokens of the console (ADR 180). Its name is a label with credit to its authors, never our name. `opendustpan` is the built-in scheme: the palette of the default theme.
+_Avoid_: Theme (for a palette), skin
+
+**Preset**:
+Branding that an operator sets for the whole installation, for example the palette of OpenDustpan Cloud. A person never selects a preset, and a theme and a color scheme apply on top of it (ADR 180).
+_Avoid_: Scheme, theme (for branding)
+
+**Preferences**:
+The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+_Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
+
 ## Flagged ambiguities
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
