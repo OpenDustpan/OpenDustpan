@@ -21,11 +21,11 @@ const (
 // Audience names who receives a notice.
 type Audience string
 
-// Audiences of a notice. The event model resolves each one to people and
-// to the sinks of their subscriptions.
+// Audiences of a notice. The notification model resolves each one to
+// people and to the sinks of their subscriptions.
 const (
 	// AudienceReviewers is each principal that can review the use, except
-	// the person who used it.
+	// the people of the use (Use.People).
 	AudienceReviewers Audience = "reviewers"
 	// AudienceUser is the person who used break-glass.
 	AudienceUser Audience = "user"
@@ -131,8 +131,10 @@ type Notice struct {
 
 // Open returns a new pending review of u with the ID id, opened at now. It
 // takes the calendar that applies to u.Scope. With the opt-in on, DueAt is
-// the end of the next business day after u.At, and NextNoticeAt is the
-// time of the first step. It returns ErrInvalid for a use or settings that
+// the end of the next business day after the end of the use (u.Until for
+// a break-glass session, u.At for a freeze break), and NextNoticeAt is the
+// time of the first step. The server opens the review at the use, so a
+// session that ends by its time limit has a review too. It returns ErrInvalid for a use or settings that
 // fail validation, and the errors of the calendar.
 func Open(id string, u Use, s Settings, cal calendar.Resolved, now time.Time) (Review, error) {
 	if err := u.Validate(); err != nil {
@@ -153,7 +155,12 @@ func Open(id string, u Use, s Settings, cal calendar.Resolved, now time.Time) (R
 		return r, nil
 	}
 
-	due, err := cal.Calendar.EndOfNextBusinessDay(u.At)
+	end := u.At
+	if !u.Until.IsZero() {
+		end = u.Until
+	}
+
+	due, err := cal.Calendar.EndOfNextBusinessDay(end)
 	if err != nil {
 		return Review{}, fmt.Errorf("deadline of %s: %w", id, err)
 	}

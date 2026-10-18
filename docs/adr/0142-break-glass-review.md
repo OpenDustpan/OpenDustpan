@@ -37,10 +37,22 @@ accounts.
    - `account-session`: a session of a break-glass account. The reference
      is the session ID. The review covers each action of the session.
 
-   The use holds the scope (the namespace of the job, or `@server` for a
-   session), the unit of the job, the person, the reason that the person
-   typed, and the time. An agent never uses break-glass (ADR 103 decision
-   7), so a use names no agent.
+   The use holds the scope, the unit of the job, the person, the people
+   who cannot review the use, the reason that the person typed, the time
+   of the use and, for a session, its time limit. `Use.Validate` refuses
+   a use whose scope does not match its kind:
+   - a freeze break is in the namespace of its job, never in `@server`,
+     has a unit, and has no time limit,
+   - a session is in `@server`, has no unit, and has a time limit after
+     its sign-in (ADR 70 decision 25).
+
+   The people of a use (`Use.People`) are the person, the named owner of
+   the break-glass account (ADR 70 decision 23), and each principal that
+   can act as the person (ADR 70), as the server knows them at the time
+   of the use. An agent never uses break-glass (ADR 103 decision 7, ADR
+   125 decision 15), so a use names no agent. A run of an agent that a
+   person starts in a break-glass session acts with the rights of the
+   session, so the review of the session covers it.
 2. **The opt-in of the installation.** The installation setting
    `breakGlassReview.enabled` is off by default. A site administrator
    changes it with `server:manage-settings`. When it is off:
@@ -50,17 +62,26 @@ accounts.
 
    When it is on, each use of both kinds gets a review with a deadline and
    notices.
-3. **A review always opens.** The start of a job with break-glass writes
-   the event `break-glass.used` in its transaction (ADR 145). The end of a
-   break-glass session writes the same event. A durable consumer of the
-   event opens the review with `Store.Open`. `Open` is idempotent for each
-   use. So each committed use gets one review, also after a crash.
+3. **A review opens at the use.** The start of a job with break-glass,
+   and the sign-in of a break-glass account, each write the notification
+   `break-glass.used` in their transaction (ADR 145). A durable consumer
+   of the notification opens the review with `Store.Open`. `Open` is
+   idempotent for each use. So each committed use gets one review, also
+   after a crash.
+
+   The end of a session writes nothing to the review. A session that ends
+   at its time limit, with a sign-out, or with a crash of the server has
+   its review from the sign-in. A verdict on a session waits until the
+   time limit of the session (`Use.Until`). The server revokes the
+   session at that time, so that the review covers each action of the session
+   (`ErrInUse`). A sign-out before the time limit does not move it.
 
 ### Deadline and notices
 
 4. **The deadline.** `breakglass.Open` sets `DueAt` to the end of the next
-   business day after the use, in the calendar of the scope of the use
-   (ADR 140 decision 6). The review records the calendar and the scope that
+   business day after the end of the use, in the calendar of the scope of
+   the use (ADR 140 decision 6). The end of a freeze break is the start of
+   the job. The end of a session is its time limit. The review records the calendar and the scope that
    gave it.
 5. **Notice steps.** The settings have up to 10 steps. Each step has a name,
    a base (the open of the review, the start of the working hours on the due
@@ -82,18 +103,20 @@ accounts.
    steps that came due since the last run, with their audiences joined. A
    server that was down for two days sends one escalation, not four
    notices.
-7. **Audiences.** The event model resolves each audience to people:
+7. **Audiences.** The notification model resolves each audience to
+   people:
    - reviewers: each principal with the review action on the scope,
-     except the user,
+     except the people of the use,
    - the user: the person who used break-glass,
    - owners: the owners of the namespace, from its context (ADR 160),
    - on call: the person on call for the namespace, from its context and
      the on-call schedule (ADR 143),
    - administrators: the principals with `server:manage-settings`.
 
-   A notice is the event `break-glass.review-notice` with these recipients
-   (ADR 145). A chat sink shows the buttons "Open" and "Acknowledge" (ADR
-   146). No chat button records a verdict.
+   A notice is the notification `break-glass.review-notice` with these
+   recipients (ADR 145). A chat sink shows the button "Open" (ADR 146). No
+   chat button records a verdict or stops a notice. Only a verdict stops
+   the notices.
 
 ### The verdict
 
@@ -106,18 +129,36 @@ accounts.
    - the reviewer holds `namespace:review-break-glass` on the namespace of
      a freeze break, or `server:review-break-glass` on `@server` for a
      session,
-   - the reviewer is not the user (the subject compares with no case),
+   - the reviewer has a subject: `ErrInvalid`,
    - no agent acts: `ErrAgentDenied`,
+   - the request comes from a console session, never from an access
+     token: `ErrNeedsSession`. This is the rule of the other gates that
+     need a fresh authentication (ADR 123 decision 10, ADR 125 decision 5).
+     So an agent that holds the token of its person cannot record a
+     verdict,
+   - the reviewer is not one of the people of the use: the person, the
+     owner of the break-glass account, or a principal that can act as the
+     person (the subjects compare with no case): `ErrSelfReview`,
+   - a session is past its time limit: `ErrInUse`,
    - the request has a fresh authentication, at most 15 minutes old, of the
      kind of ADR 103 decision 2 (MFA step or SSO with a maximum age):
      `ErrAuthStale`.
+
+   The server fills the session, the kind of the authentication and its
+   time from the console session of the request, never from the body of
+   the request. `Store.Record` checks the verdict again against the stored
+   review with `breakglass.CheckVerdict`: the state is a verdict, the
+   review names a reviewer who is not one of the people of the stored use, the
+   authentication was fresh at the time of the verdict, and a dispute has
+   a note. So a caller cannot record a verdict that `CheckReviewer` would
+   refuse.
 
    A review replaces the approval of a manager before use. A fresh
    authentication makes sure that the second person is present.
 10. **Accept or dispute.** `breakglass.Accept` records that the reviewer
     found the use justified. A note is optional. `breakglass.Dispute`
-    records the opposite, and needs a note. A dispute sends the event
-    `break-glass.reviewed` with the severity `warning` to the administrators
+    records the opposite, and needs a note. A dispute sends the
+    notification `break-glass.reviewed` with the severity `warning` to the administrators
     and the owners. The follow-up of a dispute is outside the review.
 11. **Visibility.** The admin access report of ADR 70 lists each pending
     and overdue review. The gauge `dustpan_break_glass_reviews_overdue`
@@ -139,24 +180,41 @@ accounts.
     covers, so the read needs the read action of the audit log.
 13. **Audit entries.** In the scope of the use:
 
-    | Event | Subject | Action | Kind |
+    | Change | Subject | Action | Kind |
     | --- | --- | --- | --- |
-    | Review opened | the server | `namespace:break-freeze` or `server:review-break-glass` | `change` |
+    | Review opened | the server | `namespace:review-break-glass` or `server:review-break-glass` | `change` |
     | Verdict | the reviewer | `namespace:review-break-glass` or `server:review-break-glass` | `change` |
     | Settings changed | the administrator | `server:manage-settings` | `change` |
 
     The entry of a verdict holds the review ID, the verdict, the note, the
-    kind of the fresh authentication and its time. A notice writes no audit
-    entry: it is not an action of a person. The delivery history of the
-    event model records it (ADR 145).
-14. **Ports with conformance first.** `breakglass.Store` gets the suite
+    kind of the fresh authentication and its time. The entry of the open
+    names the action of the review, not `namespace:break-freeze`: the
+    entry of the start of the job already records the break-glass with the
+    kind `override`. The audit log has no kind for an action of the server,
+    so the open has the kind `change`. A notice writes no audit entry: it
+    is not an action of a person. The delivery history of the notification
+    model records it (ADR 145).
+14. **Each write carries the fence of its scope.** Each write of
+    `breakglass.Store` carries the fence of the namespace of its review,
+    and the store checks it in the transaction of the write. A review of
+    a freeze break carries the fence of the namespace of the job. A review
+    of a session is in `@server` and carries a zero fence. The store
+    refuses a zero fence for a namespace, a fence for `@server`, and the
+    fence of another namespace: `Open` with `ErrInvalid`, `Record` and
+    `Advance` with `ErrNotFound`, so that a write does not tell that a
+    review exists in another namespace.
+15. **Ports with conformance first.** `breakglass.Store` gets the suite
     `pkg/breakglass/breakglasstest`, with a reference adapter in memory.
+    The suite covers a zero fence, the fence of another namespace and a
+    stale fence on each write, and a verdict that breaks a rule of
+    decision 9.
 
 ## Superseded decisions
 
 | ADR | Decision | What changes |
 | --- | --- | --- |
-| 70 | 26, the review after use | The review is a record of this ADR, with the rules of decision 9: no agent, and a fresh authentication. With the opt-in on, it has a deadline and notices. The record replaces the mark "used, not reviewed". Rotation and the regular test of ADR 70 stay. |
+| 70 | 26, the review after use | The review is a record of this ADR, with the rules of decision 9. These rules ask for no agent, a console session, a fresh authentication, and a reviewer from outside the people of the use. It opens at the sign-in, not after the session (decision 3). With the opt-in on, it has a deadline and notices. The record replaces the mark "used, not reviewed". Rotation and the regular test of ADR 70 stay. |
+| 70 | 13, the sensitive actions | `server:review-break-glass` is a sensitive action too. The identity provider cannot add a member to a group whose reach holds it. |
 
 ## Consequences
 
@@ -164,11 +222,22 @@ accounts.
   `server:review-break-glass`. The built-in role `admin` gets the first.
   The roles `site-administrator` and `account-administrator` get the
   second.
+  - `namespace:review-break-glass` is a data action, because a role on a
+    namespace holds only data actions.
+  - `server:review-break-glass` is an administration action and a
+    sensitive action (ADR 70 decision 13).
+  - `namespace:break-freeze` and the two review actions do not imply each
+    other. No action gives another of them. A principal that holds both
+    still cannot review its own use, because decision 9 refuses the people
+    of the use.
 - A small team with one administrator cannot review a break-glass session
   of that administrator. ADR 70 already asks for two break-glass accounts
   with two people. The review needs a second person too.
 - Every review costs one durable notice run for each step. A review that
   gets its verdict before the first step sends nothing.
+- The verdict of a session waits for the time limit of the session, also
+  after an early sign-out. The time limit of an elevated session is short
+  (ADR 70 decision 25), so the wait is short too.
 - `GLOSSARY.md` needs the terms Break-glass review, Verdict and Overdue.
 
 ## Open questions

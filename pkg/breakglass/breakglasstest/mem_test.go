@@ -2,6 +2,7 @@ package breakglasstest_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -41,15 +42,26 @@ func (m *memStore) Open(
 		return breakglass.Review{}, err
 	}
 
-	var out breakglass.Review
+	var (
+		out breakglass.Review
+		old breakglass.Review
+		ok  bool
+	)
 
-	err := m.WriteEntries(fence, func() ([]audit.Entry, error) {
-		for id := range m.reviews {
-			if old := m.reviews[id]; old.Use.Kind == r.Use.Kind && old.Use.Ref == r.Use.Ref {
-				out = old
+	scope := func() (namespace.Name, error) {
+		old, ok = m.byUse(r.Use)
+		if ok {
+			return old.Use.Scope, nil
+		}
 
-				return nil, nil
-			}
+		return r.Use.Scope, nil
+	}
+
+	err := m.WriteEntries(fence, scope, func() ([]audit.Entry, error) {
+		if ok {
+			out = old
+
+			return nil, nil
 		}
 
 		r.Version = 1
@@ -57,6 +69,10 @@ func (m *memStore) Open(
 
 		return []audit.Entry{e}, nil
 	})
+	if errors.Is(err, opsmem.ErrScope) {
+		return breakglass.Review{}, fmt.Errorf("open %s: %w: %w", r.ID, breakglass.ErrInvalid, err)
+	}
+
 	if err != nil {
 		return breakglass.Review{}, err
 	}
@@ -107,14 +123,14 @@ func (m *memStore) List(_ context.Context, f breakglass.Filter) ([]breakglass.Re
 }
 
 func (m *memStore) Record(_ context.Context, r breakglass.Review, fence namespace.Fence, e audit.Entry) error {
-	return m.Write(fence, []audit.Entry{e}, func() error {
+	err := m.Write(fence, m.scope(r.ID), []audit.Entry{e}, func() error {
 		old, err := m.current(r)
 		if err != nil {
 			return err
 		}
 
-		if old.State != breakglass.StatePending {
-			return fmt.Errorf("record %s: %w", r.ID, breakglass.ErrReviewed)
+		if err := breakglass.CheckVerdict(old, r.State, r.Verdict); err != nil {
+			return fmt.Errorf("record %s: %w", r.ID, err)
 		}
 
 		old.State, old.Verdict, old.NextNoticeAt = r.State, r.Verdict, time.Time{}
@@ -123,10 +139,12 @@ func (m *memStore) Record(_ context.Context, r breakglass.Review, fence namespac
 
 		return nil
 	})
+
+	return notFound(r.ID, err)
 }
 
 func (m *memStore) Advance(_ context.Context, r breakglass.Review, fence namespace.Fence) error {
-	return m.Write(fence, nil, func() error {
+	err := m.Write(fence, m.scope(r.ID), nil, func() error {
 		old, err := m.current(r)
 		if err != nil {
 			return err
@@ -138,6 +156,18 @@ func (m *memStore) Advance(_ context.Context, r breakglass.Review, fence namespa
 
 		return nil
 	})
+
+	return notFound(r.ID, err)
+}
+
+// notFound translates a fence of another scope into ErrNotFound, so that
+// a write does not tell that a review exists in another namespace.
+func notFound(id string, err error) error {
+	if errors.Is(err, opsmem.ErrScope) {
+		return fmt.Errorf("review %s: %w", id, breakglass.ErrNotFound)
+	}
+
+	return err
 }
 
 func (m *memStore) Due(_ context.Context, now time.Time, limit int) ([]breakglass.Review, error) {
@@ -170,4 +200,32 @@ func (m *memStore) current(r breakglass.Review) (breakglass.Review, error) {
 	}
 
 	return old, nil
+}
+
+// byUse returns the review of the kind and the reference of u. The caller
+// holds the mutex of the domain.
+func (m *memStore) byUse(u breakglass.Use) (breakglass.Review, bool) {
+	for id := range m.reviews {
+		if old := m.reviews[id]; old.Use.Kind == u.Kind && old.Use.Ref == u.Ref {
+			return old, true
+		}
+	}
+
+	var none breakglass.Review
+
+	return none, false
+}
+
+// scope returns the scope function of a write to the stored review id. It
+// returns ErrNotFound for an unknown review. It runs under the mutex of
+// the domain.
+func (m *memStore) scope(id string) func() (namespace.Name, error) {
+	return func() (namespace.Name, error) {
+		old, ok := m.reviews[id]
+		if !ok {
+			return "", fmt.Errorf("review %s: %w", id, breakglass.ErrNotFound)
+		}
+
+		return old.Use.Scope, nil
+	}
 }

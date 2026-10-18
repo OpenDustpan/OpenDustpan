@@ -47,6 +47,15 @@ const (
 	MaxLinks = 200
 	// MaxNoteLen caps a note of the timeline, in bytes.
 	MaxNoteLen = 8192
+	// MaxRecords caps the classifications and the reports of an incident,
+	// each.
+	MaxRecords = 100
+	// MaxCriteria caps the criteria of a classification.
+	MaxCriteria = 32
+	// MaxNameLen caps a criterion and the kind of a report, in bytes.
+	MaxNameLen = 64
+	// MaxReferenceLen caps the reference of a report, in bytes.
+	MaxReferenceLen = 200
 )
 
 // State is the state of an incident.
@@ -58,8 +67,11 @@ const (
 	StateAcknowledged State = "acknowledged"
 	StateMitigated    State = "mitigated"
 	StateResolved     State = "resolved"
-	// StateClosed is final. An incident closes after its review after the
-	// incident: the root cause and the lessons are set.
+	// StateClosed is final for the step and the fields of the incident.
+	// An incident closes after its review after the incident: the root
+	// cause and the lessons are set. A closed incident still takes notes,
+	// classifications and reports, because a final report and a late
+	// classification can come after the close.
 	StateClosed State = "closed"
 )
 
@@ -83,6 +95,25 @@ type Classification struct {
 	ClassifiedAt time.Time
 }
 
+// Validate returns ErrInvalid for a classification with no person, no
+// time, or criteria that break a bound.
+func (c Classification) Validate() error {
+	switch {
+	case c.ClassifiedBy == "" || c.ClassifiedAt.IsZero():
+		return fmt.Errorf("%w: a classification needs a person and a time", ErrInvalid)
+	case len(c.Criteria) > MaxCriteria:
+		return fmt.Errorf("%w: a classification has at most %d criteria", ErrInvalid, MaxCriteria)
+	}
+
+	for _, name := range c.Criteria {
+		if name == "" || len(name) > MaxNameLen {
+			return fmt.Errorf("%w: a criterion has 1 to %d bytes", ErrInvalid, MaxNameLen)
+		}
+	}
+
+	return nil
+}
+
 // Report records a report about the incident that a person made outside
 // OpenDustpan, for example to a supervisor, with its reference there.
 type Report struct {
@@ -92,34 +123,61 @@ type Report struct {
 	By        string
 }
 
+// Validate returns ErrInvalid for a report with no person or no time, or
+// with a kind or a reference that breaks a bound.
+func (r Report) Validate() error {
+	switch {
+	case r.By == "" || r.SentAt.IsZero():
+		return fmt.Errorf("%w: a report needs a person and a time", ErrInvalid)
+	case r.Kind == "" || len(r.Kind) > MaxNameLen:
+		return fmt.Errorf("%w: the kind of a report has 1 to %d bytes", ErrInvalid, MaxNameLen)
+	case r.Reference == "" || len(r.Reference) > MaxReferenceLen:
+		return fmt.Errorf("%w: the reference of a report has 1 to %d bytes", ErrInvalid, MaxReferenceLen)
+	default:
+		return nil
+	}
+}
+
 // Incident is one incident in a namespace. DetectedAt is when the team
 // found the problem, which can be before OpenedAt. Commander is the
 // principal who leads the response. OnCall is the on-call field that
-// paged, for example a schedule reference.
+// paged, for example a schedule reference. Classifications and Reports
+// are append-only and oldest first: the last classification is the
+// current one.
 type Incident struct {
-	ID             string
-	Namespace      namespace.Name
-	Title          string
-	Severity       Severity
-	State          State
-	DetectedAt     time.Time
-	OpenedAt       time.Time
-	AcknowledgedAt time.Time
-	MitigatedAt    time.Time
-	ResolvedAt     time.Time
-	ClosedAt       time.Time
-	OpenedBy       string
-	Commander      string
-	OnCall         string
-	Units          []string
-	Jobs           []JobLink
-	Reviews        []string
-	Impact         string
-	Classification Classification
-	RootCause      string
-	Lessons        string
-	Reports        []Report
-	Version        int64
+	ID              string
+	Namespace       namespace.Name
+	Title           string
+	Severity        Severity
+	State           State
+	DetectedAt      time.Time
+	OpenedAt        time.Time
+	AcknowledgedAt  time.Time
+	MitigatedAt     time.Time
+	ResolvedAt      time.Time
+	ClosedAt        time.Time
+	OpenedBy        string
+	Commander       string
+	OnCall          string
+	Units           []string
+	Jobs            []JobLink
+	Reviews         []string
+	Impact          string
+	Classifications []Classification
+	RootCause       string
+	Lessons         string
+	Reports         []Report
+	Version         int64
+}
+
+// Classification returns the current classification of the incident, and
+// false when no person classified it.
+func (in Incident) Classification() (Classification, bool) {
+	if len(in.Classifications) == 0 {
+		return Classification{Major: false, Criteria: nil, ClassifiedBy: "", ClassifiedAt: time.Time{}}, false
+	}
+
+	return in.Classifications[len(in.Classifications)-1], true
 }
 
 // Validate returns ErrInvalid for an incident that breaks a bound.
@@ -131,13 +189,31 @@ func (in Incident) Validate() error {
 	return in.validateBounds()
 }
 
+// ValidateNew returns ErrInvalid for an incident that fails Validate, or
+// that a create cannot store: an incident starts in the state open, with
+// no time of a later step.
+func (in Incident) ValidateNew() error {
+	if err := in.Validate(); err != nil {
+		return err
+	}
+
+	switch {
+	case in.State != StateOpen:
+		return fmt.Errorf("%w: a new incident is in the state %s", ErrInvalid, StateOpen)
+	case !in.AcknowledgedAt.IsZero() || !in.MitigatedAt.IsZero() || !in.ResolvedAt.IsZero() || !in.ClosedAt.IsZero():
+		return fmt.Errorf("%w: a new incident has no time of a later step", ErrInvalid)
+	default:
+		return nil
+	}
+}
+
 // validateFields returns ErrInvalid for an ID, a namespace, a title, a
 // severity or a time of the incident that breaks a bound.
 func (in Incident) validateFields() error {
 	switch {
 	case !strings.HasPrefix(in.ID, IDPrefix):
 		return fmt.Errorf("%w: an incident ID starts with %q", ErrInvalid, IDPrefix)
-	case in.Namespace == "":
+	case !validNamespace(in.Namespace):
 		return fmt.Errorf("%w: an incident needs a namespace", ErrInvalid)
 	case in.Title == "" || len(in.Title) > MaxTitleLen:
 		return fmt.Errorf("%w: a title has 1 to %d bytes", ErrInvalid, MaxTitleLen)
@@ -158,9 +234,41 @@ func (in Incident) validateBounds() error {
 		return fmt.Errorf("%w: at most %d units, jobs and reviews each", ErrInvalid, MaxLinks)
 	case len(in.Impact) > MaxTextLen || len(in.RootCause) > MaxTextLen || len(in.Lessons) > MaxTextLen:
 		return fmt.Errorf("%w: a text has at most %d bytes", ErrInvalid, MaxTextLen)
+	case len(in.Classifications) > MaxRecords || len(in.Reports) > MaxRecords:
+		return fmt.Errorf("%w: at most %d classifications and reports each", ErrInvalid, MaxRecords)
 	default:
-		return in.validateJobLinks()
+		return in.validateRecords()
 	}
+}
+
+// validateRecords returns ErrInvalid for a job link, a classification or a
+// report that fails its validation.
+func (in Incident) validateRecords() error {
+	if err := in.validateJobLinks(); err != nil {
+		return err
+	}
+
+	for i := range in.Classifications {
+		if err := in.Classifications[i].Validate(); err != nil {
+			return err
+		}
+	}
+
+	for i := range in.Reports {
+		if err := in.Reports[i].Validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validNamespace reports whether ns is the name of a namespace. The
+// server scope is not a namespace, so it holds no incident.
+func validNamespace(ns namespace.Name) bool {
+	_, err := namespace.ParseName(ns.String())
+
+	return err == nil
 }
 
 // validateJobLinks returns ErrInvalid for a job link with no job or with
@@ -261,4 +369,17 @@ type Note struct {
 	At       time.Time
 	By       string
 	Text     string
+}
+
+// Validate returns ErrInvalid for a note with no incident, no person, no
+// time, or a text that is empty or above MaxNoteLen.
+func (n Note) Validate() error {
+	switch {
+	case n.Incident == "" || n.By == "" || n.At.IsZero():
+		return fmt.Errorf("%w: a note needs an incident, a person and a time", ErrInvalid)
+	case strings.TrimSpace(n.Text) == "" || len(n.Text) > MaxNoteLen:
+		return fmt.Errorf("%w: a note has 1 to %d bytes", ErrInvalid, MaxNoteLen)
+	default:
+		return nil
+	}
 }

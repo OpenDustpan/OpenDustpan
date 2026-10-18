@@ -3,9 +3,11 @@ package breakglass_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/breakglass"
 	"opendustpan.org/opendustpan/pkg/calendar"
 )
@@ -33,8 +35,91 @@ func use(at time.Time) breakglass.Use {
 		Scope:   "shop",
 		Object:  "opentofu:shop/network",
 		Subject: "alice",
+		People:  []string{"alice", "carol"},
 		Reason:  "Roll back the bad route table",
 		At:      at,
+		Until:   time.Time{},
+	}
+}
+
+// session returns the use of a break-glass account session that signed in
+// at at, with a time limit of two hours.
+func session(at time.Time) breakglass.Use {
+	u := use(at)
+	u.Kind, u.Ref, u.Scope, u.Object, u.Until = breakglass.KindAccountSession, "ses-1", audit.ServerScope, "", at.Add(
+		2*time.Hour,
+	)
+	u.People = []string{"alice", "erin"}
+
+	return u
+}
+
+func TestUseValidate(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name   string
+		u      breakglass.Use
+		change func(u *breakglass.Use)
+		valid  bool
+	}{
+		{"a freeze break", use(at), func(*breakglass.Use) {}, true},
+		{"a session", session(at), func(*breakglass.Use) {}, true},
+		{"an unknown kind", use(at), func(u *breakglass.Use) { u.Kind = "other" }, false},
+		{"no reason", use(at), func(u *breakglass.Use) { u.Reason = "" }, false},
+		{"no subject in the people", use(at), func(u *breakglass.Use) { u.People = []string{"carol"} }, false},
+		{"an empty person", use(at), func(u *breakglass.Use) { u.People = append(u.People, "") }, false},
+		{"the subject with another case", use(at), func(u *breakglass.Use) { u.People = []string{"Alice"} }, true},
+		{"a freeze break with no unit", use(at), func(u *breakglass.Use) { u.Object = "" }, false},
+		{"a freeze break in the server scope", use(at), func(u *breakglass.Use) { u.Scope = audit.ServerScope }, false},
+		{"a freeze break with a time limit", use(at), func(u *breakglass.Use) { u.Until = at.Add(time.Hour) }, false},
+		{"a session in a namespace", session(at), func(u *breakglass.Use) { u.Scope = "shop" }, false},
+		{"a session with a unit", session(at), func(u *breakglass.Use) { u.Object = "opentofu:shop/network" }, false},
+		{"a session with no time limit", session(at), func(u *breakglass.Use) { u.Until = time.Time{} }, false},
+		{"a session that ends at its sign-in", session(at), func(u *breakglass.Use) { u.Until = at }, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			u := tc.u
+			tc.change(&u)
+
+			err := u.Validate()
+			if tc.valid && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+
+			if !tc.valid && !errors.Is(err, breakglass.ErrInvalid) {
+				t.Fatalf("Validate: err = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestOpenCountsASessionFromItsTimeLimit(t *testing.T) {
+	t.Parallel()
+
+	cal, loc := berlin(t)
+	// A sign-in on Friday at 16:00 with a time limit of two hours ends
+	// after the working hours, so the deadline is the end of Monday.
+	friday := time.Date(2026, 10, 23, 16, 0, 0, 0, loc)
+
+	r, err := breakglass.Open("bgr-1", session(friday), breakglass.DefaultSettings(), cal, friday)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if want := time.Date(2026, 10, 26, 17, 0, 0, 0, loc); !r.DueAt.Equal(want) {
+		t.Fatalf("DueAt = %s, want %s", r.DueAt, want)
+	}
+
+	// The first notice goes out at the sign-in, in business hours.
+	if !r.NextNoticeAt.Equal(friday) {
+		t.Fatalf("NextNoticeAt = %s, want %s", r.NextNoticeAt, friday)
 	}
 }
 
@@ -185,8 +270,14 @@ func TestAcceptAndDispute(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
-	fresh := breakglass.Reviewer{Subject: "bob", Agent: "", Auth: breakglass.AuthMFA, AuthAt: now.Add(-time.Minute)}
+	fresh := breakglass.Reviewer{
+		Subject: "bob", Agent: "", Session: "ses-bob", TokenID: "",
+		Auth: breakglass.AuthMFA, AuthAt: now.Add(-time.Minute),
+	}
 	pending := pendingReview(use(now.Add(-time.Hour)))
+	ended := pendingReview(session(now.Add(-3 * time.Hour)))
+	active := pendingReview(session(now.Add(-time.Hour)))
+	same := func(r breakglass.Reviewer) breakglass.Reviewer { return r }
 
 	cases := []struct {
 		name   string
@@ -247,6 +338,72 @@ func TestAcceptAndDispute(t *testing.T) {
 			breakglass.Accept,
 			"",
 			breakglass.ErrAuthStale,
+		},
+		{
+			"no reviewer",
+			pending,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.Subject = " "; return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrInvalid,
+		},
+		{
+			"a person who can act as the user cannot review",
+			pending,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.Subject = "Carol"; return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrSelfReview,
+		},
+		{
+			"the owner of the break-glass account cannot review",
+			ended,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.Subject = "erin"; return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrSelfReview,
+		},
+		{"a second person accepts an ended session", ended, same, breakglass.Accept, "", nil},
+		{"a session in its time limit", active, same, breakglass.Dispute, "Too long", breakglass.ErrInUse},
+		{
+			"an access token cannot review",
+			pending,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.TokenID = "tok-1"; return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrNeedsSession,
+		},
+		{
+			"a request with no console session",
+			pending,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.Session = ""; return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrNeedsSession,
+		},
+		{
+			"an authentication in the future",
+			pending,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.AuthAt = now.Add(time.Minute); return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrAuthStale,
+		},
+		{
+			"an unknown kind of authentication",
+			pending,
+			func(r breakglass.Reviewer) breakglass.Reviewer { r.Auth = "password"; return r },
+			breakglass.Accept,
+			"",
+			breakglass.ErrAuthStale,
+		},
+		{
+			"a note above the bound",
+			pending,
+			same,
+			breakglass.Accept,
+			strings.Repeat("x", breakglass.MaxNoteLen+1),
+			breakglass.ErrInvalid,
 		},
 		{
 			"a review with a verdict",
@@ -317,5 +474,78 @@ func TestSettingsValidate(t *testing.T) {
 		if err := s.Validate(); !errors.Is(err, breakglass.ErrInvalid) {
 			t.Fatalf("case %d: err = %v, want ErrInvalid", i, err)
 		}
+	}
+}
+
+func TestCheckVerdict(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	pending := pendingReview(use(now.Add(-time.Hour)))
+	good := breakglass.Verdict{Reviewer: "bob", Note: "", Auth: breakglass.AuthSSO, AuthAt: now, ReviewedAt: now}
+
+	cases := []struct {
+		name   string
+		r      breakglass.Review
+		state  breakglass.State
+		change func(v *breakglass.Verdict)
+		want   error
+	}{
+		{"a valid verdict", pending, breakglass.StateAccepted, func(*breakglass.Verdict) {}, nil},
+		{"a pending state", pending, breakglass.StatePending, func(*breakglass.Verdict) {}, breakglass.ErrInvalid},
+		{
+			"no reviewer",
+			pending,
+			breakglass.StateAccepted,
+			func(v *breakglass.Verdict) { v.Reviewer = "" },
+			breakglass.ErrInvalid,
+		},
+		{"a person of the use", pending, breakglass.StateAccepted, func(v *breakglass.Verdict) {
+			v.Reviewer = "CAROL"
+		}, breakglass.ErrSelfReview},
+		{
+			"a dispute with no note",
+			pending,
+			breakglass.StateDisputed,
+			func(*breakglass.Verdict) {},
+			breakglass.ErrInvalid,
+		},
+		{"no time", pending, breakglass.StateAccepted, func(v *breakglass.Verdict) {
+			v.ReviewedAt = time.Time{}
+		}, breakglass.ErrInvalid},
+		{"an old authentication", pending, breakglass.StateAccepted, func(v *breakglass.Verdict) {
+			v.AuthAt = now.Add(-breakglass.Freshness - time.Second)
+		}, breakglass.ErrInvalid},
+		{"no kind of authentication", pending, breakglass.StateAccepted, func(v *breakglass.Verdict) {
+			v.Auth = ""
+		}, breakglass.ErrInvalid},
+		{
+			"a session in its time limit",
+			pendingReview(session(now.Add(-time.Hour))),
+			breakglass.StateAccepted,
+			func(*breakglass.Verdict) {},
+			breakglass.ErrInUse,
+		},
+		{
+			"a review with a verdict",
+			func() breakglass.Review { r := pending; r.State = breakglass.StateDisputed; return r }(),
+			breakglass.StateAccepted,
+			func(*breakglass.Verdict) {},
+			breakglass.ErrReviewed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			v := good
+			tc.change(&v)
+
+			err := breakglass.CheckVerdict(tc.r, tc.state, v)
+			if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("CheckVerdict: err = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }

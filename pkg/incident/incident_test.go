@@ -2,6 +2,8 @@ package incident_test
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,21 +93,163 @@ func TestValidate(t *testing.T) {
 		t.Fatalf("sample: %v", err)
 	}
 
-	bad := map[string]func(in *incident.Incident){
-		"detected after it opens": func(in *incident.Incident) { in.DetectedAt = in.OpenedAt.Add(time.Minute) },
-		"a severity of 0":         func(in *incident.Incident) { in.Severity = 0 },
-		"a job link with no role": func(in *incident.Incident) {
+	cases := []struct {
+		name   string
+		change func(in *incident.Incident)
+	}{
+		{"detected after it opens", func(in *incident.Incident) { in.DetectedAt = in.OpenedAt.Add(time.Minute) }},
+		{"a severity of 0", func(in *incident.Incident) { in.Severity = 0 }},
+		{"a job link with no role", func(in *incident.Incident) {
 			in.Jobs = []incident.JobLink{{Job: "job-1", Role: ""}}
-		},
-		"no title": func(in *incident.Incident) { in.Title = "" },
+		}},
+		{"no title", func(in *incident.Incident) { in.Title = "" }},
+		{"the server scope", func(in *incident.Incident) { in.Namespace = "@server" }},
+		{"a classification with no person", func(in *incident.Incident) {
+			in.Classifications = []incident.Classification{classification("")}
+		}},
+		{"a report with no kind", func(in *incident.Incident) {
+			in.Reports = []incident.Report{{Kind: "", Reference: "REF-1", SentAt: now(), By: "carol"}}
+		}},
+		{"too many reports", func(in *incident.Incident) {
+			r := incident.Report{Kind: "initial", Reference: "REF-1", SentAt: now(), By: "carol"}
+			in.Reports = slices.Repeat([]incident.Report{r}, incident.MaxRecords+1)
+		}},
 	}
 
-	for name, change := range bad {
-		in := sample()
-		change(&in)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		if err := in.Validate(); !errors.Is(err, incident.ErrInvalid) {
-			t.Fatalf("%s: err = %v, want ErrInvalid", name, err)
-		}
+			in := sample()
+			tc.change(&in)
+
+			if err := in.Validate(); !errors.Is(err, incident.ErrInvalid) {
+				t.Fatalf("Validate: err = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestValidateNew(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		change func(in *incident.Incident)
+		err    error
+	}{
+		{"an open incident", func(*incident.Incident) {}, nil},
+		{"acknowledged", func(in *incident.Incident) {
+			in.State, in.AcknowledgedAt = incident.StateAcknowledged, now()
+		}, incident.ErrInvalid},
+		{
+			"closed",
+			func(in *incident.Incident) { in.State, in.ClosedAt = incident.StateClosed, now() },
+			incident.ErrInvalid,
+		},
+		{"open with a time of close", func(in *incident.Incident) { in.ClosedAt = now() }, incident.ErrInvalid},
+		{"open with no title", func(in *incident.Incident) { in.Title = "" }, incident.ErrInvalid},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := sample()
+			tc.change(&in)
+
+			if err := in.ValidateNew(); !errors.Is(err, tc.err) {
+				t.Fatalf("ValidateNew: err = %v, want %v", err, tc.err)
+			}
+		})
+	}
+}
+
+func classification(by string) incident.Classification {
+	return incident.Classification{Major: true, Criteria: []string{"data-loss"}, ClassifiedBy: by, ClassifiedAt: now()}
+}
+
+func TestRecordsValidate(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("x", incident.MaxNameLen+1)
+	report := incident.Report{Kind: "final", Reference: "REF-1", SentAt: now(), By: "carol"}
+	note := incident.Note{Incident: "inc-1", At: now(), By: "bob", Text: "Rolled back"}
+
+	cases := []struct {
+		name string
+		err  error
+		got  func() error
+	}{
+		{"a classification", nil, classification("carol").Validate},
+		{"a classification with no person", incident.ErrInvalid, classification("").Validate},
+		{"a classification with no time", incident.ErrInvalid, func() error {
+			c := classification("carol")
+			c.ClassifiedAt = time.Time{}
+
+			return c.Validate()
+		}},
+		{"a criterion above the bound", incident.ErrInvalid, func() error {
+			c := classification("carol")
+			c.Criteria = []string{long}
+
+			return c.Validate()
+		}},
+		{"too many criteria", incident.ErrInvalid, func() error {
+			c := classification("carol")
+			c.Criteria = slices.Repeat([]string{"data-loss"}, incident.MaxCriteria+1)
+
+			return c.Validate()
+		}},
+		{"a report", nil, report.Validate},
+		{"a report with no reference", incident.ErrInvalid, func() error {
+			r := report
+			r.Reference = ""
+
+			return r.Validate()
+		}},
+		{"a report with no time", incident.ErrInvalid, func() error {
+			r := report
+			r.SentAt = time.Time{}
+
+			return r.Validate()
+		}},
+		{"a note", nil, note.Validate},
+		{"a note of spaces", incident.ErrInvalid, func() error {
+			n := note
+			n.Text = "   "
+
+			return n.Validate()
+		}},
+		{"a note above the bound", incident.ErrInvalid, func() error {
+			n := note
+			n.Text = strings.Repeat("x", incident.MaxNoteLen+1)
+
+			return n.Validate()
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tc.got(); !errors.Is(err, tc.err) {
+				t.Fatalf("Validate: err = %v, want %v", err, tc.err)
+			}
+		})
+	}
+}
+
+func TestCurrentClassification(t *testing.T) {
+	t.Parallel()
+
+	in := sample()
+	if _, ok := in.Classification(); ok {
+		t.Fatal("Classification of a new incident: ok = true, want false")
+	}
+
+	in.Classifications = []incident.Classification{classification("carol"), classification("dave")}
+	if c, ok := in.Classification(); !ok || c.ClassifiedBy != "dave" {
+		t.Fatalf("Classification = %+v (%t), want the last one, by dave", c, ok)
 	}
 }

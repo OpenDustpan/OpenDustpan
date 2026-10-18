@@ -36,6 +36,7 @@ BANNED = [
     (r"supercharg(e|es|ed|ing)", "say what gets faster, and by how much"),
     (r"unleash(es|ed|ing)?", "delete it"),
     (r"delv(e|es|ed|ing)", "use 'read' or 'look at'"),
+    (r"DORA[- ]complian(t|ce)", "say 'designed against DORA' and name the article"),
 ]
 
 WORD_RE = re.compile(
@@ -99,6 +100,10 @@ def selftest():
         ("A non-robust-looking word stays.", []),
         ("Leverage-based is not a form we list.", []),
         ("Plain, exact text.", []),
+        ("It is DORA compliant.", ["DORA compliant"]),
+        ("Proof of dora-compliance.", ["dora-compliance"]),
+        ("Designed against DORA, Article 17.", []),
+        ("Write `DORA compliant` in a rule.", []),
     ]
     failed = 0
     for text, want in cases:
