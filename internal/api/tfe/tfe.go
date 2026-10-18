@@ -6,7 +6,8 @@
 // version, its download, its outputs, the masked resource list with one
 // masked resource, and the reveal of one masked value with its audit entry)
 // and the state write routes (create a state version and upload its content
-// through a capability) exist so far. Every further endpoint lands with its
+// through a capability) exist so far, with the masked state of a workspace
+// at a time. Every further endpoint lands with its
 // e2e step first, so no other route is served until its issue adds it with
 // the CLI coverage.
 package tfe
@@ -130,6 +131,13 @@ type StateReader interface {
 	ReadResource(
 		ctx context.Context, id workspace.StateVersionID, address string,
 	) (workspace.StateDetail, error)
+	// ReadStateAt returns the masked state that the workspace held at the
+	// time req.At, with the state version and its actor. A time before the first
+	// finalized state version fails with workspace.ErrNoStateAt, and the
+	// text names the time of the first one. A state the client encrypted
+	// answers as opaque, with no resource. The cursor, the size and the filter
+	// of req work as in ReadResources.
+	ReadStateAt(ctx context.Context, id workspace.ID, req workspace.StateAtRequest) (workspace.StateAtRead, error)
 	// DiffStates returns the diff of two finalized state versions: to is the
 	// newer side, from is the older one. Both versions must belong to the
 	// same workspace; a from version of another workspace fails with

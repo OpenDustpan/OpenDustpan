@@ -219,6 +219,25 @@ type Inventory struct {
 	LockOperation pgtype.Text
 }
 
+type InventoryChange struct {
+	NamespaceID   string
+	Seq           int64
+	AtMs          int64
+	Tool          string
+	UnitID        string
+	Name          string
+	DisplayName   string
+	Status        string
+	Collection    string
+	Kind          string
+	ResourceCount pgtype.Int8
+}
+
+type InventoryChangeHead struct {
+	NamespaceID string
+	LastSeq     int64
+}
+
 type InventoryDeleted struct {
 	Namespace    string
 	Tool         string
@@ -236,6 +255,33 @@ type Namespace struct {
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
 	IpAllowlist         string
+	ID                  string
+}
+
+type ObjectContext struct {
+	NamespaceID         string
+	ObjectKind          string
+	ObjectID            string
+	Tool                string
+	ResourceKey         string
+	Source              string
+	Fields              string
+	Warning             string
+	ItemID              string
+	ItemSeq             int64
+	ResourceDeletedAtMs pgtype.Int8
+	MarksSeq            int64
+	UpdatedAtMs         int64
+	UpdatedBy           string
+}
+
+type ObjectContextOwner struct {
+	NamespaceID string
+	Owner       string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
 }
 
 type OidcProvider struct {

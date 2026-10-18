@@ -1,13 +1,14 @@
 ---
 rfc: 73
 title: An AI agent for infrastructure across both tools
-status: draft
+status: accepted
 created: 2026-10-17
+adr: 120, 121, 122, 123, 124, 125, 126, 127, 128
 ---
 
 # RFC 73. An AI agent for infrastructure across both tools
 
-Status: draft. The question and the open questions only. This RFC proposes no design.
+Status: accepted (ADRs 120 to 128). The question and the open questions only. This RFC proposes no design.
 
 ## Problem
 
@@ -24,9 +25,16 @@ Any such agent may act on real infrastructure. It must follow the same access ru
 - RFC 13 (policy and approvals) decides which actions need an approval first.
 - RFC 22 (audit log) decides how an agent action appears in the log.
 
+## Decided on 2026-10-17
+
+The owner decided where the agent runs. The built-in agent is Dusty. It runs
+in the server as an agent loop on durable operations (ADR 72), not on a
+runner. It is off until an administrator connects a model. The other open
+questions below stay open.
+
 ## Options
 
-Each option is open. This RFC does not choose one.
+Each option was open when this RFC was written.
 
 - **No own agent.** Teams bring an agent through the API and an MCP server (RFC 41).
 - **An agent in the backend.** The backend runs the model and calls the API as a principal. This may conflict with RFC 6, which says the backend never runs an infrastructure tool.
@@ -46,4 +54,6 @@ Each option is open. This RFC does not choose one.
 
 ## Outcome
 
-None yet.
+Accepted on 2026-10-17 as ADRs 120 to 127: Dusty, the built-in agent, runs in
+the server as an agent loop on durable operations. ADR 128 puts agents in
+the job model and the history model.

@@ -271,6 +271,16 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			isUnit:  true,
 		},
 		{
+			name:    "masked state at a time",
+			pattern: "GET /api/v2/workspaces/{workspace_id}/state-at/{at}",
+			method:  http.MethodGet,
+			target:  "/api/v2/workspaces/ws-test123/state-at/1500",
+			body:    "",
+			actions: []identity.Action{identity.ActionUnitRead},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
+		{
 			name:    "one masked resource",
 			pattern: "GET /api/v2/state-versions/{state_version_id}/resources/{address}",
 			method:  http.MethodGet,

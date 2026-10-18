@@ -248,6 +248,7 @@ func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
 	}
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            n,
 		HomeRegion:      "test-region",

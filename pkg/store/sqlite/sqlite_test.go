@@ -627,6 +627,26 @@ func TestUpdatesConformance(t *testing.T) {
 	})
 }
 
+func TestStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStateAt(t, func(t *testing.T) storetest.StateAtStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+func TestWorkspaceStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunWorkspaceStateAt(t, func(t *testing.T) storetest.WorkspaceStateAtStore {
+		t.Helper()
+
+		return openAuditedWorkspaces(t)
+	})
+}
+
 func TestWorkspaceConformance(t *testing.T) {
 	t.Parallel()
 
@@ -990,6 +1010,7 @@ func TestRenameKeepsTags(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "eu-west",

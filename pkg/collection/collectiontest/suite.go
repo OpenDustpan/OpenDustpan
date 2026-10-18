@@ -755,6 +755,7 @@ func newNamespace(t *testing.T, s Store, name string) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",

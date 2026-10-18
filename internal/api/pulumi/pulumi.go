@@ -929,7 +929,7 @@ func classify(err error) (int, string) {
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
-		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState),
+		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState), errors.Is(err, stack.ErrNoStateAt),
 		errors.Is(err, stack.ErrResourceNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrHasResources):

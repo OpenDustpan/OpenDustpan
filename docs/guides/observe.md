@@ -152,12 +152,12 @@ names the key and the rule.
 The `result` label is `success` or `failure`.
 Alert when the `failure` series grows: a failed run disables nothing.
 `dustpan_deleted_unit_sweep_total` counts the outcomes of the retention
-sweep. The `result` label is `purged`, `skipped`, `finished` or
-`failed`. `finished` counts the blob purge records that the sweep finished.
+expiry. The `result` label is `purged`, `skipped`, `finished` or
+`failed`. `finished` counts the blob purge records that the run finished.
 `failed` counts the failed purges, blob deletes and record finishes, and the
-sweeps that could not read the store.
+runs that could not read the store.
 Alert when the `failed` series grows: a failed purge keeps the unit until the
-next sweep. The log line of each failure names the unit and the error kind.
+next run. The log line of each failure names the unit and the error kind.
 
 ## Request log
 

@@ -38,6 +38,7 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 const (
@@ -1122,6 +1123,7 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 	}
 
 	var doc struct {
+		ID              string `json:"id"`
 		Name            string `json:"name"`
 		HomeRegion      string `json:"homeRegion"`
 		FailoverVersion int64  `json:"failoverVersion"`
@@ -1133,6 +1135,10 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 
 	if doc.Name != name || doc.FailoverVersion != 1 || doc.HomeRegion == "" {
 		t.Fatalf("namespace answers %+v, want %q at version 1 with a region", doc, name)
+	}
+
+	if _, parseErr := namespace.ParseID(doc.ID); parseErr != nil {
+		t.Fatalf("namespace %q answers ID %q: %v", name, doc.ID, parseErr)
 	}
 
 	status, body, err = env.ServerAPIStatus(
@@ -1193,6 +1199,9 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	beforeID := stackIDBeforeRename(t, env, org)
+
+	// The context routes: the stack reads the owners of its namespace.
+	contextScenario(t, env, "pulumi", beforeID)
 
 	env.Step(ctx, t, e2e.StepSpec{
 		Check:  checkRenameKeptID(ctx, env, org, renamePath, beforeID),
@@ -1623,7 +1632,12 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 			"config", "set", "--secret", "--stack", qualified, "apiKey", maskedStateSecret,
 		),
 	)
+	beforeFirst := time.Now()
+
 	env.Step(ctx, t, step("up masked 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+
+	betweenUps := time.Now()
+
 	env.WritePulumiProject(t, maskedStateProgram(org, "hello-again"))
 	env.Step(ctx, t, step("up masked 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
 	env.Step(ctx, t, step(
@@ -1631,6 +1645,13 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		checkMaskedState(ctx, env, org, maskedStateSecret),
 		"stack", "--show-name", "--stack", qualified,
 	))
+	env.Step(ctx, t, step(
+		"masked state at a time",
+		checkMaskedStateAt(ctx, env, org, maskedStateSecret, stateAtTimes{before: beforeFirst, between: betweenUps}),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	checkStateAtRunning(ctx, t, env, org)
+	pulumiRenameNamesSteps(ctx, t, env, org, betweenUps)
 	env.Step(ctx, t, step(
 		"masked state resource search",
 		checkMaskedStateFilter(ctx, env, org, maskedStateSecret),
@@ -2916,7 +2937,12 @@ func stackIDOf(t *testing.T, env *e2e.Env, org, name string) string {
 func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, softDeleted)
 
+	// existedAt is a time when the stack still existed: the inventory at
+	// that time lists it, whatever happens to it later.
+	existedAt := new(time.Time)
+
 	steps := []e2e.StepSpec{
+		step("note the time before the delete", noteTime(existedAt), "stack", "ls", "--json", "--all"),
 		step("stack rm soft", nil, "stack", "rm", "--yes", "--stack", qualified),
 		step("stack ls hides the removed stack", checkNoTombstone(ctx, env, org), "stack", "ls", "--json", "--all"),
 		{
@@ -2948,7 +2974,7 @@ func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID str
 
 	// While the new stack holds the old name, the restore steps prove the
 	// 409, the restore under a new name and the purge.
-	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID)...)
+	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID, existedAt)...)
 
 	return append(steps,
 		step("stack history of new stack", func(r e2e.Result) error {
@@ -4124,6 +4150,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	inventorySchemeScenario(t, env)
 	// The collection routes move the e2e workspace between two collections (ADR 51).
 	collectionsScenario(t, env)
+	// The context routes: the workspace reads the owners of its namespace.
+	tofuContextScenario(t, env)
 
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
@@ -4475,6 +4503,10 @@ const remoteProdName = e2e.RemotePrefix + e2e.RemoteProd
 func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 	var removedID string
 
+	// existedAt is a time when the workspace still existed: the inventory at
+	// that time lists it, whatever happens to it later.
+	existedAt := new(time.Time)
+
 	// While the new workspace holds the old name, the restore steps prove the
 	// 409, the restore under a new name and the purge.
 	return append([]e2e.StepSpec{
@@ -4482,7 +4514,13 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 			id, err := remoteWorkspaceID(ctx, env, remoteProdName)
 			removedID = id
 
-			return err
+			if err != nil {
+				return err
+			}
+
+			recordTime(existedAt)
+
+			return nil
 		}, "workspace", "select", e2e.RemoteDev, "-no-color"),
 		step("workspace delete prod", func(e2e.Result) error {
 			path := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/" + remoteProdName
@@ -4497,7 +4535,7 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 		}, "workspace", "list", "-no-color"),
 		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
 		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
-	}, tofuRestoreSteps(ctx, env, &removedID)...)
+	}, tofuRestoreSteps(ctx, env, &removedID, existedAt)...)
 }
 
 // workspaceIDData is the data member of a TFE-compatible workspace document,
@@ -7217,6 +7255,8 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 	writeImportConfig(t, dir, maskedCloudConfig(env.Host(), "masked"))
 
 	env.StepIn(ctx, t, dir, step("masked init", nil, "init", "-input=false", "-no-color"))
+	beforeFirst := time.Now()
+
 	env.StepIn(ctx, t, dir, e2e.StepSpec{
 		Check:  nil,
 		Name:   "masked apply 1",
@@ -7226,6 +7266,9 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 		Fail:   false,
 		Redact: false,
 	})
+	betweenApplies := time.Now()
+	firstVersion := maskedCurrentVersion(ctx, t, env, "masked")
+
 	env.StepIn(ctx, t, dir, e2e.StepSpec{
 		Check:  nil,
 		Name:   "masked apply 2",
@@ -7242,6 +7285,9 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 	maskedOutputsCheck(ctx, t, env, "masked")
 	maskedSensitiveAttributesFinding(ctx, t, env, "masked", versionID)
 	maskedRevealCheck(ctx, t, env, versionID)
+	maskedStateAtChecks(ctx, t, env, stateAtVersions{
+		workspace: "masked", first: firstVersion, second: versionID, before: beforeFirst, between: betweenApplies,
+	})
 
 	tofuMaskedEncryptedScenario(ctx, t, env)
 }
@@ -8189,6 +8235,17 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 	} {
 		env.APIStepA(ctx, t, spec)
 	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:     checkOpaqueStateAt,
+		Name:      "masked encrypted state at a time",
+		Method:    http.MethodGet,
+		Path:      stateAtPathTofu(env.WorkspaceIDByName(ctx, t, "masked-encrypted"), time.Now()),
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
+		Scheme:    "",
+	})
 
 	wsID := env.WorkspaceIDByName(ctx, t, "masked-encrypted")
 
@@ -14616,4 +14673,16 @@ func tofuSealedStateScenario(t *testing.T, env *e2e.Env) {
 	if !ok || greeting.Value != cli.Outputs["greeting"].Value || greeting.Value == "" {
 		t.Fatalf("downloaded state lacks the pulled greeting: %s", download)
 	}
+}
+
+// tofuContextScenario runs the context scenario for the e2e workspace.
+func tofuContextScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	id, err := remoteWorkspaceID(t.Context(), env, e2e.Workspace)
+	if err != nil || id == "" {
+		t.Fatalf("read the ID of the workspace: %q, %v", id, err)
+	}
+
+	contextScenario(t, env, "opentofu", id)
 }

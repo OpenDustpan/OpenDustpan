@@ -183,6 +183,7 @@ func buildDeletedFixture(
 		Namespaces: namespaces,
 		Units:      &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Deleted:    &memDeleted{entries: entries},
+		History:    nil,
 		Lifecycles: map[string]coreinventory.Lifecycle{
 			"pulumi":   pulumi,
 			"opentofu": &memLifecycle{err: nil, calls: nil},

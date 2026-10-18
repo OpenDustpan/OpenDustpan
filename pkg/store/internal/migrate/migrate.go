@@ -284,3 +284,20 @@ func parseMinimumLine(comment string) (string, error) {
 
 	return value, nil
 }
+
+// CollapseVersion returns the version of the baseline that replaces the
+// migrations with the given versions, in every dialect. It is above each of
+// them and at least schema.BaselineVersion. So a database from an untagged
+// build records versions that the new binary does not embed, and the
+// migration check refuses it instead of finding no pending migration.
+func CollapseVersion(versions []int64) int64 {
+	next := schema.BaselineVersion
+
+	for _, v := range versions {
+		if v >= next {
+			next = v + 1
+		}
+	}
+
+	return next
+}

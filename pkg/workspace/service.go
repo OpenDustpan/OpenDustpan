@@ -122,8 +122,13 @@ type StateStore interface {
 	// GetStateVersion returns the state version, or ErrStateVersionNotFound.
 	GetStateVersion(ctx context.Context, id StateVersionID) (StateVersion, error)
 	// FinalizeStateVersion saves the finalized sv (with its Content key),
-	// stamps the workspace's UpdatedAt with sv.FinalizedAt, and makes sv the
-	// workspace's current state, checking in the same transaction that:
+	// stamps the version's finalize time and the workspace's UpdatedAt, and
+	// makes sv the workspace's current state. The stamped time is
+	// sv.FinalizedAt, or one millisecond after the latest finalize time of
+	// the workspace when sv.FinalizedAt is not later than it, so the current
+	// state always has the latest finalize time. The sv of the caller keeps
+	// the requested time; read the stored version for the stamped time. It
+	// checks in the same transaction that:
 	//   - the stored version is still pending, else ErrUploadDenied;
 	//   - the stored version still names sv.Content as its latest attempt,
 	//     else ErrUploadDenied: a superseded attempt never finalizes over a
@@ -147,7 +152,8 @@ type StateStore interface {
 	// it names the content, the new lineage, its serial and FenceBy. The
 	// caller stores sv as a pending version with CreateStateVersion before it
 	// writes the content, so a sweep finds the key; FenceAndUnlock finalizes
-	// that row. The stored version must still be pending and name sv.Content,
+	// that row, with the finalize time that FinalizeStateVersion stamps. The
+	// stored version must still be pending and name sv.Content,
 	// else ErrUploadDenied. The stored workspace must be locked and hold
 	// revision w.Revision-1, else
 	// ErrNotLocked or ErrConcurrentModification. The current version must be
@@ -266,7 +272,23 @@ type Service struct {
 	maxState   int64
 	maxPending int
 	retention  time.Duration
+	stateAt    StateAtReader
+	names      inventory.HistoryReader
 	stripes    [lockStripes]sync.Mutex
+}
+
+// attachOptionalReaders sets the optional reads of the state store. A store
+// that also finds the state at a time enables ReadStateAt. A store that also
+// keeps the inventory change log lets ReadStateAt name the workspace at the
+// time.
+func attachOptionalReaders(s *Service, states StateStore) {
+	if reader, ok := states.(StateAtReader); ok {
+		s.stateAt = reader
+	}
+
+	if reader, ok := states.(inventory.HistoryReader); ok {
+		s.names = reader
+	}
 }
 
 // NewService returns a Service. Every port, Namespaces and the Sealer are
@@ -296,8 +318,12 @@ func NewService(cfg Config) (*Service, error) {
 		maxState:   cfg.MaxStateBytes,
 		maxPending: cfg.MaxPendingVersions,
 		retention:  cfg.Retention,
+		stateAt:    nil,
+		names:      nil,
 		stripes:    [lockStripes]sync.Mutex{},
 	}
+
+	attachOptionalReaders(s, cfg.States)
 
 	if s.now == nil {
 		s.now = time.Now

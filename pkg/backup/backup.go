@@ -74,7 +74,7 @@ const (
 //
 //nolint:gochecknoglobals // The shared frozen table list: Go has no constant slices, and both adapters use this one source.
 var Tables = []string{
-	"namespaces",
+	portTableNamespaces,
 	"stacks",
 	"stack_tags",
 	"updates",
@@ -86,8 +86,12 @@ var Tables = []string{
 	"secret_keys",
 	"inventory",
 	"inventory_deleted",
+	"inventory_change_heads",
+	"inventory_changes",
 	"collections",
 	"collection_members",
+	"object_context",
+	"object_context_owners",
 	"blob_purges",
 	"workspaces",
 	"state_versions",

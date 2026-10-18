@@ -20,6 +20,7 @@ const (
 	backupColName        = "name"
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
+	backupColNamespaceID = "namespace_id"
 	backupColSequence    = "sequence"
 	backupColSize        = "size"
 	backupColStackID     = "stack_id"
@@ -35,6 +36,8 @@ const (
 	backupColSubject     = "subject"
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"
+	backupColObjectKind  = "object_kind"
+	backupColObjectID    = "object_id"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
 )
@@ -66,6 +69,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"allow_forced_writes",
 				"allow_unlocked_writes",
 				"ip_allowlist",
+				"id",
 			},
 		},
 		{
@@ -216,6 +220,31 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "object_context",
+			columns: []string{
+				backupColNamespaceID,
+				backupColObjectKind,
+				backupColObjectID,
+				backupColTool,
+				"resource_key",
+				backupColSource,
+				"fields",
+				"warning",
+				"item_id",
+				"item_seq",
+				"resource_deleted_at_ms",
+				"marks_seq",
+				backupColUpdatedAtMs,
+				"updated_by",
+			},
+		},
+		{
+			table: "object_context_owners",
+			columns: []string{
+				backupColNamespaceID, "owner", backupColObjectKind, backupColObjectID, "resource_key", backupColSource,
+			},
+		},
+		{
 			table: "inventory_deleted",
 			columns: []string{
 				backupColNamespace,
@@ -224,6 +253,18 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColName,
 				backupColDeletedAtMs,
 				"purge_after_ms",
+			},
+		},
+		{
+			table:   "inventory_change_heads",
+			columns: []string{backupColNamespaceID, "last_seq"},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				backupColNamespaceID, "seq", "at_ms", backupColTool, backupColUnitID, backupColName,
+				backupColDisplayName,
+				backupColStatus, "collection", backupColKind, "resource_count",
 			},
 		},
 		{

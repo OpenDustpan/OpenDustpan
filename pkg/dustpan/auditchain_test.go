@@ -322,6 +322,7 @@ func createChainNamespace(t *testing.T, st *sqlite.Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      region,

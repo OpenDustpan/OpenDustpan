@@ -427,6 +427,7 @@ func createLoadNamespace(ctx context.Context, stores namespace.Store, ns string)
 	}
 
 	found := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            name,
 		HomeRegion:      harnessRegion,

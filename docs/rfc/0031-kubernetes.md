@@ -132,4 +132,5 @@ project's API group as ours. A migration tool converts them instead.
 
 ## Outcome
 
-None yet.
+Phase 2 is answered by ADR 136 (the Kubernetes coordinator), on 2026-10-18.
+The other phases stay open.

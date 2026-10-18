@@ -115,6 +115,7 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",
@@ -396,6 +397,7 @@ func testIsolation(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 
 	other := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "other",
 		HomeRegion:      "eu-west",

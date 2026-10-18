@@ -627,6 +627,36 @@ func TestUpdateHistoryConformance(t *testing.T) {
 	})
 }
 
+func TestStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunStateAt(t, func(t *testing.T) storetest.StateAtStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+func TestWorkspaceStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunWorkspaceStateAt(t, func(t *testing.T) storetest.WorkspaceStateAtStore {
+		t.Helper()
+
+		return openAuditedWorkspaces(t, base)
+	})
+}
+
 func TestWorkspaceConformance(t *testing.T) {
 	t.Parallel()
 
@@ -1365,6 +1395,7 @@ func TestRenameKeepsTags(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "eu-west",

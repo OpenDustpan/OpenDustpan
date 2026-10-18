@@ -905,6 +905,7 @@ func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, r
 	tb.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      namespace.Region(region),

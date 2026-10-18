@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+
+	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 )
 
 // connectKeepControl connects to the test database and closes the
@@ -47,17 +49,18 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	name := "test_" + hex.EncodeToString(suffix)
 	ident := pgx.Identifier{name}.Sanitize()
 
-	ddl, err := migrations.ReadFile("migrations/0100_baseline.sql")
+	all, err := migrate.Load(migrations, "migrations")
 	if err != nil {
-		t.Fatalf("read baseline: %v", err)
+		t.Fatalf("load migrations: %v", err)
 	}
 
-	failuresDDL, err := migrations.ReadFile("migrations/0104_sign_in_failures.sql")
-	if err != nil {
-		t.Fatalf("read sign-in failures migration: %v", err)
+	stmts := make([]string, 0, len(all)+2)
+	stmts = append(stmts, "CREATE SCHEMA "+ident, "SET search_path TO "+ident)
+	for _, m := range all {
+		stmts = append(stmts, m.SQL)
 	}
 
-	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl), string(failuresDDL)} {
+	for _, stmt := range stmts {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 			t.Fatalf("create durable schema: %v", execErr)
 		}

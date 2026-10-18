@@ -123,6 +123,7 @@ func TestKeepAccessHoldsShareLocksAcrossSwap(t *testing.T) {
 	s := openKeepLockStore(t, testPostgresURL(t))
 
 	seed := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now().UTC(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",

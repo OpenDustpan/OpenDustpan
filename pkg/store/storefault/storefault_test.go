@@ -38,6 +38,30 @@ func TestUpdatesTransparency(t *testing.T) {
 	})
 }
 
+// TestStateAtTransparency runs the state-at cases through the wrapper with
+// no faults configured.
+func TestStateAtTransparency(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStateAt(t, func(t *testing.T) storetest.StateAtStore {
+		t.Helper()
+
+		return wrap(t)
+	})
+}
+
+// TestWorkspaceStateAtTransparency runs the workspace state-at cases through
+// the wrapper with no faults configured.
+func TestWorkspaceStateAtTransparency(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunWorkspaceStateAt(t, func(t *testing.T) storetest.WorkspaceStateAtStore {
+		t.Helper()
+
+		return wrap(t)
+	})
+}
+
 // TestWorkspaceTransparency runs the workspace suite through the wrapper with
 // no faults configured.
 func TestWorkspaceTransparency(t *testing.T) {

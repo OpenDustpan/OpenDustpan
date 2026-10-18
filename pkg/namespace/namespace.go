@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -24,6 +25,8 @@ var (
 	ErrAlreadyExists = errors.New("namespace already exists")
 	// ErrInvalidName reports a name that fails validation.
 	ErrInvalidName = errors.New("invalid namespace name")
+	// ErrInvalidID reports a namespace ID that fails validation.
+	ErrInvalidID = errors.New("invalid namespace ID")
 	// ErrInvalidRegion reports a region that fails validation.
 	ErrInvalidRegion = errors.New("invalid region")
 	// ErrNotHome reports a write attempted outside the namespace's home region.
@@ -46,6 +49,9 @@ var (
 )
 
 const maxNameLength = 100
+
+// maxIDLength is the longest namespace ID, prefix included.
+const maxIDLength = 100
 
 // maxPageLimit is the largest page size a page query can name. It holds one
 // row more than the largest page a caller can ask for, so a handler that
@@ -70,6 +76,37 @@ func (n Name) String() string {
 	return string(n)
 }
 
+// idPrefix starts every namespace ID.
+const idPrefix = "ns-"
+
+// ID is the stable, opaque identifier of a namespace ("ns-..."). The server
+// makes it when it creates the namespace, in the home region, and it never
+// changes. A namespace that is created later under the name of a purged
+// namespace gets a new ID, so rows that hold the old ID never reach the new
+// namespace. The ID is not a secret, and it does not sort by time.
+type ID string
+
+// NewID returns a new namespace ID: the prefix "ns-" and 20 random lowercase
+// letters and digits.
+func NewID() ID {
+	return ID(ident.NewID(idPrefix))
+}
+
+// ParseID validates s as a namespace ID: the prefix "ns-", then ASCII
+// letters, digits, '-', '_' and '.', at most 100 characters in total.
+func ParseID(s string) (ID, error) {
+	if !strings.HasPrefix(s, idPrefix) || len(s) == len(idPrefix) || !ident.Valid(s, maxIDLength) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidID, s)
+	}
+
+	return ID(s), nil
+}
+
+// String returns the ID as a plain string.
+func (id ID) String() string {
+	return string(id)
+}
+
 // Region identifies a deployment region, for example "eu-west".
 type Region string
 
@@ -90,6 +127,7 @@ func (r Region) String() string {
 // Namespace is the aggregate root for tenancy.
 type Namespace struct {
 	CreatedAt       time.Time
+	ID              ID
 	Name            Name
 	HomeRegion      Region
 	Overrides       Overrides
@@ -133,7 +171,11 @@ type Fence struct {
 // dustpan.go already holds this port, so the readiness check reaches the
 // database through it with no new option.
 type Store interface {
-	// CreateNamespace persists ns. It returns ErrAlreadyExists if the name is taken.
+	// CreateNamespace persists ns. It returns ErrInvalidID if ns.ID fails
+	// ParseID, and ErrAlreadyExists if the name or the ID is taken. A store
+	// never changes the ID of a namespace. A purge of a namespace deletes its
+	// row. A later namespace of the same name has a new ID, so it gets no row
+	// that holds the ID of the purged one.
 	CreateNamespace(ctx context.Context, ns Namespace) error
 	// GetNamespace returns the namespace called name, or ErrNotFound.
 	GetNamespace(ctx context.Context, name Name) (Namespace, error)
@@ -210,12 +252,13 @@ func NewService(cfg Config) (*Service, error) {
 	return &Service{store: cfg.Store, now: now, region: cfg.Region}, nil
 }
 
-// New returns the namespace that Create stores for name: homed in the
-// service's region, at failover version 1, created now. It stores nothing,
+// New returns the namespace that Create stores for name: a new ID, homed in
+// the service's region, at failover version 1, created now. It stores nothing,
 // so a caller can store it with other rows in one transaction.
 func (s *Service) New(name Name) Namespace {
 	return Namespace{
 		CreatedAt:       s.now().UTC(),
+		ID:              NewID(),
 		Name:            name,
 		HomeRegion:      s.region,
 		FailoverVersion: 1,

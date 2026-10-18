@@ -39,6 +39,7 @@ func DurableDomainForTest(ctx context.Context, s *Store) (durabletest.Domain, er
 
 func (d durableDomain) CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error) {
 	ns := namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: time.Now(), Name: name, HomeRegion: "local",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	}

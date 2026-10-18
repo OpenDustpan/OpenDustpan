@@ -485,23 +485,7 @@ func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := codec.ToNamespaceRow(ns)
-
-	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
-		Name:            row.Name,
-		HomeRegion:      row.HomeRegion,
-		FailoverVersion: row.FailoverVersion,
-		CreatedAtMs:     row.CreatedAtMs,
-	})
-	if err != nil {
-		return fmt.Errorf("insert namespace: %w", err)
-	}
-
-	if n == 0 {
-		return namespace.ErrAlreadyExists
-	}
-
-	return nil
+	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
 }
 
 // GetNamespace implements namespace.Store.
@@ -596,7 +580,12 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			return err
 		}
 
-		return publishStackInventory(ctx, q, st.Ref, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			st.Ref,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+		)
 	})
 }
 
@@ -673,7 +662,12 @@ func (s *Store) UpdateStackTags(
 			return err
 		}
 
-		return publishStackInventory(ctx, q, ref, id, codec.Millis(updatedAt))
+		return publishStackInventory(
+			ctx,
+			q,
+			ref,
+			unitWrite{unitID: id, atMs: codec.Millis(updatedAt), kind: inventory.ChangeChanged},
+		)
 	})
 }
 
@@ -757,7 +751,12 @@ func (s *Store) RenameStack(
 			return fmt.Errorf("read renamed stack: %w", err)
 		}
 
-		return publishStackInventory(ctx, q, newRef, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			newRef,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeRenamed},
+		)
 	})
 }
 

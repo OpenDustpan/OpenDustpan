@@ -210,6 +210,7 @@ func seedNamespace(t *testing.T, st *sqlite.Store, name string) {
 	t.Helper()
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      namespace.Region(region),

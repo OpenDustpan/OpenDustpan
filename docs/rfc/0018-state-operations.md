@@ -2,14 +2,15 @@
 rfc: 18
 title: State operations: history, restore, locks and leases
 status: accepted
-adr: 28
+adr: 28, 213
 created: 2026-10-10
 ---
 
 # RFC 18. State operations: history, restore, locks and leases
 
-Status: accepted (ADR 28) for milestone 3: history, restore and unlock, for
-both tools. Retention, content diff and the manual lock stay open.
+Status: accepted (ADR 28, ADR 213) for milestone 3: history, restore and
+unlock, for both tools, and the manual lock. Retention and content diff
+stay open.
 
 The rest stays a draft. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". It records the gap and first ideas only.
@@ -46,3 +47,9 @@ keeps only the latest Pulumi checkpoint today and has no unlock action.
 Accepted in part as [ADR 28](../adr/0028-state-operations.md) for
 milestone 3: history, restore and unlock, for both tools. Retention, content
 diff and the manual lock stay open for a later decision.
+
+On 2026-10-18 the owner decided the manual lock, recorded as
+[ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+decision 10: a person can put a manual lock with a reason on one unit, one
+collection or a whole namespace. It is audited, and the inventory shows it
+as the lock flag. Retention and content diff stay open.
