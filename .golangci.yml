@@ -124,6 +124,7 @@ linters:
             - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/durable/**"
+            - "**/pkg/agent/**"
             - "**/pkg/job/**"
             - "**/pkg/history/**"
             - "**/pkg/dependency/**"
@@ -392,7 +393,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^pkg/agent/agenttest/)
         linters:
           - mnd
           - funlen
