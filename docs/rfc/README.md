@@ -57,7 +57,7 @@ both together.
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft; module switches and the capabilities document accepted (ADR 211) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted; the backup of one namespace (ADR 218) |
-| [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft; the branding preset setting accepted (ADR 212) |
+| [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft; the branding preset setting accepted (ADR 212), operator branding accepted (ADR 235) |
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
@@ -125,4 +125,5 @@ both together.
 | [74](0074-snapshots-of-files-with-no-git-commit.md) | Snapshots of files that have no git commit | draft |
 | [75](0075-commands-by-intent.md) | Commands by intent: a dev server with no setup, and a serve command that needs decisions | draft |
 | [76](0076-hosted-multitenancy-open-questions.md) | Hosted multitenancy, the open questions after the namespace decisions | draft |
+| [78](0078-localization-open-questions.md) | Localization open questions: translated docs, the translation machine, the server formatter and the edges | discussing; translated docs, the translation agent, the formatter, the product name in chat, `resolvedLanguage` and reports of one string accepted (ADRs 232, 234 and 235) |
 | [79](0079-opt-in-federation-routing-and-geo-replication.md) | Opt-in federation of installations, routing and geo-replication | draft |

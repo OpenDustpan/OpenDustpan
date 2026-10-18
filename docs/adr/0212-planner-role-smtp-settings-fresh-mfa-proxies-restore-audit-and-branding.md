@@ -1,6 +1,6 @@
 # 212. The planner role, SMTP settings, fresh MFA for weaker settings and approvals, trusted proxies, restore audit entries, the branding preset and one settings API
 
-Status: accepted · 2026-10-18. Supersedes in part ADR 27 decision 2. Extends ADR 46 decision 8, ADR 52, ADR 56, ADR 103 decision 2 and ADR 180 decision 11. Accepts part of RFC 68
+Status: accepted · 2026-10-18. Supersedes in part ADR 27 decision 2. Extends ADR 46 decision 8, ADR 52, ADR 56, ADR 103 decision 2 and ADR 180 decision 11. Accepts part of RFC 68. Decision 6 superseded in part by ADRs 232 and 235
 
 ## Context
 

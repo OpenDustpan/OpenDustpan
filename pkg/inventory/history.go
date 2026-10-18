@@ -34,9 +34,10 @@ const (
 // same transaction as each inventory write that it makes. A row holds names
 // and counts, never state, and no foreign key to the unit, so a purge keeps
 // it. At is the time of the write. Seq is a sequence that the store assigns
-// in the transaction of the write: it increases in commit order across the
-// installation, so it orders two rows that have the same time, or a time
-// out of commit order.
+// in the transaction of the write: in one namespace it increases in commit
+// order, so it orders two rows that have the same time, or a time out of
+// commit order. Two namespaces have their own sequences, and a sequence may
+// skip a number.
 type Change struct {
 	At            time.Time
 	Seq           int64
@@ -52,7 +53,9 @@ type Change struct {
 }
 
 // Entry returns the inventory entry that the row records. The lock of a
-// unit is not history, so the entry has none.
+// unit is not history, so the entry has none. The collection of a unit is
+// not history either: a move to another collection appends no row, so the
+// collection in a row may be out of date, and the entry has none.
 func (c Change) Entry() Entry {
 	return Entry{
 		LastChanged:   c.At,
@@ -64,7 +67,7 @@ func (c Change) Entry() Entry {
 		Status:        c.Status,
 		ResourceCount: c.ResourceCount,
 		Lock:          nil,
-		Collection:    c.Collection,
+		Collection:    "",
 	}
 }
 
@@ -91,6 +94,156 @@ type HistoryReader interface {
 	// defines it. A namespace with no row at or before at reads as an empty
 	// list, as does a namespace that does not exist.
 	UnitsAt(ctx context.Context, ns namespace.Name, at time.Time) ([]Entry, error)
+	// ViewAt returns the units of ns at the time at, as ReplayView defines
+	// it: the live units with their current names, the units that are
+	// soft-deleted now, and the count of units that a purge removed since.
+	// A namespace with no row at or before at reads as an empty view, as
+	// does a namespace that does not exist.
+	ViewAt(ctx context.Context, ns namespace.Name, at time.Time) (UnitsView, error)
+	// UnitNames returns the names of one unit at the time at and now, as
+	// NamesAt defines it. A unit with no row, and a namespace that does not
+	// exist, read as empty names.
+	UnitNames(ctx context.Context, ns namespace.Name, tool, unitID string, at time.Time) (Names, error)
+}
+
+// UnitAt is one unit in the inventory at a time. Entry is the entry that the
+// unit had at that time, with its name at that time. CurrentName is the name
+// that the unit has now: after a soft delete, its name before the delete.
+// DeletedAt is the time of the soft delete when the unit is soft-deleted
+// now, and zero otherwise.
+type UnitAt struct {
+	DeletedAt   time.Time
+	CurrentName string
+	Entry       Entry
+}
+
+// Deleted reports whether the unit is soft-deleted now.
+func (u UnitAt) Deleted() bool {
+	return !u.DeletedAt.IsZero()
+}
+
+// UnitsView is the inventory of one namespace at a time, with the units that
+// the caller may not name. Purged counts the units that existed at the time
+// and that a purge removed since. The view never names them.
+type UnitsView struct {
+	Units  []UnitAt
+	Purged int
+}
+
+// Names holds the name of one unit at a time and its name now. A name is
+// empty when the change log does not know it: the unit has no row at or
+// before the time, or a purge removed the unit.
+type Names struct {
+	AtTime  string
+	Current string
+}
+
+// unitKey names a unit in the change log of one namespace.
+type unitKey struct{ tool, id string }
+
+// unitBounds holds, for one unit, its row with the highest sequence among the
+// rows at or before a time, and its row with the highest sequence of all.
+type unitBounds struct {
+	atRow   *Change
+	lastRow *Change
+}
+
+// add counts the row c, for the time at.
+func (b *unitBounds) add(c *Change, at time.Time) {
+	if b.lastRow == nil || c.Seq > b.lastRow.Seq {
+		b.lastRow = c
+	}
+
+	if !c.At.After(at) && (b.atRow == nil || c.Seq > b.atRow.Seq) {
+		b.atRow = c
+	}
+}
+
+// boundsOf returns the bounds of each unit that has a row in changes, for the
+// time at.
+func boundsOf(changes []Change, at time.Time) map[unitKey]*unitBounds {
+	out := map[unitKey]*unitBounds{}
+
+	for n := range changes {
+		c := &changes[n]
+		key := unitKey{tool: c.Tool, id: c.UnitID}
+
+		b, ok := out[key]
+		if !ok {
+			b = &unitBounds{atRow: nil, lastRow: nil}
+			out[key] = b
+		}
+
+		b.add(c, at)
+	}
+
+	return out
+}
+
+// nameOf returns the name in the row c, or "" for no row and for a purged
+// row.
+func nameOf(c *Change) string {
+	if c == nil || c.Kind == ChangePurged {
+		return ""
+	}
+
+	return c.Name
+}
+
+// NamesAt returns the names of the unit tool and unitID at the time at, from
+// the change log rows of one namespace, in any order. AtTime is the name in
+// the row with the highest sequence among the rows with a time at or before
+// at. Current is the name in the row with the highest sequence of all. A
+// purged row gives an empty name. It defines what HistoryReader.UnitNames
+// answers.
+func NamesAt(changes []Change, tool, unitID string, at time.Time) Names {
+	b, ok := boundsOf(changes, at)[unitKey{tool: tool, id: unitID}]
+	if !ok {
+		return Names{AtTime: "", Current: ""}
+	}
+
+	return Names{AtTime: nameOf(b.atRow), Current: nameOf(b.lastRow)}
+}
+
+// ReplayView returns the units at the time at from the change log rows
+// changes of one namespace, in any order. A unit is in the view when its row
+// with the highest sequence among the rows with a time at or before at is
+// not ChangeDeleted or ChangePurged. Its CurrentName and DeletedAt come from
+// its row with the highest sequence of all: a unit whose last row is
+// ChangeDeleted is soft-deleted now, and a unit whose last row is
+// ChangePurged is counted in Purged and not named. The units are ordered as
+// ReplayAt orders them. It defines what HistoryReader.ViewAt answers.
+func ReplayView(changes []Change, at time.Time) UnitsView {
+	view := UnitsView{Units: []UnitAt{}, Purged: 0}
+
+	for _, b := range boundsOf(changes, at) {
+		if b.atRow == nil || b.lastRow == nil || b.atRow.Kind == ChangeDeleted || b.atRow.Kind == ChangePurged {
+			continue
+		}
+
+		if b.lastRow.Kind == ChangePurged {
+			view.Purged++
+
+			continue
+		}
+
+		unit := UnitAt{DeletedAt: time.Time{}, CurrentName: b.lastRow.Name, Entry: b.atRow.Entry()}
+		if b.lastRow.Kind == ChangeDeleted {
+			unit.DeletedAt = b.lastRow.At
+		}
+
+		view.Units = append(view.Units, unit)
+	}
+
+	slices.SortFunc(view.Units, func(a, b UnitAt) int {
+		return cmp.Or(
+			cmp.Compare(a.Entry.Tool, b.Entry.Tool),
+			cmp.Compare(a.Entry.Name, b.Entry.Name),
+			cmp.Compare(a.Entry.UnitID, b.Entry.UnitID),
+		)
+	})
+
+	return view
 }
 
 // ReplayAt returns the inventory at the time at from the change log rows

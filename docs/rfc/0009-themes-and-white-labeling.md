@@ -76,3 +76,9 @@ Accepted in part as [ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-p
 decision 6 on 2026-10-18: the branding preset is an installation setting,
 changed through the settings resource, and the public answer of the
 sign-in page holds it. The rest of the white-label mechanism stays open.
+
+Accepted in part as [ADR 235](../adr/0235-operator-branding-the-product-name-logo-colors-and-agent-name.md)
+on 2026-10-18: an operator can change the product name, the logo, the
+accent colors and the agent's name. Custom CSS, custom fonts and the product
+name in server errors, logs and CLI output are not taken. A theme for each
+namespace and the server's own error pages stay open.

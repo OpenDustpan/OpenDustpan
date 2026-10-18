@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/history"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -104,10 +105,15 @@ type BlameStore interface {
 // Version is the update with the highest version that saved a checkpoint
 // and ended at or before the time. Running is the version of an update that
 // ran at that time, whose checkpoints were not final, or 0. CreatedBy is the
-// subject that asked for the update of Version.
+// subject that asked for the update of Version. Names holds the name of the
+// stack at the time and its name now, from the inventory change log. The
+// service sets it, never the store. A name is empty when the log does not
+// know it, for example for a stack that the server created before it kept
+// the log.
 type StateAt struct {
 	EndedAt   time.Time
 	CreatedBy string
+	Names     inventory.Names
 	Version   int
 	Running   int
 }

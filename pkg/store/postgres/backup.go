@@ -43,6 +43,8 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
+	pgColNamespaceID = "namespace_id"
+	pgColSeq         = "seq"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
@@ -58,7 +60,6 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
-	pgColNamespaceID = "namespace_id"
 	pgColObjectKind  = "object_kind"
 	pgColObjectID    = "object_id"
 	pgColResourceKey = "resource_key"
@@ -91,6 +92,7 @@ type pgCopyTable struct {
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
+	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
@@ -166,6 +168,25 @@ func pgCopyStackTables() []pgCopyTable {
 				pgColStackID, pgColUpdateID, pgColArrival, "sequence_ids", "status", "reason",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
+		},
+	}
+}
+
+// pgInventoryChangeTables holds the COPY columns of the inventory change log.
+func pgInventoryChangeTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table:   "inventory_change_heads",
+			columns: []string{pgColNamespaceID, "last_seq"},
+			orderBy: []string{pgColNamespaceID},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
+				pgColStatus, "collection", "kind", "resource_count",
+			},
+			orderBy: []string{pgColNamespaceID, pgColSeq},
 		},
 	}
 }
@@ -308,8 +329,8 @@ func pgControlTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableDurableSteps,
-			columns: []string{"operation_id", pgColName, "seq", "result", "done_at_ms"},
-			orderBy: []string{"operation_id", "seq"},
+			columns: []string{"operation_id", pgColName, pgColSeq, "result", "done_at_ms"},
+			orderBy: []string{"operation_id", pgColSeq},
 		},
 		{
 			table:   backup.TableDurableSchedules,
