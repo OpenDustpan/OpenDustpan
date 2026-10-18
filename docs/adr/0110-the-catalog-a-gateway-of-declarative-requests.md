@@ -166,7 +166,7 @@ limits.
 ## Changes requested in the job model
 
 The job model (ADRs 100 to 103) is a design that no tag shipped (ADR 73).
-The Catalog needs these four changes. Each one adds to the job model and
+The Catalog needs these five changes. Each one adds to the job model and
 changes none of its rules:
 
 1. **A Catalog origin on a job.** `job.StartRequest` and `job.Spec` get a
@@ -223,6 +223,16 @@ changes none of its rules:
    exactly the request file of the revision, `GitPath(ref)`
    (`catalog.EditableRequestFile`), and no other file. The CI configuration
    rule of ADR 101 decision 4 still applies to the path.
+5. **Several approval gates on one phase.** `job.Decision.Gates` becomes
+   `map[PhaseKind][]Gate`, and `job.PolicyGates` appends each gate of the
+   kind. The server's `job.Decider` adapter appends the gates of
+   `catalog.GateFor` to the gates of the `job.start` decision, and never
+   merges two gates. A `jobtest` rule checks that a phase with two policy
+   gates dispatches only when both are open. Approvals across the gates of
+   one phase must come from distinct people: one approver who is in two
+   required groups passes one gate, not both. This change replaces the rule
+   of one gate for each phase kind (ADR 103 decision 1). This pull request
+   changes no code in `pkg/job`.
 
 The Catalog needs no new field in `job.DecisionInput` (item 1 covers it)
 and no batch ID in version 1 (ADR 112 "Open questions").

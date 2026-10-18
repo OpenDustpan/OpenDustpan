@@ -223,7 +223,20 @@ func TestExpiryOf(t *testing.T) {
 		err      error
 	}{
 		{
-			name: "before the deadline", job: "job-1", j: jobIn(job.StateRunning), now: deadline.Add(-time.Minute),
+			name: "before the lead", job: "job-1", j: jobIn(job.StateRunning),
+			now: deadline.Add(-catalog.ExtendLead - time.Minute), end: "", deadline: time.Time{}, err: nil,
+		},
+		{
+			name: "a running job moves the deadline one hour before it", job: "job-1", j: jobIn(job.StateRunning),
+			now: deadline.Add(-time.Hour), end: "", deadline: deadline.Add(quota.ReservationGrace), err: nil,
+		},
+		{
+			name: "no job does not expire before the deadline", job: "", j: nil, now: deadline.Add(-time.Hour),
+			end: "", deadline: time.Time{}, err: nil,
+		},
+		{
+			name: "a job that ended does not end the revision before the deadline", job: "job-1",
+			j: jobIn(job.StateSucceeded), now: deadline.Add(-time.Hour),
 			end: "", deadline: time.Time{}, err: nil,
 		},
 		{
@@ -232,11 +245,11 @@ func TestExpiryOf(t *testing.T) {
 		},
 		{
 			name: "a running job moves the deadline", job: "job-1", j: jobIn(job.StateRunning), now: after,
-			end: "", deadline: after.Add(quota.ReservationGrace), err: nil,
+			end: "", deadline: deadline.Add(quota.ReservationGrace), err: nil,
 		},
 		{
 			name: "a job at a gate moves the deadline", job: "job-1", j: jobIn(job.StateAwaitingApproval), now: after,
-			end: "", deadline: after.Add(quota.ReservationGrace), err: nil,
+			end: "", deadline: deadline.Add(quota.ReservationGrace), err: nil,
 		},
 		{
 			name: "a job that succeeded applies", job: "job-1", j: jobIn(job.StateSucceeded), now: after,

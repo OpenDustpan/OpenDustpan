@@ -87,7 +87,11 @@ break-glass come from the job model.
    calls `job.Service.Start`. The API runs the operation at once and waits
    for it up to 10 seconds, so a submit with no problem answers with the job.
    Each step is idempotent, so a retry after a crash gives one unit and one
-   job. A start error of the job model ends the revision:
+   job. The operation first reads the revision, and stops when the revision
+   is terminal. A job that the operation started may exist while
+   `catalog.Revision.Job` is empty, so for an API revision with no job,
+   `catalog.ExpiryOf` first looks up the job by the idempotency key
+   `catalog.Revision.Key()`. A start error of the job model ends the revision:
 
    | `job.Service.Start` error | Revision |
    | --- | --- |
@@ -112,10 +116,13 @@ break-glass come from the job model.
      first phase that changes: `apply` for a runner job, `deliver` for a
      write-back job. The job model needs each gate of a phase, so the change
      needs each requirement: an `approve` by `security` and an `approve` by
-     `dba` give two gates. Each gate binds its approvals to the plan when a
+     `dba` give two gates. The decision of a phase needs several gates
+     (ADR 110, "Changes requested in the job model", item 5). Each gate binds its approvals to the plan when a
      plan phase comes before. Each gate sets `AllowSelf` to false
      (`catalog.GateFor`), so the requester never counts as an approver of
      its own request, also when it is a member of a group of the gate.
+     The approvals across the gates of one phase come from distinct people.
+     One approver who is in two required groups passes one gate, not both.
    - `allow` gives no gate.
 
    An approver approves through `job.Service.Approve`, as for any job, and
@@ -231,8 +238,9 @@ break-glass come from the job model.
     time, a confirmation gate can wait on each phase that changes, the job
     decision can add a gate to each phase, and the steps of a job can run
     for many hours. So the deadline ends a revision only when its job
-    ended. The schedule `catalog.expire` applies `catalog.ExpiryOf` to each
-    revision in flight past its deadline:
+    ended. The schedule `catalog.expire` runs at least once each hour. It
+    applies `catalog.ExpiryOf` to each revision in flight, from
+    `catalog.ExtendLead` (half of the grace, 12 hours) before the deadline:
     - A revision with no job, for example a revision from git that waits
       for its state version, ends `expired` (`catalog.Store.Change`). For a
       create, the change starts the `catalog.quota` operation.
@@ -240,9 +248,10 @@ break-glass come from the job model.
       (`catalog.StateOf`). For a create, the change starts the
       `catalog.quota` operation.
     - A revision whose job has not ended keeps its state. The schedule
-      cancels the job when the job model allows it, and moves the deadline
-      of the revision and the end time of its reservation by the grace of
-      1 day (`quota.ReservationGrace`), in one transaction
+      cancels the job when the job model allows it, and, from
+      `catalog.ExtendLead` before the deadline, moves the deadline of the
+      revision and the end time of its reservation by the grace of 1 day
+      (`quota.ReservationGrace`), in one transaction
       (`catalog.Store.Extend`, which calls `quota.Tx.SetEnd`). The schedule
       checks the revision again on each run, until its job ends.
 
@@ -251,7 +260,11 @@ break-glass come from the job model.
     job of the revision ended. The reservation of a create ends at the
     deadline (ADR 115 decision 7), and the deadline moves while the job
     has not ended. So the reservation of a revision whose job has not ended
-    stays open, and its unit stays. The store refuses a revision with no
+    stays open, and its unit stays, with no gap: the counter counts a
+    reservation only while its end time is after the time of the count, so
+    the schedule moves the end time before the deadline, not at it. A lost
+    release can hold a slot for up to the grace plus one schedule interval
+    after the end of the job. The store refuses a revision with no
     deadline, and a reservation that does not end at the deadline of its
     revision, with `catalog.ErrInvalid`.
 

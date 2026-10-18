@@ -120,10 +120,12 @@ both pass the last free unit of a quota.
    At the deadline, a revision with no job, or whose job ended, ends, and
    its reservation stops counting at the same time. For a revision whose
    job has not ended, the schedule `catalog.expire` moves the deadline and
-   the end time of the reservation by the grace of 1 day, and checks again
-   on its next run (ADR 116 decision 13). So the reservation of a revision
-   whose job has not ended stays open, and a lost release cannot hold a
-   slot for longer than 1 day after the end of the job.
+   the end time of the reservation by the grace of 1 day, from
+   `catalog.ExtendLead` (12 hours) before the deadline, and checks again on
+   its next run (ADR 116 decision 13). The schedule runs at least once each
+   hour. So the reservation of a revision whose job has not ended stays
+   open with no gap, and a lost release can hold a slot for up to the grace
+   (1 day) plus one schedule interval after the end of the job.
 8. **An update or a destroy reserves nothing.** An update keeps the count. A
    destroy frees its unit when the revision ends `applied`: the counter lowers
    the settled count then, not at submit. A destroy that fails keeps the

@@ -22,10 +22,10 @@ func testExpireRunning(t *testing.T, h Harness, f fixture) {
 	var j job.Job
 
 	j.ID, j.State = "job-1", job.StateRunning
-	now := rev.Deadline.Add(time.Minute)
+	now := rev.Deadline.Add(-time.Hour)
 
 	exp, err := catalog.ExpiryOf(&rev, &j, now)
-	if err != nil || exp.End != "" || !exp.Deadline.Equal(now.Add(quota.ReservationGrace)) {
+	if err != nil || exp.End != "" || !exp.Deadline.Equal(rev.Deadline.Add(quota.ReservationGrace)) {
 		t.Fatalf("ExpiryOf(running job) = %+v, %v, want a new deadline and no end", exp, err)
 	}
 
@@ -38,6 +38,7 @@ func testExpireRunning(t *testing.T, h Harness, f fixture) {
 	}
 
 	wantKept(t, h, &rev, now)
+	wantKept(t, h, &rev, rev.Deadline.Add(time.Minute))
 	wantExtendErrors(t, h, f, d)
 }
 
@@ -61,7 +62,7 @@ func runningCreate(t *testing.T, h Harness, f fixture) catalog.Revision {
 }
 
 // wantKept checks that the unit of rev exists, that its reservation counts
-// at now, after its first deadline, and that no quota operation started.
+// at now, and that no quota operation started.
 func wantKept(t *testing.T, h Harness, rev *catalog.Revision, now time.Time) {
 	t.Helper()
 
@@ -71,7 +72,7 @@ func wantKept(t *testing.T, h Harness, rev *catalog.Revision, now time.Time) {
 
 	usage, err := h.Domain.QuotaUsage(t.Context(), []quota.Check{{Key: unitsKey(), Window: 0, Max: 0}}, now)
 	if err != nil || len(usage) != 1 || usage[0].Reserved != 1 {
-		t.Fatalf("QuotaUsage(after the old deadline) = %+v, %v, want 1 reserved", usage, err)
+		t.Fatalf("QuotaUsage(at %v) = %+v, %v, want 1 reserved", now, usage, err)
 	}
 
 	if _, ok, err := h.Domain.Operation(t.Context(), catalog.QuotaKey(rev.Key())); err != nil || ok {

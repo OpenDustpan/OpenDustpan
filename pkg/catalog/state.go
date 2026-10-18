@@ -171,11 +171,11 @@ const (
 // live longer than JobRevisionWait: it goes back to the queue after each
 // phase and after each approval, with a new time limit each time, and it
 // can have a gate on each phase that changes. So the expire schedule
-// (KindExpire) applies ExpiryOf to each revision past its deadline. It ends
+// (KindExpire) applies ExpiryOf to each revision at or after ExtendLead before its deadline. It ends
 // a revision only when it has no job or its job ended. For a job that has
 // not ended, it cancels the job and moves the deadline and the end time of
-// the reservation by quota.ReservationGrace (Store.Extend), and checks the
-// revision again on each run. So the reservation of a revision with a job
+// the reservation by quota.ReservationGrace (Store.Extend) from ExtendLead
+// before the deadline, and checks the revision again on each run. So the reservation of a revision with a job
 // that has not ended stays open, and its unit stays.
 func RevisionDeadline(origin Origin, at time.Time) time.Time {
 	wait := JobRevisionWait
@@ -186,10 +186,26 @@ func RevisionDeadline(origin Origin, at time.Time) time.Time {
 	return at.Add(wait + quota.ReservationGrace)
 }
 
+// ExtendLead is how long before its deadline the expire schedule moves the
+// deadline of a revision whose job has not ended. The reservation of the
+// revision ends at its deadline (quota.Counter.Usage counts an open
+// reservation only while its end time is after the time of the count), so a
+// move at the deadline would leave a gap in which the reservation does not
+// count while its job can still act. The lead is half of the grace, so the
+// schedule has at least one run before the deadline when it runs once each
+// hour.
+const ExtendLead = quota.ReservationGrace / 2
+
 // Expired reports whether r is in flight at now and past its deadline. The
-// expire schedule then applies ExpiryOf to r.
+// expire schedule ends r then, when r has no job or its job ended.
 func (r *Revision) Expired(now time.Time) bool {
 	return !r.State.Terminal() && !r.Deadline.IsZero() && !now.Before(r.Deadline)
+}
+
+// ExtendDue reports whether r is in flight at now and at or after ExtendLead
+// before its deadline. The expire schedule then applies ExpiryOf to r.
+func (r *Revision) ExtendDue(now time.Time) bool {
+	return !r.State.Terminal() && !r.Deadline.IsZero() && !now.Before(r.Deadline.Add(-ExtendLead))
 }
 
 // Expiry is what the expire schedule does with one revision. A zero Expiry
@@ -208,25 +224,35 @@ type Expiry struct {
 }
 
 // ExpiryOf returns what the expire schedule does at now with r, whose job is
-// j, or nil when r has no job. It returns a zero Expiry for a revision that
-// is not Expired at now, ErrInvalid for a revision with a job and a nil j,
-// and the errors of StateOf.
+// j, or nil when r has no job. A revision with a job that has not ended gets
+// the new deadline r.Deadline plus quota.ReservationGrace from ExtendLead
+// before its deadline, so its reservation counts without a gap. A revision
+// with no job, or with a job that ended, ends at its deadline. For an API
+// revision with no job, the caller first looks up the job by the idempotency
+// key rev.Key(), because the start operation may have created the job before
+// it wrote the job ID. ExpiryOf returns a zero Expiry for a revision that is
+// not ExtendDue at now, ErrInvalid for a revision with a job and a nil j, and
+// the errors of StateOf.
 func ExpiryOf(r *Revision, j *job.Job, now time.Time) (Expiry, error) {
 	var out Expiry
 
 	switch {
-	case !r.Expired(now):
+	case !r.ExtendDue(now):
 		return out, nil
 	case r.Job == "":
-		out.End = StateExpired
+		if r.Expired(now) {
+			out.End = StateExpired
+		}
 
 		return out, nil
 	case j == nil:
 		return out, fmt.Errorf("%w: revision %d has the job %s, and the caller did not read it",
 			ErrInvalid, r.Number, r.Job)
 	case !j.State.Terminal():
-		out.Deadline = now.Add(quota.ReservationGrace)
+		out.Deadline = r.Deadline.Add(quota.ReservationGrace)
 
+		return out, nil
+	case !r.Expired(now):
 		return out, nil
 	default:
 		end, err := StateOf(j)

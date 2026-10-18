@@ -58,8 +58,9 @@ type Store interface {
 	// durable operation of KindQuota, with the start key of QuotaKey. It
 	// returns ErrNotFound, ErrConflict, and the errors of CheckTransition.
 	Change(ctx context.Context, c RevisionChange, fence namespace.Fence, e []audit.Entry) (Revision, error)
-	// Extend applies d to a revision in flight past its deadline whose job
-	// has not ended, at d.Version of the request, in one transaction: it
+	// Extend applies d to a revision in flight, at or after ExtendLead before
+	// its deadline, whose job has not ended, at d.Version of the request, in
+	// one transaction: it
 	// moves the deadline of the revision to d.Deadline and, for a revision
 	// with a reservation, the end time of the reservation to the same time,
 	// through the quota.Tx of the transaction (SetEnd). It changes no state,

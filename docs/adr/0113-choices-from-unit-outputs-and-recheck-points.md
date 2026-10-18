@@ -98,10 +98,13 @@ which dependents read the outputs of a unit.
    records no approval and dispatches nothing (ADR 110, "Changes requested
    in the job model", item 2): the job waits, the reconcile schedule asks
    again, and the timeout of the gate still ends a job whose check keeps
-   failing.
+   failing. At `approval` and at `apply`, the `catalog.Rechecker` compares
+   each requirement of the policy decision with its gate: the group set and
+   the count of that requirement, never a total count of approvals.
 9. **A recheck can only refuse.** A recheck never changes an answer, never
    picks another option, and never changes a gate. When a policy at a later
-   point asks for more approvals than the gates of the job have, the
+   point asks for a requirement that no gate of the job has, or for a larger
+   count or a different group set than its gate has, the
    recheck fails with `catalog.ErrPolicyChanged`, and the requester submits
    again. So a person who approved saw the same answers as the apply uses.
 10. **The server reads options as the source principal of the blueprint.**

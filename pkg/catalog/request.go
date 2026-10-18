@@ -86,10 +86,10 @@ type Revision struct {
 	// git that supersedes a create takes over its reservation, so the ID can
 	// be the key of the superseded revision.
 	Reservation quota.ReservationID
-	// Deadline is the time after which the expire schedule applies ExpiryOf
-	// to the revision (RevisionDeadline): it ends a revision with no job or
-	// with a job that ended, and moves the deadline of a revision whose job
-	// has not ended. The reservation of a create ends at the same time.
+	// Deadline is the time at which the expire schedule ends a revision with
+	// no job or with a job that ended (ExpiryOf, RevisionDeadline). It moves
+	// the deadline of a revision whose job has not ended from ExtendLead
+	// before it. The reservation of a create ends at the same time.
 	Deadline time.Time
 	// Document is the document of the revision. For a request in git it is
 	// a record of what the revision delivered, never a second home.
@@ -207,7 +207,8 @@ const KindStart durable.Kind = "catalog.start"
 const KindQuota durable.Kind = "catalog.quota"
 
 // KindExpire is the schedule that applies ExpiryOf to each revision in
-// flight past its deadline. It ends a revision only when the revision has
+// flight at or after ExtendLead before its deadline. It runs at least once
+// each hour. It ends a revision only when the revision has
 // no job or its job ended, with Store.Change, which starts the operation of
 // KindQuota of a create. For a job that has not ended, it cancels the job
 // when the job model allows it, moves the deadline and the end time of the
