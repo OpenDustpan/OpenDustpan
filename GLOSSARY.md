@@ -491,7 +491,7 @@ The gate before each phase that changes, for a job of an agent in approve-first 
 _Avoid_: Approval (an approval passes an approval gate), consent
 
 **Request-changes thread**:
-A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on an approval gate of the job. The status of the gate does not matter. That needs `job:approve` and the groups of that gate. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A later design of change orders gets the same thread.
+A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on an approval gate of the job. The status of the gate does not matter. That needs `job:approve` and the groups of that gate. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A change order has its own request-changes threads (ADR 193). A job with a change order origin gets no job thread (ADR 190 decision 16).
 _Avoid_: rejection (a rejection ends the job), review (alone: that is the review request of the forge)
 
 **Dismissal**:
@@ -597,6 +597,76 @@ _Avoid_: Snapshot (alone), source (alone: that is the backend before an import),
 **Source policy**:
 The setting of a namespace that decides which submodules and Git LFS objects a source snapshot holds (`source.Policy`, ADR 135 decision 6). It is empty by default, so a snapshot holds no submodule and no Git LFS object. `submodules` and `largeFiles` list `https` URL patterns, at most 64 in each list. `failOnDenied` fails the `source.fetch` operation when the commit has a submodule or a pointer that the policy does not allow. A change of the policy needs `namespace:manage-runners` and makes a new snapshot key. The routes are `GET` and `PUT /api/runners/{namespace}/source-policy` (ADR 138 decision 6).
 _Avoid_: Submodule allowlist
+
+### Change orders
+
+**Change order**:
+An object above jobs that holds the plan of one or more units of one namespace, its approvals, its signatures and its threads (ADR 190). Its ID has the prefix `cho-`. Jobs run under it: a plan job for each unit of each plan revision, and an apply job for each unit of the approved revision. The change order owns the approvals of its jobs, so its jobs get no approval gate. Its states are `planning`, `plan-failed`, `in-review`, `approved`, `applying`, `partially-applied`, `applied`, `closed` and `expired`. A person asks for the apply. An agent can only comment and leave blocking comments on it. Version 1 runs runner jobs only.
+_Avoid_: Change request (that is an ITSM record, RFC 51), change set, pull request, merge request, review request (that is of the forge)
+
+**Plan revision**:
+The plan of a change order at one time (ADR 191). It has a number, from 1 and one higher for each attach, and one unit plan for each unit. Only the revision with the highest number is current, and the others are superseded. An attach of a new revision voids every signature of the earlier revisions. A ready revision has a digest.
+_Avoid_: Plan version, patch set, iteration
+
+**Unit plan**:
+The part of a plan revision for one unit (ADR 191). It holds the unit reference, the operation (`apply` or `destroy`), the code location with its commit, and the plan job. It also holds the binding of its stored plan: the plan ID, the hashes of its two parts and the state version that it read. In the console, it is the preview of a Pulumi unit or the plan of an OpenTofu unit (ADR 195).
+_Avoid_: Unit preview (in shared code), sub-plan
+
+**Plan job**:
+A runner job with the operation `plan` that a change order starts for one unit of a plan revision (ADR 190). Its one phase stores one stored plan. It runs as the principal that attached the revision.
+_Avoid_: Preview job, dry run
+
+**Apply job**:
+A runner job with the operation `apply` or `destroy` that a change order starts for one unit of its approved revision (ADR 190). Its spec names the stored plan of the plan job of the same unit (`job.Spec.Plan`), and it has one phase, of the kind `apply`. A stale plan ends it `failed` with the reason `plan-stale`, before any change.
+_Avoid_: Deploy job, run (alone)
+
+**Author (change order)**:
+The principal that created a change order, or that attached a plan revision to it (ADR 190 decision 4). An author never approves, requests changes, rejects, opens a blocking thread or resolves one, also when the author holds `changeorder:approve`. An agent is never an author.
+_Avoid_: Owner (that is a context field), requester (that is of a Catalog request)
+
+**Signature**:
+The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A principal has at most one signature on each revision. A new revision voids it, with the cause `new-plan`. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
+_Avoid_: Sign-off, stamp, approval (alone: an approval is the verdict)
+
+**Approval requirement**:
+One `approve` decision of a policy for a change order: a number of approvals and the groups of the approvers (ADR 192). A change order needs each requirement, and one signature fills one slot of one requirement only. So the approvals across requirements come from distinct people. With no policy, a change order has one requirement of one approval with no groups. Each requirement needs at least 1 approval. A change order always needs at least 1 signature by a principal that is not an author (`MinApprovals`), also when a policy gives the requirements.
+_Avoid_: Quorum, rule (alone)
+
+**Eligible approver**:
+A principal that can approve a change order (ADR 192 decision 5). It holds `changeorder:approve` on each unit, and it is a member of the groups of at least one requirement. It is not an author.
+_Avoid_: Reviewer (alone: any reader can comment)
+
+**Change order review**:
+One submit of one reviewer on one plan revision, with an ID with the prefix `cor-` (ADR 192). Its verdict is `approve`, `request-changes`, `comment` or `reject-and-close`. Request changes keeps the change order open and opens at least one request-changes thread. Reject and close ends the change order `closed`. Both need a reason. Its summary is a comment, so a redaction reaches it. An agent records no verdict: it submits its blocking threads in a review of the verdict `comment`.
+_Avoid_: Review (alone), sign-off
+
+**Draft review**:
+The threads and replies that one reviewer wrote on a change order and did not submit (ADR 193 decision 5). Only its reviewer reads it. The reviewer submits it in one review. A draft write writes no audit entry. No backup holds a draft, and the store deletes it 30 days after its last write.
+_Avoid_: Pending review, draft (alone)
+
+**Thread anchor**:
+What a thread of a change order is about: the whole plan, 1 to 50 resources, or a change group (ADR 193 decision 3). A resource is the unit ID and the key of the resource in the plan of its tool. The key is the URN for Pulumi, and the resource instance address for OpenTofu. A thread follows its anchor into each new plan revision.
+_Avoid_: Target, location, line
+
+**Outdated thread**:
+A thread whose anchor does not map in full to the current plan revision (ADR 193 decision 8). A resource of the anchor has no change in the new plan, or its change group is not in it. An outdated request-changes thread still blocks approval until a person resolves it.
+_Avoid_: Stale thread, orphan thread
+
+**Cause diff**:
+The change of the code that the author of a change order made (ADR 194 decision 2). It is the file diff of each code location from the base commit to the head commit. The review shows it before the effect. The server reads it from the forge at each read and does not store it.
+_Avoid_: Source diff, code diff (alone), state diff (that compares two state versions)
+
+**Needs attention**:
+The section of the review view of a change order that lists each replacement and each delete, one by one (ADR 194 decision 4). It also lists, as a whole, each unit whose plan the server cannot read. It gives a warning for two units of the change order where one reads the outputs of the other. It comes before every change group. A replacement or a delete is never in a group.
+_Avoid_: Dangerous changes, warnings
+
+**Change group**:
+Two or more identical in-place changes in the plan revision of a change order (ADR 194 decision 5). Identical means the same tool, type, value paths and values before and after. A change that touches a secret path is never in a change group, so the key covers no secret value. Its key is a content key, not an ID, with the prefix `cog-`. The key stays the same from one revision to the next for the same change. A thread can have a change group as its anchor, of the kind `change-group`. In Go, it is `changeorder.ChangeGroup`.
+_Avoid_: Group (alone: that is a set of principals), batch, bucket
+
+**Proposed changes**:
+The console heading of a plan of a change order whose units are of more than one tool (ADR 195). For units of one tool, the heading is the word of that tool: "Preview" or "Plan".
+_Avoid_: Plan (for a set of Pulumi units), preview (for OpenTofu units), change set
 
 ### Agents
 
@@ -912,7 +982,10 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Session** has three meanings: the console session of a person, a job session of a launcher (ADR 133), and an MCP session (ADR 123). Name which one.
 - **Job token** and **handoff token** are different. A job token is the access token of a tool for the unit of a job (ADR 100). A handoff token opens one job session (ADR 133).
 - **Executor** and **launcher** are different. An executor is the way a job runs: write-back or runners (ADR 100). The launcher runs the steps of one claim (ADR 134).
-- **Plan** has four meanings: the operation `plan` of a job, the phase kind `plan`, a stored plan, and the OpenTofu plan. Name which one.
+- **Plan** has six meanings. They are the operation `plan` of a job, the phase kind `plan` and a stored plan. They are also the OpenTofu plan, a plan revision and a unit plan (ADR 195). Name which one.
+- **Signature** has three meanings. A webhook delivery has one (ADR 145), a signed audit segment has one (RFC 71), and a change order has signatures (ADR 191). Name which one.
+- **Review** has four meanings: a review request of the forge, a break-glass review, an incident review and a change order review (ADR 192). Name which one.
+- **Group** is a set of principals. A change group is a set of identical changes in a change order (ADR 194). Write "change group" for the second.
 - **Claim** has two meanings. The durable claim of a phase gives one executor the right to run it. The job-ID claim is a field of a principal that a job token authenticates (ADR 100). Name which one.
 - **Approval**, **confirmation** and **consent** are different. An approval passes an approval gate (ADR 103). A confirmation passes a confirmation gate. A consent allows one secret read of an outside agent (ADR 124).
 - **Tool** is an infrastructure-as-code CLI. An agent tool is one of the tools of an agent (ADR 122). Write "agent tool" for the second.
