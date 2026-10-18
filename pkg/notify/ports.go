@@ -78,17 +78,22 @@ type CursorMove struct {
 // transaction.
 type Subscriptions interface {
 	// PutSink creates s, or replaces it when s.Version is the stored
-	// version. secrets are the new secret items of the write: each one
-	// has a ref of s.SecretRefs, and the store keeps its value under that
-	// ref in the scope of s. Each other ref of s names a secret item that
-	// the scope holds for the sink s.ID. The API stores each new secret
-	// value under a new ref. It never writes a new value under an existing
-	// ref. The store enforces this: it refuses a new secret item whose ref
-	// the scope holds or held, also after a delete. So a sink whose refs
-	// did not change sends to the place that the creators of its
+	// version. secrets are the new secret items of the write, sealed: the
+	// API seals each value with SinkSealer.Seal for s before the call, so
+	// the store never gets a plaintext value, and keeps only the sealed
+	// value. Each item has a ref of s.SecretRefs, and the store keeps it
+	// under that ref in the scope of s. Each other ref of s names a secret
+	// item that the scope holds for the sink s.ID. The API stores each new
+	// secret value under a new ref. It never writes a new value under an
+	// existing ref. The store enforces this in the transaction of the
+	// write, under its fence: it refuses a new secret item whose ref the
+	// scope holds or held, also after a delete. So a sink whose refs did
+	// not change sends to the place that the creators of its
 	// subscriptions approved. A replace deletes the values of the refs
 	// that s no longer names, and DeleteSink deletes the values of the
-	// sink.
+	// sink. The refs that a scope held stay after a delete. A SQL adapter
+	// that keeps them in a table adds that table to the table list of
+	// backups, and deletes its rows with the namespace.
 	//
 	// A replace that changes the kind, the target or the secret refs of
 	// the sink also does these steps in its transaction, for each active
@@ -96,9 +101,9 @@ type Subscriptions interface {
 	//   - It sets State to SubscriptionStateSuspended, Reason to
 	//     ReasonSinkChanged, and increments the version of the
 	//     subscription.
-	//   - It appends the notification SinkChangedNotice(sub, e) to the
+	//   - It appends the notification SinkChangedNotice(sub, v, e) to the
 	//     outbox of the scope, where sub is the subscription before the
-	//     suspend.
+	//     suspend and v is the version of the sink that the write stores.
 	//
 	// In the same transaction, it sets each pending delivery of each
 	// subscription of the sink to DeliverySkipped and increments its
@@ -108,17 +113,21 @@ type Subscriptions interface {
 	// nothing.
 	//
 	// It returns ErrInvalid for a sink that fails Validate, for secrets
-	// that fail s.ValidateSecrets, for a new secret item whose ref the
-	// scope holds or held, for a ref of s with no new secret item and no
-	// stored secret item of the sink, and for a fence that is not of
-	// s.Scope; ErrNotFound when the stored sink s.ID is in another scope;
+	// that fail s.ValidateSealed (an item sealed for another sink or
+	// scope included), for a new secret item whose ref the scope holds or
+	// held, for a ref of s with no new secret item and no stored secret
+	// item of the sink, and for a fence that is not of s.Scope;
+	// ErrNotFound when the stored sink s.ID is in another scope;
 	// ErrConflict; namespace.ErrFenced and namespace.ErrNotFound.
-	PutSink(ctx context.Context, s Sink, secrets []SinkSecret, fence namespace.Fence, e audit.Entry) error
-	// SinkSecrets returns the values of the secret items of the sink id in
-	// scope, in the order of its SecretRefs. Only the dispatcher calls it,
-	// to deliver; the API never answers a value. It returns ErrNotFound for
-	// an unknown sink or a sink of another scope.
-	SinkSecrets(ctx context.Context, scope namespace.Name, id string) ([][]byte, error)
+	PutSink(ctx context.Context, s Sink, secrets []SealedSecret, fence namespace.Fence, e audit.Entry) error
+	// SinkSecrets returns the sealed secret items of the sink id in scope,
+	// in the order of its SecretRefs, each as PutSink got it. It never
+	// returns a plaintext value: the dispatcher opens the items with
+	// SinkSealer.Open just before a send, and keeps the values only in
+	// memory for that send. Only the dispatcher calls it; the API never
+	// answers a value. It returns ErrNotFound for an unknown sink or a
+	// sink of another scope.
+	SinkSecrets(ctx context.Context, scope namespace.Name, id string) ([]SealedSecret, error)
 	// DeleteSink deletes the sink id. It returns ErrNotFound for an
 	// unknown sink or a sink of another scope than fence, ErrInUse while a
 	// subscription names it, namespace.ErrFenced and namespace.ErrNotFound.
@@ -398,16 +407,20 @@ type Contact struct {
 
 // Contacts finds the personal contacts of a person: the verified email
 // address, and the chat identity that the person linked. The identity
-// package implements it.
+// package implements it, and runs the suite notifytest.RunContacts.
 type Contacts interface {
-	// ContactsOf returns the contacts of the principal id, or none for a
-	// principal that is disabled or has none. The dispatcher calls it
-	// before each attempt of a delivery to a contact (BeforeAttempt).
+	// ContactsOf returns the contacts of the principal id, in any order,
+	// or none for a principal that is disabled, unknown or has none. The
+	// dispatcher calls it before each attempt of a delivery to a contact
+	// (BeforeAttempt).
 	ContactsOf(ctx context.Context, id string) ([]Contact, error)
-	// Members returns the principal IDs of the group name.
+	// Members returns the principal IDs of the group name, in any order,
+	// or none for an unknown group.
 	Members(ctx context.Context, name string) ([]string, error)
-	// Admins returns the principal IDs of the administrators of scope:
-	// each principal that holds the action to manage the notifications of
-	// scope. A recipient with Admins set goes to them.
+	// Admins returns the principal IDs of the administrators of scope, in
+	// any order: each principal that holds ActionManage on the namespace
+	// scope, or ActionManageServer for audit.ServerScope. A grant on
+	// another scope does not count. A recipient with Admins set goes to
+	// them.
 	Admins(ctx context.Context, scope namespace.Name) ([]string, error)
 }

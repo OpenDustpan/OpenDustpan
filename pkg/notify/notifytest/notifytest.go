@@ -8,8 +8,10 @@
 //	}
 //
 // A reference adapter in memory, in the tests of this package, runs the
-// suite, so each case runs before the first SQL adapter. The suite of the
-// Sender port comes with the first sender adapter.
+// suite, so each case runs before the first SQL adapter. RunContacts is the
+// suite of notify.Contacts, which the identity package runs; a reference
+// adapter in memory runs it here too. The suite of the Sender port comes
+// with the first sender adapter.
 package notifytest
 
 import (
@@ -82,6 +84,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"redeliver refuses a delivery that its subscription no longer sends", testRedeliverAfterSinkChange},
 		{"a sink change appends one notice for each subscription it suspends", testSinkChangeNotices},
 		{"a ref of a sink names one value for good", testSinkSecretRefs},
+		{"the store keeps only values sealed for the sink", testSinkSecretsSealed},
 	}
 
 	for _, tc := range cases {
@@ -184,21 +187,6 @@ func sink(id string, scope namespace.Name) notify.Sink {
 	}
 }
 
-// secret returns a new secret item of a sink with the ref ref.
-func secret(ref string) notify.SinkSecret {
-	return notify.SinkSecret{Ref: ref, Value: []byte("key of " + ref)}
-}
-
-// fresh returns a new secret item for each ref of the new sink s.
-func fresh(s notify.Sink) []notify.SinkSecret {
-	out := make([]notify.SinkSecret, 0, len(s.SecretRefs))
-	for _, ref := range s.SecretRefs {
-		out = append(out, secret(ref))
-	}
-
-	return out
-}
-
 func subscription(sinkID string) notify.Subscription { return subscriptionIn(shop, sinkID) }
 
 func subscriptionIn(scope namespace.Name, sinkID string) notify.Subscription {
@@ -235,7 +223,7 @@ func putSink(t *testing.T, h Harness, fence namespace.Fence) {
 	t.Helper()
 
 	s := sink("snk-1", shop)
-	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(s), fence, manage()); err != nil {
+	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(t.Context(), s), fence, manage()); err != nil {
 		t.Fatalf("PutSink: %v", err)
 	}
 }
@@ -493,8 +481,13 @@ func testSubscriptionScope(t *testing.T, h Harness) {
 		t.Fatalf("CreateNamespace: %v", err)
 	}
 
-	err = h.Subscriptions.PutSink(t.Context(), sink("snk-9", other), fresh(sink("snk-9", other)), otherFence,
-		entry(other))
+	err = h.Subscriptions.PutSink(
+		t.Context(),
+		sink("snk-9", other),
+		fresh(t.Context(), sink("snk-9", other)),
+		otherFence,
+		entry(other),
+	)
 	if err != nil {
 		t.Fatalf("PutSink: %v", err)
 	}
@@ -544,12 +537,13 @@ func testServerScope(t *testing.T, h Harness) {
 
 	serverEntry := entry(audit.ServerScope)
 
-	refused := h.Subscriptions.PutSink(t.Context(), s, fresh(s), fence, serverEntry)
+	refused := h.Subscriptions.PutSink(t.Context(), s, fresh(t.Context(), s), fence, serverEntry)
 	if !errors.Is(refused, notify.ErrInvalid) {
 		t.Fatalf("PutSink in the server scope with a namespace fence: err = %v, want ErrInvalid", refused)
 	}
 
-	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(s), zeroFence(), entry(audit.ServerScope)); err != nil {
+	put := fresh(t.Context(), s)
+	if err := h.Subscriptions.PutSink(t.Context(), s, put, zeroFence(), entry(audit.ServerScope)); err != nil {
 		t.Fatalf("PutSink in the server scope with the zero fence: %v", err)
 	}
 
@@ -951,7 +945,7 @@ func testEntryScope(t *testing.T, h Harness) {
 	err := h.Subscriptions.PutSink(
 		t.Context(),
 		sink("snk-2", shop),
-		fresh(sink("snk-2", shop)),
+		fresh(t.Context(), sink("snk-2", shop)),
 		fence,
 		entry(other),
 	)
@@ -1000,7 +994,7 @@ func putSinkIn(t *testing.T, h Harness, fence namespace.Fence, scope namespace.N
 	t.Helper()
 
 	s := sink("snk-1", scope)
-	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(s), fence, entry(scope)); err != nil {
+	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(t.Context(), s), fence, entry(scope)); err != nil {
 		t.Fatalf("PutSink: %v", err)
 	}
 }
@@ -1123,7 +1117,7 @@ func writes() []write {
 			return h.Outbox.MoveCursor(ctx, f, moveIn(s, 0, 1))
 		}, checkCursorZero, notify.ErrInvalid},
 		{"PutSink", none, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
-			return h.Subscriptions.PutSink(ctx, sink("snk-1", s), fresh(sink("snk-1", s)), f, entry(s))
+			return h.Subscriptions.PutSink(ctx, sink("snk-1", s), fresh(ctx, sink("snk-1", s)), f, entry(s))
 		}, checkSinks(0), notify.ErrInvalid},
 		{"DeleteSink", putSinkIn, func(ctx context.Context, h Harness, f namespace.Fence, s namespace.Name) error {
 			return h.Subscriptions.DeleteSink(ctx, "snk-1", f, entry(s))
@@ -1368,12 +1362,12 @@ func changeDestination(t *testing.T, h Harness, fence namespace.Fence, renamed n
 	changes := []struct {
 		name    string
 		change  func(s *notify.Sink)
-		secrets []notify.SinkSecret
+		secrets []notify.SealedSecret
 	}{
 		{"a new target", func(s *notify.Sink) { s.Target = "https://hooks.example.net/ops" }, nil},
 		{
 			"new secrets", func(s *notify.Sink) { s.SecretRefs = []string{"itm-snk-1", "itm-snk-1-b"} },
-			[]notify.SinkSecret{secret("itm-snk-1-b")},
+			[]notify.SealedSecret{secret(t.Context(), renamed, "itm-snk-1-b")},
 		},
 	}
 
@@ -1440,7 +1434,8 @@ func raceSinkChange(t *testing.T, h Harness, fence namespace.Fence, round int) {
 	t.Helper()
 
 	id := fmt.Sprintf("snk-%d", round+1)
-	if err := h.Subscriptions.PutSink(t.Context(), sink(id, shop), fresh(sink(id, shop)), fence, manage()); err != nil {
+	s := sink(id, shop)
+	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(t.Context(), s), fence, manage()); err != nil {
 		t.Fatalf("PutSink %s: %v", id, err)
 	}
 

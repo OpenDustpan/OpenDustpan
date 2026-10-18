@@ -218,6 +218,11 @@ func TestSinkValidate(t *testing.T) {
 		{"a webhook with two secrets", webhook("https://hooks.example.com/ops", "itm-1", "itm-2"), true, false},
 		{"a webhook with three secrets", webhook("https://hooks.example.com/ops", "a", "b", "c"), false, false},
 		{"a webhook with no secret", webhook("https://hooks.example.com/ops"), false, false},
+		{"a ref with a zero byte", webhook("https://hooks.example.com/ops", "itm-1\x00"), false, false},
+		{"a ref with a slash", webhook("https://hooks.example.com/ops", "itm/1"), false, false},
+		{"an empty ref", webhook("https://hooks.example.com/ops", ""), false, false},
+		{"a ref above the bound", webhook("https://hooks.example.com/ops", strings.Repeat("r", 101)), false, false},
+		{"a ref at the bound", webhook("https://hooks.example.com/ops", strings.Repeat("r", 100)), true, false},
 		{"an http webhook", webhook("http://hooks.example.com/ops", "itm-1"), false, true},
 		{"the metadata address", webhook("https://169.254.169.254/", "itm-1"), false, true},
 		{"IPv6 loopback", webhook("https://[::1]:8443/", "itm-1"), false, true},
@@ -590,6 +595,12 @@ func TestScopeActions(t *testing.T) {
 
 		return n
 	}
+	withObject := func(object string, scope namespace.Name) notify.Notification {
+		n := withType(notify.SubscriptionSuspended, scope)
+		n.Object = object
+
+		return n
+	}
 
 	cases := []struct {
 		name string
@@ -600,6 +611,19 @@ func TestScopeActions(t *testing.T) {
 		{"a cost estimate", withType(notify.CostEstimated, "shop"), "[namespace:read namespace:read-cost]"},
 		{"a budget threshold", withType(notify.BudgetThreshold, "shop"), "[namespace:read namespace:read-cost]"},
 		{"a notification of the server", withType(notify.SubscriptionSuspended, "@server"), "[server:observe]"},
+		{
+			"a notice about the notifications of a namespace", withObject(notify.NotificationsObject("shop"), "shop"),
+			"[namespace:read namespace:manage-notifications]",
+		},
+		{
+			"a notice about the notifications of the server",
+			withObject(notify.NotificationsObject("@server"), "@server"),
+			"[server:observe server:manage-notifications]",
+		},
+		{
+			"a notice about the notifications of another namespace",
+			withObject(notify.NotificationsObject("other"), "shop"), "[namespace:read]",
+		},
 	}
 
 	for _, tc := range cases {
@@ -847,7 +871,7 @@ func TestSinkChangedNotice(t *testing.T) {
 		Sequence: 0, FenceVersion: 0,
 	}
 
-	n := notify.SinkChangedNotice(sub, e)
+	n := notify.SinkChangedNotice(sub, 4, e)
 	if err := n.Validate(); err != nil {
 		t.Fatalf("Validate = %v, want a valid notice", err)
 	}
@@ -857,11 +881,32 @@ func TestSinkChangedNotice(t *testing.T) {
 		{Principal: "alice", Group: "", Admins: false},
 	}
 	if n.Type != notify.SubscriptionSuspended || n.ObjectID != "sub-1" || n.Subject != "bob" ||
-		!n.At.Equal(e.At) || !slices.Equal(n.Recipients, want) || n.DedupeKey != n.ID {
-		t.Fatalf("SinkChangedNotice = %+v, want the suspend of sub-1 by bob, to the administrators and alice", n)
+		!n.At.Equal(e.At) || !slices.Equal(n.Recipients, want) || n.DedupeKey != "sub-1/sink-changed/4" {
+		t.Fatalf("SinkChangedNotice = %+v, want the suspend of sub-1 by bob at sink version 4, "+
+			"to the administrators and alice", n)
 	}
 
-	if again := notify.SinkChangedNotice(sub, e); again.ID == n.ID {
-		t.Fatalf("two notices have the ID %s, want a new ID for each suspend", n.ID)
+	checkNoticeKeys(t, sub, e, n)
+}
+
+// checkNoticeKeys checks the object and the dedupe key of n, the notice
+// of sub at the sink version 4: only a manager reads it, a repeat has the
+// same dedupe key and a new ID, and a later change has its own key.
+func checkNoticeKeys(t *testing.T, sub notify.Subscription, e audit.Entry, n notify.Notification) {
+	t.Helper()
+
+	if n.Object != notify.NotificationsObject("shop") ||
+		!slices.Contains(notify.ScopeActions(n), "namespace:manage-notifications") {
+		t.Fatalf("SinkChangedNotice object = %s, want the notifications of shop, which only a manager reads", n.Object)
+	}
+
+	again := notify.SinkChangedNotice(sub, 4, e)
+	if again.ID == n.ID || again.DedupeKey != n.DedupeKey {
+		t.Fatalf("a repeat of the notice = %s %s, want a new ID and the dedupe key %s", again.ID, again.DedupeKey,
+			n.DedupeKey)
+	}
+
+	if later := notify.SinkChangedNotice(sub, 5, e); later.DedupeKey == n.DedupeKey {
+		t.Fatalf("a later change has the dedupe key %s, want its own key", later.DedupeKey)
 	}
 }

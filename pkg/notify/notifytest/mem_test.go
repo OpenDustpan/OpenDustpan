@@ -51,10 +51,11 @@ type secretKey struct {
 	ref   string
 }
 
-// storedSecret is the value of a secret item and the sink that names it.
+// storedSecret is the sealed value of a secret item and the sink that
+// names it. The store never holds a plaintext value.
 type storedSecret struct {
-	sink  string
-	value []byte
+	sink       string
+	ciphertext []byte
 }
 
 // memStore is the reference adapter of the notification ports in memory.
@@ -67,7 +68,7 @@ type memStore struct {
 	sinks         map[string]notify.Sink
 	subs          map[string]notify.Subscription
 	deliveries    map[string]notify.Delivery
-	// secrets holds the values of the secret items of the sinks.
+	// secrets holds the sealed values of the secret items of the sinks.
 	// usedRefs holds each ref that a scope ever held, so a ref never
 	// gets a second value, also after a delete.
 	secrets  map[secretKey]storedSecret
@@ -170,7 +171,7 @@ func (m *memStore) MoveCursor(_ context.Context, fence namespace.Fence, mv notif
 func (m *memStore) PutSink(
 	_ context.Context,
 	s notify.Sink,
-	secrets []notify.SinkSecret,
+	secrets []notify.SealedSecret,
 	fence namespace.Fence,
 	e audit.Entry,
 ) error {
@@ -178,7 +179,7 @@ func (m *memStore) PutSink(
 		return err
 	}
 
-	if err := s.ValidateSecrets(secrets); err != nil {
+	if err := s.ValidateSealed(secrets); err != nil {
 		return err
 	}
 
@@ -197,7 +198,7 @@ func (m *memStore) PutSink(
 		}
 
 		if ok && destinationChanged(old, s) {
-			if err := m.suspendSubscriptionsOf(s.ID, e); err != nil {
+			if err := m.suspendSubscriptionsOf(s.ID, s.Version+1, e); err != nil {
 				return err
 			}
 		}
@@ -210,9 +211,9 @@ func (m *memStore) PutSink(
 	}), notify.ErrInvalid)
 }
 
-func (m *memStore) SinkSecrets(_ context.Context, scope namespace.Name, id string) ([][]byte, error) {
+func (m *memStore) SinkSecrets(_ context.Context, scope namespace.Name, id string) ([]notify.SealedSecret, error) {
 	var (
-		out   [][]byte
+		out   []notify.SealedSecret
 		found bool
 	)
 
@@ -225,7 +226,7 @@ func (m *memStore) SinkSecrets(_ context.Context, scope namespace.Name, id strin
 		found = true
 
 		for _, ref := range s.SecretRefs {
-			out = append(out, slices.Clone(m.secrets[secretKey{scope, ref}].value))
+			out = append(out, notify.StoredSecret(scope, id, ref, m.secrets[secretKey{scope, ref}].ciphertext))
 		}
 	})
 
@@ -516,6 +517,20 @@ func (m *memStore) Redeliver(_ context.Context, id string, fence namespace.Fence
 // its scope, and skips a repeated dedupe key. The caller holds the mutex
 // of the domain.
 func (m *memStore) appendLocked(ns []notify.Notification) error {
+	add, err := m.planAppend(ns)
+	if err != nil {
+		return err
+	}
+
+	m.commitAppend(add)
+
+	return nil
+}
+
+// planAppend returns the notifications of ns that appendLocked adds, and
+// changes nothing. It skips a repeated dedupe key, and returns ErrInvalid
+// for an ID that exists. The caller holds the mutex of the domain.
+func (m *memStore) planAppend(ns []notify.Notification) ([]notify.Notification, error) {
 	var add []notify.Notification
 
 	for i := range ns {
@@ -529,35 +544,39 @@ func (m *memStore) appendLocked(ns []notify.Notification) error {
 		if slices.ContainsFunc(slices.Concat(m.notifications, add), func(o notify.Notification) bool {
 			return o.ID == n.ID
 		}) {
-			return fmt.Errorf("append %s: %w: the ID exists", n.ID, notify.ErrInvalid)
+			return nil, fmt.Errorf("append %s: %w: the ID exists", n.ID, notify.ErrInvalid)
 		}
 
 		add = append(add, n)
 	}
 
+	return add, nil
+}
+
+// commitAppend appends add, which planAppend returned, each with the next
+// sequence of its scope. The caller holds the mutex of the domain.
+func (m *memStore) commitAppend(add []notify.Notification) {
 	for i := range add {
 		n := add[i]
 		m.sequences[n.Scope]++
 		n.Sequence = m.sequences[n.Scope]
 		m.notifications = append(m.notifications, n)
 	}
-
-	return nil
 }
 
 // checkSecrets returns ErrInvalid for a new secret item of s whose ref
 // the scope holds or held, and for a ref of s with no new item and no
 // stored item of the sink s.ID. The caller holds the mutex of the domain.
-func (m *memStore) checkSecrets(s notify.Sink, secrets []notify.SinkSecret) error {
+func (m *memStore) checkSecrets(s notify.Sink, secrets []notify.SealedSecret) error {
 	for _, sec := range secrets {
-		if m.usedRefs[secretKey{s.Scope, sec.Ref}] {
+		if m.usedRefs[secretKey{s.Scope, sec.Ref()}] {
 			return fmt.Errorf("put sink %s: %w: the ref %s exists; store a new value under a new ref",
-				s.ID, notify.ErrInvalid, sec.Ref)
+				s.ID, notify.ErrInvalid, sec.Ref())
 		}
 	}
 
 	for _, ref := range s.SecretRefs {
-		isNew := slices.ContainsFunc(secrets, func(sec notify.SinkSecret) bool { return sec.Ref == ref })
+		isNew := slices.ContainsFunc(secrets, func(sec notify.SealedSecret) bool { return sec.Ref() == ref })
 		if stored, ok := m.secrets[secretKey{s.Scope, ref}]; !isNew && (!ok || stored.sink != s.ID) {
 			return fmt.Errorf("put sink %s: %w: the ref %s names no secret of the sink", s.ID, notify.ErrInvalid, ref)
 		}
@@ -569,14 +588,14 @@ func (m *memStore) checkSecrets(s notify.Sink, secrets []notify.SinkSecret) erro
 // storeSecrets stores the new secret items of s and deletes the values of
 // the refs of the sink that s no longer names. The caller holds the mutex
 // of the domain.
-func (m *memStore) storeSecrets(s notify.Sink, secrets []notify.SinkSecret) {
+func (m *memStore) storeSecrets(s notify.Sink, secrets []notify.SealedSecret) {
 	maps.DeleteFunc(m.secrets, func(k secretKey, v storedSecret) bool {
 		return k.scope == s.Scope && v.sink == s.ID && !slices.Contains(s.SecretRefs, k.ref)
 	})
 
 	for _, sec := range secrets {
-		k := secretKey{s.Scope, sec.Ref}
-		m.secrets[k] = storedSecret{sink: s.ID, value: slices.Clone(sec.Value)}
+		k := secretKey{s.Scope, sec.Ref()}
+		m.secrets[k] = storedSecret{sink: s.ID, ciphertext: sec.Ciphertext()}
 		m.usedRefs[k] = true
 	}
 }
@@ -670,16 +689,19 @@ func destinationChanged(old, s notify.Sink) bool {
 // the change gets ErrConflict. It appends one notice of each suspend, and
 // skips each pending delivery of each subscription of the sink. The
 // caller holds the mutex of the domain.
-func (m *memStore) suspendSubscriptionsOf(id string, e audit.Entry) error {
+func (m *memStore) suspendSubscriptionsOf(id string, version int64, e audit.Entry) error {
 	var notices []notify.Notification
 
 	for _, sid := range slices.Sorted(maps.Keys(m.subs)) {
 		if sub := m.subs[sid]; sub.Sink == id && sub.State == notify.SubscriptionStateActive {
-			notices = append(notices, notify.SinkChangedNotice(sub, e))
+			notices = append(notices, notify.SinkChangedNotice(sub, version, e))
 		}
 	}
 
-	if err := m.appendLocked(notices); err != nil {
+	// The check of the notices comes first, so a refused append changes
+	// nothing. The append comes last, after the changes of the rows.
+	add, err := m.planAppend(notices)
+	if err != nil {
 		return err
 	}
 
@@ -697,6 +719,8 @@ func (m *memStore) suspendSubscriptionsOf(id string, e audit.Entry) error {
 
 		m.skipPending(sub)
 	}
+
+	m.commitAppend(add)
 
 	return nil
 }

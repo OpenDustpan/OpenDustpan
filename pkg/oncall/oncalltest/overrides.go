@@ -210,3 +210,38 @@ func testConcurrentOverrideOrder(t *testing.T, h Harness) {
 		t.Fatalf("At = %s (%v), want %s of the last add", sh.Principal, err, last.Principal)
 	}
 }
+
+// testUpdateStaleOverrides checks that an update at a stale version gets
+// ErrConflict and not ErrInvalid, also when its overrides are the list of
+// that version and no longer the stored list: the store checks the version
+// before the overrides. So a client that read the schedule before an add
+// learns to read it again.
+func testUpdateStaleOverrides(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h, shop)
+	create(t, h, fence, sample("ocs-1", shop, "network", "alice"))
+	ref := oncall.Ref{Namespace: shop, Name: "network"}
+
+	if err := h.Schedules.AddOverride(t.Context(), ref, override("ovr-bob", "bob"), fence, entry(shop)); err != nil {
+		t.Fatalf("AddOverride bob: %v", err)
+	}
+
+	stale := getNetwork(t, h)
+
+	carol := override("ovr-carol", "carol")
+	if err := h.Schedules.AddOverride(t.Context(), ref, carol, fence, entry(shop)); err != nil {
+		t.Fatalf("AddOverride carol: %v", err)
+	}
+
+	stale.Layers[0].Members = []string{"alice", "dave"}
+
+	if err := h.Schedules.Update(t.Context(), stale, fence, entry(shop)); !errors.Is(err, oncall.ErrConflict) {
+		t.Fatalf("Update at a stale version with the old overrides: err = %v, want ErrConflict", err)
+	}
+
+	if got := getNetwork(t, h); len(got.Overrides) != 2 || !slices.Equal(got.Layers[0].Members, []string{"alice"}) {
+		t.Fatalf("after the refused update: %d overrides and members %v, want 2 and [alice]", len(got.Overrides),
+			got.Layers[0].Members)
+	}
+}

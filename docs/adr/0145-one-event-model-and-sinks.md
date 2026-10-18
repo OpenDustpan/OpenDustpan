@@ -150,9 +150,26 @@ audit sink.
     sinks keeps the values: `Subscriptions.PutSink` takes the new secret
     items of the write with the sink, and refuses with `ErrInvalid` a new
     item whose ref the scope holds or held, also after a delete, and a
-    ref with no value of the sink. `Subscriptions.SinkSecrets` gives the
+    ref with no value of the sink. It does this check in the fenced
+    transaction of the write. `Subscriptions.SinkSecrets` gives the
     values to the dispatcher. So a sink whose kind, target and refs did
     not change sends to the same place.
+
+    A secret value never reaches the store of sinks as plaintext. The API
+    seals each new value with `notify.SinkSealer.Seal` before
+    `PutSink`, with per-scope envelope encryption (ADR 23): the data key
+    of the secret scope of the namespace and the sink ID, or for a sink
+    of `@server` the installation scope of the sink ID. The sealed value
+    also holds its ref. The ports carry only `notify.SealedSecret`, whose
+    fields are not exported, so a caller cannot put a plaintext value in
+    it by mistake. `PutSink` refuses with `ErrInvalid` an item sealed for
+    another sink or another scope. The dispatcher opens the items of
+    `SinkSecrets` with `notify.SinkSealer.Open` just before a send, and
+    keeps the values only in memory for that send. A value sealed for
+    another sink, scope or ref does not open. The refs that a scope held
+    stay after a delete of the sink. A SQL adapter that keeps them in a
+    table adds that table to the table list of backups, and deletes its
+    rows with the namespace.
 14. **A subscription routes notifications.** `notify.Subscription` sends
     the notifications of its scope that match its filter to one sink. A
     filter selects by type (`job.failed` or `job.*`), by object (a unit
@@ -178,6 +195,15 @@ audit sink.
       (`notify.SinkChangedNotice`) for each subscription that it
       suspends, to the administrators of the scope and to the earlier
       creator of the subscription, who approved the old destination.
+      Its dedupe key is `<subscription ID>/sink-changed/<sink version>`.
+      Its object is `notify.NotificationsObject` of the scope
+      (`notifications:<scope>`). Only a principal that holds
+      `namespace:manage-notifications` on the namespace, or
+      `server:manage-notifications` for `@server`, reads a notification
+      of this object (`notify.ScopeActions`). So the notice reaches only
+      the recipients and the subscriptions whose creator can manage the
+      notifications of the scope. An earlier creator who lost the action
+      does not get it.
     - It sets each pending delivery of each subscription of the sink to
       `skipped` and increments its version. A delivery routed to the old
       place is never sent to the new one, and an operation that holds a
@@ -382,7 +408,8 @@ audit sink.
   audit entry, with the fence of the change.
 - **Identity.** The actions `namespace:manage-notifications` and
   `server:manage-notifications` are new. The identity package implements
-  `notify.Reader` and `notify.Contacts`. `Reader.CanRead` checks each
+  `notify.Reader` and `notify.Contacts`, and runs the suite
+  `notifytest.RunContacts`. `Reader.CanRead` checks each
   action of `notify.ScopeActions`, which includes `namespace:read-cost`
   (ADR 144) for a cost or budget notification.
 - **Audit (ADR 60).** No change. Notification sinks and log sinks stay

@@ -33,6 +33,8 @@ const (
 	// Two let an operator add a new secret, move the receiver to it, and
 	// then remove the old one, with no delivery that the receiver refuses.
 	MaxSigningSecrets = 2
+	// MaxRefLen caps a secret ref of a sink, in bytes.
+	MaxRefLen = 100
 )
 
 // SinkKind names the kind of a sink.
@@ -88,8 +90,9 @@ func (s Sink) Validate() error {
 		return fmt.Errorf("%w: a sink ID starts with %q", ErrInvalid, SinkIDPrefix)
 	case s.Scope == "" || s.Name == "" || len(s.Name) > MaxNameLen:
 		return fmt.Errorf("%w: a sink needs a scope and a name of 1 to %d bytes", ErrInvalid, MaxNameLen)
-	case len(s.SecretRefs) > MaxSigningSecrets || slices.Contains(s.SecretRefs, ""):
-		return fmt.Errorf("%w: a sink has at most %d secrets, none empty", ErrInvalid, MaxSigningSecrets)
+	case len(s.SecretRefs) > MaxSigningSecrets || slices.ContainsFunc(s.SecretRefs, badRef):
+		return fmt.Errorf("%w: a sink has at most %d secrets, each an identifier of at most %d bytes", ErrInvalid,
+			MaxSigningSecrets, MaxRefLen)
 	}
 
 	switch s.Kind {
@@ -104,11 +107,18 @@ func (s Sink) Validate() error {
 	}
 }
 
+// badRef reports whether ref is not a valid secret ref of a sink.
+func badRef(ref string) bool {
+	return !ident.Valid(ref, MaxRefLen)
+}
+
 // MaxSecretLen caps the value of a secret item of a sink, in bytes.
 const MaxSecretLen = 4096
 
-// SinkSecret is a new secret item of a sink: its ref and its value. A
-// value is a signing key of a webhook, or the URL of a chat webhook.
+// SinkSecret is a new secret item of a sink in plaintext: its ref and its
+// value. A value is a signing key of a webhook, or the URL of a chat
+// webhook. Only the API holds it, to seal it with SinkSealer.Seal. No
+// port carries it.
 type SinkSecret struct {
 	Ref   string
 	Value []byte
@@ -292,20 +302,22 @@ const (
 const ReasonSinkChanged = "the destination of the sink changed"
 
 // SinkChangedNotice returns the notification subscription.suspended for
-// the subscription sub, which the change e of its sink suspends. sub is
-// the subscription before the suspend. The notice goes to the
-// administrators of the scope and to sub.CreatedBy, the person who
-// approved the old destination. Its ID is new and random, and its dedupe
-// key is its ID, so each suspend has its own notice. The store of
+// the subscription sub, which a change of its sink suspends; e is the
+// audit entry of the change. sub is the subscription before the suspend,
+// and version is the version of the sink that the change stores. The notice goes to the administrators of the scope and
+// to sub.CreatedBy, the person who approved the old destination. Its
+// object is NotificationsObject of the scope, so only a principal that can
+// manage the notifications of the scope reads it, and a subscription
+// sends it only for such a creator. Its ID is new and random. Its dedupe
+// key is "<sub.ID>/sink-changed/<version>", so each suspend has its own
+// notice, and a store that repeats the append adds none. The store of
 // Subscriptions.PutSink appends it in the transaction of the change.
-func SinkChangedNotice(sub Subscription, e audit.Entry) Notification {
-	id := ident.NewID(IDPrefix)
-
+func SinkChangedNotice(sub Subscription, version int64, e audit.Entry) Notification {
 	return Notification{
-		ID:       id,
+		ID:       ident.NewID(IDPrefix),
 		Type:     SubscriptionSuspended,
 		Scope:    sub.Scope,
-		Object:   sub.Scope.String(),
+		Object:   NotificationsObject(sub.Scope),
 		ObjectID: sub.ID,
 		Subject:  e.Subject,
 		Agent:    "",
@@ -320,10 +332,20 @@ func SinkChangedNotice(sub Subscription, e audit.Entry) Notification {
 			{Principal: "", Group: "", Admins: true},
 			{Principal: sub.CreatedBy, Group: "", Admins: false},
 		},
-		DedupeKey: id,
+		DedupeKey: sub.ID + "/sink-changed/" + strconv.FormatInt(version, 10),
 		At:        e.At,
 		Sequence:  0,
 	}.Fit()
+}
+
+// NotificationsObject returns the object reference of the notification
+// settings of scope, its sinks and subscriptions, for example
+// "notifications:shop". A notification of this object tells about the
+// sinks and the subscriptions of the scope. Only a principal that holds
+// the action to manage the notifications of the scope reads it (see
+// ScopeActions).
+func NotificationsObject(scope namespace.Name) string {
+	return "notifications:" + scope.String()
 }
 
 // Subscription sends the notifications of its scope that match Filter to
@@ -368,23 +390,38 @@ const (
 	ActionReadCost = "namespace:read-cost"
 	// ActionObserve is the read action on the server scope.
 	ActionObserve = "server:observe"
+	// ActionManage is the action to manage the notifications of a
+	// namespace.
+	ActionManage = "namespace:manage-notifications"
+	// ActionManageServer is the action to manage the notifications of the
+	// server scope.
+	ActionManageServer = "server:manage-notifications"
 )
 
 // ScopeActions returns the actions on the scope of n that a principal
 // needs to read n, in addition to the read action of its object: the read
-// action of the scope, and for a cost or budget notification also
-// ActionReadCost. So a cost estimate or a budget threshold reaches no
-// list, subscription or notice of a principal that cannot read costs.
+// action of the scope; for a cost or budget notification also
+// ActionReadCost; and for a notification of NotificationsObject of the
+// scope also the action to manage the notifications of the scope. So a
+// cost estimate or a budget threshold reaches no list, subscription or
+// notice of a principal that cannot read costs, and a notice about the
+// sinks and subscriptions of a scope reaches only a principal that can
+// manage them.
 func ScopeActions(n Notification) []string {
-	if n.Scope == audit.ServerScope {
+	settings := n.Object == NotificationsObject(n.Scope)
+
+	switch {
+	case n.Scope == audit.ServerScope && settings:
+		return []string{ActionObserve, ActionManageServer}
+	case n.Scope == audit.ServerScope:
 		return []string{ActionObserve}
-	}
-
-	if n.Type == CostEstimated || n.Type == BudgetThreshold {
+	case settings:
+		return []string{ActionRead, ActionManage}
+	case n.Type == CostEstimated || n.Type == BudgetThreshold:
 		return []string{ActionRead, ActionReadCost}
+	default:
+		return []string{ActionRead}
 	}
-
-	return []string{ActionRead}
 }
 
 // Reader decides whether a principal can read a notification. The

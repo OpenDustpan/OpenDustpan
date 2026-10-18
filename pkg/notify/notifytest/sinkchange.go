@@ -65,7 +65,7 @@ func putSecond(t *testing.T, h Harness, fence namespace.Fence) {
 	t.Helper()
 
 	s := sink("snk-2", shop)
-	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(s), fence, manage()); err != nil {
+	if err := h.Subscriptions.PutSink(t.Context(), s, fresh(t.Context(), s), fence, manage()); err != nil {
 		t.Fatalf("PutSink snk-2: %v", err)
 	}
 }
@@ -235,8 +235,9 @@ func testSinkChangeNotices(t *testing.T, h Harness) {
 	}
 }
 
-// checkNotice checks that n is the notice of the sink change of dave for a
-// subscription of creators, to the administrators and to its creator.
+// checkNotice checks that n is the notice of the sink change of dave to
+// the sink version 3 for a subscription of creators, to the
+// administrators and to its creator.
 func checkNotice(t *testing.T, n notify.Notification, creators map[string]string) {
 	t.Helper()
 
@@ -244,6 +245,11 @@ func checkNotice(t *testing.T, n notify.Notification, creators map[string]string
 	if !ok || n.Type != notify.SubscriptionSuspended || n.Scope != shop || n.Subject != "dave" ||
 		n.Attributes["sink"] != "snk-1" || n.Attributes["subscription"] != n.ObjectID {
 		t.Fatalf("notice = %+v, want subscription.suspended of sub-1 or sub-3 by dave", n)
+	}
+
+	if n.Object != notify.NotificationsObject(shop) || n.DedupeKey != n.ObjectID+"/sink-changed/3" {
+		t.Fatalf("notice of %s has object %s and dedupe key %s, want the notifications of shop and %s/sink-changed/3",
+			n.ObjectID, n.Object, n.DedupeKey, n.ObjectID)
 	}
 
 	want := []notify.Recipient{
@@ -264,7 +270,7 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 
 	fence := setup(t, h)
 	putSink(t, h, fence)
-	checkSecrets(t, h, "snk-1", "[key of itm-snk-1]")
+	checkSecrets(t, h, "[key of itm-snk-1]")
 
 	s := sink("snk-1", shop)
 	s.Version = 1
@@ -272,10 +278,14 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 	refused := []struct {
 		name    string
 		s       notify.Sink
-		secrets []notify.SinkSecret
+		secrets []notify.SealedSecret
 	}{
-		{"a new value under the stored ref", s, []notify.SinkSecret{{Ref: "itm-snk-1", Value: []byte("new")}}},
-		{"a new value for a ref that the sink does not name", s, []notify.SinkSecret{secret("itm-x")}},
+		{"a new value under the stored ref", s, []notify.SealedSecret{sealed(t.Context(), s, "itm-snk-1", "new")}},
+		{
+			"a new value for a ref that the sink does not name",
+			s,
+			[]notify.SealedSecret{secret(t.Context(), s, "itm-x")},
+		},
 		{"a new sink with no value", sink("snk-2", shop), nil},
 		{"a new sink that names the ref of another sink", withRefs(sink("snk-2", shop), "itm-snk-1"), nil},
 	}
@@ -289,20 +299,26 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 		}
 	}
 
-	checkSecrets(t, h, "snk-1", "[key of itm-snk-1]")
+	checkSecrets(t, h, "[key of itm-snk-1]")
 
 	rotated := withRefs(s, "itm-snk-1-b")
-	err := h.Subscriptions.PutSink(t.Context(), rotated, []notify.SinkSecret{secret("itm-snk-1-b")}, fence, manage())
+	err := h.Subscriptions.PutSink(
+		t.Context(),
+		rotated,
+		[]notify.SealedSecret{secret(t.Context(), s, "itm-snk-1-b")},
+		fence,
+		manage(),
+	)
 	if err != nil {
 		t.Fatalf("PutSink with a new ref: %v", err)
 	}
 
-	checkSecrets(t, h, "snk-1", "[key of itm-snk-1-b]")
+	checkSecrets(t, h, "[key of itm-snk-1-b]")
 
 	back := withRefs(s, "itm-snk-1")
 	back.Version = 2
 
-	for _, secrets := range [][]notify.SinkSecret{{secret("itm-snk-1")}, nil} {
+	for _, secrets := range [][]notify.SealedSecret{{secret(t.Context(), s, "itm-snk-1")}, nil} {
 		err = h.Subscriptions.PutSink(t.Context(), back, secrets, fence, manage())
 		if !errors.Is(err, notify.ErrInvalid) {
 			t.Fatalf("PutSink back to a dropped ref with %d new values: err = %v, want ErrInvalid", len(secrets), err)
@@ -314,7 +330,7 @@ func testSinkSecretRefs(t *testing.T, h Harness) {
 	}
 
 	again := withRefs(sink("snk-1", shop), "itm-snk-1-b")
-	err = h.Subscriptions.PutSink(t.Context(), again, fresh(again), fence, manage())
+	err = h.Subscriptions.PutSink(t.Context(), again, fresh(t.Context(), again), fence, manage())
 	if !errors.Is(err, notify.ErrInvalid) {
 		t.Fatalf("PutSink of a new sink with a ref of a deleted sink: err = %v, want ErrInvalid", err)
 	}
@@ -333,26 +349,32 @@ func withRefs(s notify.Sink, refs ...string) notify.Sink {
 	return s
 }
 
-// checkSecrets checks the values of the secret items of the sink id in
-// shop, and that another scope reads none.
-func checkSecrets(t *testing.T, h Harness, id, want string) {
+// checkSecrets checks the values of the secret items of the sink snk-1
+// in shop, opened with the sealer of the suite, and that another scope
+// reads none.
+func checkSecrets(t *testing.T, h Harness, want string) {
 	t.Helper()
 
-	got, err := h.Subscriptions.SinkSecrets(t.Context(), shop, id)
+	got, err := h.Subscriptions.SinkSecrets(t.Context(), shop, "snk-1")
 	if err != nil {
 		t.Fatalf("SinkSecrets: %v", err)
 	}
 
-	values := make([]string, 0, len(got))
-	for _, v := range got {
-		values = append(values, string(v))
+	s := withRefs(sink("snk-1", shop))
+	for _, g := range got {
+		s.SecretRefs = append(s.SecretRefs, g.Ref())
 	}
 
-	if fmt.Sprint(values) != want {
-		t.Fatalf("SinkSecrets = %v, want %s", values, want)
+	values, err := suiteSealer().Open(t.Context(), s, got)
+	if err != nil {
+		t.Fatalf("Open the values of SinkSecrets: %v", err)
 	}
 
-	if _, err := h.Subscriptions.SinkSecrets(t.Context(), other, id); !errors.Is(err, notify.ErrNotFound) {
+	if fmt.Sprintf("%s", values) != want {
+		t.Fatalf("SinkSecrets = %s, want %s", values, want)
+	}
+
+	if _, err := h.Subscriptions.SinkSecrets(t.Context(), other, "snk-1"); !errors.Is(err, notify.ErrNotFound) {
 		t.Fatalf("SinkSecrets of another scope: err = %v, want ErrNotFound", err)
 	}
 }

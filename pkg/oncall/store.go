@@ -44,7 +44,9 @@ type Store interface {
 	// the live ones, and a client that reads a schedule, changes it and
 	// sends it back keeps working. A request with other overrides is
 	// refused, so a caller never thinks that Update wrote an override. It
-	// returns ErrNotFound for an unknown ID or a stored schedule of
+	// checks the version before the overrides: a request at a stale
+	// version gets ErrConflict, also when its overrides are the list of
+	// that version and not the stored list. It returns ErrNotFound for an unknown ID or a stored schedule of
 	// another namespace than fence, ErrInvalid for a schedule that fails
 	// Validate, that names another namespace than the stored one, or whose
 	// overrides are not empty and not the stored list, ErrExists for a new

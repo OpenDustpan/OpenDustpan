@@ -71,6 +71,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"the time of an add is the time of the store", testOverrideTime},
 		{"create with overrides is ErrInvalid", testCreateWithOverrides},
 		{"update keeps the stored overrides", testUpdateKeepsOverrides},
+		{"update at a stale version with the old overrides is a conflict", testUpdateStaleOverrides},
 		{"get gives the overrides in the order of their adds", testOverrideOrder},
 		{"overrides added at one time keep the order of their adds", testConcurrentOverrideOrder},
 		{"handoff notes of another namespace are ErrNotFound", testHandoffScope},
