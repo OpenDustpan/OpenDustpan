@@ -78,16 +78,47 @@ type CursorMove struct {
 // transaction.
 type Subscriptions interface {
 	// PutSink creates s, or replaces it when s.Version is the stored
-	// version. A replace that changes the kind, the target or the secret
-	// refs of the sink also suspends, in its transaction, each active
-	// subscription of the sink: it sets State to
-	// SubscriptionStateSuspended, Reason to ReasonSinkChanged, and
-	// increments the version of the subscription. A replace that changes
-	// only the name suspends nothing. It returns ErrInvalid for a sink that fails Validate or for
-	// a fence that is not of s.Scope, ErrNotFound when the stored sink
-	// s.ID is in another scope, ErrConflict, namespace.ErrFenced and
-	// namespace.ErrNotFound.
-	PutSink(ctx context.Context, s Sink, fence namespace.Fence, e audit.Entry) error
+	// version. secrets are the new secret items of the write: each one
+	// has a ref of s.SecretRefs, and the store keeps its value under that
+	// ref in the scope of s. Each other ref of s names a secret item that
+	// the scope holds for the sink s.ID. The API stores each new secret
+	// value under a new ref. It never writes a new value under an existing
+	// ref. The store enforces this: it refuses a new secret item whose ref
+	// the scope holds or held, also after a delete. So a sink whose refs
+	// did not change sends to the place that the creators of its
+	// subscriptions approved. A replace deletes the values of the refs
+	// that s no longer names, and DeleteSink deletes the values of the
+	// sink.
+	//
+	// A replace that changes the kind, the target or the secret refs of
+	// the sink also does these steps in its transaction, for each active
+	// subscription of the sink:
+	//   - It sets State to SubscriptionStateSuspended, Reason to
+	//     ReasonSinkChanged, and increments the version of the
+	//     subscription.
+	//   - It appends the notification SinkChangedNotice(sub, e) to the
+	//     outbox of the scope, where sub is the subscription before the
+	//     suspend.
+	//
+	// In the same transaction, it sets each pending delivery of each
+	// subscription of the sink to DeliverySkipped and increments its
+	// version, so a delivery that was routed to the old place is never
+	// sent to the new one, and a holder of a claim gets ErrConflict at
+	// Record. A replace that changes only the name suspends and skips
+	// nothing.
+	//
+	// It returns ErrInvalid for a sink that fails Validate, for secrets
+	// that fail s.ValidateSecrets, for a new secret item whose ref the
+	// scope holds or held, for a ref of s with no new secret item and no
+	// stored secret item of the sink, and for a fence that is not of
+	// s.Scope; ErrNotFound when the stored sink s.ID is in another scope;
+	// ErrConflict; namespace.ErrFenced and namespace.ErrNotFound.
+	PutSink(ctx context.Context, s Sink, secrets []SinkSecret, fence namespace.Fence, e audit.Entry) error
+	// SinkSecrets returns the values of the secret items of the sink id in
+	// scope, in the order of its SecretRefs. Only the dispatcher calls it,
+	// to deliver; the API never answers a value. It returns ErrNotFound for
+	// an unknown sink or a sink of another scope.
+	SinkSecrets(ctx context.Context, scope namespace.Name, id string) ([][]byte, error)
 	// DeleteSink deletes the sink id. It returns ErrNotFound for an
 	// unknown sink or a sink of another scope than fence, ErrInUse while a
 	// subscription names it, namespace.ErrFenced and namespace.ErrNotFound.
@@ -121,8 +152,11 @@ const (
 	DeliveryDone      DeliveryState = "delivered"
 	DeliveryAbandoned DeliveryState = "abandoned"
 	// DeliverySkipped is a delivery that the dispatcher did not try,
-	// because its principal can no longer read the notification, or the
-	// contact is no longer a contact of the principal (see BeforeAttempt).
+	// because its principal can no longer read the notification, the
+	// contact is no longer a contact of the principal, or its subscription
+	// no longer sends for the principal to the sink (see BeforeAttempt).
+	// PutSink also skips the pending deliveries of a sink whose
+	// destination changed.
 	DeliverySkipped DeliveryState = "skipped"
 )
 
@@ -277,10 +311,15 @@ type Deliveries interface {
 	History(ctx context.Context, scope namespace.Name, id string, limit int) ([]Delivery, error)
 	// Redeliver makes the delivery id pending again with no attempts and
 	// no claim, and appends e. Only a stopped delivery (delivered,
-	// abandoned or skipped) can be sent again. It returns ErrNotFound for
-	// an unknown delivery or a delivery of another scope than fence,
-	// ErrConflict for a pending delivery, which a claim can hold,
-	// namespace.ErrFenced and namespace.ErrNotFound.
+	// abandoned or skipped) can be sent again. A delivery of a
+	// subscription can be sent again only while the subscription exists,
+	// is active, sends to the sink of the delivery, and has the principal
+	// of the delivery as its CreatedBy. So a delivery from before a change
+	// of the sink or of the subscription never goes to the new place. It
+	// returns ErrNotFound for an unknown delivery or a delivery of another
+	// scope than fence; ErrConflict for a pending delivery, which a claim
+	// can hold, and for a delivery whose subscription fails these
+	// conditions; namespace.ErrFenced and namespace.ErrNotFound.
 	Redeliver(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
 }
 
@@ -367,4 +406,8 @@ type Contacts interface {
 	ContactsOf(ctx context.Context, id string) ([]Contact, error)
 	// Members returns the principal IDs of the group name.
 	Members(ctx context.Context, name string) ([]string, error)
+	// Admins returns the principal IDs of the administrators of scope:
+	// each principal that holds the action to manage the notifications of
+	// scope. A recipient with Admins set goes to them.
+	Admins(ctx context.Context, scope namespace.Name) ([]string, error)
 }

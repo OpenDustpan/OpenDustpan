@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -57,6 +58,13 @@ const (
 // webhook. SecretRefs name the stored secrets of the sink: the one or two
 // active signing keys of a webhook, or the URL of a chat webhook. The API
 // never answers a secret, and the dispatcher reads them only to deliver.
+// A ref names one value for good: the API stores each new secret value
+// under a new ref. It never writes a new value under an existing ref
+// (see Subscriptions.PutSink). The URL of a chat webhook is a secret
+// item, and Target holds only its host, so a new value under the same
+// ref could send to another webhook of the same host. With one value for
+// each ref, a sink whose kind, target and refs did not change sends to
+// the same place.
 type Sink struct {
 	ID         string
 	Scope      namespace.Name
@@ -94,6 +102,36 @@ func (s Sink) Validate() error {
 	default:
 		return fmt.Errorf("%w: unknown sink kind %q", ErrInvalid, s.Kind)
 	}
+}
+
+// MaxSecretLen caps the value of a secret item of a sink, in bytes.
+const MaxSecretLen = 4096
+
+// SinkSecret is a new secret item of a sink: its ref and its value. A
+// value is a signing key of a webhook, or the URL of a chat webhook.
+type SinkSecret struct {
+	Ref   string
+	Value []byte
+}
+
+// ValidateSecrets returns ErrInvalid for new secret items of s with an
+// empty ref, a ref that s.SecretRefs does not hold, a ref that two items
+// share, or a value that is empty or longer than MaxSecretLen.
+func (s Sink) ValidateSecrets(secrets []SinkSecret) error {
+	seen := make([]string, 0, len(secrets))
+
+	for _, sec := range secrets {
+		switch {
+		case sec.Ref == "" || !slices.Contains(s.SecretRefs, sec.Ref) || slices.Contains(seen, sec.Ref):
+			return fmt.Errorf("%w: each new secret of a sink has its own ref of the sink", ErrInvalid)
+		case len(sec.Value) == 0 || len(sec.Value) > MaxSecretLen:
+			return fmt.Errorf("%w: a secret of a sink has 1 to %d bytes", ErrInvalid, MaxSecretLen)
+		}
+
+		seen = append(seen, sec.Ref)
+	}
+
+	return nil
 }
 
 // validURL returns ErrInvalid for a webhook sink whose target the egress
@@ -253,6 +291,41 @@ const (
 // so the subscription delivers nothing until a person resumes it.
 const ReasonSinkChanged = "the destination of the sink changed"
 
+// SinkChangedNotice returns the notification subscription.suspended for
+// the subscription sub, which the change e of its sink suspends. sub is
+// the subscription before the suspend. The notice goes to the
+// administrators of the scope and to sub.CreatedBy, the person who
+// approved the old destination. Its ID is new and random, and its dedupe
+// key is its ID, so each suspend has its own notice. The store of
+// Subscriptions.PutSink appends it in the transaction of the change.
+func SinkChangedNotice(sub Subscription, e audit.Entry) Notification {
+	id := ident.NewID(IDPrefix)
+
+	return Notification{
+		ID:       id,
+		Type:     SubscriptionSuspended,
+		Scope:    sub.Scope,
+		Object:   sub.Scope.String(),
+		ObjectID: sub.ID,
+		Subject:  e.Subject,
+		Agent:    "",
+		Severity: SeverityWarning,
+		Summary: fmt.Sprintf("Subscription %s is suspended: the destination of sink %s changed. "+
+			"Resume it to send to the new destination.", sub.ID, sub.Sink),
+		Links: nil,
+		Attributes: map[string]string{
+			"subscription": sub.ID, "sink": sub.Sink, "reason": "sink-changed",
+		},
+		Recipients: []Recipient{
+			{Principal: "", Group: "", Admins: true},
+			{Principal: sub.CreatedBy, Group: "", Admins: false},
+		},
+		DedupeKey: id,
+		At:        e.At,
+		Sequence:  0,
+	}.Fit()
+}
+
 // Subscription sends the notifications of its scope that match Filter to
 // Sink. A subscription of the server scope receives the notifications of
 // the server scope only. CreatedBy is the principal whose actions the
@@ -327,6 +400,13 @@ type Reader interface {
 	CanRead(ctx context.Context, id string, n Notification) (bool, error)
 }
 
+// Access is the Reader and the Contacts that BeforeAttempt checks. The
+// identity package implements both.
+type Access interface {
+	Reader
+	Contacts
+}
+
 // Route returns the active subscriptions of subs that receive n: those of
 // the scope of n whose filter matches, and whose creator can read the
 // object of n. A subscription whose creator cannot read the object skips
@@ -355,15 +435,28 @@ func Route(ctx context.Context, n Notification, subs []Subscription, r Reader) (
 	return out, nil
 }
 
-// BeforeAttempt runs before each attempt of the delivery d of n. It
-// returns ErrNoAccess when the principal of d can no longer read n, or
-// when d goes to a contact that is no longer a contact of the principal,
-// for example after the principal lost a grant, was disabled, or removed
-// the address. The dispatcher then records d as DeliverySkipped and does
-// not send it. It returns the error of a port that cannot decide; the
-// dispatcher then tries d again later, as for ErrTemporary.
-func BeforeAttempt(ctx context.Context, d Delivery, n Notification, r Reader, c Contacts) error {
-	ok, err := r.CanRead(ctx, d.Principal, n)
+// BeforeAttempt runs before each attempt of the delivery d of n. sub is
+// the stored subscription of d, or the zero Subscription for a delivery
+// with no subscription or a subscription that is gone. It returns
+// ErrNoAccess:
+//   - for a delivery of a subscription when sub is not that subscription,
+//     is not active, sends to another sink than d, or has another
+//     CreatedBy than the principal of d, for example after a change of
+//     the sink, an edit of another person, or a suspend,
+//   - when the principal of d can no longer read n, for example after the
+//     principal lost a grant or was disabled,
+//   - when d goes to a contact that is no longer a contact of the
+//     principal, for example after the principal removed the address.
+//
+// The dispatcher then records d as DeliverySkipped and does not send it.
+// It returns the error of a port that cannot decide; the dispatcher then
+// tries d again later, as for ErrTemporary.
+func BeforeAttempt(ctx context.Context, d Delivery, sub Subscription, n Notification, a Access) error {
+	if d.Subscription != "" && !SendsFor(sub, d) {
+		return fmt.Errorf("before attempt of %s: the subscription changed: %w", d.ID, ErrNoAccess)
+	}
+
+	ok, err := a.CanRead(ctx, d.Principal, n)
 	if err != nil {
 		return fmt.Errorf("before attempt of %s: %w", d.ID, err)
 	}
@@ -376,7 +469,7 @@ func BeforeAttempt(ctx context.Context, d Delivery, n Notification, r Reader, c 
 		return nil
 	}
 
-	contacts, err := c.ContactsOf(ctx, d.Principal)
+	contacts, err := a.ContactsOf(ctx, d.Principal)
 	if err != nil {
 		return fmt.Errorf("before attempt of %s: %w", d.ID, err)
 	}
@@ -386,6 +479,15 @@ func BeforeAttempt(ctx context.Context, d Delivery, n Notification, r Reader, c 
 	}
 
 	return nil
+}
+
+// SendsFor reports whether the subscription sub still sends the delivery
+// d: sub is the subscription of d, is active, sends to the sink of d, and
+// has the principal of d as its CreatedBy. BeforeAttempt and
+// Deliveries.Redeliver apply it.
+func SendsFor(sub Subscription, d Delivery) bool {
+	return sub.ID != "" && sub.ID == d.Subscription && sub.Scope == d.Scope &&
+		sub.State == SubscriptionStateActive && sub.Sink == d.Sink && sub.CreatedBy == d.Principal
 }
 
 // Readers returns the principals of ids that can read the object of n, in

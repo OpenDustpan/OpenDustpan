@@ -36,14 +36,15 @@ var (
 	// ErrNotLinked reports a chat user with no link to a principal, or an
 	// intent whose chat user is no longer linked to its principal.
 	ErrNotLinked = errors.New("chat user is not linked")
-	// ErrNotFound reports an unknown link, link request or intent.
+	// ErrNotFound reports an unknown link, link request or intent, or an
+	// intent of another principal (see VisibleTo).
 	ErrNotFound = errors.New("chat data not found")
 	// ErrConflict reports a write that collides with a stored row: an
 	// intent or a link request with an ID that exists, or a link that
 	// another link of the same chat user replaced.
 	ErrConflict = errors.New("chat data conflict")
-	// ErrDenied reports an intent that another principal, an agent or a
-	// break-glass session tries to use.
+	// ErrDenied reports an intent that an agent or a break-glass session
+	// of its principal tries to use.
 	ErrDenied = errors.New("chat action denied")
 	// ErrNeedsSession reports an intent that a request with an access
 	// token, or with no console session, tries to complete.
@@ -375,11 +376,13 @@ func linkHolds(in Intent, link *Link) bool {
 // binding of the stored plans of that phase. link is the current link of
 // the chat user of the request of in (Links.LinkOf), or nil when that
 // chat user has no link. It returns, in this order:
+//   - ErrNotFound for a caller that is not the principal of in (see
+//     VisibleTo), so another person learns nothing of the intent,
 //   - ErrUsed for an intent with a use,
 //   - ErrExpired after its expiry,
 //   - ErrNeedsSession for a request with an access token or with no
 //     console session,
-//   - ErrDenied for another principal, an agent, or a break-glass session,
+//   - ErrDenied for an agent or a break-glass session,
 //   - ErrNotLinked when link is nil, is the link of another chat user,
 //     names another principal than in, or was made after in, so an intent
 //     stops when its link is deleted or replaced, also when the same
@@ -392,6 +395,10 @@ func linkHolds(in Intent, link *Link) bool {
 // An authentication from before the button never counts: the person
 // authenticates for this approval.
 func CheckIntent(in Intent, link *Link, auth Auth, current Target, now time.Time) error {
+	if err := VisibleTo(in, auth.Principal); err != nil {
+		return err
+	}
+
 	switch {
 	case !in.UsedAt.IsZero():
 		return ErrUsed
@@ -399,7 +406,7 @@ func CheckIntent(in Intent, link *Link, auth Auth, current Target, now time.Time
 		return ErrExpired
 	}
 
-	if err := checkCaller(in, auth); err != nil {
+	if err := checkCaller(auth); err != nil {
 		return err
 	}
 
@@ -418,14 +425,26 @@ func CheckIntent(in Intent, link *Link, auth Auth, current Target, now time.Time
 	return nil
 }
 
+// VisibleTo returns ErrNotFound when principal is not the principal of
+// in. The read and the complete route of an intent call it first, so a
+// caller who is not the principal gets the same 404 as for an unknown ID,
+// also for an intent that is used or expired.
+func VisibleTo(in Intent, principal string) error {
+	if principal == "" || principal != in.Principal {
+		return fmt.Errorf("intent %s: %w", in.ID, ErrNotFound)
+	}
+
+	return nil
+}
+
 // checkCaller returns ErrNeedsSession for a request with an access token
-// or with no console session, and ErrDenied for another principal than
-// the one of in, an agent, or a break-glass session.
-func checkCaller(in Intent, auth Auth) error {
+// or with no console session, and ErrDenied for an agent or a
+// break-glass session.
+func checkCaller(auth Auth) error {
 	switch {
 	case auth.Session == "" || auth.TokenID != "":
 		return fmt.Errorf("%w: open the link in the console", ErrNeedsSession)
-	case auth.Principal != in.Principal || auth.Agent != "" || auth.BreakGlass:
+	case auth.Agent != "" || auth.BreakGlass:
 		return ErrDenied
 	default:
 		return nil

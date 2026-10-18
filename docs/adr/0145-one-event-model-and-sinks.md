@@ -141,6 +141,18 @@ audit sink.
     is that `Target`. The server makes the signing key of a webhook and
     answers it once, at the create. The API never answers a secret
     again.
+
+    A ref names one value for good. The API stores each new secret value
+    under a new ref. It never writes a new value under an existing ref.
+    The URL of a chat webhook is the secret, and `Target` holds only its
+    host, so a new value under the same ref could send to another webhook
+    of the same host with no change that the store sees. The store of
+    sinks keeps the values: `Subscriptions.PutSink` takes the new secret
+    items of the write with the sink, and refuses with `ErrInvalid` a new
+    item whose ref the scope holds or held, also after a delete, and a
+    ref with no value of the sink. `Subscriptions.SinkSecrets` gives the
+    values to the dispatcher. So a sink whose kind, target and refs did
+    not change sends to the same place.
 14. **A subscription routes notifications.** `notify.Subscription` sends
     the notifications of its scope that match its filter to one sink. A
     filter selects by type (`job.failed` or `job.*`), by object (a unit
@@ -157,13 +169,30 @@ audit sink.
     the read access of another person. A change of the kind, the target or
     the secrets of a sink makes a new destination that the creators of its
     subscriptions did not approve. So in the transaction of that change,
-    `Subscriptions.PutSink` suspends each active subscription of the sink,
-    with the reason `notify.ReasonSinkChanged`, and increments its
-    version. A put of a subscription that a person read before the change
-    then gets `ErrConflict`, so it cannot undo the suspend. A person
-    resumes the subscription and becomes its creator. A change of only the
-    name of a sink suspends nothing. Before each delivery, the dispatcher
-    checks two things:
+    `Subscriptions.PutSink` does these steps:
+    - It suspends each active subscription of the sink, with the reason
+      `notify.ReasonSinkChanged`, and increments its version. A put of a
+      subscription that a person read before the change then gets
+      `ErrConflict`, so it cannot undo the suspend.
+    - It appends one notification `subscription.suspended`
+      (`notify.SinkChangedNotice`) for each subscription that it
+      suspends, to the administrators of the scope and to the earlier
+      creator of the subscription, who approved the old destination.
+    - It sets each pending delivery of each subscription of the sink to
+      `skipped` and increments its version. A delivery routed to the old
+      place is never sent to the new one, and an operation that holds a
+      claim of such a delivery gets `ErrConflict` when it records the
+      attempt.
+
+    A person resumes the subscription and becomes its creator. A change of
+    only the name of a sink suspends and skips nothing. A delivery of a
+    subscription goes out, and `Deliveries.Redeliver` sends it again
+    (else `ErrConflict`), only while its subscription is active, sends to
+    the sink of the delivery, and has the principal of the delivery as
+    its creator (`notify.SendsFor`). So a delivery from before a change of
+    the sink, a change of the subscription by another person, or a
+    suspend never goes to a place that its principal did not approve.
+    Before each delivery, the dispatcher checks two things:
     - The creator still holds `namespace:manage-notifications` and
       `namespace:read` on the scope. When the creator lost either action,
       the dispatcher suspends the subscription, and sends the notification
@@ -186,11 +215,13 @@ audit sink.
     creator of the subscription, or the recipient of a notice. Access can
     change between the route and an attempt, and a notice can wait for
     quiet hours. So before each attempt the delivery operation calls
-    `notify.BeforeAttempt`. It calls `Reader.CanRead` for the principal
-    and, for a delivery to a contact, `Contacts.ContactsOf`. When the
-    principal can no longer read the notification, or the contact is no
-    longer a contact of the principal, the operation records the delivery
-    as `skipped` and sends nothing. When a port cannot decide, the
+    `notify.BeforeAttempt` with the stored subscription of the delivery.
+    It applies `notify.SendsFor` to a delivery of a subscription, then
+    calls `Reader.CanRead` for the principal and, for a delivery to a
+    contact, `Contacts.ContactsOf`. When the subscription no longer sends
+    the delivery, the principal can no longer read the notification, or
+    the contact is no longer a contact of the principal, the operation
+    records the delivery as `skipped` and sends nothing. When a port cannot decide, the
     operation tries again later, as for `ErrTemporary`.
 
 ### Delivery
@@ -282,7 +313,10 @@ audit sink.
 
 ### Notices to people
 
-24. **Recipients.** A notice names recipients: principals or groups. The
+24. **Recipients.** A notice names recipients: principals, groups, or
+    the administrators of the scope of the notification (`Admins`): each
+    principal that holds the action to manage the notifications of the
+    scope, from `Contacts.Admins`. The
     `notify.Contacts` port gives the contacts of each person: the verified
     email address, and the chat identity that the person linked (ADR 146).
     A chat sink of the kind `chat` cannot send a direct message through an

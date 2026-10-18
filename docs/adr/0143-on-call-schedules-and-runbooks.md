@@ -74,10 +74,14 @@ rotation in a spreadsheet. OpenDustpan must serve both, with one answer to
    principal that added it and the time of the add. `Store.AddOverride`
    is the only write of on-call overrides: a create with on-call
    overrides is `ErrInvalid`, and an update keeps the stored on-call
-   overrides and ignores those of the request. So a caller with
-   `namespace:manage-on-call` and not `namespace:override-on-call` cannot
-   write an on-call override, its creator or its time, and a `PUT` with no
-   on-call overrides does not delete the live ones. `Store.Get` gives the
+   overrides. An update accepts no on-call overrides or the stored list
+   (`oncall.SameOverrides`), and returns `ErrInvalid` for other on-call
+   overrides, so a caller never thinks that an update wrote one. So a
+   caller with `namespace:manage-on-call` and not
+   `namespace:override-on-call` cannot write an on-call override, its
+   creator or its time, a `PUT` with no on-call overrides does not delete
+   the live ones, and a `GET`, a change and a `PUT` of the same schedule
+   still works. `Store.Get` gives the
    on-call overrides in the order of their adds, by a sequence number that
    the store gives each add in its transaction. Where two on-call
    overrides cover one time, the last add wins, also when two adds have

@@ -110,13 +110,29 @@ func (m *memStore) Get(_ context.Context, ref oncall.Ref) (oncall.Schedule, erro
 		return s, fmt.Errorf("get %s/%s: %w", ref.Namespace, ref.Name, oncall.ErrNotFound)
 	}
 
-	return s, nil
+	return detach(s), nil
+}
+
+// detach returns s with its own copies of the slices of the store, so a
+// caller that changes the schedule that Get returned does not change the
+// stored one, as with a SQL adapter.
+func detach(s oncall.Schedule) oncall.Schedule {
+	s.Layers = slices.Clone(s.Layers)
+	for i := range s.Layers {
+		s.Layers[i].Members = slices.Clone(s.Layers[i].Members)
+	}
+
+	s.Overrides, s.Copied = slices.Clone(s.Overrides), slices.Clone(s.Copied)
+
+	return s
 }
 
 func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.Fence, e audit.Entry) error {
-	// The update keeps the stored overrides, so it ignores those of s,
-	// also for the check of the bounds.
+	// The update keeps the stored overrides. It accepts no overrides or
+	// the stored list, and validates the rest of s.
+	sent := s.Overrides
 	s.Overrides = nil
+
 	if err := s.Validate(); err != nil {
 		return err
 	}
@@ -139,6 +155,10 @@ func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.
 
 		if old.Version != s.Version {
 			return fmt.Errorf("update %s: %w", s.ID, oncall.ErrConflict)
+		}
+
+		if len(sent) != 0 && !oncall.SameOverrides(sent, old.Overrides) {
+			return fmt.Errorf("update %s: %w: only an add writes an override", s.ID, oncall.ErrInvalid)
 		}
 
 		if other, used := m.byRef(oncall.Ref{Namespace: s.Namespace, Name: s.Name}); used && other.ID != s.ID {

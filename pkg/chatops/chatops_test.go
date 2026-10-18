@@ -233,7 +233,26 @@ func TestCheckIntent(t *testing.T) {
 		},
 		{
 			"another principal", nil,
-			func(a chatops.Auth) chatops.Auth { a.Principal = "bob"; return a }, nil, at, chatops.ErrDenied,
+			func(a chatops.Auth) chatops.Auth { a.Principal = "bob"; return a }, nil, at, chatops.ErrNotFound,
+		},
+		{
+			"another principal on a used intent",
+			func(i chatops.Intent) chatops.Intent { i.UsedAt = now(); return i },
+			func(a chatops.Auth) chatops.Auth { a.Principal = "bob"; return a }, nil, at, chatops.ErrNotFound,
+		},
+		{
+			"another principal after the expiry", nil,
+			func(a chatops.Auth) chatops.Auth { a.Principal = "bob"; return a }, nil,
+			now().Add(chatops.IntentLifetime), chatops.ErrNotFound,
+		},
+		{
+			"another principal with an access token", nil,
+			func(a chatops.Auth) chatops.Auth { a.Principal, a.TokenID = "bob", "tok-1"; return a }, nil, at,
+			chatops.ErrNotFound,
+		},
+		{
+			"no principal", nil,
+			func(a chatops.Auth) chatops.Auth { a.Principal = ""; return a }, nil, at, chatops.ErrNotFound,
 		},
 		{
 			"an agent", nil,

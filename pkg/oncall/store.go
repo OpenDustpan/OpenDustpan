@@ -38,12 +38,17 @@ type Store interface {
 	Get(ctx context.Context, ref Ref) (Schedule, error)
 	// Update replaces the stored schedule s.ID when s.Version is the
 	// stored version, and increments the version. It keeps the stored
-	// overrides, copied shifts and sync time, and ignores those of s, so
-	// an update with no overrides does not delete the live ones. It returns
-	// ErrNotFound for an unknown ID or a stored schedule of another
-	// namespace than fence, ErrInvalid for a schedule that fails Validate
-	// or that names another namespace than the stored one, ErrExists for
-	// a new name that the namespace already has, ErrConflict, and
+	// overrides, copied shifts and sync time, and ignores the copied
+	// shifts and the sync time of s. s.Overrides is empty or the stored
+	// list (SameOverrides), so an update with no overrides does not delete
+	// the live ones, and a client that reads a schedule, changes it and
+	// sends it back keeps working. A request with other overrides is
+	// refused, so a caller never thinks that Update wrote an override. It
+	// returns ErrNotFound for an unknown ID or a stored schedule of
+	// another namespace than fence, ErrInvalid for a schedule that fails
+	// Validate, that names another namespace than the stored one, or whose
+	// overrides are not empty and not the stored list, ErrExists for a new
+	// name that the namespace already has, ErrConflict, and
 	// namespace.ErrFenced.
 	Update(ctx context.Context, s Schedule, fence namespace.Fence, e audit.Entry) error
 	// Delete deletes the schedule ref names. It returns ErrNotFound for

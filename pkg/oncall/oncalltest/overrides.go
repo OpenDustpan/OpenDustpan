@@ -3,6 +3,7 @@ package oncalltest
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -55,18 +56,58 @@ func testUpdateKeepsOverrides(t *testing.T, h Harness) {
 
 	checkOnlyBob(t, h, "an update with no overrides")
 
+	s = getNetwork(t, h)
+	s.Layers[0].Members = []string{"carol", "alice"}
+
+	for i := range s.Overrides {
+		o := &s.Overrides[i]
+		o.Start, o.End, o.CreatedAt = o.Start.In(time.FixedZone("CEST", 2*3600)), o.End.UTC(), o.CreatedAt.Local()
+	}
+
+	if err := h.Schedules.Update(t.Context(), s, fence, entry(shop)); err != nil {
+		t.Fatalf("Update with the stored overrides, read and sent back: %v", err)
+	}
+
+	checkOnlyBob(t, h, "an update with the stored overrides")
+
+	if got := getNetwork(t, h); !slices.Equal(got.Layers[0].Members, []string{"carol", "alice"}) {
+		t.Fatalf("members after a read, a change and an update = %v, want [carol alice]", got.Layers[0].Members)
+	}
+
 	forged := override("ovr-forged", "mallory")
 	forged.CreatedBy, forged.CreatedAt = "carol", now().AddDate(-1, 0, 0)
 	forged.Start, forged.End = now().Add(-time.Hour), now().AddDate(1, 0, 0)
 
-	s = getNetwork(t, h)
-	s.Overrides = []oncall.Override{forged}
+	refused := []struct {
+		name   string
+		change func(os []oncall.Override) []oncall.Override
+	}{
+		{"a forged override", func([]oncall.Override) []oncall.Override { return []oncall.Override{forged} }},
+		{"a forged override after the stored one", func(os []oncall.Override) []oncall.Override {
+			return append(os, forged)
+		}},
+		{"the stored override with another principal", func(os []oncall.Override) []oncall.Override {
+			os[0].Principal = "mallory"
 
-	if err := h.Schedules.Update(t.Context(), s, fence, entry(shop)); err != nil {
-		t.Fatalf("Update with a forged override: %v", err)
+			return os
+		}},
+		{"the stored override with a later end", func(os []oncall.Override) []oncall.Override {
+			os[0].End = os[0].End.AddDate(1, 0, 0)
+
+			return os
+		}},
 	}
 
-	checkOnlyBob(t, h, "an update with a forged override")
+	for _, tc := range refused {
+		s = getNetwork(t, h)
+		s.Overrides = tc.change(slices.Clone(s.Overrides))
+
+		if err := h.Schedules.Update(t.Context(), s, fence, entry(shop)); !errors.Is(err, oncall.ErrInvalid) {
+			t.Fatalf("Update with %s: err = %v, want ErrInvalid", tc.name, err)
+		}
+
+		checkOnlyBob(t, h, "an update with "+tc.name)
+	}
 
 	if sh, err := getNetwork(t, h).At(now().Add(time.Minute)); err != nil || sh.Principal != "bob" {
 		t.Fatalf("At = %s (%v), want bob of the stored override", sh.Principal, err)

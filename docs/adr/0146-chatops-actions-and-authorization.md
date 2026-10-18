@@ -216,6 +216,12 @@ a click on it.
     | `DELETE /api/principals/{id}/chat-links/{platform}/{workspace}/{user}` | `server:manage-principals` | principal |
     | `GET /api/chat/intents/{id}` and `POST .../complete` | `job:approve` | unit |
 
+    The read and the complete route of an intent answer 404 when the
+    caller is not the principal of the intent, the same 404 as for an
+    unknown ID (`chatops.VisibleTo`). `chatops.CheckIntent` checks this
+    first, so a caller who is not the principal learns nothing of the
+    intent, also not that it has a use or that it expired.
+
     The action route is on the public list of the route test, because the
     chat tool sends it with no session. The signature of the tool takes
     the place of a session. The route then checks the action of the linked
