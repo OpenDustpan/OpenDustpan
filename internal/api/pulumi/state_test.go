@@ -78,11 +78,11 @@ type stateVersions struct {
 	second int
 }
 
-// seedStateVersion saves deployment as the next finished version of the
-// fixture stack and returns its version.
 // stateActor is the subject that asks for each seeded update.
 const stateActor = "alice"
 
+// seedStateVersion saves deployment as the next finished version of the
+// fixture stack and returns its version.
 func seedStateVersion(t *testing.T, f updateFixture, deployment string) int {
 	t.Helper()
 

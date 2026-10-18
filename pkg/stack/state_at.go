@@ -19,6 +19,8 @@ func (s *Updates) ExportAt(ctx context.Context, ref Ref, at time.Time) (Checkpoi
 		return Checkpoint{}, StateAt{}, fmt.Errorf("%w: state at a time", ErrMissingDependency)
 	}
 
+	// The three reads (stack, state, checkpoint) are not one snapshot. A
+	// delete between them makes the call return ErrNotFound.
 	st, err := s.stacks.GetStack(ctx, ref)
 	if err != nil {
 		return Checkpoint{}, StateAt{}, fmt.Errorf("state of %s at %s: %w", ref, at.UTC().Format(time.RFC3339), err)

@@ -39,6 +39,7 @@ func RunStateAt(t *testing.T, newStore StateAtFactory) {
 		{name: "state at a time names an update that ran then", test: testStateAtRunning},
 		{name: "state at a time of a stack without a checkpoint", test: testStateAtNoCheckpoint},
 		{name: "state at a time ignores a running update below the found version", test: testStateAtOlderRunning},
+		{name: "state at a time ignores a preview and a dry run", test: testStateAtPreview},
 		{name: "state at a time of a soft-deleted stack", test: testStateAtSoftDeleted},
 		{name: "state at a time of an unknown stack is ErrNotFound", test: testStateAtUnknownStack},
 	}
@@ -63,7 +64,13 @@ func stateAtBase() time.Time {
 func (f stateAtFixture) startAt(t *testing.T, id string, at time.Time, body string) stack.Update {
 	t.Helper()
 
-	plan := mutating()
+	return f.startPlanAt(t, id, mutating(), at, body)
+}
+
+// startPlanAt is startAt for the update that plan describes.
+func (f stateAtFixture) startPlanAt(t *testing.T, id string, plan stack.Plan, at time.Time, body string) stack.Update {
+	t.Helper()
+
 	plan.CreatedBy = "by-" + id
 
 	u := started(t, f.create(t, f.ref, id, plan))
@@ -233,6 +240,28 @@ func testStateAtOlderRunning(t *testing.T, f stateAtFixture) {
 
 	checkStateAt(t, f, stateAtID(t, f), []stateAtCase{
 		answers("older update still running", end2.Add(time.Minute), stateAtOf(end2, 2, 0)),
+	})
+}
+
+// testStateAtPreview checks that a preview and a dry run that run at the time
+// do not change the state and are not named in Running.
+func testStateAtPreview(t *testing.T, f stateAtFixture) {
+	t.Helper()
+
+	base := stateAtBase()
+	end1 := base.Add(10 * time.Minute)
+
+	one := f.startAt(t, "u1", base, `{"v":1}`)
+	f.endAt(t, one, end1)
+
+	preview := f.startPlanAt(t, "u2", preview(), base.Add(20*time.Minute), "")
+	f.endAt(t, preview, base.Add(40*time.Minute))
+
+	dry := f.startPlanAt(t, "u3", dryRun(), base.Add(20*time.Minute), "")
+	f.endAt(t, dry, base.Add(40*time.Minute))
+
+	checkStateAt(t, f, stateAtID(t, f), []stateAtCase{
+		answers("preview and dry run over the time", base.Add(30*time.Minute), stateAtOf(end1, 1, 0)),
 	})
 }
 
