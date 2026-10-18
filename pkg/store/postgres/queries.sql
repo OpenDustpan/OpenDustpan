@@ -431,13 +431,6 @@ LIMIT sqlc.arg(page_limit);
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3;
 
--- name: GetNamespaceID :one
--- The stable ID of the namespace called name. The change log keys its rows on
--- it, never on the name.
-SELECT id
-FROM namespaces
-WHERE name = $1;
-
 -- name: NextInventoryChangeSeq :one
 -- Takes the next number of the change log of one namespace. The statement runs
 -- last in the transaction of the write, after every other row lock, so the
@@ -474,8 +467,9 @@ LIMIT sqlc.arg(page_limit);
 -- For each unit of a namespace, the row with the highest sequence among the
 -- rows at or before the time, and the row with the highest sequence of all.
 -- ReplayAt and ReplayView need no other row. A skip scan on the index finds
--- each unit once, then two lookups on the index read its rows, so the cost
--- follows the count of units, not the count of rows.
+-- each unit once, then two lookups on the index read its rows. The lookup at
+-- the time reads the rows of the unit after the time, so the cost follows the
+-- count of units and of the rows after the time.
 WITH RECURSIVE units(tool, unit_id) AS (
     (SELECT f.tool, f.unit_id
      FROM inventory_changes AS f

@@ -13,7 +13,7 @@ import (
 
 // changeLogVersion is the version of the migration that adds the inventory
 // change log.
-const changeLogVersion = 107
+const changeLogVersion = 108
 
 // TestInventoryChangeLogBaseline applies the migrations before the change
 // log, adds a live unit and a soft-deleted unit, then opens the store, which

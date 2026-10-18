@@ -60,7 +60,6 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
-	pgColNamespaceID = "namespace_id"
 	pgColObjectKind  = "object_kind"
 	pgColObjectID    = "object_id"
 	pgColResourceKey = "resource_key"
@@ -93,6 +92,7 @@ type pgCopyTable struct {
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
+	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
@@ -172,6 +172,25 @@ func pgCopyStackTables() []pgCopyTable {
 	}
 }
 
+// pgInventoryChangeTables holds the COPY columns of the inventory change log.
+func pgInventoryChangeTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table:   "inventory_change_heads",
+			columns: []string{pgColNamespaceID, "last_seq"},
+			orderBy: []string{pgColNamespaceID},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
+				pgColStatus, "collection", "kind", "resource_count",
+			},
+			orderBy: []string{pgColNamespaceID, pgColSeq},
+		},
+	}
+}
+
 // pgCopyScopeTables holds the COPY columns of the secret and inventory
 // tables, in foreign-key order.
 func pgCopyScopeTables() []pgCopyTable {
@@ -196,19 +215,6 @@ func pgCopyScopeTables() []pgCopyTable {
 			table:   "inventory_deleted",
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
-		},
-		{
-			table:   "inventory_change_heads",
-			columns: []string{pgColNamespaceID, "last_seq"},
-			orderBy: []string{pgColNamespaceID},
-		},
-		{
-			table: "inventory_changes",
-			columns: []string{
-				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
-				pgColStatus, "collection", "kind", "resource_count",
-			},
-			orderBy: []string{pgColNamespaceID, pgColSeq},
 		},
 		{
 			table: "collections",

@@ -144,5 +144,13 @@ func TestInventoryChangeBoundsPlan(t *testing.T) {
 		t.Fatalf("view: %d units, err %v, want %d units", len(view.Units), err, planUnits/2)
 	}
 
-	t.Logf("ViewAt over %d units of %d changes: %v", planUnits, planChanges, time.Since(start))
+	t.Logf("ViewAt at the middle over %d units of %d changes: %v", planUnits, planChanges, time.Since(start))
+
+	start = time.Now()
+
+	if _, err = s.ViewAt(ctx, namespace.Name("acme"), time.UnixMilli(1000+1)); err != nil {
+		t.Fatalf("view at the earliest time: %v", err)
+	}
+
+	t.Logf("ViewAt at the earliest time over %d units of %d changes: %v", planUnits, planChanges, time.Since(start))
 }

@@ -398,13 +398,6 @@ LIMIT sqlc.arg(page_limit);
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
--- name: GetNamespaceID :one
--- The stable ID of the namespace called name. The change log keys its rows on
--- it, never on the name.
-SELECT id
-FROM namespaces
-WHERE name = ?;
-
 -- name: NextInventoryChangeSeq :one
 -- Takes the next number of the change log of one namespace. The statement runs
 -- last in the transaction of the write, after every other row lock, so the
@@ -441,8 +434,9 @@ LIMIT sqlc.arg(page_limit);
 -- For each unit of a namespace, the row with the highest sequence among the
 -- rows at or before the time, and the row with the highest sequence of all.
 -- ReplayAt and ReplayView need no other row. A skip scan on the index finds
--- each unit once, then two lookups on the index read its rows, so the cost
--- follows the count of units, not the count of rows.
+-- each unit once, then two lookups on the index read its rows. The lookup at
+-- the time reads the rows of the unit after the time, so the cost follows the
+-- count of units and of the rows after the time.
 WITH RECURSIVE units(tool, unit_id) AS (
     SELECT seed.tool, seed.unit_id
     FROM (
@@ -455,12 +449,17 @@ WITH RECURSIVE units(tool, unit_id) AS (
     UNION ALL
     SELECT n.tool, n.unit_id
     FROM units AS u
-    JOIN inventory_changes AS n ON n.rowid = (
-        SELECT s.rowid
-        FROM inventory_changes AS s
-        WHERE s.namespace_id = sqlc.arg(namespace_id) AND (s.tool, s.unit_id) > (u.tool, u.unit_id)
-        ORDER BY s.tool, s.unit_id
-        LIMIT 1)
+    JOIN inventory_changes AS n ON n.rowid = coalesce(
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = sqlc.arg(namespace_id) AND s.tool = u.tool AND s.unit_id > u.unit_id
+         ORDER BY s.unit_id
+         LIMIT 1),
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = sqlc.arg(namespace_id) AND s.tool > u.tool
+         ORDER BY s.tool, s.unit_id
+         LIMIT 1))
 )
 SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
 FROM (

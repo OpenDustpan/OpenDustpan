@@ -3569,21 +3569,6 @@ func (q *Queries) GetNamespaceID(ctx context.Context, name string) (string, erro
 	return id, err
 }
 
-const getNamespaceID = `-- name: GetNamespaceID :one
-SELECT id
-FROM namespaces
-WHERE name = $1
-`
-
-// The stable ID of the namespace called name. The change log keys its rows on
-// it, never on the name.
-func (q *Queries) GetNamespaceID(ctx context.Context, name string) (string, error) {
-	row := q.db.QueryRow(ctx, getNamespaceID, name)
-	var id string
-	err := row.Scan(&id)
-	return id, err
-}
-
 const getNamespaceIPAllowlist = `-- name: GetNamespaceIPAllowlist :one
 SELECT ip_allowlist
 FROM namespaces
@@ -6310,8 +6295,9 @@ type ListInventoryChangeBoundsParams struct {
 // For each unit of a namespace, the row with the highest sequence among the
 // rows at or before the time, and the row with the highest sequence of all.
 // ReplayAt and ReplayView need no other row. A skip scan on the index finds
-// each unit once, then two lookups on the index read its rows, so the cost
-// follows the count of units, not the count of rows.
+// each unit once, then two lookups on the index read its rows. The lookup at
+// the time reads the rows of the unit after the time, so the cost follows the
+// count of units and of the rows after the time.
 func (q *Queries) ListInventoryChangeBounds(ctx context.Context, arg ListInventoryChangeBoundsParams) ([]InventoryChange, error) {
 	rows, err := q.db.Query(ctx, listInventoryChangeBounds, arg.NamespaceID, arg.AtMs)
 	if err != nil {

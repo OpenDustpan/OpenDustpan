@@ -35,7 +35,6 @@ const (
 	portColDigest       = "digest"
 	portColSink         = "sink"
 	portColExpiresAtMs  = "expires_at_ms"
-	portColNamespaceID  = "namespace_id"
 	portColObjectKind   = "object_kind"
 	portColObjectID     = "object_id"
 	portColResourceKey  = "resource_key"
