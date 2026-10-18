@@ -123,3 +123,4 @@ both together.
 | [72](0072-programmatic-runs-api-and-sdk.md) | Programmatic plans and applies through the API and an SDK | draft |
 | [73](0073-ai-agent-for-infrastructure.md) | An AI agent for infrastructure across both tools | draft |
 | [74](0074-snapshots-of-files-with-no-git-commit.md) | Snapshots of files that have no git commit | draft |
+| [75](0075-commands-by-intent.md) | Commands by intent: a dev server with no setup, and a serve command that needs decisions | draft |
