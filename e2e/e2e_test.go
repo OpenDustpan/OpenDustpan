@@ -1623,7 +1623,12 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 			"config", "set", "--secret", "--stack", qualified, "apiKey", maskedStateSecret,
 		),
 	)
+	beforeFirst := time.Now()
+
 	env.Step(ctx, t, step("up masked 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+
+	betweenUps := time.Now()
+
 	env.WritePulumiProject(t, maskedStateProgram(org, "hello-again"))
 	env.Step(ctx, t, step("up masked 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
 	env.Step(ctx, t, step(
@@ -1631,6 +1636,12 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		checkMaskedState(ctx, env, org, maskedStateSecret),
 		"stack", "--show-name", "--stack", qualified,
 	))
+	env.Step(ctx, t, step(
+		"masked state at a time",
+		checkMaskedStateAt(ctx, env, org, maskedStateSecret, stateAtTimes{before: beforeFirst, between: betweenUps}),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	checkStateAtRunning(ctx, t, env, org)
 	env.Step(ctx, t, step(
 		"masked state resource search",
 		checkMaskedStateFilter(ctx, env, org, maskedStateSecret),

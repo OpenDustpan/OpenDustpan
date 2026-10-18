@@ -2535,6 +2535,25 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (i
 	return result.RowsAffected(), nil
 }
 
+const firstStateUpdateEnd = `-- name: FirstStateUpdateEnd :one
+SELECT u.ended_at_ms
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0
+ORDER BY u.version ASC
+LIMIT 1
+`
+
+func (q *Queries) FirstStateUpdateEnd(ctx context.Context, stackID string) (int64, error) {
+	row := q.db.QueryRow(ctx, firstStateUpdateEnd, stackID)
+	var ended_at_ms int64
+	err := row.Scan(&ended_at_ms)
+	return ended_at_ms, err
+}
+
 const getAccessToken = `-- name: GetAccessToken :one
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens WHERE id = $1
@@ -7640,6 +7659,32 @@ func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (i
 	return count, err
 }
 
+const runningUpdateAt = `-- name: RunningUpdateAt :one
+SELECT u.version
+FROM updates AS u
+WHERE u.stack_id = $1
+  AND u.version > $3
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.started_at_ms <= $2
+  AND (u.ended_at_ms = 0 OR u.ended_at_ms > $2)
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+type RunningUpdateAtParams struct {
+	StackID     string
+	StartedAtMs int64
+	Version     int64
+}
+
+func (q *Queries) RunningUpdateAt(ctx context.Context, arg RunningUpdateAtParams) (int64, error) {
+	row := q.db.QueryRow(ctx, runningUpdateAt, arg.StackID, arg.StartedAtMs, arg.Version)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
 const saveSensitiveMarks = `-- name: SaveSensitiveMarks :execrows
 UPDATE state_versions
 SET sensitive_marks = $1
@@ -8079,6 +8124,17 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 	return result.RowsAffected(), nil
 }
 
+const stackExistsByID = `-- name: StackExistsByID :one
+SELECT id FROM stacks WHERE id = $1
+`
+
+func (q *Queries) StackExistsByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, stackExistsByID, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const stackRefByID = `-- name: StackRefByID :one
 SELECT namespace, project, name
 FROM stacks
@@ -8095,6 +8151,36 @@ func (q *Queries) StackRefByID(ctx context.Context, id string) (StackRefByIDRow,
 	row := q.db.QueryRow(ctx, stackRefByID, id)
 	var i StackRefByIDRow
 	err := row.Scan(&i.Namespace, &i.Project, &i.Name)
+	return i, err
+}
+
+const stateAtUpdate = `-- name: StateAtUpdate :one
+SELECT u.version, u.ended_at_ms, u.created_by
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0 AND u.ended_at_ms <= $2
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+type StateAtUpdateParams struct {
+	StackID   string
+	EndedAtMs int64
+}
+
+type StateAtUpdateRow struct {
+	Version   int64
+	EndedAtMs int64
+	CreatedBy string
+}
+
+func (q *Queries) StateAtUpdate(ctx context.Context, arg StateAtUpdateParams) (StateAtUpdateRow, error) {
+	row := q.db.QueryRow(ctx, stateAtUpdate, arg.StackID, arg.EndedAtMs)
+	var i StateAtUpdateRow
+	err := row.Scan(&i.Version, &i.EndedAtMs, &i.CreatedBy)
 	return i, err
 }
 

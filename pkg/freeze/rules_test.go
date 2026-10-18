@@ -302,6 +302,34 @@ func TestOccurrenceIDIsStable(t *testing.T) {
 	}
 }
 
+func TestIsOccurrenceID(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 10, 16, 13, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{freeze.OccurrenceID("shop", "fzs-weekend", start), true},
+		{freeze.OccurrenceID("other", "fzs-release-week", start), true},
+		{freeze.OccurrenceID("shop", "fzs-old", time.Date(1969, 12, 31, 0, 0, 0, 0, time.UTC)), true},
+		{"frz-1", false},
+		{"frz-manual", false},
+		{"frz-weekend-1792155600000", false},
+		{"frz-weekend-1792155600000-8d9001d32c6a703", false},
+		{"frz-weekend-17921556x0000-8d9001d32c6a703d", false},
+		{"frz-weekend-1792155600000-8D9001D32C6A703D", false},
+		{"fzs-weekend-1792155600000-8d9001d32c6a703d", false},
+	}
+
+	for _, tc := range cases {
+		if got := freeze.IsOccurrenceID(tc.id); got != tc.want {
+			t.Errorf("IsOccurrenceID(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
 func TestFreezeOf(t *testing.T) {
 	t.Parallel()
 

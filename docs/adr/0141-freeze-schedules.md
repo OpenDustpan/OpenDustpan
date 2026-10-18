@@ -1,6 +1,6 @@
 # 141. Freeze schedules: windows, recurring freezes and calendar freezes
 
-Status: accepted · 2026-10-18 · supersedes decision 9 of ADR 103 in part
+Status: accepted · 2026-10-18 · supersedes decision 9 of ADR 103 in part. Decisions 1, 4, 6, 9 and 14 superseded in part by ADR 149
 
 ## Context
 

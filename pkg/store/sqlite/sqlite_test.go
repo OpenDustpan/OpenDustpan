@@ -627,6 +627,16 @@ func TestUpdatesConformance(t *testing.T) {
 	})
 }
 
+func TestStateAtConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStateAt(t, func(t *testing.T) storetest.StateAtStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 func TestWorkspaceConformance(t *testing.T) {
 	t.Parallel()
 

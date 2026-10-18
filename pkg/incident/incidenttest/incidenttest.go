@@ -52,6 +52,7 @@ func Run(t *testing.T, newHarness Factory) {
 		run  func(t *testing.T, h Harness)
 	}{
 		{"create stores an incident and get returns it", testCreateGet},
+		{"get and notes of an incident of another namespace are ErrNotFound", testReadOtherNamespace},
 		{"create refuses an incident that is not new", testCreateNotNew},
 		{"update on an older version is ErrConflict", testUpdateConflict},
 		{"update keeps the namespace, the classifications and the reports", testUpdateKeeps},
@@ -184,7 +185,7 @@ func create(t *testing.T, h Harness, fence namespace.Fence, in incident.Incident
 func get(t *testing.T, h Harness, id string) incident.Incident {
 	t.Helper()
 
-	in, err := h.Store.Get(t.Context(), id)
+	in, err := h.Store.Get(t.Context(), shop, id)
 	if err != nil {
 		t.Fatalf("Get %s: %v", id, err)
 	}
@@ -242,7 +243,7 @@ func testCreateGet(t *testing.T, h Harness) {
 	fence := setup(t, h)
 	create(t, h, fence, sample("inc-1", now(), "opentofu:shop/network"))
 
-	got, err := h.Store.Get(t.Context(), "inc-1")
+	got, err := h.Store.Get(t.Context(), shop, "inc-1")
 	if err != nil || got.Version != 1 || got.OnCall != "schedule:network" || len(got.Units) != 1 {
 		t.Fatalf("Get = %+v (%v), want the created incident with version 1", got, err)
 	}
@@ -251,12 +252,40 @@ func testCreateGet(t *testing.T, h Harness) {
 		t.Fatalf("second Create: err = %v, want ErrExists", err)
 	}
 
-	if _, err := h.Store.Get(t.Context(), "inc-none"); !errors.Is(err, incident.ErrNotFound) {
+	if _, err := h.Store.Get(t.Context(), shop, "inc-none"); !errors.Is(err, incident.ErrNotFound) {
 		t.Fatalf("Get unknown: err = %v, want ErrNotFound", err)
 	}
 
 	if n := auditCount(t, h, shop); n != 1 {
 		t.Fatalf("audit entries = %d, want 1", n)
+	}
+}
+
+func testReadOtherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, fence, sample("inc-1", now(), "opentofu:shop/network"))
+
+	if err := h.Store.AddNote(t.Context(), note("inc-1", "Paged the network team"), fence, entry()); err != nil {
+		t.Fatalf("AddNote: %v", err)
+	}
+
+	if _, err := h.Store.Get(t.Context(), lab, "inc-1"); !errors.Is(err, incident.ErrNotFound) {
+		t.Fatalf("Get inc-1 in %s: err = %v, want ErrNotFound", lab, err)
+	}
+
+	for _, tc := range []struct {
+		ns namespace.Name
+		id string
+	}{{lab, "inc-1"}, {shop, "inc-none"}} {
+		if _, err := h.Store.Notes(t.Context(), tc.ns, tc.id); !errors.Is(err, incident.ErrNotFound) {
+			t.Fatalf("Notes %s in %s: err = %v, want ErrNotFound", tc.id, tc.ns, err)
+		}
+	}
+
+	if notes, err := h.Store.Notes(t.Context(), shop, "inc-1"); err != nil || len(notes) != 1 {
+		t.Fatalf("Notes inc-1 in %s = %d (%v), want 1", shop, len(notes), err)
 	}
 }
 
@@ -290,7 +319,7 @@ func testCreateNotNew(t *testing.T, h Harness) {
 		}
 	}
 
-	if _, err := h.Store.Get(t.Context(), "inc-1"); !errors.Is(err, incident.ErrNotFound) {
+	if _, err := h.Store.Get(t.Context(), shop, "inc-1"); !errors.Is(err, incident.ErrNotFound) {
 		t.Fatalf("Get: err = %v, want ErrNotFound", err)
 	}
 
@@ -845,7 +874,7 @@ func testNotes(t *testing.T, h Harness) {
 		t.Fatalf("AddNote to an unknown incident: err = %v, want ErrNotFound", err)
 	}
 
-	got, err := h.Store.Notes(t.Context(), "inc-1")
+	got, err := h.Store.Notes(t.Context(), shop, "inc-1")
 	if err != nil || len(got) != 2 || got[0].Text != "Paged the network team" {
 		t.Fatalf("Notes = %+v (%v), want two, oldest first", got, err)
 	}
@@ -964,12 +993,12 @@ func checkUnchanged(t *testing.T, h Harness, stored incident.Incident) {
 		t.Fatalf("Get = %+v, want the incident as created", got)
 	}
 
-	_, err := h.Store.Get(t.Context(), "inc-2")
+	_, err := h.Store.Get(t.Context(), shop, "inc-2")
 	if !errors.Is(err, incident.ErrNotFound) {
 		t.Fatalf("Get inc-2: err = %v, want ErrNotFound", err)
 	}
 
-	notes, err := h.Store.Notes(t.Context(), stored.ID)
+	notes, err := h.Store.Notes(t.Context(), shop, stored.ID)
 	if err != nil || len(notes) != 0 {
 		t.Fatalf("Notes = %d (%v), want none", len(notes), err)
 	}
