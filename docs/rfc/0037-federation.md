@@ -13,6 +13,10 @@ wider question. RFC 37 was not accepted, so an edit is allowed (ADR 15). This
 RFC replaces the separate multi-tenancy RFC that RFC 68 names. It decides
 nothing.
 
+On 2026-10-18 the owner decided parts of it. See "Outcome": the hosted
+service is multitenant (ADR 215), and no routing and no reads go across
+installations (ADR 221). Regions in one installation stay open here.
+
 ## Problem
 
 Where does a namespace live, and how does a request reach it?
@@ -400,4 +404,21 @@ a license, an edition or a hosted flag, and each exists in every build.
 
 ## Outcome
 
-None yet.
+Decided in part on 2026-10-18 (owner decisions):
+
+- [ADR 221](../adr/0221-no-bucket-of-the-customer-and-no-routing-across-installations.md):
+  no routing, forwarding or redirect to another installation, and no read
+  across installations. This drops the placement map for installations
+  (design point 1, options B and C), forwarding to another installation
+  (design point 2), the trust between installations (design point 3), the
+  fan-out of design point 4, and the read view of design point 8.
+- [ADR 215](../adr/0215-the-account-is-the-tenant-of-a-multitenant-hosted-service.md):
+  design point 7. OpenDustpan Cloud runs many accounts on shared
+  installations (option B, with an account above namespaces), and the
+  operator can shard. A request reaches its shard by the host name of its
+  account and DNS, so the router is not needed for it.
+- The operator's move of an account between shards goes to RFC 76.
+
+Regions in one installation (design point 1 option A, design points 2 and
+5), the move of a namespace (design point 6) and open questions 1, 2, 7 and
+9 for regions stay open.

@@ -1,6 +1,6 @@
 # 30. Backups and restore
 
-Status: accepted · 2026-10-11 · superseded in part by ADR 38 (restore) and ADR 39 (`backup check`). Decision 8 superseded in part by ADR 151
+Status: accepted · 2026-10-11 · superseded in part by ADR 38 (restore) and ADR 39 (`backup check`). Decision 8 superseded in part by ADR 151. The backup of one namespace added by ADR 218
 
 ## Context
 

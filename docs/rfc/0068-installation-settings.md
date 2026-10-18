@@ -889,4 +889,18 @@ the owner's approval.
 
 ## Outcome
 
-None yet.
+Decided in part on 2026-10-18 (owner decisions):
+
+- "Multi-tenancy" and open question 10: OpenDustpan Cloud is multitenant,
+  with the account as the tenant and an account layer of settings between
+  the installation and the namespace
+  ([ADR 215](../adr/0215-the-account-is-the-tenant-of-a-multitenant-hosted-service.md)).
+  Option A of that section is not taken.
+- "Storage quota": the key is `limits.storageBytes`, shown as "storage
+  limit" (ADR 215 decision 12).
+- Open question 11: a lock in the static layer can turn a feature off
+  ([ADR 219](../adr/0219-a-static-lock-can-turn-a-feature-off.md)).
+- "API request rate": an account bucket and shares of shared resources
+  ([ADR 220](../adr/0220-isolation-between-accounts-on-shared-infrastructure.md)).
+
+The other questions stay open.

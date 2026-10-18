@@ -1,6 +1,6 @@
 # 23. Secrets and the built-in key-encryption key
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10. Decision 8 decided by ADR 217, which also makes the namespace key the wrapper of the data keys of a namespace
 
 ## Context
 

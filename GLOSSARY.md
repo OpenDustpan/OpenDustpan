@@ -16,8 +16,28 @@ _Avoid_: Client, integration, provider
 The short name of a tool, as a label in the console, the API and the docs: "Pulumi" or "OpenTofu". In a claim of compatibility, or where the text means the program, write "the Pulumi CLI". Never write "Pulumi" alone where a reader can think of Pulumi Cloud or of the company. A unit reference and stored data hold the lowercase code of the tool instead: `pulumi` or `opentofu`.
 _Avoid_: "Pulumi CLI" as a label, "Pulumi Cloud" for the Pulumi CLI, "Terraform" for OpenTofu, tool label
 
+**Account**:
+The tenant: the object above namespaces (ADR 215). It owns namespaces, principals and groups, sign-in with its identity provider, settings and limits, its keys and a billing reference. The server finds the account of a request from its host name. A self-hosted installation has one account, the default account.
+_Avoid_: Tenant (outside design documents), organization, customer, org
+
+**Account ID**:
+The stable, opaque identifier of an account, with the prefix `acc-`. It never changes, and the server never gives it to a second account (ADR 215).
+_Avoid_: Tenant ID, customer ID
+
+**Account host name**:
+A host name that names one account, for example `acme.opendustpan.com` on OpenDustpan Cloud. The server reads the account of a request from it before it authenticates the request. It never changes once a tenant uses it, because cloud trusts and CLI logins hold it (ADR 215 decision 9).
+_Avoid_: Subdomain, tenant URL
+
+**Default account**:
+The one account of a self-hosted installation, which each new installation and each upgrade makes. It is the operator account. With one account, the server answers it on every host name (ADR 215 decision 14).
+_Avoid_: Root account, main account
+
+**Operator account**:
+The one account of an installation whose principals can hold grants on the installation object. On a self-hosted installation it is the default account. On OpenDustpan Cloud it holds the operator's staff and no tenant (ADR 215 decision 7).
+_Avoid_: Admin account, system account
+
 **Namespace**:
-The unit of tenancy that owns units, access rules and secrets. Each tool calls it an organization.
+A boundary inside one account that owns units, access rules and secrets. It has its own fence, home region, audit scope, backup, blueprints, profiles, OIDC issuer, settings and namespace key (ADR 218). Each tool calls it an organization. A namespace name is unique in its account.
 _Avoid_: Organization (except when naming a tool's own protocol field), tenant, account, org
 
 **Namespace ID**:
@@ -65,7 +85,7 @@ The backend or product that holds the state of a unit before an import. Examples
 _Avoid_: Origin, legacy backend
 
 **Installation**:
-One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
+One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. It holds one or more accounts. On OpenDustpan Cloud, each installation is a shard. The installation API (`/api/server/...`) acts on the whole installation.
 _Avoid_: Cluster, instance (one server process), deployment
 
 **Instance**:
@@ -99,6 +119,10 @@ _Avoid_: Minimum schema version, compatibility level
 **Backup**:
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
+
+**Namespace backup**:
+The copy of the rows and blobs of one namespace in the portable format (ADR 218 decision 4). It holds the namespace key, wrapped by the account key. It holds the grants of the namespace, never its principals or groups. It restores only into its own account.
+_Avoid_: Partial backup, namespace export
 
 **Baseline migration**:
 The one migration of each dialect that replaced every migration before it, before the first tag. Its version is 100. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
@@ -172,7 +196,7 @@ _Avoid_: Token, guard
 ### Identity
 
 **Principal**:
-A caller whose identity OpenDustpan checked: a person, a service or a workload. Most principals belong to the whole installation. A principal of a namespace is the exception.
+A caller whose identity OpenDustpan checked: a person, a service or a workload. Each principal belongs to one account (ADR 215 decision 6). A person who works in two accounts has two principals. A principal of a namespace is the exception: it belongs to one namespace of the account.
 _Avoid_: User (when the caller can be a machine), actor
 
 **Principal of a namespace**:
@@ -227,7 +251,7 @@ A rule in one namespace that matches a JWT from an issuer or a TLS client certif
 _Avoid_: Trust policy, federation rule
 
 **Group**:
-A named set of principals of the whole installation. A principal can be a member of more than one group (ADR 52).
+A named set of principals of one account. A principal can be a member of more than one group of its account (ADR 52, ADR 215).
 _Avoid_: Team (except when naming a tool's own protocol field), collection
 
 **Role**:
@@ -393,8 +417,24 @@ The random key that encrypts all secret values of one scope. OpenDustpan stores 
 _Avoid_: DEK, secret key
 
 **Key-encryption key**:
-The key, kept outside the OpenDustpan database, that encrypts data keys.
+The key, kept outside the OpenDustpan database, at the top of the key hierarchy. It wraps each account key and the data keys of the installation scope (ADR 217). It is a key file or a KMS key of the operator.
 _Avoid_: Master key, root key, KEK
+
+**Customer key**:
+A key in the key management service (KMS) of a customer that wraps the account key of one account (ADR 217). The server never holds it. It is optional. When the customer disables it, the content of the account cannot be opened, and the key state of the account is `revoked`.
+_Avoid_: BYOK key, CMK, master key
+
+**Account key**:
+The random 256-bit key of one account, with the prefix `ak-`. It wraps the namespace keys of the account and the data keys of the account scope. The key-encryption key wraps it, and a customer key too when the account has one (ADR 217).
+_Avoid_: Tenant key, account master key
+
+**Namespace key**:
+The random 256-bit key of one namespace, with the prefix `nk-`. The account key wraps it. It wraps the data keys and the item keys of the namespace (ADR 217). It does not rotate.
+_Avoid_: Namespace data key (a data key has a scope), namespace KEK
+
+**Key state**:
+The state of the account key of an account: `active`, `unavailable` (the KMS cannot answer) or `revoked` (the customer disabled its key) (ADR 217).
+_Avoid_: Key status, KMS state
 
 **Sealed**:
 Encrypted at rest with the data key of a scope, or with the item key of a history item. The server seals each checkpoint blob, event payload and journal batch of a Pulumi update with the item key of the update (ADR 151). It seals the state blob and the outputs document of an OpenTofu state version with the item key of the state version. The part of the server that seals and opens content is the sealer.
@@ -453,6 +493,14 @@ _Avoid_: Secret count
 **OpenDustpan Cloud**:
 The hosted service that the project runs. It is the build of the server and the console with shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59, ADR 77).
 _Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edition with its own features)
+
+**Shard**:
+One installation of OpenDustpan Cloud that holds whole accounts. An account is on one shard at a time. No API answer, error, ID or host name tells a tenant which shard holds its account (ADR 215 decision 2). Only the operator moves an account.
+_Avoid_: Cell, pod, cluster, region
+
+**Storage limit**:
+The fair-use limit on the stored bytes of an account or a namespace (ADR 215 decision 12). Its setting is `limits.storageBytes`. At the limit, the server refuses the start of new work, never work in progress.
+_Avoid_: Quota (the catalog quota is another concept), storage quota
 
 ### Resources and self-service
 
@@ -899,7 +947,7 @@ The state item of a unit that no redaction can target (ADR 150, ADR 151). For a 
 _Avoid_: Current item, head
 
 **Item key**:
-The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The `Wrapper` wraps it, as it wraps a data key. The server writes the wrapped key one time, as the blob `item-keys/<item key ID>`. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
+The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key one time, as the blob `item-keys/<item key ID>`. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
 _Avoid_: Version key, derived key, data key (that is the one key of a scope)
 
 **Redaction**:
@@ -973,7 +1021,7 @@ The JSON Lines file that the command of a cloud sweep writes to the path in `DUS
 _Avoid_: Sweep result, scan output
 
 **Namespace link**:
-A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. An installation administrator with `server:link-namespaces` makes the link. A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
+A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. An account administrator with `account:link-namespaces` makes the link, and both namespaces are in one account (ADR 216, ADR 220). A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
 _Avoid_: Link (alone), namespace trust, federation
 
 **Context**:
@@ -1115,7 +1163,7 @@ _Avoid_: Threat (alone), alert, vulnerability
 
 ## Flagged ambiguities
 
-- **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
+- **Account** is the tenant above namespaces (ADR 215). It is no longer a console label for a namespace. A break-glass account, a user account and a cloud account (an account scope of a sweep target) are different things. Write "account" alone only for the tenant.
 
 - **Group** is a set of principals (ADR 52). RFC 4 used "group" for a set of units before the owner chose "collection". A set of units is a collection.
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".

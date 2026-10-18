@@ -1,6 +1,6 @@
 # 70. Act-as reach, identity provider groups and break-glass accounts
 
-Status: accepted · 2026-10-15
+Status: accepted · 2026-10-15. Decision 11 superseded in part by ADR 216 for the account scope
 
 ## Context
 

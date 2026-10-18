@@ -1,6 +1,6 @@
 # 52. Groups, roles, grants and the access-review export
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13. Decisions 1 and 2 superseded in part by ADR 215: principals and groups belong to an account
 
 ## Context
 
