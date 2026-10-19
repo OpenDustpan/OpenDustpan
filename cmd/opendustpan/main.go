@@ -2,6 +2,7 @@
 //
 //	opendustpan --version
 //	opendustpan serve [flags]
+//	opendustpan dev [flags]
 //	opendustpan health [flags]
 //	opendustpan namespace create [flags] <name>
 //	opendustpan upgrade check [flags]
@@ -50,6 +51,7 @@ import (
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -236,7 +238,7 @@ func serveWithIO(
 		return err
 	}
 
-	return f.run(ctx, stdin, stderr, terminal)
+	return kindRefusal(f.run(ctx, stdin, stderr, terminal), commandServe)
 }
 
 // serveFlags holds the settings of the serve subcommand.
@@ -255,6 +257,10 @@ type serveFlags struct {
 	args    []string
 	lookup  cli.LookupFunc
 	fileSum [sha256.Size]byte
+
+	// installationKind is the kind of the command: empty means production.
+	// Only the dev command sets it.
+	installationKind installation.Kind
 
 	// hup receives SIGHUP from the parse of the flags on, when --config
 	// names a file. The reloader reads it.
@@ -308,6 +314,16 @@ type serveFlags struct {
 	auditSigningKeyFile string
 	auditVerifyKeysFile string
 	auditCheckpoints    bool
+}
+
+// kind answers the installation kind of the command: production for serve,
+// and the kind that dev sets for the server code that dev shares with serve.
+func (f *serveFlags) kind() installation.Kind {
+	if f.installationKind == "" {
+		return installation.KindProduction
+	}
+
+	return f.installationKind
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
@@ -517,7 +533,7 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 
 	open := func() (store, error) {
 		if st == nil {
-			opened, err := openStore(ctx, f.database, logger, openMigrate)
+			opened, err := openStore(ctx, f.database, logger, openMigrate, installation.KindProduction)
 			if err != nil {
 				return nil, err
 			}
@@ -557,7 +573,8 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 // subject and each setting with its layer and its effective value. The audit
 // log is always on, so a failed write stops the start (decision 11).
 func (f *serveFlags) writeStartEntry(ctx context.Context, entries audit.ServerStore) error {
-	entry := cli.SettingsEntry(audit.ChannelStartup, f.instanceID, time.Now(), cli.AuditSettings(f.resolved))
+	changes := append(cli.AuditSettings(f.resolved), kindChange(f.kind()))
+	entry := cli.SettingsEntry(audit.ChannelStartup, f.instanceID, time.Now(), changes)
 
 	if _, err := entries.AppendServer(ctx, entry); err != nil {
 		return fmt.Errorf("write the start audit entry: %w", err)
@@ -1176,6 +1193,7 @@ func (f *serveFlags) serverOptions(
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
 	opts = append(opts, profileStoreOption(st)...)
+	opts = append(opts, dustpan.WithInstallationKind(f.kind()), dustpan.WithInstallationKindStore(st))
 
 	return opts, nil
 }
@@ -1527,6 +1545,21 @@ func closeAppLog(ctx context.Context, app *appLog, stderr io.Writer) {
 	}
 }
 
+// logLevelOf answers the slog level of a log level setting that
+// checkLogFlags accepted. An unknown value answers info.
+func logLevelOf(setting string) slog.Level {
+	switch normalizeLogLevel(setting) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // appLogFor builds the application logger and its sinks from the log
 // flags. Without --log-sink it writes to stderr, as serve always did.
 func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
@@ -1534,20 +1567,7 @@ func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
 		return appLog{}, err
 	}
 
-	var level slog.Level
-
-	switch normalizeLogLevel(f.logLevel) {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
-
-	return newAppLog(f.logSinks, level, f.logFormat, stderr, os.LookupEnv)
+	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, os.LookupEnv)
 }
 
 // store is the persistence adapter chosen by --database.
@@ -1569,6 +1589,7 @@ type store interface {
 	accesstoken.Store
 	accesstoken.HostStore
 	tempadmin.Store
+	installation.KindStore
 	close()
 }
 
@@ -1595,21 +1616,27 @@ const (
 	openNoMigrate
 )
 
-// openStore opens the persistence adapter that --database names. Only serve
-// and host create-temp-admin call it: serve runs the server, and host
-// create-temp-admin recovers a lost administrator through the database,
+// openStore opens the persistence adapter that --database names. Only serve,
+// dev and host create-temp-admin call it: serve and dev run the server, and
+// host create-temp-admin recovers a lost administrator through the database,
 // after its off switch and the recovery mode allow it. Every other command
 // is a client of the REST API. The gate test swaps it for a function that
 // fails the test, so a future client command that opens a store fails the
 // test. The mode says whether Open applies pending migrations: serve
 // applies them, and the host command applies none and refuses a database
-// with a pending migration.
+// with a pending migration. The kind is the installation kind of the
+// command: the opener refuses a database that another kind claimed before it
+// applies a migration. An empty kind makes no check.
 //
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
-var openStore = func(ctx context.Context, database string, logger *slog.Logger, mode openMode) (store, error) {
+var openStore = func(
+	ctx context.Context, database string, logger *slog.Logger, mode openMode, kind installation.Kind,
+) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		opts := []sqlite.Option{sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version)}
+		opts := []sqlite.Option{
+			sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version), sqlite.WithInstallationKind(kind),
+		}
 		if mode == openNoMigrate {
 			opts = append(opts, sqlite.WithoutMigrate())
 		}
@@ -1623,7 +1650,7 @@ var openStore = func(ctx context.Context, database string, logger *slog.Logger, 
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		opts := []postgres.Option{postgres.WithBinaryVersion(version)}
+		opts := []postgres.Option{postgres.WithBinaryVersion(version), postgres.WithInstallationKind(kind)}
 		if mode == openNoMigrate {
 			opts = append(opts, postgres.WithoutMigrate())
 		}

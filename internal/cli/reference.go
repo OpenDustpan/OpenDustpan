@@ -17,6 +17,7 @@ func Reference() string {
 	writeSecrets(&out)
 	writeStepInputs(&out)
 	writeClients(&out)
+	writeDev(&out)
 	writeHost(&out)
 
 	return out.String()
@@ -355,4 +356,38 @@ func writeHost(out *strings.Builder) {
 
 		out.WriteString("| " + flag + " | " + env + " | " + s.Reference + " |\n")
 	}
+}
+
+// writeDev writes the dev command section from the dev declarations, so the
+// reference lists the same flags as the command takes.
+func writeDev(out *strings.Builder) {
+	out.WriteString("\n")
+	out.WriteString("## Dev command\n")
+	out.WriteString("\n")
+	out.WriteString("`opendustpan dev` runs a server for a trial or for CI, with no setup. It reads\n")
+	out.WriteString("each setting from a flag only. No variable of `serve` and no configuration\n")
+	out.WriteString("file sets a flag of `dev`, also when `serve` has a flag with the same name.\n")
+	out.WriteString("The [dev server guide](../guides/dev-server.md) shows the steps.\n")
+	out.WriteString("\n")
+	out.WriteString("| Flag | Default |\n")
+	out.WriteString("| --- | --- |\n")
+
+	for _, s := range DevFlags() {
+		out.WriteString("| `--" + s.Flag + "` | " + s.Reference + " |\n")
+	}
+
+	out.WriteString("\n")
+	out.WriteString("`dev` reads only these two variables:\n")
+	out.WriteString("\n")
+	out.WriteString("| Environment | Description |\n")
+	out.WriteString("| --- | --- |\n")
+
+	for _, s := range DevEnvs() {
+		out.WriteString("| `" + s.Env + "` | " + s.Doc + " |\n")
+	}
+
+	out.WriteString("\n")
+	out.WriteString("At start, `dev` clears each variable of a secret setting of `serve` from its\n")
+	out.WriteString("environment, and never reads `DUSTPAN_ADMIN_TOKEN` or\n")
+	out.WriteString("`DUSTPAN_ADMIN_TOKEN_FILE`.\n")
 }
