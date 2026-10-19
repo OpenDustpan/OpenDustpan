@@ -1,6 +1,6 @@
 # 19. A stack has a stable ID
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10 · the home region amended by ADR 248 (primary installation)
 
 ## Context
 

@@ -17,7 +17,7 @@ The short name of a tool, as a label in the console, the API and the docs: "Pulu
 _Avoid_: "Pulumi CLI" as a label, "Pulumi Cloud" for the Pulumi CLI, "Terraform" for OpenTofu, tool label
 
 **Namespace**:
-The unit of tenancy that owns units, access rules and secrets, and the tenant of OpenDustpan Cloud (ADR 215). It has its own fence, home region, audit scope, backup, blueprints, profiles, OIDC issuer, settings and namespace key (ADR 218). With `identity.principalHome: namespace`, it also has its own principals, groups and sign-in. Each tool calls it an organization, and the hosted console calls it an account. A namespace name is unique in the installation.
+The unit of tenancy that owns units, access rules and secrets, and the tenant of OpenDustpan Cloud (ADR 215). It has its own fence, primary installation, audit scope, backup, blueprints, profiles, OIDC issuer, settings and namespace key (ADR 218). With `identity.principalHome: namespace`, it also has its own principals, groups and sign-in. Each tool calls it an organization, and the hosted console calls it an account. A namespace name is unique in the installation.
 _Avoid_: Organization (except when naming a tool's own protocol field), tenant, account, org
 
 **Namespace state**:
@@ -101,7 +101,7 @@ A finding of a move check or an import plan. It names a part of a unit that the 
 _Avoid_: Breakage, gap
 
 **Installation**:
-One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path, and its actions have the area `installation:` (ADR 210). The authorization and audit object of the installation keeps the name `@server`. Write `@server` only for that object, and "installation" in each other place.
+One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path, and its actions have the area `installation:` (ADR 210). The authorization and audit object of the installation keeps the name `@server`. Write `@server` only for that object, and "installation" in each other place. An installation owns its namespaces. A namespace holds collections, and a collection holds units (ADR 248).
 _Avoid_: Cluster, instance (one server process), deployment
 
 **Instance**:
@@ -215,22 +215,42 @@ _Avoid_: Tombstone (that is the shred record of a purged unit)
 The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/dustpan/v1/maintenance/enter`. The other state is `normal`.
 _Avoid_: Downtime, freeze
 
-### Regions
+### Federation
 
-**Home region**:
-The one region where a namespace accepts writes.
-_Avoid_: Primary region, active region
+**Installation name**:
+The name that an operator gives an installation with `--installation` (`DUSTPAN_INSTALLATION`). It is `local` by default. The namespace row names its primary installation with it. The server never makes it at random, so a restore into a new database keeps it (ADR 248).
+_Avoid_: Region, installation ID, server name
 
-**Standby region**:
-A region that holds a replicated copy of a namespace and accepts no writes to it.
-_Avoid_: Secondary region, replica region
+**Primary installation**:
+The one installation that owns a namespace and accepts its writes. The namespace row names it. A namespace gets the installation that creates it, and only a promotion changes it (ADR 248).
+_Avoid_: Home region, home installation, home instance, owning installation, active installation, region (of a namespace)
+
+**Replica installation**:
+An installation of a federation that holds an asynchronous copy of a namespace and accepts no writes to it. It answers reads from its copy. With request forwarding on, it forwards each write to the primary installation. Without request forwarding, it answers 421 to a write.
+_Avoid_: Standby installation, standby region, secondary, follower
+
+**Federation**:
+A set of installations that an operator joins for request forwarding, asynchronous replication of namespaces, or both. A federation has no control home, no lease, no write quorum and no consensus protocol. No write waits for another installation, and a network partition does not stop writes. Each installation keeps its own installation scope (ADR 248).
+_Avoid_: Cluster, mesh, shard, region
+
+**Federation member**:
+One installation in a federation. Federation is opt-in, on a self-hosted installation and on OpenDustpan Cloud. Without request forwarding, each member has its own public URL.
+_Avoid_: Shard, cell, pod, node
+
+**Request forwarding**:
+The optional federation behavior in which a member sends a request for a namespace to its primary installation and streams the answer back. It makes one hop only. The primary installation checks the token and the authorization again. It refuses a request with a token that another installation made for its own installation principal.
+_Avoid_: Proxying (alone), redirect
 
 **Promotion**:
-The administrator action that makes a standby region the home region of a namespace.
-_Avoid_: Failover (as the name of the action), switchover
+The operator action that makes a replica installation the primary installation of a namespace. A planned promotion first demotes the old primary installation and loses no change. A forced promotion does not wait for the old primary installation. The server never promotes on its own. The unit of a promotion is the namespace.
+_Avoid_: Failover (as the name of the action), switchover, automatic failover
+
+**Divergent tail**:
+The changes that a former primary installation wrote to a namespace after its last replicated change and before it applied a forced promotion. The former primary installation keeps them readable for an export. The server never merges them into the new primary installation.
+_Avoid_: Conflict, lost writes, split brain (as a name of the data)
 
 **Failover version**:
-A number that increases by one at each promotion of a namespace.
+A number that increases by one at each promotion of a namespace, and at each restore.
 _Avoid_: Epoch, generation
 
 **Fence**:
@@ -549,10 +569,6 @@ _Avoid_: Secret count
 **OpenDustpan Cloud**:
 The hosted service that the project runs. It is the build of the server and the console with shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59, ADR 77).
 _Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edition with its own features)
-
-**Federation member**:
-One installation in a federation of installations (RFC 79). Federation is opt-in, on a self-hosted installation and on OpenDustpan Cloud. It is not decided: OpenDustpan Cloud is one installation now (ADR 215 decision 21). No API answer, error, ID or host name tells a tenant which member holds its namespace.
-_Avoid_: Shard, cell, pod
 
 **Storage limit**:
 The fair-use limit on the stored bytes of a namespace (ADR 220 decision 13). Its setting is `limits.storageBytes`. At the limit, the server refuses the start of new work, never work in progress.

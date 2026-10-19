@@ -1,6 +1,6 @@
 # 215. The namespace is the tenant, and OpenDustpan Cloud is multitenant (owner)
 
-Status: accepted · 2026-10-18 · supersedes in part ADR 52 (decisions 1 and 2), ADR 59 (decision 6) and ADR 67 (decision 7)
+Status: accepted · 2026-10-18 · supersedes in part ADR 52 (decisions 1 and 2), ADR 59 (decision 6) and ADR 67 (decision 7). Decision 21 amended by ADR 248 (federation model)
 
 ## Context
 
