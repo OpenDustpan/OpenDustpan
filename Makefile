@@ -46,8 +46,8 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 
 # The vulnerability database and the misconfiguration checks come from
-# mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is a
-# line in .trivyignore with its reason.
+# mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
+# entry in .trivyignore.yaml, scoped by path, with its reason in statement.
 #
 # The license scan writes a JSON report, and scripts/trivy-license-gate.py checks
 # it. The gate fails on an unknown, restricted (HIGH, for example GPL) or
@@ -63,7 +63,7 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 TRIVY_CANARY_MODULE := github.com/xen0n/gosmopolitan@v1.3.0
 TRIVY_LICENSE_FLAGS := --scanners license --disable-telemetry --skip-version-check --no-progress
 
-trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile), secrets in the tree, and dependency licenses.
+trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile, Helm chart output), secrets in the tree, and dependency licenses.
 	trivy fs --scanners vuln,misconfig,secret --exit-code 1 --ignorefile .trivyignore.yaml \
 		--disable-telemetry --skip-version-check --no-progress .
 	go mod download
