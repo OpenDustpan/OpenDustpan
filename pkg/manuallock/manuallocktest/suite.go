@@ -71,6 +71,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a failed audit write leaves no lock and keeps a lock", test: testAuditRollsBack},
 		{name: "the holder removes the lock and another principal cannot", test: testRemove},
 		{name: "a forced removal ends the lock of another principal", test: testForcedRemove},
+		{name: "a removal with an empty holder is refused and keeps the lock", test: testEmptyHolderRefused},
 		{name: "a removal of a lock that does not exist is refused", test: testRemoveMissing},
 		{name: "an unlock after a force-unlock and a new lock keeps the new lock", test: testStaleUnlockKeepsNewLock},
 		{name: "two concurrent removals end the lock once", test: testConcurrentRemoval},
@@ -210,9 +211,14 @@ func testFenced(t *testing.T, s Store) {
 
 	f.lock(t, target, alice, testReason)
 
-	_, err := s.RemoveLock(t.Context(), target, "", stale, lockAudit(stale))
+	_, err := s.RemoveLock(t.Context(), target, alice, stale, lockAudit(stale))
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Errorf("RemoveLock with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	_, err = s.ForceRemoveLock(t.Context(), target, stale, lockAudit(stale))
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Errorf("ForceRemoveLock with a stale fence: err = %v, want ErrFenced", err)
 	}
 
 	if _, err := s.GetLock(t.Context(), target); err != nil {
@@ -292,7 +298,7 @@ func testForcedRemove(t *testing.T, s Store) {
 	} {
 		f.lock(t, target, alice, testReason)
 
-		removed, err := s.RemoveLock(t.Context(), target, "", f.ns.Fence(), lockAudit(f.ns.Fence()))
+		removed, err := s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence()))
 		if err != nil {
 			t.Fatalf("%s: forced removal: %v", target, err)
 		}
@@ -312,10 +318,54 @@ func testRemoveMissing(t *testing.T, s Store) {
 
 	f := newFixture(t, s)
 
-	for _, holder := range []string{"", alice} {
-		_, err := s.RemoveLock(t.Context(), manuallock.UnitTarget(f.web), holder, f.ns.Fence(), lockAudit(f.ns.Fence()))
-		if !errors.Is(err, manuallock.ErrNotLocked) {
-			t.Errorf("holder %q: err = %v, want ErrNotLocked", holder, err)
+	target := manuallock.UnitTarget(f.web)
+
+	if _, err := s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence())); !errors.Is(
+		err, manuallock.ErrNotLocked,
+	) {
+		t.Errorf("RemoveLock: err = %v, want ErrNotLocked", err)
+	}
+
+	if _, err := s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence())); !errors.Is(
+		err, manuallock.ErrNotLocked,
+	) {
+		t.Errorf("ForceRemoveLock: err = %v, want ErrNotLocked", err)
+	}
+}
+
+// testEmptyHolderRefused sends RemoveLock an empty holder, as if the service
+// had not checked it. The store must refuse, keep the lock and write no audit
+// entry: only ForceRemoveLock removes the lock of another principal.
+func testEmptyHolderRefused(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+
+	for _, target := range []manuallock.Target{
+		manuallock.UnitTarget(f.web),
+		manuallock.CollectionTarget(f.payments.Ref),
+	} {
+		f.lock(t, target, alice, testReason)
+
+		_, err := s.RemoveLock(t.Context(), target, "", f.ns.Fence(), lockAudit(f.ns.Fence()))
+		if !errors.Is(err, manuallock.ErrNotHolder) {
+			t.Errorf("%s: RemoveLock with an empty holder: err = %v, want ErrNotHolder", target, err)
+		}
+
+		got, getErr := s.GetLock(t.Context(), target)
+		if getErr != nil || got.Holder != alice {
+			t.Errorf("%s: after the refused removal: lock = %+v, err = %v, want the lock of alice", target, got, getErr)
+		}
+	}
+
+	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Number: 1, Size: auditPageSize})
+	if err != nil {
+		t.Fatalf("List audit: %v", err)
+	}
+
+	for i := range listing.Entries {
+		if hasChange(listing.Entries[i], "lock-holder", alice) {
+			t.Errorf("the refused removal wrote the audit entry %+v that ends a lock", listing.Entries[i])
 		}
 	}
 }
@@ -332,7 +382,7 @@ func testStaleUnlockKeepsNewLock(t *testing.T, s Store) {
 		f.lock(t, target, alice, testReason)
 
 		// Another principal force-unlocks the lock of alice and takes a new one.
-		if _, err := s.RemoveLock(t.Context(), target, "", f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+		if _, err := s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
 			t.Fatalf("%s: force-unlock: %v", target, err)
 		}
 
@@ -372,14 +422,15 @@ func testConcurrentRemoval(t *testing.T, s Store) {
 		wg.Go(func() {
 			<-start
 
-			// An empty holder is a force-unlock; the holder alice is the owner. Both
-			// kinds of caller race for the same lock.
-			holder := ""
+			// Alice is the owner and removes the lock; the other callers force it.
+			// Both kinds of caller race for the same lock.
 			if i%2 == 0 {
-				holder = alice
+				_, errs[i] = s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence()))
+
+				return
 			}
 
-			_, errs[i] = s.RemoveLock(t.Context(), target, holder, f.ns.Fence(), lockAudit(f.ns.Fence()))
+			_, errs[i] = s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence()))
 		})
 	}
 
@@ -428,7 +479,7 @@ func testAuditEntries(t *testing.T, s Store) {
 
 	f.lock(t, target, alice, "freeze for the audit")
 
-	if _, err := s.RemoveLock(t.Context(), target, "", f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+	if _, err := s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
 		t.Fatalf("RemoveLock: %v", err)
 	}
 
@@ -558,7 +609,7 @@ func testUnitLockWins(t *testing.T, s Store) {
 	}
 
 	unit := manuallock.UnitTarget(f.web)
-	if _, rmErr := s.RemoveLock(t.Context(), unit, "", f.ns.Fence(), lockAudit(f.ns.Fence())); rmErr != nil {
+	if _, rmErr := s.ForceRemoveLock(t.Context(), unit, f.ns.Fence(), lockAudit(f.ns.Fence())); rmErr != nil {
 		t.Fatalf("remove the unit lock: %v", rmErr)
 	}
 

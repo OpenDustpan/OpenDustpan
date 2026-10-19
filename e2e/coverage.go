@@ -661,6 +661,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	locks, err := manuallock.NewService(manuallock.Config{
 		Store:      coverageLockStore{},
 		Namespaces: coverageNamespaceStore{},
+		Authorizer: identity.AdminOnly{},
 		Now:        nil,
 	})
 	if err != nil {
@@ -848,6 +849,12 @@ func (coverageLockStore) PutLock(_ context.Context, _ manuallock.Lock, _ namespa
 
 func (coverageLockStore) RemoveLock(
 	_ context.Context, _ manuallock.Target, _ string, _ namespace.Fence, _ audit.Entry,
+) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) ForceRemoveLock(
+	_ context.Context, _ manuallock.Target, _ namespace.Fence, _ audit.Entry,
 ) (manuallock.Lock, error) {
 	return manuallock.Lock{}, manuallock.ErrNotLocked
 }

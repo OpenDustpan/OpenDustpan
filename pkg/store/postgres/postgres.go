@@ -56,6 +56,10 @@ type Store struct {
 	// Tests set it to prove the live access tables stay locked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// beforeLockDelete, when set, runs in the removal of a manual lock between
+	// the read of the lock and the delete, inside the transaction. Tests change
+	// the lock there to reach the changed-lock check. Nil in production.
+	beforeLockDelete func(ctx context.Context, q *db.Queries) error
 	// binaryVersion is the version of the binary that opens the store. The
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
@@ -132,7 +136,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		binaryVersion: "", gate: nil, noMigrate: false,
+		beforeLockDelete: nil,
+		binaryVersion:    "", gate: nil, noMigrate: false,
 	}
 	s.gate = gatestore.New(gateRunner{s: s})
 

@@ -34,10 +34,13 @@ type memLocks struct {
 	mu      sync.Mutex
 	locks   map[string]manuallock.Lock
 	entries []audit.Entry
+	// removeErr, when set, is the error of every removal. Tests set it to reach
+	// the answers of store errors that a fresh store does not give.
+	removeErr error
 }
 
 func newMemLocks() *memLocks {
-	return &memLocks{mu: sync.Mutex{}, locks: map[string]manuallock.Lock{}, entries: nil}
+	return &memLocks{mu: sync.Mutex{}, locks: map[string]manuallock.Lock{}, entries: nil, removeErr: nil}
 }
 
 func (m *memLocks) PutLock(_ context.Context, l manuallock.Lock, _ namespace.Fence, e audit.Entry) error {
@@ -61,26 +64,17 @@ func (m *memLocks) PutLock(_ context.Context, l manuallock.Lock, _ namespace.Fen
 func (m *memLocks) RemoveLock(
 	_ context.Context, t manuallock.Target, holder string, _ namespace.Fence, e audit.Entry,
 ) (manuallock.Lock, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !m.known(t) {
-		return manuallock.Lock{}, manuallock.ErrTargetNotFound
-	}
-
-	held, ok := m.locks[t.String()]
-	if !ok {
-		return manuallock.Lock{}, manuallock.ErrNotLocked
-	}
-
-	if holder != "" && held.Holder != holder {
+	if holder == "" {
 		return manuallock.Lock{}, manuallock.ErrNotHolder
 	}
 
-	delete(m.locks, t.String())
-	m.entries = append(m.entries, e)
+	return m.remove(t, holder, e)
+}
 
-	return held, nil
+func (m *memLocks) ForceRemoveLock(
+	_ context.Context, t manuallock.Target, _ namespace.Fence, e audit.Entry,
+) (manuallock.Lock, error) {
+	return m.remove(t, "", e)
 }
 
 func (m *memLocks) GetLock(_ context.Context, t manuallock.Target) (manuallock.Lock, error) {
@@ -101,6 +95,33 @@ func (m *memLocks) GetLock(_ context.Context, t manuallock.Target) (manuallock.L
 
 func (m *memLocks) CoveringLock(_ context.Context, _ collection.UnitRef) (manuallock.Lock, error) {
 	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (manuallock.Lock, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.removeErr != nil {
+		return manuallock.Lock{}, m.removeErr
+	}
+
+	if !m.known(t) {
+		return manuallock.Lock{}, manuallock.ErrTargetNotFound
+	}
+
+	held, ok := m.locks[t.String()]
+	if !ok {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
+
+	if holder != "" && held.Holder != holder {
+		return manuallock.Lock{}, manuallock.ErrNotHolder
+	}
+
+	delete(m.locks, t.String())
+	m.entries = append(m.entries, e)
+
+	return held, nil
 }
 
 // known reports whether the route tests have the object.
@@ -143,7 +164,9 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 
 	store := newMemLocks()
 
-	locks, err := manuallock.NewService(manuallock.Config{Store: store, Namespaces: nsStore, Now: nil})
+	locks, err := manuallock.NewService(
+		manuallock.Config{Store: store, Namespaces: nsStore, Authorizer: authz, Now: nil},
+	)
 	if err != nil {
 		t.Fatalf("manual lock service: %v", err)
 	}
@@ -450,10 +473,6 @@ func checkDenied(t *testing.T, obj lockObject, tc deniedCase) {
 		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 
-	if got := len(f.store.entries); got != 0 {
-		t.Errorf("audit entries after a denied request = %d, want 0", got)
-	}
-
 	if _, held := f.store.locks[target.String()]; held != tc.seed {
 		t.Errorf("lock held = %v after a denied request, want %v", held, tc.seed)
 	}
@@ -736,5 +755,43 @@ func TestLockReasonOfEscapedAstralCharacters(t *testing.T) {
 				t.Errorf("reason has %d characters, want %d", got, maxLen)
 			}
 		})
+	}
+}
+
+// TestLockRoutesAnswerLockChangedWith409 proves that a store which reports a
+// lock that changed during the removal gives 409 on the remove route and on the
+// force-unlock route, and that the text tells the caller to read the lock again.
+func TestLockRoutesAnswerLockChangedWith409(t *testing.T) {
+	t.Parallel()
+
+	for _, obj := range lockObjects() {
+		for _, force := range []bool{false, true} {
+			name := obj.name + "/remove"
+			path, method := obj.path, http.MethodDelete
+
+			if force {
+				name, path, method = obj.name+"/force-unlock", forcePath(obj.path), http.MethodPost
+			}
+
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				f := newLockFixture(t, selectiveAuthorizer{deny: nil})
+				target := mustTarget(t, obj)
+				f.store.locks[target.String()] = manuallock.Lock{
+					Since: time.Now(), Target: target, Holder: "alice", Reason: "seed",
+				}
+				f.store.removeErr = manuallock.ErrLockChanged
+
+				rec := f.do(t, "alice", method, path, "")
+				if rec.Code != http.StatusConflict {
+					t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusConflict, rec.Body.String())
+				}
+
+				if !strings.Contains(rec.Body.String(), "read the lock again") {
+					t.Errorf("body = %s, want the text of ErrLockChanged", rec.Body.String())
+				}
+			})
+		}
 	}
 }

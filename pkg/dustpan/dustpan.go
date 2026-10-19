@@ -2449,6 +2449,7 @@ func newManualLockService(cfg *settings) (*manuallock.Service, error) {
 	svc, err := manuallock.NewService(manuallock.Config{
 		Store:      store,
 		Namespaces: cfg.namespaceStore,
+		Authorizer: cfg.authorizer,
 		Now:        cfg.now,
 	})
 	if err != nil {

@@ -141,7 +141,7 @@ func manualLockInfo(e *manuallock.LockedError) lockInfo {
 		Operation: "manual lock",
 		Info: e.Error() + ". `tofu force-unlock` does not remove a manual lock. " +
 			"The holder sends `DELETE " + routes.Remove + "`. A person with unit:manage sends `POST " + routes.Force + "`.",
-		Who:     e.Lock.Holder,
+		Who:     manuallock.SafeText(e.Lock.Holder),
 		Version: "",
 		Created: e.Lock.Since.Format(time.RFC3339),
 		Path:    "",

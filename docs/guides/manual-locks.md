@@ -162,8 +162,13 @@ lock. The field `lock` of the unit stays the lock of the tool.
 
 ## Remove a lock
 
-The holder sends `DELETE` on the same path. The answer is 204. When another
-person holds the lock, the answer is 409 and the lock stays.
+The holder sends `DELETE` on the same path. The answer is 204. The answer is
+409, and the lock stays, in these two cases:
+
+- Another person holds the lock.
+- The lock changed while the server removed it. A person ended the lock and took
+  a new one in the same moment. The new lock stays. Read the lock again, then
+  decide again.
 
 A person with `unit:manage` on the object removes the lock of another person
 with a force-unlock. The answer is 204:
@@ -175,6 +180,9 @@ curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
 curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
   "https://dustpan.example/api/dustpan/v1/namespaces/acme/collections/payments/lock/force-unlock"
 ```
+
+A force-unlock answers 409 when the lock changed while the server removed it.
+The new lock stays. Read the lock again, then decide again.
 
 ## Audit
 

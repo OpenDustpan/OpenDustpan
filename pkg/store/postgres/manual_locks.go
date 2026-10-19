@@ -55,8 +55,30 @@ func (s *Store) PutLock(ctx context.Context, l manuallock.Lock, fence namespace.
 }
 
 // RemoveLock implements manuallock.Store. The holder check, the delete and the
-// audit entry run in one transaction.
+// audit entry run in one transaction. It refuses an empty holder: the removal
+// of a lock by a principal that does not hold it goes through ForceRemoveLock.
 func (s *Store) RemoveLock(
+	ctx context.Context, t manuallock.Target, holder string, fence namespace.Fence, e audit.Entry,
+) (manuallock.Lock, error) {
+	if holder == "" {
+		return manuallock.Lock{}, fmt.Errorf("%w: a removal without a holder", manuallock.ErrNotHolder)
+	}
+
+	return s.endLock(ctx, t, holder, fence, e)
+}
+
+// ForceRemoveLock implements manuallock.Store. It removes the lock whoever
+// holds it, in the same transaction as the delete and the audit entry.
+func (s *Store) ForceRemoveLock(
+	ctx context.Context, t manuallock.Target, fence namespace.Fence, e audit.Entry,
+) (manuallock.Lock, error) {
+	return s.endLock(ctx, t, "", fence, e)
+}
+
+// endLock removes the lock of t. A holder that is not empty must hold the
+// lock; an empty holder is the forced removal, which only ForceRemoveLock
+// reaches.
+func (s *Store) endLock(
 	ctx context.Context, t manuallock.Target, holder string, fence namespace.Fence, e audit.Entry,
 ) (manuallock.Lock, error) {
 	if t.Namespace() != fence.Namespace {
@@ -81,25 +103,8 @@ func (s *Store) RemoveLock(
 			return fmt.Errorf("%w: held by %s", manuallock.ErrNotHolder, held.Holder)
 		}
 
-		del := db.DeleteManualLockParams{
-			Kind:     string(t.Kind),
-			ObjectID: id,
-			Holder:   held.Holder,
-			SinceMs:  codec.Millis(held.Since),
-		}
-
-		n, err := q.DeleteManualLock(ctx, del)
-		if err != nil {
-			return fmt.Errorf("delete manual lock: %w", err)
-		}
-
-		// Defense in depth: the read above already holds the lock against a
-		// concurrent change, and the delete matches the holder and the time of
-		// that read. This check stays so that a delete which removes no row or
-		// another row is never reported as a removal, and so that no audit entry
-		// "ended" is written for a lock that this call did not end.
-		if n != 1 {
-			return manuallock.ErrLockChanged
+		if delErr := s.deleteHeldLock(ctx, q, t, id, held); delErr != nil {
+			return delErr
 		}
 
 		e.ObjectID = id
@@ -274,4 +279,37 @@ func inventoryManualFlag(row db.ListInventoryRow) *inventory.ManualLock {
 	default:
 		return nil
 	}
+}
+
+// deleteHeldLock deletes the lock that the caller read. The delete matches the
+// holder and the time of that read, so it removes no other lock.
+func (s *Store) deleteHeldLock(
+	ctx context.Context, q *db.Queries, t manuallock.Target, id string, held manuallock.Lock,
+) error {
+	if s.beforeLockDelete != nil {
+		if err := s.beforeLockDelete(ctx, q); err != nil {
+			return err
+		}
+	}
+
+	n, err := q.DeleteManualLock(ctx, db.DeleteManualLockParams{
+		Kind:     string(t.Kind),
+		ObjectID: id,
+		Holder:   held.Holder,
+		SinceMs:  codec.Millis(held.Since),
+	})
+	if err != nil {
+		return fmt.Errorf("delete manual lock: %w", err)
+	}
+
+	// Defense in depth: the read above already holds the lock against a
+	// concurrent change, and the delete matches the holder and the time of
+	// that read. This check stays so that a delete which removes no row or
+	// another row is never reported as a removal, and so that no audit entry
+	// "ended" is written for a lock that this call did not end.
+	if n != 1 {
+		return manuallock.ErrLockChanged
+	}
+
+	return nil
 }

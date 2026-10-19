@@ -9,13 +9,24 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
+
+// Authorizer decides whether a principal may act on an object. identity.Authorizer
+// satisfies it. The service asks it for each call, so a caller that skips the
+// check of its own route still cannot lock, unlock or read without the action.
+type Authorizer interface {
+	// Authorize returns nil if allowed and an error wrapping identity.ErrDenied
+	// otherwise.
+	Authorize(ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object) error
+}
 
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store      Store
 	Namespaces namespace.Store
+	Authorizer Authorizer
 	Now        func() time.Time
 }
 
@@ -25,14 +36,15 @@ type Config struct {
 type Service struct {
 	store      Store
 	namespaces namespace.Store
+	authorizer Authorizer
 	now        func() time.Time
 }
 
 // NewService returns a Service. It returns ErrMissingDependency when a port
 // is missing. A nil Now uses time.Now.
 func NewService(cfg Config) (*Service, error) {
-	if cfg.Store == nil || cfg.Namespaces == nil {
-		return nil, fmt.Errorf("%w: manual lock store and namespace store", ErrMissingDependency)
+	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Authorizer == nil {
+		return nil, fmt.Errorf("%w: manual lock store, namespace store and authorizer", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -40,16 +52,26 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{store: cfg.Store, namespaces: cfg.Namespaces, now: now}, nil
+	return &Service{store: cfg.Store, namespaces: cfg.Namespaces, authorizer: cfg.Authorizer, now: now}, nil
 }
 
-// Lock puts a manual lock on t for holder, the subject of the calling
-// principal. The reason is required and has at most 500 characters. The audit
-// entry by names the caller and the request; the service sets its time and its
-// reason. A lock on an object that has one returns ErrAlreadyLocked, and the
-// message names the holder.
-func (s *Service) Lock(ctx context.Context, t Target, holder, reason string, by audit.Entry) (Lock, error) {
+// Lock puts a manual lock on t for the principal p, who needs unit:lock on the
+// object. The holder is the subject of p. The reason is required and has at
+// most 500 characters. The audit entry by names the caller and the request; the
+// service sets its time and its reason. A lock on an object that has one
+// returns ErrAlreadyLocked, and the message names the holder.
+func (s *Service) Lock(
+	ctx context.Context,
+	p identity.Principal,
+	t Target,
+	reason string,
+	by audit.Entry,
+) (Lock, error) {
 	if err := t.Valid(); err != nil {
+		return Lock{}, err
+	}
+
+	if err := s.authorize(ctx, p, identity.ActionUnitLock, t); err != nil {
 		return Lock{}, err
 	}
 
@@ -66,7 +88,7 @@ func (s *Service) Lock(ctx context.Context, t Target, holder, reason string, by 
 		return Lock{}, err
 	}
 
-	l := Lock{Since: s.now().UTC(), Target: t, Holder: holder, Reason: reason}
+	l := Lock{Since: s.now().UTC(), Target: t, Holder: p.Subject, Reason: reason}
 
 	by.At = l.Since
 	by.Reason = reason
@@ -78,26 +100,78 @@ func (s *Service) Lock(ctx context.Context, t Target, holder, reason string, by 
 	return l, nil
 }
 
-// Unlock removes the manual lock of t, which holder must hold. It returns
-// ErrNotHolder when another principal holds it.
-func (s *Service) Unlock(ctx context.Context, t Target, holder string, by audit.Entry) error {
-	if holder == "" {
+// Unlock removes the manual lock of t, which the principal p must hold. The
+// principal needs unit:lock on the object. It returns ErrNotHolder when
+// another principal holds the lock.
+func (s *Service) Unlock(ctx context.Context, p identity.Principal, t Target, by audit.Entry) error {
+	if err := t.Valid(); err != nil {
+		return err
+	}
+
+	if err := s.authorize(ctx, p, identity.ActionUnitLock, t); err != nil {
+		return err
+	}
+
+	// Defense in depth: the store refuses an empty holder too. This check stays
+	// so that a principal with no subject never reaches the store as the holder.
+	if p.Subject == "" {
 		return fmt.Errorf("unlock %s: %w", t, ErrNotHolder)
 	}
 
-	return s.remove(ctx, t, holder, by)
+	fence, err := s.fence(ctx, t.Namespace())
+	if err != nil {
+		return err
+	}
+
+	by.At = s.now().UTC()
+
+	if _, err := s.store.RemoveLock(ctx, t, p.Subject, fence, by); err != nil {
+		return fmt.Errorf("unlock %s: %w", t, err)
+	}
+
+	return nil
 }
 
-// ForceUnlock removes the manual lock of t whoever holds it. The caller has
-// checked unit:manage on t. The audit entry by records the principal that
-// forced the removal.
-func (s *Service) ForceUnlock(ctx context.Context, t Target, by audit.Entry) error {
-	return s.remove(ctx, t, "", by)
-}
-
-// Get returns the manual lock of t, or ErrNotLocked.
-func (s *Service) Get(ctx context.Context, t Target) (Lock, error) {
+// ForceUnlock removes the manual lock of t whoever holds it. The principal p
+// needs unit:manage on the object. The audit entry by records the principal
+// that forced the removal.
+func (s *Service) ForceUnlock(ctx context.Context, p identity.Principal, t Target, by audit.Entry) error {
 	if err := t.Valid(); err != nil {
+		return err
+	}
+
+	if err := s.authorize(ctx, p, identity.ActionUnitManage, t); err != nil {
+		return err
+	}
+
+	fence, err := s.fence(ctx, t.Namespace())
+	if err != nil {
+		return err
+	}
+
+	by.At = s.now().UTC()
+
+	if _, err := s.store.ForceRemoveLock(ctx, t, fence, by); err != nil {
+		return fmt.Errorf("force-unlock %s: %w", t, err)
+	}
+
+	return nil
+}
+
+// Get returns the manual lock of t, or ErrNotLocked. The principal p needs
+// read access to the object: unit:read on a unit, collection:read on a
+// collection.
+func (s *Service) Get(ctx context.Context, p identity.Principal, t Target) (Lock, error) {
+	if err := t.Valid(); err != nil {
+		return Lock{}, err
+	}
+
+	action := identity.ActionUnitRead
+	if t.Kind == KindCollection {
+		action = identity.ActionCollectionRead
+	}
+
+	if err := s.authorize(ctx, p, action, t); err != nil {
 		return Lock{}, err
 	}
 
@@ -110,20 +184,29 @@ func (s *Service) Covering(ctx context.Context, unit collection.UnitRef) (Lock, 
 	return s.store.CoveringLock(ctx, unit)
 }
 
-func (s *Service) remove(ctx context.Context, t Target, holder string, by audit.Entry) error {
-	if err := t.Valid(); err != nil {
-		return err
+// authorize checks that p may do action on the object of t. It fails closed:
+// an object that cannot be named is refused.
+func (s *Service) authorize(ctx context.Context, p identity.Principal, action identity.Action, t Target) error {
+	var (
+		obj identity.Object
+		err error
+	)
+
+	switch t.Kind {
+	case KindUnit:
+		obj, err = identity.UnitObject(t.Unit.Tool, t.Unit.Namespace, t.Unit.Name)
+	case KindCollection:
+		obj = identity.CollectionObject(t.Collection.Namespace, string(t.Collection.Name))
+	default:
+		err = ErrInvalidTarget
 	}
 
-	fence, err := s.fence(ctx, t.Namespace())
 	if err != nil {
-		return err
+		return fmt.Errorf("authorize %s on %s: %w: %w", action, t, ErrInvalidTarget, err)
 	}
 
-	by.At = s.now().UTC()
-
-	if _, err := s.store.RemoveLock(ctx, t, holder, fence, by); err != nil {
-		return fmt.Errorf("unlock %s: %w", t, err)
+	if err := s.authorizer.Authorize(ctx, p, action, obj); err != nil {
+		return fmt.Errorf("authorize %s on %s: %w", action, t, err)
 	}
 
 	return nil
@@ -141,8 +224,7 @@ func (s *Service) annotate(ctx context.Context, t Target, err error) error {
 		return err
 	}
 
-	return fmt.Errorf("%w: held by %s since %s: %s",
-		ErrAlreadyLocked, held.Holder, held.Since.UTC().Format(time.RFC3339), held.Reason)
+	return fmt.Errorf("%w: held %s", ErrAlreadyLocked, held.Detail())
 }
 
 func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {

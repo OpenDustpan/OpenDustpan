@@ -11,7 +11,7 @@ const (
 func portableManualLockTables() []PortableTable {
 	return []PortableTable{
 		{
-			Table:   "manual_locks",
+			Table:   portTableManualLocks,
 			OrderBy: []string{portColKind, portColObjectIDOfLock},
 			Columns: []Column{
 				{Name: portColKind, Kind: KindText},

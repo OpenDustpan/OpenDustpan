@@ -3,12 +3,16 @@ package manuallock_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -48,6 +52,7 @@ type recordingStore struct {
 	putEntry  []audit.Entry
 	putFence  []namespace.Fence
 	removed   []string
+	forced    int
 	putErr    error
 	removeErr error
 	held      manuallock.Lock
@@ -57,7 +62,7 @@ type recordingStore struct {
 // newStore returns a store that accepts every write and holds no lock.
 func newStore() *recordingStore {
 	return &recordingStore{
-		put: nil, putEntry: nil, putFence: nil, removed: nil, putErr: nil, removeErr: nil,
+		put: nil, putEntry: nil, putFence: nil, removed: nil, putErr: nil, removeErr: nil, forced: 0,
 		held: manuallock.Lock{Since: time.Time{}, Target: zeroTarget(), Holder: "", Reason: ""}, getErr: nil,
 	}
 }
@@ -82,6 +87,14 @@ func (s *recordingStore) RemoveLock(
 	return s.held, s.removeErr
 }
 
+func (s *recordingStore) ForceRemoveLock(
+	_ context.Context, _ manuallock.Target, _ namespace.Fence, _ audit.Entry,
+) (manuallock.Lock, error) {
+	s.forced++
+
+	return s.held, s.removeErr
+}
+
 func (s *recordingStore) GetLock(context.Context, manuallock.Target) (manuallock.Lock, error) {
 	return s.held, s.getErr
 }
@@ -90,11 +103,70 @@ func (s *recordingStore) CoveringLock(context.Context, collection.UnitRef) (manu
 	return s.held, s.getErr
 }
 
+// fakeAuthorizer allows the actions in allow on every object and records each
+// check. A principal that is not alice, bob or admin has no action.
+type fakeAuthorizer struct {
+	allow map[identity.Action]bool
+	mu    sync.Mutex
+	asked []string
+}
+
+// allowAll returns an authorizer that allows every action.
+func allowAll() *fakeAuthorizer {
+	return &fakeAuthorizer{allow: map[identity.Action]bool{
+		identity.ActionUnitLock: true, identity.ActionUnitRead: true, identity.ActionCollectionRead: true,
+		identity.ActionUnitManage: true,
+	}, mu: sync.Mutex{}, asked: nil}
+}
+
+// allowOnly returns an authorizer that allows only the actions given.
+func allowOnly(actions ...identity.Action) *fakeAuthorizer {
+	a := &fakeAuthorizer{allow: map[identity.Action]bool{}, mu: sync.Mutex{}, asked: nil}
+	for _, action := range actions {
+		a.allow[action] = true
+	}
+
+	return a
+}
+
+func (a *fakeAuthorizer) Authorize(
+	_ context.Context,
+	_ identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.asked = append(a.asked, string(action)+" "+obj.String())
+
+	if !a.allow[action] {
+		return fmt.Errorf("%w: %s on %s", identity.ErrDenied, action, obj)
+	}
+
+	return nil
+}
+
+// person returns the principal with the subject sub.
+func person(sub string) identity.Principal {
+	return identity.Principal{
+		Subject: sub, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+		Credential: identity.CredentialAccessToken, JobID: "",
+	}
+}
+
 func newService(t *testing.T, s manuallock.Store) *manuallock.Service {
 	t.Helper()
 
+	return newServiceWith(t, s, allowAll())
+}
+
+func newServiceWith(t *testing.T, s manuallock.Store, authz manuallock.Authorizer) *manuallock.Service {
+	t.Helper()
+
 	svc, err := manuallock.NewService(manuallock.Config{
-		Store: s, Namespaces: fakeNamespaces{}, Now: fixedNow,
+		Store: s, Namespaces: fakeNamespaces{}, Authorizer: authz, Now: fixedNow,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -137,8 +209,15 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 		name string
 		cfg  manuallock.Config
 	}{
-		{name: "no store", cfg: manuallock.Config{Store: nil, Namespaces: fakeNamespaces{}, Now: nil}},
-		{name: "no namespace store", cfg: manuallock.Config{Store: newStore(), Namespaces: nil, Now: nil}},
+		{name: "no store", cfg: manuallock.Config{
+			Store: nil, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Now: nil,
+		}},
+		{name: "no namespace store", cfg: manuallock.Config{
+			Store: newStore(), Namespaces: nil, Authorizer: allowAll(), Now: nil,
+		}},
+		{name: "no authorizer", cfg: manuallock.Config{
+			Store: newStore(), Namespaces: fakeNamespaces{}, Authorizer: nil, Now: nil,
+		}},
 	}
 
 	for _, tc := range cases {
@@ -210,7 +289,7 @@ func TestLockChecksTheRequestBeforeTheStore(t *testing.T) {
 			store := newStore()
 			svc := newService(t, store)
 
-			_, err := svc.Lock(t.Context(), tc.target, "alice", tc.reason, entry())
+			_, err := svc.Lock(t.Context(), person("alice"), tc.target, tc.reason, entry())
 			if !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
@@ -242,7 +321,7 @@ func TestLockWritesTheLockAndTheEntry(t *testing.T) {
 			store := newStore()
 			svc := newService(t, store)
 
-			got, err := svc.Lock(t.Context(), tc.target, "alice", reason, entry())
+			got, err := svc.Lock(t.Context(), person("alice"), tc.target, reason, entry())
 			if err != nil {
 				t.Fatalf("Lock: %v", err)
 			}
@@ -285,7 +364,7 @@ func TestLockOfAnObjectThatHasOneNamesTheHolder(t *testing.T) {
 	}
 	svc := newService(t, store)
 
-	_, err := svc.Lock(t.Context(), manuallock.UnitTarget(webUnit()), "alice", "x", entry())
+	_, err := svc.Lock(t.Context(), person("alice"), manuallock.UnitTarget(webUnit()), "x", entry())
 	if !errors.Is(err, manuallock.ErrAlreadyLocked) {
 		t.Fatalf("err = %v, want ErrAlreadyLocked", err)
 	}
@@ -308,60 +387,64 @@ func TestRemoval(t *testing.T) {
 		storeErr  error
 		wantErr   error
 		wantCalls []string
+		wantForce int
 	}{
 		{
 			name: "the holder removes",
 			call: func(t *testing.T, s *manuallock.Service) error {
 				t.Helper()
 
-				return s.Unlock(t.Context(), target, "alice", entry())
+				return s.Unlock(t.Context(), person("alice"), target, entry())
 			},
-			storeErr: nil, wantErr: nil, wantCalls: []string{"alice"},
+			storeErr: nil, wantErr: nil, wantCalls: []string{"alice"}, wantForce: 0,
 		},
 		{
 			name: "a removal with no holder is refused before the store",
 			call: func(t *testing.T, s *manuallock.Service) error {
 				t.Helper()
 
-				return s.Unlock(t.Context(), target, "", entry())
+				return s.Unlock(t.Context(), person(""), target, entry())
 			},
-			storeErr: nil, wantErr: manuallock.ErrNotHolder, wantCalls: nil,
+			storeErr: nil, wantErr: manuallock.ErrNotHolder, wantCalls: nil, wantForce: 0,
 		},
 		{
 			name: "another principal is refused by the store",
 			call: func(t *testing.T, s *manuallock.Service) error {
 				t.Helper()
 
-				return s.Unlock(t.Context(), target, "bob", entry())
+				return s.Unlock(t.Context(), person("bob"), target, entry())
 			},
-			storeErr: manuallock.ErrNotHolder, wantErr: manuallock.ErrNotHolder, wantCalls: []string{"bob"},
+			storeErr:  manuallock.ErrNotHolder,
+			wantErr:   manuallock.ErrNotHolder,
+			wantCalls: []string{"bob"},
+			wantForce: 0,
 		},
 		{
-			name: "a force-unlock names no holder",
+			name: "a force-unlock uses the forced removal of the store",
 			call: func(t *testing.T, s *manuallock.Service) error {
 				t.Helper()
 
-				return s.ForceUnlock(t.Context(), target, entry())
+				return s.ForceUnlock(t.Context(), person("admin"), target, entry())
 			},
-			storeErr: nil, wantErr: nil, wantCalls: []string{""},
+			storeErr: nil, wantErr: nil, wantCalls: nil, wantForce: 1,
 		},
 		{
 			name: "a lock that does not exist",
 			call: func(t *testing.T, s *manuallock.Service) error {
 				t.Helper()
 
-				return s.ForceUnlock(t.Context(), target, entry())
+				return s.ForceUnlock(t.Context(), person("admin"), target, entry())
 			},
-			storeErr: manuallock.ErrNotLocked, wantErr: manuallock.ErrNotLocked, wantCalls: []string{""},
+			storeErr: manuallock.ErrNotLocked, wantErr: manuallock.ErrNotLocked, wantCalls: nil, wantForce: 1,
 		},
 		{
 			name: "an invalid object",
 			call: func(t *testing.T, s *manuallock.Service) error {
 				t.Helper()
 
-				return s.ForceUnlock(t.Context(), zeroTarget(), entry())
+				return s.ForceUnlock(t.Context(), person("admin"), zeroTarget(), entry())
 			},
-			storeErr: nil, wantErr: manuallock.ErrInvalidTarget, wantCalls: nil,
+			storeErr: nil, wantErr: manuallock.ErrInvalidTarget, wantCalls: nil, wantForce: 0,
 		},
 	}
 
@@ -380,6 +463,10 @@ func TestRemoval(t *testing.T) {
 			if strings.Join(store.removed, ",") != strings.Join(tc.wantCalls, ",") {
 				t.Errorf("store removals for holders %q, want %q", store.removed, tc.wantCalls)
 			}
+
+			if store.forced != tc.wantForce {
+				t.Errorf("store forced removals = %d, want %d", store.forced, tc.wantForce)
+			}
 		})
 	}
 }
@@ -392,7 +479,7 @@ func TestReadsPassThrough(t *testing.T) {
 	store.held = held
 	svc := newService(t, store)
 
-	if got, err := svc.Get(t.Context(), held.Target); err != nil || got != held {
+	if got, err := svc.Get(t.Context(), person("alice"), held.Target); err != nil || got != held {
 		t.Errorf("Get = %+v, %v; want %+v", got, err, held)
 	}
 
@@ -400,7 +487,7 @@ func TestReadsPassThrough(t *testing.T) {
 		t.Errorf("Covering = %+v, %v; want %+v", got, err, held)
 	}
 
-	if _, err := svc.Get(t.Context(), zeroTarget()); !errors.Is(err, manuallock.ErrInvalidTarget) {
+	if _, err := svc.Get(t.Context(), person("alice"), zeroTarget()); !errors.Is(err, manuallock.ErrInvalidTarget) {
 		t.Errorf("Get of no object: err = %v, want ErrInvalidTarget", err)
 	}
 }
@@ -491,6 +578,209 @@ func TestTarget(t *testing.T) {
 
 			if valid := tc.target.Valid() == nil; valid != tc.wantValid {
 				t.Errorf("valid = %v, want %v", valid, tc.wantValid)
+			}
+		})
+	}
+}
+
+// TestServiceChecksAuthorizationAtThePointOfUse calls the service directly, as
+// if the route had not checked anything, with a principal that lacks the action.
+// The service must refuse before it reads the fence or touches the store.
+func TestServiceChecksAuthorizationAtThePointOfUse(t *testing.T) {
+	t.Parallel()
+
+	unit := manuallock.UnitTarget(webUnit())
+	coll := manuallock.CollectionTarget(paymentsRef())
+
+	cases := []struct {
+		name   string
+		allow  []identity.Action
+		call   func(*manuallock.Service) error
+		action string
+		object string
+	}{
+		{
+			name:  "lock a unit without unit:lock",
+			allow: []identity.Action{identity.ActionUnitRead, identity.ActionUnitManage},
+			call: func(s *manuallock.Service) error {
+				_, err := s.Lock(context.Background(), person("alice"), unit, "r", entry())
+
+				return err
+			},
+			action: "unit:lock",
+			object: unit.Unit.String(),
+		},
+		{
+			name: "lock a collection without unit:lock", allow: []identity.Action{identity.ActionCollectionRead},
+			call: func(s *manuallock.Service) error {
+				_, err := s.Lock(context.Background(), person("alice"), coll, "r", entry())
+
+				return err
+			},
+			action: "unit:lock", object: "",
+		},
+		{
+			name:  "unlock without unit:lock",
+			allow: []identity.Action{identity.ActionUnitRead, identity.ActionUnitManage},
+			call: func(s *manuallock.Service) error {
+				return s.Unlock(context.Background(), person("alice"), unit, entry())
+			},
+			action: "unit:lock",
+			object: unit.Unit.String(),
+		},
+		{
+			name:  "force-unlock with unit:lock but without unit:manage",
+			allow: []identity.Action{identity.ActionUnitLock, identity.ActionUnitRead},
+			call: func(s *manuallock.Service) error {
+				return s.ForceUnlock(context.Background(), person("alice"), unit, entry())
+			},
+			action: "unit:manage", object: unit.Unit.String(),
+		},
+		{
+			name: "force-unlock a collection without unit:manage", allow: []identity.Action{identity.ActionUnitLock},
+			call: func(s *manuallock.Service) error {
+				return s.ForceUnlock(context.Background(), person("alice"), coll, entry())
+			},
+			action: "unit:manage", object: "",
+		},
+		{
+			name:  "get a unit lock without unit:read",
+			allow: []identity.Action{identity.ActionUnitLock, identity.ActionUnitManage},
+			call: func(s *manuallock.Service) error {
+				_, err := s.Get(context.Background(), person("alice"), unit)
+
+				return err
+			},
+			action: "unit:read",
+			object: unit.Unit.String(),
+		},
+		{
+			name: "get a collection lock without collection:read", allow: []identity.Action{identity.ActionUnitRead},
+			call: func(s *manuallock.Service) error {
+				_, err := s.Get(context.Background(), person("alice"), coll)
+
+				return err
+			},
+			action: "collection:read", object: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+			authz := allowOnly(tc.allow...)
+
+			err := tc.call(newServiceWith(t, store, authz))
+			if !errors.Is(err, identity.ErrDenied) {
+				t.Fatalf("err = %v, want identity.ErrDenied", err)
+			}
+
+			if len(authz.asked) != 1 || !strings.HasPrefix(authz.asked[0], tc.action+" ") ||
+				!strings.Contains(authz.asked[0], tc.object) {
+				t.Errorf("authorization checks = %q, want one check of %s on %q", authz.asked, tc.action, tc.object)
+			}
+
+			if len(store.put) != 0 || len(store.removed) != 0 || store.forced != 0 {
+				t.Errorf(
+					"store was reached: put %d, removed %d, forced %d",
+					len(store.put),
+					len(store.removed),
+					store.forced,
+				)
+			}
+		})
+	}
+}
+
+// TestServiceFailsClosedOnAnAuthorizerError sends an error that is not a
+// denial. The service must refuse and not touch the store.
+func TestServiceFailsClosedOnAnAuthorizerError(t *testing.T) {
+	t.Parallel()
+
+	store := newStore()
+	svc := newServiceWith(t, store, errAuthorizer{})
+
+	_, err := svc.Lock(t.Context(), person("alice"), manuallock.UnitTarget(webUnit()), "r", entry())
+	if err == nil || len(store.put) != 0 {
+		t.Fatalf("Lock: err = %v, writes = %d; want an error and no write", err, len(store.put))
+	}
+}
+
+var errPolicyDown = errors.New("policy store is down")
+
+type errAuthorizer struct{}
+
+func (errAuthorizer) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return errPolicyDown
+}
+
+// TestLockedTextHasNoTerminalControls puts a hostile reason, holder and name
+// straight into a Lock, as if a restored backup had brought them in. No text
+// that reaches a terminal may hold a control or format character.
+func TestLockedTextHasNoTerminalControls(t *testing.T) {
+	t.Parallel()
+
+	hostile := "ok\x1b[2J\x1b]0;owned\x07\r\nforged: line\u202eevil\u2028\u200b\x00\xff"
+
+	cases := []struct {
+		name   string
+		target manuallock.Target
+	}{
+		{name: "unit", target: manuallock.UnitTarget(webUnit())},
+		{name: "collection", target: manuallock.CollectionTarget(paymentsRef())},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			l := manuallock.Lock{Since: fixedNow(), Target: tc.target, Holder: hostile, Reason: hostile}
+			locked := &manuallock.LockedError{Lock: l, Noun: "stack" + hostile, Name: "acme/web" + hostile}
+
+			checkNoHiddenText(t, "Detail", l.Detail())
+			checkNoHiddenText(t, "LockedError", locked.Error())
+		})
+	}
+}
+
+// checkNoHiddenText fails when text holds a hidden character, or when it lost
+// the visible text or the written-out escape.
+func checkNoHiddenText(t *testing.T, name, text string) {
+	t.Helper()
+
+	hidden := func(r rune) bool {
+		return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+	}
+
+	if i := strings.IndexFunc(text, hidden); i >= 0 {
+		t.Errorf("%s = %q holds a hidden character at byte %d", name, text, i)
+	}
+
+	if !strings.Contains(text, "forged: line") || !strings.Contains(text, "\\u001B") {
+		t.Errorf("%s = %q, want the visible text kept and the escape written out", name, text)
+	}
+}
+
+func TestSafeText(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, in, want string }{
+		{name: "plain", in: "freeze for audit", want: "freeze for audit"},
+		{name: "unicode letters", in: "gel \u00e9t\u00e9 \u65e5\u672c", want: "gel \u00e9t\u00e9 \u65e5\u672c"},
+		{name: "escape", in: "a\x1bb", want: "a\\u001Bb"},
+		{name: "bidi override", in: "a\u202eb", want: "a\\u202Eb"},
+		{name: "line separator", in: "a\u2028b", want: "a\\u2028b"},
+		{name: "bad bytes", in: "a\xffb", want: "a\ufffdb"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := manuallock.SafeText(tc.in); got != tc.want {
+				t.Errorf("SafeText(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

@@ -19,7 +19,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -129,9 +132,46 @@ type Lock struct {
 
 // Detail returns the holder, the time and the reason of the lock, without a
 // name for the object: "by <holder> since <time>: <reason>". A tool adds its
-// own word for the unit.
+// own word for the unit. A person reads the text in a terminal, so the holder
+// and the reason go through SafeText: a lock that holds a control character
+// (for example from a restored backup) cannot change what the terminal shows.
+//
+// Defense in depth: the lock service and the backup import refuse such a
+// reason too. This escape stays so that a value which skipped both cannot reach
+// a terminal.
 func (l Lock) Detail() string {
-	return fmt.Sprintf("by %s since %s: %s", l.Holder, l.Since.UTC().Format(time.RFC3339), l.Reason)
+	return fmt.Sprintf("by %s since %s: %s", SafeText(l.Holder), l.Since.UTC().Format(time.RFC3339), SafeText(l.Reason))
+}
+
+// SafeText returns s with each control character (Cc), format character (Cf,
+// for example the bidirectional overrides), line separator and paragraph
+// separator written as \uXXXX, and each byte that is not valid UTF-8 as
+// U+FFFD. The result has no character that moves a cursor, ends a line or
+// changes the direction of the text.
+func SafeText(s string) string {
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, isHiddenRune) {
+		return s
+	}
+
+	var b strings.Builder
+
+	for _, r := range s {
+		if isHiddenRune(r) {
+			fmt.Fprintf(&b, "\\u%04X", r)
+
+			continue
+		}
+
+		b.WriteRune(r)
+	}
+
+	return b.String()
+}
+
+// isHiddenRune reports whether r is a control, format, line separator or
+// paragraph separator character.
+func isHiddenRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 // LockedError is the error of a request that a manual lock refuses. It
@@ -155,11 +195,14 @@ func (e *LockedError) Error() string {
 		noun = "object"
 	}
 
+	noun, name := SafeText(noun), SafeText(e.Name)
+
 	if e.Lock.Target.Kind == KindCollection {
-		return fmt.Sprintf("%s %s is in %s, which has a manual lock %s", noun, e.Name, e.Lock.Target, e.Lock.Detail())
+		return fmt.Sprintf("%s %s is in %s, which has a manual lock %s",
+			noun, name, SafeText(e.Lock.Target.String()), e.Lock.Detail())
 	}
 
-	return fmt.Sprintf("%s %s has a manual lock %s", noun, e.Name, e.Lock.Detail())
+	return fmt.Sprintf("%s %s has a manual lock %s", noun, name, e.Lock.Detail())
 }
 
 // Is reports whether target is ErrLocked.
@@ -178,13 +221,19 @@ type Store interface {
 	// stale. The audit entry names the object and the reason.
 	PutLock(ctx context.Context, l Lock, fence namespace.Fence, e audit.Entry) error
 	// RemoveLock removes the manual lock of t and appends e, with the holder
-	// and the reason of the lock it ends. A holder that is not empty must
-	// hold the lock, else it returns ErrNotHolder. An empty holder removes
-	// the lock whoever holds it. It removes only the lock that it read and
-	// checked: a lock that changed in between stays, and the call returns
+	// and the reason of the lock it ends. The holder must not be empty and
+	// must hold the lock, else it returns ErrNotHolder; an empty holder
+	// removes nothing. It removes only the lock that it read and checked: a
+	// lock that changed in between stays, and the call returns
 	// ErrLockChanged. It returns the lock it removed, ErrNotLocked when the
 	// object has none, and namespace.ErrFenced when the fence is stale.
 	RemoveLock(ctx context.Context, t Target, holder string, fence namespace.Fence, e audit.Entry) (Lock, error)
+	// ForceRemoveLock is RemoveLock for a removal by a principal that does not
+	// hold the lock. It removes the lock whoever holds it, and the audit entry
+	// e names the principal that forced the removal. The service calls it only
+	// after the authorization check for unit:manage. It has the same errors
+	// as RemoveLock, except ErrNotHolder.
+	ForceRemoveLock(ctx context.Context, t Target, fence namespace.Fence, e audit.Entry) (Lock, error)
 	// GetLock returns the manual lock of t, or ErrNotLocked. It does not
 	// look at the collection of a unit.
 	GetLock(ctx context.Context, t Target) (Lock, error)

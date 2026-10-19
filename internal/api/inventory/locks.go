@@ -153,7 +153,7 @@ func (h *Handler) putLock(w http.ResponseWriter, r *http.Request, p identity.Pri
 
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "")
 
-	l, err := h.locks.Lock(ctx, lockTarget(obj), p.Subject, reason, entry)
+	l, err := h.locks.Lock(ctx, p, lockTarget(obj), reason, entry)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -164,10 +164,10 @@ func (h *Handler) putLock(w http.ResponseWriter, r *http.Request, p identity.Pri
 }
 
 // getLock serves GET on a lock route. An object with no lock answers 404.
-func (h *Handler) getLock(w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object) {
+func (h *Handler) getLock(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	l, err := h.locks.Get(ctx, lockTarget(obj))
+	l, err := h.locks.Get(ctx, p, lockTarget(obj))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -184,7 +184,7 @@ func (h *Handler) deleteLock(w http.ResponseWriter, r *http.Request, p identity.
 
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "unlock")
 
-	if err := h.locks.Unlock(ctx, lockTarget(obj), p.Subject, entry); err != nil {
+	if err := h.locks.Unlock(ctx, p, lockTarget(obj), entry); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -202,7 +202,7 @@ func (h *Handler) forceUnlock(w http.ResponseWriter, r *http.Request, p identity
 
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitManage, "force-unlock")
 
-	if err := h.locks.ForceUnlock(ctx, lockTarget(obj), entry); err != nil {
+	if err := h.locks.ForceUnlock(ctx, p, lockTarget(obj), entry); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

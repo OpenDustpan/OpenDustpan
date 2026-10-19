@@ -214,6 +214,10 @@ type Store struct {
 	// Tests set it to prove a concurrent write stays blocked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context)
+	// beforeLockDelete, when set, runs in the removal of a manual lock between
+	// the read of the lock and the delete, inside the transaction. Tests change
+	// the lock there to reach the changed-lock check. Nil in production.
+	beforeLockDelete func(ctx context.Context, q *db.Queries) error
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -366,6 +370,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
 		keepAccessHook:      nil,
+		beforeLockDelete:    nil,
 		binaryVersion:       "",
 		noMigrate:           false,
 		processGuard:        guard,
