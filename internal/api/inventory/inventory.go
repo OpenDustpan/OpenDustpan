@@ -515,7 +515,7 @@ func classifyChange(err error) (int, string) {
 	case errors.Is(err, coreinventory.ErrNameTaken):
 		return http.StatusConflict, "a live unit holds the name: send a new name in the restore body"
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, "write fenced: try again"
+		return http.StatusConflict, namespace.ErrFenced.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
 	default:
