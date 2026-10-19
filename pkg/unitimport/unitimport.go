@@ -28,6 +28,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -501,47 +502,93 @@ type Filter struct {
 	States []State
 }
 
+// Move is a change of state of an import: the state that the caller expects
+// the import to be in, the state to move to, and the reason.
+type Move struct {
+	From   State
+	To     State
+	Reason string
+}
+
+// UnitKey names one import unit: its import and its ID in the import.
+type UnitKey struct {
+	ImportID string
+	UnitID   string
+}
+
+// UnitMove is a change of state of an import unit: the state that the caller
+// expects the unit to be in, the state to move to, and the error code of a
+// failed or skipped unit.
+type UnitMove struct {
+	From UnitState
+	To   UnitState
+	Code string
+}
+
+// Counts are the counts of an import unit: its source versions and the
+// versions that it committed.
+type Counts struct {
+	Versions  int
+	Committed int
+}
+
 // Store keeps imports and their plans. Each write takes the fence of the
-// namespace and checks it in the same transaction. Get wraps ErrNotFound,
-// and ErrPurged for a purged import. Transition wraps ErrTransition for a
-// change that the transition table does not allow.
+// namespace and the audit entry of the write, and checks the fence and
+// appends the entry in the same transaction. The entry names the namespace
+// of the fence. Create wraps ErrInvalid. Get wraps ErrNotFound, and
+// ErrPurged for a purged import. Transition wraps ErrTransition for a
+// change that the transition table does not allow, or when the import is
+// not in the state from. Every method that takes an ID wraps ErrNotFound
+// and ErrPurged.
 type Store interface {
-	// Create stores a new import in StatePlanning.
-	Create(ctx context.Context, fence namespace.Fence, imp Import) (Import, error)
+	// Create stores a new import in StatePlanning. The caller gives the ID.
+	// Create sets the state, and it ignores the plan and the end time of
+	// imp.
+	Create(ctx context.Context, fence namespace.Fence, imp Import, e audit.Entry) (Import, error)
 	// Get returns one import.
 	Get(ctx context.Context, ns namespace.Name, id string) (Import, error)
 	// List returns the imports of a namespace that f selects.
 	List(ctx context.Context, ns namespace.Name, f Filter) ([]Import, error)
-	// Transition moves an import from one state to another, with a reason.
-	Transition(ctx context.Context, fence namespace.Fence, id string, from, to State, reason string) error
+	// Transition moves an import from m.From to m.To, with a reason.
+	// A move to StateReleased or StateCanceled sets the end time to the
+	// time of the audit entry.
+	Transition(ctx context.Context, fence namespace.Fence, id string, m Move, e audit.Entry) error
 	// SetPlan replaces the plan of an import in StatePlanning or
-	// StatePlanned, or the reservation of its plan.
-	SetPlan(ctx context.Context, fence namespace.Fence, id string, plan Plan) error
-	// Purge deletes the record of an ended import and keeps its ID as
-	// purged. It deletes no ledger row and no history item.
-	Purge(ctx context.Context, fence namespace.Fence, id string) error
+	// StatePlanned. In each other state it replaces the reservations of the
+	// plan only and keeps the rest of the stored plan.
+	SetPlan(ctx context.Context, fence namespace.Fence, id string, plan Plan, e audit.Entry) error
+	// Purge deletes the record of an ended import (StateReleased or
+	// StateCanceled) and its import units, and keeps its ID as purged. It
+	// deletes no ledger row and no history item. Purge wraps ErrTransition
+	// for an import that did not end.
+	Purge(ctx context.Context, fence namespace.Fence, id string, e audit.Entry) error
 }
 
 // UnitStore keeps the import units of an import and reads their ledgers.
 // The Tool port writes each ledger row in the transaction of its history
 // item, and the Target of each import unit in the transaction of Create.
-// Each write takes the fence of the namespace and checks it in the
-// same transaction. Unit wraps ErrNotFound. TransitionUnit wraps
-// ErrTransition for a change that the transition table does not allow.
+// Each write takes the fence of the namespace and the audit entry of the
+// write, and checks the fence and appends the entry in the same
+// transaction. Units and Unit wrap ErrNotFound and ErrPurged. Ledger wraps
+// ErrNotFound for an import that never existed, and it still answers the
+// rows of a purged import. PutUnits wraps ErrInvalid for a bad unit and
+// ErrTransition for an import that is not in StatePlanning or StatePlanned.
+// TransitionUnit wraps ErrTransition for a change that the transition table
+// does not allow, or when the unit is not in the state from.
 type UnitStore interface {
 	// PutUnits replaces the import units of a planned import.
-	PutUnits(ctx context.Context, fence namespace.Fence, id string, units []ImportUnit) error
+	PutUnits(ctx context.Context, fence namespace.Fence, id string, units []ImportUnit, e audit.Entry) error
 	// Units returns the import units of an import.
 	Units(ctx context.Context, ns namespace.Name, id string) ([]ImportUnit, error)
 	// Unit returns one import unit.
 	Unit(ctx context.Context, ns namespace.Name, id, unitID string) (ImportUnit, error)
 	// TransitionUnit moves an import unit from one state to another, with
 	// the error code of a failed or skipped unit.
-	TransitionUnit(ctx context.Context, fence namespace.Fence, id, unitID string, from, to UnitState, code string) error
+	TransitionUnit(ctx context.Context, fence namespace.Fence, key UnitKey, m UnitMove, e audit.Entry) error
 	// SetCounts sets the count of source versions of an import unit, after
 	// the writer check finds new versions, and its count of committed
 	// versions.
-	SetCounts(ctx context.Context, fence namespace.Fence, id, unitID string, versions, committed int) error
+	SetCounts(ctx context.Context, fence namespace.Fence, key UnitKey, c Counts, e audit.Entry) error
 	// Ledger returns the ledger rows of an import unit, oldest first.
 	Ledger(ctx context.Context, ns namespace.Name, id, unitID string) ([]LedgerRow, error)
 }

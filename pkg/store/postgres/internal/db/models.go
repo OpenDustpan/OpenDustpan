@@ -193,6 +193,63 @@ type GroupMember struct {
 	Pinned        bool
 }
 
+type Import struct {
+	NamespaceID string
+	ID          string
+	Kind        string
+	Address     string
+	Selection   string
+	Credential  string
+	Profile     string
+	ProfilePath string
+	Options     string
+	State       string
+	Reason      string
+	CreatedBy   string
+	CreatedAtMs int64
+	Plan        string
+	EndedAtMs   int64
+}
+
+type ImportLedger struct {
+	NamespaceID   string
+	ImportID      string
+	ImportUnitID  string
+	Version       string
+	SourceSha256  string
+	StoredSha256  string
+	ItemTool      string
+	ItemUnitID    string
+	ItemKind      string
+	ItemID        string
+	CommittedAtMs int64
+}
+
+type ImportUnit struct {
+	NamespaceID  string
+	ImportID     string
+	ID           string
+	Position     int64
+	SourceTool   string
+	SourceName   string
+	TargetName   string
+	TargetTool   string
+	TargetUnitID string
+	State        string
+	ErrorCode    string
+	Versions     int64
+	Committed    int64
+	Bytes        int64
+	Encryption   string
+	Findings     string
+}
+
+type ImportsPurged struct {
+	NamespaceID string
+	ID          string
+	PurgedAtMs  int64
+}
+
 type Installation struct {
 	ID    int64
 	State string
