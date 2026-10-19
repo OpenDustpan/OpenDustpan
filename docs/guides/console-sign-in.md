@@ -248,7 +248,18 @@ A console on another origin sends a preflight request. For an origin in
 `--allowed-origins`, the server allows the headers `Authorization`,
 `Content-Type`, `Dustpan-Channel` and `X-Dustpan-CSRF`, and the methods GET,
 POST, PUT, PATCH and DELETE, with credentials. It caches the answer for 600
-seconds. A request from another origin gets no CORS headers.
+seconds. On an answer to a request, the server sets `Access-Control-Expose-Headers: Retry-After`,
+so that the console can read the wait time of a 503 answer. A request from
+another origin gets no CORS headers.
+
+The server answers CORS on `/api/` (including the TFE-compatible API at
+`/api/v2/` and the context API at `/api/context/`), and not on
+`/tofu/state/`.
+
+Each value of `--allowed-origins` has the form `scheme://host[:port]`. The
+scheme is `http` or `https`. The value has no path, query or fragment, and no
+trailing slash. The server refuses to start with the value `null`, the value
+`*`, or any other value that does not have this form.
 
 The APIs of the console take the session cookie: the installation API
 (`/api/server/`), the inventory API (`/api/inventory/`), the audit API

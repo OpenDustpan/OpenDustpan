@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"slices"
@@ -55,6 +56,8 @@ func consoleHandler(dir string) (http.Handler, error) {
 // Requests from other origins get no CORS headers, so browsers block them.
 func withCORS(next http.Handler, allowed []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+
 		origin := r.Header.Get("Origin")
 		if origin == "" || !slices.Contains(allowed, origin) {
 			next.ServeHTTP(w, r)
@@ -65,7 +68,6 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", origin)
 		h.Set("Access-Control-Allow-Credentials", "true")
-		h.Add("Vary", "Origin")
 
 		if r.Method == http.MethodOptions {
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
@@ -76,6 +78,27 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 			return
 		}
 
+		h.Set("Access-Control-Expose-Headers", "Retry-After")
+
 		next.ServeHTTP(w, r)
 	})
+}
+
+// checkAllowedOrigins refuses an origin that is not http(s)://host[:port]
+// with no path, query or fragment. It refuses "null" and "*" too: the
+// server compares each origin to the Origin header as an exact string.
+func checkAllowedOrigins(origins []string) error {
+	for _, o := range origins {
+		u, err := url.Parse(o)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+			o != u.Scheme+"://"+u.Host {
+			return fmt.Errorf(
+				"%w: allowed origin %q must be http:// or https:// with a host and an optional port, "+
+					"and no path, query or fragment, for example https://console.example.com",
+				ErrInvalidOption, o,
+			)
+		}
+	}
+
+	return nil
 }

@@ -507,60 +507,119 @@ func (f fixture) doRaw(t *testing.T, method, path, auth string) (int, http.Heade
 	return resp.StatusCode, resp.Header, string(data)
 }
 
+type corsRow struct {
+	name, method, origin, path string
+	wantAllow                  string
+}
+
+const corsOtherOrigin = "https://evil.example"
+
+func corsRows() []corsRow {
+	paths := []string{
+		"/api/user", "/api/v2/ping", "/api/inventory/units", "/api/server/session",
+		"/api/audit/events", "/api/context/objects",
+	}
+	rows := make([]corsRow, 0, 6*len(paths)+2)
+
+	for _, p := range paths {
+		rows = append(rows,
+			corsRow{"preflight allowed origin " + p, http.MethodOptions, origin, p, origin},
+			corsRow{"preflight other origin " + p, http.MethodOptions, corsOtherOrigin, p, ""},
+			corsRow{"preflight no origin " + p, http.MethodOptions, "", p, ""},
+			corsRow{"request allowed origin " + p, http.MethodGet, origin, p, origin},
+			corsRow{"request other origin " + p, http.MethodGet, corsOtherOrigin, p, ""},
+			corsRow{"request no origin " + p, http.MethodGet, "", p, ""},
+		)
+	}
+
+	return append(rows,
+		corsRow{"tofu state preflight", http.MethodOptions, origin, "/tofu/state/acme/net", ""},
+		corsRow{"tofu state request", http.MethodGet, origin, "/tofu/state/acme/net", ""},
+	)
+}
+
 func TestCORS(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 
-	for _, tc := range []struct {
-		name, method, origin, wantAllow string
-	}{
-		{"preflight allowed origin", http.MethodOptions, origin, origin},
-		{"preflight other origin", http.MethodOptions, "https://evil.example", ""},
-		{"preflight no origin", http.MethodOptions, "", ""},
-		{"request allowed origin", http.MethodGet, origin, origin},
-		{"request other origin", http.MethodGet, "https://evil.example", ""},
-	} {
+	for _, tc := range corsRows() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			url := f.server.URL + "/api/user"
+			status, header := doCORSRequest(t, f.server, tc)
 
-			req, err := http.NewRequestWithContext(t.Context(), tc.method, url, http.NoBody)
-			if err != nil {
-				t.Fatalf("new request: %v", err)
-			}
-
-			if tc.origin != "" {
-				req.Header.Set("Origin", tc.origin)
-			}
-
-			req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-
-			resp, err := f.server.Client().Do(req)
-			if err != nil {
-				t.Fatalf("request: %v", err)
-			}
-
-			if closeErr := resp.Body.Close(); closeErr != nil {
-				t.Fatalf("close body: %v", closeErr)
-			}
-
-			checkCORSHeaders(t, resp.Header, tc.method, tc.wantAllow)
+			checkCORSHeaders(t, header, tc)
+			checkPreflightStatus(t, status, tc)
 		})
 	}
 }
 
-func checkCORSHeaders(t *testing.T, h http.Header, method, wantAllow string) {
+func doCORSRequest(t *testing.T, ts *httptest.Server, tc corsRow) (int, http.Header) {
 	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), tc.method, ts.URL+tc.path, http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	if tc.origin != "" {
+		req.Header.Set("Origin", tc.origin)
+	}
+
+	if tc.method == http.MethodOptions {
+		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	}
+
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close body: %v", closeErr)
+	}
+
+	return resp.StatusCode, resp.Header
+}
+
+func checkPreflightStatus(t *testing.T, status int, tc corsRow) {
+	t.Helper()
+
+	if tc.method != http.MethodOptions {
+		return
+	}
+
+	if tc.wantAllow != "" && status != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", status)
+	}
+
+	if tc.origin == corsOtherOrigin && status == http.StatusNoContent {
+		t.Fatal("preflight from another origin answered 204")
+	}
+}
+
+func checkCORSHeaders(t *testing.T, h http.Header, tc corsRow) {
+	t.Helper()
+
+	method, wantAllow := tc.method, tc.wantAllow
 
 	if got := h.Get("Access-Control-Allow-Origin"); got != wantAllow {
 		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, wantAllow)
 	}
 
+	if !slices.Contains(h.Values("Vary"), "Origin") && !strings.HasPrefix(tc.path, "/tofu/") {
+		t.Fatalf("Vary = %v, want Origin", h.Values("Vary"))
+	}
+
 	if wantAllow == "" {
-		if h.Get("Access-Control-Allow-Credentials") != "" || h.Get("Access-Control-Allow-Headers") != "" {
-			t.Fatalf("CORS headers set without an allowed origin: %v", h)
+		for _, name := range []string{
+			"Access-Control-Allow-Credentials", "Access-Control-Allow-Headers", "Access-Control-Allow-Methods",
+			"Access-Control-Max-Age", "Access-Control-Expose-Headers",
+		} {
+			if h.Get(name) != "" {
+				t.Fatalf("%s set without an allowed origin: %v", name, h)
+			}
 		}
 
 		return
@@ -570,19 +629,77 @@ func checkCORSHeaders(t *testing.T, h http.Header, method, wantAllow string) {
 		t.Fatalf("Access-Control-Allow-Credentials = %q, want true", got)
 	}
 
-	if !slices.Contains(h.Values("Vary"), "Origin") {
-		t.Fatalf("Vary = %v, want Origin", h.Values("Vary"))
-	}
+	if method == http.MethodOptions {
+		checkPreflightHeaders(t, h)
 
-	if method != http.MethodOptions {
 		return
 	}
 
-	allowHeaders := h.Get("Access-Control-Allow-Headers")
+	if got := h.Get("Access-Control-Expose-Headers"); got != "Retry-After" {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want Retry-After", got)
+	}
+}
+
+func checkPreflightHeaders(t *testing.T, h http.Header) {
+	t.Helper()
+
+	if got := h.Get("Access-Control-Expose-Headers"); got != "" {
+		t.Fatalf("Access-Control-Expose-Headers on preflight = %q, want empty", got)
+	}
+
+	if got := h.Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, PATCH, DELETE" {
+		t.Fatalf("Access-Control-Allow-Methods = %q", got)
+	}
+
+	if got := h.Get("Access-Control-Max-Age"); got != "600" {
+		t.Fatalf("Access-Control-Max-Age = %q, want 600", got)
+	}
+
+	allowHeaders := strings.Split(h.Get("Access-Control-Allow-Headers"), ", ")
 	for _, want := range []string{"Authorization", "Content-Type", "Dustpan-Channel", "X-Dustpan-CSRF"} {
-		if !strings.Contains(allowHeaders, want) {
+		if !slices.Contains(allowHeaders, want) {
 			t.Fatalf("Access-Control-Allow-Headers = %q, want %q", allowHeaders, want)
 		}
+	}
+}
+
+func TestNewServerRefusesBadAllowedOrigins(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		origin string
+		ok     bool
+	}{
+		{"https://console.example.com", true},
+		{"http://localhost:5173", true},
+		{"null", false},
+		{"*", false},
+		{"console.example.com", false},
+		{"ftp://console.example.com", false},
+		{"https://", false},
+		{"https://console.example.com/", false},
+		{"https://console.example.com/app", false},
+		{"https://console.example.com?x=1", false},
+		{"https://console.example.com#top", false},
+		{"https://user@console.example.com", false},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+			opts := append(fullServerOptions(t, st, blobs, authn), dustpan.WithAllowedOrigins(origin, tc.origin))
+
+			_, err := dustpan.NewServer(opts...)
+			if tc.ok && err != nil {
+				t.Fatalf("origin %q: %v", tc.origin, err)
+			}
+
+			if !tc.ok {
+				if !errors.Is(err, dustpan.ErrInvalidOption) || !strings.Contains(err.Error(), tc.origin) {
+					t.Fatalf("origin %q: err = %v, want ErrInvalidOption naming the value", tc.origin, err)
+				}
+			}
+		})
 	}
 }
 
