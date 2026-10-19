@@ -92,6 +92,7 @@ type pgCopyTable struct {
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
+	tables = append(tables, pgCopyGateTables()...)
 	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
@@ -183,7 +184,7 @@ func pgInventoryChangeTables() []pgCopyTable {
 		{
 			table: "inventory_changes",
 			columns: []string{
-				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
+				pgColNamespaceID, pgColSeq, pgColAtMs, pgColTool, pgColUnitID, pgColName, pgColDisplayName,
 				pgColStatus, "collection", "kind", "resource_count",
 			},
 			orderBy: []string{pgColNamespaceID, pgColSeq},
@@ -292,7 +293,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table: "audit_entries",
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
-				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
+				"object", pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 				"changes", "object_id", "fence_version",
 			},

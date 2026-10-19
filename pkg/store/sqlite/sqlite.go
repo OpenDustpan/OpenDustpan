@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -198,7 +199,9 @@ var migrations embed.FS
 type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
-	path    string
+	// gate serves the ports of gate.Store over this store.
+	gate *gatestore.Store
+	path string
 	// mu guards conn and queries across the online restore swap: readers
 	// hold it shared, and the swap holds it exclusive while it renames the
 	// database file. Lock order with stagingMu is stagingMu before mu.
@@ -319,7 +322,10 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		binaryVersion:       "",
 		processGuard:        guard,
 		stepTxBound:         DefaultStepTransactionBound,
+		gate:                nil,
 	}
+	s.gate = gatestore.New(gateRunner{s: s})
+
 	for _, opt := range opts {
 		opt(s)
 	}

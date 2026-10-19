@@ -2328,3 +2328,180 @@ WHERE o.namespace_id = sqlc.arg(namespace_id) AND o.owner = sqlc.arg(owner)
   AND (o.object_kind, o.object_id, o.resource_key, o.source) > (sqlc.arg(after_kind), sqlc.arg(after_id), sqlc.arg(after_key), sqlc.arg(after_source))
 ORDER BY o.object_kind, o.object_id, o.resource_key, o.source
 LIMIT sqlc.arg(page_limit);
+
+-- name: GetGateObject :one
+-- One configuration object of a scope.
+SELECT version, body
+FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
+  AND kind = sqlc.arg(kind) AND id = sqlc.arg(id);
+
+-- name: ListGateObjects :many
+-- The objects of one kind in one scope, ordered by ID.
+SELECT id, version, body
+FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind)
+ORDER BY id COLLATE "C";
+
+-- name: ListGateObjectsOfScope :many
+-- Every object and setting of one scope, ordered by kind and ID.
+SELECT kind, id, version, body
+FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
+ORDER BY kind COLLATE "C", id COLLATE "C";
+
+-- name: CountGateObjects :one
+-- The count of objects of one kind in one scope.
+SELECT COUNT(*)
+FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key) AND kind = sqlc.arg(kind);
+
+-- name: InsertGateObject :exec
+INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
+VALUES (sqlc.arg(namespace_id), sqlc.arg(scope_key), sqlc.arg(kind), sqlc.arg(id), sqlc.arg(level), sqlc.arg(tool),
+        sqlc.arg(unit_name), sqlc.arg(version), sqlc.arg(body), sqlc.arg(updated_at_ms));
+
+-- name: UpdateGateObject :execrows
+-- Replaces an object when its version is the expected one.
+UPDATE gate_objects
+SET version = sqlc.arg(version), body = sqlc.arg(body), updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
+  AND kind = sqlc.arg(kind) AND id = sqlc.arg(id) AND version = sqlc.arg(prev_version);
+
+-- name: DeleteGateObject :execrows
+-- Removes an object when its version is the expected one. Its references go
+-- with it.
+DELETE FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
+  AND kind = sqlc.arg(kind) AND id = sqlc.arg(id) AND version = sqlc.arg(prev_version);
+
+-- name: InsertGateReference :exec
+INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
+VALUES (sqlc.arg(ref_kind), sqlc.arg(ref_id), sqlc.arg(namespace_id), sqlc.arg(scope_key),
+        sqlc.arg(owner_kind), sqlc.arg(owner_id));
+
+-- name: DeleteGateReferences :exec
+DELETE FROM gate_references
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
+  AND owner_kind = sqlc.arg(owner_kind) AND owner_id = sqlc.arg(owner_id);
+
+-- name: ListNarrowerGateObjects :many
+-- The objects of one kind and ID in the scope and in the scopes after it: for
+-- the installation, every scope; for a namespace, every scope of the
+-- namespace; for a collection, the collection and the units that it holds
+-- now; for a unit, the unit. level, namespace_id, scope_key and
+-- collection_key describe the scope.
+SELECT o.scope_key, o.version, o.body
+FROM gate_objects AS o
+WHERE o.kind = sqlc.arg(kind) AND o.id = sqlc.arg(id)
+  AND (
+      sqlc.arg(level)::text = 'installation'
+      OR (sqlc.arg(level)::text = 'namespace' AND o.namespace_id = sqlc.arg(namespace_id))
+      OR (o.namespace_id = sqlc.arg(namespace_id) AND o.scope_key = sqlc.arg(scope_key))
+      OR (sqlc.arg(level)::text = 'collection' AND o.level = 'unit' AND o.namespace_id = sqlc.arg(namespace_id)
+          AND EXISTS (
+              SELECT 1
+              FROM namespaces AS n
+              JOIN inventory AS i ON i.namespace = n.name
+              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
+              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+                AND m.collection_key = sqlc.arg(collection_key)))
+  )
+ORDER BY o.scope_key COLLATE "C";
+
+-- name: ListGateReferrers :many
+-- The objects, in the scope and in the scopes after it (see
+-- ListNarrowerGateObjects), that name the approval rule or the path set.
+SELECT o.scope_key, o.kind, o.id, o.version, o.body
+FROM gate_references AS r
+JOIN gate_objects AS o
+    ON o.namespace_id = r.namespace_id AND o.scope_key = r.scope_key AND o.kind = r.owner_kind AND o.id = r.owner_id
+WHERE r.ref_kind = sqlc.arg(ref_kind) AND r.ref_id = sqlc.arg(ref_id)
+  AND (
+      sqlc.arg(level)::text = 'installation'
+      OR (sqlc.arg(level)::text = 'namespace' AND o.namespace_id = sqlc.arg(namespace_id))
+      OR (o.namespace_id = sqlc.arg(namespace_id) AND o.scope_key = sqlc.arg(scope_key))
+      OR (sqlc.arg(level)::text = 'collection' AND o.level = 'unit' AND o.namespace_id = sqlc.arg(namespace_id)
+          AND EXISTS (
+              SELECT 1
+              FROM namespaces AS n
+              JOIN inventory AS i ON i.namespace = n.name
+              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
+              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+                AND m.collection_key = sqlc.arg(collection_key)))
+  )
+ORDER BY o.scope_key COLLATE "C", o.kind COLLATE "C", o.id COLLATE "C";
+
+-- name: GateUnitCollection :one
+-- The key of the collection that holds a unit now. A unit in no collection has
+-- no row.
+SELECT m.collection_key
+FROM namespaces AS n
+JOIN inventory AS i ON i.namespace = n.name
+JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
+WHERE n.id = sqlc.arg(namespace_id) AND i.tool = sqlc.arg(tool) AND i.name = sqlc.arg(unit_name);
+
+-- name: DeleteUnitGateObjects :exec
+-- Deletes the configuration of a unit that a purge removes. The references go
+-- with it.
+DELETE FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
+  AND unit_name = sqlc.arg(unit_name);
+
+-- name: DeleteScopeGateObjects :exec
+-- Deletes the configuration of one scope, for example a collection that a
+-- delete removes. The references go with it.
+DELETE FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key);
+
+-- name: InsertGateRecord :exec
+INSERT INTO gate_records (id, namespace_id, point, change_kind, change_id, at_ms, last_at_ms, count, refusal_key, body)
+VALUES (sqlc.arg(id), sqlc.arg(namespace_id), sqlc.arg(point), sqlc.arg(change_kind), sqlc.arg(change_id),
+        sqlc.arg(at_ms), sqlc.arg(last_at_ms), sqlc.arg(count), sqlc.arg(refusal_key), sqlc.arg(body));
+
+-- name: GetGateRecord :one
+SELECT body
+FROM gate_records
+WHERE id = sqlc.arg(id) AND namespace_id = sqlc.arg(namespace_id);
+
+-- name: ListGateRecordsByChange :many
+SELECT body
+FROM gate_records
+WHERE namespace_id = sqlc.arg(namespace_id) AND change_kind = sqlc.arg(change_kind)
+  AND change_id = sqlc.arg(change_id)
+ORDER BY at_ms, id COLLATE "C";
+
+-- name: QueryGateRecords :many
+-- The records of a decision point with at_ms from from_ms up to, not
+-- including, to_ms, newest first.
+SELECT body
+FROM gate_records
+WHERE namespace_id = sqlc.arg(namespace_id) AND point = sqlc.arg(point)
+  AND at_ms >= sqlc.arg(from_ms) AND at_ms < sqlc.arg(to_ms)
+ORDER BY at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg(max_rows);
+
+-- name: FindGateRefusal :one
+-- The newest record of a refusal key whose last refusal is not before since_ms.
+SELECT id, count, body
+FROM gate_records
+WHERE namespace_id = sqlc.arg(namespace_id) AND refusal_key = sqlc.arg(refusal_key) AND refusal_key <> ''
+  AND last_at_ms >= sqlc.arg(since_ms)
+ORDER BY last_at_ms DESC, id COLLATE "C" DESC
+LIMIT 1;
+
+-- name: UpdateGateRefusal :exec
+UPDATE gate_records
+SET count = sqlc.arg(count), last_at_ms = sqlc.arg(last_at_ms), body = sqlc.arg(body)
+WHERE id = sqlc.arg(id);
+
+-- name: LockGateRefusal :exec
+-- Takes a lock until the end of the transaction on one refusal key of a
+-- namespace, so two refusals of one key at the same time share one record.
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(lock_key)::text, 0));
+
+-- name: GetGateRecordByID :one
+-- The namespace of the record with an ID, in any namespace.
+SELECT namespace_id
+FROM gate_records
+WHERE id = sqlc.arg(id);

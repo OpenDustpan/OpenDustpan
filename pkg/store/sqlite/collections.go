@@ -114,6 +114,10 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
+		if gateErr := purgeCollectionGate(ctx, q, ref); gateErr != nil {
+			return gateErr
+		}
+
 		return removeCollection(ctx, q, ref)
 	})
 }
