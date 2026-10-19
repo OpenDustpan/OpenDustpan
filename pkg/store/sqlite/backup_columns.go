@@ -21,6 +21,7 @@ const (
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
 	backupColNamespaceID = "namespace_id"
+	backupColReason      = "reason"
 	backupColSequence    = "sequence"
 	backupColSize        = "size"
 	backupColStackID     = "stack_id"
@@ -178,7 +179,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColArrival,
 				"sequence_ids",
 				"status",
-				"reason",
+				backupColReason,
 			},
 		},
 		{
@@ -347,7 +348,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"changes",
 				"object_id",
 				"fence_version",
-				"reason",
+				backupColReason,
 			},
 		},
 	}
@@ -544,7 +545,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColExpiresAtMs,
 				backupColCreatedAtMs,
 				backupColCreatedBy,
-				"reason",
+				backupColReason,
 				"ended_at_ms",
 			},
 		},

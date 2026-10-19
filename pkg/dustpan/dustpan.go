@@ -1577,6 +1577,7 @@ func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
 		PrevHash:     "",
 		Hash:         "",
 		Sequence:     0,
+		Reason:       "",
 	})
 
 	switch {

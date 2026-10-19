@@ -300,6 +300,7 @@ func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 		PrevHash:     "",
 		Hash:         "",
 		Sequence:     0,
+		Reason:       "",
 	}, now, Ref(rec.PrincipalID)))
 
 	switch {
@@ -344,6 +345,7 @@ func (d *Decorator) appendSignIn(
 		PrevHash:     "",
 		Hash:         "",
 		Sequence:     0,
+		Reason:       "",
 	}
 
 	if _, err := d.audit.AppendServer(ctx, e); err != nil {
