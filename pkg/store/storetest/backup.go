@@ -127,6 +127,7 @@ type backupSeed struct {
 	backedUp   backup.Record
 	audit      []audit.Entry
 	imports    *seededImports
+	profiles   *seededProfiles
 }
 
 // seedBackupStore fills s through the real ports: namespaces, stacks with
@@ -254,6 +255,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupSignIn(t, s)
 	imports := seedBackupImports(t, s, acme)
 	seedBlameRows(t, s, blameSeed{ns: acme, w: net, first: current.ID.String(), second: pending.ID.String()})
+	profiles := seedBackupProfiles(t, s, acme)
 	seedBackupGate(t, s, acme)
 
 	return backupSeed{
@@ -274,6 +276,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		backedUp:   backedUp,
 		audit:      entries,
 		imports:    imports,
+		profiles:   profiles,
 	}
 }
 

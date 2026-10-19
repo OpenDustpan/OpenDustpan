@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/unitimport"
@@ -96,4 +97,11 @@ func (s *backupStore) ImportPorts() storetest.ImportPorts {
 			return imports.SeedTarget(ctx, key, target)
 		},
 	}
+}
+
+// ProfileStore implements storetest.ProfileSeeder.
+//
+//nolint:ireturn // The method implements storetest.ProfileSeeder, which returns the port.
+func (s *backupStore) ProfileStore() profile.Store {
+	return s.Profiles()
 }

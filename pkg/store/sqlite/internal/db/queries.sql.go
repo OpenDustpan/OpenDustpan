@@ -774,6 +774,19 @@ func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, err
 	return count, err
 }
 
+const countLiveProfiles = `-- name: CountLiveProfiles :one
+SELECT COUNT(*)
+FROM profiles
+WHERE namespace_id = ?1 AND deleted_at_ms = 0
+`
+
+func (q *Queries) CountLiveProfiles(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLiveProfiles, namespaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countNamespaces = `-- name: CountNamespaces :one
 SELECT COUNT(*)
 FROM namespaces
@@ -3849,6 +3862,60 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Chec
 	return i, err
 }
 
+const getLiveProfileByID = `-- name: GetLiveProfileByID :one
+SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+FROM profiles
+WHERE namespace_id = ?1 AND id = ?2 AND deleted_at_ms = 0
+`
+
+type GetLiveProfileByIDParams struct {
+	NamespaceID string
+	ID          string
+}
+
+func (q *Queries) GetLiveProfileByID(ctx context.Context, arg GetLiveProfileByIDParams) (Profile, error) {
+	row := q.db.QueryRowContext(ctx, getLiveProfileByID, arg.NamespaceID, arg.ID)
+	var i Profile
+	err := row.Scan(
+		&i.NamespaceID,
+		&i.ID,
+		&i.Name,
+		&i.Latest,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+		&i.DeletedAtMs,
+	)
+	return i, err
+}
+
+const getLiveProfileByName = `-- name: GetLiveProfileByName :one
+SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+FROM profiles
+WHERE namespace_id = ?1 AND name = ?2 AND deleted_at_ms = 0
+`
+
+type GetLiveProfileByNameParams struct {
+	NamespaceID string
+	Name        string
+}
+
+func (q *Queries) GetLiveProfileByName(ctx context.Context, arg GetLiveProfileByNameParams) (Profile, error) {
+	row := q.db.QueryRowContext(ctx, getLiveProfileByName, arg.NamespaceID, arg.Name)
+	var i Profile
+	err := row.Scan(
+		&i.NamespaceID,
+		&i.ID,
+		&i.Name,
+		&i.Latest,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+		&i.DeletedAtMs,
+	)
+	return i, err
+}
+
 const getNamespace = `-- name: GetNamespace :one
 SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
@@ -4009,6 +4076,34 @@ func (q *Queries) GetPrincipalNamespace(ctx context.Context, id string) (string,
 	var namespace string
 	err := row.Scan(&namespace)
 	return namespace, err
+}
+
+const getProfileRevision = `-- name: GetProfileRevision :one
+SELECT namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
+FROM profile_revisions
+WHERE namespace_id = ?1 AND profile_id = ?2 AND number = ?3
+`
+
+type GetProfileRevisionParams struct {
+	NamespaceID string
+	ProfileID   string
+	Number      int64
+}
+
+func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevisionParams) (ProfileRevision, error) {
+	row := q.db.QueryRowContext(ctx, getProfileRevision, arg.NamespaceID, arg.ProfileID, arg.Number)
+	var i ProfileRevision
+	err := row.Scan(
+		&i.NamespaceID,
+		&i.ProfileID,
+		&i.Number,
+		&i.Document,
+		&i.DocumentSha256,
+		&i.Author,
+		&i.CreatedAtMs,
+		&i.Reason,
+	)
+	return i, err
 }
 
 const getRestore = `-- name: GetRestore :one
@@ -5642,6 +5737,73 @@ func (q *Queries) InsertObjectOwner(ctx context.Context, arg InsertObjectOwnerPa
 		arg.ObjectID,
 		arg.ResourceKey,
 		arg.Source,
+	)
+	return err
+}
+
+const insertProfile = `-- name: InsertProfile :exec
+INSERT INTO profiles (
+    namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, 0
+)
+`
+
+type InsertProfileParams struct {
+	NamespaceID string
+	ID          string
+	Name        string
+	Latest      int64
+	CreatedBy   string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// A new live profile in the namespace with the stable ID namespace_id.
+func (q *Queries) InsertProfile(ctx context.Context, arg InsertProfileParams) error {
+	_, err := q.db.ExecContext(ctx, insertProfile,
+		arg.NamespaceID,
+		arg.ID,
+		arg.Name,
+		arg.Latest,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const insertProfileRevision = `-- name: InsertProfileRevision :exec
+INSERT INTO profile_revisions (
+    namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8
+)
+`
+
+type InsertProfileRevisionParams struct {
+	NamespaceID    string
+	ProfileID      string
+	Number         int64
+	Document       string
+	DocumentSha256 string
+	Author         string
+	CreatedAtMs    int64
+	Reason         string
+}
+
+func (q *Queries) InsertProfileRevision(ctx context.Context, arg InsertProfileRevisionParams) error {
+	_, err := q.db.ExecContext(ctx, insertProfileRevision,
+		arg.NamespaceID,
+		arg.ProfileID,
+		arg.Number,
+		arg.Document,
+		arg.DocumentSha256,
+		arg.Author,
+		arg.CreatedAtMs,
+		arg.Reason,
 	)
 	return err
 }
@@ -7812,6 +7974,64 @@ func (q *Queries) ListJournalSequences(ctx context.Context, arg ListJournalSeque
 	return items, nil
 }
 
+const listLiveProfiles = `-- name: ListLiveProfiles :many
+SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+FROM profiles
+WHERE namespace_id = ?1
+  AND deleted_at_ms = 0
+  AND name > ?2
+  AND (CAST(?3 AS TEXT) = ''
+       OR substr(name, 1, length(CAST(?3 AS TEXT)) + 1) = CAST(?3 AS TEXT) || '/')
+ORDER BY name
+LIMIT ?4
+`
+
+type ListLiveProfilesParams struct {
+	NamespaceID string
+	AfterName   string
+	Folder      string
+	PageLimit   int64
+}
+
+// The live profiles of a namespace after the name after_name, ordered by name.
+// A folder limits the list to the names that start with folder and a slash.
+func (q *Queries) ListLiveProfiles(ctx context.Context, arg ListLiveProfilesParams) ([]Profile, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveProfiles,
+		arg.NamespaceID,
+		arg.AfterName,
+		arg.Folder,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Profile
+	for rows.Next() {
+		var i Profile
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ID,
+			&i.Name,
+			&i.Latest,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.DeletedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNamespaces = `-- name: ListNamespaces :many
 SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
@@ -8059,6 +8279,60 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 			&i.Namespace,
 			&i.BreakGlass,
 			&i.GroupCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProfileRevisions = `-- name: ListProfileRevisions :many
+SELECT namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
+FROM profile_revisions
+WHERE namespace_id = ?1 AND profile_id = ?2
+  AND number < ?3
+ORDER BY number DESC
+LIMIT ?4
+`
+
+type ListProfileRevisionsParams struct {
+	NamespaceID  string
+	ProfileID    string
+	BeforeNumber int64
+	PageLimit    int64
+}
+
+// The revisions of a profile with a number below before_number, newest first.
+func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevisionsParams) ([]ProfileRevision, error) {
+	rows, err := q.db.QueryContext(ctx, listProfileRevisions,
+		arg.NamespaceID,
+		arg.ProfileID,
+		arg.BeforeNumber,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProfileRevision
+	for rows.Next() {
+		var i ProfileRevision
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ProfileID,
+			&i.Number,
+			&i.Document,
+			&i.DocumentSha256,
+			&i.Author,
+			&i.CreatedAtMs,
+			&i.Reason,
 		); err != nil {
 			return nil, err
 		}
@@ -8847,6 +9121,35 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 	return items, nil
 }
 
+const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
+UPDATE profiles
+SET deleted_at_ms = ?1
+WHERE namespace_id = ?2 AND id = ?3 AND deleted_at_ms = 0
+  AND (CAST(?4 AS INTEGER) = 0 OR latest = CAST(?4 AS INTEGER))
+`
+
+type MarkProfileDeletedParams struct {
+	DeletedAtMs int64
+	NamespaceID string
+	ID          string
+	IfLatest    int64
+}
+
+// Frees the name of a live profile. A non-zero if_latest must be the newest
+// revision.
+func (q *Queries) MarkProfileDeleted(ctx context.Context, arg MarkProfileDeletedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markProfileDeleted,
+		arg.DeletedAtMs,
+		arg.NamespaceID,
+		arg.ID,
+		arg.IfLatest,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const markRestoreApplying = `-- name: MarkRestoreApplying :execrows
 UPDATE restores
 SET state = 'applying', pre_backup_id = ?
@@ -8879,6 +9182,37 @@ func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const moveProfileLatest = `-- name: MoveProfileLatest :execrows
+UPDATE profiles
+SET latest = ?1, updated_at_ms = ?2
+WHERE namespace_id = ?3 AND id = ?4 AND deleted_at_ms = 0
+  AND latest = ?5
+`
+
+type MoveProfileLatestParams struct {
+	Next        int64
+	UpdatedAtMs int64
+	NamespaceID string
+	ID          string
+	Base        int64
+}
+
+// Moves the newest revision from base to next. It changes no row when the
+// newest revision is another.
+func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, moveProfileLatest,
+		arg.Next,
+		arg.UpdatedAtMs,
+		arg.NamespaceID,
+		arg.ID,
+		arg.Base,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const nextInventoryChangeSeq = `-- name: NextInventoryChangeSeq :one

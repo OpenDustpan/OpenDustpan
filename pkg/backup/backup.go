@@ -123,6 +123,8 @@ var Tables = []string{
 	"workspace_blame_cursors",
 	"workspace_blame_items",
 	"workspace_resource_changes",
+	"profiles",
+	"profile_revisions",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

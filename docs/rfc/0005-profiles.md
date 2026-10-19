@@ -368,6 +368,27 @@ another option.
     decision 3). The owner accepts it or picks another option on the
     merge.
 
+### Slice 1 deviations
+
+The first slice of profiles (the store and the REST API) differs from the
+ADRs in these points. Each point stays open until the owner decides it.
+
+- The secret scope is the namespace and the profile ID (`prf-...`), not
+  `profile:<ID>` (ADR 202 decision 1).
+- `$neverStore` needs `$secret` or `$sealed`. ADR 201 decision 12 allows it
+  on any value.
+- A save with a `$secret` writes the document text again. The spacing can
+  change (ADR 201 decision 1).
+- A request with `Idempotency-Key` answers 400 until an idempotency store
+  exists. ADR 210 decision 6 requires each mutating route to take the key.
+- The Store port differs from ADR 200 decision 4: `Revision` and `Revisions`
+  also take the namespace, `Save` takes an `Anchor` (namespace, ID, newest
+  revision read) instead of `id` and `base`, and `Save` returns the `Profile`,
+  not the `Revision`. `At` and `Anchor` are structs, so tags, drafts and
+  sessions can add fields without a change of signature.
+- The `/entries` routes are removed. They return in a later slice only after
+  an RFC accepts them.
+
 ## Outcome
 
 Accepted in part: ADRs 200 to 209, on the merge of their pull request. The
