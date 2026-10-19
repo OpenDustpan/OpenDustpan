@@ -33,6 +33,16 @@ sql:
             go_type: bool
           - column: state_versions.unlocked_write
             go_type: bool
+          - column: workspace_blame_items.opaque
+            go_type: bool
+          - column: workspace_blame_items.lineage_changed
+            go_type: bool
+          - column: workspace_resource_changes.restored
+            go_type: bool
+          - column: workspace_resource_changes.forced
+            go_type: bool
+          - column: workspace_resource_changes.lineage_changed
+            go_type: bool
           - column: access_token_policy.disable_tokens
             go_type: bool
           - column: durable_operations.cancel_requested

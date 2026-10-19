@@ -13,7 +13,7 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 				backupColNamespaceID,
 				"id",
 				backupColKind,
-				"address",
+				backupColAddress,
 				"selection",
 				"credential",
 				"profile",

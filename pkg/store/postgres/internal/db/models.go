@@ -748,3 +748,33 @@ type Workspace struct {
 	DeletedAtMs           pgtype.Int8
 	DeletedName           pgtype.Text
 }
+
+type WorkspaceBlameCursor struct {
+	WorkspaceID string
+	Ordinal     int64
+}
+
+type WorkspaceBlameItem struct {
+	WorkspaceID    string
+	StateVersionID string
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
+	ResourceCount  int64
+}
+
+type WorkspaceResourceChange struct {
+	WorkspaceID    string
+	StateVersionID string
+	Address        string
+	Ordinal        int64
+	Kind           string
+	AtMs           int64
+	BySubject      string
+	ByTokenID      string
+	ByJobID        string
+	ChangedPaths   int64
+	Restored       bool
+	Forced         bool
+	LineageChanged bool
+}

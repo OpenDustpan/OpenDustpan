@@ -13,7 +13,7 @@ func pgCopyImportTables() []pgCopyTable {
 				pgColNamespaceID,
 				"id",
 				pgColKind,
-				"address",
+				pgColAddress,
 				"selection",
 				"credential",
 				"profile",
