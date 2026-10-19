@@ -90,7 +90,7 @@ both together.
 | [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
 | [41](0041-agent-interface.md) | An interface for AI agents | draft |
-| [42](0042-migration-import.md) | Migration from other backends and operators | accepted |
+| [42](0042-migration-import.md) | Migration from other backends and operators | accepted (ADR 29); the import resource and the source adapters decided by ADRs 241 to 244 |
 | [43](0043-ephemeral-units.md) | Ephemeral units and time to live | draft |
 | [44](0044-bulk-operations.md) | Bulk operations | draft; bulk calls accepted (ADR 213) |
 | [45](0045-cost-estimation.md) | Cost estimation | draft |
@@ -99,7 +99,7 @@ both together.
 | [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
 | [49](0049-run-tasks.md) | Run tasks: external checks with callbacks | accepted (ADR 226) |
 | [50](0050-policy-authoring.md) | Policy authoring, testing and compliance packs | draft; decision records, simulate and starter packs accepted (ADR 229) |
-| [51](0051-change-management-integrations.md) | Change management and portal integrations | draft |
+| [51](0051-change-management-integrations.md) | Change management and portal integrations | draft; Backstage plugin accepted (ADR 247) |
 | [52](0052-console-core.md) | Console core views and navigation | draft; the console reads the capabilities document (ADR 211) |
 | [53](0053-terraform-cli.md) | Terraform CLI support | draft |
 | [54](0054-sources-beyond-git.md) | Sources other than git | draft |
@@ -114,7 +114,7 @@ both together.
 | [63](0063-workspace-lock-holder.md) | A workspace lock belongs to a principal, not to a client | accepted |
 | [64](0064-pulumi-journaling-architecture.md) | Architecture of Pulumi journaling support | accepted |
 | [65](0065-opentofu-http-backend.md) | OpenTofu through the http backend too | accepted |
-| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft |
+| [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft; the import tool and the move check of one unit, then of a namespace, accepted (ADRs 241 to 244) |
 | [67](0067-spend-and-cost-tool-integration.md) | Integration with spend and cost tools (FinOps) | draft |
 | [68](0068-installation-settings.md) | Installation settings: inventory, settings through the API, and live reload | draft; fresh MFA for weaker settings and one settings API accepted (ADR 212), the namespace as the tenant (ADR 215) and a lock that turns a feature off (ADR 219) |
 | [69](0069-community-channels.md) | Community channels: announce list, Discussions, and a later chat | discussing |
@@ -129,4 +129,6 @@ both together.
 | [78](0078-localization-open-questions.md) | Localization open questions: translated docs, the translation machine, the server formatter and the edges | discussing; translated docs, the translation agent, the formatter, the product name in chat, `resolvedLanguage` and reports of one string accepted (ADRs 232, 234 and 235) |
 | [79](0079-opt-in-federation-routing-and-geo-replication.md) | Opt-in federation of installations, routing and geo-replication | draft |
 | [80](0080-console-sessions-on-the-tfe-compatible-api.md) | Console sessions on the TFE-compatible API, and fresh authentication for force-unlock and the state download | draft |
+| [81](0081-open-questions-of-the-import-tool.md) | Open questions of the import tool and the move check | accepted (ADRs 241 to 244) |
 | [82](0082-a-namespace-in-the-blueprint-scope-key.md) | A namespace in the scope key of a blueprint version | discussing |
+| [84](0084-backstage-plugin-open-questions.md) | Open questions of the Backstage plugin | discussing |
