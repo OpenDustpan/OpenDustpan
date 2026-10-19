@@ -56,7 +56,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -216,10 +216,10 @@ type settings struct {
 	beforeServe func(ctx context.Context) error
 	// installationKind, kindStore and devCode are the installation kind, the
 	// store that keeps it and the one-time sign-in code of opendustpan dev.
-	// See WithInstallationKind, WithInstallationKindStore and WithDevSignIn.
+	// See WithInstallationKind and WithInstallationKindStore.
 	installationKind installation.Kind
 	kindStore        installation.KindStore
-	devCode          *devcode.Code
+	devSignIn        *devsignin.Config
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -657,7 +657,7 @@ func defaultSettings() *settings {
 		beforeServe:             nil,
 		installationKind:        "",
 		kindStore:               nil,
-		devCode:                 nil,
+		devSignIn:               nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainOn,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
@@ -919,9 +919,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		kind:             kindState{kind: cfg.installationKind, store: cfg.kindStore},
 		durable:          cfg.durableStore,
 		durableOwner:     durableOwner(cfg),
-		inactivityEvery:  sweepEvery,
-		deletedEvery:     deletedSweepEvery,
-		idempotency:      cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
+		inactivityEvery:  sweepEvery, deletedEvery: deletedSweepEvery,
+		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 	}, nil
 }
 

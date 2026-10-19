@@ -20,6 +20,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -258,6 +259,10 @@ func (r *devRun) run(ctx context.Context) error {
 	defer closeAppLog(ctx, &app, r.stderr)
 	defer r.openLog() // A run that fails before the banner still shows its log.
 
+	if delErr := r.deleteStaleAddr(envParent); delErr != nil {
+		return delErr
+	}
+
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", r.flags.listen) //nolint:exhaustruct_v5 // Defaults only.
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", r.flags.listen, err)
@@ -286,6 +291,24 @@ func (r *devRun) run(ctx context.Context) error {
 	handedOver = true
 
 	return r.serve(ctx, listener)
+}
+
+// deleteStaleAddr deletes dev.addr of the data directory at start, before dev
+// listens: a file that an earlier run left (a crash or a kill) must not tell
+// `health` that a server runs. A new --ephemeral directory has no such file,
+// and a directory that does not exist yet has none. A path error shows later,
+// when prepareDir reads the same path.
+func (r *devRun) deleteStaleAddr(envParent string) error {
+	if r.flags.ephemeral {
+		return nil
+	}
+
+	dir, err := devDirPath(r.proc.dirs(r.flags.dataDir, envParent))
+	if err != nil {
+		return nil //nolint:nilerr // prepareDir reports the same error.
+	}
+
+	return removeDevAddr(dir)
 }
 
 // openLog lets the log through when the run ends before the banner, so the
@@ -412,7 +435,7 @@ func (r *devRun) serve(ctx context.Context, listener net.Listener) error {
 
 	codeText := ""
 
-	if r.showsLink() {
+	if r.showsLink(listener) {
 		if code, codeText, err = devcode.Make(r.proc.now); err != nil {
 			return err
 		}
@@ -514,7 +537,7 @@ func (r *devRun) writeCredentials(serverURL string, cert devCert) error {
 // banner prints the banner of dev to stderr.
 func (r *devRun) banner(listener net.Listener, serverURL string, cert devCert, codeText string) error {
 	b := devBanner{
-		tlsExpiry: cert.notAfter, dir: r.dir, serverURL: serverURL, signIn: r.signInLine(serverURL, codeText),
+		tlsExpiry: cert.notAfter, dir: r.dir, serverURL: serverURL, signIn: r.signInLine(listener, serverURL, codeText),
 		envFile: filepath.Join(r.dir, devEnvName), network: r.networkLine(listener), tokenNote: r.tokenNote(),
 		ephemeral: r.flags.ephemeral, trustStep: r.flags.tls && cert.bundleFile == "",
 	}
@@ -523,25 +546,48 @@ func (r *devRun) banner(listener net.Listener, serverURL string, cert devCert, c
 }
 
 // showsLink reports whether the banner shows the sign-in link: the first start
-// of the data directory, stderr is a terminal, and dev serves a console.
-func (r *devRun) showsLink() bool {
-	return r.fresh && r.proc.terminal && r.flags.consoleDir != ""
+// of the data directory, stderr is a terminal, dev serves a console, and a
+// browser can keep the session cookie. The cookie is Secure, so on plain HTTP
+// a browser keeps it only from a loopback origin: dev makes no link for an
+// address that is not a loopback address, unless --tls is set.
+func (r *devRun) showsLink(listener net.Listener) bool {
+	return r.fresh && r.proc.terminal && r.flags.consoleDir != "" && (r.flags.tls || isLoopbackAddr(listener.Addr()))
 }
 
 // signInLine answers the text of the Sign in line. The link shows only on the
 // first start of the directory and only when stderr is a terminal, so a log of
-// CI or of a container never holds the code. Else the line names where the
-// token is.
-func (r *devRun) signInLine(serverURL, codeText string) string {
+// CI or of a container never holds the code. Without --tls, the link names
+// localhost, because a browser keeps the Secure cookie on plain HTTP only for a
+// loopback name, and the address of a LAN can be a name that it refuses. Else
+// the line names where the token is.
+func (r *devRun) signInLine(listener net.Listener, serverURL, codeText string) string {
 	switch {
 	case r.flags.consoleDir == "":
 		return "dev serves no console: set --console-dir to serve one"
 	case codeText != "":
-		return serverURL + "/sign-in#code=" + codeText +
+		return r.linkBase(listener, serverURL) + "/sign-in#code=" + codeText +
 			"   (first start on a terminal only, works one time, for 10 minutes)"
+	case r.fresh && r.proc.terminal && !r.flags.tls && !isLoopbackAddr(listener.Addr()):
+		return "no sign-in link on plain HTTP from another machine: set --tls to sign in with a link, " +
+			"or use the administrator token in the console"
 	default:
 		return "with the administrator token, in the console"
 	}
+}
+
+// linkBase answers the base of the sign-in link: the URL of the server with
+// TLS, else http://localhost and the port of the server.
+func (r *devRun) linkBase(listener net.Listener, serverURL string) string {
+	if r.flags.tls {
+		return serverURL
+	}
+
+	tcp, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return serverURL
+	}
+
+	return "http://" + net.JoinHostPort("localhost", strconv.Itoa(tcp.Port))
 }
 
 // tokenNote answers the text of the Token line: where the administrator
@@ -570,7 +616,7 @@ func (r *devRun) networkLine(listener net.Listener) string {
 
 	text := listener.Addr().String() + " is not a loopback address: other hosts can reach this server"
 	if !r.flags.tls {
-		text += ", and the administrator token and the sign-in code cross the network in plain text"
+		text += ", and the administrator token crosses the network in plain text"
 	}
 
 	r.logger.Warn("dev listens on an address that is not a loopback address",
@@ -612,7 +658,12 @@ func (r *devRun) runServer(ctx context.Context, in runInputs) error {
 	opts = append(opts, dustpan.WithListener(in.listener), dustpan.WithBeforeServe(r.beforeServe(in, instanceID)))
 
 	if in.code != nil {
-		opts = append(opts, dustpan.WithDevSignIn(in.code))
+		signIn, signInErr := r.devSignInOption(ctx, in)
+		if signInErr != nil {
+			return signInErr
+		}
+
+		opts = append(opts, signIn)
 	}
 
 	srv, err := dustpan.NewServer(opts...)
@@ -627,6 +678,28 @@ func (r *devRun) runServer(ctx context.Context, in runInputs) error {
 	}
 
 	return nil
+}
+
+// devSignInOption answers the server option of the dev sign-in. The session
+// of the link gets the role from the bootstrap administrator of the token
+// file, so the grant names the same principal as the token.
+func (r *devRun) devSignInOption(ctx context.Context, in runInputs) (dustpan.Option, error) {
+	admin, err := in.authn.AuthenticateToken(ctx, r.token.value)
+	if err != nil {
+		return nil, fmt.Errorf("administrator of dev: %w", err)
+	}
+
+	raw, err := devsignin.Option(devsignin.Config{Code: in.code, Admin: admin})
+	if err != nil {
+		return nil, fmt.Errorf("dev sign-in: %w", err)
+	}
+
+	opt, ok := raw.(dustpan.Option)
+	if !ok {
+		return nil, fmt.Errorf("dev sign-in: %w", devsignin.ErrNotRegistered)
+	}
+
+	return opt, nil
 }
 
 // stopped deletes dev.addr at stop.

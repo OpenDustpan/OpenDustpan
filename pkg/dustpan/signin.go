@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -57,13 +58,27 @@ var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 // errSignInSetup reports a sign-in configuration that the server cannot use.
 var errSignInSetup = errors.New("console sign-in")
 
+// noDevAdmin is the administrator of a server with no dev sign-in.
+//
+//nolint:gochecknoglobals // A frozen zero value.
+var noDevAdmin = identity.Principal{
+	TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+	Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+}
+
+// hasStaticSignIn reports whether cfg names a sign-in that needs no stored
+// provider: a provider of the configuration, or the dev sign-in.
+func hasStaticSignIn(cfg *settings) bool {
+	return len(cfg.oidcProviders) > 0 || cfg.devSignIn != nil
+}
+
 // newSignIn returns the console sign-in of cfg, or nil when cfg has none.
 // The sign-in runs when cfg names a provider, or when the store keeps the
 // providers of the API and cfg has an HTTPS public URL. With a store that
 // keeps them, the API manages the providers in addition to those of cfg.
 func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Service) (*serverapi.SignIn, error) {
 	stores, stored := cfg.namespaceStore.(providerStores)
-	if len(cfg.oidcProviders) == 0 && cfg.devCode == nil && (!stored || !storedSignInReady(cfg, policies)) {
+	if !hasStaticSignIn(cfg) && (!stored || !storedSignInReady(cfg, policies)) {
 		return nil, nil //nolint:nilnil // No provider is a valid setup: the sign-in routes stay unmounted.
 	}
 
@@ -91,7 +106,11 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 
 	in := &serverapi.SignIn{
 		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...), DevCode: cfg.devCode,
+		Origins: append([]string{origin}, cfg.allowedOrigins...), DevCode: nil, DevAdmin: noDevAdmin,
+	}
+
+	if cfg.devSignIn != nil {
+		in.DevCode, in.DevAdmin = cfg.devSignIn.Code, cfg.devSignIn.Admin
 	}
 
 	if cfg.gate != nil {

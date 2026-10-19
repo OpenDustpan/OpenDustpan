@@ -151,6 +151,7 @@ linters:
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
             - "**/pkg/unitimport/*.go"
+            - "**/pkg/installation/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
           deny:

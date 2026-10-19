@@ -20,7 +20,7 @@ It prints a banner to stderr before the first log line:
 opendustpan dev: this server is for a trial or for CI. Do not use it in production.
 Data:     /home/alex/.local/share/opendustpan/dev
 Server:   http://127.0.0.1:8080
-Sign in:  http://127.0.0.1:8080/sign-in#code=<code>   (first start on a terminal only, works one time, for 10 minutes)
+Sign in:  http://localhost:8080/sign-in#code=<code>   (first start on a terminal only, works one time, for 10 minutes)
 Token:    in the file /home/alex/.local/share/opendustpan/dev/dev.token
 Settings: . /home/alex/.local/share/opendustpan/dev/dev.env
 The key-encryption key is in the data directory. A backup of this directory holds the key.
@@ -41,6 +41,13 @@ So no request line, access log or `Referer` header holds the code.
 The code signs one browser in as the administrator of the dev installation.
 It works one time, and it stops 10 minutes after the start or when `dev` stops.
 Open the link at once.
+
+The link works only from a loopback address or with `--tls`.
+The session cookie is `Secure`, and a browser keeps it on plain HTTP only for a loopback name.
+So the link names `localhost` and the port of the server when `dev` runs without `--tls`.
+If `--listen` is not a loopback address and you set no `--tls`, `dev` makes no link and no code.
+The `Sign in` line then says to set `--tls` to sign in from another machine.
+In that case, sign in to the console with the token in the token file.
 
 A later start prints no link.
 A start with no terminal, for example in a CI job, prints the path of the token file in place of the link.
@@ -206,7 +213,7 @@ A job on a reused runner that sets no `--data-dir` and no `--ephemeral` leaves f
 `dev` binds the loopback address by default.
 `--listen` accepts another address.
 For an address that is not a loopback address, the banner and the log name the address at each start.
-Without `--tls`, they also say that the administrator token and the sign-in code cross the network in plain text.
+Without `--tls`, they also say that the administrator token crosses the network in plain text.
 Use `--tls` for any address that other hosts can reach.
 
 ## What dev does not take
@@ -243,11 +250,11 @@ curl -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" http://127.0.0.1:8080/api/d
 A caller with no sign-in gets `apiVersion` only.
 The audit entry of each start records the kind.
 
-## Keep the units of a trial
+## Keep the stacks and workspaces of a trial
 
 No command and no flag turns a dev installation into a production installation.
-To keep a unit, move it to a production server with the commands of its tool.
-The units keep the `dev/` prefix of their names.
+To keep a stack or a workspace, move it to a production server with the commands of its tool.
+The stacks and workspaces keep the `dev/` prefix of their names.
 
 For a Pulumi stack, export it and import it into the new server:
 

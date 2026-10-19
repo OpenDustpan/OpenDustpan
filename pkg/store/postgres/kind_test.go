@@ -149,7 +149,7 @@ func TestOpenKindMismatchAppliesNoMigration(t *testing.T) {
 
 	schemaURL := openKindFixture(t, installation.KindDev)
 
-	execInSchema(t, schemaURL, `DELETE FROM schema_migrations WHERE name = '0118_installation_kind.sql'`)
+	execInSchema(t, schemaURL, `DELETE FROM schema_migrations WHERE name = '0120_installation_kind.sql'`)
 
 	_, err := postgres.Open(t.Context(), schemaURL, postgres.WithInstallationKind(installation.KindProduction))
 
@@ -173,7 +173,7 @@ func TestOpenKindOnDatabaseWithoutColumn(t *testing.T) {
 
 	execInSchema(t, schemaURL,
 		`ALTER TABLE installation DROP COLUMN kind`,
-		`DELETE FROM schema_migrations WHERE name = '0118_installation_kind.sql'`,
+		`DELETE FROM schema_migrations WHERE name = '0120_installation_kind.sql'`,
 	)
 
 	second, err := postgres.Open(t.Context(), schemaURL, postgres.WithInstallationKind(installation.KindDev))

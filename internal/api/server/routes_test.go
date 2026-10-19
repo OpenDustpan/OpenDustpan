@@ -317,7 +317,8 @@ func newServiceBackedHandler(
 					Source:      principal.SourceOIDC,
 				},
 			},
-			DevCode: devCode,
+			DevCode:  devCode,
+			DevAdmin: bootstrapAdmin,
 		},
 		CheckpointEpochs: fakeEpochs{},
 	})

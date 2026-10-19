@@ -4,15 +4,16 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // WithInstallationKind sets the installation kind of the server: dev or
 // production. Without it, the server runs as production, so an SDK server
 // gets the rules of a production installation. Run claims the kind in the
-// store of WithInstallationKindStore. A server of the kind dev never serves
-// the sign-in route of the one-time code, unless the binary passes one.
+// store of WithInstallationKindStore. A server of the kind dev serves
+// the sign-in route of the one-time code only when the wiring of the binary
+// passes one.
 func WithInstallationKind(kind installation.Kind) Option {
 	return func(o *settings) { o.installationKind = kind }
 }
@@ -26,14 +27,19 @@ func WithInstallationKindStore(store installation.KindStore) Option {
 	return func(o *settings) { o.kindStore = store }
 }
 
-// WithDevSignIn mounts the sign-in route of the one-time code of
-// opendustpan dev. The type of code lives in an internal package, so only
-// the binary of this repository can call the option: an SDK server never
-// serves the route. The option needs the installation kind dev, a public
-// URL and a store that keeps sessions and principals.
-func WithDevSignIn(code *devcode.Code) Option {
-	return func(o *settings) { o.devCode = code }
-}
+// This variable registers the maker of the dev sign-in option with the
+// internal seam when the package initializes. pkg/dustpan has no exported
+// option for the sign-in: only code of this repository can import
+// internal/devsignin, so an SDK server never serves it.
+//
+//nolint:unparam // The initializer needs a value; the function registers and answers nothing else.
+var _ = func() struct{} {
+	devsignin.Register(func(c devsignin.Config) any {
+		return Option(func(o *settings) { o.devSignIn = &c })
+	})
+
+	return struct{}{}
+}()
 
 // kindState is the installation kind of a server and the store that keeps its
 // claim. The store is nil for a server that claims nothing.
@@ -53,8 +59,8 @@ func checkKindSettings(cfg *settings) error {
 		return fmt.Errorf("%w: WithInstallationKind: %w", ErrInvalidOption, installation.ErrInvalidKind)
 	}
 
-	if cfg.devCode != nil && cfg.installationKind != installation.KindDev {
-		return fmt.Errorf("%w: WithDevSignIn needs the installation kind dev", ErrInvalidOption)
+	if cfg.devSignIn != nil && cfg.installationKind != installation.KindDev {
+		return fmt.Errorf("%w: the dev sign-in needs the installation kind dev", ErrInvalidOption)
 	}
 
 	return nil

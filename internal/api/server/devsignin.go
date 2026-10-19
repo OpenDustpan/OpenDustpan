@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -24,14 +23,18 @@ const (
 	devProvider    = "dev"
 	devSubject     = devProvider + ":admin"
 	devDisplayName = "Dev administrator"
-	// devGranter is the subject that the audit entry of the grant names. The
-	// code is the only proof that the request comes from the person who
-	// started the server, so the route grants as the server itself.
-	devGranter = "dev"
 	// maxDevCodeBody caps the body of a request, in bytes. The code holds
 	// 43 characters.
 	maxDevCodeBody = 1024
 )
+
+// errDevAccess reports a handler that has no access service. The dev sign-in
+// then cannot give the role of the administrator, and a session without the
+// role is not the session that the link promises.
+var errDevAccess = errors.New("the dev sign-in needs the access service to give the administrator role")
+
+// errDevAdmin reports a dev sign-in with no bootstrap administrator to grant.
+var errDevAdmin = errors.New("the dev sign-in needs the bootstrap administrator")
 
 // errDevCode reports a code that is wrong, spent or too old. One text covers
 // the three cases, so an answer tells nothing about the code.
@@ -69,6 +72,18 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 
 	if err := h.admitSignIn(ctx); err != nil {
 		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if h.access == nil {
+		h.writeError(ctx, w, errDevAccess)
+
+		return
+	}
+
+	if !h.signIn.devAdmin.Admin || h.signIn.devAdmin.Subject == "" {
+		h.writeError(ctx, w, errDevAdmin)
 
 		return
 	}
@@ -112,27 +127,17 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 }
 
 // grantDevAdministrator gives the site-administrator role on the
-// installation to the principal id. A principal that holds the grant already
-// is not an error: the person of an earlier start keeps it.
+// installation to the principal id. The grant is made by the bootstrap
+// administrator of dev, the principal of the token in the token file. A
+// principal that holds the grant already is not an error: the person of an
+// earlier start keeps it. It fails when the handler has no access service,
+// so a session never starts without the role.
 func (h *Handler) grantDevAdministrator(ctx context.Context, e audit.Entry, id string) error {
 	if h.access == nil {
-		return nil
+		return errDevAccess
 	}
 
-	granter := identity.Principal{
-		TemporaryAdministrator: false,
-		TemporaryExpiresAt:     time.Time{},
-		Subject:                devGranter,
-		DisplayName:            devGranter,
-		Admin:                  true,
-		TokenID:                "",
-		TokenExpiresAt:         time.Time{},
-		Kind:                   "",
-		Credential:             "",
-		JobID:                  "",
-	}
-
-	_, err := h.access.Grant(ctx, e, granter, access.GrantInput{
+	_, err := h.access.Grant(ctx, e, h.signIn.devAdmin, access.GrantInput{
 		Object:  identity.ServerObject(),
 		Role:    access.RoleSiteAdministrator,
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: id},

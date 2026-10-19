@@ -142,6 +142,10 @@ type SignIn struct {
 	// mounts the route that signs a browser in as the dev administrator.
 	// Nil mounts no such route.
 	DevCode *devcode.Code
+	// DevAdmin is the bootstrap administrator of opendustpan dev. The dev
+	// sign-in grants the role of the site administrator as DevAdmin, and
+	// refuses to sign in when the handler has no access service.
+	DevAdmin identity.Principal
 }
 
 // StoredProviders finds the sign-in providers that the API keeps.
@@ -161,6 +165,7 @@ type signInState struct {
 	providers map[string]SignInProvider
 	checker   *sessionauth.Checker
 	devCode   *devcode.Code
+	devAdmin  identity.Principal
 }
 
 // provider returns the sign-in provider id: a provider of the
@@ -216,7 +221,7 @@ func newSignInState(cfg *SignIn) (*signInState, error) {
 
 	return &signInState{
 		sessions: cfg.Sessions, limiter: cfg.Limiter, stored: cfg.Stored, admin: cfg.Admin, providers: providers,
-		checker: checker, devCode: cfg.DevCode,
+		checker: checker, devCode: cfg.DevCode, devAdmin: cfg.DevAdmin,
 	}, nil
 }
 

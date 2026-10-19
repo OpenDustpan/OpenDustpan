@@ -44,6 +44,23 @@ type devEnvOptions struct {
 	authz  identity.Authorizer
 	kind   installation.Kind
 	noCode bool
+	// noAccess gives the handler no access service. noAdmin gives the dev
+	// sign-in no bootstrap administrator.
+	noAccess bool
+	noAdmin  bool
+}
+
+// bootstrapAdmin is the bootstrap administrator that the dev sign-in grants
+// as: the principal of the token of dev.
+var bootstrapAdmin = identity.Principal{ //nolint:gochecknoglobals // A frozen test value.
+	TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "admin",
+	Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+}
+
+// noBootstrapAdmin is the zero principal of a sign-in with no administrator.
+var noBootstrapAdmin = identity.Principal{ //nolint:gochecknoglobals // A frozen test value.
+	TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+	Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
 }
 
 func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
@@ -93,6 +110,16 @@ func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
 
 	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
+	var svc *access.Service
+	if !opts.noAccess {
+		svc = grants
+	}
+
+	devAdmin := bootstrapAdmin
+	if opts.noAdmin {
+		devAdmin = noBootstrapAdmin
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       authz,
@@ -106,7 +133,7 @@ func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
 		Schema:           st,
 		Journal:          st,
 		Principals:       seedRoutePrincipals(t, st),
-		Access:           grants,
+		Access:           svc,
 		Tokens:           seedRouteTokens(t, st),
 		Audit:            st,
 		IPAllowlists:     nil,
@@ -120,7 +147,7 @@ func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
 		AuditSinks:       nil,
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions, Limiter: limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
-			Providers: nil, DevCode: code,
+			Providers: nil, DevCode: code, DevAdmin: devAdmin,
 		},
 		InstallationKind: opts.kind,
 	})
@@ -195,7 +222,10 @@ func TestDevCodeRejected(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := newDevEnv(t, devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false})
+			env := newDevEnv(
+				t,
+				devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+			)
 
 			checkDevCodeRejected(t, env, env.post(t, tt.body(env.code)))
 		})
@@ -236,7 +266,10 @@ func checkDevCodeRejected(t *testing.T, env devEnv, rec *httptest.ResponseRecord
 func TestDevCodeSignsInOnce(t *testing.T) {
 	t.Parallel()
 
-	env := newDevEnv(t, devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false})
+	env := newDevEnv(
+		t,
+		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+	)
 
 	first := env.post(t, codeBody(env.code))
 	if first.Code != http.StatusNoContent {
@@ -292,12 +325,53 @@ func TestDevCodeSignsInOnce(t *testing.T) {
 	}
 }
 
+// TestDevCodeNeedsAccessAndAdmin proves that the sign-in fails, and makes no
+// session, when the handler cannot give the administrator role: no access
+// service, or no bootstrap administrator to grant as. The code stays unspent.
+func TestDevCodeNeedsAccessAndAdmin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts devEnvOptions
+	}{
+		{
+			name: "no access service",
+			opts: devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: true, noAdmin: false},
+		},
+		{
+			name: "no bootstrap administrator",
+			opts: devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newDevEnv(t, tt.opts)
+
+			rec := env.post(t, codeBody(env.code))
+			if rec.Code < http.StatusInternalServerError {
+				t.Fatalf("status = %d, want a server error: %s", rec.Code, rec.Body)
+			}
+
+			if cookieOf(rec, apiserver.SessionCookie) != nil {
+				t.Fatal("the failed sign-in set a session cookie")
+			}
+		})
+	}
+}
+
 // TestDevCodeExpires proves that the code stops working when its lifetime
 // ends.
 func TestDevCodeExpires(t *testing.T) {
 	t.Parallel()
 
-	env := newDevEnv(t, devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false})
+	env := newDevEnv(
+		t,
+		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+	)
 
 	env.clock.Add(devcode.Lifetime)
 
@@ -312,7 +386,10 @@ func TestDevCodeExpires(t *testing.T) {
 func TestDevCodeRefusedByLimiter(t *testing.T) {
 	t.Parallel()
 
-	env := newDevEnv(t, devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false})
+	env := newDevEnv(
+		t,
+		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+	)
 	env.limiter.refuse = true
 
 	rec := env.post(t, codeBody(env.code))
@@ -330,7 +407,7 @@ func TestDevCodeRouteNeedsCode(t *testing.T) {
 		t.Run("kind "+kind.String(), func(t *testing.T) {
 			t.Parallel()
 
-			env := newDevEnv(t, devEnvOptions{authz: nil, kind: kind, noCode: true})
+			env := newDevEnv(t, devEnvOptions{authz: nil, kind: kind, noCode: true, noAccess: false, noAdmin: false})
 
 			rec := env.post(t, codeBody("anything"))
 			if rec.Code != http.StatusNotFound {
@@ -391,7 +468,10 @@ func TestCapabilities(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := newDevEnv(t, devEnvOptions{authz: tt.authz, kind: tt.kind, noCode: true})
+			env := newDevEnv(
+				t,
+				devEnvOptions{authz: tt.authz, kind: tt.kind, noCode: true, noAccess: false, noAdmin: false},
+			)
 
 			checkCapabilities(t, env.get(t, capabilitiesRoute, tt.token), tt.wantKind)
 		})
@@ -433,7 +513,10 @@ func checkCapabilities(t *testing.T, rec *httptest.ResponseRecorder, wantKind st
 func TestCapabilitiesWithDevSession(t *testing.T) {
 	t.Parallel()
 
-	env := newDevEnv(t, devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false})
+	env := newDevEnv(
+		t,
+		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+	)
 
 	signedIn := env.post(t, codeBody(env.code))
 	cookie := cookieOf(signedIn, apiserver.SessionCookie)

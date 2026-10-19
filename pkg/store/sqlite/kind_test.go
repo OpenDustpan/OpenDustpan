@@ -123,7 +123,7 @@ func TestOpenKindMismatchAppliesNoMigration(t *testing.T) {
 		t.Fatalf("open raw database: %v", err)
 	}
 
-	const forget = `DELETE FROM schema_migrations WHERE name = '0118_installation_kind.sql'`
+	const forget = `DELETE FROM schema_migrations WHERE name = '0120_installation_kind.sql'`
 	if _, execErr := raw.ExecContext(t.Context(), forget); execErr != nil {
 		t.Fatalf("remove the record of the kind migration: %v", execErr)
 	}
@@ -168,7 +168,7 @@ func TestOpenKindOnDatabaseWithoutColumn(t *testing.T) {
 
 	for _, stmt := range []string{
 		`ALTER TABLE installation DROP COLUMN kind`,
-		`DELETE FROM schema_migrations WHERE name = '0118_installation_kind.sql'`,
+		`DELETE FROM schema_migrations WHERE name = '0120_installation_kind.sql'`,
 	} {
 		if _, execErr := raw.ExecContext(t.Context(), stmt); execErr != nil {
 			t.Fatalf("make a database from before the kind column: %v", execErr)

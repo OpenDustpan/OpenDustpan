@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -69,6 +71,27 @@ func kindOptions(kind installation.Kind) func(*testing.T) []dustpan.Option {
 	}
 }
 
+// devSignInOption answers the server option of the dev sign-in from the
+// internal seam, the only way to get it.
+func devSignInOption(t *testing.T, code *devcode.Code) dustpan.Option {
+	t.Helper()
+
+	//nolint:exhaustruct_v5 // The sign-in reads the subject and the admin flag only.
+	admin := identity.Principal{Subject: "admin", Admin: true}
+
+	raw, err := devsignin.Option(devsignin.Config{Code: code, Admin: admin})
+	if err != nil {
+		t.Fatalf("dev sign-in option: %v", err)
+	}
+
+	opt, ok := raw.(dustpan.Option)
+	if !ok {
+		t.Fatalf("dev sign-in option has type %T, want dustpan.Option", raw)
+	}
+
+	return opt
+}
+
 // devSignInOptions answers the options of a server with a dev sign-in, the
 // public URL devPublicURL and the kind, when the kind is not empty.
 func devSignInOptions(kind installation.Kind) func(*testing.T) []dustpan.Option {
@@ -80,7 +103,7 @@ func devSignInOptions(kind installation.Kind) func(*testing.T) []dustpan.Option 
 			t.Fatalf("make code: %v", err)
 		}
 
-		opts := []dustpan.Option{dustpan.WithDevSignIn(code), dustpan.WithPublicURL(devPublicURL)}
+		opts := []dustpan.Option{devSignInOption(t, code), dustpan.WithPublicURL(devPublicURL)}
 		if kind != "" {
 			opts = append(opts, dustpan.WithInstallationKind(kind))
 		}
@@ -102,7 +125,7 @@ func TestNewServerDevSignInNeedsPublicURL(t *testing.T) {
 		t.Fatalf("make code: %v", err)
 	}
 
-	opts = append(opts, dustpan.WithInstallationKind(installation.KindDev), dustpan.WithDevSignIn(code))
+	opts = append(opts, dustpan.WithInstallationKind(installation.KindDev), devSignInOption(t, code))
 
 	if _, newErr := dustpan.NewServer(opts...); newErr == nil {
 		t.Fatal("NewServer with a dev sign-in and no public URL succeeded")

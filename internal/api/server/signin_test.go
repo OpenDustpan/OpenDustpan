@@ -210,6 +210,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		SessionPolicy:    policyRoutes,
 		SignIn: &apiserver.SignIn{
 			DevCode:  nil,
+			DevAdmin: noBootstrapAdmin,
 			Sessions: sessions,
 			Limiter:  limiter,
 			Stored:   stored,
@@ -1042,6 +1043,7 @@ func TestSignInProviderDown(t *testing.T) {
 		SessionPolicy:    policies,
 		SignIn: &apiserver.SignIn{
 			DevCode:  nil,
+			DevAdmin: noBootstrapAdmin,
 			Sessions: sessions, Stored: nil, Admin: nil,
 			Limiter: limiter,
 			Origins: nil,

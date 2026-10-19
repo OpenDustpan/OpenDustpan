@@ -7,7 +7,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -297,7 +299,7 @@ func TestDevFirstStartPrintsALinkThatWorksOnce(t *testing.T) {
 		t.Fatalf("the first start prints no sign-in link:\n%s", banner)
 	}
 
-	wantLine := "Sign in:  " + r.url + "/sign-in#code=" + match[1] +
+	wantLine := "Sign in:  " + strings.Replace(r.url, "127.0.0.1", "localhost", 1) + "/sign-in#code=" + match[1] +
 		"   (first start on a terminal only, works one time, for 10 minutes)"
 	if !strings.Contains(banner, wantLine) {
 		t.Fatalf("banner does not hold the sign-in line %q:\n%s", wantLine, banner)
@@ -783,7 +785,7 @@ func TestDevNetworkLine(t *testing.T) {
 			banner := r.stderr.String()
 			checkText(t, banner, []string{"Network:  ", "is not a loopback address", "level=WARN"}, nil)
 
-			if plain := strings.Contains(banner, "cross the network in plain text"); plain != tt.wantPlain {
+			if plain := strings.Contains(banner, "crosses the network in plain text"); plain != tt.wantPlain {
 				t.Fatalf("plain text warning = %v, want %v:\n%s", plain, tt.wantPlain, banner)
 			}
 
@@ -836,5 +838,97 @@ func TestDevRefusesBadFlags(t *testing.T) {
 				t.Fatalf("err = %v, want it to hold %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestDevSignInLinkNeedsLoopbackOrTLS proves the rule of the Secure cookie:
+// on plain HTTP the link works only from a loopback origin, so dev on an
+// address that is not a loopback address makes no code and no link, and says
+// to set --tls. With --tls, dev makes the link for any address.
+func TestDevSignInLinkNeedsLoopbackOrTLS(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		listen   string
+		tls      bool
+		wantLink bool
+	}{
+		{name: "loopback address, plain HTTP", listen: "127.0.0.1:0", tls: false, wantLink: true},
+		{name: "wildcard address, plain HTTP", listen: "0.0.0.0:0", tls: false, wantLink: false},
+		{name: "wildcard address, TLS", listen: "0.0.0.0:0", tls: true, wantLink: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			args := []string{
+				"--data-dir", filepath.Join(t.TempDir(), "trial"), "--listen", tt.listen,
+				"--console-dir", consoleDir(t), "--log-format", "text",
+			}
+			if tt.tls {
+				args = append(args, "--tls")
+			}
+
+			r := mustStartDev(t, newDevTestProcess(true), t.TempDir(), args...)
+			banner := r.stderr.String()
+			match := codePattern.FindStringSubmatch(banner)
+
+			if (match != nil) != tt.wantLink {
+				t.Fatalf("link printed = %v, want %v:\n%s", match != nil, tt.wantLink, banner)
+			}
+
+			switch {
+			case !tt.wantLink:
+				checkText(t, banner, []string{"set --tls", "administrator token in the console"}, []string{"#code="})
+
+				if status, _ := devPost(t, r.url, "anything"); status != http.StatusNotFound {
+					t.Fatalf("dev sign-in with no link: status = %d, want 404", status)
+				}
+			case tt.tls:
+				checkText(t, banner, []string{"Sign in:  https://"}, nil)
+			default:
+				checkText(t, banner, []string{"Sign in:  http://localhost:"}, []string{"Sign in:  http://127.0.0.1"})
+			}
+		})
+	}
+}
+
+// TestDevDeletesStaleAddrBeforeListening proves that dev deletes dev.addr of
+// the data directory at start, before it listens: a start that fails to listen
+// still leaves no file that tells `health` a server runs.
+func TestDevDeletesStaleAddrBeforeListening(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "trial")
+	home := t.TempDir()
+	proc := newDevTestProcess(false)
+
+	first := mustStartDev(t, proc, home, "--data-dir", dir, "--listen", "127.0.0.1:0", "--log-format", "text")
+	if err := first.stop(t); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	stale := filepath.Join(dir, devAddrName)
+	if err := os.WriteFile(stale, []byte("{\"addr\":\"127.0.0.1:1\"}\n"), 0o600); err != nil {
+		t.Fatalf("write a stale dev.addr: %v", err)
+	}
+
+	busy, err := (&net.ListenConfig{}).Listen( //nolint:exhaustruct_v5 // Defaults only.
+		t.Context(), "tcp", "127.0.0.1:0",
+	)
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+
+	t.Cleanup(func() { _ = busy.Close() }) //nolint:errcheck // The test ends.
+
+	if _, startErr := startDev(t, proc, home, "--data-dir", dir, "--listen", busy.Addr().String()); startErr == nil {
+		t.Fatal("dev started on a port that is in use")
+	}
+
+	if _, statErr := os.Stat(stale); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("dev.addr after a start that fails to listen: stat err = %v, want not exist", statErr)
 	}
 }
