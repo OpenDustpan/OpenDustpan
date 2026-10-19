@@ -1,6 +1,6 @@
 # 240. A state download by a person is a reveal, and a principal has a kind
 
-Status: accepted · 2026-10-18. Supersedes in part ADR 41 decisions 9 and 13 and ADR 60 decision 4. Extends ADR 41 decision 5 and ADR 226 decision 2
+Status: accepted · 2026-10-18. Supersedes in part ADR 41 decisions 9 and 13, ADR 60 decision 4 and ADR 226 decision 4. Extends ADR 41 decision 5
 
 ## Context
 
@@ -31,7 +31,7 @@ Facts from `main`:
   (ADR 52 decision 1). The principal record holds the kind. No route
   changes the kind after the server makes the record: an update changes the display
   name only.
-- ADR 226 decision 2 names the fact `principal.kind` with the values
+- ADR 226 decision 4 names the fact `principal.kind` with the values
   `person`, `service` and `agent`, and the fact `principal.credential`
   with the values `session`, `access-token`, `job-token` and
   `trust-token`. The record has no kind `agent`, and ADR 226 does not name
@@ -44,7 +44,7 @@ Facts from `main`:
 - The access token lookup and the session lookup read the owner with its
   kind. The session service refuses a session whose owner is not a person.
 - `identity.Principal`, which each route gets, has no kind. It has
-  `Subject`, `DisplayName`, `Admin`, `TokenID` and `TokenExpiresAt`.
+  `Subject`, `DisplayName`, `Admin`, `TokenID` and `TokenExpiresAt`. ADR 100 decision 20 adds `JobID` for a job token. The code does not have it yet.
 - The bootstrap admin token (ADR 6) has no stored record. ADR 53 decision
   9 retires it on the first sign-in.
 - A job token is an access token of the principal that started the job
@@ -56,11 +56,7 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
 
 ## Decision
 
-1. **A download by a person is a reveal (product manager).** A state
-   download by a principal of the kind `person` writes an audit entry of
-   the kind `reveal`. Its value path is `""`, the JSON Pointer of the whole
-   state document (RFC 6901). A download by any other principal writes the
-   kind `tool-operation`, as before. The principal decides the kind, with
+1. **A download by a person is a reveal (product manager).** A state download by a person writes an audit entry of the kind `reveal`. Its value path is `""`, the JSON Pointer of the whole state document (RFC 6901). Any other download writes the kind `tool-operation`, as before. The principal decides the kind, with
    the two fields of decision 3: `reveal` when `Credential` is `session`
    or `access-token` and `Kind` is `person` or empty (decision 4).
    `tool-operation` in all other cases. An empty `Credential` counts as
@@ -83,7 +79,7 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
      exactly the values of the code: `person`, `service` and `workload`.
      The empty value is an unknown kind.
    - `Credential`: the kind of the credential of the request, with the
-     values of ADR 226 decision 2: `session`, `access-token`, `job-token`
+     values of ADR 226 decision 4: `session`, `access-token`, `job-token`
      and `trust-token`.
 
    Each authenticator fills both from the record that it already reads.
@@ -103,12 +99,11 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
    acts through it. A job token and a trust token never make a `reveal`
    entry. A test checks each row of the table.
 
-   This decision also extends ADR 226 decision 2. The fact
+   This decision also supersedes ADR 226 decision 4 in part. The fact
    `principal.kind` takes the same record kinds: `person`, `service` and
    `workload`. The fact `principal.credential` reads `Credential`. The
    value `agent` of ADR 226 is not a record kind. An agent acts as its
-   user, so `principal.kind` is the kind of that user, and a gate tells an
-   agent apart through `source.kind == "agent"`.
+   user, so `principal.kind` is the kind of that user, and a gate tells an agent apart through `source.kind == "agent"`. No server built `change.planned/1.0`, so these values are part of version 1.0 and need no new major version.
 
    Benchmark: AWS IAM keeps the principal type apart from the credential
    (a session or an access key), and AWS CloudTrail records both.
@@ -122,12 +117,11 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
 
    Benchmark: AWS CloudTrail never records the root user as a service
    identity. It has its own type, `Root`.
-5. **The entry records the kind.** An audit entry gets the optional field
-   `principalKind` (ADR 60 decision 5). A reader can then see why an entry
+5. **The entry records the kind.** An audit entry gets the field `principalKind`. The hash encoding writes it after the fence version, with `jobID` after it, in the fixed field list of ADR 72 decision 6. It writes `0:` when the field is not set. A reader can then see why an entry
    has its kind of access. An entry from a principal with no kind has no
    `principalKind`. Its kind of access follows decision 4. An entry made
    with a job token also gets the optional field `jobID`, the job-ID claim
-   of the token (ADR 100 decision 20). An older entry keeps its hash.
+   of the token (ADR 100 decision 20). No tag shipped an audit entry, so an entry from an earlier build does not keep its hash (ADR 72 decision 6). The digest of ADR 64 decision 8 covers the new field list.
 6. **Other kinds stay.** The reveal call of ADR 41 decision 4 and the two
    audit routes of ADR 23 keep the kind `reveal`. The Pulumi `decrypt`
    and `batch-decrypt` routes and the OpenTofu route for one sensitive
@@ -169,7 +163,7 @@ replaces:
 - **ADR 60, decision 4:** "A route that already writes `tool-operation`,
   `reveal` or `override` keeps that kind." The download route writes one
   of two kinds, by the principal.
-- **ADR 226, decision 2:** "`kind` (`person`, `service` or `agent`)" and
+- **ADR 226, decision 4:** "`kind` (`person`, `service` or `agent`)" and
   "An agent is a subject of gates through `source.kind == "agent"` and
   `principal.kind == "agent"`." The fact `principal.kind` takes the record
   kinds `person`, `service` and `workload` (decision 3). An agent is a
@@ -186,8 +180,7 @@ replaces:
   lookup already join the owner with its kind, and the kind cannot change
   after the server makes the record.
 - The audit entry gets `principalKind` and `jobID`. The SQL stores get a numbered
-  migration for the columns. The `audittest` suite checks that an older
-  entry keeps its hash.
+  migration for the columns. The `audittest` suite checks the hash of an entry with and without each new field, and the documented encoding of `ComputeHash` names both fields.
 - An installation where people run `tofu plan` with personal tokens gets
   a `reveal` entry for each state download of each plan. A
   `terraform_remote_state` read of another workspace with a personal token
@@ -203,8 +196,7 @@ replaces:
   use the bootstrap admin token, expect `reveal`. A new step with a
   service token proves `tool-operation`. Both land with their e2e step
   first (ADR 12).
-- The status line of ADR 226 names this ADR. Its text does not change
-  (ADR 1).
+- The status line of ADR 226 names this ADR as superseding decision 4 in part. Its text does not change (ADR 1).
 - The glossary entry "Kind of access" changes. "Principal kind" is a new
   term.
 - The audit log guide and the security model guide change in the same
