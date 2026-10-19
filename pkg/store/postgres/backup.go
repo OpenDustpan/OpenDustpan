@@ -49,6 +49,7 @@ const (
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
+	pgColWrapperID   = "wrapper_id"
 	pgColStartedAtMs = "started_at_ms"
 	pgColState       = "state"
 	pgColStatus      = "status"
@@ -206,7 +207,7 @@ func pgCopyScopeTables() []pgCopyTable {
 		{
 			table: "secret_keys",
 			columns: []string{
-				pgColNamespace, pgColStackID, "wrapper_id", "ciphertext", pgColCreatedAtMs,
+				pgColNamespace, pgColStackID, pgColWrapperID, "ciphertext", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, pgColStackID},
 		},
@@ -385,6 +386,27 @@ func pgControlTables() []pgCopyTable {
 	return slices.Concat(core, pgRunnerControlTables())
 }
 
+// pgEmptiedTables lists the column list of every table of
+// backup.EmptiedTables. CheckCoverage compares each list with the live
+// columns.
+func pgEmptiedTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableIdempotencyRecords,
+			columns: []string{
+				"principal", "method", "path", "idem_key", "fingerprint", "token", "status", "headers", pgColBody,
+				pgColCreatedAtMs,
+			},
+			orderBy: []string{"principal", "method", "path", "idem_key"},
+		},
+		{
+			table:   backup.TableIdempotencyServerKey,
+			columns: []string{"id", "wrapped_key", pgColWrapperID},
+			orderBy: []string{"id"},
+		},
+	}
+}
+
 // pgCopySessionTables holds the COPY columns of the session and sign-in
 // request tables.
 func pgCopySessionTables() []pgCopyTable {
@@ -412,7 +434,7 @@ func pgCopySessionTables() []pgCopyTable {
 		},
 		{
 			table:   "installation_secret_keys",
-			columns: []string{"scope_id", "wrapper_id", "ciphertext", pgColCreatedAtMs},
+			columns: []string{"scope_id", pgColWrapperID, "ciphertext", pgColCreatedAtMs},
 			orderBy: []string{"scope_id"},
 		},
 		{
@@ -568,12 +590,7 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 			return err
 		}
 
-		live, liveErr := s.liveColumns(ctx, table)
-		if liveErr != nil {
-			return liveErr
-		}
-
-		if checkErr := backup.CheckColumns(table, spec.columns, live); checkErr != nil {
+		if checkErr := s.checkColumns(ctx, spec); checkErr != nil {
 			return checkErr
 		}
 	}
@@ -584,13 +601,14 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 			return err
 		}
 
-		live, liveErr := s.liveColumns(ctx, table)
-		if liveErr != nil {
-			return liveErr
-		}
-
-		if checkErr := backup.CheckColumns(table, spec.columns, live); checkErr != nil {
+		if checkErr := s.checkColumns(ctx, spec); checkErr != nil {
 			return checkErr
+		}
+	}
+
+	for _, spec := range pgEmptiedTables() {
+		if err := s.checkColumns(ctx, spec); err != nil {
+			return err
 		}
 	}
 
@@ -601,6 +619,17 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 	return s.checkPortableColumns(ctx)
 }
 
+// checkColumns compares the column list of spec with the live columns of its
+// table.
+func (s *Store) checkColumns(ctx context.Context, spec pgCopyTable) error {
+	live, err := s.liveColumns(ctx, spec.table)
+	if err != nil {
+		return err
+	}
+
+	return backup.CheckColumns(spec.table, spec.columns, live)
+}
+
 // checkNoUnknownTables fails with ErrCoverage when the schema holds a data
 // table in neither backup.Tables nor backup.ControlTables.
 func (s *Store) checkNoUnknownTables(ctx context.Context) error {
@@ -609,12 +638,16 @@ func (s *Store) checkNoUnknownTables(ctx context.Context) error {
 		return err
 	}
 
-	known := make(map[string]bool, len(backup.Tables)+len(backup.ControlTables))
+	known := make(map[string]bool, len(backup.Tables)+len(backup.ControlTables)+len(backup.EmptiedTables))
 	for _, table := range backup.Tables {
 		known[table] = true
 	}
 
 	for _, table := range backup.ControlTables {
+		known[table] = true
+	}
+
+	for _, table := range backup.EmptiedTables {
 		known[table] = true
 	}
 
@@ -1087,12 +1120,12 @@ func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging st
 // stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
 // of the installation keys in the staging schema, ordered, never nil.
 func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
-	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", "wrapper_id")
+	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", pgColWrapperID)
 	if err != nil {
 		return nil, err
 	}
 
-	installation, err := stagingStrings(ctx, pool, staging, "installation_secret_keys", "wrapper_id")
+	installation, err := stagingStrings(ctx, pool, staging, "installation_secret_keys", pgColWrapperID)
 	if err != nil {
 		return nil, err
 	}

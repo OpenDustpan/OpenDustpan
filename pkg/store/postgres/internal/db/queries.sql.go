@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const abandonIdempotencyRecord = `-- name: AbandonIdempotencyRecord :exec
+DELETE FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4 AND token = $5 AND status = 0
+`
+
+type AbandonIdempotencyRecordParams struct {
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+	Token     string
+}
+
+func (q *Queries) AbandonIdempotencyRecord(ctx context.Context, arg AbandonIdempotencyRecordParams) error {
+	_, err := q.db.Exec(ctx, abandonIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Token,
+	)
+	return err
+}
+
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -647,6 +672,43 @@ type CloseJournalParams struct {
 func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) error {
 	_, err := q.db.Exec(ctx, closeJournal, arg.StackID, arg.ID)
 	return err
+}
+
+const completeIdempotencyRecord = `-- name: CompleteIdempotencyRecord :execrows
+UPDATE idempotency_records
+SET status = $1, headers = $2, body = $3
+WHERE principal = $4 AND method = $5 AND path = $6
+  AND idem_key = $7 AND token = $8 AND status = 0
+`
+
+type CompleteIdempotencyRecordParams struct {
+	Status    int64
+	Headers   string
+	Body      []byte
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+	Token     string
+}
+
+// Stores the final answer of the pending record that holds token. It changes
+// no row when another request holds the record or the record is done.
+func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIdempotencyRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeIdempotencyRecord,
+		arg.Status,
+		arg.Headers,
+		arg.Body,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Token,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const contextUnitExists = `-- name: ContextUnitExists :one
@@ -2173,6 +2235,15 @@ func (q *Queries) DatabaseNowMs(ctx context.Context) (int64, error) {
 	return now_ms, err
 }
 
+const deleteAllIdempotencyRecords = `-- name: DeleteAllIdempotencyRecords :exec
+DELETE FROM idempotency_records
+`
+
+func (q *Queries) DeleteAllIdempotencyRecords(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteAllIdempotencyRecords)
+	return err
+}
+
 const deleteBlobPurge = `-- name: DeleteBlobPurge :exec
 DELETE FROM blob_purges WHERE tool = $1 AND unit_id = $2
 `
@@ -2269,6 +2340,44 @@ WHERE stack_id = $1
 
 func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.Exec(ctx, deleteEventsOfStack, stackID)
+	return err
+}
+
+const deleteExpiredIdempotencyRecord = `-- name: DeleteExpiredIdempotencyRecord :exec
+DELETE FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4
+  AND (created_at_ms < (
+         CASE WHEN $5::bigint <> 0 THEN $5::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $6
+       OR (status = 0 AND created_at_ms < (
+         CASE WHEN $5::bigint <> 0 THEN $5::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $7))
+`
+
+type DeleteExpiredIdempotencyRecordParams struct {
+	Principal     string
+	Method        string
+	Path          string
+	IdemKey       string
+	NowOverrideMs int64
+	RecordTtlMs   interface{}
+	PendingTtlMs  interface{}
+}
+
+// Deletes the record of the name when it is past its period: a record past
+// record_ttl_ms, or a pending record past pending_ttl_ms. The time is the
+// clock of the database. A non-zero now_override_ms replaces it, for tests.
+func (q *Queries) DeleteExpiredIdempotencyRecord(ctx context.Context, arg DeleteExpiredIdempotencyRecordParams) error {
+	_, err := q.db.Exec(ctx, deleteExpiredIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.NowOverrideMs,
+		arg.RecordTtlMs,
+		arg.PendingTtlMs,
+	)
 	return err
 }
 
@@ -4262,6 +4371,84 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 		&i.UpdatedAtMs,
 		&i.MemberCount,
 	)
+	return i, err
+}
+
+const getIdempotencyRecord = `-- name: GetIdempotencyRecord :one
+SELECT fingerprint, token, status, headers, body, created_at_ms
+FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4
+`
+
+type GetIdempotencyRecordParams struct {
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+}
+
+type GetIdempotencyRecordRow struct {
+	Fingerprint []byte
+	Token       string
+	Status      int64
+	Headers     string
+	Body        []byte
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetIdempotencyRecord(ctx context.Context, arg GetIdempotencyRecordParams) (GetIdempotencyRecordRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+	)
+	var i GetIdempotencyRecordRow
+	err := row.Scan(
+		&i.Fingerprint,
+		&i.Token,
+		&i.Status,
+		&i.Headers,
+		&i.Body,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getIdempotencyServerKeyExclusive = `-- name: GetIdempotencyServerKeyExclusive :one
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR UPDATE
+`
+
+type GetIdempotencyServerKeyExclusiveRow struct {
+	WrappedKey []byte
+	WrapperID  string
+}
+
+// A reset takes this lock. Two processes that hold the share lock and then
+// write the row wait for each other, so a reset starts again with this lock.
+func (q *Queries) GetIdempotencyServerKeyExclusive(ctx context.Context) (GetIdempotencyServerKeyExclusiveRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyServerKeyExclusive)
+	var i GetIdempotencyServerKeyExclusiveRow
+	err := row.Scan(&i.WrappedKey, &i.WrapperID)
+	return i, err
+}
+
+const getIdempotencyServerKeyShared = `-- name: GetIdempotencyServerKeyShared :one
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR SHARE
+`
+
+type GetIdempotencyServerKeySharedRow struct {
+	WrappedKey []byte
+	WrapperID  string
+}
+
+// The share lock keeps a reset by another process from changing the row before
+// the transaction ends.
+func (q *Queries) GetIdempotencyServerKeyShared(ctx context.Context) (GetIdempotencyServerKeySharedRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyServerKeyShared)
+	var i GetIdempotencyServerKeySharedRow
+	err := row.Scan(&i.WrappedKey, &i.WrapperID)
 	return i, err
 }
 
@@ -6348,6 +6535,64 @@ func (q *Queries) InsertGateReference(ctx context.Context, arg InsertGateReferen
 		arg.OwnerKind,
 		arg.OwnerID,
 	)
+	return err
+}
+
+const insertIdempotencyRecord = `-- name: InsertIdempotencyRecord :execrows
+INSERT INTO idempotency_records (
+    principal, method, path, idem_key, fingerprint, token, status, headers, body, created_at_ms
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, 0, '', ''::bytea,
+    CASE WHEN $7::bigint <> 0 THEN $7::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END
+)
+ON CONFLICT (principal, method, path, idem_key) DO NOTHING
+`
+
+type InsertIdempotencyRecordParams struct {
+	Principal     string
+	Method        string
+	Path          string
+	IdemKey       string
+	Fingerprint   []byte
+	Token         string
+	NowOverrideMs int64
+}
+
+// Writes a pending record. It changes no row when a record holds the name.
+// created_at_ms is the clock of the database. A non-zero now_override_ms
+// replaces it, for tests.
+func (q *Queries) InsertIdempotencyRecord(ctx context.Context, arg InsertIdempotencyRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Fingerprint,
+		arg.Token,
+		arg.NowOverrideMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertIdempotencyServerKey = `-- name: InsertIdempotencyServerKey :exec
+INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
+VALUES (1, $1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type InsertIdempotencyServerKeyParams struct {
+	WrappedKey []byte
+	WrapperID  string
+}
+
+// It changes no row when a key is in place: the first writer wins.
+func (q *Queries) InsertIdempotencyServerKey(ctx context.Context, arg InsertIdempotencyServerKeyParams) error {
+	_, err := q.db.Exec(ctx, insertIdempotencyServerKey, arg.WrappedKey, arg.WrapperID)
 	return err
 }
 
@@ -11226,6 +11471,27 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const replaceIdempotencyServerKey = `-- name: ReplaceIdempotencyServerKey :execrows
+UPDATE idempotency_server_key
+SET wrapped_key = $1, wrapper_id = $2
+WHERE id = 1 AND wrapped_key = $3
+`
+
+type ReplaceIdempotencyServerKeyParams struct {
+	NewWrappedKey []byte
+	NewWrapperID  string
+	OldWrappedKey []byte
+}
+
+// It changes no row when another process replaced the key first.
+func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceIdempotencyServerKey, arg.NewWrappedKey, arg.NewWrapperID, arg.OldWrappedKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const restoreStack = `-- name: RestoreStack :execrows
 UPDATE stacks
 SET name = $1, deleted_name = NULL, deleted_at_ms = NULL, updated_at_ms = $2
@@ -12504,6 +12770,32 @@ func (q *Queries) SubjectsOfEnabledCaller(ctx context.Context, subject string) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const sweepIdempotencyRecords = `-- name: SweepIdempotencyRecords :execrows
+DELETE FROM idempotency_records
+WHERE created_at_ms < (
+         CASE WHEN $1::bigint <> 0 THEN $1::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $2
+   OR (status = 0 AND created_at_ms < (
+         CASE WHEN $1::bigint <> 0 THEN $1::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $3)
+`
+
+type SweepIdempotencyRecordsParams struct {
+	NowOverrideMs int64
+	RecordTtlMs   interface{}
+	PendingTtlMs  interface{}
+}
+
+// The time is the clock of the database. A non-zero now_override_ms replaces
+// it, for tests.
+func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempotencyRecordsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepIdempotencyRecords, arg.NowOverrideMs, arg.RecordTtlMs, arg.PendingTtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const takeSignInRequest = `-- name: TakeSignInRequest :one

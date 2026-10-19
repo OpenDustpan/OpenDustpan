@@ -750,6 +750,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
+		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})

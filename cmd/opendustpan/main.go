@@ -1175,7 +1175,7 @@ func (f *serveFlags) serverOptions(
 
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
-	opts = append(opts, profileStoreOption(st)...)
+	opts = append(opts, profileStoreOption(st, wrapper)...)
 
 	return opts, nil
 }
@@ -1207,13 +1207,19 @@ func runnerStoreOption(st store) []dustpan.Option {
 }
 
 // profileStoreOption returns the profile store option for st, or nil when st
-// keeps no profiles.
-func profileStoreOption(st store) []dustpan.Option {
+// keeps no profiles. wrapper seals the server key of the replay records.
+func profileStoreOption(st store, wrapper secret.Wrapper) []dustpan.Option {
 	switch s := st.(type) {
 	case sqliteStore:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+		return []dustpan.Option{
+			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
+		}
 	case postgresStore:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+		return []dustpan.Option{
+			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
+		}
 	default:
 		return nil
 	}

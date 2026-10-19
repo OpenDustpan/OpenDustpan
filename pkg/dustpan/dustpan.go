@@ -67,6 +67,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -157,6 +158,7 @@ type settings struct {
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
+	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
 	logger               *slog.Logger
@@ -305,6 +307,13 @@ func WithBlobCache(maxBytes int64) Option {
 // server serves no profile route.
 func WithProfileStore(st profile.Store) Option {
 	return func(o *settings) { o.profileStore = st }
+}
+
+// WithIdempotencyStore sets the store of the replay records of the
+// Idempotency-Key header. It is optional: without it a request with the
+// header answers 400, and the server does not run the sweep of the records.
+func WithIdempotencyStore(st idempotency.Store) Option {
+	return func(o *settings) { o.idempotencyStore = st }
 }
 
 // WithInventoryReader sets the inventory projection reader. Required.
@@ -549,6 +558,11 @@ type Server struct {
 	// that schedule.
 	signInRequests   *session.Sessions
 	signInPruneEvery time.Duration
+	// idempotency deletes the expired replay records on a schedule, or is nil
+	// without a store of them. idempotencyEvery is the period of that
+	// schedule.
+	idempotency      idempotency.Store
+	idempotencyEvery time.Duration
 	// signInProviders binds each provider of the console sign-in to its
 	// issuer at the start, or is the zero value with no console sign-in.
 	signInProviders providerBinding
@@ -607,6 +621,7 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
+		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
 		logger:                  slog.New(slog.DiscardHandler),
@@ -895,6 +910,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		durableOwner:     durableOwner(cfg),
 		inactivityEvery:  sweepEvery,
 		deletedEvery:     deletedSweepEvery,
+		idempotency:      cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 	}, nil
 }
 
@@ -2032,7 +2048,13 @@ func newProfileHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("profile service: %w", err)
 	}
 
+	idem, err := idempotencyMiddleware(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := profileapi.NewHandler(profileapi.Config{
+		Idempotency:   idem,
 		Profiles:      profiles,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,

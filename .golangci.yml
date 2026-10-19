@@ -140,7 +140,7 @@ linters:
             - "**/pkg/tempadmin/**"
             - "**/pkg/oncall/**"
             - "**/pkg/cost/**"
-            - "**/pkg/notify/**"
+            - "**/pkg/notify/*.go"
             - "**/pkg/egress/*.go"
             - "**/pkg/chatops/**"
             - "**/pkg/incident/**"
@@ -160,6 +160,8 @@ linters:
               desc: Domain code must not import transport adapters.
             - pkg: opendustpan.org/opendustpan/pkg/blob/
               desc: Domain code depends on the blob port, never on an adapter.
+            - pkg: opendustpan.org/opendustpan/pkg/notify/
+              desc: Domain code depends on the notify.Sender port, never on a sender adapter.
             - pkg: net/http
               desc: HTTP belongs in api/, not in the domain.
             - pkg: database/sql
