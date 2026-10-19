@@ -1,11 +1,11 @@
 ---
-rfc: 87
+rfc: 89
 title: The Forge port, what each consumer needs from a forge, and the forge connection API
 status: discussing
 created: 2026-10-19
 ---
 
-# RFC 87. The Forge port, what each consumer needs from a forge, and the forge connection API
+# RFC 89. The Forge port, what each consumer needs from a forge, and the forge connection API
 
 Status: discussing. An agent wrote this RFC for issue #886 under the
 direction of the project manager. It proposes the shape of the `Forge` port
