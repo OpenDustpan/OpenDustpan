@@ -119,7 +119,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		Moves:         nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
-		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
+		Units:         &memReader{entries: enforcingUnitEntries(), err: nil},
 		Deleted:       seededDeleted(),
 		History:       nil,
 		Lifecycles:    testLifecycles(),
@@ -136,6 +136,26 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 	}
 
 	return handler
+}
+
+// enforcingUnitEntries holds the live unit that the by-ID route resolves in
+// the enforcement tests: the unit of seededUnitID in acme.
+func enforcingUnitEntries() map[namespace.Name][]coreinventory.Entry {
+	return map[namespace.Name][]coreinventory.Entry{
+		"acme": {{
+			LastChanged:   changeTime(),
+			Namespace:     "acme",
+			Tool:          "pulumi",
+			Name:          "web/prod",
+			UnitID:        seededUnitID,
+			DisplayName:   "web/prod",
+			Status:        "succeeded",
+			ResourceCount: nil,
+			Lock:          nil,
+			Collection:    "",
+			Labels:        nil,
+		}},
+	}
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -329,7 +349,7 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 	handler := newTestHandler(t)
 
 	for _, route := range handler.Routes() {
-		if isCollectionRoute(route) || route.DeniedAsNotFound {
+		if isCollectionRoute(route) {
 			continue
 		}
 
@@ -374,13 +394,22 @@ func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
 		deny[action] = true
 	}
 
+	for _, action := range route.NamespaceActions {
+		deny[action] = true
+	}
+
+	wantDenied := http.StatusForbidden
+	if route.DeniedAsNotFound {
+		wantDenied = http.StatusNotFound
+	}
+
 	denied := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("denied request answers %d, want %d", rec.Code, http.StatusForbidden)
+	if rec.Code != wantDenied {
+		t.Fatalf("denied request answers %d, want %d", rec.Code, wantDenied)
 	}
 }
 
@@ -446,10 +475,10 @@ func (denyObjectAuthorizer) ListObjects(
 func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 	t.Parallel()
 
-	handler := newTestHandler(t)
+	handler := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
 
 	for _, route := range handler.Routes() {
-		if isCollectionRoute(route) || route.DeniedAsNotFound {
+		if isCollectionRoute(route) {
 			continue
 		}
 
@@ -522,13 +551,26 @@ func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
 		}
 	}
 
+	nsObject := identity.NamespaceObject("acme").String()
+
+	for _, action := range route.NamespaceActions {
+		if !containsCall(recorder.calls, recordedCall{action: action, object: nsObject}) {
+			t.Fatalf("route never asks %s on %q (calls %v)", action, nsObject, recorder.calls)
+		}
+	}
+
+	wantDenied := http.StatusForbidden
+	if route.DeniedAsNotFound {
+		wantDenied = http.StatusNotFound
+	}
+
 	denied := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, http.StatusForbidden)
+	if rec.Code != wantDenied {
+		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, wantDenied)
 	}
 }
 

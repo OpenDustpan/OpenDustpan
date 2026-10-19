@@ -25,7 +25,7 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (ident
 	return unitObject(e)
 }
 
-// getUnit answers GET /api/dustpan/v1/units/{unitID} with the unit entry that
+// getUnit answers GET /api/dustpan/v1/namespaces/-/units/{unitID} with the unit entry that
 // the unit list gives for the same unit. The route wrapper already allowed
 // unit:read on the unit and namespace:read on its namespace.
 //

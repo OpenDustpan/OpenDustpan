@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	unitByIDPath    = "/api/dustpan/v1/units/"
+	unitByIDPath    = "/api/dustpan/v1/namespaces/-/units/"
 	acmeUnitID      = "stk-acme"
 	globexUnitID    = "stk-globex"
 	deletedUnitByID = "stk-gone"
@@ -235,6 +235,26 @@ func TestGetUnitByID(t *testing.T) {
 	}
 }
 
+// TestGetUnitByIDOldPath proves that the path without a namespace segment is
+// not served.
+func TestGetUnitByIDOldPath(t *testing.T) {
+	t.Parallel()
+
+	handler := newUnitHandler(t, grantAuthorizer{allow: nil})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/dustpan/v1/units/"+acmeUnitID, http.NoBody,
+	)
+	req.Header.Set("Authorization", "token test-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
 // TestGetUnitByIDMatchesList proves the route answers the object that the
 // namespace list gives for the same unit.
 func TestGetUnitByIDMatchesList(t *testing.T) {
@@ -293,7 +313,7 @@ func TestGetUnitByIDRouteRow(t *testing.T) {
 	var found bool
 
 	for _, route := range newUnitHandler(t, grantAuthorizer{allow: nil}).Routes() {
-		if route.Path != "/api/dustpan/v1/units/{unitID}" {
+		if route.Path != "/api/dustpan/v1/namespaces/-/units/{unitID}" {
 			continue
 		}
 

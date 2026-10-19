@@ -5617,7 +5617,7 @@ func namespaceOf(ref string) string {
 	return ns
 }
 
-// checkInventoryUnitByID proves GET /api/dustpan/v1/units/{unit_id} answers
+// checkInventoryUnitByID proves GET /api/dustpan/v1/namespaces/-/units/{unit_id} answers
 // the list entry of ref, and answers 404 for an ID that no unit holds. It
 // fails the test otherwise.
 func checkInventoryUnitByID(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
@@ -5646,7 +5646,7 @@ func checkInventoryUnlockedByID(ctx context.Context, t *testing.T, env *e2e.Env,
 	checkInventoryUnitByID(ctx, t, env, ref)
 }
 
-// readInventoryUnitByID reads GET /api/dustpan/v1/units/{unit_id} as
+// readInventoryUnitByID reads GET /api/dustpan/v1/namespaces/-/units/{unit_id} as
 // principal A, fails the test unless the status is want, and returns the
 // decoded unit for a 200.
 func readInventoryUnitByID(
@@ -5655,14 +5655,17 @@ func readInventoryUnitByID(
 	t.Helper()
 
 	got, err := env.StatusWithHeader(
-		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/units/"+unitID, "",
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/-/units/"+unitID, "",
 	)
 	if err != nil {
-		t.Fatalf("GET /api/dustpan/v1/units/%s: %v", unitID, err)
+		t.Fatalf("GET /api/dustpan/v1/namespaces/-/units/%s: %v", unitID, err)
 	}
 
 	if got.Status != want {
-		t.Fatalf("GET /api/dustpan/v1/units/%s answers %d, want %d (%s)", unitID, got.Status, want, got.Body)
+		t.Fatalf(
+			"GET /api/dustpan/v1/namespaces/-/units/%s answers %d, want %d (%s)",
+			unitID, got.Status, want, got.Body,
+		)
 	}
 
 	var unit inventoryUnitDoc

@@ -53,7 +53,7 @@ type Route struct {
 	// it, and the wrapper authorizes every entry on the resolved object.
 	Actions []identity.Action
 	// NamespaceActions lists actions that the wrapper authorizes on the
-	// namespace of the resolved object, after Actions. Only authorized routes
+	// namespace of the resolved object, before Actions. Only authorized routes
 	// set it.
 	NamespaceActions []identity.Action
 	// Resolve returns the object that Actions apply to. Only authorized
@@ -94,7 +94,7 @@ func (h *Handler) buildRoutes() []Route {
 		},
 		{
 			Method: http.MethodGet,
-			Path:   v1Prefix + "/units/{unitID}",
+			Path:   v1Prefix + "/namespaces/-/units/{unitID}",
 			// The object is the unit of the path, found by its ID alone. The
 			// caller needs unit:read on the unit and namespace:read on its
 			// namespace. A denied caller gets the 404 of an unknown unit.
@@ -287,8 +287,8 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	}
 }
 
-// authorizeRoute authorizes every action of route: Actions on obj, then
-// NamespaceActions on the namespace of obj. For a route with DeniedAsNotFound,
+// authorizeRoute authorizes every action of route: NamespaceActions on the
+// namespace of obj, then Actions on obj. For a route with DeniedAsNotFound,
 // a denial gives the error of an unknown object.
 func (h *Handler) authorizeRoute(
 	ctx context.Context, route Route, p identity.Principal, obj identity.Object,
@@ -306,14 +306,14 @@ func (h *Handler) authorizeRoute(
 		return fmt.Errorf("authorize %s: %w", action, err)
 	}
 
-	for _, action := range route.Actions {
-		if err := check(action, obj); err != nil {
+	for _, action := range route.NamespaceActions {
+		if err := check(action, identity.NamespaceObject(obj.Namespace())); err != nil {
 			return err
 		}
 	}
 
-	for _, action := range route.NamespaceActions {
-		if err := check(action, identity.NamespaceObject(obj.Namespace())); err != nil {
+	for _, action := range route.Actions {
+		if err := check(action, obj); err != nil {
 			return err
 		}
 	}

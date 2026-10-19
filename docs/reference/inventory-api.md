@@ -75,10 +75,10 @@ namespace and the same filters. A `pageToken` from another query answers 400.
 
 ## One unit by its ID
 
-`GET /api/dustpan/v1/units/{unit_id}` answers one unit entry with the same
-fields as an item of the unit list. The unit ID is unique in the installation,
-so the path has no namespace. Use it when a client holds only a unit ID, for
-example from a `consoleUrl`.
+`GET /api/dustpan/v1/namespaces/-/units/{unit_id}` answers one unit entry with
+the same fields as an item of the unit list. The path puts `-` in the place of
+the namespace, because the unit ID is unique in the installation. Use it when a
+client holds only a unit ID, for example from a `consoleUrl`.
 
 The server answers 404 with `{"code": 404, "message": "unit not found"}` in
 these cases:
@@ -94,7 +94,7 @@ token.
 
 ```sh
 curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
-  "https://dustpan.example/api/dustpan/v1/units/$UNIT_ID"
+  "https://dustpan.example/api/dustpan/v1/namespaces/-/units/$UNIT_ID"
 ```
 
 ### Query values

@@ -1580,7 +1580,7 @@ func consoleAllowEntries() []AllowEntry {
 			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/dustpan/v1/units/{unitID}",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/-/units/{unitID}",
 			CoveringTest: "TestCLIs (checkInventoryUnitByID)",
 			Reason: "Console-only: no CLI reads a unit by its ID. The harness " +
 				"steps read a stack and a workspace by ID.",
