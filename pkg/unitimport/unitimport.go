@@ -542,7 +542,8 @@ type Counts struct {
 // of the fence. Create wraps ErrInvalid. Get wraps ErrNotFound, and
 // ErrPurged for a purged import. Transition wraps ErrTransition for a
 // change that the transition table does not allow, or when the import is
-// not in the state from. Every method that takes an ID wraps ErrNotFound
+// not in the state from, or for a move from StatePaused to StatePlanning
+// of an import that has ledger rows. Every method that takes an ID wraps ErrNotFound
 // and ErrPurged.
 type Store interface {
 	// Create stores a new import in StatePlanning. The caller gives the ID.
