@@ -155,7 +155,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColUpdateID,
 				backupColArrival,
 				"blob_key",
-				"sha256",
+				backupColSHA256,
 				"md5",
 				backupColSize,
 				"lowest_sequence",
@@ -170,7 +170,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColUpdateID,
 				backupColSequence,
 				backupColArrival,
-				"sha256",
+				backupColSHA256,
 			},
 		},
 		{
@@ -397,6 +397,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteIdentityBackupTables(),
 		sqliteSessionBackupTables(),
 		sqliteImportBackupTables(),
+		sqliteRunnerBackupTables(),
 		sqliteProfileBackupTables(),
 	)
 }
@@ -406,7 +407,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 // restores tables that a restore keeps. CheckCoverage compares each list with
 // the live schema.
 func sqliteControlTables() []sqliteBackupTable {
-	return []sqliteBackupTable{
+	core := []sqliteBackupTable{
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
@@ -417,7 +418,7 @@ func sqliteControlTables() []sqliteBackupTable {
 		},
 		{
 			table:   backup.TableDurableSteps,
-			columns: []string{"operation_id", "name", "seq", "result", "done_at_ms"},
+			columns: []string{backupColOperationID, "name", "seq", "result", "done_at_ms"},
 		},
 		{
 			table:   backup.TableDurableSchedules,
@@ -459,6 +460,8 @@ func sqliteControlTables() []sqliteBackupTable {
 			},
 		},
 	}
+
+	return slices.Concat(core, sqliteRunnerControlTables())
 }
 
 // sqliteSessionBackupTables lists the column lists of the session and
@@ -605,7 +608,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColExpiresAtMs,
 				"last_used_at_ms",
-				"revoked_at_ms",
+				backupColRevokedAtMs,
 				"replaced_by",
 				backupColCreatedBy,
 				"disabled_at_ms",
@@ -639,7 +642,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"condition",
 				backupColCreatedAtMs,
 				backupColCreatedBy,
-				"revoked_at_ms",
+				backupColRevokedAtMs,
 				"revoked_by",
 			},
 		},

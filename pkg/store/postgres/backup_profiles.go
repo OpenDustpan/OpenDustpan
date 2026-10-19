@@ -10,7 +10,7 @@ func pgCopyProfileTables() []pgCopyTable {
 		{
 			table: "profiles",
 			columns: []string{
-				pgColNamespaceID, "id", pgColName, "latest", "created_by", pgColCreatedAtMs, pgColUpdatedAtMs,
+				pgColNamespaceID, "id", pgColName, "latest", pgColCreatedBy, pgColCreatedAtMs, pgColUpdatedAtMs,
 				"deleted_at_ms",
 			},
 			orderBy: []string{pgColNamespaceID, "id"},
