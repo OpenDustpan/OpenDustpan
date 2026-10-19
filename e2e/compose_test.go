@@ -84,7 +84,7 @@ func TestComposeQuickstart(t *testing.T) {
 		"OPENDUSTPAN_IMAGE=" + image,
 	}
 
-	compose := func(args ...string) string {
+	compose := func(ctx context.Context, args ...string) string {
 		t.Helper()
 
 		return runIn(ctx, t, command{
@@ -113,14 +113,14 @@ func TestComposeQuickstart(t *testing.T) {
 		}
 	})
 
-	compose("up", "--detach", "--wait", "--wait-timeout", "300")
+	compose(ctx, "up", "--detach", "--wait", "--wait-timeout", "300")
 
 	token := envFileValue(t, filepath.Join(dir, ".env"), "OPENDUSTPAN_ADMIN_TOKEN")
 	cert := filepath.Join(dir, "tls", "cert.pem")
 	host := "localhost:" + port
 
 	// The server reads the token from its own environment in the container.
-	out := compose("exec", "-T", "opendustpan", "/opendustpan", "namespace", "create",
+	out := compose(ctx, "exec", "-T", "opendustpan", "/opendustpan", "namespace", "create",
 		"--server", "https://localhost:8080", "--ca-file", "/tls/cert.pem", composeNamespace)
 	if !strings.Contains(out, "created namespace "+composeNamespace) {
 		t.Fatalf("namespace create did not report the namespace:\n%s", out)
@@ -128,40 +128,58 @@ func TestComposeQuickstart(t *testing.T) {
 
 	stack := composeStack{host: host, token: token, cert: cert}
 
-	var listStacks func(t *testing.T) string
+	// The subtests end before the restart check below. Their directories
+	// come from this test, so that they still exist when the check runs.
+	pulumiDirs := [2]string{t.TempDir(), t.TempDir()}
+	tofuDirs := [2]string{t.TempDir(), t.TempDir()}
+
+	var (
+		listStacks   func(ctx context.Context, t *testing.T) string
+		tofuGreeting func(ctx context.Context, t *testing.T) string
+	)
 
 	t.Run("Pulumi CLI", func(t *testing.T) {
 		t.Parallel()
-		listStacks = composePulumi(ctx, t, pulumi, stack)
+		listStacks = composePulumi(ctx, t, pulumi, stack, pulumiDirs)
 	})
 
 	t.Run("OpenTofu", func(t *testing.T) {
 		t.Parallel()
-		composeTofu(ctx, t, tofu, stack)
+		tofuGreeting = composeTofu(ctx, t, tofu, stack, tofuDirs)
 	})
 
 	// This cleanup runs after both subtests end and before the cleanup that
-	// removes the stack. The data must survive a restart of the stack.
+	// removes the stack. The data must survive a restart of the stack. Go
+	// cancels the context of the test before it runs the cleanups.
 	t.Cleanup(func() {
-		if t.Failed() || listStacks == nil {
+		if t.Failed() || listStacks == nil || tofuGreeting == nil {
 			return
 		}
 
-		compose("down")
-		compose("up", "--detach", "--wait", "--wait-timeout", "300")
+		restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeStepLimit)
+		defer cancel()
 
-		if out := listStacks(t); !strings.Contains(out, "dev") {
+		compose(restartCtx, "down")
+		compose(restartCtx, "up", "--detach", "--wait", "--wait-timeout", "300")
+
+		if out := listStacks(restartCtx, t); !strings.Contains(out, "dev") {
 			t.Errorf("pulumi stack ls does not list the stack after a restart:\n%s", out)
+		}
+
+		if out := tofuGreeting(restartCtx, t); !strings.Contains(out, "hello") {
+			t.Errorf("tofu output greeting does not show the value after a restart:\n%s", out)
 		}
 	})
 }
 
 // composePulumi makes a stack and answers a function that lists the stacks.
-func composePulumi(ctx context.Context, t *testing.T, cli e2e.Install, stack composeStack) func(t *testing.T) string {
+// dirs hold the project and the home directory.
+func composePulumi(
+	ctx context.Context, t *testing.T, cli e2e.Install, stack composeStack, dirs [2]string,
+) func(ctx context.Context, t *testing.T) string {
 	t.Helper()
 
-	project := t.TempDir()
-	home := t.TempDir()
+	project, home := dirs[0], dirs[1]
 
 	writeFile(t, filepath.Join(project, "Pulumi.yaml"), "name: demo\nruntime: yaml\n")
 
@@ -189,7 +207,7 @@ func composePulumi(ctx context.Context, t *testing.T, cli e2e.Install, stack com
 		t.Fatalf("pulumi stack ls does not list the stack:\n%s", out)
 	}
 
-	return func(t *testing.T) string {
+	return func(ctx context.Context, t *testing.T) string {
 		t.Helper()
 
 		return runIn(ctx, t, command{
@@ -198,11 +216,14 @@ func composePulumi(ctx context.Context, t *testing.T, cli e2e.Install, stack com
 	}
 }
 
-func composeTofu(ctx context.Context, t *testing.T, cli e2e.Install, stack composeStack) {
+// composeTofu applies a configuration and answers a function that reads its
+// output. dirs hold the project and the home directory.
+func composeTofu(
+	ctx context.Context, t *testing.T, cli e2e.Install, stack composeStack, dirs [2]string,
+) func(ctx context.Context, t *testing.T) string {
 	t.Helper()
 
-	project := t.TempDir()
-	home := t.TempDir()
+	project, home := dirs[0], dirs[1]
 
 	writeFile(t, filepath.Join(project, "main.tf"), fmt.Sprintf(`terraform {
   cloud {
@@ -242,6 +263,14 @@ output "greeting" {
 
 	if out := runCLI("apply", "-auto-approve"); !strings.Contains(out, "Apply complete") {
 		t.Fatalf("tofu apply did not complete:\n%s", out)
+	}
+
+	return func(ctx context.Context, t *testing.T) string {
+		t.Helper()
+
+		return runIn(ctx, t, command{
+			dir: project, env: env, name: cli.Binary(), args: []string{"output", "-raw", "greeting"}, clean: true,
+		})
 	}
 }
 

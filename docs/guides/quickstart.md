@@ -151,7 +151,7 @@ OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu in
 
 ## Test the compose stack
 
-`make compose-smoke` runs this guide against the compose stack. It builds the image, runs `init.sh`, starts the stack, and makes a namespace. Then it runs `pulumi login`, `pulumi stack init`, `tofu init` and `tofu apply` with the real CLIs. Then it restarts the stack and checks that the Pulumi stack is still there. At the end it deletes the stack and its volumes. It needs Docker, the Compose plugin and OpenSSL.
+`make compose-smoke` runs this guide against the compose stack. It builds the image, runs `init.sh`, starts the stack, and makes a namespace. Then it runs `pulumi login`, `pulumi stack init`, `tofu init` and `tofu apply` with the real CLIs. Then it restarts the stack and checks that `pulumi stack ls` still lists the stack and that `tofu output greeting` still shows `hello`. At the end it deletes the stack and its volumes. It needs Docker, the Compose plugin and OpenSSL.
 
 ## Next steps
 

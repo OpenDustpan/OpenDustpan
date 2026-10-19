@@ -5,8 +5,8 @@ set -eu
 
 cd "$(dirname "$0")"
 
-if [ -e .env ] || [ -e tls/cert.pem ]; then
-  echo "init: .env or tls/cert.pem exists. Remove them first if you want new ones." >&2
+if [ -e .env ] || [ -e tls ]; then
+  echo "init: .env or tls exists. Remove them first if you want new ones." >&2
   exit 1
 fi
 
