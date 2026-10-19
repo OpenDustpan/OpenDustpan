@@ -71,6 +71,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
@@ -216,6 +217,12 @@ type settings struct {
 	// durableStore keeps the durable operations and the job schedules, or
 	// is nil without job schedules. See WithDurableStore.
 	durableStore DurableStore
+	// runners are the stores of the runner protocol, or nil without the
+	// protocol. See WithRunners.
+	runners RunnerStores
+	// jobClaimer claims the phases of runner jobs for the runners of the
+	// protocol, or is nil. See WithJobClaimer.
+	jobClaimer job.Claimer
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -645,6 +652,8 @@ func defaultSettings() *settings {
 		auditShipper:            nil,
 		auditSigner:             nil,
 		durableStore:            nil,
+		runners:                 nil,
+		jobClaimer:              nil,
 	}
 }
 
@@ -903,10 +912,11 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 // adapters holds the HTTP adapters that routes mounts.
 type adapters struct {
+	// neutralHandlers are the inventory, audit, context and runner
+	// handlers.
+	neutralHandlers
+
 	pulumi      http.Handler
-	inventory   http.Handler
-	audit       http.Handler
-	context     http.Handler
 	profiles    http.Handler
 	tfe         http.Handler
 	tofuHTTP    http.Handler
@@ -985,19 +995,17 @@ func newAdapters(
 	}
 
 	return adapters{
-		pulumi:      api,
-		inventory:   neutral.inventory,
-		audit:       neutral.audit,
-		context:     neutral.context,
-		profiles:    neutral.profiles,
-		tfe:         tfeAPI,
-		tofuHTTP:    tofuHTTPAPI,
-		server:      serverAPI,
-		ready:       newReadiness(cfg, observed),
-		maintenance: watcher,
-		restores:    restores,
-		chain:       chain,
-		signIn:      signIn,
+		neutralHandlers: neutral,
+		pulumi:          api,
+		profiles:        neutral.profiles,
+		tfe:             tfeAPI,
+		tofuHTTP:        tofuHTTPAPI,
+		server:          serverAPI,
+		ready:           newReadiness(cfg, observed),
+		maintenance:     watcher,
+		restores:        restores,
+		chain:           chain,
+		signIn:          signIn,
 	}, nil
 }
 
@@ -1007,6 +1015,8 @@ type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
 	context   http.Handler
+	// runners is the runner protocol and its management API, or nil.
+	runners http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
 }
@@ -1029,12 +1039,18 @@ func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 		return neutralHandlers{}, err
 	}
 
+	runners, err := newRunnerHandler(cfg, svc)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
 	profiles, err := newProfileHandler(svc, cfg)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
-	return neutralHandlers{inventory: units, audit: entries, context: contexts, profiles: profiles}, nil
+	return neutralHandlers{
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles,
+	}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -3077,6 +3093,16 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	// like the installation API: an operator reads the log while the
 	// installation is down for a restore.
 	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
+	// The runner protocol is outside /api/. A runner sends no cookie and no
+	// Origin header, so it passes no CORS gate. The management API of the
+	// runners is more specific than /api/, so it reaches its own adapter.
+	if a.runners != nil {
+		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
+		mux.Handle(
+			"/api/runners/",
+			withCORS(withMaintenance(a.runners, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+		)
+	}
 	// The paths of the inventory and the context API under /api/dustpan/v1/
 	// reach their own handlers by exact path, so another area can take the
 	// rest of the prefix. The tool adapters are refused in maintenance mode.

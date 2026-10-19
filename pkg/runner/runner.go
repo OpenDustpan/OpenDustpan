@@ -83,6 +83,11 @@ var (
 	// claim that is no longer the live claim of its operation. It wraps
 	// durable.ErrClaimLost.
 	ErrClaimLost = fmt.Errorf("claim of the runner is lost: %w", durable.ErrClaimLost)
+	// ErrSessionWaitPassed reports a renewal of a claim that has no job
+	// session after MaxSessionWait. The claim is lost. The store changes
+	// nothing: the caller releases the claim through the job.Claimer or
+	// the sweep claimer of the purpose of its pool.
+	ErrSessionWaitPassed = fmt.Errorf("%w: no job session within the session wait limit", ErrClaimLost)
 	// ErrVersionUnsupported reports a runner or a launcher release outside
 	// the skew that the server accepts (CheckSkew).
 	ErrVersionUnsupported = errors.New("runner release is not supported by this server")

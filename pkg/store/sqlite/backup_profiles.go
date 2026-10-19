@@ -13,7 +13,7 @@ func sqliteProfileBackupTables() []sqliteBackupTable {
 		{
 			table: "profiles",
 			columns: []string{
-				backupColNamespaceID, "id", backupColName, "latest", "created_by", backupColCreatedAtMs,
+				backupColNamespaceID, "id", backupColName, "latest", backupColCreatedBy, backupColCreatedAtMs,
 				backupColUpdatedAtMs, "deleted_at_ms",
 			},
 		},

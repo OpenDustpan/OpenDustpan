@@ -6112,10 +6112,12 @@ output "greeting" {
 // checks: the serial for order and the added holder, force and
 // restored-from attributes.
 type stateVersionListAttributes struct {
-	Serial       int64  `json:"serial"`
-	Holder       string `json:"holder"`
-	Force        bool   `json:"force"`
-	RestoredFrom string `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	Serial        int64  `json:"serial"`
+	Holder        string `json:"holder"`
+	Force         bool   `json:"force"`
+	RestoredFrom  string `json:"restored-from"`  //nolint:tagliatelle // The TFE wire name; it must not change.
+	FenceBy       string `json:"fence-by"`       //nolint:tagliatelle // The TFE wire name; it must not change.
+	UnlockedWrite bool   `json:"unlocked-write"` //nolint:tagliatelle // The TFE wire name; it must not change.
 }
 
 // stateVersionListItem holds one entry of a state version list document.
@@ -6186,7 +6188,7 @@ func checkStateVersionListThree(body string) error {
 			return fmt.Errorf("%w: entry holds no attributes: %s", errUnexpected, body)
 		}
 
-		for _, key := range []string{"holder", "force", "restored-from"} {
+		for _, key := range []string{"holder", "force", "restored-from", "fence-by", "unlocked-write"} {
 			if _, ok := attrs[key]; !ok {
 				return fmt.Errorf("%w: entry lacks attribute %q: %s", errUnexpected, key, body)
 			}
@@ -6202,17 +6204,48 @@ func checkStateVersionListThree(body string) error {
 		return fmt.Errorf("%w: list holds the same version twice: %s", errUnexpected, body)
 	}
 
-	if doc.Data[0].Attributes.Serial <= doc.Data[1].Attributes.Serial {
-		return fmt.Errorf(
-			"%w: list is not newest first: serials %d then %d",
-			errUnexpected,
-			doc.Data[0].Attributes.Serial,
-			doc.Data[1].Attributes.Serial,
-		)
+	if err := checkStateVersionListFences(doc, body); err != nil {
+		return err
 	}
 
 	if doc.Meta.Pagination.TotalCount != 3 {
 		return fmt.Errorf("%w: total count is %d, want 3: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
+	}
+
+	return nil
+}
+
+// checkStateVersionListFences checks the serial order of a list of three,
+// then that only the middle entry holds a fence-by (the maintenance fence) and
+// that no entry is an unlocked write.
+func checkStateVersionListFences(doc stateVersionListDoc, body string) error {
+	for i := range len(doc.Data) - 1 {
+		if doc.Data[i].Attributes.Serial <= doc.Data[i+1].Attributes.Serial {
+			return fmt.Errorf(
+				"%w: list is not newest first: serials %d then %d",
+				errUnexpected,
+				doc.Data[i].Attributes.Serial,
+				doc.Data[i+1].Attributes.Serial,
+			)
+		}
+	}
+
+	for i, item := range doc.Data {
+		wantFence := ""
+		if i == 1 {
+			wantFence = "maintenance"
+		}
+
+		if item.Attributes.FenceBy != wantFence {
+			return fmt.Errorf(
+				"%w: entry %d has fence-by %q, want %q: %s",
+				errUnexpected, i, item.Attributes.FenceBy, wantFence, body,
+			)
+		}
+
+		if item.Attributes.UnlockedWrite {
+			return fmt.Errorf("%w: entry %d has unlocked-write true, want false: %s", errUnexpected, i, body)
+		}
 	}
 
 	return nil

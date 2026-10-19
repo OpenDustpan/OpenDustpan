@@ -481,6 +481,88 @@ type Role struct {
 	DeletedAtMs sql.NullInt64
 }
 
+type Runner struct {
+	ID                     string
+	NamespaceID            string
+	PoolID                 string
+	Name                   string
+	Kind                   string
+	Isolation              string
+	Labels                 string
+	Release                string
+	KeyPublic              []byte
+	KeyCreatedAtMs         int64
+	PreviousKeyPublic      []byte
+	PreviousKeyCreatedAtMs int64
+	RotatedAtMs            int64
+	JoinedWith             string
+	Draining               bool
+	RetiredAtMs            int64
+	LastSeenAtMs           int64
+	JoinedAtMs             int64
+}
+
+type RunnerClaim struct {
+	OperationID string
+	Token       int64
+	ClaimedAtMs int64
+	JobID       string
+	Phase       int64
+}
+
+type RunnerHandoffToken struct {
+	Sha256      string
+	OperationID string
+	Token       int64
+	RunnerID    string
+	IssuedAtMs  int64
+	ExpiresAtMs int64
+	UsedAtMs    int64
+}
+
+type RunnerJoinToken struct {
+	ID          string
+	NamespaceID string
+	PoolID      string
+	Sha256      string
+	CreatedBy   string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+	UsedAtMs    int64
+	UsedBy      string
+	RevokedAtMs int64
+}
+
+type RunnerNonce struct {
+	Subject     string
+	Nonce       string
+	ExpiresAtMs int64
+}
+
+type RunnerPool struct {
+	ID          string
+	NamespaceID string
+	Name        string
+	Purpose     string
+	LeaseMs     int64
+	Concurrency int64
+	Isolation   string
+	GitMode     string
+	GitHelper   string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+type RunnerSession struct {
+	ID             string
+	OperationID    string
+	Token          int64
+	RunnerID       string
+	KeyPublic      []byte
+	KeyCreatedAtMs int64
+	CreatedAtMs    int64
+}
+
 type SchemaMigration struct {
 	Version          int64
 	Name             string
@@ -683,4 +765,34 @@ type Workspace struct {
 	AllowUnlockedWrites   bool
 	DeletedAtMs           sql.NullInt64
 	DeletedName           sql.NullString
+}
+
+type WorkspaceBlameCursor struct {
+	WorkspaceID string
+	Ordinal     int64
+}
+
+type WorkspaceBlameItem struct {
+	WorkspaceID    string
+	StateVersionID string
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
+	ResourceCount  int64
+}
+
+type WorkspaceResourceChange struct {
+	WorkspaceID    string
+	StateVersionID string
+	Address        string
+	Ordinal        int64
+	Kind           string
+	AtMs           int64
+	BySubject      string
+	ByTokenID      string
+	ByJobID        string
+	ChangedPaths   int64
+	Restored       bool
+	Forced         bool
+	LineageChanged bool
 }

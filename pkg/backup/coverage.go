@@ -35,6 +35,10 @@ var ControlTables = []string{
 	TableBackups,
 	TableRestores,
 	TableInstallation,
+	"runner_claims",
+	"runner_handoff_tokens",
+	"runner_sessions",
+	"runner_nonces",
 }
 
 // EmptiedTables lists the tables of the schema that a backup leaves out and
