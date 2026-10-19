@@ -3,6 +3,9 @@ package sqlite
 // backupColDocumentSha256 is the column that holds the hash of a document.
 const backupColDocumentSha256 = "document_sha256"
 
+// backupColBody is the column that holds a body.
+const backupColBody = "body"
+
 // sqliteProfileBackupTables holds the backup columns of the profile tables,
 // in the order of backup.Tables.
 func sqliteProfileBackupTables() []sqliteBackupTable {

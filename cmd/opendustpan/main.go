@@ -1197,9 +1197,9 @@ func durableStoreOption(st store) []dustpan.Option {
 func profileStoreOption(st store) []dustpan.Option {
 	switch s := st.(type) {
 	case sqliteStore:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles()), dustpan.WithIdempotencyStore(s.Idempotency())}
 	case postgresStore:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles()), dustpan.WithIdempotencyStore(s.Idempotency())}
 	default:
 		return nil
 	}

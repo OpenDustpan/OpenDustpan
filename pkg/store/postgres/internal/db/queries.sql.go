@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const abandonIdempotencyRecord = `-- name: AbandonIdempotencyRecord :exec
+DELETE FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4 AND token = $5 AND status = 0
+`
+
+type AbandonIdempotencyRecordParams struct {
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+	Token     string
+}
+
+func (q *Queries) AbandonIdempotencyRecord(ctx context.Context, arg AbandonIdempotencyRecordParams) error {
+	_, err := q.db.Exec(ctx, abandonIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Token,
+	)
+	return err
+}
+
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -625,6 +650,43 @@ type CloseJournalParams struct {
 func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) error {
 	_, err := q.db.Exec(ctx, closeJournal, arg.StackID, arg.ID)
 	return err
+}
+
+const completeIdempotencyRecord = `-- name: CompleteIdempotencyRecord :execrows
+UPDATE idempotency_records
+SET status = $1, headers = $2, body = $3
+WHERE principal = $4 AND method = $5 AND path = $6
+  AND idem_key = $7 AND token = $8 AND status = 0
+`
+
+type CompleteIdempotencyRecordParams struct {
+	Status    int64
+	Headers   string
+	Body      []byte
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+	Token     string
+}
+
+// Stores the final answer of the pending record that holds token. It changes
+// no row when another request holds the record or the record is done.
+func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIdempotencyRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeIdempotencyRecord,
+		arg.Status,
+		arg.Headers,
+		arg.Body,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Token,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const contextUnitExists = `-- name: ContextUnitExists :one
@@ -2155,6 +2217,39 @@ WHERE stack_id = $1
 
 func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.Exec(ctx, deleteEventsOfStack, stackID)
+	return err
+}
+
+const deleteExpiredIdempotencyRecord = `-- name: DeleteExpiredIdempotencyRecord :exec
+DELETE FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4
+  AND ($5 - created_at_ms > $6
+       OR (status = 0 AND $5 - created_at_ms > $7))
+`
+
+type DeleteExpiredIdempotencyRecordParams struct {
+	Principal    string
+	Method       string
+	Path         string
+	IdemKey      string
+	NowMs        int64
+	RecordTtlMs  int64
+	PendingTtlMs int64
+}
+
+// Deletes the record of the name when it is past its period: a record past
+// record_ttl_ms, or a pending record past pending_ttl_ms.
+func (q *Queries) DeleteExpiredIdempotencyRecord(ctx context.Context, arg DeleteExpiredIdempotencyRecordParams) error {
+	_, err := q.db.Exec(ctx, deleteExpiredIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.NowMs,
+		arg.RecordTtlMs,
+		arg.PendingTtlMs,
+	)
 	return err
 }
 
@@ -3968,6 +4063,59 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 	return i, err
 }
 
+const getIdempotencyRecord = `-- name: GetIdempotencyRecord :one
+SELECT fingerprint, token, status, headers, body, created_at_ms
+FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4
+`
+
+type GetIdempotencyRecordParams struct {
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+}
+
+type GetIdempotencyRecordRow struct {
+	Fingerprint []byte
+	Token       string
+	Status      int64
+	Headers     string
+	Body        []byte
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetIdempotencyRecord(ctx context.Context, arg GetIdempotencyRecordParams) (GetIdempotencyRecordRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+	)
+	var i GetIdempotencyRecordRow
+	err := row.Scan(
+		&i.Fingerprint,
+		&i.Token,
+		&i.Status,
+		&i.Headers,
+		&i.Body,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getIdempotencyServerKey = `-- name: GetIdempotencyServerKey :one
+SELECT key FROM idempotency_server_key WHERE id = 1
+`
+
+func (q *Queries) GetIdempotencyServerKey(ctx context.Context) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyServerKey)
+	var key []byte
+	err := row.Scan(&key)
+	return key, err
+}
+
 const getImport = `-- name: GetImport :one
 SELECT namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
        state, reason, created_by, created_at_ms, plan, ended_at_ms
@@ -5699,6 +5847,52 @@ func (q *Queries) InsertGateReference(ctx context.Context, arg InsertGateReferen
 		arg.OwnerKind,
 		arg.OwnerID,
 	)
+	return err
+}
+
+const insertIdempotencyRecord = `-- name: InsertIdempotencyRecord :execrows
+INSERT INTO idempotency_records (
+    principal, method, path, idem_key, fingerprint, token, status, headers, body, created_at_ms
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, 0, '', ''::bytea, $7
+)
+ON CONFLICT (principal, method, path, idem_key) DO NOTHING
+`
+
+type InsertIdempotencyRecordParams struct {
+	Principal   string
+	Method      string
+	Path        string
+	IdemKey     string
+	Fingerprint []byte
+	Token       string
+	CreatedAtMs int64
+}
+
+// Writes a pending record. It changes no row when a record holds the name.
+func (q *Queries) InsertIdempotencyRecord(ctx context.Context, arg InsertIdempotencyRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Fingerprint,
+		arg.Token,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertIdempotencyServerKey = `-- name: InsertIdempotencyServerKey :exec
+INSERT INTO idempotency_server_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING
+`
+
+func (q *Queries) InsertIdempotencyServerKey(ctx context.Context, key []byte) error {
+	_, err := q.db.Exec(ctx, insertIdempotencyServerKey, key)
 	return err
 }
 
@@ -11007,6 +11201,26 @@ func (q *Queries) SubjectsOfEnabledCaller(ctx context.Context, subject string) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const sweepIdempotencyRecords = `-- name: SweepIdempotencyRecords :execrows
+DELETE FROM idempotency_records
+WHERE $1 - created_at_ms > $2
+   OR (status = 0 AND $1 - created_at_ms > $3)
+`
+
+type SweepIdempotencyRecordsParams struct {
+	NowMs        int64
+	RecordTtlMs  int64
+	PendingTtlMs int64
+}
+
+func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempotencyRecordsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepIdempotencyRecords, arg.NowMs, arg.RecordTtlMs, arg.PendingTtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const takeSignInRequest = `-- name: TakeSignInRequest :one

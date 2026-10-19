@@ -231,6 +231,24 @@ type GroupMember struct {
 	Pinned        bool
 }
 
+type IdempotencyRecord struct {
+	Principal   string
+	Method      string
+	Path        string
+	IdemKey     string
+	Fingerprint []byte
+	Token       string
+	Status      int64
+	Headers     string
+	Body        []byte
+	CreatedAtMs int64
+}
+
+type IdempotencyServerKey struct {
+	ID  int64
+	Key []byte
+}
+
 type Import struct {
 	NamespaceID string
 	ID          string

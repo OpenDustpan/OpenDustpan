@@ -3,6 +3,9 @@ package postgres
 // pgColDocumentSha256 is the column that holds the hash of a document.
 const pgColDocumentSha256 = "document_sha256"
 
+// pgColBody is the column that holds a body.
+const pgColBody = "body"
+
 // pgCopyProfileTables holds the COPY columns of the profile tables, in the
 // order of backup.Tables.
 func pgCopyProfileTables() []pgCopyTable {

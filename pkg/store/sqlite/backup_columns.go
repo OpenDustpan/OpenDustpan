@@ -262,7 +262,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColTool,
 				"unit_name",
 				backupColVersion,
-				"body",
+				backupColBody,
 				backupColUpdatedAtMs,
 			},
 		},
@@ -274,7 +274,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "gate_records",
 			columns: []string{
 				"id", backupColNamespaceID, "point", "change_kind", "change_id", backupColAtMs, "last_at_ms", "count",
-				"refusal_key", "body",
+				"refusal_key", backupColBody,
 			},
 		},
 		{
@@ -457,6 +457,24 @@ func sqliteControlTables() []sqliteBackupTable {
 				"id",
 				backupColState,
 			},
+		},
+	}
+}
+
+// sqliteEmptiedTables lists the column list of every table of
+// backup.EmptiedTables. CheckCoverage compares each list with the live schema.
+func sqliteEmptiedTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableIdempotencyRecords,
+			columns: []string{
+				"principal", "method", "path", "idem_key", "fingerprint", "token", "status", "headers", backupColBody,
+				backupColCreatedAtMs,
+			},
+		},
+		{
+			table:   backup.TableIdempotencyServerKey,
+			columns: []string{"id", "key"},
 		},
 	}
 }

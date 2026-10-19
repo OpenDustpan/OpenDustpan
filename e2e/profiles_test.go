@@ -33,12 +33,13 @@ type profileCall struct {
 	path    string
 	body    string
 	ifMatch string
+	key     string
 	want    int
 }
 
 // profileRequest returns a request with no body, no check and no tag.
 func profileRequest(name, method, path string, want int) profileCall {
-	return profileCall{check: nil, name: name, method: method, path: path, body: "", ifMatch: "", want: want}
+	return profileCall{check: nil, name: name, method: method, path: path, body: "", ifMatch: "", key: "", want: want}
 }
 
 // withBody returns c with a body.
@@ -55,6 +56,13 @@ func (c profileCall) withTag(tag string) profileCall {
 	return c
 }
 
+// withKey returns c with the Idempotency-Key header.
+func (c profileCall) withKey(key string) profileCall {
+	c.key = key
+
+	return c
+}
+
 // checking returns c with a check of the answer.
 func (c profileCall) checking(check func(string) error) profileCall {
 	c.check = check
@@ -66,9 +74,14 @@ func (c profileCall) checking(check func(string) error) profileCall {
 func profileStep(t *testing.T, env *e2e.Env, c profileCall) {
 	t.Helper()
 
-	var headers map[string]string
+	headers := map[string]string{}
+
 	if c.ifMatch != "" {
-		headers = map[string]string{"If-Match": c.ifMatch}
+		headers["If-Match"] = c.ifMatch
+	}
+
+	if c.key != "" {
+		headers["Idempotency-Key"] = c.key
 	}
 
 	env.APIStepWithHeaders(t.Context(), t, e2e.APIStepSpec{
@@ -162,6 +175,7 @@ func profileScenario(t *testing.T, env *e2e.Env, tool string) {
 
 	profileReads(t, env, one, tool)
 	profileWrites(t, env, one, &tag)
+	profileKeyedCreate(t, env, tool)
 
 	profileStep(t, env, profileRequest("a write with a stale tag is refused",
 		http.MethodDelete, one, http.StatusPreconditionFailed).withTag(`"`+tag.id+`.1"`))
@@ -213,4 +227,70 @@ func profileWrites(t *testing.T, env *e2e.Env, one string, tag *profileTag) {
 		profileRequest("the revisions list newest first", http.MethodGet, one+"/revisions", http.StatusOK).
 			checking(profileMasked(`"revision":3`, `"reason":"e2e"`)),
 	)
+}
+
+// profileKeyedCreate sends one create with an Idempotency-Key two times. The
+// second answer is the first answer and the server writes one profile. The
+// same key with another body is refused.
+func profileKeyedCreate(t *testing.T, env *e2e.Env, tool string) {
+	t.Helper()
+
+	name := "e2e-" + tool + "-keyed"
+	key := "e2e-key-" + tool
+
+	body, err := json.Marshal(map[string]string{"name": name, "document": "schemaVersion: 1\n"})
+	if err != nil {
+		t.Fatalf("encode profile body: %v", err)
+	}
+
+	other, err := json.Marshal(map[string]string{"name": name + "-other", "document": "schemaVersion: 1\n"})
+	if err != nil {
+		t.Fatalf("encode profile body: %v", err)
+	}
+
+	var (
+		first string
+		tag   profileTag
+	)
+
+	profileStep(t, env, profileRequest("create a profile with an idempotency key ("+tool+")",
+		http.MethodPost, profilesBase, http.StatusCreated).withBody(string(body)).withKey(key).
+		checking(func(answer string) error {
+			first = answer
+
+			return tag.remember(answer)
+		}))
+	profileStep(t, env, profileRequest("the same create with the same key answers the first answer ("+tool+")",
+		http.MethodPost, profilesBase, http.StatusCreated).withBody(string(body)).withKey(key).
+		checking(func(answer string) error {
+			if answer != first {
+				return fmt.Errorf(
+					"%w: replay %s differs from the first answer %s",
+					errAnswerLacksFragment,
+					answer,
+					first,
+				)
+			}
+
+			return nil
+		}))
+	profileStep(t, env, profileRequest("the same key with another body is refused ("+tool+")",
+		http.MethodPost, profilesBase, http.StatusUnprocessableEntity).withBody(string(other)).withKey(key).
+		checking(profileMasked(`request.idempotency-key-reused`)))
+	profileStep(t, env, profileRequest("the two creates made one profile ("+tool+")",
+		http.MethodGet, profilesBase, http.StatusOK).checking(func(answer string) error {
+		if n := strings.Count(answer, `"name":"`+name+`"`); n != 1 {
+			return fmt.Errorf(
+				"%w: the list holds %d profiles named %s, want 1: %s",
+				errAnswerLacksFragment,
+				n,
+				name,
+				answer,
+			)
+		}
+
+		return nil
+	}))
+	profileStep(t, env, profileRequest("delete the profile of the key ("+tool+")",
+		http.MethodDelete, profilesBase+"/"+tag.id, http.StatusNoContent))
 }

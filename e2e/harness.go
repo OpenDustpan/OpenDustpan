@@ -604,9 +604,9 @@ type serverArgs struct {
 func profileStoreOptions(st serverStore) []dustpan.Option {
 	switch s := st.(type) {
 	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles()), dustpan.WithIdempotencyStore(s.Idempotency())}
 	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles()), dustpan.WithIdempotencyStore(s.Idempotency())}
 	default:
 		return nil
 	}

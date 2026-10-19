@@ -17,6 +17,11 @@ import (
 // or names another namespace, ErrInvalid for an empty slice of entries, and
 // changes nothing on an error.
 //
+// When the context of a write carries an idempotency.Completion, the store
+// stores the answer of the request in the transaction of the write. It then
+// returns idempotency.ErrLost, and changes nothing, when the pending record
+// of the request is not in place.
+//
 // A profile is in one namespace. A name is unique among the live profiles of
 // a namespace. A deleted profile keeps its ID and its revisions, and frees
 // its name.
@@ -48,6 +53,15 @@ type Store interface {
 	// revisions stay. With at.Latest above 0 it returns ErrConflict when
 	// the newest revision is another. ErrNotFound.
 	Delete(ctx context.Context, at Anchor, fence namespace.Fence, e []audit.Entry) error
+}
+
+// Written is what a write of the store passes to the idempotency.Completion
+// of its context: the profile after the write and the revision that the
+// write made. Delete passes the zero value. A write that finds no Completion
+// passes nothing.
+type Written struct {
+	Revision *Revision
+	Profile  Profile
 }
 
 // Anchor names a live profile and the newest revision that the caller read.

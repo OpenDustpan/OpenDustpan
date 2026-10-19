@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -41,8 +43,11 @@ type Config struct {
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
-	Logger   *slog.Logger
-	Now      func() time.Time
+	// Idempotency serves the Idempotency-Key header. Nil makes every request
+	// with the header answer 400.
+	Idempotency *idempotent.Middleware
+	Logger      *slog.Logger
+	Now         func() time.Time
 }
 
 // Handler serves the profile API.
@@ -51,6 +56,7 @@ type Handler struct {
 	authn    identity.Authenticator
 	authz    identity.Authorizer
 	sessions *sessionauth.Checker
+	idem     *idempotent.Middleware
 	logger   *slog.Logger
 	mux      *patternMux
 	routes   []Route
@@ -74,6 +80,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
 		sessions: cfg.Sessions,
+		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,
 		mux:      newPatternMux(),
 		routes:   nil,
@@ -164,6 +171,17 @@ func classify(err error) problem {
 
 	if se, ok := errors.AsType[*statusError](err); ok {
 		return problem{status: se.status, code: se.code, message: se.message}
+	}
+
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		return problem{status: ie.Status, code: ie.Code, message: ie.Message}
+	}
+
+	if errors.Is(err, idempotency.ErrLost) {
+		return problem{
+			status: http.StatusConflict, code: idempotent.CodeInProgress,
+			message: "a newer request took this Idempotency-Key before this request ended: retry later",
+		}
 	}
 
 	if pr, ok := classifyNamespace(err); ok {

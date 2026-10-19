@@ -20,6 +20,6 @@ func TestProfileConformance(t *testing.T) {
 
 		s := open(t, base)
 
-		return profiletest.Store{Profiles: s.Profiles(), Namespaces: s, Audit: s}
+		return profiletest.Store{Profiles: s.Profiles(), Namespaces: s, Audit: s, Records: s.Idempotency()}
 	})
 }

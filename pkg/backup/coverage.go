@@ -37,6 +37,20 @@ var ControlTables = []string{
 	TableInstallation,
 }
 
+// EmptiedTables lists the tables of the schema that a backup leaves out and
+// a restore leaves empty: the replay records of the Idempotency-Key header and
+// the server key of their fingerprints. A replay record answers for the state
+// at the time of the first request, so a replay after a restore of older state
+// would answer for state that the restore removed. The schema holds these
+// tables and the tables of Tables and ControlTables, and no other table.
+// Treat the list as a constant and never mutate it.
+//
+//nolint:gochecknoglobals // A shared frozen table list, as Tables is.
+var EmptiedTables = []string{
+	TableIdempotencyRecords,
+	TableIdempotencyServerKey,
+}
+
 // ErrSchemaRead reports that the store could not read its live schema to
 // compare it with a column list. The driver error stays out of the value: an
 // adapter translates it into this sentinel (CLAUDE.md, backend rules).

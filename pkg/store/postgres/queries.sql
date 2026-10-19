@@ -2864,3 +2864,52 @@ UPDATE profiles
 SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
+
+-- name: DeleteExpiredIdempotencyRecord :exec
+-- Deletes the record of the name when it is past its period: a record past
+-- record_ttl_ms, or a pending record past pending_ttl_ms.
+DELETE FROM idempotency_records
+WHERE principal = sqlc.arg(principal) AND method = sqlc.arg(method) AND path = sqlc.arg(path)
+  AND idem_key = sqlc.arg(idem_key)
+  AND (sqlc.arg(now_ms) - created_at_ms > sqlc.arg(record_ttl_ms)
+       OR (status = 0 AND sqlc.arg(now_ms) - created_at_ms > sqlc.arg(pending_ttl_ms)));
+
+-- name: InsertIdempotencyRecord :execrows
+-- Writes a pending record. It changes no row when a record holds the name.
+INSERT INTO idempotency_records (
+    principal, method, path, idem_key, fingerprint, token, status, headers, body, created_at_ms
+) VALUES (
+    sqlc.arg(principal), sqlc.arg(method), sqlc.arg(path), sqlc.arg(idem_key), sqlc.arg(fingerprint),
+    sqlc.arg(token), 0, '', ''::bytea, sqlc.arg(created_at_ms)
+)
+ON CONFLICT (principal, method, path, idem_key) DO NOTHING;
+
+-- name: GetIdempotencyRecord :one
+SELECT fingerprint, token, status, headers, body, created_at_ms
+FROM idempotency_records
+WHERE principal = sqlc.arg(principal) AND method = sqlc.arg(method) AND path = sqlc.arg(path)
+  AND idem_key = sqlc.arg(idem_key);
+
+-- name: CompleteIdempotencyRecord :execrows
+-- Stores the final answer of the pending record that holds token. It changes
+-- no row when another request holds the record or the record is done.
+UPDATE idempotency_records
+SET status = sqlc.arg(status), headers = sqlc.arg(headers), body = sqlc.arg(body)
+WHERE principal = sqlc.arg(principal) AND method = sqlc.arg(method) AND path = sqlc.arg(path)
+  AND idem_key = sqlc.arg(idem_key) AND token = sqlc.arg(token) AND status = 0;
+
+-- name: AbandonIdempotencyRecord :exec
+DELETE FROM idempotency_records
+WHERE principal = sqlc.arg(principal) AND method = sqlc.arg(method) AND path = sqlc.arg(path)
+  AND idem_key = sqlc.arg(idem_key) AND token = sqlc.arg(token) AND status = 0;
+
+-- name: SweepIdempotencyRecords :execrows
+DELETE FROM idempotency_records
+WHERE sqlc.arg(now_ms) - created_at_ms > sqlc.arg(record_ttl_ms)
+   OR (status = 0 AND sqlc.arg(now_ms) - created_at_ms > sqlc.arg(pending_ttl_ms));
+
+-- name: GetIdempotencyServerKey :one
+SELECT key FROM idempotency_server_key WHERE id = 1;
+
+-- name: InsertIdempotencyServerKey :exec
+INSERT INTO idempotency_server_key (id, key) VALUES (1, sqlc.arg(key)) ON CONFLICT DO NOTHING;

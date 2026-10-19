@@ -380,6 +380,27 @@ func pgControlTables() []pgCopyTable {
 	}
 }
 
+// pgEmptiedTables lists the column list of every table of
+// backup.EmptiedTables. CheckCoverage compares each list with the live
+// columns.
+func pgEmptiedTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableIdempotencyRecords,
+			columns: []string{
+				"principal", "method", "path", "idem_key", "fingerprint", "token", "status", "headers", pgColBody,
+				pgColCreatedAtMs,
+			},
+			orderBy: []string{"principal", "method", "path", "idem_key"},
+		},
+		{
+			table:   backup.TableIdempotencyServerKey,
+			columns: []string{"id", "key"},
+			orderBy: []string{"id"},
+		},
+	}
+}
+
 // pgCopySessionTables holds the COPY columns of the session and sign-in
 // request tables.
 func pgCopySessionTables() []pgCopyTable {
@@ -563,12 +584,7 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 			return err
 		}
 
-		live, liveErr := s.liveColumns(ctx, table)
-		if liveErr != nil {
-			return liveErr
-		}
-
-		if checkErr := backup.CheckColumns(table, spec.columns, live); checkErr != nil {
+		if checkErr := s.checkColumns(ctx, spec); checkErr != nil {
 			return checkErr
 		}
 	}
@@ -579,13 +595,14 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 			return err
 		}
 
-		live, liveErr := s.liveColumns(ctx, table)
-		if liveErr != nil {
-			return liveErr
-		}
-
-		if checkErr := backup.CheckColumns(table, spec.columns, live); checkErr != nil {
+		if checkErr := s.checkColumns(ctx, spec); checkErr != nil {
 			return checkErr
+		}
+	}
+
+	for _, spec := range pgEmptiedTables() {
+		if err := s.checkColumns(ctx, spec); err != nil {
+			return err
 		}
 	}
 
@@ -596,6 +613,17 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 	return s.checkPortableColumns(ctx)
 }
 
+// checkColumns compares the column list of spec with the live columns of its
+// table.
+func (s *Store) checkColumns(ctx context.Context, spec pgCopyTable) error {
+	live, err := s.liveColumns(ctx, spec.table)
+	if err != nil {
+		return err
+	}
+
+	return backup.CheckColumns(spec.table, spec.columns, live)
+}
+
 // checkNoUnknownTables fails with ErrCoverage when the schema holds a data
 // table in neither backup.Tables nor backup.ControlTables.
 func (s *Store) checkNoUnknownTables(ctx context.Context) error {
@@ -604,12 +632,16 @@ func (s *Store) checkNoUnknownTables(ctx context.Context) error {
 		return err
 	}
 
-	known := make(map[string]bool, len(backup.Tables)+len(backup.ControlTables))
+	known := make(map[string]bool, len(backup.Tables)+len(backup.ControlTables)+len(backup.EmptiedTables))
 	for _, table := range backup.Tables {
 		known[table] = true
 	}
 
 	for _, table := range backup.ControlTables {
+		known[table] = true
+	}
+
+	for _, table := range backup.EmptiedTables {
 		known[table] = true
 	}
 
