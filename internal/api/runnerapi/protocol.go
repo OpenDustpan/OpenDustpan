@@ -440,11 +440,30 @@ func (h *Handler) pollOnce(
 	}
 
 	work, found, err := h.tryClaim(r, &rn, pool, assignmentVersion)
-	if found {
+	if !found {
+		return work, pollIdle, err
+	}
+
+	// A drain or a retire that committed during the claim gets the claim
+	// back. The claim then comes before the drain, or the runner gets no work.
+	after, err := h.members.Runner(r.Context(), caller.ID)
+	if err == nil && !after.Draining && after.RetiredAt.IsZero() {
 		return work, pollWork, nil
 	}
 
-	return work, pollIdle, err
+	claim := durable.Claim{
+		Operation: durable.ID(work.Operation), Owner: rn.ID, Token: work.Token, ExpiresAt: work.ExpiresAt,
+	}
+	if giveErr := h.giveBack(r, &rn, claim); giveErr != nil && !errors.Is(giveErr, runner.ErrClaimLost) {
+		h.logger.WarnContext(r.Context(), "release of a claim after a drain", slog.String("runner", rn.ID),
+			slog.String("operation", work.Operation), slog.Any("error", giveErr))
+	}
+
+	if err != nil {
+		return none, pollIdle, fmt.Errorf("select runner: %w", err)
+	}
+
+	return none, pollStop, nil
 }
 
 // tryClaim asks the claimer of the purpose of pool for one phase or sweep.
@@ -548,7 +567,7 @@ func (h *Handler) claimSweep(
 	}
 
 	if err = h.handoffs.RecordClaim(ctx, s.Claim, "", 0); err != nil {
-		if relErr := h.sweeps.Release(context.WithoutCancel(ctx), s.Claim); relErr != nil {
+		if relErr := h.sweeps.Release(context.WithoutCancel(ctx), s.Claim, s.Fence); relErr != nil {
 			h.logger.WarnContext(ctx, "release of a claim that failed to record", slog.String("runner", rn.ID),
 				slog.String("operation", string(s.Claim.Operation)), slog.Any("error", relErr))
 		}
@@ -728,15 +747,15 @@ func (h *Handler) giveBack(r *http.Request, rn *runner.Runner, claim durable.Cla
 		return fmt.Errorf("select pool: %w", err)
 	}
 
+	fence, fenceErr := h.fenceOf(r, rn.Namespace)
+	if fenceErr != nil {
+		return fenceErr
+	}
+
 	switch pool.Purpose {
 	case runner.PurposeJobs:
 		if h.claimer == nil {
 			return runner.ErrNotFound
-		}
-
-		fence, fenceErr := h.fenceOf(r, rn.Namespace)
-		if fenceErr != nil {
-			return fenceErr
 		}
 
 		phase := job.PhaseClaim{Job: job.ID(rec.Job), Phase: rec.Phase, Claim: claim, Fence: fence}
@@ -748,7 +767,7 @@ func (h *Handler) giveBack(r *http.Request, rn *runner.Runner, claim durable.Cla
 			return runner.ErrNotFound
 		}
 
-		if err = h.sweeps.Release(ctx, claim); err != nil {
+		if err = h.sweeps.Release(ctx, claim, fence); err != nil {
 			return fmt.Errorf("release sweep: %w", err)
 		}
 	default:

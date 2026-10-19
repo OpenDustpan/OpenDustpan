@@ -223,29 +223,32 @@ type SessionStore interface {
 // sweeps owns the adapter. The protocol adds no rule to it.
 type SweepClaimer interface {
 	// Claim takes one sweep of req.Kinds that can run, and returns its
-	// work. It returns durable.ErrNoWork when no sweep can run now, and
+	// work and the fence of the namespace of the pool. It returns
+	// durable.ErrNoWork when no sweep can run now, and
 	// ErrInvalid for a request with no owner, a kind that is not a
 	// SweepKind, or a lease that is not positive.
 	Claim(ctx context.Context, req durable.ClaimRequest) (SweepClaim, error)
 	// Renew moves the expiry of c to now plus d on the clock of the
 	// store, and returns the new claim. It returns ErrClaimLost when c is
-	// not live.
-	Renew(ctx context.Context, c durable.Claim, d time.Duration) (durable.Claim, error)
+	// not live, and namespace.ErrFenced when the fence is stale.
+	Renew(ctx context.Context, c durable.Claim, fence namespace.Fence, d time.Duration) (durable.Claim, error)
 	// Release gives the sweep back before its report, so that the next
 	// claim runs it from its start. It returns ErrClaimLost when c is not
-	// live.
-	Release(ctx context.Context, c durable.Claim) error
+	// live, and namespace.ErrFenced when the fence is stale.
+	Release(ctx context.Context, c durable.Claim, fence namespace.Fence) error
 	// Report stores the report of the sweep from r, and ends the claim and
 	// the operation in one transaction: the upload of the report is the
 	// end of a sweep. It returns ErrClaimLost when c is not live, and
-	// ErrInvalid for a report above the limit of the design of sweeps.
-	Report(ctx context.Context, c durable.Claim, r io.Reader) error
+	// ErrInvalid for a report above the limit of the design of sweeps. It
+	// returns namespace.ErrFenced when the fence is stale.
+	Report(ctx context.Context, c durable.Claim, fence namespace.Fence, r io.Reader) error
 }
 
-// SweepClaim is one claimed sweep: the claim and the work of the
-// coordinator.
+// SweepClaim is one claimed sweep: the claim, the fence of the namespace of
+// the pool and the work of the coordinator.
 type SweepClaim struct {
 	Claim durable.Claim
+	Fence namespace.Fence
 	Work  Work
 }
 
