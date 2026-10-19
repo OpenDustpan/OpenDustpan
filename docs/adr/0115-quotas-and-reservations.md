@@ -1,6 +1,6 @@
 # 115. Quotas and reservations
 
-Status: accepted · 2026-10-17. The `expr` rules of decision 2 and decision 13 superseded by ADRs 224 and 226
+Status: accepted · 2026-10-17. The `expr` rules of decision 2 and decision 13 superseded by ADRs 224 and 226. Reservations extended by ADR 241 for imports
 
 ## Context
 
