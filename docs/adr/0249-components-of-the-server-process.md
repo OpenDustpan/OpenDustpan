@@ -31,44 +31,20 @@ questions of RFC 87, as the project manager relayed.
      migration, and later jobs and sweeps), the schedule claims, the audit
      shipper and the audit chain check.
    A later component gets its own RFC.
-3. **The flag.** `opendustpan serve --components api,worker`, with the
-   environment variable `DUSTPAN_COMPONENTS`. The default is `all`, which
-   means each component of this binary. An unknown name stops the start,
-   and the error names the valid components. `opendustpan dev` takes no
-   flag and always runs `all`. There are no build tags for components.
-4. **Components and modules are separate.** A module switch (ADR 211) is a
-   setting of the installation and applies to each component. A component
-   is a setting of one process. The capabilities document lists modules,
-   not components.
-5. **The parts that every process runs.** Each process, whatever its
-   components, runs the store, the key-encryption key check,
-   `/health/live`, `/health/ready` and the metrics route. A process that
-   runs `worker` without `api` listens on its port for the health and
-   metrics routes only, and each other route answers 404.
-6. **Migrations.** Each process migrates at start, under the advisory
+3. **One start flag.** A start flag selects the components of a process.
+   The default is all components. There are no build tags for components.
+4. **Migrations.** Each process migrates at start, under the advisory
    lock, whatever its components. The start order of the processes does
    not matter.
-7. **A flag that no selected component reads.** The process ignores it,
+5. **A flag that no selected component reads.** The process ignores it,
    and logs at start that the flag has no effect. The flag does not stop
    the start.
-8. **No worker.** When no `worker` claimed work for 2 lease periods, an
+6. **No worker.** When no `worker` claimed work for 2 lease periods, an
    `api` process refuses each request that starts an operation, for example
    a backup or a restore, with 503 and the command that helps. Other
    requests stay as they are.
-9. **Health.** `/health/live` stays the same for each component: 200 when
-   the process runs. It does not check the claim loop. `/health/ready`
-   answers for the components of the process, and lists each component
-   with its state. `/health/ready/<component>` answers for one component.
-   `api` is ready when the store and the blob store answer and the audit
-   chain gate admits requests. `worker` is ready when the store answers and
-   its claim loop ran in the last 2 claim intervals.
-10. **A stuck worker.** Readiness and a metric of the age of the oldest
-    unclaimed operation report a stuck worker. The installation API
-    reports each due schedule and each operation that no worker claimed
-    for more than 2 lease periods.
-11. **Records.** The start log and the version row of the instance (ADR 72
-    decision 11) record the components. The installation API lists them
-    for each instance.
+7. **Liveness.** `/health/live` stays the same for each component: 200 when
+   the process runs. It does not check the claim loop.
 
 ## Consequences
 
@@ -77,7 +53,7 @@ questions of RFC 87, as the project manager relayed.
   instance runs each component, and the fixes make that safe.
 - The Helm chart can get one Deployment for each component after its cap
   of one replica goes (ADR 246 decision 12). Only the `api` Deployment
-  gets the Service and the Ingress. That change has its own issue.
+  gets the Service and the Ingress. That change has its own issue, #1057.
 - RFC 87 open questions 6 and 7 are moot: ADR 248 has no home lease.
 - An installation with only `api` processes refuses the start of new
   operations after 2 lease periods, and the error tells the operator to
@@ -90,3 +66,35 @@ Designed against these, as a comparison only, never a compliance claim:
 - The Temporal server: one binary, the services `frontend`, `history`,
   `matching` and `worker`, and `temporal-server start --service <name>`.
 - The Kubernetes label `app.kubernetes.io/component`.
+
+## Not decided
+
+The project owner has not accepted these items. RFC 87 proposes them, and
+issue #948 (the start flag) decides each one. An ADR records an item only
+after the owner accepts it.
+
+- **The flag.** The flag is `opendustpan serve --components api,worker`,
+  with the environment variable `DUSTPAN_COMPONENTS`. The default value is
+  `all`. An unknown name stops the start, and the error names the valid
+  components. `opendustpan dev` takes no flag and always runs `all`.
+- **Components and modules.** A module switch (ADR 211) is a setting of the
+  installation and applies to each component. A component is a setting of
+  one process. The capabilities document lists modules, not components.
+- **The parts that every process runs.** Each process, whatever its
+  components, runs the store, the key-encryption key check, `/health/live`,
+  `/health/ready` and the metrics route. A process that runs `worker`
+  without `api` listens on its port for the health and metrics routes only,
+  and each other route answers 404.
+- **Readiness.** `/health/ready` answers for the components of the process,
+  and lists each component with its state. `/health/ready/<component>`
+  answers for one component. `api` is ready when the store and the blob
+  store answer and the audit chain gate admits requests. `worker` is ready
+  when the store answers and its claim loop ran in the last 2 claim
+  intervals.
+- **A stuck worker.** Readiness and a metric of the age of the oldest
+  unclaimed operation report a stuck worker. The installation API reports
+  each due schedule and each operation that no worker claimed for more than
+  2 lease periods.
+- **Records.** The start log and the version row of the instance (ADR 72
+  decision 11) record the components. The installation API lists them for
+  each instance.

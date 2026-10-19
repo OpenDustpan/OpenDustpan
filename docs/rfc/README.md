@@ -55,7 +55,7 @@ both together.
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209) |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
-| [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft; module switches and the capabilities document accepted (ADR 211), components accepted (ADR 249) |
+| [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | accepted (ADRs 211, 249) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted; the backup of one namespace (ADR 218) |
 | [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft; the branding preset setting accepted (ADR 212), operator branding accepted (ADR 235) |
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |

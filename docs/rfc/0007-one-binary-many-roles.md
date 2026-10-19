@@ -1,13 +1,13 @@
 ---
 rfc: 7
 title: One binary, many roles, removable features
-status: draft
+status: accepted (ADRs 211, 249)
 created: 2026-10-10
 ---
 
 # RFC 7. One binary, many roles, removable features
 
-Status: draft.
+Status: accepted (ADRs 211, 249).
 
 ## Problem
 
