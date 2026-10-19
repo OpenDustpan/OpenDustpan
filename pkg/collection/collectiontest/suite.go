@@ -736,6 +736,7 @@ func auditFor(fence namespace.Fence) audit.Entry {
 		Changes:      nil,
 		ObjectID:     "",
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

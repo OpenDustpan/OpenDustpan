@@ -922,6 +922,7 @@ func epochEntry(epoch int64, at time.Time) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

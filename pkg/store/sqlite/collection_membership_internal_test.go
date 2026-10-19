@@ -200,6 +200,7 @@ func membershipEntry(at time.Time, ns namespace.Name, action string) audit.Entry
 		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 		Changes: nil, ObjectID: "",
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

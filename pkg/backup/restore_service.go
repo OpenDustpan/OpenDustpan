@@ -971,6 +971,7 @@ func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, r
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	if _, err := store.AppendServer(ctx, entry); err != nil {

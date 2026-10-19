@@ -235,6 +235,7 @@ func seedIPAllowlist(t *testing.T, st *sqlite.Store, ns namespace.Name, cidrs ..
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	fence := namespace.Fence{Namespace: ns, FailoverVersion: 1}

@@ -218,6 +218,7 @@ func entryAt(ns namespace.Name, seq int64) audit.Entry {
 		Hash:         "hash-" + strconv.FormatInt(seq, 10),
 		Sequence:     seq,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

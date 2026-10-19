@@ -319,5 +319,6 @@ func testEntry() audit.Entry {
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 		ObjectID:     "",
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }

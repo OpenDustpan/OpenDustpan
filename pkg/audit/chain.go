@@ -367,6 +367,7 @@ func chainMarker(scope namespace.Name, action string, change ChainChange) Entry 
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

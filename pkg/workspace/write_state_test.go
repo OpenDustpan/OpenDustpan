@@ -627,6 +627,7 @@ func TestForceUnlockRefusesAnotherHolderOfTheSameLockID(t *testing.T) {
 		"admin",
 		admin,
 		nil,
+		forceEntry(),
 	)
 	if err != nil {
 		t.Fatalf("force-unlock of bob's lock as seen: %v", err)
@@ -643,6 +644,7 @@ func TestForceUnlockRefusesAnotherHolderOfTheSameLockID(t *testing.T) {
 		"admin",
 		admin,
 		nil,
+		forceEntry(),
 	)
 	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)

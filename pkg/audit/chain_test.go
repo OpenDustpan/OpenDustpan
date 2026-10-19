@@ -127,6 +127,7 @@ func walkEntry(seq int64) audit.Entry {
 		Hash:         "",
 		Sequence:     seq,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

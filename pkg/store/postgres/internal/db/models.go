@@ -67,6 +67,7 @@ type AuditEntry struct {
 	Changes      pgtype.Text
 	ObjectID     string
 	FenceVersion int64
+	Reason       string
 }
 
 type AuditSinkCursor struct {

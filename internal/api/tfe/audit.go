@@ -54,6 +54,7 @@ func (h *Handler) appendToolOperationAudit(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	ns, err := h.namespaces.Get(ctx, entry.Namespace)
@@ -94,6 +95,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

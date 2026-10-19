@@ -215,5 +215,6 @@ func auditEntry(r *http.Request, p identity.Principal, t target) audit.Entry {
 		Changes:      nil,
 		ObjectID:     t.obj.UnitID(),
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }

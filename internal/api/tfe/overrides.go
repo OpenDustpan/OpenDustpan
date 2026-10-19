@@ -133,6 +133,7 @@ func (h *Handler) appendOverrideAudit(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	ns, err := h.namespaces.Get(ctx, entry.Namespace)

@@ -43,7 +43,7 @@ const (
 // workspacePermissions are the flags go-tfe reads from a workspace document.
 // Each flag follows the Authorizer result for the caller on the workspace
 // unit: lock, unlock and queue-run need unit:write, force-unlock needs
-// unit:manage.
+// unit:write-forced.
 type workspacePermissions struct {
 	CanLock        bool `json:"can-lock"`         //nolint:tagliatelle // The TFE wire name; it must not change.
 	CanUnlock      bool `json:"can-unlock"`       //nolint:tagliatelle // The TFE wire name; it must not change.
@@ -56,6 +56,7 @@ type workspaceAttributes struct {
 	Name          string               `json:"name"`
 	ExecutionMode string               `json:"execution-mode"` //nolint:tagliatelle // The TFE wire name; it must not change.
 	Locked        bool                 `json:"locked"`
+	LockID        string               `json:"lock-id"`     //nolint:tagliatelle // The TFE wire name; it must not change.
 	LockHolder    string               `json:"lock-holder"` //nolint:tagliatelle // The TFE wire name; it must not change.
 	LockedAt      string               `json:"locked-at"`   //nolint:tagliatelle // The TFE wire name; it must not change.
 	LockReason    string               `json:"lock-reason"` //nolint:tagliatelle // The TFE wire name; it must not change.
@@ -546,6 +547,7 @@ func (h *Handler) workspaceDocument(
 			Name:          name,
 			ExecutionMode: localExecutionMode,
 			Locked:        ws.Lock.Locked(),
+			LockID:        ws.Lock.ID,
 			LockHolder:    ws.Lock.Holder,
 			LockedAt:      lockedAt,
 			LockReason:    ws.Lock.Reason,
@@ -581,7 +583,7 @@ func (h *Handler) workspacePermissions(
 	return workspacePermissions{
 		CanLock:        write,
 		CanUnlock:      write,
-		CanForceUnlock: allow(identity.ActionUnitManage),
+		CanForceUnlock: allow(identity.ActionUnitWriteForced),
 		CanQueueRun:    write,
 	}
 }
