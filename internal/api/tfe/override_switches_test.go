@@ -63,7 +63,7 @@ func (w switchedWorkspaces) BeginState(
 
 	if in.Force && !auth.Allow.Forced {
 		return workspace.PendingState{}, fmt.Errorf(
-			"new state: %w: a forced write needs the unit:write-forced action and both forced-write switches on",
+			"new state: %w: a forced write needs the forced-write switch on for the namespace (`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace (`PUT /api/v2/workspaces/{id}/override-switches`), and the permission to write forced state (`unit:write-forced`)",
 			workspace.ErrOverrideRefused,
 		)
 	}
