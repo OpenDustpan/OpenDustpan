@@ -629,7 +629,7 @@ func checkCallerAccessRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 	erinSecret := callerToken(ctx, t, env, erin.ID)
 
 	// The built-in roles that hold unit:read-secrets, in catalog order.
-	builtIn := []string{"secret-viewer", "admin", "account-administrator", "site-administrator"}
+	builtIn := []string{"secret-viewer", "writer", "maintainer", "admin", "account-administrator", "site-administrator"}
 
 	got := callerAccessAs(ctx, t, env, erinSecret, "/api/server/caller/access?object=roles")
 	if got.Object != "roles" || len(got.Actions) != 0 || len(got.Grants) != 0 {

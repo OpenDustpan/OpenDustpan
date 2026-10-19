@@ -20,29 +20,31 @@ func testEntry() audit.Entry {
 	}
 
 	return audit.Entry{
-		At:           time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
-		Namespace:    ns,
-		Subject:      "admin",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:decrypt",
-		Object:       "pulumi:acme/web/prod",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "pulumi-cli/3.200.0",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindReveal,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "req-1",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     1,
-		FenceVersion: 0,
-		Reason:       "",
+		At:            time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
+		Namespace:     ns,
+		Subject:       "admin",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:decrypt",
+		Object:        "pulumi:acme/web/prod",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "pulumi-cli/3.200.0",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindReveal,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "req-1",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      1,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -115,6 +117,8 @@ type hashTail struct {
 	objectID     string
 	changes      string
 	fenceVersion string
+	principal    string
+	jobID        string
 	reason       string
 }
 
@@ -152,6 +156,8 @@ func encodedHash(prevHash string, tail hashTail) string {
 	frame(tail.objectID)
 	frame(tail.changes)
 	frame(tail.fenceVersion)
+	frame(tail.principal)
+	frame(tail.jobID)
 	frame(tail.reason)
 
 	sum := sha256.Sum256([]byte(sb.String()))
@@ -178,22 +184,42 @@ func TestComputeHashEncodesEveryField(t *testing.T) {
 		id    string
 		chg   string
 		fence string
+		kind  string
+		job   string
 		why   string
 	}{
-		{"no field set", func(*audit.Entry) {}, "", "-", "", "", "0", ""},
-		{"previous hash", func(*audit.Entry) {}, "prev", "-", "", "", "0", ""},
-		{"value count 0", func(e *audit.Entry) { e.ValueCount = &zero }, "", "0", "", "", "0", ""},
-		{"value count 2", func(e *audit.Entry) { e.ValueCount = &two }, "", "2", "", "", "0", ""},
-		{"object ID", func(e *audit.Entry) { e.ObjectID = "stk-1" }, "", "-", "stk-1", "", "0", ""},
-		{"fence version", func(e *audit.Entry) { e.FenceVersion = 2 }, "", "-", "", "", "2", ""},
-		{"every field", func(e *audit.Entry) {
-			e.ValueCount = &two
-			e.ObjectID = "stk-1"
-			e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
-			e.FenceVersion = 3
-			e.Reason = "lock released after the run crashed"
-		}, "prev", "2", "stk-1", `[{"key":"region","new":"eu-west","layer":"file"}]`, "3", "lock released after the run crashed"},
-		{"reason", func(e *audit.Entry) { e.Reason = "run crashed" }, "", "-", "", "", "0", "run crashed"},
+		{"no field set", func(*audit.Entry) {}, "", "-", "", "", "0", "", "", ""},
+		{"previous hash", func(*audit.Entry) {}, "prev", "-", "", "", "0", "", "", ""},
+		{"value count 0", func(e *audit.Entry) { e.ValueCount = &zero }, "", "0", "", "", "0", "", "", ""},
+		{"value count 2", func(e *audit.Entry) { e.ValueCount = &two }, "", "2", "", "", "0", "", "", ""},
+		{"object ID", func(e *audit.Entry) { e.ObjectID = "stk-1" }, "", "-", "stk-1", "", "0", "", "", ""},
+		{"fence version", func(e *audit.Entry) { e.FenceVersion = 2 }, "", "-", "", "", "2", "", "", ""},
+		{
+			"principal kind",
+			func(e *audit.Entry) { e.PrincipalKind = audit.PrincipalKindPerson },
+			"",
+			"-",
+			"",
+			"",
+			"0",
+			"person",
+			"",
+			"",
+		},
+		{"job ID", func(e *audit.Entry) { e.JobID = "job-7" }, "", "-", "", "", "0", "", "job-7", ""},
+		{
+			"every field", func(e *audit.Entry) {
+				e.ValueCount = &two
+				e.ObjectID = "stk-1"
+				e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
+				e.FenceVersion = 3
+				e.PrincipalKind = audit.PrincipalKindService
+				e.JobID = "job-7"
+				e.Reason = "lock released after the run crashed"
+			}, "prev", "2", "stk-1", `[{"key":"region","new":"eu-west","layer":"file"}]`, "3", "service", "job-7",
+			"lock released after the run crashed",
+		},
+		{"reason", func(e *audit.Entry) { e.Reason = "run crashed" }, "", "-", "", "", "0", "", "", "run crashed"},
 	}
 
 	for _, tc := range cases {
@@ -203,7 +229,7 @@ func TestComputeHashEncodesEveryField(t *testing.T) {
 			e := testEntry()
 			tc.edit(&e)
 
-			want := encodedHash(tc.prev, hashTail{tc.count, tc.id, tc.chg, tc.fence, tc.why})
+			want := encodedHash(tc.prev, hashTail{tc.count, tc.id, tc.chg, tc.fence, tc.kind, tc.job, tc.why})
 			if got := audit.ComputeHash(e, tc.prev); got != want {
 				t.Fatalf("hash = %s, want %s", got, want)
 			}
@@ -217,7 +243,7 @@ func TestComputeHashEncodesEveryField(t *testing.T) {
 func TestComputeHashGoldenVector(t *testing.T) {
 	t.Parallel()
 
-	const want = "86aa124d85b1f880cfa3742095388f336e896ef9836824039be1e0978d1a990f"
+	const want = "0b3f939fc0affde21025d9b2d0c9bcb1904d2b17a7eacdb164790d8d17148c4c"
 
 	count := int64(4)
 	e := testEntry()
@@ -231,6 +257,8 @@ func TestComputeHashGoldenVector(t *testing.T) {
 	e.ObjectID = "stk-1"
 	e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
 	e.FenceVersion = 5
+	e.PrincipalKind = audit.PrincipalKindPerson
+	e.JobID = "job-7"
 	e.Reason = "lock released after the run crashed"
 
 	if got := audit.ComputeHash(e, "prev-hash-6"); got != want {
@@ -284,6 +312,9 @@ var hashSlots = []struct {
 	{hashSlot{func(_ *audit.Entry, prev, _ *string, v string) { *prev = v }, "previous hash"}, false},
 	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.ObjectID = v }, "object ID"}, true},
 	{hashSlot{func(_ *audit.Entry, _, changes *string, v string) { *changes = v }, "changes"}, false},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.PrincipalKind = v }, "principal kind"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.JobID = v }, "job ID"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Reason = v }, "reason"}, false},
 }
 
 // slotHash answers the stored hash of testEntry with the two slots set to
@@ -409,6 +440,43 @@ func TestValidateReason(t *testing.T) {
 
 			if tc.invalid != errors.Is(e.Validate(), audit.ErrInvalidEntry) {
 				t.Fatalf("Entry.Validate error = %v, want invalid = %t", e.Validate(), tc.invalid)
+			}
+		})
+	}
+}
+
+// TestValidateChecksThePrincipalFields proves that an entry accepts the three
+// kinds of a principal record and no kind, and refuses any other kind and a
+// job ID that is too long.
+func TestValidateChecksThePrincipalFields(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		kind    string
+		jobID   string
+		invalid bool
+	}{
+		{"no kind", "", "", false},
+		{"person", audit.PrincipalKindPerson, "", false},
+		{"service", audit.PrincipalKindService, "", false},
+		{"workload with a job", audit.PrincipalKindWorkload, "job-7", false},
+		{"unknown kind", "agent", "", true},
+		{"job ID at the limit", "", strings.Repeat("j", audit.MaxJobIDLen), false},
+		{"job ID over the limit", "", strings.Repeat("j", audit.MaxJobIDLen+1), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := testEntry()
+			e.PrincipalKind = tc.kind
+			e.JobID = tc.jobID
+
+			err := e.Validate()
+			if tc.invalid != errors.Is(err, audit.ErrInvalidEntry) {
+				t.Fatalf("validate error = %v, want invalid = %t", err, tc.invalid)
 			}
 		})
 	}

@@ -134,6 +134,9 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 }
 
@@ -250,6 +253,9 @@ func admin() identity.Principal {
 		Admin:                  true,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 }
 
@@ -321,6 +327,7 @@ func TestContainment(t *testing.T) {
 		{identity.NamespaceObject("acme"), identity.ActionNamespaceRead, true},
 		{other, read, false},
 		{web, identity.ActionUnitWrite, false},
+		{web, identity.ActionUnitReadSecrets, false},
 	})
 	assertChecks(t, f.authz, coll, []check{
 		{web, read, true},
@@ -345,7 +352,10 @@ func TestGroupGrants(t *testing.T) {
 
 	f.grant(t, ops, access.RoleWriter, identity.NamespaceObject("acme"))
 
-	assertChecks(t, f.authz, member, []check{{web, identity.ActionUnitWrite, true}})
+	assertChecks(t, f.authz, member, []check{
+		{web, identity.ActionUnitWrite, true},
+		{web, identity.ActionUnitReadSecrets, true},
+	})
 	assertChecks(t, f.authz, outsider, []check{{web, identity.ActionUnitRead, false}})
 
 	err := f.store.RemoveMember(
@@ -373,6 +383,9 @@ func TestUnknownAndDeletedPrincipals(t *testing.T) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	web := unitObject(t, "acme", "web/prod")
 
@@ -412,6 +425,9 @@ func TestUnclassifiedActionIsDenied(t *testing.T) {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	assertChecks(t, f.authz, admin, []check{{identity.ServerObject(), identity.Action("server:future"), true}})
 }
@@ -731,6 +747,9 @@ func TestGrantChecksSubjectAndNamespace(t *testing.T) {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	f.person(t, "target")
 
@@ -937,6 +956,9 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	ns := namespace.Namespace{
@@ -1030,6 +1052,9 @@ func TestRevokeChecksTheObject(t *testing.T) {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	f.person(t, "target")
 
@@ -1143,9 +1168,11 @@ func testEntry() audit.Entry {
 		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
-		ObjectID:     "",
-		FenceVersion: 0,
-		Reason:       "",
+		ObjectID:      "",
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

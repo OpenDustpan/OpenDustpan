@@ -90,7 +90,9 @@ func contextPurge(t *testing.T, s *postgres.Store, u graph.Unit) {
 		ValueCount: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil,
 		ObjectID: "", FenceVersion: 0,
-		Reason: "",
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 	d := inventory.Deletion{Entry: e, PurgeAfter: e.At}
 	ref := workspace.Ref{Namespace: n.Name, Name: name}
@@ -132,7 +134,9 @@ func contextHarness(s *postgres.Store) objectcontexttest.Harness {
 				SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 				Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 				Changes: nil, ObjectID: "", FenceVersion: 0,
-				Reason: "",
+				Reason:        "",
+				PrincipalKind: "",
+				JobID:         "",
 			}
 
 			if err := s.CreateCollection(t.Context(), c, n.Fence(), e); err != nil {
@@ -225,7 +229,9 @@ func TestObjectContextOwnerRows(t *testing.T) {
 			ValueCount: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 			Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil,
 			ObjectID: "", FenceVersion: 0,
-			Reason: "",
+			Reason:        "",
+			PrincipalKind: "",
+			JobID:         "",
 		}
 
 		got, err := s.SetAPI(t.Context(), ref, p, "user:ada", fence, e)

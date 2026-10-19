@@ -373,6 +373,9 @@ func TestCheckAgent(t *testing.T) {
 			a := job.Actor{Principal: identity.Principal{
 				Subject: "al", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+				Kind:       "",
+				Credential: "",
+				JobID:      "",
 			}, Agent: tt.agent, Mode: tt.mode, ConfirmAuth: job.ConfirmAuthMFA, AuthAt: time.Time{}}
 
 			confirm, err := job.CheckAgent(&tt.spec, a, tt.sw)
@@ -460,6 +463,9 @@ func TestCheckAgentFreshAuth(t *testing.T) {
 			a := job.Actor{Principal: identity.Principal{
 				Subject: "al", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+				Kind:       "",
+				Credential: "",
+				JobID:      "",
 			}, Agent: "dusty", Mode: tt.mode, ConfirmAuth: tt.auth, AuthAt: time.Time{}}
 
 			confirm, err := job.CheckAgent(&spec, a, all)

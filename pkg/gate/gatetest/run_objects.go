@@ -263,13 +263,13 @@ func caseInstallationFence(t *testing.T, e *env, k kindOps) {
 
 	_, err = k.putWith(
 		e,
-		write{scope: e.fx.installation, id: "b", salt: "one", prev: 0, fence: e.acme, entry: serverEntry()},
+		&write{scope: e.fx.installation, id: "b", salt: "one", prev: 0, fence: e.acme, entry: serverEntry()},
 	)
 	wantErr(t, "Put(installation, fence of acme)", err, gate.ErrInvalid)
 
 	_, err = k.putWith(
 		e,
-		write{scope: e.fx.installation, id: "c", salt: "one", prev: 0, fence: zeroFence(), entry: entry("acme")},
+		&write{scope: e.fx.installation, id: "c", salt: "one", prev: 0, fence: zeroFence(), entry: entry("acme")},
 	)
 	wantErr(t, "Put(installation, entry of acme)", err, audit.ErrInvalidEntry)
 }
@@ -285,7 +285,7 @@ func caseStaleFence(t *testing.T, e *env, k kindOps) {
 	_, err = e.h.Domain.BumpFence(t.Context(), e.acme)
 	mustNil(t, "BumpFence()", err)
 
-	_, err = k.putWith(e, write{scope: e.fx.prod, id: "b", salt: "one", prev: 0, fence: stale, entry: entry("acme")})
+	_, err = k.putWith(e, &write{scope: e.fx.prod, id: "b", salt: "one", prev: 0, fence: stale, entry: entry("acme")})
 	wantErr(t, "Put(stale fence)", err, namespace.ErrFenced)
 
 	err = k.del(e, ref(e.fx.prod, v), stale, entry("acme"))
@@ -313,7 +313,7 @@ func caseOtherFence(t *testing.T, e *env, k kindOps) {
 	for _, c := range cases {
 		_, err := k.putWith(
 			e,
-			write{scope: c.scope, id: "a", salt: "one", prev: 0, fence: c.fence, entry: entry(c.scope.Namespace())},
+			&write{scope: c.scope, id: "a", salt: "one", prev: 0, fence: c.fence, entry: entry(c.scope.Namespace())},
 		)
 		wantErr(t, fmt.Sprintf("Put(%s, fence %+v)", c.scope, c.fence), err, gate.ErrInvalid)
 	}
@@ -331,7 +331,10 @@ func caseOtherEntry(t *testing.T, e *env, k kindOps) {
 
 	entries := []audit.Entry{entry("globex"), invalid, serverEntry()}
 	for i := range entries {
-		_, err := k.putWith(e, write{scope: e.fx.acme, id: "a", salt: "one", prev: 0, fence: e.acme, entry: entries[i]})
+		_, err := k.putWith(
+			e,
+			&write{scope: e.fx.acme, id: "a", salt: "one", prev: 0, fence: e.acme, entry: entries[i]},
+		)
 		wantErr(t, "Put(entry of "+entries[i].Namespace.String()+")", err, audit.ErrInvalidEntry)
 	}
 
@@ -372,7 +375,7 @@ func caseNoRoutes(t *testing.T, e *env, k kindOps) {
 	t.Helper()
 
 	for _, scope := range []gate.Scope{e.fx.blueprintWeb, e.fx.profileBase} {
-		_, err := k.putWith(e, write{scope: scope, id: "a", salt: "one", prev: 0, fence: e.acme, entry: entry("acme")})
+		_, err := k.putWith(e, &write{scope: scope, id: "a", salt: "one", prev: 0, fence: e.acme, entry: entry("acme")})
 		wantErr(t, "Put("+scope.Key()+")", err, gate.ErrInvalid)
 
 		err = k.del(e, ref(scope, 1), e.acme, entry("acme"))

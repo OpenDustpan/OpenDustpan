@@ -95,7 +95,9 @@ func entry(action string) audit.Entry {
 		SourceIP: "192.0.2.1", UserAgent: "suite", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "req-suite", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0,
-		Reason: "",
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

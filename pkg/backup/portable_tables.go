@@ -455,6 +455,8 @@ func portableSpec() []PortableTable {
 				{Name: "changes", Kind: KindText},
 				{Name: "object_id", Kind: KindText},
 				{Name: "fence_version", Kind: KindInteger},
+				{Name: "principal_kind", Kind: KindText},
+				{Name: "job_id", Kind: KindText},
 				{Name: portColReason, Kind: KindText},
 			},
 		},

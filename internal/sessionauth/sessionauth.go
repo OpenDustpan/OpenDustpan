@@ -115,6 +115,9 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 		TemporaryExpiresAt:     time.Time{},
 		Subject:                m.Owner.Subject, DisplayName: m.Owner.DisplayName, Admin: false, TokenID: "",
 		TokenExpiresAt: time.Time{},
+		Kind:           identity.KindPerson,
+		Credential:     identity.CredentialSession,
+		JobID:          "",
 	}
 
 	return p, Caller{Match: m, Secret: secret}, nil

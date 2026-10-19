@@ -185,8 +185,10 @@ func membershipEntry(at time.Time, ns namespace.Name, action string) audit.Entry
 		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 		Changes: nil, ObjectID: "",
-		FenceVersion: 0,
-		Reason:       "",
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

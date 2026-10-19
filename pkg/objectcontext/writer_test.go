@@ -60,7 +60,9 @@ func auditBy(subject string) audit.Entry {
 		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: "",
 		Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
-		Reason: "",
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

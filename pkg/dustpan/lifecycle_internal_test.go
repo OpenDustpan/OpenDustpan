@@ -157,6 +157,9 @@ func TestDeletedReadScope(t *testing.T) {
 				Admin:          false,
 				TokenID:        "",
 				TokenExpiresAt: time.Time{},
+				Kind:           "",
+				Credential:     "",
+				JobID:          "",
 			}
 
 			all, ids, err := scope.ReadableUnits(t.Context(), p, tc.ns)
@@ -186,6 +189,9 @@ func TestDeletedReadScopeFailsClosed(t *testing.T) {
 			Admin:          admin,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}
 
 		all, ids, err := scope.ReadableUnits(t.Context(), p, "acme")

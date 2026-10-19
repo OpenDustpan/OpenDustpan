@@ -250,7 +250,7 @@ type kindOps interface {
 	// put stores a sample object and returns its version.
 	put(e *env, scope gate.Scope, id gate.ID, salt string, prev int64) (int64, error)
 	// putWith is put with an explicit fence and entry.
-	putWith(e *env, w write) (int64, error)
+	putWith(e *env, w *write) (int64, error)
 	get(e *env, scope gate.Scope, id gate.ID) (gate.ObjectRef, error)
 	list(e *env, scope gate.Scope) ([]gate.ObjectRef, error)
 	del(e *env, ref gate.ObjectRef, fence namespace.Fence, en audit.Entry) error
@@ -268,7 +268,7 @@ func (o ops[T]) kind() Kind { return o.k }
 func (o ops[T]) limit() int { return limitOf[T]() }
 
 func (o ops[T]) put(e *env, scope gate.Scope, id gate.ID, salt string, prev int64) (int64, error) {
-	return o.putWith(e, write{
+	return o.putWith(e, &write{
 		scope: scope, id: id, salt: salt, prev: prev, fence: e.fence(scope), entry: e.entry(scope),
 	})
 }
@@ -283,7 +283,7 @@ type write struct {
 	entry audit.Entry
 }
 
-func (o ops[T]) putWith(e *env, w write) (int64, error) {
+func (o ops[T]) putWith(e *env, w *write) (int64, error) {
 	v, err := o.objs.Put(e.t.Context(), sample[T](e.t, w.scope, w.id, w.salt), w.prev, w.fence, w.entry)
 	if err != nil {
 		return 0, fmt.Errorf("put: %w", err)

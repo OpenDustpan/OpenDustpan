@@ -31,6 +31,9 @@ func (adminAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 
