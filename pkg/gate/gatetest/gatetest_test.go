@@ -170,3 +170,29 @@ func TestObjectCasesUseRoutedScopes(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryStoreCaseRuns checks that RunStore holds a runner for each case of
+// StoreCases, and no runner for a name that is no case.
+func TestEveryStoreCaseRuns(t *testing.T) {
+	t.Parallel()
+
+	runnable := gatetest.RunnableCases()
+	cases := gatetest.StoreCases()
+
+	known := make([]string, len(cases))
+	for i := range cases {
+		known[i] = cases[i].Name
+	}
+
+	for _, name := range known {
+		if !slices.Contains(runnable, name) {
+			t.Errorf("the case %q has no runner in RunStore", name)
+		}
+	}
+
+	for _, name := range runnable {
+		if !slices.Contains(known, name) {
+			t.Errorf("RunStore runs %q, which is no case of StoreCases", name)
+		}
+	}
+}

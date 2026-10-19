@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -249,6 +250,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupAccess(t, s)
 	seedBackupPurge(t, s, acme)
 	seedBackupSignIn(t, s)
+	seedBackupGate(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -267,6 +269,136 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		pending:    pending,
 		backedUp:   backedUp,
 		audit:      entries,
+	}
+}
+
+// seedBackupGate writes one gate that reads a path set, so the store holds a
+// reference row, one decision record of the installation and one decision
+// record of the namespace acme, when s keeps the policy model. A store with no
+// gate port skips it: the fake of this package's own tests is one.
+func seedBackupGate(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	gs, ok := s.(gate.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+	scope := gate.NamespaceScope(acme.Name)
+	e := gateEntry(acme.Name, "namespace:manage-gates")
+
+	set := gate.PathSet{Scope: scope, ID: "network", Version: 0, Globs: []string{"modules/net/**"}}
+	if _, err := gs.PathSets().Put(ctx, set, 0, acme.Fence(), e); err != nil {
+		t.Fatalf("put path set: %v", err)
+	}
+
+	g := gate.Gate{
+		Scope: scope, ID: "cost-cap", Version: 0, DecisionPoint: gate.PointChangePlanned, Condition: "", Unless: "",
+		Outcome: gate.OutcomeDeny, Message: "no", Mode: gate.ModeEnforce, OnError: gate.OnErrorFail, Final: false,
+		CheckedWith: gate.CheckedWith{Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0}},
+		State:       "", Reads: []gate.ID{"network"},
+	}
+	if _, err := gs.Gates().Put(ctx, g, 0, acme.Fence(), e); err != nil {
+		t.Fatalf("put gate: %v", err)
+	}
+
+	for _, ns := range []namespace.Name{audit.ServerScope, acme.Name} {
+		fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+		if ns == acme.Name {
+			fence = acme.Fence()
+		}
+
+		// A refusal record needs the window key that NoteRefusal sets.
+		if _, err := gs.Records().NoteRefusal(ctx, seedGateRecord(ns), gate.AccessRefusalWindow, fence); err != nil {
+			t.Fatalf("note gate refusal of %q: %v", ns, err)
+		}
+	}
+}
+
+// seedGateRecord returns a refusal record of an access limit in ns.
+func seedGateRecord(ns namespace.Name) gate.Record {
+	return gate.Record{
+		ID: gate.NewRecordID(), Point: "", Change: gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}, Namespace: ns,
+		At: now(), Subject: "agent-1", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0},
+		PathSets: nil, Units: nil, Requirements: nil, Warnings: nil, AutoApply: false, Controls: nil, BreakGlass: "",
+		Result: gate.ResultDeny, Action: "state.read", Count: 1, LastAt: now(),
+	}
+}
+
+// requireSeededGate checks that s holds what seedBackupGate wrote: the gate
+// and the path set that it reads, and the two records. It also checks that
+// the row counts of the summary hold the reference row. A store with no gate
+// port skips it.
+func requireSeededGate(t *testing.T, s BackupStore, sum backup.Summary) {
+	t.Helper()
+
+	gs, ok := s.(gate.Store)
+	if !ok {
+		return
+	}
+
+	for _, table := range []string{"gate_objects", "gate_references"} {
+		if sum.RowCounts[table] < 1 {
+			t.Fatalf("summary rows of %s = %d, want at least 1", table, sum.RowCounts[table])
+		}
+	}
+
+	if sum.RowCounts["gate_records"] != 2 {
+		t.Fatalf("summary rows of gate_records = %d, want 2", sum.RowCounts["gate_records"])
+	}
+
+	ctx := t.Context()
+	scope := gate.NamespaceScope("acme")
+
+	if _, err := gs.Gates().Get(ctx, scope, "cost-cap"); err != nil {
+		t.Fatalf("get the restored gate: %v", err)
+	}
+
+	if _, err := gs.PathSets().Get(ctx, scope, "network"); err != nil {
+		t.Fatalf("get the restored path set: %v", err)
+	}
+
+	change := gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}
+
+	for _, ns := range []namespace.Name{audit.ServerScope, "acme"} {
+		records, err := gs.Records().ListByChange(ctx, ns, change)
+		if err != nil {
+			t.Fatalf("list the restored records of %q: %v", ns, err)
+		}
+
+		if len(records) != 1 || records[0].Action != "state.read" {
+			t.Fatalf("restored records of %q = %+v, want one record with the action state.read", ns, records)
+		}
+
+		requireRefusalFolded(t, s, gs, ns, records[0].ID)
+	}
+}
+
+// requireRefusalFolded checks that the restored refusal key of ns still folds a
+// second refusal into the record id.
+func requireRefusalFolded(t *testing.T, s BackupStore, gs gate.Store, ns namespace.Name, id gate.RecordID) {
+	t.Helper()
+
+	ctx := t.Context()
+	change := gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}
+
+	again, err := gs.Records().NoteRefusal(ctx, seedGateRecord(ns), gate.AccessRefusalWindow, fenceOf(t, s, ns))
+	if err != nil {
+		t.Fatalf("note a second refusal in %q: %v", ns, err)
+	}
+
+	if again != id {
+		t.Fatalf("second refusal in %q returned the record %s, want %s", ns, again, id)
+	}
+
+	folded, err := gs.Records().ListByChange(ctx, ns, change)
+	if err != nil {
+		t.Fatalf("list the folded records of %q: %v", ns, err)
+	}
+
+	if len(folded) != 1 || folded[0].Count != 2 {
+		t.Fatalf("records of %q after a second refusal = %+v, want one record with count 2", ns, folded)
 	}
 }
 
@@ -1310,4 +1442,21 @@ func checkReopenedBackups(
 	if gotFinished := mustGetBackup(t, reopened, finished.ID); gotFinished != finished {
 		t.Fatalf("finished backup after reopen = %+v, want %+v", gotFinished, finished)
 	}
+}
+
+// fenceOf returns the fence of the namespace ns in s, or the zero fence for the
+// installation scope.
+func fenceOf(t *testing.T, s BackupStore, ns namespace.Name) namespace.Fence {
+	t.Helper()
+
+	if ns == audit.ServerScope {
+		return namespace.Fence{Namespace: "", FailoverVersion: 0}
+	}
+
+	n, err := s.GetNamespace(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("get namespace %q: %v", ns, err)
+	}
+
+	return n.Fence()
 }

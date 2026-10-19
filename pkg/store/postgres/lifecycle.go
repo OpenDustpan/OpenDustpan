@@ -57,7 +57,7 @@ func (s *Store) RestoreStack(
 			e.Object,
 		)
 
-		return restoreStackRow(ctx, q, ref, id, e)
+		return restoreStackRow(ctx, q, ref, deletedStack{id: id, name: stack.Name(row.DeletedName.String)}, &e)
 	})
 	if err != nil {
 		return stack.Ref{}, err
@@ -66,10 +66,26 @@ func (s *Store) RestoreStack(
 	return ref, nil
 }
 
+// deletedStack names the deleted stack that a restore brings back: its ID and
+// its name before the delete.
+type deletedStack struct {
+	id   stack.ID
+	name stack.Name
+}
+
+// deletedWorkspace names the deleted workspace that a restore brings back: its
+// ID and its name before the delete.
+type deletedWorkspace struct {
+	id   workspace.ID
+	name workspace.Name
+}
+
 // restoreStackRow renames the deleted stack id to ref and moves its
 // inventory entry back. It returns ErrAlreadyExists if a live stack holds the
 // name of ref.
-func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack.ID, e audit.Entry) error {
+func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, deleted deletedStack, e *audit.Entry) error {
+	id := deleted.id
+
 	_, liveErr := q.GetStackID(ctx, db.GetStackIDParams{
 		Namespace: ref.Namespace.String(), Project: ref.Project.String(), Name: ref.Stack.String(),
 	})
@@ -80,6 +96,19 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack
 	case !errors.Is(liveErr, pgx.ErrNoRows):
 		return fmt.Errorf("select stack: %w", liveErr)
 	}
+
+	from := unitGate{
+		ns:   ref.Namespace,
+		tool: inventoryTool,
+		name: stackUnitName(stack.Ref{Namespace: ref.Namespace, Project: ref.Project, Stack: deleted.name}),
+	}
+
+	moved, err := restoreUnitGate(ctx, q, from, stackUnitName(ref), audit.MaxChanges-len(e.Changes))
+	if err != nil {
+		return err
+	}
+
+	e.Changes = append(e.Changes, moved...)
 
 	n, err := q.RestoreStack(ctx, db.RestoreStackParams{
 		Name: ref.Stack.String(), UpdatedAtMs: e.At.UnixMilli(), Namespace: ref.Namespace.String(), ID: id.String(),
@@ -222,7 +251,7 @@ func (s *Store) RestoreWorkspace(
 		e.ObjectID = id.String()
 		e.Object = restoredReference(inventoryToolOpenTofu, fence.Namespace, name.String(), e.Object)
 
-		return restoreWorkspaceRow(ctx, q, ref, id, e)
+		return restoreWorkspaceRow(ctx, q, ref, deletedWorkspace{id: id, name: workspace.Name(deletedName.String)}, &e)
 	})
 	if err != nil {
 		return workspace.Ref{}, err
@@ -235,8 +264,10 @@ func (s *Store) RestoreWorkspace(
 // inventory entry back. It returns ErrAlreadyExists if a live workspace holds
 // the name of ref.
 func restoreWorkspaceRow(
-	ctx context.Context, q *db.Queries, ref workspace.Ref, id workspace.ID, e audit.Entry,
+	ctx context.Context, q *db.Queries, ref workspace.Ref, deleted deletedWorkspace, e *audit.Entry,
 ) error {
+	id := deleted.id
+
 	_, liveErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{Namespace: ref.Namespace.String(), Name: ref.Name.String()})
 
 	switch {
@@ -245,6 +276,15 @@ func restoreWorkspaceRow(
 	case !errors.Is(liveErr, pgx.ErrNoRows):
 		return fmt.Errorf("select workspace: %w", liveErr)
 	}
+
+	from := unitGate{ns: ref.Namespace, tool: inventoryToolOpenTofu, name: deleted.name.String()}
+
+	moved, err := restoreUnitGate(ctx, q, from, ref.Name.String(), audit.MaxChanges-len(e.Changes))
+	if err != nil {
+		return err
+	}
+
+	e.Changes = append(e.Changes, moved...)
 
 	n, err := q.RestoreWorkspace(ctx, db.RestoreWorkspaceParams{
 		Name: ref.Name.String(), UpdatedAtMs: e.At.UnixMilli(), Namespace: ref.Namespace.String(), ID: id.String(),
@@ -429,6 +469,15 @@ func (s *Store) purgeUnit(
 		if err := rows(q); err != nil {
 			return err
 		}
+
+		removed, gateErr := purgeUnitGate(
+			ctx, q, unitGate{ns: fence.Namespace, tool: u.tool, name: deleted.Name}, audit.MaxChanges-len(e.Changes),
+		)
+		if gateErr != nil {
+			return gateErr
+		}
+
+		e.Changes = append(e.Changes, removed...)
 
 		if err := q.DeleteCollectionMembersOfUnit(ctx, u.id); err != nil {
 			return fmt.Errorf("delete collection membership: %w", err)

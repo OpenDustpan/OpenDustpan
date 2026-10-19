@@ -191,7 +191,7 @@ type Records interface {
 	// r.Namespace, and the fence errors of Objects.
 	Put(ctx context.Context, r Record, fence namespace.Fence) error
 	// NoteRefusal stores the refusal r of an access limit. When a record
-	// of the same subject, action and limit has a LastAt within window
+	// of the same r.Subject, r.Action and limit has a LastAt within window
 	// before r.At, it adds 1 to its Count, sets its LastAt to r.At and
 	// returns its ID. Else it stores r with Count 1 and returns r.ID. The
 	// fence rules of Put hold. The service gives AccessRefusalWindow.

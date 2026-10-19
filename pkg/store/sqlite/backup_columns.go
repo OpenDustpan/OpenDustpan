@@ -39,6 +39,8 @@ const (
 	backupColTool        = "tool"
 	backupColObjectKind  = "object_kind"
 	backupColObjectID    = "object_id"
+	backupColAtMs        = "at_ms"
+	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
 )
@@ -250,6 +252,32 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "gate_objects",
+			columns: []string{
+				backupColNamespaceID,
+				backupColScopeKey,
+				backupColKind,
+				"id",
+				"level",
+				backupColTool,
+				"unit_name",
+				backupColVersion,
+				"body",
+				backupColUpdatedAtMs,
+			},
+		},
+		{
+			table:   "gate_references",
+			columns: []string{"ref_kind", "ref_id", backupColNamespaceID, backupColScopeKey, "owner_kind", "owner_id"},
+		},
+		{
+			table: "gate_records",
+			columns: []string{
+				"id", backupColNamespaceID, "point", "change_kind", "change_id", backupColAtMs, "last_at_ms", "count",
+				"refusal_key", "body",
+			},
+		},
+		{
 			table: "inventory_deleted",
 			columns: []string{
 				backupColNamespace,
@@ -267,7 +295,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table: "inventory_changes",
 			columns: []string{
-				backupColNamespaceID, "seq", "at_ms", backupColTool, backupColUnitID, backupColName,
+				backupColNamespaceID, "seq", backupColAtMs, backupColTool, backupColUnitID, backupColName,
 				backupColDisplayName,
 				backupColStatus, "collection", backupColKind, "resource_count",
 			},
@@ -339,7 +367,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"object",
 				backupColVersion,
 				"value_path",
-				"at_ms",
+				backupColAtMs,
 				"source_ip",
 				"user_agent",
 				"channel",
