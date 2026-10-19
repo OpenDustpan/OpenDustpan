@@ -186,7 +186,7 @@ example, the `approval` value `rejected` of ServiceNow maps to `refused`.
 The spikes give each mapping table.
 
 The check name of the ticket also goes into `externalChecks`: `passed`
-for `approved` when `inWindow` is `true` (`approved && inWindow`), `failed` for `refused`, `canceled` or `closed`, `pending`
+for `approved` when `inWindow` is `true` (`approved && inWindow`), `failed` for `refused`, `canceled` or `closed`, and for `approved` when the window has ended or the ticket has no window, `pending`
 for `open`, and for `approved` when the window has not started, and `timedOut` after the timeout. So a gate that reads only
 `externalChecks` also works.
 
@@ -226,11 +226,12 @@ change, as a rejection does. The job state value stays `awaiting-approval`
 (ADR 225 decision 8). The shortest timeout of the requirements and of the
 ticket holds.
 
-Option A amends ADR 226 decision 10 twice:
+Option A amends ADR 226 decision 10 three times:
 
 1. The timeout range of a ticket check is 1 hour to 30 days, not 1 hour.
 2. The answer of a ticket check comes from a read of the server through the
    API of the change system, not from a signed callback (Q3).
+3. The request of a ticket check is `Open` through the API of the change system, not a request signed as ADR 114 decision 8 gives.
 
 The check `passed` needs `approved && inWindow`.
 
@@ -240,7 +241,7 @@ The check `passed` needs `approved && inWindow`.
 
 | Moment in OpenDustpan | Effect on the change ticket |
 | --- | --- |
-| `change.planned` runs for a change that a ticket rule selects (Q5) | Open the ticket, with the plan summary, the units, the decision record ID and the console link. |
+| `change.planned` runs for a change that a ticket rule selects (Q5) | Open the ticket, with the plan counts, the units, the decision record ID and the console link. |
 | The change waits for people in OpenDustpan | Add a note that names each open requirement. |
 | OpenDustpan has each signature that the change needs | Add a note. |
 | A gate denies, an approver rejects, or the change expires, or a person cancels it | Cancel the ticket, with the reason and the record ID. |
@@ -259,21 +260,18 @@ addition to the `job.*` types of `notify.Types`:
   system refuses the credential or each try of a write fails.
 
 A ticket connection reads the outbox with its own cursor (ADR 145
-decision 9). It is not a sink. A ticket connection records its creator. Before each
-open and each write, the server applies the two checks of ADR 145
-decision 15 to that creator and to the ticket rule. When a check fails,
-the server suspends the connection and sends `change-ticket.sync-failed`.
+decision 9). It is not a sink. Before each open and each write, the server checks that the creator of the connection still holds `namespace:manage-ticket-connections` and `namespace:read` on the scope, and the read action of each unit of the change, with its unit and collection grants. A ticket rule records its creator, and the server applies the same checks to that creator. When a check fails, the server suspends the connection and sends `change-ticket.sync-failed`. A suspended connection opens and writes nothing, and gives `changeTicket.available == false`.
 A sink can lose a notification after a
 day of failures (ADR 145 decision 19). A ticket must not lose its close.
 
 When the cursor resumes after a stop, a reconcile pass writes each open
 ticket from the current state of its change. Then the cursor reads the
 notifications that follow. A note to a ticket that is already closed
-answers `ErrConflict`. The adapter counts that as success.
+answers `ErrConflict`. The cursor counts that as success.
 
 The fields that leave the installation are: the change ID, the unit
 references, the plan counts, the operation, the cost delta, the decision
-record ID, the console link and the planned window. Each is optional in
+record ID, the console link, the planned window, the state version ID of each unit, the reason of a cancel, and the names of the open requirements. Each is optional in
 the field map. The default sends the change ID, the unit references, the
 counts and the console link. The approver names and email addresses that
 a change system reports stay in the decision record for the life of the
@@ -304,9 +302,7 @@ Three limits keep a callback harmless:
   seconds.
 - The route answers 204 to each request, also for an unknown connection
   and for a bad signature. The answer gives no information.
-- The route is `POST /api/v1/namespaces/{namespace}/ticket-callbacks/{connection ID}`
-  for a connection of a namespace. A connection of the installation uses
-  `POST /api/v1/ticket-callbacks/{connection ID}`.
+- The route is `POST /ticket-callbacks/{connection ID}`. A connection ID is unique in the installation. As ADR 210 decision 2 gives for a path that an external system stores, the route is outside `/api/dustpan/v1` and has no API version. This adds a row to the table of ADR 210 decision 2.
 
 Benchmark: Stripe does not promise the order of its webhook events, and
 tells a receiver that it can get the object through the API.
@@ -373,16 +369,18 @@ values to the fields of the system.
 ## Q5. Configuration
 
 A **ticket connection** is an object of a scope, with the scope in the
-route path as ADR 230 decision 3 gives:
+route path as ADR 230 decision 3 gives. A ticket connection lives on the installation or a namespace only.
 
 - `GET`, `PUT`, `DELETE {scope}/ticket-connections/{id}`, with `system`
   (`jsm` or `servicenow`), the base URL, the auth kind, the field map and
-  the secret refs.
+  the secret refs. A `DELETE` removes each secret of the connection, so a new connection with the same ID has no secret.
 - `PUT {scope}/ticket-connections/{id}/secrets/{ref}`, which takes a
   value and never answers it.
 - `POST {scope}/ticket-connections/{id}/test`, which runs `Read` on a
   ticket key that the person gives, or the dry run of Jira Service
   Management.
+
+A change order takes an optional `plannedWindow` (`start`, `end`, Unix milliseconds) through its REST API.
 
 A **ticket rule** says which changes open a ticket: a ticket connection, a
 Cedar `when` over the facts of `change.planned`, and a timeout. It has a
@@ -396,7 +394,7 @@ New actions: `namespace:manage-ticket-connections` and
 `namespace:read-ticket-connections`, and the same at the installation.
 A change of a ticket connection or a rule writes an audit entry of the
 kind `change` and needs a fresh authentication (ADR 227). The callback
-route `POST .../ticket-callbacks/{connection ID}` needs no sign-in, so it
+route `POST /ticket-callbacks/{connection ID}` needs no sign-in, so it
 goes on the explicit public list of the route test.
 
 ## Q6. A new plan, and the record
@@ -469,29 +467,24 @@ Inbound callbacks:
 ## Q8. Idempotency and retries
 
 - **The ticket key.** Each ticket has a key:
-  `<installation ID>/<change ID>/<plan digest>`. ServiceNow stores it in
+  `<installation ID>/<change ID>/<plan revision number>`. ServiceNow stores it in
   `correlation_id`. Jira Service Management stores it in a field that the
   create call sets (a text custom field of the field map, or a label). The
   spike checks that JQL finds it right after the create. Before each
-  create, the adapter searches for the key. A found ticket is the answer
-  of `Open`.
-- **Key length.** The digest is 64 hexadecimal characters, so the full key
-  leaves 34 characters for two IDs, and two UUIDs do not fit in 100
-  characters. The product manager proposes the first 16 characters of the
-  digest. The key then has at most 100 characters when the two IDs have 82
-  characters together. The spike checks the field limit of each system.
+  create, the adapter searches for the key. The search matches only tickets that the account of the ticket connection created (ServiceNow `opened_by`, Jira reporter), of the configured change type or request type (ServiceNow `type`, Jira `serviceDeskId` and `requestTypeId`). A found ticket is the answer
+  of `Open`. The server records the ref that Open returns, and each later Read uses that ref only. A ticket found later never replaces it.
+- **Key length.** Two UUIDs, two slashes and a revision number of at most 6 digits fit in 100 characters. The ticket text also holds the full plan digest as evidence. When Open finds a ticket whose digest is not the digest of the revision, Open returns ErrConflict and the server sends `change-ticket.sync-failed`. Open never answers with that ticket.
 - **One writer.** Each open and each write is a durable operation with
   one owner and a lease (`pkg/durable`), so two instances never create
   two tickets at the same time. The call timeout of the adapter is shorter
   than the lease. The owner records "create started" in the fenced
   operation before the call.
 - **A lost answer.** When a create succeeded and the server did not get its answer,
-  the next try finds the ticket through the search. A search index can
+  the next try finds the ticket through the search. After a create that followed 'create started' with no ticket found, the next Read searches the key again and applies the duplicate rule. A search index can
   lag (spike). When the adapter finds two tickets with one key, it keeps
   the oldest and cancels the others with a note. ServiceNow has no unique
-  `correlation_id`. When a duplicate is already approved, or is the ticket
-  that the decision record cites, the adapter does not cancel it. It
-  keeps that ticket, cancels the others, and sends
+  `correlation_id`. The adapter never cancels the recorded ticket, and never adopts an approved duplicate in its place. It
+  keeps the recorded ticket, cancels the others, and sends
   `change-ticket.sync-failed` so that a person decides.
 - **Retries.** The schedule of ADR 145 decision 18: 30 seconds, then
   double, up to 1 hour, at most 15 tries, and `Retry-After` up to 24
@@ -558,8 +551,10 @@ build, build A first. Both fit the port of Q4.
    signature of a new kind (B, which changes ADR 225 decision 7)?
 2. **Q2.** Can a ticket check wait up to 30 days, as an approval rule
    can, and can its answer come from a server read instead of the
-   signed callback? This amends ADR 226 decision 10 twice: the timeout
-   and the source of the answer.
+   signed callback? This amends ADR 226 decision 10 three times: the timeout,
+   the source of the answer, and the request of the check. The request is
+   `Open` through the API of the change system, not a request signed as
+   ADR 114 decision 8 gives.
 3. **First-party or community.** RFC 51 asks whether these adapters live
    in this repository. The product manager proposes the two adapters in
    this repository, with fakes of each API in the conformance suite. A
