@@ -7,9 +7,15 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// identifier is one name in a path under values: a letter, underscore or
+// dollar sign, then letters, digits, underscores or dollar signs.
+const identifier = `[\p{L}_$][\p{L}\p{Nd}_$]*`
+
 var (
-	valuesRef   = regexp.MustCompile(`\bvalues((?:\.[A-Za-z_][A-Za-z0-9_-]*|\[\s*"[^"]*"\s*\]|\[\s*'[^']*'\s*\])*)`)
-	pathSegment = regexp.MustCompile(`\.([A-Za-z_][A-Za-z0-9_-]*)|\[\s*"([^"]*)"\s*\]|\[\s*'([^']*)'\s*\]`)
+	valuesRef = regexp.MustCompile(
+		`\bvalues((?:\.` + identifier + `|\[\s*"[^"\\]*"\s*\]|\[\s*'[^'\\]*'\s*\])*)`,
+	)
+	pathSegment = regexp.MustCompile(`\.(` + identifier + `)|\[\s*"([^"\\]*)"\s*\]|\[\s*'([^'\\]*)'\s*\]`)
 )
 
 // refsIn returns the paths under values that the expressions in n read. A

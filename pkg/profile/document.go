@@ -127,7 +127,7 @@ func decodeRoot(text []byte) (*yaml.Node, error) {
 	}
 
 	var extra yaml.Node
-	if err := dec.Decode(&extra); err == nil {
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: document holds more than one YAML document", ErrInvalid)
 	}
 

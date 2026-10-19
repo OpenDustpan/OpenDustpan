@@ -23,6 +23,10 @@ func checkKeys(n *yaml.Node) error {
 			return fmt.Errorf("%w: line %d: merge keys (<<) are not allowed", ErrInvalid, k.Line)
 		}
 
+		if k.Tag == "!!binary" {
+			return fmt.Errorf("%w: line %d: binary keys are not allowed", ErrInvalid, k.Line)
+		}
+
 		if keys[k.Value] {
 			return fmt.Errorf("%w: line %d: key %q is twice in one map", ErrInvalid, k.Line, k.Value)
 		}

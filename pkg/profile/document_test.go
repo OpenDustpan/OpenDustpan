@@ -29,6 +29,17 @@ func TestParseDocument(t *testing.T) {
 		{"unknown top-level key", "schemaVersion: 1\nfoo: 1\n", profile.ErrInvalid},
 		{"duplicate key", "schemaVersion: 1\nvalues:\n  a: 1\n  a: 2\n", profile.ErrInvalid},
 		{"alias", "schemaVersion: 1\nvalues:\n  a: &x 1\n  b: *x\n", profile.ErrInvalid},
+		{
+			"error in a later document",
+			"schemaVersion: 1\nvalues:\n  a: 1\n---\nvalues:\n  b:\n    $secret: hunter2\n  c: [unterminated\n",
+			profile.ErrInvalid,
+		},
+		{"document end marker", "schemaVersion: 1\nvalues:\n  a: 1\n...\n", nil},
+		{
+			"binary key",
+			"schemaVersion: 1\nvalues:\n  a:\n    $value:\n      !!binary JHNlY3JldA==: x\n",
+			profile.ErrInvalid,
+		},
 		{"two documents", "schemaVersion: 1\n---\nschemaVersion: 1\n", profile.ErrInvalid},
 		{
 			"entry with two forms",
@@ -361,6 +372,43 @@ func TestRoutingChangesSeesHiddenReads(t *testing.T) {
 
 			if len(got) == 0 {
 				t.Error("a change of values.host is not a routing change")
+			}
+		})
+	}
+}
+
+func TestRoutingChangesReadsOfValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		expr   string
+		values string
+		change [2]string
+		want   string
+	}{
+		{
+			"arithmetic index",
+			`${ ["https://good","https://evil"][values.n-0] }`,
+			"n: 0",
+			[2]string{"n: 0", "n: 1"},
+			"values.n",
+		},
+		{"non-ASCII name", `${ values.hosté }`, "hosté: a", [2]string{"hosté: a", "hosté: b"}, "values.hosté"},
+		{"escaped key", `${ values["ho\u0073t"] }`, "host: a", [2]string{"host: a", "host: b"}, "values"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			text := "schemaVersion: 1\nproviders:\n  vault: { use: login/vault, with: { address: '" + tc.expr +
+				"' } }\nvalues:\n  " + tc.values + "\n"
+			after := strings.Replace(text, tc.change[0], tc.change[1], 1)
+			got := profile.RoutingChanges(mustDoc(t, text), mustDoc(t, after))
+
+			if strings.Join(got, ",") != tc.want {
+				t.Errorf("RoutingChanges() = %v, want [%s]", got, tc.want)
 			}
 		})
 	}
