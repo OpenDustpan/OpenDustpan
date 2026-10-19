@@ -157,8 +157,8 @@ allows only the two kinds.
 ## Settings entries
 
 Each server process writes entries about its own settings in the scope
-`@server` (ADR 63 decisions 9 and 10). The subject is the instance ID: a new
-`ins-` ID at each start, which the start log shows on the line `instance`.
+`@server`. The subject is the ID of the server process: a new `ins-` ID at
+each start, which the start log shows on the line `instance`.
 The action is `server:manage-settings`, and the kind is `change`.
 
 - At each start, the server writes one entry with the channel `startup`.
@@ -173,8 +173,8 @@ The action is `server:manage-settings`, and the kind is `change`.
   `next start`: the entry records a change, and the new value applies at
   the next start.
 
-No route of the API reads the scope `@server` yet (ADR 60 decision 7).
-These entries become readable through the API when that route lands.
+No route of the API reads the scope `@server` yet. These entries become
+readable through the API when that route lands.
 
 A sensitive setting (the database URL and each secret) shows only `set` or
 `not set`, never the value. When the server cannot write the start entry,

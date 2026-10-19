@@ -175,7 +175,7 @@ The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 | Data | Where | Protection |
 | --- | --- | --- |
 | Namespaces, stacks, workspaces, locks, history | The SQL database: a SQLite file, or PostgreSQL | None of its own. Protect the database. |
-| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is sealed with the key-encryption key. |
+| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | The server encrypts OpenTofu state with the key-encryption key. |
 | Data keys of Pulumi secret config values | The SQL database | Wrapped with the key-encryption key. The encrypted values stay in your stack configuration. |
 
 The database and the backups hold no copy of the key-encryption key. It
@@ -197,7 +197,7 @@ address of the local server.
    key in a different place from the backups. The default key file sits next
    to the SQLite database, so a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
-   and the blobs to a backup target. A backup holds sealed OpenTofu state, so protect the target.
+   and the blobs to a backup target. A backup holds OpenTofu state that the server encrypted, so protect the target.
 
 The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
 
@@ -411,7 +411,8 @@ flag and environment variable of `opendustpan serve`.
 ## Development
 
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
-golangci-lint, NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
+golangci-lint, the module age check (no module version is younger than 14
+days), NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
 check, the docs lint and the tests with the race detector. goleak fails a test
 package that leaves a goroutine running. The `Makefile` lists the tool
 versions to install. NilAway and govulncheck need no install. Set

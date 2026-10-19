@@ -493,7 +493,7 @@ func writeBackupReport(stdout io.Writer, doc BackupStatusResponse) error {
 
 	warnings := []string{
 		"A backup cannot decrypt secrets without " + KeyEnvVar + ".",
-		"A backup holds sealed OpenTofu state: protect the target.",
+		"A backup holds OpenTofu state that the server encrypted: protect the target.",
 	}
 
 	for _, line := range warnings {

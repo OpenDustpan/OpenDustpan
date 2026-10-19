@@ -37,7 +37,7 @@ var (
 	// ErrOverrideRefused reports an override that the unit or its namespace
 	// does not allow, or that the caller lacks the action for. Its text names
 	// the switch and the action that would allow it (ADR 44, decision 8).
-	ErrOverrideRefused = errors.New("override refused")
+	ErrOverrideRefused = errors.New("write refused")
 	// ErrLockedByOther reports a lock held by someone other than the caller.
 	ErrLockedByOther = errors.New("workspace is locked by someone else")
 	// ErrLockMismatch reports a write that names a lock ID other than the current lock.
