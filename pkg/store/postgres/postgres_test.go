@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -1020,7 +1021,7 @@ type backupStore struct {
 
 // IdempotencyStore implements storetest.IdempotencyHolder.
 func (s *backupStore) IdempotencyStore() idempotency.Store { //nolint:ireturn // The capability returns the port.
-	return s.Idempotency()
+	return s.Idempotency(idempotencytest.TestWrapper(s.t, 1))
 }
 
 var (

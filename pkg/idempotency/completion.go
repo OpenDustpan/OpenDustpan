@@ -13,6 +13,10 @@ import (
 // finds one, it calls Finish with the result of the write before it commits.
 // The documentation of each method says what the result is.
 //
+// A store method that finds a Completion must call Finish. A route that
+// takes the key and whose store never calls Finish gets no stored answer:
+// the middleware logs an error and frees the key after a 2xx answer.
+//
 // A Completion is for one request. Its methods are safe to call from many
 // goroutines.
 type Completion struct {
@@ -50,6 +54,12 @@ func CompletionFrom(ctx context.Context) (*Completion, bool) {
 // transaction of the write. It returns the error of Build or of store. The
 // store function returns ErrLost when the pending record of the request is
 // not in place, and the transaction then rolls back.
+//
+// Finish must be the last step of the transaction. It checks the pending
+// record, so a step after it that fails would roll back a transaction that
+// already told the Completion it stored the answer. A call to Finish also
+// fails with ErrInvalid when the answer is larger than MaxAnswerBytes, and
+// the write then rolls back.
 func (c *Completion) Finish(result any, store func(token string, a Answer) error) error {
 	a, err := c.build(result)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/profile/profiletest"
 )
 
@@ -20,6 +21,10 @@ func TestProfileConformance(t *testing.T) {
 
 		s := open(t, base)
 
-		return profiletest.Store{Profiles: s.Profiles(), Namespaces: s, Audit: s, Records: s.Idempotency()}
+		wrapper := idempotencytest.TestWrapper(t, 1)
+
+		return profiletest.Store{
+			Profiles: s.Profiles(), Namespaces: s, Audit: s, Records: s.Idempotency(wrapper),
+		}
 	})
 }

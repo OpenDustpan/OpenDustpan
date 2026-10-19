@@ -3174,20 +3174,29 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at
 
 -- name: DeleteExpiredIdempotencyRecord :exec
 -- Deletes the record of the name when it is past its period: a record past
--- record_ttl_ms, or a pending record past pending_ttl_ms.
+-- record_ttl_ms, or a pending record past pending_ttl_ms. The time is the
+-- clock of the database. A non-zero now_override_ms replaces it, for tests.
 DELETE FROM idempotency_records
 WHERE principal = sqlc.arg(principal) AND method = sqlc.arg(method) AND path = sqlc.arg(path)
   AND idem_key = sqlc.arg(idem_key)
-  AND (sqlc.arg(now_ms) - created_at_ms > sqlc.arg(record_ttl_ms)
-       OR (status = 0 AND sqlc.arg(now_ms) - created_at_ms > sqlc.arg(pending_ttl_ms)));
+  AND (created_at_ms < (
+         CASE WHEN sqlc.arg(now_override_ms)::bigint <> 0 THEN sqlc.arg(now_override_ms)::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - sqlc.arg(record_ttl_ms)
+       OR (status = 0 AND created_at_ms < (
+         CASE WHEN sqlc.arg(now_override_ms)::bigint <> 0 THEN sqlc.arg(now_override_ms)::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - sqlc.arg(pending_ttl_ms)));
 
 -- name: InsertIdempotencyRecord :execrows
 -- Writes a pending record. It changes no row when a record holds the name.
+-- created_at_ms is the clock of the database. A non-zero now_override_ms
+-- replaces it, for tests.
 INSERT INTO idempotency_records (
     principal, method, path, idem_key, fingerprint, token, status, headers, body, created_at_ms
 ) VALUES (
     sqlc.arg(principal), sqlc.arg(method), sqlc.arg(path), sqlc.arg(idem_key), sqlc.arg(fingerprint),
-    sqlc.arg(token), 0, '', ''::bytea, sqlc.arg(created_at_ms)
+    sqlc.arg(token), 0, '', ''::bytea,
+    CASE WHEN sqlc.arg(now_override_ms)::bigint <> 0 THEN sqlc.arg(now_override_ms)::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END
 )
 ON CONFLICT (principal, method, path, idem_key) DO NOTHING;
 
@@ -3211,13 +3220,30 @@ WHERE principal = sqlc.arg(principal) AND method = sqlc.arg(method) AND path = s
   AND idem_key = sqlc.arg(idem_key) AND token = sqlc.arg(token) AND status = 0;
 
 -- name: SweepIdempotencyRecords :execrows
+-- The time is the clock of the database. A non-zero now_override_ms replaces
+-- it, for tests.
 DELETE FROM idempotency_records
-WHERE sqlc.arg(now_ms) - created_at_ms > sqlc.arg(record_ttl_ms)
-   OR (status = 0 AND sqlc.arg(now_ms) - created_at_ms > sqlc.arg(pending_ttl_ms));
+WHERE created_at_ms < (
+         CASE WHEN sqlc.arg(now_override_ms)::bigint <> 0 THEN sqlc.arg(now_override_ms)::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - sqlc.arg(record_ttl_ms)
+   OR (status = 0 AND created_at_ms < (
+         CASE WHEN sqlc.arg(now_override_ms)::bigint <> 0 THEN sqlc.arg(now_override_ms)::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - sqlc.arg(pending_ttl_ms));
 
 -- name: GetIdempotencyServerKey :one
-SELECT key FROM idempotency_server_key WHERE id = 1;
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1;
 
 -- name: InsertIdempotencyServerKey :exec
-INSERT INTO idempotency_server_key (id, key) VALUES (1, sqlc.arg(key)) ON CONFLICT DO NOTHING;
+-- It changes no row when a key is in place: the first writer wins.
+INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
+VALUES (1, sqlc.arg(wrapped_key), sqlc.arg(wrapper_id))
+ON CONFLICT DO NOTHING;
+
+-- name: ReplaceIdempotencyServerKey :exec
+INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
+VALUES (1, sqlc.arg(wrapped_key), sqlc.arg(wrapper_id))
+ON CONFLICT (id) DO UPDATE SET wrapped_key = excluded.wrapped_key, wrapper_id = excluded.wrapper_id;
+
+-- name: DeleteAllIdempotencyRecords :exec
+DELETE FROM idempotency_records;
 

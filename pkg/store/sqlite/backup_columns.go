@@ -22,6 +22,7 @@ const (
 	backupColNamespace   = "namespace"
 	backupColNamespaceID = "namespace_id"
 	backupColReason      = "reason"
+	backupColWrapperID   = "wrapper_id"
 	backupColSequence    = "sequence"
 	backupColSize        = "size"
 	backupColStackID     = "stack_id"
@@ -189,7 +190,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespace,
 				backupColStackID,
-				"wrapper_id",
+				backupColWrapperID,
 				"ciphertext",
 				backupColCreatedAtMs,
 			},
@@ -478,7 +479,7 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		},
 		{
 			table:   backup.TableIdempotencyServerKey,
-			columns: []string{"id", "key"},
+			columns: []string{"id", "wrapped_key", backupColWrapperID},
 		},
 	}
 }
@@ -522,7 +523,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "installation_secret_keys",
-			columns: []string{"scope_id", "wrapper_id", "ciphertext", backupColCreatedAtMs},
+			columns: []string{"scope_id", backupColWrapperID, "ciphertext", backupColCreatedAtMs},
 		},
 		{
 			table: "sign_in_providers",

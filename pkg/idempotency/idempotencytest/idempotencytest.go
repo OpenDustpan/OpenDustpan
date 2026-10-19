@@ -36,6 +36,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"an invalid ref is refused and changes nothing", testInvalidRef},
 		{"complete refuses a token that does not hold the record", testCompleteToken},
 		{"complete refuses an answer with a status that the store never keeps", testCompleteStatus},
+		{"complete refuses an answer over the size limit", testCompleteSize},
 		{"abandon frees the key and ignores a token that does not hold it", testAbandon},
 		{"a pending record expires after the pending period", testPendingExpiry},
 		{"a record expires after the record period", testRecordExpiry},
@@ -436,5 +437,22 @@ func testAnswerBytes(t *testing.T, s idempotency.Store) {
 	if got.Answer.Status != want.Status || !bytes.Equal(got.Answer.Body, want.Body) ||
 		got.Answer.Headers["X-A"] != "1" || got.Answer.Headers["X-B"] != want.Headers["X-B"] {
 		t.Fatalf("answer = %+v, want %+v", got.Answer, want)
+	}
+}
+
+func testCompleteSize(t *testing.T, s idempotency.Store) {
+	t.Helper()
+
+	first := started(t, s, ref("k1"), epoch())
+	big := idempotency.Answer{Status: statusCreated, Headers: nil, Body: make([]byte, idempotency.MaxAnswerBytes+1)}
+
+	if err := s.Complete(t.Context(), ref("k1"), first.Token, big); !errors.Is(err, idempotency.ErrInvalid) {
+		t.Fatalf("complete with %d bytes: err = %v, want ErrInvalid", len(big.Body), err)
+	}
+
+	big.Body = big.Body[:idempotency.MaxAnswerBytes]
+
+	if err := s.Complete(t.Context(), ref("k1"), first.Token, big); err != nil {
+		t.Fatalf("complete with %d bytes: %v", len(big.Body), err)
 	}
 }

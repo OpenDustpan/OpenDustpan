@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -17,42 +18,70 @@ var _ idempotency.Store = (*Idempotency)(nil)
 
 // Idempotency is the store of replay records on the database of a Store. It
 // implements idempotency.Store.
+//
+// The server key of the fingerprints is a random key that the key-encryption
+// key seals in the database. A process unwraps it one time and keeps it. When
+// the key-encryption key cannot open the sealed key (the operator lost it or
+// changed it), the next Begin replaces the sealed key and deletes every
+// record in one transaction: a retry then does its operation again, and no
+// request fails. The wrapper must not be nil.
 type Idempotency struct {
 	store *Store
+	keys  *codec.IdempotencyKeys
 }
 
-// Idempotency returns the store of replay records on s.
-func (s *Store) Idempotency() *Idempotency {
-	return &Idempotency{store: s}
+// Idempotency returns the store of replay records on s. wrapper seals the
+// server key of the fingerprints.
+func (s *Store) Idempotency(wrapper secret.Wrapper) *Idempotency {
+	return &Idempotency{store: s, keys: codec.NewIdempotencyKeys(wrapper)}
 }
 
-// idempotencyServerKey reads the key of the fingerprints, and makes it when
-// no row holds it.
-func idempotencyServerKey(ctx context.Context, q *db.Queries) ([]byte, error) {
-	key, err := q.GetIdempotencyServerKey(ctx)
-	if err == nil {
-		return key, nil
-	}
+// idempotencyKeyOps returns the operations of the key row in the transaction
+// of q.
+func idempotencyKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
+	return codec.IdempotencyKeyOps{
+		Get: func(ctx context.Context) (codec.IdempotencyKeyRow, bool, error) {
+			var none codec.IdempotencyKeyRow
 
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("select idempotency server key: %w", err)
-	}
+			row, err := q.GetIdempotencyServerKey(ctx)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return none, false, nil
+			}
 
-	fresh, err := codec.NewIdempotencyServerKey()
-	if err != nil {
-		return nil, err
-	}
+			if err != nil {
+				return none, false, fmt.Errorf("select idempotency server key: %w", err)
+			}
 
-	if err = q.InsertIdempotencyServerKey(ctx, fresh); err != nil {
-		return nil, fmt.Errorf("insert idempotency server key: %w", err)
-	}
+			return codec.IdempotencyKeyRow{WrappedKey: row.WrappedKey, WrapperID: row.WrapperID}, true, nil
+		},
+		Insert: func(ctx context.Context, row codec.IdempotencyKeyRow) error {
+			err := q.InsertIdempotencyServerKey(ctx, db.InsertIdempotencyServerKeyParams{
+				WrappedKey: row.WrappedKey, WrapperID: row.WrapperID,
+			})
+			if err != nil {
+				return fmt.Errorf("insert idempotency server key: %w", err)
+			}
 
-	key, err = q.GetIdempotencyServerKey(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("select idempotency server key: %w", err)
-	}
+			return nil
+		},
+		Replace: func(ctx context.Context, row codec.IdempotencyKeyRow) error {
+			err := q.ReplaceIdempotencyServerKey(ctx, db.ReplaceIdempotencyServerKeyParams{
+				WrappedKey: row.WrappedKey, WrapperID: row.WrapperID,
+			})
+			if err != nil {
+				return fmt.Errorf("replace idempotency server key: %w", err)
+			}
 
-	return key, nil
+			return nil
+		},
+		DeleteRecords: func(ctx context.Context) error {
+			if err := q.DeleteAllIdempotencyRecords(ctx); err != nil {
+				return fmt.Errorf("delete idempotency records: %w", err)
+			}
+
+			return nil
+		},
+	}
 }
 
 // Begin implements idempotency.Store.
@@ -70,55 +99,75 @@ func (i *Idempotency) Begin(
 
 	var res idempotency.Result
 
+	serverKey, cached := i.keys.Cached()
+
 	err = i.store.inTx(ctx, func(q *db.Queries) error {
-		serverKey, keyErr := idempotencyServerKey(ctx, q)
-		if keyErr != nil {
-			return keyErr
+		if !cached {
+			var keyErr error
+
+			if serverKey, keyErr = i.keys.Resolve(ctx, idempotencyKeyOps(q)); keyErr != nil {
+				return keyErr
+			}
 		}
 
-		fp := idempotency.Fingerprint(serverKey, material)
+		var txErr error
 
-		expired := db.DeleteExpiredIdempotencyRecordParams{
-			Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
-			NowMs: codec.Millis(now), RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
-			PendingTtlMs: idempotency.PendingTTL.Milliseconds(),
-		}
-
-		if delErr := q.DeleteExpiredIdempotencyRecord(ctx, expired); delErr != nil {
-			return fmt.Errorf("delete expired idempotency record: %w", delErr)
-		}
-
-		n, insErr := q.InsertIdempotencyRecord(ctx, db.InsertIdempotencyRecordParams{
-			Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
-			Fingerprint: fp, Token: token, CreatedAtMs: codec.Millis(now),
+		res, txErr = startOrFind(ctx, q, codec.IdempotencyAttempt{
+			Ref: ref, Fingerprint: idempotency.Fingerprint(serverKey, material), Token: token, Now: now,
 		})
-		if insErr != nil {
-			return fmt.Errorf("insert idempotency record: %w", insErr)
-		}
 
-		if n == 1 {
-			res = codec.IdempotencyOutcome(idempotency.Started)
-			res.Token = token
-
-			return nil
-		}
-
-		row, getErr := q.GetIdempotencyRecord(ctx, db.GetIdempotencyRecordParams{
-			Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
-		})
-		if getErr != nil {
-			return fmt.Errorf("select idempotency record: %w", getErr)
-		}
-
-		res, getErr = codec.ClassifyIdempotency(codec.IdempotencyRow(row), fp)
-
-		return getErr
+		return txErr
 	})
 	if err != nil {
 		return idempotency.Result{}, err
 	}
 
+	if !cached {
+		i.keys.Remember(serverKey)
+	}
+
 	return res, nil
+}
+
+// startOrFind deletes the record of ref when it expired, then writes a
+// pending record with token, or finds the record that holds the name.
+func startOrFind(ctx context.Context, q *db.Queries, at codec.IdempotencyAttempt) (idempotency.Result, error) {
+	ref, fp, token := at.Ref, at.Fingerprint, at.Token
+	override := codec.IdempotencyOverrideMillis(at.Now)
+
+	expired := db.DeleteExpiredIdempotencyRecordParams{
+		Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
+		NowOverrideMs: override, RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
+		PendingTtlMs: idempotency.PendingTTL.Milliseconds(),
+	}
+
+	if err := q.DeleteExpiredIdempotencyRecord(ctx, expired); err != nil {
+		return idempotency.Result{}, fmt.Errorf("delete expired idempotency record: %w", err)
+	}
+
+	n, err := q.InsertIdempotencyRecord(ctx, db.InsertIdempotencyRecordParams{
+		Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
+		Fingerprint: fp, Token: token, NowOverrideMs: override,
+	})
+	if err != nil {
+		return idempotency.Result{}, fmt.Errorf("insert idempotency record: %w", err)
+	}
+
+	if n == 1 {
+		started := codec.IdempotencyOutcome(idempotency.Started)
+		started.Token = token
+
+		return started, nil
+	}
+
+	row, err := q.GetIdempotencyRecord(ctx, db.GetIdempotencyRecordParams{
+		Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
+	})
+	if err != nil {
+		return idempotency.Result{}, fmt.Errorf("select idempotency record: %w", err)
+	}
+
+	return codec.ClassifyIdempotency(codec.IdempotencyRow(row), fp)
 }
 
 // completeIdempotencyRecord stores a on the pending record that holds token,
@@ -189,7 +238,7 @@ func (i *Idempotency) Abandon(ctx context.Context, ref idempotency.Ref, token st
 // Sweep implements idempotency.Store.
 func (i *Idempotency) Sweep(ctx context.Context, now time.Time) (int, error) {
 	n, err := i.store.queries.SweepIdempotencyRecords(ctx, db.SweepIdempotencyRecordsParams{
-		NowMs: codec.Millis(now), RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
+		NowOverrideMs: codec.IdempotencyOverrideMillis(now), RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
 		PendingTtlMs: idempotency.PendingTTL.Milliseconds(),
 	})
 	if err != nil {

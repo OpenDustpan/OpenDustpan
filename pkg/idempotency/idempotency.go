@@ -5,6 +5,12 @@
 //
 // A record belongs to the caller, the method, the path and the key. A record
 // never holds a request body: it holds the keyed hash of the body.
+//
+// The hash key is a random server key. The key-encryption key seals it in the
+// database, so a copy of the database holds no key that can test a guess of
+// a body. If the key-encryption key cannot open the sealed key (the operator
+// lost it or changed it), the store makes a new key and deletes all records
+// in one transaction. A retry then does its operation again.
 package idempotency
 
 import (
@@ -24,6 +30,10 @@ const (
 	// PendingTTL is how long a record with no final answer lives. After it, a
 	// request with the same key does the operation.
 	PendingTTL = 5 * time.Minute
+	// MaxAnswerBytes is the largest body of a stored answer. The server does
+	// not store a larger answer: the first request still answers, and a retry
+	// with the same key does the operation again.
+	MaxAnswerBytes = 1 << 20
 )
 
 // The statuses that the server never stores. They are the values of the
@@ -111,10 +121,20 @@ type Answer struct {
 	Status  int
 }
 
-// Validate returns ErrInvalid for a status outside 200 to 499.
+// Validate returns ErrInvalid for a status outside 200 to 499 and for a body
+// over MaxAnswerBytes.
 func (a Answer) Validate() error {
 	if a.Status < 200 || a.Status > 499 {
 		return fmt.Errorf("%w: a stored answer has a status from 200 to 499, got %d", ErrInvalid, a.Status)
+	}
+
+	if len(a.Body) > MaxAnswerBytes {
+		return fmt.Errorf(
+			"%w: a stored answer has at most %d body bytes, got %d",
+			ErrInvalid,
+			MaxAnswerBytes,
+			len(a.Body),
+		)
 	}
 
 	return nil
@@ -164,6 +184,11 @@ type Result struct {
 // A record that is older than RecordTTL, or pending and older than
 // PendingTTL, counts as absent for every method. All methods return
 // ErrInvalid or ErrInvalidKey for an invalid Ref, and change nothing then.
+//
+// Time comes from the clock of the store, so the clock of one instance
+// changes no decision. The now argument of Begin and Sweep overrides that
+// clock, for tests. The zero time means the clock of the store, and every
+// caller outside a test passes it.
 type Store interface {
 	// Begin finds the record of ref, or writes a pending record. material
 	// is the bytes that the request is compared by, for example the body.

@@ -601,12 +601,18 @@ type serverArgs struct {
 
 // profileStoreOptions returns the option that gives the in-process server the
 // profile store of st.
-func profileStoreOptions(st serverStore) []dustpan.Option {
+func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Option {
 	switch s := st.(type) {
 	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles()), dustpan.WithIdempotencyStore(s.Idempotency())}
+		return []dustpan.Option{
+			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
+		}
 	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles()), dustpan.WithIdempotencyStore(s.Idempotency())}
+		return []dustpan.Option{
+			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
+		}
 	default:
 		return nil
 	}
@@ -661,7 +667,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
-		append(profileStoreOptions(st), []dustpan.Option{
+		append(profileStoreOptions(st, wrapper), []dustpan.Option{
 			dustpan.WithRegion(region),
 			dustpan.WithNamespaceStore(st),
 			dustpan.WithStackStore(st),

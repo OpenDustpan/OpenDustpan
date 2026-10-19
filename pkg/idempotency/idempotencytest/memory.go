@@ -56,6 +56,10 @@ func (m *Memory) Begin(
 		return idempotency.Result{}, err
 	}
 
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -127,6 +131,10 @@ func (m *Memory) Abandon(_ context.Context, ref idempotency.Ref, token string) e
 
 // Sweep implements idempotency.Store.
 func (m *Memory) Sweep(_ context.Context, now time.Time) (int, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

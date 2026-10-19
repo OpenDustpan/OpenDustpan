@@ -49,6 +49,7 @@ const (
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
+	pgColWrapperID   = "wrapper_id"
 	pgColStartedAtMs = "started_at_ms"
 	pgColState       = "state"
 	pgColStatus      = "status"
@@ -205,7 +206,7 @@ func pgCopyScopeTables() []pgCopyTable {
 		{
 			table: "secret_keys",
 			columns: []string{
-				pgColNamespace, pgColStackID, "wrapper_id", "ciphertext", pgColCreatedAtMs,
+				pgColNamespace, pgColStackID, pgColWrapperID, "ciphertext", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, pgColStackID},
 		},
@@ -399,7 +400,7 @@ func pgEmptiedTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableIdempotencyServerKey,
-			columns: []string{"id", "key"},
+			columns: []string{"id", "wrapped_key", pgColWrapperID},
 			orderBy: []string{"id"},
 		},
 	}
@@ -432,7 +433,7 @@ func pgCopySessionTables() []pgCopyTable {
 		},
 		{
 			table:   "installation_secret_keys",
-			columns: []string{"scope_id", "wrapper_id", "ciphertext", pgColCreatedAtMs},
+			columns: []string{"scope_id", pgColWrapperID, "ciphertext", pgColCreatedAtMs},
 			orderBy: []string{"scope_id"},
 		},
 		{
@@ -1118,12 +1119,12 @@ func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging st
 // stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
 // of the installation keys in the staging schema, ordered, never nil.
 func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
-	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", "wrapper_id")
+	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", pgColWrapperID)
 	if err != nil {
 		return nil, err
 	}
 
-	installation, err := stagingStrings(ctx, pool, staging, "installation_secret_keys", "wrapper_id")
+	installation, err := stagingStrings(ctx, pool, staging, "installation_secret_keys", pgColWrapperID)
 	if err != nil {
 		return nil, err
 	}

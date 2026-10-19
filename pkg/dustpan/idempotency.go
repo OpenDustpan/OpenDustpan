@@ -26,7 +26,7 @@ func idempotencyMiddleware(cfg *settings) (*idempotent.Middleware, error) {
 	}
 
 	mw, err := idempotent.New(idempotent.Config{
-		Store: cfg.idempotencyStore, Logger: cfg.logger, Now: cfg.now, MaxBodyBytes: idempotencyBodyLimit,
+		Store: cfg.idempotencyStore, Logger: cfg.logger, Now: nil, MaxBodyBytes: idempotencyBodyLimit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("idempotency middleware: %w", err)
@@ -64,7 +64,7 @@ func (s *Server) sweepIdempotency(ctx context.Context) {
 // logs no error text, which may hold driver detail, and the next run tries
 // again.
 func (s *Server) sweepIdempotencyOnce(ctx context.Context) {
-	n, err := s.idempotency.Sweep(ctx, time.Now())
+	n, err := s.idempotency.Sweep(ctx, time.Time{})
 
 	switch {
 	case err != nil && !errors.Is(ctx.Err(), context.Canceled):

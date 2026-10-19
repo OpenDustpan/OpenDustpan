@@ -245,8 +245,9 @@ type IdempotencyRecord struct {
 }
 
 type IdempotencyServerKey struct {
-	ID  int64
-	Key []byte
+	ID         int64
+	WrappedKey []byte
+	WrapperID  string
 }
 
 type Import struct {
