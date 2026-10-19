@@ -2,13 +2,15 @@
 rfc: 51
 title: Change management and portal integrations
 status: draft
+adr: 247           # the Backstage plugin only
 created: 2026-10-10
 ---
 
 # RFC 51. Change management and portal integrations
 
 Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+"IaC and TACOS landscape". It records the gap and first ideas only. The Backstage plugin is accepted as
+ADR 247 on 2026-10-19.
 
 ## Problem
 

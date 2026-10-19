@@ -1,6 +1,6 @@
 # 247. Works with Backstage: an entity tab that shows the units of a component
 
-Status: accepted · 2026-10-19. Extends ADR 13 (labels and consoleUrl on the inventory entry) and ADR 210 decision 4 (the label and reference filters of the unit list). Accepts part of RFC 51. Opens RFC 84.
+Status: accepted · 2026-10-19. Extends ADR 13 (labels and consoleUrl on the inventory entry) and ADR 210 decision 3 (the label and reference filters of the unit list). Accepts part of RFC 51. Opens RFC 84.
 
 ## Context
 
@@ -23,7 +23,7 @@ database. An entity carries annotations: keys and values in
 entity. A plugin has a frontend part, which runs in the browser, and can
 have a backend part, which runs in the Backstage backend.
 
-The project manager decides a question when Google, AWS, PCI DSS, SOC 2 or
+The product manager decides a question when Google, AWS, PCI DSS, SOC 2 or
 ISO 27001 would answer it the same way, when no persona is upset or an
 escape hatch exists, and when the answer is not stupid on a step back
 (ADR 210 gives the rule). Here the benchmarks are the Backstage plugins of
@@ -121,7 +121,9 @@ The facts on `main`:
    - A unit reference changes when a person renames a stack or a
      workspace. The "not found" row then shows the reference and the
      annotation to change. A team that renames units uses labels.
-   - A person who can change the labels of a unit can show it on each
+   - A person who holds `unit:edit-labels` on a unit, or `unit:write` in the
+     namespace (a create sets the first labels, ADR 223 decision 11),
+     can show it on each
      entity that selects those labels. For a strict mapping, use
      `opendustpan.org/units`.
    - The annotation keys use the domain `opendustpan.org`.
@@ -188,11 +190,14 @@ The facts on `main`:
      `workload`.
    - A required backend setting `opendustpan.namespaces` lists the
      namespaces that the plugin may read. It has no wildcard default. A
-     reference outside the list shows as "not found".
+     reference outside the list shows as "not found". For
+     `opendustpan.org/namespace` outside the list, the tab shows one row
+     "not found" with the namespace, and the backend plugin makes no call.
    - Each Backstage user who can see the tab sees the data that the
      principal can read. This includes the subject of a lock holder and
      the actors of the changes. The setting `opendustpan.showActors`
-     (default true) hides the actors. The user guide says so, and names
+     (default true) hides the actors of the changes and the subject of the
+     lock holder. The user guide says so, and names
      three limits: the grants of the principal, the Backstage permission of
      decision 4 and the access limits of ADR 223 (a Cedar forbid on the
      Backstage principal).
@@ -258,7 +263,7 @@ The facts on `main`:
    not Go. It does not go into `opendustpan/opendustpan`, because
    `make check` there is a Go and docs gate.
 
-   - The project manager proposes a new repository,
+   - The product manager proposes a new repository,
      `OpenDustpan/backstage-plugins`, with a workspace of three packages
      under the npm scope `@opendustpan`:
      `@opendustpan/backstage-plugin-opendustpan`,
@@ -294,7 +299,8 @@ The facts on `main`:
       only the routes of decision 7, that it refuses another path, that a
       request that holds a unit reference or a namespace gets 400, that
       no answer to the browser holds the token, and that no answer to the
-      browser holds a field outside those types.
+      browser holds a field outside those types, and that a second user whom the policy
+      refuses gets 403 when the cache holds the answer for the first user.
     - One end-to-end test starts a real server with `opendustpan dev`
       (ADR 237). It makes a Pulumi stack with the real Pulumi CLI and an
       OpenTofu workspace with the real OpenTofu CLI, and gives each a
@@ -323,6 +329,11 @@ The facts on `main`:
 
 13. **Cache and limits (product manager).** The backend plugin caches each
     answer for 60 seconds, keyed by the route, the query and the principal.
+    The cache holds only answers of OpenDustpan. On each request, also on a
+    cache hit, the backend plugin reads the entity from the Software Catalog
+    as the Backstage user and checks `opendustpan.unit.read` for that entity
+    before it reads the cache. It never caches the entity or the decision of
+    the permission check.
     It makes at most 4 calls to OpenDustpan at a time. The card reads only
     the unit list (status, lock, last change). Only the tab reads the
     context of each unit.
@@ -352,6 +363,8 @@ The facts on `main`:
   policy, an access limit, or narrows the grants of the principal.
 - An entity owner in Backstage can show any unit of the listed namespaces
   on the page of the entity.
+- A principal with `unit:write` in a listed namespace can make a unit that
+  matches the labels of any entity.
 - A rename of a unit breaks a reference in an annotation. The label form
   does not break.
 - `GLOSSARY.md` gets no new term. The plugin uses the words of the

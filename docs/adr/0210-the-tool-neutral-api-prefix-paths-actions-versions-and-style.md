@@ -1,6 +1,6 @@
 # 210. The tool-neutral API: one prefix, resource paths, action names, versions and a style guide
 
-Status: accepted · 2026-10-18. Accepts RFC 59. Supersedes in part the route paths and the `server:` action names of earlier ADRs (see "What this ADR replaces"). ADR 247 extends decision 4
+Status: accepted · 2026-10-18. Accepts RFC 59. Supersedes in part the route paths and the `server:` action names of earlier ADRs (see "What this ADR replaces"). ADR 247 extends decision 3
 
 ## Context
 
