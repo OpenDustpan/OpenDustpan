@@ -120,6 +120,7 @@ func newIPAllowlistBenchServer(b *testing.B, on bool) (*dustpan.Server, *sqlite.
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	fence := namespace.Fence{Namespace: nsName, FailoverVersion: 1}

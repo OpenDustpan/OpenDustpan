@@ -117,6 +117,7 @@ func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	fence := namespace.Fence{Namespace: nsName, FailoverVersion: 1}

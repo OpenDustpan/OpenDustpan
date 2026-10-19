@@ -604,6 +604,7 @@ func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entr
 		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

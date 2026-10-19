@@ -101,6 +101,7 @@ func (h *Handler) appendOverrideAudit(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	ns, err := h.namespaces.Get(ctx, entry.Namespace)
@@ -111,6 +112,39 @@ func (h *Handler) appendOverrideAudit(
 	_, err = h.audit.Append(ctx, ns.Fence(), entry)
 
 	return err
+}
+
+// forceUnlockEntry returns the audit entry of a force-unlock from the request
+// fields. The workspace service sets the rest: the time, the namespace, the
+// subject, the unit ID, the changes and the new state version. The UNLOCK
+// body is the lock info of the OpenTofu http backend, which has no field for
+// a reason, so the entry holds none.
+func (h *Handler) forceUnlockEntry(r *http.Request, c call, obj identity.Object) audit.Entry {
+	return audit.Entry{
+		At:           time.Time{},
+		Namespace:    obj.Namespace(),
+		Subject:      c.principal.Subject,
+		IDPSubject:   "",
+		TokenID:      c.principal.TokenID,
+		Action:       string(identity.ActionUnitWriteForced),
+		Object:       obj.String(),
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     clientip.String(r),
+		UserAgent:    truncateUserAgent(r.UserAgent()),
+		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    requestid.FromContext(r.Context()),
+		ObjectID:     obj.UnitID(),
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
+		Reason:       "",
+	}
 }
 
 // truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune

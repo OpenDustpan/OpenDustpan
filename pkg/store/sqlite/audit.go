@@ -320,6 +320,7 @@ func insertPlacedEntry(
 		Changes:      toChangesText(e.Changes),
 		ObjectID:     e.ObjectID,
 		FenceVersion: e.FenceVersion,
+		Reason:       e.Reason,
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -523,6 +524,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Hash:         row.Hash,
 		Sequence:     row.Sequence,
 		FenceVersion: row.FenceVersion,
+		Reason:       row.Reason,
 	}
 }
 

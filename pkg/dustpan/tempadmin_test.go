@@ -62,6 +62,7 @@ func tempadminEntry(at time.Time, action, object string) audit.Entry {
 		PrevHash:     "",
 		Hash:         "",
 		Sequence:     0,
+		Reason:       "",
 	}
 }
 

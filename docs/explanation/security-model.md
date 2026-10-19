@@ -155,6 +155,25 @@ The server seals each new OpenTofu state version before it stores it:
 - **A download answers the same bytes that the CLI sent.** The MD5 and the
   size of a state version stay those of the plain bytes.
 
+### Force-unlock
+
+A force-unlock releases the lock of a workspace whoever holds it. It can make
+a running job fail, so it needs the action `unit:write-forced` on the
+workspace, on the TFE-compatible API and on the OpenTofu http backend. Only
+the built-in role `admin` has this action. A person with the role
+`maintainer` gets 403, and the message names the action. An administrator
+can give the action to an on-call group with a custom role.
+
+A force-unlock of a state that the client encrypted writes no fence version,
+because the server cannot set the lineage of such a state. It needs the
+action and the forced-write switch of the namespace and of the workspace. With a
+switch off, the release answers 409, and the message names the action and the
+switches.
+
+Each force-unlock writes one audit entry of the kind `change`. It holds the
+released lock holder, the lock time, the new state version and the reason,
+if the caller gave one.
+
 ## The key-encryption key
 
 `serve` needs a key-encryption key before it opens the database. It takes

@@ -167,6 +167,7 @@ func deniedEntry(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
