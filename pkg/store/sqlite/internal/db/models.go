@@ -165,6 +165,41 @@ type DurableStep struct {
 	DoneAtMs    int64
 }
 
+type GateObject struct {
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+	ID          string
+	Level       string
+	Tool        string
+	UnitName    string
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
+}
+
+type GateRecord struct {
+	ID          string
+	NamespaceID string
+	Point       string
+	ChangeKind  string
+	ChangeID    string
+	AtMs        int64
+	LastAtMs    int64
+	Count       int64
+	RefusalKey  string
+	Body        string
+}
+
+type GateReference struct {
+	RefKind     string
+	RefID       string
+	NamespaceID string
+	ScopeKey    string
+	OwnerKind   string
+	OwnerID     string
+}
+
 type Grant struct {
 	ID          string
 	Subject     string
@@ -192,6 +227,63 @@ type GroupMember struct {
 	State         string
 	SuspendedAtMs int64
 	Pinned        bool
+}
+
+type Import struct {
+	NamespaceID string
+	ID          string
+	Kind        string
+	Address     string
+	Selection   string
+	Credential  string
+	Profile     string
+	ProfilePath string
+	Options     string
+	State       string
+	Reason      string
+	CreatedBy   string
+	CreatedAtMs int64
+	Plan        string
+	EndedAtMs   int64
+}
+
+type ImportLedger struct {
+	NamespaceID   string
+	ImportID      string
+	ImportUnitID  string
+	Version       string
+	SourceSha256  string
+	StoredSha256  string
+	ItemTool      string
+	ItemUnitID    string
+	ItemKind      string
+	ItemID        string
+	CommittedAtMs int64
+}
+
+type ImportUnit struct {
+	NamespaceID  string
+	ImportID     string
+	ID           string
+	Position     int64
+	SourceTool   string
+	SourceName   string
+	TargetName   string
+	TargetTool   string
+	TargetUnitID string
+	State        string
+	ErrorCode    string
+	Versions     int64
+	Committed    int64
+	Bytes        int64
+	Encryption   string
+	Findings     string
+}
+
+type ImportsPurged struct {
+	NamespaceID string
+	ID          string
+	PurgedAtMs  int64
 }
 
 type Installation struct {
@@ -246,6 +338,13 @@ type InventoryDeleted struct {
 	Name         string
 	DeletedAtMs  int64
 	PurgeAfterMs int64
+}
+
+type InventoryLabel struct {
+	Namespace  string
+	UnitID     string
+	LabelKey   string
+	LabelValue string
 }
 
 type Namespace struct {

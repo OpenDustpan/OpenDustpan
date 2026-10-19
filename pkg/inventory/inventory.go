@@ -44,6 +44,10 @@ type Entry struct {
 	// written. It is empty when the unit has none (ADR 51). A collection never
 	// changes the tool's own name of the unit.
 	Collection string
+	// Labels are the labels of the unit: a key and a value each. The map is
+	// never nil in an entry that a store reads, and a unit with no label has
+	// an empty map. A label never grants access.
+	Labels map[string]string
 }
 
 // Lock is who holds a unit and why. Holder is the subject of the principal

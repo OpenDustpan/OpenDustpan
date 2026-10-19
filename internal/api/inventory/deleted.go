@@ -66,13 +66,13 @@ type deletedUnitEntry struct {
 
 // listDeletedUnitsResponse is one page of deleted units. Total counts every
 // deleted unit of the namespace that matches the filters and that the caller
-// may read. NextCursor is empty on the last page.
+// may read. NextPageToken is omitted on the last page.
 //
 // Contract: never remove or rename these fields.
 type listDeletedUnitsResponse struct {
-	NextCursor string             `json:"nextCursor"`
-	Units      []deletedUnitEntry `json:"units"`
-	Total      int                `json:"total"`
+	NextPageToken string             `json:"nextPageToken,omitempty"`
+	Units         []deletedUnitEntry `json:"units"`
+	Total         int                `json:"total"`
 }
 
 // restoredUnitResponse is the live unit after a restore.
@@ -173,17 +173,17 @@ func decodeCursor(s string) (*coreinventory.DeletedCursor, error) {
 	return &coreinventory.DeletedCursor{Tool: w.Tool, Name: w.Name, UnitID: w.UnitID}, nil
 }
 
-// intQuery parses the query value name as an int from 0 to limit. An empty
+// intQuery parses the query value name as an int from low to limit. An empty
 // value is 0.
-func intQuery(r *http.Request, name string, limit int) (int, error) {
+func intQuery(r *http.Request, name string, low, limit int) (int, error) {
 	raw := r.URL.Query().Get(name)
 	if raw == "" {
 		return 0, nil
 	}
 
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 || n > limit {
-		return 0, fmt.Errorf("%w: %s must be a number from 0 to %d", errInvalidQuery, name, limit)
+	if err != nil || n < low || n > limit {
+		return 0, fmt.Errorf("%w: %s must be a number from %d to %d", errInvalidQuery, name, low, limit)
 	}
 
 	return n, nil
@@ -192,17 +192,17 @@ func intQuery(r *http.Request, name string, limit int) (int, error) {
 // deletedQuery builds the store query of a list request for ns. It does not
 // set the read scope.
 func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventory.DeletedQuery, error) {
-	limit, err := intQuery(r, "limit", coreinventory.MaxDeletedPageSize)
+	limit, err := intQuery(r, "pageSize", 1, coreinventory.MaxDeletedPageSize)
 	if err != nil {
 		return coreinventory.DeletedQuery{}, err
 	}
 
-	days, err := intQuery(r, "purgeWithinDays", maxPurgeWithinDays)
+	days, err := intQuery(r, "purgeWithinDays", 0, maxPurgeWithinDays)
 	if err != nil {
 		return coreinventory.DeletedQuery{}, err
 	}
 
-	cursor, err := decodeCursor(r.URL.Query().Get("cursor"))
+	cursor, err := decodeCursor(r.URL.Query().Get("pageToken"))
 	if err != nil {
 		return coreinventory.DeletedQuery{}, err
 	}
@@ -224,12 +224,12 @@ func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventor
 	}, nil
 }
 
-// listDeletedUnits answers GET /api/inventory/deleted-units with one page of
+// listDeletedUnits answers GET /api/dustpan/v1/namespaces/{namespace}/deleted-units with one page of
 // the deleted units of the namespace (ADR 47). The route wrapper already
 // allowed namespace:read on the namespace. The store query holds only the
 // units that the caller may read, so the page, the cursor and the total
 // never show another unit. The query values tool, namePrefix,
-// purgeWithinDays, limit and cursor filter and page the list.
+// purgeWithinDays, pageSize and pageToken filter and page the list.
 func (h *Handler) listDeletedUnits(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
@@ -274,7 +274,7 @@ func (h *Handler) listDeletedUnits(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listDeletedUnitsResponse{
-		NextCursor: encodeCursor(page.Next), Units: units, Total: page.Total,
+		NextPageToken: encodeCursor(page.Next), Units: units, Total: page.Total,
 	})
 }
 

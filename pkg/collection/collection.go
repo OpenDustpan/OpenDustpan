@@ -28,7 +28,7 @@ import (
 var (
 	// ErrNotFound reports that a collection or a unit does not exist.
 	ErrNotFound = errors.New("collection not found: create it with " +
-		"POST /api/inventory/namespaces/{namespace}/collections")
+		"POST /api/dustpan/v1/namespaces/{namespace}/collections")
 	// ErrAlreadyExists reports that a collection with the same name exists,
 	// without regard to case.
 	ErrAlreadyExists = errors.New("collection already exists")

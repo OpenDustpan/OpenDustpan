@@ -58,7 +58,7 @@ type Config struct {
 	Logger        *slog.Logger
 }
 
-// Handler serves the context API under /api/context/.
+// Handler serves the context API under /api/dustpan/v1/.
 type Handler struct {
 	namespaces  *namespace.Service
 	units       coreinventory.Reader

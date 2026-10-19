@@ -403,7 +403,7 @@ func checkConsoleAPIsTakeTheCookie(t *testing.T, b browser) {
 	}
 
 	for _, path := range []string{
-		"/api/inventory/namespaces/" + e2e.Namespace + "/collections",
+		"/api/dustpan/v1/namespaces/" + e2e.Namespace + "/collections",
 		"/api/audit/entries?organization=" + e2e.Namespace,
 	} {
 		if a := b.do(t, b.server, http.MethodGet, b.env.URL+path, nil); a.status != http.StatusForbidden {

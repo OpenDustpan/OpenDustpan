@@ -217,6 +217,7 @@ func newBehaviorHandlerWithSessions(
 
 	return newBehaviorHandlerWith(t, nsStore, reader, authz, behaviorWiring{
 		sessions: sessions, lifecycles: testLifecycles(),
+		publicURL: "",
 	})
 }
 
@@ -225,6 +226,7 @@ func newBehaviorHandlerWithSessions(
 type behaviorWiring struct {
 	sessions   *sessionauth.Checker
 	lifecycles map[string]coreinventory.Lifecycle
+	publicURL  string
 }
 
 // newBehaviorHandlerWith is newBehaviorHandlerWithSessions with the
@@ -253,6 +255,7 @@ func newBehaviorHandlerWith(
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Sessions:      wiring.sessions,
+		PublicURL:     wiring.publicURL,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -286,7 +289,7 @@ type unitBody struct {
 	UnitID        string    `json:"unitID"`
 	Namespace     string    `json:"namespace"`
 	Name          string    `json:"name"`
-	LastChange    int64     `json:"lastChange"`
+	LastChange    string    `json:"lastChange"`
 	Status        string    `json:"status"`
 	ResourceCount *int64    `json:"resourceCount"`
 	Lock          *lockBody `json:"lock"`
@@ -295,11 +298,11 @@ type unitBody struct {
 // lockBody is one decoded lock object.
 type lockBody struct {
 	Holder    string `json:"holder"`
-	Since     int64  `json:"since"`
+	Since     string `json:"since"`
 	Operation string `json:"operation"`
 }
 
-// unitsBody is the decoded GET /api/inventory/units response.
+// unitsBody is the decoded GET /api/dustpan/v1/namespaces/{namespace}/units response.
 type unitsBody struct {
 	Units []unitBody `json:"units"`
 }
@@ -358,6 +361,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			Labels:        nil,
 		},
 		{
 			Collection:    "",
@@ -370,6 +374,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			Labels:        nil,
 		},
 		{
 			Collection:    "",
@@ -382,6 +387,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Status:        "deployed",
 			ResourceCount: &count,
 			Lock:          nil,
+			Labels:        nil,
 		},
 	}
 }
@@ -405,7 +411,7 @@ func TestRouteDeclaresNamespaceRead(t *testing.T) {
 	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	for _, route := range handler.Routes() {
-		if route.Method+" "+route.Path != "GET /api/inventory/units" {
+		if route.Method+" "+route.Path != "GET /api/dustpan/v1/namespaces/{namespace}/units" {
 			continue
 		}
 
@@ -416,18 +422,18 @@ func TestRouteDeclaresNamespaceRead(t *testing.T) {
 		return
 	}
 
-	t.Fatal("GET /api/inventory/units is not declared")
+	t.Fatal("GET /api/dustpan/v1/namespaces/{namespace}/units is not declared")
 }
 
 // TestListUnitsBothTools proves one response holds both tools, ordered by
-// tool then name, with the tool labels, references and change times the
+// unit ID, with the tool labels, references and change times the
 // console reads.
 func TestListUnitsBothTools(t *testing.T) {
 	t.Parallel()
 
 	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -441,12 +447,12 @@ func TestListUnitsBothTools(t *testing.T) {
 
 	want := []unitBody{
 		{
-			Tool:          "OpenTofu",
-			Reference:     "opentofu:acme/network",
-			UnitID:        "ws-1",
+			Tool:          "Pulumi",
+			Reference:     "pulumi:acme/web/prod",
+			UnitID:        "stk-1",
 			Namespace:     "acme",
-			Name:          "network",
-			LastChange:    changeTime().Unix(),
+			Name:          "web/prod",
+			LastChange:    changeTime().UTC().Format(time.RFC3339Nano),
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
@@ -457,18 +463,18 @@ func TestListUnitsBothTools(t *testing.T) {
 			UnitID:        "stk-2",
 			Namespace:     "acme",
 			Name:          "api/dev",
-			LastChange:    changeTime().Unix(),
+			LastChange:    changeTime().UTC().Format(time.RFC3339Nano),
 			Status:        "deployed",
 			ResourceCount: &count,
 			Lock:          nil,
 		},
 		{
-			Tool:          "Pulumi",
-			Reference:     "pulumi:acme/web/prod",
-			UnitID:        "stk-1",
+			Tool:          "OpenTofu",
+			Reference:     "opentofu:acme/network",
+			UnitID:        "ws-1",
 			Namespace:     "acme",
-			Name:          "web/prod",
-			LastChange:    changeTime().Unix(),
+			Name:          "network",
+			LastChange:    changeTime().UTC().Format(time.RFC3339Nano),
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
@@ -541,7 +547,7 @@ func TestListUnitsOmitsUnknown(t *testing.T) {
 
 	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -590,7 +596,7 @@ func TestListUnitsOmitsUnknown(t *testing.T) {
 }
 
 // TestListUnitsLockField proves a locked unit answers its lock with the
-// holder, the take time in Unix seconds and the operation.
+// holder, the take time in RFC 3339 and the operation.
 func TestListUnitsLockField(t *testing.T) {
 	t.Parallel()
 
@@ -618,6 +624,7 @@ func TestListUnitsLockField(t *testing.T) {
 						Holder:    "admin",
 						Operation: "update",
 					},
+					Labels: nil,
 				},
 			},
 		},
@@ -626,7 +633,7 @@ func TestListUnitsLockField(t *testing.T) {
 
 	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -641,7 +648,9 @@ func TestListUnitsLockField(t *testing.T) {
 		t.Fatalf("unit reference = %q, want the locked stack", locked.Reference)
 	}
 
-	checkLock(t, locked.Lock, &lockBody{Holder: "admin", Since: since.Unix(), Operation: "update"})
+	checkLock(t, locked.Lock, &lockBody{
+		Holder: "admin", Since: since.UTC().Format(time.RFC3339Nano), Operation: "update",
+	})
 }
 
 // TestListUnitsOmitsLock proves an unlocked unit omits the lock field from
@@ -668,6 +677,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 					Status:        "",
 					ResourceCount: nil,
 					Lock:          nil,
+					Labels:        nil,
 				},
 			},
 		},
@@ -676,7 +686,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 
 	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -725,6 +735,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 						Holder:    "tester",
 						Operation: "lock",
 					},
+					Labels: nil,
 				},
 			},
 		},
@@ -733,7 +744,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 
 	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -762,7 +773,7 @@ func TestListUnitsEmptyNamespace(t *testing.T) {
 	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil}
 	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -778,7 +789,7 @@ func TestListUnitsUnknownNamespace(t *testing.T) {
 
 	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=ghost", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/ghost/units", "test-token")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
@@ -793,14 +804,16 @@ func TestListUnitsUnknownNamespace(t *testing.T) {
 	}
 }
 
-// TestListUnitsMissingOrganization proves a missing organization parameter
-// answers 400 with the error shape the console reads.
-func TestListUnitsMissingOrganization(t *testing.T) {
+// TestListUnitsInvalidNamespace proves a namespace name in the path that is not
+// valid answers 400 with the error shape the console reads.
+func TestListUnitsInvalidNamespace(t *testing.T) {
 	t.Parallel()
 
 	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	for _, target := range []string{"/api/inventory/units", "/api/inventory/units?organization="} {
+	for _, name := range []string{"BAD%20NAME", "-x", "a%2Fb"} {
+		target := "/api/dustpan/v1/namespaces/" + name + "/units"
+
 		rec := authorizedGet(t, handler, target, "test-token")
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s answers %d, want %d (%s)", target, rec.Code, http.StatusBadRequest, rec.Body.String())
@@ -817,18 +830,6 @@ func TestListUnitsMissingOrganization(t *testing.T) {
 	}
 }
 
-// TestListUnitsInvalidOrganization proves an invalid organization value answers 400.
-func TestListUnitsInvalidOrganization(t *testing.T) {
-	t.Parallel()
-
-	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
-
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=../x", "test-token")
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusBadRequest, rec.Body.String())
-	}
-}
-
 // TestListUnitsFiltersDeniedUnits proves the handler removes entries whose
 // unit the caller may not read.
 func TestListUnitsFiltersDeniedUnits(t *testing.T) {
@@ -836,7 +837,7 @@ func TestListUnitsFiltersDeniedUnits(t *testing.T) {
 
 	handler := newSeededHandler(t, denyUnits{deny: map[string]bool{"pulumi:acme/web/prod": true}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -864,7 +865,7 @@ func TestListUnitsDeniesAllUnits(t *testing.T) {
 		"pulumi:acme/web/prod":  true,
 	}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -881,7 +882,7 @@ func TestListUnitsNeedsAuthentication(t *testing.T) {
 
 	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
@@ -896,7 +897,7 @@ func TestListUnitsDeniedNamespace(t *testing.T) {
 		t, selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionNamespaceRead: true}},
 	)
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
@@ -930,6 +931,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		PublicURL:     "",
 	}
 
 	cases := []struct {
