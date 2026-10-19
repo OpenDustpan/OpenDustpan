@@ -158,6 +158,9 @@ func bootstrap() identity.Principal {
 		Admin:                  true,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 }
 
@@ -170,6 +173,9 @@ func signedIn(p principal.Principal) identity.Principal {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 }
 

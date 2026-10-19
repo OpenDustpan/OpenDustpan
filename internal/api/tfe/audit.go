@@ -25,6 +25,41 @@ const channelHeader = "Dustpan-Channel"
 func (h *Handler) appendToolOperationAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, version, valuePath string,
 ) error {
+	return h.appendReadAudit(
+		r,
+		p,
+		obj,
+		readEntry{version: version, valuePath: valuePath, kind: audit.KindToolOperation},
+	)
+}
+
+// appendDownloadAudit writes the audit entry of a state download. A download
+// by a person writes the kind reveal, because a person asked to see every
+// secret value of the state. Any other download writes the kind
+// tool-operation. The principal decides, and the channel header never does.
+func (h *Handler) appendDownloadAudit(
+	r *http.Request, p identity.Principal, obj identity.Object, version string,
+) error {
+	kind := audit.KindToolOperation
+	if p.ActsAsPerson() {
+		kind = audit.KindReveal
+	}
+
+	return h.appendReadAudit(r, p, obj, readEntry{version: version, valuePath: "", kind: kind})
+}
+
+// readEntry holds the fields of the audit entry of a read of secret values
+// that differ between routes.
+type readEntry struct {
+	version   string
+	valuePath string
+	kind      audit.Kind
+}
+
+// appendReadAudit writes one audit entry of the action unit:read-secrets.
+func (h *Handler) appendReadAudit(
+	r *http.Request, p identity.Principal, obj identity.Object, re readEntry,
+) error {
 	if h.audit == nil {
 		return nil
 	}
@@ -32,29 +67,31 @@ func (h *Handler) appendToolOperationAudit(
 	ctx := r.Context()
 
 	entry := audit.Entry{
-		At:           time.Now().UTC(),
-		Namespace:    obj.Namespace(),
-		Subject:      p.Subject,
-		IDPSubject:   "",
-		TokenID:      p.TokenID,
-		Action:       string(identity.ActionUnitReadSecrets),
-		Object:       obj.String(),
-		Version:      version,
-		ValuePath:    valuePath,
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:         audit.KindToolOperation,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    requestid.FromContext(ctx),
-		ObjectID:     obj.UnitID(),
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
-		Reason:       "",
+		At:            time.Now().UTC(),
+		Namespace:     obj.Namespace(),
+		Subject:       p.Subject,
+		IDPSubject:    "",
+		TokenID:       p.TokenID,
+		Action:        string(identity.ActionUnitReadSecrets),
+		Object:        obj.String(),
+		Version:       re.version,
+		ValuePath:     re.valuePath,
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      clientip.String(r),
+		UserAgent:     truncateUserAgent(r.UserAgent()),
+		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:          re.kind,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     requestid.FromContext(ctx),
+		ObjectID:      obj.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: string(p.Kind),
+		JobID:         p.JobID,
 	}
 
 	ns, err := h.namespaces.Get(ctx, entry.Namespace)
@@ -73,29 +110,31 @@ func (h *Handler) appendToolOperationAudit(
 // closed). The service stamps the time of the change on it.
 func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, action identity.Action) audit.Entry {
 	return audit.Entry{
-		At:           time.Time{},
-		Namespace:    obj.Namespace(),
-		Subject:      p.Subject,
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       string(action),
-		Object:       obj.String(),
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    requestid.FromContext(r.Context()),
-		ObjectID:     obj.UnitID(),
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
-		Reason:       "",
+		At:            time.Time{},
+		Namespace:     obj.Namespace(),
+		Subject:       p.Subject,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        string(action),
+		Object:        obj.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      clientip.String(r),
+		UserAgent:     truncateUserAgent(r.UserAgent()),
+		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     requestid.FromContext(r.Context()),
+		ObjectID:      obj.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: string(p.Kind),
+		JobID:         p.JobID,
 	}
 }
 

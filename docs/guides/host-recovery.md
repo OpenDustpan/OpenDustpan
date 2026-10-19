@@ -33,8 +33,8 @@ The command runs only when the installation allows host recovery:
 
 ## Make the temporary administrator
 
-Pass the name of the person and the reason for the recovery. The name must
-name no principal that exists.
+Pass the name of the person and the reason for the recovery. The reason is
+at most 500 characters. The name must name no principal that exists.
 
 ```sh
 opendustpan host create-temp-admin --database sqlite:/var/lib/dustpan/dustpan.db \

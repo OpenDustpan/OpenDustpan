@@ -63,6 +63,9 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	grantInput := access.GrantInput{
 		Object:  identity.CollectionObject(ns.Name, "payments"),
@@ -81,6 +84,9 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	bob := identity.Principal{
 		TemporaryAdministrator: false,
@@ -90,6 +96,9 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	tests := []struct {

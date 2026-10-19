@@ -140,6 +140,9 @@ func seedPrincipal(t *testing.T, s moveStore, id, subject string) identity.Princ
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 }
 
@@ -215,6 +218,9 @@ func testRenamedCollectionGrants(t *testing.T, s access.Store) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	for _, tc := range []struct {

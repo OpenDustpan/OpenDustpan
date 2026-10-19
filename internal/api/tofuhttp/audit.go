@@ -50,6 +50,63 @@ func (h *Handler) permits(ctx context.Context, p identity.Principal, action iden
 	return h.authz.Authorize(ctx, p, action, obj) == nil
 }
 
+// appendDownloadAudit writes the audit entry of a state read: the action
+// unit:read-secrets, with the kind reveal for a person and tool-operation for
+// any other caller. The principal decides, and the channel header never does.
+// A nil audit store writes no entry. It returns the append error, so the read
+// answers no content when the entry is lost.
+func (h *Handler) appendDownloadAudit(
+	r *http.Request, p identity.Principal, obj identity.Object, version string,
+) error {
+	if h.audit == nil {
+		return nil
+	}
+
+	ctx := r.Context()
+
+	kind := audit.KindToolOperation
+	if p.ActsAsPerson() {
+		kind = audit.KindReveal
+	}
+
+	entry := audit.Entry{
+		At:            time.Now().UTC(),
+		Namespace:     obj.Namespace(),
+		Subject:       p.Subject,
+		IDPSubject:    "",
+		TokenID:       p.TokenID,
+		Action:        string(identity.ActionUnitReadSecrets),
+		Object:        obj.String(),
+		Version:       version,
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      clientip.String(r),
+		UserAgent:     truncateUserAgent(r.UserAgent()),
+		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:          kind,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     requestid.FromContext(ctx),
+		ObjectID:      obj.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: string(p.Kind),
+		JobID:         p.JobID,
+	}
+
+	ns, err := h.namespaces.Get(ctx, entry.Namespace)
+	if err != nil {
+		return err
+	}
+
+	_, err = h.audit.Append(ctx, ns.Fence(), entry)
+
+	return err
+}
+
 // recordOverride returns the audit callback of one streamed write. The write
 // calls it after the body streams and before it finalizes, with the serial of
 // the body (ADR 41, decision 5).
@@ -79,29 +136,31 @@ func (h *Handler) appendOverrideAudit(
 	ctx := r.Context()
 
 	entry := audit.Entry{
-		At:           time.Now().UTC(),
-		Namespace:    obj.Namespace(),
-		Subject:      p.Subject,
-		IDPSubject:   "",
-		TokenID:      p.TokenID,
-		Action:       string(action),
-		Object:       obj.String(),
-		Version:      version,
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:         audit.KindOverride,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    requestid.FromContext(ctx),
-		ObjectID:     obj.UnitID(),
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
-		Reason:       "",
+		At:            time.Now().UTC(),
+		Namespace:     obj.Namespace(),
+		Subject:       p.Subject,
+		IDPSubject:    "",
+		TokenID:       p.TokenID,
+		Action:        string(action),
+		Object:        obj.String(),
+		Version:       version,
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      clientip.String(r),
+		UserAgent:     truncateUserAgent(r.UserAgent()),
+		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:          audit.KindOverride,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     requestid.FromContext(ctx),
+		ObjectID:      obj.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: string(p.Kind),
+		JobID:         p.JobID,
 	}
 
 	ns, err := h.namespaces.Get(ctx, entry.Namespace)
@@ -121,29 +180,31 @@ func (h *Handler) appendOverrideAudit(
 // a reason, so the entry holds none.
 func (h *Handler) forceUnlockEntry(r *http.Request, c call, obj identity.Object) audit.Entry {
 	return audit.Entry{
-		At:           time.Time{},
-		Namespace:    obj.Namespace(),
-		Subject:      c.principal.Subject,
-		IDPSubject:   "",
-		TokenID:      c.principal.TokenID,
-		Action:       string(identity.ActionUnitWriteForced),
-		Object:       obj.String(),
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    requestid.FromContext(r.Context()),
-		ObjectID:     obj.UnitID(),
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
-		Reason:       "",
+		At:            time.Time{},
+		Namespace:     obj.Namespace(),
+		Subject:       c.principal.Subject,
+		IDPSubject:    "",
+		TokenID:       c.principal.TokenID,
+		Action:        string(identity.ActionUnitWriteForced),
+		Object:        obj.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      clientip.String(r),
+		UserAgent:     truncateUserAgent(r.UserAgent()),
+		Channel:       audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     requestid.FromContext(r.Context()),
+		ObjectID:      obj.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: string(c.principal.Kind),
+		JobID:         c.principal.JobID,
 	}
 }
 

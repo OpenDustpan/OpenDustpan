@@ -245,6 +245,9 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Admin:          true,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	case userToken:
 		return identity.Principal{
@@ -254,6 +257,9 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	default:
 		return identity.Principal{
@@ -263,6 +269,9 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, identity.ErrUnauthenticated
 	}
 }
