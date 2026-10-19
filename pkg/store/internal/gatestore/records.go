@@ -106,7 +106,7 @@ func insertRecord(ctx context.Context, tx Tx, ns namespace.Name, row RecordRow) 
 }
 
 // refusalKey joins the refusals of one principal and one access limit: it is
-// the digest of the subject, the change, and the access limits that gave the
+// the digest of the subject, the action, the change, and the access limits that gave the
 // refusal. A record holds no other name of the call. Each part has its length
 // in front, so two lists of parts never give one key.
 func refusalKey(r gate.Record) string {
@@ -122,7 +122,7 @@ func refusalKey(r gate.Record) string {
 
 	var b strings.Builder
 
-	for _, part := range append([]string{r.Subject, string(r.Change.Kind), r.Change.ID}, limits...) {
+	for _, part := range append([]string{r.Subject, r.Action, string(r.Change.Kind), r.Change.ID}, limits...) {
 		b.WriteString(strconv.Itoa(len(part)))
 		b.WriteByte(':')
 		b.WriteString(part)
@@ -277,7 +277,7 @@ func (s *Records) Query(ctx context.Context, ns namespace.Name, q gate.RecordQue
 // marshalRecord returns the JSON form of r. gate.Record is the wire form of
 // the record, and its types carry their own JSON names.
 func marshalRecord(r *gate.Record) ([]byte, error) {
-	b, err := json.Marshal(r) //nolint:musttag // See the comment of the function.
+	b, err := json.Marshal(r)
 	if err != nil {
 		return nil, fmt.Errorf("encode record %s: %w", r.ID, err)
 	}
@@ -287,7 +287,7 @@ func marshalRecord(r *gate.Record) ([]byte, error) {
 
 // unmarshalRecord reads the JSON form of a record into r.
 func unmarshalRecord(b []byte, r *gate.Record) error {
-	if err := json.Unmarshal(b, r); err != nil { //nolint:musttag // See marshalRecord.
+	if err := json.Unmarshal(b, r); err != nil {
 		return fmt.Errorf("decode record: %w", err)
 	}
 

@@ -9,6 +9,7 @@ package gatestore
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -202,3 +203,40 @@ func (s *Store) Settings() gate.Settings { return s.settings }
 //
 //nolint:ireturn // The method implements gate.Store, which returns the port.
 func (s *Store) Records() gate.Records { return s.records }
+
+// Removed names one configuration object that a purge or a delete removes.
+type Removed struct {
+	Kind     string
+	ID       string
+	ScopeKey string
+}
+
+// RemovedChanges returns the audit changes that name the removed objects: one
+// change for each object, keyed by its kind and ID, with the scope key as the
+// value. A list above the cap of an entry ends with one change that gives the
+// count of the objects that it leaves out.
+func RemovedChanges(removed []Removed) []audit.Change {
+	if len(removed) == 0 {
+		return nil
+	}
+
+	limit := audit.MaxChanges - 1
+
+	out := make([]audit.Change, 0, min(len(removed), audit.MaxChanges))
+
+	for i, r := range removed {
+		if i == limit && len(removed) > audit.MaxChanges {
+			out = append(out, audit.Change{
+				Key: "removed:more", Old: nil, New: strconv.Itoa(len(removed) - limit), Layer: "", TakesEffect: "",
+			})
+
+			break
+		}
+
+		out = append(out, audit.Change{
+			Key: "removed:" + r.Kind + ":" + r.ID, Old: nil, New: r.ScopeKey, Layer: "", TakesEffect: "",
+		})
+	}
+
+	return out
+}

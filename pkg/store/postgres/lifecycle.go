@@ -429,9 +429,12 @@ func (s *Store) purgeUnit(
 			return err
 		}
 
-		if err := purgeUnitGate(ctx, q, fence.Namespace, u.tool, deleted.Name); err != nil {
-			return err
+		removed, gateErr := purgeUnitGate(ctx, q, fence.Namespace, u.tool, deleted.Name)
+		if gateErr != nil {
+			return gateErr
 		}
+
+		e.Changes = append(e.Changes, removed...)
 
 		if err := q.DeleteCollectionMembersOfUnit(ctx, u.id); err != nil {
 			return fmt.Errorf("delete collection membership: %w", err)

@@ -2247,6 +2247,48 @@ JOIN inventory AS i ON i.namespace = n.name
 JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
 WHERE n.id = sqlc.arg(namespace_id) AND i.tool = sqlc.arg(tool) AND i.name = sqlc.arg(unit_name);
 
+-- name: ListUnitGateObjectKeys :many
+-- The kind, ID and scope key of the configuration of a unit that a purge
+-- removes, for the audit entry of the purge.
+SELECT kind, id, scope_key
+FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
+  AND unit_name = sqlc.arg(unit_name)
+ORDER BY kind, id;
+
+-- name: ListScopeGateObjectKeys :many
+-- The kind, ID and scope key of the configuration of one scope that a delete
+-- removes, for the audit entry of the delete.
+SELECT kind, id, scope_key
+FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND scope_key = sqlc.arg(scope_key)
+ORDER BY kind, id;
+
+-- name: CountUnitGateObjects :one
+-- The count of configuration objects that the unit called unit_name holds.
+SELECT COUNT(*)
+FROM gate_objects
+WHERE namespace_id = sqlc.arg(namespace_id) AND level = 'unit' AND tool = sqlc.arg(tool)
+  AND unit_name = sqlc.arg(unit_name);
+
+-- name: CopyUnitGateObjects :exec
+-- Copies the configuration of a unit to the scope of its new name, in the
+-- transaction of a rename.
+INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
+SELECT o.namespace_id, CAST(sqlc.arg(new_scope_key) AS TEXT), o.kind, o.id, o.level, o.tool,
+       CAST(sqlc.arg(new_unit_name) AS TEXT), o.version, o.body, o.updated_at_ms
+FROM gate_objects AS o
+WHERE o.namespace_id = sqlc.arg(namespace_id) AND o.level = 'unit' AND o.tool = sqlc.arg(tool)
+  AND o.unit_name = sqlc.arg(old_unit_name);
+
+-- name: CopyUnitGateReferences :exec
+-- Copies the references of the configuration of a unit to the scope of its
+-- new name, in the transaction of a rename.
+INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
+SELECT r.ref_kind, r.ref_id, r.namespace_id, CAST(sqlc.arg(new_scope_key) AS TEXT), r.owner_kind, r.owner_id
+FROM gate_references AS r
+WHERE r.namespace_id = sqlc.arg(namespace_id) AND r.scope_key = sqlc.arg(old_scope_key);
+
 -- name: DeleteUnitGateObjects :exec
 -- Deletes the configuration of a unit that a purge removes. The references go
 -- with it.

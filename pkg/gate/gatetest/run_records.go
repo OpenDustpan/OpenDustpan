@@ -83,7 +83,7 @@ func record(t *testing.T, ns namespace.Name, change gate.ChangeRef, at time.Time
 		}},
 		Warnings: []string{"budget at 82 percent"}, AutoApply: false,
 		Controls:   []gate.FixedControl{{Kind: gate.ControlFreeze, Passed: true, Detail: "freeze-1"}},
-		BreakGlass: "audit-9", Result: gate.ResultAwaitingApproval, Count: 1, LastAt: at,
+		BreakGlass: "audit-9", Result: gate.ResultAwaitingApproval, Action: "", Count: 1, LastAt: at,
 	}
 }
 
@@ -112,6 +112,7 @@ func accessRecord(t *testing.T, ns namespace.Name, subject string, limit gate.Po
 	r := record(t, ns, gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}, at)
 	r.Point = ""
 	r.Subject = subject
+	r.Action = "state.read"
 	r.Units[0].Gates = []gate.PolicyResult{{
 		Policy: limit, Version: 1, Mode: gate.ModeEnforce, Outcome: gate.OutcomeDeny, Matched: true, Error: false,
 		Diagnostic: "", Skipped: false, BrokenBy: "", Message: "",
@@ -416,10 +417,14 @@ func caseRefusalNew(t *testing.T, e *env) {
 	_, err := rs.NoteRefusal(t.Context(), first, gate.AccessRefusalWindow, e.acme)
 	mustNil(t, "NoteRefusal(first)", err)
 
+	otherAction := accessRecord(t, "acme", "agent-1", limit, recordTime().Add(time.Second))
+	otherAction.Action = "state.write"
+
 	cases := map[string]gate.Record{
 		"after the window": accessRecord(t, "acme", "agent-1", limit, recordTime().Add(2*gate.AccessRefusalWindow)),
 		"other subject":    accessRecord(t, "acme", "agent-2", limit, recordTime().Add(time.Second)),
 		"other limit":      accessRecord(t, "acme", "agent-1", otherLimit, recordTime().Add(time.Second)),
+		"other action":     otherAction,
 		"other namespace":  accessRecord(t, "globex", "agent-1", limit, recordTime().Add(time.Second)),
 	}
 

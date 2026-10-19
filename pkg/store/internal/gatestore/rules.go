@@ -404,3 +404,43 @@ func ParseScope(key string) (gate.Scope, error) {
 
 	return scope, nil
 }
+
+// CheckJoin returns gate.ErrFinal when the unit holds a gate with the ID of a
+// final gate of the collection. A unit that joins a collection falls under its
+// final gates, so it must not shadow one. Put enforces the same rule when a
+// scope gets a final gate.
+func CheckJoin(ctx context.Context, tx Tx, unit, coll gate.Scope) error {
+	held, err := tx.List(ctx, unit, KindGate)
+	if err != nil {
+		return err
+	}
+
+	if len(held) == 0 {
+		return nil
+	}
+
+	finals, err := tx.List(ctx, coll, KindGate)
+	if err != nil {
+		return err
+	}
+
+	for _, row := range finals {
+		g, derr := decodeGate(coll, row)
+		if derr != nil {
+			return derr
+		}
+
+		if !g.Final {
+			continue
+		}
+
+		for _, h := range held {
+			if h.ID == row.ID {
+				return fmt.Errorf("%w: the unit holds a gate with the ID of the final gate %s of the collection",
+					gate.ErrFinal, g.PolicyID())
+			}
+		}
+	}
+
+	return nil
+}
