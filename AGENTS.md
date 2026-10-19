@@ -74,6 +74,7 @@ pkg/                   the public SDK (ADR 35)
   graph/               domain: the unit graph, blast radius and focus view
   unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
   unitimport/          domain: imports of units from a source, the import ledger and the move check
+  gate/                domain: gates, access limits, approval rules, facts and decision records
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
@@ -84,6 +85,7 @@ internal/              code that is not part of the SDK
   metrics/, token/...  helpers shared across packages
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
+deploy/helm/           the Helm chart in opendustpan/: values.yaml and values.schema.json (templates later)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
 GLOSSARY.md            the project's domain language: one word per concept
@@ -114,7 +116,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`, `unitimport`) never import
+  `unmanaged`, `unitimport`, `gate`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.

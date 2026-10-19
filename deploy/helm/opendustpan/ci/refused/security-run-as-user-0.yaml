@@ -1,0 +1,9 @@
+# Refused: user 0.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+podSecurityContext:
+  runAsUser: 0
