@@ -37,7 +37,7 @@ func portableRunnerTables() []PortableTable {
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "pool_id", Kind: KindText},
 				{Name: portColSHA256, Kind: KindText},
-				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: "expires_at_ms", Kind: KindTime},
 				{Name: "used_at_ms", Kind: KindTime},

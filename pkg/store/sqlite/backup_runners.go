@@ -35,7 +35,7 @@ func sqliteRunnerBackupTables() []sqliteBackupTable {
 				backupColNamespaceID,
 				"pool_id",
 				backupColSHA256,
-				"created_by",
+				backupColCreatedBy,
 				backupColCreatedAtMs,
 				backupColExpiresAtMs,
 				"used_at_ms",

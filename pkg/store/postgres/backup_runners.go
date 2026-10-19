@@ -37,7 +37,7 @@ func pgCopyRunnerTables() []pgCopyTable {
 				pgColNamespaceID,
 				"pool_id",
 				pgColSHA256,
-				"created_by",
+				pgColCreatedBy,
 				pgColCreatedAtMs,
 				pgColExpiresAtMs,
 				"used_at_ms",

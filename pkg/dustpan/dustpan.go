@@ -1032,7 +1032,9 @@ func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 		return neutralHandlers{}, err
 	}
 
-	return neutralHandlers{inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles}, nil
+	return neutralHandlers{
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles,
+	}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob

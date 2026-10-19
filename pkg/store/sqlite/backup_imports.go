@@ -21,7 +21,7 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 				"options",
 				backupColState,
 				"reason",
-				"created_by",
+				backupColCreatedBy,
 				backupColCreatedAtMs,
 				"plan",
 				backupColEndedAtMs,

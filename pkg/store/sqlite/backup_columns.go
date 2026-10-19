@@ -393,13 +393,13 @@ func sqliteBackupTables() []sqliteBackupTable {
 // sqliteLaterBackupTables lists the column lists of the tables that follow the
 // base list in the order of backup.Tables.
 func sqliteLaterBackupTables() []sqliteBackupTable {
-
 	return slices.Concat(
 		sqliteIdentityBackupTables(),
 		sqliteSessionBackupTables(),
 		sqliteImportBackupTables(),
 		sqliteRunnerBackupTables(),
-		sqliteProfileBackupTables())
+		sqliteProfileBackupTables(),
+	)
 }
 
 // sqliteControlTables lists the column list of every table of
