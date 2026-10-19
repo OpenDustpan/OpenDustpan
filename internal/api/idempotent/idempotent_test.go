@@ -46,12 +46,59 @@ const (
 func call(t *testing.T, mw *idempotent.Middleware, serve http.HandlerFunc) (*httptest.ResponseRecorder, error) {
 	t.Helper()
 
+	return callWith(t, mw, plainCall(noAnswer, serve), nil)
+}
+
+// plainCall returns the Call of a route with an answer that holds no secret
+// and a key that is optional.
+func plainCall(build func(any) (idempotency.Answer, error), serve http.HandlerFunc) idempotent.Call {
+	return idempotent.Call{Principal: caller, Build: build, Serve: serve, SecretAnswer: nil, Required: false}
+}
+
+// callWith runs one request with the key key1 and the body body1 through
+// Handle, with the Call c. edit changes the request first, if set.
+func callWith(
+	t *testing.T, mw *idempotent.Middleware, c idempotent.Call, edit func(*http.Request),
+) (*httptest.ResponseRecorder, error) {
+	t.Helper()
+
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target+"?x=1", strings.NewReader(body1))
 	req.Header.Set(idempotent.Header, key1)
 
+	if edit != nil {
+		edit(req)
+	}
+
 	rec := httptest.NewRecorder()
 
-	return rec, mw.Handle(rec, req, idempotent.Call{Principal: caller, Build: noAnswer, Serve: serve})
+	return rec, mw.Handle(rec, req, c)
+}
+
+// finish does what the store of a keyed route does as the last step of its
+// transaction: it stores the answer that the Build of the Call makes.
+func finish(t *testing.T, store idempotency.Store, r *http.Request) {
+	t.Helper()
+
+	completion, ok := idempotency.CompletionFrom(r.Context())
+	if !ok {
+		t.Error("the context carries no completion")
+
+		return
+	}
+
+	ctx := r.Context()
+
+	err := completion.Finish(nil, func(token string, a idempotency.Answer) error {
+		return store.Complete(ctx, completion.Ref, token, a)
+	})
+	if err != nil {
+		t.Errorf("Finish: %v", err)
+	}
+}
+
+// builds returns a Build that makes the answer a.
+func builds(a idempotency.Answer) func(any) (idempotency.Answer, error) {
+	return func(any) (idempotency.Answer, error) { return a, nil }
 }
 
 func TestNewNeedsItsDependencies(t *testing.T) {
@@ -74,8 +121,12 @@ func TestNewNeedsItsDependencies(t *testing.T) {
 func TestStoresAnAnswerThatTheHandlerWrote(t *testing.T) {
 	t.Parallel()
 
-	mw := newMiddleware(t, idempotencytest.NewMemory(), 1<<20)
+	store := idempotencytest.NewMemory()
+	mw := newMiddleware(t, store, 1<<20)
 	runs := 0
+	stored := idempotency.Answer{
+		Status: http.StatusAccepted, Headers: map[string]string{"Content-Type": "text/plain"}, Body: []byte("done"),
+	}
 	serve := func(w http.ResponseWriter, r *http.Request) {
 		runs++
 
@@ -84,21 +135,18 @@ func TestStoresAnAnswerThatTheHandlerWrote(t *testing.T) {
 			t.Errorf("the handler read %q, %v, want the body again", got, readErr)
 		}
 
-		w.Header().Set("Content-Type", "text/plain")
+		finish(t, store, r)
 		w.Header().Set("X-Not-Kept", "1")
-		w.WriteHeader(http.StatusAccepted)
-
-		if _, writeErr := w.Write([]byte("done")); writeErr != nil {
-			t.Errorf("write: %v", writeErr)
-		}
+		idempotent.Write(w, stored)
 	}
+	c := plainCall(builds(stored), serve)
 
-	first, err := call(t, mw, serve)
+	first, err := callWith(t, mw, c, nil)
 	if err != nil || first.Code != http.StatusAccepted {
 		t.Fatalf("first: %d, %v", first.Code, err)
 	}
 
-	again, err := call(t, mw, serve)
+	again, err := callWith(t, mw, c, nil)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -128,10 +176,15 @@ func checkReplay(t *testing.T, got *httptest.ResponseRecorder) {
 func TestRefusals(t *testing.T) {
 	t.Parallel()
 
-	mw := newMiddleware(t, idempotencytest.NewMemory(), 8)
-	serve := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	store := idempotencytest.NewMemory()
+	mw := newMiddleware(t, store, 8)
+	serve := func(w http.ResponseWriter, r *http.Request) {
+		finish(t, store, r)
+		w.WriteHeader(http.StatusNoContent)
+	}
+	build := builds(idempotency.Answer{Status: http.StatusNoContent, Headers: nil, Body: nil})
 
-	if _, err := call(t, mw, serve); err != nil {
+	if _, err := callWith(t, mw, plainCall(build, serve), nil); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 
@@ -146,7 +199,7 @@ func TestRefusals(t *testing.T) {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target+"?x=1", strings.NewReader(tc.body))
 		req.Header.Set(idempotent.Header, tc.key)
 
-		err := mw.Handle(httptest.NewRecorder(), req, idempotent.Call{Principal: caller, Build: noAnswer, Serve: serve})
+		err := mw.Handle(httptest.NewRecorder(), req, plainCall(noAnswer, serve))
 
 		refusal, ok := errors.AsType[*idempotent.Error](err)
 		if !ok || refusal.Code != tc.code || refusal.Status != tc.status {
@@ -158,7 +211,7 @@ func TestRefusals(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target+"?x=2", strings.NewReader("body"))
 	req.Header.Set(idempotent.Header, "k1")
 
-	err := mw.Handle(httptest.NewRecorder(), req, idempotent.Call{Principal: caller, Build: noAnswer, Serve: serve})
+	err := mw.Handle(httptest.NewRecorder(), req, plainCall(noAnswer, serve))
 	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Code != idempotent.CodeReused {
 		t.Errorf("another query: err = %v, want %s", err, idempotent.CodeReused)
 	}
@@ -186,19 +239,19 @@ func TestAnErrorAnswerFreesTheKey(t *testing.T) {
 		t.Errorf("the handler ran %d times, want 3: an error answer is not stored", runs)
 	}
 
-	// A handler that wrote nothing answered 200: stored.
-	nothing := func(http.ResponseWriter, *http.Request) {}
-	if _, err := call(t, mw, nothing); err != nil {
-		t.Fatalf("empty handler: %v", err)
+	// A handler that wrote nothing answered 200. Its store did not call
+	// Finish, so the middleware keeps no answer and frees the key.
+	empties := 0
+	nothing := func(http.ResponseWriter, *http.Request) { empties++ }
+
+	for range 2 {
+		if _, err := call(t, mw, nothing); err != nil {
+			t.Fatalf("empty handler: %v", err)
+		}
 	}
 
-	replay, err := call(t, mw, nothing)
-	if err != nil {
-		t.Fatalf("replay of an empty answer: %v", err)
-	}
-
-	if replay.Code != http.StatusOK || replay.Header().Get("Idempotent-Replayed") != "true" {
-		t.Errorf("replay of an empty answer: %d %v", replay.Code, replay.Header())
+	if empties != 2 {
+		t.Errorf("the empty handler ran %d times, want 2: no answer is stored without Finish", empties)
 	}
 }
 
@@ -244,7 +297,7 @@ func TestACanceledClientStillFreesTheKey(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 
-	err := mw.Handle(httptest.NewRecorder(), req, idempotent.Call{Principal: caller, Build: noAnswer, Serve: gone})
+	err := mw.Handle(httptest.NewRecorder(), req, plainCall(noAnswer, gone))
 	if err != nil {
 		t.Fatalf("canceled request: %v", err)
 	}
@@ -306,7 +359,7 @@ func TestAFailedCommitFreesTheKey(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 
-	err := mw.Handle(httptest.NewRecorder(), req, idempotent.Call{Principal: caller, Build: build, Serve: failed})
+	err := mw.Handle(httptest.NewRecorder(), req, plainCall(build, failed))
 	if err != nil {
 		t.Fatalf("failed commit: %v", err)
 	}

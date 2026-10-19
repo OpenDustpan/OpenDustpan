@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -143,7 +144,8 @@ func keyMiddleware(t *testing.T, store *sqlite.Store, clock *testClock) *idempot
 	t.Helper()
 
 	idem, err := idempotent.New(idempotent.Config{
-		Store: store.Idempotency(), Logger: slog.New(slog.DiscardHandler), Now: clock.Now, MaxBodyBytes: 1 << 20,
+		Store:  store.Idempotency(idempotencytest.TestWrapper(t, 1)),
+		Logger: slog.New(slog.DiscardHandler), Now: clock.Now, MaxBodyBytes: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("idempotency middleware: %v", err)

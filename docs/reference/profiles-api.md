@@ -134,12 +134,13 @@ does the write one time.
 - **The scope.** The server keeps the first answer for the caller, the method,
   the path and the key. The same key from another caller, or on another path,
   is a new key. A caller never sees the answer of another caller.
-- **A replay.** A request with a known key and the same body and query gets
-  the first answer again, with its status and its headers, and the server
+- **A replay.** A request with a known key and the same body, query and
+  `If-Match` header gets the first answer again, with its status and its headers, and the server
   does not write again. The answer has the header `Idempotent-Replayed: true`.
   The server checks the permissions of the caller again before it sends the
   answer. A caller that lost the permission gets 403.
-- **Another body.** The same key with another body or query answers 422 with
+- **Another request.** The server compares the body, the query and `If-Match`.
+  The same key with another body, query or `If-Match` answers 422 with
   the error code `request.idempotency-key-reused` and changes nothing.
 - **A request that runs.** A request with a key whose first request has not
   ended answers 409 with the error code `request.idempotency-key-in-progress`.
@@ -151,7 +152,9 @@ does the write one time.
   key after the client fixes the cause does the write. The server never keeps
   400, 401, 403, 404, 409, 412, 422, 423, 429 or 5xx.
 - **For how long.** 24 hours from the first request. A restore of a backup
-  deletes all keys.
+  deletes all keys. A change of the key-encryption key, or the loss of it,
+  deletes all keys too: the server cannot open the key of its hashes, so it
+  makes a new one.
 - **What the server keeps.** The first answer, and a keyed hash of the request
   body. The server never keeps the body. The answer of a write holds no secret
   value.

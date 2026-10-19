@@ -214,9 +214,11 @@ func (h *Handler) serveKeyed(
 	}
 
 	err := h.idem.Handle(w, r, idempotent.Call{
-		Principal: p.Subject,
-		Build:     route.Answer(obj),
-		Serve:     func(w http.ResponseWriter, r *http.Request) { route.Serve(w, r, p, obj) },
+		Principal:    p.Subject,
+		Build:        route.Answer(obj),
+		SecretAnswer: nil,
+		Required:     false,
+		Serve:        func(w http.ResponseWriter, r *http.Request) { route.Serve(w, r, p, obj) },
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
