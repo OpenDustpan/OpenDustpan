@@ -274,9 +274,9 @@ Facts that this design depends on:
     `backup.schedule.tokenSecret`. It sets `concurrencyPolicy: Forbid`. The
     schema does not parse the cron syntax. `kubeconform` checks the
     CronJob against the Kubernetes schema, and the API server checks the
-    cron string when it admits the CronJob. The default schedule is once a day, which keeps the
-    25-hour check of `doctor` green. A restore is an API call (ADR 38), and
-    the chart has no restore Job.
+    cron string when it admits the CronJob. The default schedule is once a
+    day, which keeps the 25-hour check of `doctor` green. A restore is an
+    API call (ADR 38), and the chart has no restore Job.
     Benchmark: the GitLab chart runs its backups from a CronJob.
 
 ### Console, ingress and TLS
@@ -293,6 +293,9 @@ Facts that this design depends on:
     `server.tls.existingSecret`, the server serves TLS itself (ADR 27
     decision 1), and a certificate renewal needs a restart of the pods.
     OpenTofu needs TLS at the edge that the client sees (ADR 25).
+    The container listens on `:8080` (`DUSTPAN_LISTEN`, which the chart
+    sets), and the Service and the NetworkPolicy target that port.
+    `service.port` 0 means 80 with plain HTTP and 443 with built-in TLS.
     Benchmark: the Grafana, Keycloak (codecentric) and Harbor charts end
     TLS at the ingress by default.
 
@@ -389,8 +392,8 @@ Facts that this design depends on:
 
     CI runs it in a job of its own, in parallel with the Go job. The job
     downloads pinned versions of `helm` and `kubeconform` and checks their
-    SHA-256. On this design, `helm lint` takes under 1 second for each values
-    file, so the job does not make CI slower than the Go job.
+    SHA-256. On this design, `helm lint --strict` with helm v3.18.6 took 0.07
+    seconds for each values file, so the job does not make CI slower than the Go job.
     `make check` does not include the target, so a contributor needs no
     Helm. The tools need the owner's yes. See "Open", item 1.
     Benchmark: the Grafana and Bitnami chart repositories lint each chart
@@ -443,8 +446,10 @@ Facts that this design depends on:
   `secretKeyRef`. `DUSTPAN_OIDC_CLIENT_SECRET` works from a `secretKeyRef`.
 - No value mounts a Secret file for a `_FILE` setting, and the chart cannot
   set those settings. The chart cannot turn on audit chain signing:
-  `DUSTPAN_AUDIT_SIGNING_KEY_FILE` and the other `_FILE` secrets that
-  `serve` checks have no environment form. A server change that accepts a
+  `DUSTPAN_AUDIT_SIGNING_KEY_FILE` has no environment form. The webhook
+  secrets of the audit sink and the log sink have an environment form
+  (`DUSTPAN_AUDIT_WEBHOOK_SECRET`, `DUSTPAN_LOG_WEBHOOK_SECRET`), so they
+  work from a `secretKeyRef` in `server.extraEnv`. A server change that accepts a
   file with owner user 0, the group of the process and mode 0440 would
   need an RFC.
 - In `v0.1.0` the chart runs one instance with the `Recreate` strategy, and
