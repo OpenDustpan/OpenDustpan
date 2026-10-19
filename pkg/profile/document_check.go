@@ -8,6 +8,31 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// checkKeys refuses a key that is not text, a merge key and a duplicate key
+// in the map n.
+func checkKeys(n *yaml.Node) error {
+	keys := map[string]bool{}
+
+	for i := 0; i < len(n.Content); i += pairSize {
+		k := n.Content[i]
+		if k.Kind != yaml.ScalarNode {
+			return fmt.Errorf("%w: line %d: a key must be text", ErrInvalid, k.Line)
+		}
+
+		if k.Tag == "!!merge" || k.Value == "<<" {
+			return fmt.Errorf("%w: line %d: merge keys (<<) are not allowed", ErrInvalid, k.Line)
+		}
+
+		if keys[k.Value] {
+			return fmt.Errorf("%w: line %d: key %q is twice in one map", ErrInvalid, k.Line, k.Value)
+		}
+
+		keys[k.Value] = true
+	}
+
+	return nil
+}
+
 // checkPlain refuses an alias and a duplicate key, at any depth.
 func checkPlain(n *yaml.Node) error {
 	if n.Kind == yaml.AliasNode || n.Anchor != "" {
@@ -15,19 +40,8 @@ func checkPlain(n *yaml.Node) error {
 	}
 
 	if n.Kind == yaml.MappingNode {
-		keys := map[string]bool{}
-
-		for i := 0; i < len(n.Content); i += pairSize {
-			k := n.Content[i]
-			if k.Kind != yaml.ScalarNode {
-				return fmt.Errorf("%w: line %d: a key must be text", ErrInvalid, k.Line)
-			}
-
-			if keys[k.Value] {
-				return fmt.Errorf("%w: line %d: key %q is twice in one map", ErrInvalid, k.Line, k.Value)
-			}
-
-			keys[k.Value] = true
+		if err := checkKeys(n); err != nil {
+			return err
 		}
 	}
 
@@ -210,6 +224,10 @@ func walkValues(n *yaml.Node, path string, depth int, count *int, visit func(Ent
 		return walkChildren(n, path, depth, count, visit)
 	}
 
+	if err := noEntryKeys(n, joinPath(topValues, path)); err != nil {
+		return err
+	}
+
 	e := newEntry(path)
 	if err := n.Decode(&e.Value); err != nil {
 		return fmt.Errorf("%w: value at %s: %w", ErrInvalid, path, err)
@@ -279,6 +297,10 @@ func readEntry(n *yaml.Node, path string) (Entry, error) {
 func (e *Entry) setField(key string, val *yaml.Node) (bool, error) {
 	switch key {
 	case keyValue:
+		if err := noEntryKeys(val, keyValue); err != nil {
+			return false, err
+		}
+
 		if err := val.Decode(&e.Value); err != nil {
 			return false, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
@@ -338,6 +360,12 @@ func setFlag(dst *bool, key string, val *yaml.Node) error {
 func typeKind(n *yaml.Node) (string, error) {
 	if n.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("%w: %s must be a map with a \"kind\"", ErrInvalid, keyType)
+	}
+
+	for i := 0; i < len(n.Content); i += pairSize {
+		if n.Content[i].Value != "kind" {
+			return "", fmt.Errorf("%w: %s holds only \"kind\"", ErrInvalid, keyType)
+		}
 	}
 
 	k := mapGet(n, "kind")

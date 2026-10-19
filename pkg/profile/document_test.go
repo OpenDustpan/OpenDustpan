@@ -53,6 +53,27 @@ func TestParseDocument(t *testing.T) {
 			"schemaVersion: 1\nvalues:\n  a:\n    $value: 1\n    $type: {kind: blob}\n",
 			profile.ErrInvalid,
 		},
+		{
+			"secret in a list under a plain key",
+			"schemaVersion: 1\nvalues:\n  list: [{$secret: hunter2}]\n",
+			profile.ErrInvalid,
+		},
+		{"secret in a top-level list", "schemaVersion: 1\nvalues: [{$secret: hunter2}]\n", profile.ErrInvalid},
+		{
+			"secret inside a value",
+			"schemaVersion: 1\nvalues:\n  a: {$value: {$secret: hunter2}}\n",
+			profile.ErrInvalid,
+		},
+		{
+			"secret key inside a type",
+			"schemaVersion: 1\nvalues:\n  a: {$value: x, $type: {kind: string, $secret: hunter2}}\n",
+			profile.ErrInvalid,
+		},
+		{
+			"merge key",
+			"schemaVersion: 1\nvalues: {\"<<\": {$secret: hunter2}}\n",
+			profile.ErrInvalid,
+		},
 		{"provider without use", "schemaVersion: 1\nproviders:\n  a: {}\n", profile.ErrInvalid},
 		{
 			"secret under providers",

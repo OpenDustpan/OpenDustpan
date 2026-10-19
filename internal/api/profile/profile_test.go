@@ -593,6 +593,23 @@ func TestDelete(t *testing.T) {
 	wantCode(t, "unknown name", f.do(t, get("reader", base+"/nothing")), http.StatusNotFound)
 }
 
+func TestCreateRefusesASecretInAList(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	doc := "schemaVersion: 1\nvalues:\n  list: [{$secret: hunter2}]\n"
+	body := jsonString(t, map[string]string{"name": "a", "document": doc})
+
+	wantCode(t, "create", f.do(t, send("admin", http.MethodPost, base, body)), http.StatusBadRequest)
+
+	wantCode(t, "the refused create left a profile", f.do(t, get("reader", base+"/a")), http.StatusNotFound)
+
+	list := f.do(t, get("reader", base))
+	if list.code != http.StatusOK || strings.Contains(list.body, `"a"`) {
+		t.Errorf("list after the refused create: %d %s", list.code, list.body)
+	}
+}
+
 func TestIdempotencyKeyIsRefusedNotIgnored(t *testing.T) {
 	t.Parallel()
 
