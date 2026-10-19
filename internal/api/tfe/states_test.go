@@ -771,9 +771,9 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 		force, unlockedWrite          bool
 		serial                        int64
 	}{
-		{id: "sv-3", holder: "tester", restored: "sv-1", fenceBy: "", force: true, unlockedWrite: true, serial: 5},
-		{id: "sv-2", holder: "tester", restored: "", fenceBy: "alice", force: true, unlockedWrite: false, serial: 4},
-		{id: "sv-1", holder: "tester", restored: "", fenceBy: "", force: false, unlockedWrite: false, serial: 3},
+		{id: "sv-3", holder: "", restored: "", fenceBy: "", force: false, unlockedWrite: true, serial: 5},
+		{id: "sv-2", holder: "", restored: "", fenceBy: "alice", force: false, unlockedWrite: false, serial: 4},
+		{id: "sv-1", holder: "tester", restored: "sv-0", fenceBy: "", force: true, unlockedWrite: false, serial: 3},
 	} {
 		created := at.Add(time.Duration(i) * time.Minute)
 		versions = append(versions, workspace.StateVersion{
@@ -945,9 +945,9 @@ func TestListStateVersionsAddedAttributes(t *testing.T) {
 	doc := decodeStateList(t, rec)
 
 	want := map[string]stateListTestAttributes{
-		"sv-3": {Holder: "tester", Force: true, RestoredFrom: "sv-1", FenceBy: "", Unlocked: true},
-		"sv-2": {Holder: "tester", Force: true, RestoredFrom: "", FenceBy: "alice", Unlocked: false},
-		"sv-1": {Holder: "tester", Force: false, RestoredFrom: "", FenceBy: "", Unlocked: false},
+		"sv-3": {Holder: "", Force: false, RestoredFrom: "", FenceBy: "", Unlocked: true},
+		"sv-2": {Holder: "", Force: false, RestoredFrom: "", FenceBy: "alice", Unlocked: false},
+		"sv-1": {Holder: "tester", Force: true, RestoredFrom: "sv-0", FenceBy: "", Unlocked: false},
 	}
 
 	if len(doc.Data) != len(want) {
