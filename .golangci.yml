@@ -145,6 +145,7 @@ linters:
             - "**/pkg/incident/**"
             - "**/pkg/catalog/**"
             - "**/pkg/policy/**"
+            - "**/pkg/gate/**"
             - "**/pkg/quota/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
