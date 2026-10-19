@@ -12,6 +12,8 @@
 #   CONSOLE_SHA256  tarball checksum (required with CONSOLE_URL)
 #   EXTRA_CA_FILE   optional PEM bundle file with one more CA to trust during
 #                   the build, for hosts behind a TLS-intercepting proxy
+#   DOCKER_BUILD_NETWORK  optional network mode for the build (the --network
+#                   option of docker build), for example host
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +30,11 @@ if [ -z "$CONSOLE_URL" ]; then
   printf '%s\n' '<!doctype html><title>OpenDustpan</title><p>Placeholder console.</p>' >"$WORK/console/index.html"
   tar -czf "$TARBALL" -C "$WORK/console" .
   CONSOLE_URL="file:console-local.tgz"
-  CONSOLE_SHA256="$(sha256sum "$TARBALL" | awk '{print $1}')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    CONSOLE_SHA256="$(sha256sum "$TARBALL" | awk '{print $1}')"
+  else
+    CONSOLE_SHA256="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
+  fi
 elif [ -z "$CONSOLE_SHA256" ]; then
   echo "build-image-local: CONSOLE_SHA256 is required with CONSOLE_URL" >&2
   exit 1
@@ -46,6 +52,6 @@ docker build -t "$IMAGE" \
   --build-arg VERSION=dev \
   --build-arg CONSOLE_URL="$CONSOLE_URL" \
   --build-arg CONSOLE_SHA256="$CONSOLE_SHA256" \
-  "${BUILD_ARGS[@]}" \
+  ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
   "$ROOT"
 echo "build-image-local: built $IMAGE"

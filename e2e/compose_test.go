@@ -115,7 +115,7 @@ func TestComposeQuickstart(t *testing.T) {
 
 	compose("up", "--detach", "--wait", "--wait-timeout", "300")
 
-	token := envFileValue(t, filepath.Join(dir, ".env"), "DUSTPAN_ADMIN_TOKEN")
+	token := envFileValue(t, filepath.Join(dir, ".env"), "OPENDUSTPAN_ADMIN_TOKEN")
 	cert := filepath.Join(dir, "tls", "cert.pem")
 	host := "localhost:" + port
 
@@ -128,18 +128,36 @@ func TestComposeQuickstart(t *testing.T) {
 
 	stack := composeStack{host: host, token: token, cert: cert}
 
+	var listStacks func(t *testing.T) string
+
 	t.Run("Pulumi CLI", func(t *testing.T) {
 		t.Parallel()
-		composePulumi(ctx, t, pulumi, stack)
+		listStacks = composePulumi(ctx, t, pulumi, stack)
 	})
 
 	t.Run("OpenTofu", func(t *testing.T) {
 		t.Parallel()
 		composeTofu(ctx, t, tofu, stack)
 	})
+
+	// This cleanup runs after both subtests end and before the cleanup that
+	// removes the stack. The data must survive a restart of the stack.
+	t.Cleanup(func() {
+		if t.Failed() || listStacks == nil {
+			return
+		}
+
+		compose("down")
+		compose("up", "--detach", "--wait", "--wait-timeout", "300")
+
+		if out := listStacks(t); !strings.Contains(out, "dev") {
+			t.Errorf("pulumi stack ls does not list the stack after a restart:\n%s", out)
+		}
+	})
 }
 
-func composePulumi(ctx context.Context, t *testing.T, cli e2e.Install, stack composeStack) {
+// composePulumi makes a stack and answers a function that lists the stacks.
+func composePulumi(ctx context.Context, t *testing.T, cli e2e.Install, stack composeStack) func(t *testing.T) string {
 	t.Helper()
 
 	project := t.TempDir()
@@ -169,6 +187,14 @@ func composePulumi(ctx context.Context, t *testing.T, cli e2e.Install, stack com
 
 	if out := runCLI("stack", "ls"); !strings.Contains(out, "dev") {
 		t.Fatalf("pulumi stack ls does not list the stack:\n%s", out)
+	}
+
+	return func(t *testing.T) string {
+		t.Helper()
+
+		return runIn(ctx, t, command{
+			dir: project, env: env, name: cli.Binary(), args: []string{"stack", "ls"}, clean: true,
+		})
 	}
 }
 
@@ -370,7 +396,7 @@ func composeCommand(ctx context.Context, dir string, extra []string, name string
 	//nolint:gosec // The suite runs fixed tools (docker, the CLIs under test) with its own arguments.
 	cmd := exec.CommandContext(stepCtx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), extra...)
+	cmd.Env = append(withoutStackVariables(os.Environ()), extra...)
 
 	var out bytes.Buffer
 
@@ -418,4 +444,29 @@ func cleanCommand(ctx context.Context, dir string, env []string, name string, ar
 	err := cmd.Run()
 
 	return out.String(), err
+}
+
+// withoutStackVariables drops the variables that a shell may hold and that
+// the compose stack reads, so that they cannot override the .env file.
+func withoutStackVariables(env []string) []string {
+	prefixes := []string{"DUSTPAN_", "OPENDUSTPAN_", "POSTGRES_", "S3_", "AWS_"}
+	kept := make([]string, 0, len(env))
+
+	for _, entry := range env {
+		drop := false
+
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(entry, prefix) {
+				drop = true
+
+				break
+			}
+		}
+
+		if !drop {
+			kept = append(kept, entry)
+		}
+	}
+
+	return kept
 }

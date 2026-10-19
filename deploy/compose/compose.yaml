@@ -16,7 +16,7 @@ services:
     environment:
       POSTGRES_USER: dustpan
       POSTGRES_DB: dustpan
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh to make .env}
+      POSTGRES_PASSWORD: ${OPENDUSTPAN_POSTGRES_PASSWORD:?run ./init.sh to make .env}
     volumes:
       # The image declares its volume at /var/lib/postgresql.
       - postgres-data:/var/lib/postgresql
@@ -35,10 +35,15 @@ services:
     image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
     restart: unless-stopped
     environment:
-      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?run ./init.sh to make .env}
-      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?run ./init.sh to make .env}
+      RUSTFS_ACCESS_KEY: ${OPENDUSTPAN_S3_ACCESS_KEY:?run ./init.sh to make .env}
+      RUSTFS_SECRET_KEY: ${OPENDUSTPAN_S3_SECRET_KEY:?run ./init.sh to make .env}
+      # The stack does not publish the console port 9001, so the console
+      # has no use here.
+      RUSTFS_CONSOLE_ENABLE: "false"
     volumes:
       - rustfs-data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:9000/health"]
       interval: 5s
@@ -55,12 +60,16 @@ services:
       rustfs:
         condition: service_healthy
     environment:
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?run ./init.sh to make .env}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:?run ./init.sh to make .env}
+      S3_ACCESS_KEY: ${OPENDUSTPAN_S3_ACCESS_KEY:?run ./init.sh to make .env}
+      S3_SECRET_KEY: ${OPENDUSTPAN_S3_SECRET_KEY:?run ./init.sh to make .env}
+    read_only: true
+    tmpfs: [/data]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        curl --fail --silent --show-error --output /dev/null
+        curl --fail --silent --show-error --noproxy '*' --output /dev/null
         --aws-sigv4 aws:amz:us-east-1:s3
         --user "$$S3_ACCESS_KEY:$$S3_SECRET_KEY"
         --request PUT http://rustfs:9000/dustpan || exit 1
@@ -77,14 +86,16 @@ services:
       bucket:
         condition: service_completed_successfully
     environment:
-      DUSTPAN_DATABASE: postgres://dustpan:${POSTGRES_PASSWORD:?run ./init.sh to make .env}@postgres:5432/dustpan
-      DUSTPAN_ADMIN_TOKEN: ${DUSTPAN_ADMIN_TOKEN:?run ./init.sh to make .env}
-      DUSTPAN_KEY_ENCRYPTION_KEY: ${DUSTPAN_KEY_ENCRYPTION_KEY:?run ./init.sh to make .env}
+      DUSTPAN_DATABASE: postgres://dustpan:${OPENDUSTPAN_POSTGRES_PASSWORD:?run ./init.sh to make .env}@postgres:5432/dustpan
+      DUSTPAN_ADMIN_TOKEN: ${OPENDUSTPAN_ADMIN_TOKEN:?run ./init.sh to make .env}
+      DUSTPAN_KEY_ENCRYPTION_KEY: ${OPENDUSTPAN_KEY_ENCRYPTION_KEY:?run ./init.sh to make .env}
       DUSTPAN_BLOB_STORE: s3://dustpan
       # The traffic to RustFS stays inside the private compose network.
       DUSTPAN_S3_ENDPOINT: http://rustfs:9000
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?run ./init.sh to make .env}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?run ./init.sh to make .env}
+      AWS_ACCESS_KEY_ID: ${OPENDUSTPAN_S3_ACCESS_KEY:?run ./init.sh to make .env}
+      AWS_SECRET_ACCESS_KEY: ${OPENDUSTPAN_S3_SECRET_KEY:?run ./init.sh to make .env}
+      # A proxy in the host environment must not catch the internal traffic.
+      NO_PROXY: rustfs,postgres,localhost,127.0.0.1
       DUSTPAN_LISTEN: ":8080"
       DUSTPAN_TLS_CERT: /tls/cert.pem
       DUSTPAN_TLS_KEY: /tls/key.pem
@@ -95,6 +106,10 @@ services:
       # certificate of init.sh. Put a reverse proxy with a real certificate
       # in front before you open the port to other hosts.
       - "127.0.0.1:${OPENDUSTPAN_PORT:-8080}:8080"
+    read_only: true
+    tmpfs: [/tmp, /data]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     command:
       - serve
       - --console-dir

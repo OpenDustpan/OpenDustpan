@@ -3,7 +3,7 @@
 This guide shows two ways to run OpenDustpan:
 
 - [One process with SQLite on loopback](#one-process-with-sqlite), for a first try on one machine.
-- [A compose stack with PostgreSQL and S3-compatible storage](#compose-stack-with-postgresql-and-s3-compatible-storage), for a setup that is closer to production.
+- [A compose stack with PostgreSQL and S3-compatible storage](#compose-stack-with-postgresql-and-s3-compatible-storage), to try PostgreSQL and S3-compatible storage. For production, use an S3 service that you operate or buy. See [s3-blobs.md](s3-blobs.md).
 
 Then it shows how to connect the [Pulumi CLI](#connect-the-pulumi-cli) and [OpenTofu](#connect-opentofu).
 
@@ -60,10 +60,10 @@ The file `deploy/compose/compose.yaml` runs three services:
 | Service | Image | License |
 | --- | --- | --- |
 | `opendustpan` | Built from this repository | Apache-2.0 |
-| `postgres` | PostgreSQL 18 | PostgreSQL License |
+| `postgres` | PostgreSQL 18.6 | PostgreSQL License |
 | `rustfs` | RustFS 1.0.3 | Apache-2.0 |
 
-RustFS is the S3-compatible store. We chose it because its license is permissive. The common alternatives, MinIO and Garage, use AGPL-3.0, and the license rules of this project refuse that license. The server needs an S3 API with conditional writes, and RustFS has them.
+RustFS is the S3-compatible store. The stack uses RustFS because its license is Apache-2.0. The server needs an S3 API with conditional writes, and RustFS has them. The stack turns off the RustFS console and does not publish its port.
 
 Every image has a version and a digest. The data of PostgreSQL and of RustFS is in the named volumes `postgres-data` and `rustfs-data`. The server waits until PostgreSQL and the bucket are ready. The stack opens the port on `127.0.0.1` only.
 
@@ -75,7 +75,7 @@ cd deploy/compose
 ./init.sh
 ```
 
-The script `init.sh` writes `.env` with random secrets, mode 0600, and `tls/` with a test certificate. The compose file holds no secret. A lost `DUSTPAN_KEY_ENCRYPTION_KEY` loses every secret and every OpenTofu state, so save a copy of `.env` in a password manager.
+The script `init.sh` writes `.env` with random secrets, mode 0600, and `tls/` with a test certificate. The compose file holds no secret. A lost `OPENDUSTPAN_KEY_ENCRYPTION_KEY` loses every secret and every OpenTofu state, so save a copy of `.env` in a password manager.
 
 Start the stack and wait for every healthcheck:
 
@@ -110,7 +110,13 @@ printf 'name: demo\nruntime: yaml\n' > Pulumi.yaml
 pulumi stack init acme/demo/dev
 ```
 
-For the compose stack, `DUSTPAN_ADMIN_TOKEN` is the value in `deploy/compose/.env`. Replace `<path to cert.pem>` with the full path of the certificate file.
+For the compose stack, read the token from `deploy/compose/.env`:
+
+```sh
+export DUSTPAN_ADMIN_TOKEN=$(sed -n 's/^OPENDUSTPAN_ADMIN_TOKEN=//p' deploy/compose/.env)
+```
+
+`SSL_CERT_FILE` works on Linux. On other systems, use a certificate that the system trusts. Replace `<path to cert.pem>` with the full path of the certificate file.
 
 The stack name has the form `<namespace>/<project>/<stack>`. Run `pulumi up` to make the first update.
 
@@ -139,11 +145,13 @@ tofu init
 tofu apply
 ```
 
+`SSL_CERT_FILE` works on Linux. On other systems, use a certificate that the system trusts.
+
 OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu init`.
 
 ## Test the compose stack
 
-`make compose-smoke` runs this guide against the compose stack. It builds the image, runs `init.sh`, starts the stack, and makes a namespace. Then it runs `pulumi login`, `pulumi stack init`, `tofu init` and `tofu apply` with the real CLIs. At the end it deletes the stack and its volumes. It needs Docker, the Compose plugin and OpenSSL.
+`make compose-smoke` runs this guide against the compose stack. It builds the image, runs `init.sh`, starts the stack, and makes a namespace. Then it runs `pulumi login`, `pulumi stack init`, `tofu init` and `tofu apply` with the real CLIs. Then it restarts the stack and checks that the Pulumi stack is still there. At the end it deletes the stack and its volumes. It needs Docker, the Compose plugin and OpenSSL.
 
 ## Next steps
 
