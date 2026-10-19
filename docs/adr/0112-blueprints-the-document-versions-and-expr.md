@@ -1,6 +1,6 @@
 # 112. Blueprints: the document, its versions and Expr
 
-Status: accepted · 2026-10-17 · supersedes the "Input schema" and the "Validation" sections of RFC 14
+Status: accepted · 2026-10-17 · supersedes the "Input schema" and the "Validation" sections of RFC 14. Decisions 6 and 7 superseded by ADR 224. The builtin list of decision 12 superseded by ADR 228
 
 ## Context
 

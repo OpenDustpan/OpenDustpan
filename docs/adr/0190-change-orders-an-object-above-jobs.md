@@ -1,6 +1,6 @@
 # 190. Change orders: an object above jobs
 
-Status: accepted · 2026-10-18 · ADRs 191 to 198 give the parts · supersedes parts of ADRs 100, 102, 103, 128 and 147
+Status: accepted · 2026-10-18 · ADRs 191 to 198 give the parts · supersedes parts of ADRs 100, 102, 103, 128 and 147. Decisions 6 and 7 superseded in part by ADR 225
 
 ## Context
 

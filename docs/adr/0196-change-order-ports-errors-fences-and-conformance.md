@@ -1,6 +1,6 @@
 # 196. Change order ports, errors, fences and conformance suites
 
-Status: accepted · 2026-10-18 · part of ADR 190
+Status: accepted · 2026-10-18 · part of ADR 190. Decisions 1 and 5 superseded in part by ADR 230
 
 ## Context
 

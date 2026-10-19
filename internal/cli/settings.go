@@ -1,5 +1,11 @@
 package cli
 
+import "opendustpan.org/opendustpan/pkg/history"
+
+// retentionDefault is the default of the retention settings: 400 days. A
+// test proves it equals history.DefaultRetention.
+const retentionDefault = "9600h"
+
 // defaultFalse is the default of the bool declarations: no opt-in without
 // an explicit flag or variable.
 const defaultFalse = "false"
@@ -22,6 +28,7 @@ func stringSetting(flag, env, def, help, reference string) *Setting {
 		Kind:      KindString,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -42,6 +49,7 @@ func boolSetting(flag, env, help, reference string) *Setting {
 		Kind:      KindBool,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -61,6 +69,7 @@ func intSetting(flag, env, def, help, reference string) *Setting {
 		Kind:      KindInt,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -81,6 +90,7 @@ func envSetting(env, doc string) *Setting {
 		Kind:      KindString,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -426,4 +436,34 @@ var Settings = []*Setting{
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
 		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
 	).WithSensitive(),
+
+	stringSetting(
+		history.PlanRetentionFlag, history.PlanRetentionEnv, retentionDefault,
+		"how long a stored plan stays ("+history.PlanRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration",
+	),
+	stringSetting(
+		history.JobLogRetentionFlag, history.JobLogRetentionEnv, retentionDefault,
+		"how long a version of a job log stays ("+history.JobLogRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration",
+	),
+	stepInput("DUSTPAN_JOB_ID", "The ID of the job that the step belongs to."),
+	stepInput("DUSTPAN_PHASE", "The name of the phase of the job that the step belongs to."),
+	stepInput("DUSTPAN_STEP", "The name of the step."),
+	stepInput("DUSTPAN_UNIT", "The unit that the job runs on."),
+	stepInput("DUSTPAN_NAMESPACE", "The namespace of the unit."),
+	stepInput("DUSTPAN_COMMIT", "The commit of the source that the job runs."),
+	stepInput("DUSTPAN_SERVER_URL", "The URL of the server that the step calls."),
+	stepInput(
+		"DUSTPAN_SWEEP_REPORT",
+		"Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes "+
+			"its report to. The launcher uploads the file when the command ends.",
+	),
+}
+
+// stepInput declares a variable that the launcher sets for the process of a
+// step: the variable and its reference description. The server does not read
+// it, so it has no flag, and it holds no credential.
+func stepInput(env, doc string) *Setting {
+	return envSetting(env, doc).WithStepInput()
 }
