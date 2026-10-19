@@ -31,7 +31,7 @@ func TestUnitListAcceptsBothSchemes(t *testing.T) {
 			handler := newSeededHandler(t, selectiveAuthorizer{deny: nil})
 
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
-				"/api/inventory/units?organization=acme", http.NoBody)
+				"/api/dustpan/v1/namespaces/acme/units", http.NoBody)
 			if tc.header != "" {
 				req.Header.Set("Authorization", tc.header)
 			}

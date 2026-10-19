@@ -208,7 +208,7 @@ func listDeleted(t *testing.T, srv *dustpan.Server, token, ns string) (int, dele
 	var page deletedPageWire
 
 	code, body := serveDeletedScope(t, srv, deletedScopeCall{
-		method: http.MethodGet, target: "/api/inventory/deleted-units?organization=" + ns, token: token, body: "",
+		method: http.MethodGet, target: "/api/dustpan/v1/namespaces/" + ns + "/deleted-units", token: token, body: "",
 	})
 	if code != http.StatusOK {
 		return code, page, body

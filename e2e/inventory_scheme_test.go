@@ -19,7 +19,7 @@ func inventorySchemeScenario(t *testing.T, env *e2e.Env) {
 		UserAgent: "opendustpan-e2e-console",
 		Name:      "unit list with the console token scheme",
 		Method:    http.MethodGet,
-		Path:      "/api/inventory/units?organization=" + e2e.Namespace,
+		Path:      "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units",
 		Body:      "",
 		Want:      http.StatusOK,
 		Check:     nil,

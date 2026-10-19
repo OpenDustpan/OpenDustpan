@@ -85,6 +85,7 @@ var Tables = []string{
 	"update_journal_refusals",
 	"secret_keys",
 	"inventory",
+	"inventory_labels",
 	"inventory_deleted",
 	"inventory_change_heads",
 	"inventory_changes",
@@ -92,6 +93,9 @@ var Tables = []string{
 	"collection_members",
 	"object_context",
 	"object_context_owners",
+	"gate_objects",
+	"gate_references",
+	"gate_records",
 	"blob_purges",
 	"workspaces",
 	"state_versions",
@@ -112,6 +116,10 @@ var Tables = []string{
 	"audit_sink_leases",
 	TableAccessTokenPolicy,
 	TableSessionPolicy,
+	"imports",
+	"imports_purged",
+	"import_units",
+	"import_ledger",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

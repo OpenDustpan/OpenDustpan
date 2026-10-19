@@ -1,5 +1,7 @@
 package backup
 
+import "slices"
+
 // Column names that more than one table holds. goconst keeps each one a
 // constant.
 const (
@@ -39,6 +41,8 @@ const (
 	portColObjectKind   = "object_kind"
 	portColObjectID     = "object_id"
 	portColResourceKey  = "resource_key"
+	portColAtMs         = "at_ms"
+	portColScopeKey     = "scope_key"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -50,7 +54,7 @@ const (
 //
 //nolint:funlen,maintidx // A constant table of columns; its length is the schema.
 func portableSpec() []PortableTable {
-	return []PortableTable{
+	core := []PortableTable{
 		{
 			Table:   portTableNamespaces,
 			OrderBy: []string{portColName},
@@ -211,6 +215,16 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "inventory_labels",
+			OrderBy: []string{portColUnitID, "label_key"},
+			Columns: []Column{
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColUnitID, Kind: KindText},
+				{Name: "label_key", Kind: KindText},
+				{Name: "label_value", Kind: KindText},
+			},
+		},
+		{
 			Table:   "inventory_deleted",
 			OrderBy: []string{portColTool, portColUnitID},
 			Columns: []Column{
@@ -236,7 +250,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "seq", Kind: KindInteger},
-				{Name: "at_ms", Kind: KindTime},
+				{Name: portColAtMs, Kind: KindTime},
 				{Name: portColTool, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
 				{Name: portColName, Kind: KindText},
@@ -314,6 +328,50 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "gate_objects",
+			OrderBy: []string{portColNamespaceID, portColScopeKey, portColKind, "id"},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: portColScopeKey, Kind: KindText},
+				{Name: portColKind, Kind: KindText},
+				{Name: "id", Kind: KindText},
+				{Name: "level", Kind: KindText},
+				{Name: portColTool, Kind: KindText},
+				{Name: "unit_name", Kind: KindText},
+				{Name: portColVersion, Kind: KindInteger},
+				{Name: "body", Kind: KindText},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "gate_references",
+			OrderBy: []string{"ref_kind", "ref_id", portColNamespaceID, portColScopeKey, "owner_kind", "owner_id"},
+			Columns: []Column{
+				{Name: "ref_kind", Kind: KindText},
+				{Name: "ref_id", Kind: KindText},
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: portColScopeKey, Kind: KindText},
+				{Name: "owner_kind", Kind: KindText},
+				{Name: "owner_id", Kind: KindText},
+			},
+		},
+		{
+			Table:   "gate_records",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "point", Kind: KindText},
+				{Name: "change_kind", Kind: KindText},
+				{Name: "change_id", Kind: KindText},
+				{Name: portColAtMs, Kind: KindTime},
+				{Name: "last_at_ms", Kind: KindTime},
+				{Name: "count", Kind: KindInteger},
+				{Name: "refusal_key", Kind: KindText},
+				{Name: "body", Kind: KindText},
+			},
+		},
+		{
 			Table:   "blob_purges",
 			OrderBy: []string{portColTool, portColUnitID},
 			Columns: []Column{
@@ -384,7 +442,7 @@ func portableSpec() []PortableTable {
 				{Name: "object", Kind: KindText},
 				{Name: portColVersion, Kind: KindText},
 				{Name: "value_path", Kind: KindText},
-				{Name: "at_ms", Kind: KindTime},
+				{Name: portColAtMs, Kind: KindTime},
 				{Name: "source_ip", Kind: KindText},
 				{Name: "user_agent", Kind: KindText},
 				{Name: "channel", Kind: KindText},
@@ -632,4 +690,6 @@ func portableSpec() []PortableTable {
 			},
 		},
 	}
+
+	return slices.Concat(core, portableImportTables())
 }

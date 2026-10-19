@@ -176,6 +176,9 @@ type Record struct {
 	// in error, or empty.
 	BreakGlass string `json:"breakGlass"`
 	Result     Result `json:"result"`
+	// Action is the authorization action of the refused call. It is empty
+	// for every other record.
+	Action string `json:"action"`
 	// Count is the count of refusals that share the record: refusals of
 	// one principal, one action and one access limit within
 	// AccessRefusalWindow. It is 1 for every other record.

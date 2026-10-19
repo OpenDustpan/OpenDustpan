@@ -18,7 +18,14 @@ func TestAdapterForRequest(t *testing.T) {
 		{name: "tfe discovery", pattern: "", path: "/.well-known/terraform.json", want: "opentofu"},
 		{name: "http backend pattern", pattern: "/tofu/state/", path: "/tofu/state/acme/prod", want: "opentofu"},
 		{name: "http backend path", pattern: "", path: "/tofu/state/acme/prod", want: "opentofu"},
-		{name: "inventory", pattern: "GET /api/inventory/units", path: "/api/inventory/units", want: "inventory"},
+		{
+			name: "inventory", pattern: "GET /api/dustpan/v1/namespaces/{namespace}/units",
+			path: "/api/dustpan/v1/namespaces/acme/units", want: "inventory",
+		},
+		{
+			name: "inventory restore", pattern: "POST /api/inventory/deleted-units/{tool}/{unitID}/restore",
+			path: "/api/inventory/deleted-units/pulumi/stk-1/restore", want: "inventory",
+		},
 		{name: "audit", pattern: "GET /api/audit/entries", path: "/api/audit/entries", want: adapterServer},
 		{name: "installation", pattern: "", path: "/api/server/no-such-route", want: adapterServer},
 		{name: "probe", pattern: "GET /health/live", path: "/health/live", want: adapterServer},

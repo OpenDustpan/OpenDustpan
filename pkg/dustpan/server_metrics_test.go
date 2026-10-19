@@ -73,7 +73,7 @@ func TestMetricsCountsPerAdapter(t *testing.T) {
 		t.Fatalf("opentofu request: status %d", status)
 	}
 
-	path := "/api/inventory/units?organization=acme"
+	path := "/api/dustpan/v1/namespaces/acme/units"
 
 	status, body = f.do(t, http.MethodGet, path, adminToken, "")
 	if status != http.StatusOK {
