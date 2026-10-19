@@ -284,7 +284,20 @@ var Settings = []*Setting{
 	boolSetting(
 		"disable-host-recovery", "DUSTPAN_DISABLE_HOST_RECOVERY",
 		"turn the host command off, so it makes no temporary administrator (DUSTPAN_DISABLE_HOST_RECOVERY=true)",
-		"(none: the host command is on). Set `true` in the environment of the operator account to turn it off",
+		"(none: the host command is on). Set `true` or `1` in the environment of the operator account to turn "+
+			"it off. `false`, `0` and an empty value keep it on. The host command refuses any other value",
+	),
+	stringSetting(
+		"recovery-mode", "DUSTPAN_RECOVERY_MODE", "bootstrap",
+		"break-glass recovery mode of the installation: bootstrap, signed-request or none (DUSTPAN_RECOVERY_MODE)",
+		"`bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: "+
+			"recovery with a request signed with an offline operator key. `none`: no break-glass, the operator "+
+			"restores from a backup, and the host command refuses to run",
+	),
+	stringSetting(
+		"reason", "", "",
+		"reason for the temporary administrator, stored in its audit entry and its review",
+		referenceNone,
 	),
 	stringSetting(
 		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "on",

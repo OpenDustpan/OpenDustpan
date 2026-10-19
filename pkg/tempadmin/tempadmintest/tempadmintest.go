@@ -60,6 +60,8 @@ func Run(t *testing.T, newStore Factory) {
 			test: testExpireAfterManualDisable,
 		},
 		{name: "read by subject returns the new record after a recreate", test: testBySubjectAfterRecreate},
+		{name: "a delete of the principal removes its record", test: testDeleteRemovesRecord},
+		{name: "a new person with a reused subject has no record", test: testReusedSubjectNoRecord},
 		{name: "each write appends its audit entry in @server", test: testAuditEntries},
 	}
 
@@ -91,6 +93,9 @@ const wantNewEntries = 2
 
 // createdBy is the creator of the records of the suite.
 const createdBy = "host"
+
+// reason is the reason of the records of the suite.
+const reason = "every administrator lost access"
 
 // alicePrincipalID is the principal ID of alice in the suite.
 const alicePrincipalID = "prn-alice"
@@ -163,6 +168,7 @@ func mustRecord(t *testing.T, s Store, id, subject string, created int) tempadmi
 		PrincipalID: id,
 		Subject:     subject,
 		CreatedBy:   createdBy,
+		Reason:      reason,
 	}
 
 	if err := s.CreateTempAdmin(t.Context(), r, entry(tempadmin.Ref(id))); err != nil {
@@ -186,7 +192,8 @@ func equalRecord(t *testing.T, got, want tempadmin.TempAdmin) {
 	t.Helper()
 
 	same := got.CreatedAt.Equal(want.CreatedAt) && got.ExpiresAt.Equal(want.ExpiresAt) &&
-		got.PrincipalID == want.PrincipalID && got.Subject == want.Subject && got.CreatedBy == want.CreatedBy
+		got.PrincipalID == want.PrincipalID && got.Subject == want.Subject && got.CreatedBy == want.CreatedBy &&
+		got.Reason == want.Reason
 
 	if !same {
 		t.Fatalf("record = %+v, want %+v", got, want)
@@ -233,6 +240,7 @@ func testDuplicate(t *testing.T, s Store) {
 		PrincipalID: alicePrincipalID,
 		Subject:     "alice",
 		CreatedBy:   createdBy,
+		Reason:      reason,
 	}
 
 	err := s.CreateTempAdmin(t.Context(), dup, entry(tempadmin.Ref(alicePrincipalID)))
@@ -248,6 +256,7 @@ func testMissingPrincipal(t *testing.T, s Store) {
 		PrincipalID: "prn-ghost",
 		Subject:     "ghost",
 		CreatedBy:   createdBy,
+		Reason:      reason,
 	}
 
 	err := s.CreateTempAdmin(t.Context(), r, entry(tempadmin.Ref("prn-ghost")))
@@ -545,6 +554,50 @@ func testBySubjectAfterRecreate(t *testing.T, s Store) {
 
 	if !got.ActiveAt(at(minuteLater)) {
 		t.Fatalf("record after a recreate is not active at %s, want a sign-in to work", at(minuteLater))
+	}
+}
+
+func testDeleteRemovesRecord(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", minuteBase)
+
+	if err := s.DeletePrincipal(t.Context(), alicePrincipalID, entry(principal.Ref(alicePrincipalID))); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	if _, err := s.GetTempAdmin(t.Context(), alicePrincipalID); !errors.Is(err, tempadmin.ErrNotFound) {
+		t.Fatalf("record after the delete: err = %v, want ErrNotFound", err)
+	}
+
+	list, err := s.ListTempAdmins(t.Context())
+	if err != nil || len(list) != 0 {
+		t.Fatalf("records after the delete = %+v, %v; want none", list, err)
+	}
+}
+
+// testReusedSubjectNoRecord proves that a new person with the subject of a
+// deleted temporary administrator reads no record, so it is not locked out
+// by the tombstone of the old one.
+func testReusedSubjectNoRecord(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", minuteBase)
+
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	if err := s.DeletePrincipal(t.Context(), alicePrincipalID, entry(principal.Ref(alicePrincipalID))); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	mustPrincipal(t, s, "prn-alice-2", "alice")
+
+	if got, err := s.GetTempAdminBySubject(t.Context(), "alice"); !errors.Is(err, tempadmin.ErrNotFound) {
+		t.Fatalf("record of the new alice = %+v, %v; want ErrNotFound", got, err)
 	}
 }
 

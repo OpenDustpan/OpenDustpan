@@ -3,9 +3,11 @@ package accesstoken_test
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io/fs"
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,18 +44,20 @@ func newHostFixture(t *testing.T) hostFixture {
 
 	f.svc = svc
 
-	temps, err := tempadmin.NewService(tempadmin.Config{Store: f.store, Now: f.clock.Now})
+	temps, err := tempadmin.NewService(tempadmin.Config{Store: f.store, Reviews: nil, Now: f.clock.Now})
 	if err != nil {
 		t.Fatalf("temporary administrator service: %v", err)
 	}
 
-	in := tempadmin.Input{Subject: f.person.Subject, PrincipalID: f.person.ID, CreatedBy: "operator"}
+	in := tempadmin.Input{
+		Subject: f.person.Subject, PrincipalID: f.person.ID, CreatedBy: "operator", Reason: hostReason,
+	}
 
 	if _, err = temps.Create(t.Context(), hostAuditEntry(), in); err != nil {
 		t.Fatalf("record temporary administrator: %v", err)
 	}
 
-	issuer, err := accesstoken.NewHostIssuer(svc)
+	issuer, err := accesstoken.NewHostIssuer(svc, f.store)
 	if err != nil {
 		t.Fatalf("host issuer: %v", err)
 	}
@@ -257,38 +261,124 @@ func TestHostIssuerNeedsReader(t *testing.T) {
 
 	f := newFixture(t, nil)
 
-	if _, err := accesstoken.NewHostIssuer(f.svc); !errors.Is(err, accesstoken.ErrNoTempAdminReader) {
+	if _, err := accesstoken.NewHostIssuer(f.svc, f.store); !errors.Is(err, accesstoken.ErrNoTempAdminReader) {
 		t.Fatalf("NewHostIssuer without a reader: err = %v, want ErrNoTempAdminReader", err)
 	}
 }
 
-// TestHostIssuerNotInRoutes proves that no HTTP adapter or other package
-// reaches the host issuer: only the host command in cmd/opendustpan uses it.
-func TestHostIssuerNotInRoutes(t *testing.T) {
+// TestHostIssuerOnlyInHostCommand proves that no package of the module
+// but the host command in cmd/opendustpan reaches the host issuer. It lists
+// every package with go list and reads each non-test file of each one.
+func TestHostIssuerOnlyInHostCommand(t *testing.T) {
 	t.Parallel()
 
-	for _, root := range []string{"../../internal", "../../pkg"} {
-		fsys := os.DirFS(root)
+	const (
+		self  = "opendustpan.org/opendustpan/pkg/accesstoken"
+		host  = "opendustpan.org/opendustpan/cmd/opendustpan"
+		lines = "{{.ImportPath}}|{{.Dir}}|{{join .GoFiles \",\"}}"
+	)
 
-		err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") ||
-				strings.HasPrefix(path, "accesstoken/") {
-				return err
+	out, err := exec.CommandContext(t.Context(), "go", "list", "-f", lines, "opendustpan.org/opendustpan/...").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 || parts[0] == self || parts[2] == "" {
+			continue
+		}
+
+		for name := range strings.SplitSeq(parts[2], ",") {
+			if usesHostIssuer(t, filepath.Join(parts[1], name), self) && parts[0] != host {
+				t.Errorf("%s/%s uses the host issuer: only %s may", parts[0], name, host)
 			}
-
-			src, readErr := fs.ReadFile(fsys, path)
-			if readErr != nil {
-				return fmt.Errorf("read %s: %w", path, readErr)
-			}
-
-			if strings.Contains(string(src), "NewHostIssuer") {
-				t.Errorf("%s/%s uses the host issuer: only cmd/opendustpan may", root, path)
-			}
-
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walk %s: %v", root, err)
 		}
 	}
 }
+
+// usesHostIssuer reports whether the Go file path names HostIssuer or
+// NewHostIssuer of the package self.
+func usesHostIssuer(t *testing.T, path, self string) bool {
+	t.Helper()
+
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	alias := ""
+
+	for _, spec := range file.Imports {
+		if strings.Trim(spec.Path.Value, "\"") != self {
+			continue
+		}
+
+		alias = "accesstoken"
+		if spec.Name != nil {
+			alias = spec.Name.Name
+		}
+	}
+
+	if alias == "" {
+		return false
+	}
+
+	found := false
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+
+		if x, isIdent := sel.X.(*ast.Ident); isIdent && x.Name == alias &&
+			(sel.Sel.Name == "HostIssuer" || sel.Sel.Name == "NewHostIssuer") {
+			found = true
+		}
+
+		return !found
+	})
+
+	return found
+}
+
+// TestHostIssuerRecover makes a temporary administrator in one call and
+// proves the person, the record with its reason, the shared expiry and the
+// token.
+func TestHostIssuerRecover(t *testing.T) {
+	t.Parallel()
+
+	f := newHostFixture(t)
+	ctx := t.Context()
+
+	got, err := f.issuer.Recover(ctx, hostAuditEntry(), accesstoken.HostInput{
+		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator",
+	})
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+
+	if got.Person.Subject != "carol@example.com" || got.Record.Reason != hostReason ||
+		!got.Token.ExpiresAt.Equal(got.Record.ExpiresAt) || got.Token.PrincipalID != got.Person.ID {
+		t.Fatalf("recovery = %+v, want carol with the reason and one shared expiry", got)
+	}
+
+	if want := f.clock.Now().Add(tempadmin.Lifetime); !got.Record.ExpiresAt.Equal(want) {
+		t.Fatalf("record expires at %s, want %s", got.Record.ExpiresAt, want)
+	}
+
+	if _, authErr := f.svc.AuthenticateToken(ctx, got.Secret.Reveal()); authErr != nil {
+		t.Fatalf("authenticate the recovery token: %v", authErr)
+	}
+
+	_, err = f.issuer.Recover(ctx, hostAuditEntry(), accesstoken.HostInput{
+		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator",
+	})
+	if !errors.Is(err, principal.ErrAlreadyExists) {
+		t.Fatalf("second recovery of carol: err = %v, want principal.ErrAlreadyExists", err)
+	}
+}
+
+// hostReason is the reason of the recoveries of the tests.
+const hostReason = "every administrator lost access"

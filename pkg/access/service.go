@@ -23,9 +23,12 @@ var _ principal.Guard = (*Service)(nil)
 
 // ID prefixes. An ID is opaque: never parse it.
 const (
-	grantIDPrefix = "grt-"
+	grantIDPrefix = GrantIDPrefix
 	roleIDPrefix  = "rol-"
 )
+
+// GrantIDPrefix starts the ID of every grant.
+const GrantIDPrefix = "grt-"
 
 // Limits of the text fields of a custom role, in bytes.
 const (

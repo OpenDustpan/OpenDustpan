@@ -122,7 +122,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: svc, Namespaces: st, Tokens: svc, Now: nil, NewID: nil},
+		principal.Config{TempAdmins: nil, Store: st, Guard: svc, Namespaces: st, Tokens: svc, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

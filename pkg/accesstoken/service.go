@@ -686,7 +686,7 @@ func (s *Service) checkPolicyActive(ctx context.Context, m Match, now time.Time)
 	}
 
 	if p.inactiveAt(t, now) {
-		if allow, err := s.breakGlassExempt(ctx, o.Subject, now, p); err != nil {
+		if allow, err := s.tempAdminExempt(ctx, o.Subject, now); err != nil {
 			return err
 		} else if !allow {
 			return fmt.Errorf("%w: access token inactive for %s", identity.ErrUnauthenticated, p.Inactivity)
@@ -694,7 +694,7 @@ func (s *Service) checkPolicyActive(ctx context.Context, m Match, now time.Time)
 	}
 
 	if p.AccountInactiveAt(o, now) {
-		if allow, err := s.breakGlassExempt(ctx, o.Subject, now, p); err != nil {
+		if allow, err := s.tempAdminExempt(ctx, o.Subject, now); err != nil {
 			return err
 		} else if !allow {
 			return fmt.Errorf("%w: the user account of the access token is inactive for %s",
@@ -705,12 +705,12 @@ func (s *Service) checkPolicyActive(ctx context.Context, m Match, now time.Time)
 	return nil
 }
 
-// breakGlassExempt reports whether the inactivity disable exempts the person
-// subject at now: break-glass is on and subject is a working temporary
-// administrator. Without a TempAdmins reader it answers false. A failed
-// record read answers its error, so the caller fails closed.
-func (s *Service) breakGlassExempt(ctx context.Context, subject string, now time.Time, p Policy) (bool, error) {
-	if p.DisableBreakGlass || s.tempAdmins == nil {
+// tempAdminExempt reports whether the inactivity disable exempts the person
+// subject at now: subject is a working temporary administrator. Without a
+// TempAdmins reader it answers false. A failed record read answers its
+// error, so the caller fails closed.
+func (s *Service) tempAdminExempt(ctx context.Context, subject string, now time.Time) (bool, error) {
+	if s.tempAdmins == nil {
 		return false, nil
 	}
 

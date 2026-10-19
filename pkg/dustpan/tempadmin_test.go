@@ -325,6 +325,7 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		PrincipalID: p.ID,
 		Subject:     "alice",
 		CreatedBy:   "tester",
+		Reason:      "every administrator lost access",
 	}
 
 	recordEntry := tempadminEntry(base, tempadmin.Action, tempadmin.Ref(p.ID))
@@ -332,19 +333,22 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		t.Fatalf("record temporary administrator: %v", createErr)
 	}
 
-	issuer, err := accesstoken.NewHostIssuer(tokens)
-	if err != nil {
-		t.Fatalf("host issuer: %v", err)
+	// The person makes its own token that outlives the record, as a
+	// temporary administrator may: only the record expiry ends its use.
+	alice := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 	}
 
-	_, issued, err := issuer.IssueFirstToken(
+	_, issued, err := tokens.Create(
 		ctx,
-		tempadminEntry(base, string(identity.ActionServerManageTokens), ""),
-		p.ID,
-		base.Add(tempadmin.Lifetime),
+		alice,
+		tempadminEntry(base, string(identity.ActionTokenManageOwn), ""),
+		accesstoken.ScopeOwn,
+		accesstoken.Input{ExpiresAt: base.Add(tempadmin.Lifetime), PrincipalID: p.ID, Name: tempadmin.HostTokenName},
 	)
 	if err != nil {
-		t.Fatalf("issue host token: %v", err)
+		t.Fatalf("create the own token: %v", err)
 	}
 
 	return issued.Reveal()

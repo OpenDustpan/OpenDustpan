@@ -1212,6 +1212,57 @@ func (q *Queries) CreateCollection(ctx context.Context, arg CreateCollectionPara
 	return result.RowsAffected(), nil
 }
 
+const createFirstHostToken = `-- name: CreateFirstHostToken :execrows
+INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
+SELECT $1, p.id, $2, $3, $4,
+  $5::bigint, $6::bigint, $7
+FROM principals p
+JOIN temp_admins t ON t.principal_id = p.id
+WHERE p.id = $8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+  AND p.kind = 'person' AND p.namespace = ''
+  AND p.created_at_ms <= $5::bigint
+  AND p.created_at_ms >= $5::bigint - $9::bigint
+  AND t.expires_at_ms > $5::bigint
+  AND t.expires_at_ms >= $6::bigint
+  AND NOT EXISTS (SELECT 1 FROM access_tokens a WHERE a.principal_id = p.id)
+ON CONFLICT DO NOTHING
+`
+
+type CreateFirstHostTokenParams struct {
+	ID          string
+	Name        string
+	Kind        string
+	Digest      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+	CreatedBy   string
+	PrincipalID string
+	WindowMs    int64
+}
+
+// Inserts the first token of a temporary administrator that the host
+// command just made. It inserts nothing unless the principal is a live,
+// enabled person of the installation with no token of any status, made in
+// the window before the time of the token and not after it, and a record
+// names the principal that works past the time and the expiry of the token.
+func (q *Queries) CreateFirstHostToken(ctx context.Context, arg CreateFirstHostTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createFirstHostToken,
+		arg.ID,
+		arg.Name,
+		arg.Kind,
+		arg.Digest,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+		arg.CreatedBy,
+		arg.PrincipalID,
+		arg.WindowMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createGrant = `-- name: CreateGrant :execrows
 INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -1714,8 +1765,8 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 }
 
 const createTempAdmin = `-- name: CreateTempAdmin :execrows
-INSERT INTO temp_admins (principal_id, subject, expires_at_ms, created_at_ms, created_by)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO temp_admins (principal_id, subject, expires_at_ms, created_at_ms, created_by, reason)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT DO NOTHING
 `
 
@@ -1725,6 +1776,7 @@ type CreateTempAdminParams struct {
 	ExpiresAtMs int64
 	CreatedAtMs int64
 	CreatedBy   string
+	Reason      string
 }
 
 // Records the principal as a temporary administrator with its fixed expiry.
@@ -1736,6 +1788,7 @@ func (q *Queries) CreateTempAdmin(ctx context.Context, arg CreateTempAdminParams
 		arg.ExpiresAtMs,
 		arg.CreatedAtMs,
 		arg.CreatedBy,
+		arg.Reason,
 	)
 	if err != nil {
 		return 0, err
@@ -2268,6 +2321,7 @@ const disableInactiveAccessTokens = `-- name: DisableInactiveAccessTokens :many
 UPDATE access_tokens SET disabled_at_ms = $1::bigint
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $1::bigint
   AND COALESCE(last_used_at_ms, created_at_ms) <= $2::bigint
+  AND principal_id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > $1::bigint)
   AND NOT EXISTS (
     SELECT 1 FROM principals p
     WHERE p.id = access_tokens.principal_id AND p.break_glass = TRUE
@@ -2286,7 +2340,9 @@ type DisableInactiveAccessTokensRow struct {
 }
 
 // A token of a break-glass account is always exempt from the inactivity
-// disable.
+// disable. A token of a temporary administrator that still works is exempt
+// too: only the fixed expiry ends it. An expired record is a tombstone, not
+// an exemption: it never keeps a token.
 func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableInactiveAccessTokensParams) ([]DisableInactiveAccessTokensRow, error) {
 	rows, err := q.db.Query(ctx, disableInactiveAccessTokens, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -2296,52 +2352,6 @@ func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableIn
 	var items []DisableInactiveAccessTokensRow
 	for rows.Next() {
 		var i DisableInactiveAccessTokensRow
-		if err := rows.Scan(&i.ID, &i.PrincipalID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const disableInactiveAccessTokensExceptTemp = `-- name: DisableInactiveAccessTokensExceptTemp :many
-UPDATE access_tokens SET disabled_at_ms = $1::bigint
-WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $1::bigint
-  AND COALESCE(last_used_at_ms, created_at_ms) <= $2::bigint
-  AND principal_id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > $1::bigint)
-  AND NOT EXISTS (
-    SELECT 1 FROM principals p
-    WHERE p.id = access_tokens.principal_id AND p.break_glass = TRUE
-  )
-RETURNING id, principal_id
-`
-
-type DisableInactiveAccessTokensExceptTempParams struct {
-	AtMs     int64
-	CutoffMs int64
-}
-
-type DisableInactiveAccessTokensExceptTempRow struct {
-	ID          string
-	PrincipalID string
-}
-
-// As DisableInactiveAccessTokens, but keeps the tokens of the principals
-// that still work as temporary administrators: only their fixed expiry ends
-// them. A break-glass account stays exempt. An expired record is a
-// tombstone, not an exemption: it never keeps a token.
-func (q *Queries) DisableInactiveAccessTokensExceptTemp(ctx context.Context, arg DisableInactiveAccessTokensExceptTempParams) ([]DisableInactiveAccessTokensExceptTempRow, error) {
-	rows, err := q.db.Query(ctx, disableInactiveAccessTokensExceptTemp, arg.AtMs, arg.CutoffMs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DisableInactiveAccessTokensExceptTempRow
-	for rows.Next() {
-		var i DisableInactiveAccessTokensExceptTempRow
 		if err := rows.Scan(&i.ID, &i.PrincipalID); err != nil {
 			return nil, err
 		}
@@ -2369,6 +2379,7 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     SELECT 1 FROM sessions s
     WHERE s.principal_id = principals.id AND s.last_seen_at_ms > $2::bigint
   )
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > $1::bigint)
 RETURNING id
 `
 
@@ -2382,58 +2393,11 @@ type DisableInactivePrincipalsParams struct {
 // last use of each of its console sessions are all at or before the
 // cutoff. The session use counts by itself, so the result does not depend
 // on the maximum length of a session. A break-glass account is always
-// exempt from the inactivity disable.
+// exempt from the inactivity disable. A temporary administrator that still
+// works is exempt too: only the fixed expiry ends it. An expired record is
+// a tombstone, not an exemption: it never keeps a principal.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const disableInactivePrincipalsExceptTemp = `-- name: DisableInactivePrincipalsExceptTemp :many
-UPDATE principals SET disabled_at_ms = $1::bigint
-WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
-  AND break_glass = FALSE
-  AND created_at_ms <= $2::bigint
-  AND last_active_at_ms <= $2::bigint
-  AND COALESCE(last_sign_in_at_ms, 0) <= $2::bigint
-  AND NOT EXISTS (
-    SELECT 1 FROM access_tokens t
-    WHERE t.principal_id = principals.id
-      AND (t.created_at_ms > $2::bigint OR t.last_used_at_ms > $2::bigint)
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM sessions s
-    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > $2::bigint
-  )
-  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > $1::bigint)
-RETURNING id
-`
-
-type DisableInactivePrincipalsExceptTempParams struct {
-	AtMs     int64
-	CutoffMs int64
-}
-
-// As DisableInactivePrincipals, but keeps the principals that still work as
-// temporary administrators: only their fixed expiry ends them. A break-glass
-// account stays exempt. An expired record is a tombstone, not an exemption:
-// it never keeps a principal.
-func (q *Queries) DisableInactivePrincipalsExceptTemp(ctx context.Context, arg DisableInactivePrincipalsExceptTempParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, disableInactivePrincipalsExceptTemp, arg.AtMs, arg.CutoffMs)
 	if err != nil {
 		return nil, err
 	}
@@ -4263,7 +4227,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 }
 
 const getTempAdmin = `-- name: GetTempAdmin :one
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason
 FROM temp_admins WHERE principal_id = $1
 `
 
@@ -4276,16 +4240,21 @@ func (q *Queries) GetTempAdmin(ctx context.Context, principalID string) (TempAdm
 		&i.ExpiresAtMs,
 		&i.CreatedAtMs,
 		&i.CreatedBy,
+		&i.Reason,
 	)
 	return i, err
 }
 
 const getTempAdminBySubject = `-- name: GetTempAdminBySubject :one
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
-FROM temp_admins WHERE subject = $1
-ORDER BY expires_at_ms DESC, created_at_ms DESC
+SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason
+FROM temp_admins t
+JOIN principals p ON p.id = t.principal_id
+WHERE p.subject = $1 AND p.deleted_at_ms IS NULL
 `
 
+// Answers the record of the live principal with the subject. A record of a
+// deleted principal never answers, so a new person with a reused subject
+// is not the old temporary administrator.
 func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (TempAdmin, error) {
 	row := q.db.QueryRow(ctx, getTempAdminBySubject, subject)
 	var i TempAdmin
@@ -4295,6 +4264,7 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 		&i.ExpiresAtMs,
 		&i.CreatedAtMs,
 		&i.CreatedBy,
+		&i.Reason,
 	)
 	return i, err
 }
@@ -7299,8 +7269,8 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 }
 
 const listTempAdmins = `-- name: ListTempAdmins :many
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
-FROM temp_admins ORDER BY expires_at_ms
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason
+FROM temp_admins ORDER BY expires_at_ms, principal_id
 `
 
 func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
@@ -7318,6 +7288,7 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 			&i.ExpiresAtMs,
 			&i.CreatedAtMs,
 			&i.CreatedBy,
+			&i.Reason,
 		); err != nil {
 			return nil, err
 		}

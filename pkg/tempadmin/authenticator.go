@@ -7,10 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // Expirer ends one temporary administrator and keeps its record as a
@@ -22,12 +21,38 @@ type Expirer interface {
 	ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error
 }
 
+// Principals reads the principal of a caller. Store adapters of
+// principal.Store implement it.
+type Principals interface {
+	// GetPrincipalBySubject returns the live principal with the subject
+	// subject, or principal.ErrNotFound.
+	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
+}
+
+// Request is the client address and the request ID of one request, for
+// its audit entries.
+type Request struct {
+	SourceIP  string
+	RequestID string
+}
+
+// RequestOf answers the Request of ctx, with empty fields when ctx holds
+// none. The HTTP adapter reads them, so this package needs no HTTP code.
+type RequestOf func(ctx context.Context) Request
+
 // DecoratorConfig holds the dependencies of a Decorator.
 type DecoratorConfig struct {
 	// Next resolves the token first. Required.
 	Next identity.Authenticator
 	// Records reads the temporary administrator records. Required.
 	Records Reader
+	// Principals reads the principal of a caller with a record, so the
+	// Decorator compares the principal of the record with the principal of
+	// the caller. Required.
+	Principals Principals
+	// Request answers the client address and the request ID of a request
+	// for its audit entries. Nil means empty values.
+	Request RequestOf
 	// Expirer disables an expired record. Required: the first use after
 	// the expiry writes the expiry entry at once.
 	Expirer Expirer
@@ -49,22 +74,27 @@ type DecoratorConfig struct {
 // still denied: a missing record means the caller never was a temporary
 // administrator. A failed store read fails closed.
 type Decorator struct {
-	next    identity.Authenticator
-	records Reader
-	expirer Expirer
-	audit   audit.ServerStore
-	now     func() time.Time
+	next       identity.Authenticator
+	records    Reader
+	principals Principals
+	request    RequestOf
+	expirer    Expirer
+	audit      audit.ServerStore
+	now        func() time.Time
 }
 
 var _ identity.Authenticator = (*Decorator)(nil)
 
-// NewDecorator returns a Decorator. Every dependency but Now is required.
+// NewDecorator returns a Decorator. Every dependency but Request and Now is
+// required.
 func NewDecorator(cfg DecoratorConfig) (*Decorator, error) {
 	switch {
 	case cfg.Next == nil:
 		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Records == nil:
 		return nil, fmt.Errorf("%w: temporary administrator reader", ErrMissingDependency)
+	case cfg.Principals == nil:
+		return nil, fmt.Errorf("%w: principal reader", ErrMissingDependency)
 	case cfg.Expirer == nil:
 		return nil, fmt.Errorf("%w: temporary administrator expirer", ErrMissingDependency)
 	case cfg.Audit == nil:
@@ -76,8 +106,14 @@ func NewDecorator(cfg DecoratorConfig) (*Decorator, error) {
 		now = time.Now
 	}
 
+	request := cfg.Request
+	if request == nil {
+		request = func(context.Context) Request { return Request{SourceIP: "", RequestID: ""} }
+	}
+
 	return &Decorator{
-		next: cfg.Next, records: cfg.Records, expirer: cfg.Expirer, audit: cfg.Audit, now: now,
+		next: cfg.Next, records: cfg.Records, principals: cfg.Principals, request: request,
+		expirer: cfg.Expirer, audit: cfg.Audit, now: now,
 	}, nil
 }
 
@@ -147,9 +183,11 @@ func (s *signInScope) record(subject string) {
 
 // AuthenticateToken resolves token with Next, then marks a temporary
 // administrator and writes its sign-in entry. A caller with no record, and
-// a bootstrap administrator, pass through unchanged. A caller whose record
-// is not active is denied: the record stays as a tombstone, so the deny
-// holds for every later use too.
+// a bootstrap administrator, pass through unchanged. A record counts only
+// when it names the principal of the caller, so a new person with the
+// subject of an old one is not the old temporary administrator. A caller
+// whose record is not active is denied: the record stays as a tombstone,
+// so the deny holds for every later use too.
 func (d *Decorator) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
 	p, err := d.next.AuthenticateToken(ctx, token)
 	if err != nil {
@@ -167,6 +205,15 @@ func (d *Decorator) AuthenticateToken(ctx context.Context, token string) (identi
 
 	if err != nil {
 		return identity.Principal{}, fmt.Errorf("read temporary administrator for %q: %w", p.Subject, err)
+	}
+
+	own, err := d.ownsRecord(ctx, p.Subject, rec)
+	if err != nil {
+		return identity.Principal{}, err
+	}
+
+	if !own {
+		return p, nil
 	}
 
 	now := d.Now()
@@ -194,12 +241,28 @@ func (d *Decorator) AuthenticateToken(ctx context.Context, token string) (identi
 	return p, nil
 }
 
+// ownsRecord reports whether rec names the principal of the caller with
+// the subject subject. A failed read fails closed.
+func (d *Decorator) ownsRecord(ctx context.Context, subject string, rec TempAdmin) (bool, error) {
+	caller, err := d.principals.GetPrincipalBySubject(ctx, subject)
+	if errors.Is(err, principal.ErrNotFound) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("read principal %q: %w", subject, err)
+	}
+
+	return caller.ID == rec.PrincipalID, nil
+}
+
 // expire ends the expired record rec with an expiry entry, then denies
 // the use. The record stays as a tombstone, so a later use is denied too.
 // Any store failure denies the use as well, so no use passes without its
 // record ending first.
 func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 	now := d.Now()
+	req := d.request(ctx)
 
 	err := d.expirer.ExpireTempAdmin(ctx, rec.PrincipalID, expireEntry(audit.Entry{
 		FenceVersion: 0,
@@ -214,12 +277,12 @@ func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 		ValuePath:    "",
 		ValueCount:   nil,
 		Changes:      nil,
-		SourceIP:     clientAddr(ctx),
+		SourceIP:     req.SourceIP,
 		UserAgent:    "",
 		Channel:      audit.ChannelAPI,
 		Kind:         "",
 		Outcome:      "",
-		RequestID:    requestid.FromContext(ctx),
+		RequestID:    req.RequestID,
 		ObjectID:     "",
 		PrevHash:     "",
 		Hash:         "",
@@ -238,6 +301,8 @@ func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 func (d *Decorator) appendSignIn(
 	ctx context.Context, p identity.Principal, rec TempAdmin, now time.Time,
 ) error {
+	req := d.request(ctx)
+
 	e := audit.Entry{
 		FenceVersion: 0,
 		At:           now,
@@ -251,12 +316,12 @@ func (d *Decorator) appendSignIn(
 		ValuePath:    "",
 		ValueCount:   nil,
 		Changes:      nil,
-		SourceIP:     clientAddr(ctx),
+		SourceIP:     req.SourceIP,
 		UserAgent:    "",
 		Channel:      audit.ChannelAPI,
 		Kind:         audit.KindChange,
 		Outcome:      audit.OutcomeSuccess,
-		RequestID:    requestid.FromContext(ctx),
+		RequestID:    req.RequestID,
 		ObjectID:     "",
 		PrevHash:     "",
 		Hash:         "",
@@ -268,15 +333,4 @@ func (d *Decorator) appendSignIn(
 	}
 
 	return nil
-}
-
-// clientAddr returns the client address that the server stored in ctx, or
-// "" when ctx holds none.
-func clientAddr(ctx context.Context) string {
-	addr := clientip.FromContext(ctx)
-	if !addr.IsValid() {
-		return ""
-	}
-
-	return addr.String()
 }

@@ -334,23 +334,15 @@ func (s *Store) SweepInactive(
 }
 
 // sweepInactive disables the inactive tokens and accounts of sw in the
-// transaction of q, at the time of the database clock. It reads the stored
-// policy in the same transaction: unless the policy turns the break-glass
-// disable on, the run keeps the temporary administrators that still work,
-// and only their fixed expiry ends them. An expired record is a tombstone,
-// not an exemption: it never keeps a token or a principal.
+// transaction of q, at the time of the database clock. The run keeps the
+// temporary administrators that still work, and only their fixed expiry
+// ends them. An expired record is a tombstone, not an exemption: it never
+// keeps a token or a principal.
 func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (accesstoken.SweepResult, error) {
 	nowMs, err := q.DatabaseNowMs(ctx)
 	if err != nil {
 		return accesstoken.SweepResult{}, fmt.Errorf("read database clock: %w", err)
 	}
-
-	policy, err := q.GetAccessTokenPolicy(ctx)
-	if err != nil {
-		return accesstoken.SweepResult{}, fmt.Errorf("select access token policy: %w", err)
-	}
-
-	except := TempExemption(!policy.DisableBreakGlass)
 
 	res := accesstoken.SweepResult{
 		At: codec.FromMillis(nowMs), Tokens: []accesstoken.SweptToken{}, Principals: []string{},
@@ -358,7 +350,7 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	params := db.DisableInactiveAccessTokensParams{AtMs: nowMs, CutoffMs: nowMs - sw.Inactivity.Milliseconds()}
 
 	if sw.Tokens {
-		rows, err := disableTokensByPolicy(ctx, q, except, params)
+		rows, err := q.DisableInactiveAccessTokens(ctx, params)
 		if err != nil {
 			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive access tokens: %w", err)
 		}
@@ -369,7 +361,7 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	}
 
 	if sw.Accounts {
-		ids, err := disableAccountsByPolicy(ctx, q, except, params)
+		ids, err := q.DisableInactivePrincipals(ctx, db.DisableInactivePrincipalsParams(params))
 		if err != nil {
 			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive accounts: %w", err)
 		}
@@ -378,91 +370,6 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	}
 
 	return res, nil
-}
-
-// disableTokensByPolicy disables the inactive tokens in the transaction of
-// q. It keeps the working temporary administrators unless the stored policy
-// turns the break-glass disable on.
-func disableTokensByPolicy(
-	ctx context.Context,
-	q *db.Queries,
-	except TempExemption,
-	params db.DisableInactiveAccessTokensParams,
-) ([]db.DisableInactiveAccessTokensRow, error) {
-	if except.KeepTempAdmins() {
-		return disableInactiveTokensExceptTemp(ctx, q, params)
-	}
-
-	return disableInactiveTokens(ctx, q, params)
-}
-
-// disableAccountsByPolicy disables the inactive user accounts in the
-// transaction of q, with the same break-glass rule as the tokens.
-func disableAccountsByPolicy(
-	ctx context.Context,
-	q *db.Queries,
-	except TempExemption,
-	params db.DisableInactiveAccessTokensParams,
-) ([]string, error) {
-	if except.KeepTempAdmins() {
-		return disableInactiveAccountsExceptTemp(ctx, q, params)
-	}
-
-	return disableInactiveAccounts(ctx, q, params)
-}
-
-// TempExemption names whether a sweep keeps the working temporary
-// administrators.
-type TempExemption bool
-
-// KeepTempAdmins reports whether the sweep keeps the working temporary
-// administrators.
-func (e TempExemption) KeepTempAdmins() bool {
-	return bool(e)
-}
-
-// disableInactiveTokens disables every inactive token.
-func disableInactiveTokens(
-	ctx context.Context, q *db.Queries, params db.DisableInactiveAccessTokensParams,
-) ([]db.DisableInactiveAccessTokensRow, error) {
-	return q.DisableInactiveAccessTokens(ctx, params)
-}
-
-// disableInactiveTokensExceptTemp disables every inactive token but the ones
-// of the working temporary administrators.
-func disableInactiveTokensExceptTemp(
-	ctx context.Context, q *db.Queries, params db.DisableInactiveAccessTokensParams,
-) ([]db.DisableInactiveAccessTokensRow, error) {
-	rows, err := q.DisableInactiveAccessTokensExceptTemp(
-		ctx,
-		db.DisableInactiveAccessTokensExceptTempParams(params),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]db.DisableInactiveAccessTokensRow, 0, len(rows))
-
-	for _, r := range rows {
-		out = append(out, db.DisableInactiveAccessTokensRow(r))
-	}
-
-	return out, nil
-}
-
-// disableInactiveAccounts disables every inactive user account.
-func disableInactiveAccounts(
-	ctx context.Context, q *db.Queries, params db.DisableInactiveAccessTokensParams,
-) ([]string, error) {
-	return q.DisableInactivePrincipals(ctx, db.DisableInactivePrincipalsParams(params))
-}
-
-// disableInactiveAccountsExceptTemp disables every inactive user account but
-// the working temporary administrators.
-func disableInactiveAccountsExceptTemp(
-	ctx context.Context, q *db.Queries, params db.DisableInactiveAccessTokensParams,
-) ([]string, error) {
-	return q.DisableInactivePrincipalsExceptTemp(ctx, db.DisableInactivePrincipalsExceptTempParams(params))
 }
 
 // appendSweepEntries appends one entry for each record of res, in the

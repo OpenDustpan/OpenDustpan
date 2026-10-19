@@ -40,7 +40,15 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 	reader := tokenService(t, second, clock)
 
 	principals, err := principal.NewService(
-		principal.Config{Store: first, Guard: nil, Namespaces: nil, Tokens: nil, Now: clock, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      first,
+			Guard:      nil,
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        clock,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

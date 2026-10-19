@@ -7,12 +7,24 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/breakglass"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
+
+// Reviews opens the second-person review of a temporary administrator
+// after its end.
+type Reviews interface {
+	// OpenReview opens the review of the use u. A repeated open of the
+	// same use makes no second review.
+	OpenReview(ctx context.Context, u breakglass.Use) error
+}
 
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store Store
+	// Reviews opens the review of each record that a sweep ends. Nil
+	// opens no review.
+	Reviews Reviews
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 }
@@ -24,8 +36,9 @@ type Config struct {
 // the scope, the kind change, the outcome success and the record, and the
 // store appends the entry in the transaction of the change.
 type Service struct {
-	store Store
-	now   func() time.Time
+	store   Store
+	reviews Reviews
+	now     func() time.Time
 }
 
 // NewService returns a Service. Store is required.
@@ -39,7 +52,7 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{store: cfg.Store, now: now}, nil
+	return &Service{store: cfg.Store, reviews: cfg.Reviews, now: now}, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -50,11 +63,13 @@ func (s *Service) Now() time.Time {
 
 // Input names the fields of a new temporary administrator. Subject is the
 // name of the person the operator passes on the host. CreatedBy names the
-// host operator that runs the host command.
+// host operator that runs the host command, and Reason holds the text that
+// the host operator gave.
 type Input struct {
 	Subject     string
 	PrincipalID string
 	CreatedBy   string
+	Reason      string
 }
 
 // Create records the principal principalID as a temporary administrator of
@@ -109,8 +124,10 @@ func (s *Service) ExpiredAt(ctx context.Context, now time.Time) ([]TempAdmin, er
 
 // Sweep disables every record that ends at or before the time of the
 // Service clock, each with an entry from e, and returns the principal IDs
-// it disabled, ordered by expiry. A record that already ended is skipped:
-// ExpireTempAdmin answers ErrExpired for it and writes no second entry.
+// it disabled, ordered by expiry. It opens the review of each record that
+// it ends, when the Service has Reviews. A record that already ended is
+// skipped: ExpireTempAdmin answers ErrExpired for it and writes no second
+// entry.
 func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 	now := s.Now()
 
@@ -123,18 +140,41 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 
 	for _, r := range expired {
 		err := s.store.ExpireTempAdmin(ctx, r.PrincipalID, expireEntry(e, now, Ref(r.PrincipalID)))
-		if errors.Is(err, ErrExpired) || errors.Is(err, ErrNotFound) {
+		if errors.Is(err, ErrNotFound) {
 			continue
 		}
 
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrExpired) {
 			return done, fmt.Errorf("expire temporary administrator for %q: %w", r.Subject, err)
 		}
 
-		done = append(done, r.PrincipalID)
+		// A sign-in after the expiry can end the record first, so the
+		// review opens for each ended record. An open of a review that
+		// exists makes no second review.
+		if openErr := s.openReview(ctx, r); openErr != nil {
+			return done, openErr
+		}
+
+		if err == nil {
+			done = append(done, r.PrincipalID)
+		}
 	}
 
 	return done, nil
+}
+
+// openReview opens the review of the ended record r, when the Service has
+// Reviews.
+func (s *Service) openReview(ctx context.Context, r TempAdmin) error {
+	if s.reviews == nil {
+		return nil
+	}
+
+	if err := s.reviews.OpenReview(ctx, r.ReviewUse(r.ExpiresAt)); err != nil {
+		return fmt.Errorf("open the review of temporary administrator %q: %w", r.Subject, err)
+	}
+
+	return nil
 }
 
 // insertRecord shares the create of Create and CreateWithLifetime.
@@ -166,6 +206,7 @@ func (s *Service) insertRecord(
 		PrincipalID: in.PrincipalID,
 		Subject:     in.Subject,
 		CreatedBy:   in.CreatedBy,
+		Reason:      in.Reason,
 	}
 
 	if err := r.Validate(); err != nil {

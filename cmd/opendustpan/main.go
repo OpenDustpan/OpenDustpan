@@ -43,7 +43,6 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/instance"
-	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -1540,8 +1539,7 @@ type store interface {
 	audit.ServerStore
 	principal.Store
 	accesstoken.Store
-	access.Store
-	access.Callers
+	accesstoken.HostStore
 	tempadmin.Store
 	close()
 }
@@ -1559,11 +1557,12 @@ type postgresStore struct{ *postgres.Store }
 func (s postgresStore) close() { s.Close() }
 
 // openStore opens the persistence adapter that --database names. Only serve
-// and host call it: serve runs the server, and host recovers a lost
-// administrator through the database. Every other command is a client of
-// the REST API. The gate test swaps it for a function
-// that fails the test, so a future client command that opens a store fails
-// the test.
+// and host create-temp-admin call it: serve runs the server, and host
+// create-temp-admin recovers a lost administrator through the database,
+// after its off switch and the recovery mode allow it. Every other command
+// is a client of the REST API. The gate test swaps it for a function that
+// fails the test, so a future client command that opens a store fails the
+// test.
 //
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
 var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {

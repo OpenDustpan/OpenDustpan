@@ -30,22 +30,7 @@ func (s *Store) CreateTempAdmin(ctx context.Context, r tempadmin.TempAdmin, e au
 			return fmt.Errorf("read principal %q: %w", r.PrincipalID, err)
 		}
 
-		n, err := q.CreateTempAdmin(ctx, db.CreateTempAdminParams{
-			PrincipalID: r.PrincipalID,
-			Subject:     r.Subject,
-			ExpiresAtMs: codec.Millis(r.ExpiresAt),
-			CreatedAtMs: codec.Millis(r.CreatedAt),
-			CreatedBy:   r.CreatedBy,
-		})
-		if err != nil {
-			return fmt.Errorf("insert temporary administrator: %w", err)
-		}
-
-		if n == 0 {
-			return tempadmin.ErrAlreadyExists
-		}
-
-		return nil
+		return insertTempAdmin(ctx, q, r)
 	})
 }
 
@@ -60,7 +45,7 @@ func (s *Store) GetTempAdmin(ctx context.Context, principalID string) (tempadmin
 		return tempadmin.TempAdmin{}, fmt.Errorf("select temporary administrator: %w", err)
 	}
 
-	return tempAdminOf(row.PrincipalID, row.Subject, row.CreatedBy, row.CreatedAtMs, row.ExpiresAtMs), nil
+	return tempAdminOf(row), nil
 }
 
 // GetTempAdminBySubject implements tempadmin.Store.
@@ -74,7 +59,7 @@ func (s *Store) GetTempAdminBySubject(ctx context.Context, subject string) (temp
 		return tempadmin.TempAdmin{}, fmt.Errorf("select temporary administrator: %w", subjectErr)
 	}
 
-	return tempAdminOf(row.PrincipalID, row.Subject, row.CreatedBy, row.CreatedAtMs, row.ExpiresAtMs), nil
+	return tempAdminOf(row), nil
 }
 
 // ListTempAdmins implements tempadmin.Store.
@@ -87,7 +72,10 @@ func (s *Store) ListTempAdmins(ctx context.Context) ([]tempadmin.TempAdmin, erro
 	out := make([]tempadmin.TempAdmin, 0, len(rows))
 
 	for _, row := range rows {
-		out = append(out, tempAdminOf(row.PrincipalID, row.Subject, row.CreatedBy, row.CreatedAtMs, row.ExpiresAtMs))
+		out = append(
+			out,
+			tempAdminOf(row),
+		)
 	}
 
 	return out, nil
@@ -193,12 +181,28 @@ func revokeTempAdminTokens(
 }
 
 // tempAdminOf converts a row into its domain record.
-func tempAdminOf(id, subject, createdBy string, createdAtMs, expiresAtMs int64) tempadmin.TempAdmin {
+func tempAdminOf(row db.TempAdmin) tempadmin.TempAdmin {
 	return tempadmin.TempAdmin{
-		CreatedAt:   codec.FromMillis(createdAtMs),
-		ExpiresAt:   codec.FromMillis(expiresAtMs),
-		PrincipalID: id,
-		Subject:     subject,
-		CreatedBy:   createdBy,
+		CreatedAt:   codec.FromMillis(row.CreatedAtMs),
+		ExpiresAt:   codec.FromMillis(row.ExpiresAtMs),
+		PrincipalID: row.PrincipalID,
+		Subject:     row.Subject,
+		CreatedBy:   row.CreatedBy,
+		Reason:      row.Reason,
 	}
+}
+
+// IsTempAdmin implements principal.TempAdmins: a record of the principal,
+// that works or that ended, makes it a temporary administrator.
+func (s *Store) IsTempAdmin(ctx context.Context, id string) (bool, error) {
+	_, err := s.GetTempAdmin(ctx, id)
+	if errors.Is(err, tempadmin.ErrNotFound) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }

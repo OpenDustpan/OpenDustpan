@@ -137,6 +137,7 @@ linters:
             - "**/pkg/calendar/**"
             - "**/pkg/freeze/**"
             - "**/pkg/breakglass/**"
+            - "**/pkg/tempadmin/**"
             - "**/pkg/oncall/**"
             - "**/pkg/cost/**"
             - "**/pkg/notify/**"
@@ -165,6 +166,18 @@ linters:
               desc: SQL belongs in store/, not in the domain.
             - pkg: opendustpan.org/opendustpan/internal/metrics
               desc: Domain code must not import metrics; only dustpan.go and HTTP middleware do.
+        tempadmin:
+          # The adapter reads the client address and the request ID of a
+          # temporary administrator request, so this package needs no HTTP
+          # code, also not through the helpers that read a request.
+          files:
+            - "**/pkg/tempadmin/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/internal/clientip
+              desc: The HTTP adapter reads the client address; pass it through RequestOf.
+            - pkg: opendustpan.org/opendustpan/internal/requestid
+              desc: The HTTP adapter reads the request ID; pass it through RequestOf.
         clientpkg:
           # Client commands live in internal/cli/client and take --server:
           # they never open the database, a blob adapter, a backup target or

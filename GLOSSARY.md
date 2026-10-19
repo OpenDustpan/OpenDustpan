@@ -259,12 +259,12 @@ The administrator settings of the access token life cycle for the installation: 
 The job that disables an access token or a user account after a set period with no use. The default period is 90 days. An administrator can change the period or turn the job off (ADR 53).
 
 **Temporary administrator**:
-A principal of the kind person that the host command makes for one named person after every administrator is lost. It works until a fixed expiry of 24 hours, and then the server disables it. The API marks it with a flag, so the console shows a banner for it. Each step writes an audit entry: the create, each sign-in, and the expiry. A second host run for the same person is refused: the name must name no principal that exists.
+A principal of the kind person that the host command makes for one named person after every administrator is lost. It works until a fixed expiry: at most 24 hours, or the token policy maximum when it is shorter. Then the server disables it. The API marks it with a flag, so the console shows a banner for it. Each step writes an audit entry: the create with its reason, each sign-in, and the expiry. A second host run for the same person is refused: the name must name no principal that exists. It is not a break-glass account: it has no `break_glass` flag, and it cannot sign in through an identity provider (ADR 245).
 _Avoid_: Shared admin account, emergency account
 
-**Break-glass**:
-The recovery path through the host command. It is on: the inactivity disable never ends a temporary administrator that still works, and only the fixed expiry ends it.
-_Avoid_: Backdoor
+**Host recovery**:
+The recovery path through the host command `host create-temp-admin`: the operator makes a temporary administrator with a reason, straight through the database. The inactivity disable never ends a temporary administrator that still works, and only the fixed expiry ends it. The command refuses when the recovery mode is `none` or when `DUSTPAN_DISABLE_HOST_RECOVERY` turns it off (ADR 245).
+_Avoid_: Break-glass, backdoor
 
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
@@ -1280,7 +1280,7 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
-- **Break-glass** has four meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. A break-glass of a job starts a job during an active freeze (ADR 103). A break-glass for gates in error passes the gates whose result is `error` for one change (ADR 224 decision 13). Name which one.
+- **Break-glass** has four meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor (the setting `--recovery-mode`). Host recovery is the path of the host command, not a break-glass account. A break-glass of a job starts a job during an active freeze (ADR 103). A break-glass for gates in error passes the gates whose result is `error` for one change (ADR 224 decision 13). Name which one.
 - **Sweep** names the Sweep feature only: a cloud sweep or a state check. The task that purges deleted units is the retention expiry. The delete of key blobs with no record is the orphan cleanup (ADR 151). The Go name `inventory.Sweeper` is older than this rule.
 - **Source** has two meanings. The term **Source** is the backend of a unit before an import. A source snapshot and the source filter name the code of a commit for a runner job (ADR 135). The unit setting that names that code is the code location (ADR 100). Never write "source" alone for the code.
 - **Snapshot** is the source snapshot only (ADR 135). Do not use it for state, a backup, a checkpoint or a state version.

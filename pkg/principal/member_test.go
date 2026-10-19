@@ -83,6 +83,7 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 	var captured audit.Entry
 
 	svc, err := principal.NewService(principal.Config{
+		TempAdmins: nil,
 		Store: captureMemberStore{
 			Store:    nil,
 			captured: &captured,
@@ -128,7 +129,16 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 	added := 0
 
 	svc, err := principal.NewService(principal.Config{
-		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store: memberStore{
+			Store: nil,
+			added: &added,
+		},
+		Guard:      nil,
+		Namespaces: nil,
+		Tokens:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -177,7 +187,8 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 		var captured audit.Entry
 
 		svc, err := principal.NewService(principal.Config{
-			Store: captureMemberStore{Store: nil, captured: &captured, actsAs: tc.actsAs}, Guard: nil,
+			TempAdmins: nil,
+			Store:      captureMemberStore{Store: nil, captured: &captured, actsAs: tc.actsAs}, Guard: nil,
 			Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 		})
 		if err != nil {

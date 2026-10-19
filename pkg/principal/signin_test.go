@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // signInFixture is a service over a store that a test can also write to.
@@ -25,7 +26,7 @@ func newSignInFixture(t *testing.T) signInFixture {
 	st := openStore(t)
 
 	svc, err := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{TempAdmins: nil, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -164,7 +165,8 @@ func TestSignInPrincipalRefusesDisabled(t *testing.T) {
 	st := openStore(t)
 
 	svc, err := principal.NewService(principal.Config{
-		Store: disabledStore{Store: st}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      disabledStore{Store: st}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -284,5 +286,49 @@ func TestSignInPrincipalParallelFirstSignIn(t *testing.T) {
 		if errs[i] != nil || ids[i] != ids[0] {
 			t.Fatalf("caller %d = %s, %v; want %s", i, ids[i], errs[i], ids[0])
 		}
+	}
+}
+
+// TestSignInRefusesTempAdmin proves that a sign-in through an identity
+// provider cannot name a temporary administrator, while another person
+// with no record signs in.
+func TestSignInRefusesTempAdmin(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t)
+
+	svc, err := principal.NewService(
+		principal.Config{TempAdmins: st, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+	)
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	f := signInFixture{store: st, svc: svc}
+	temp := stored("prn-temp", "corp:temp")
+	f.put(t, temp)
+	f.put(t, stored("prn-plain", "corp:plain"))
+
+	rec := tempadmin.TempAdmin{
+		CreatedAt: temp.CreatedAt, ExpiresAt: temp.CreatedAt.Add(time.Hour), PrincipalID: temp.ID,
+		Subject: temp.Subject, CreatedBy: "operator", Reason: "every administrator lost access",
+	}
+
+	e := testEntry()
+	e.At, e.Namespace, e.Kind, e.Outcome, e.Object = rec.CreatedAt, audit.ServerScope, audit.KindChange,
+		audit.OutcomeSuccess, tempadmin.Ref(temp.ID)
+
+	if err := st.CreateTempAdmin(t.Context(), rec, e); err != nil {
+		t.Fatalf("record temporary administrator: %v", err)
+	}
+
+	if _, _, err := svc.SignInPrincipal(t.Context(), testEntry(), signIn("corp:temp", true)); !errors.Is(
+		err, principal.ErrNotSignInTarget,
+	) {
+		t.Fatalf("sign-in of the temporary administrator: err = %v, want ErrNotSignInTarget", err)
+	}
+
+	if _, _, err := svc.SignInPrincipal(t.Context(), testEntry(), signIn("corp:plain", false)); err != nil {
+		t.Fatalf("sign-in of a person with no record: %v", err)
 	}
 }

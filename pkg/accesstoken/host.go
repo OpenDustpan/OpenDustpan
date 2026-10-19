@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -18,43 +20,129 @@ import (
 // not the person of the run.
 const HostFirstTokenWindow = 5 * time.Minute
 
+// HostRecovery is one recovery of the host command: a new person, its
+// site-administrator grant on the installation, its temporary
+// administrator record and its first token, each with the audit entry of
+// its create.
+type HostRecovery struct {
+	Person      principal.Principal
+	PersonEntry audit.Entry
+	Grant       access.Grant
+	GrantEntry  audit.Entry
+	Record      tempadmin.TempAdmin
+	RecordEntry audit.Entry
+	Token       Token
+	Digest      Digest
+	TokenEntry  audit.Entry
+}
+
+// HostStore is the persistence port of the host issuer. Each method writes
+// in one transaction and appends its audit entries in that transaction:
+// all commit, or nothing does. An entry that fails validation gives
+// audit.ErrInvalidEntry and changes nothing.
+type HostStore interface {
+	// CreateFirstHostToken persists the token t with the digest d and
+	// appends e. It inserts t only when all of these hold at t.CreatedAt:
+	// the principal of t is a live, enabled person of the installation,
+	// made at most HostFirstTokenWindow before t.CreatedAt and not after
+	// it; a temporary administrator record names the principal and works
+	// past t.CreatedAt and at least to t.ExpiresAt; and the principal holds
+	// no token of any status. Else it returns ErrNotOwnToken and changes
+	// nothing. Of two concurrent calls for one principal, at most one
+	// succeeds.
+	CreateFirstHostToken(ctx context.Context, t Token, d Digest, e audit.Entry) error
+	// CreateHostRecovery persists the person, the grant, the record and
+	// the token of r, and appends their four entries. It returns
+	// principal.ErrAlreadyExists when a principal holds the subject or the
+	// ID of the person, and ErrNotOwnToken when the token fails the checks
+	// of CreateFirstHostToken.
+	CreateHostRecovery(ctx context.Context, r *HostRecovery) error
+}
+
 // HostIssuer issues the first token of a temporary administrator that the
-// host command just created. It is a narrow exception to the own-token
-// rule: recovery has no sign-in, so the person cannot make its own first
-// token.
+// host command creates. It is a narrow exception to the own-token rule:
+// recovery has no sign-in, so the person cannot make its own first token.
 //
 // Only the host command wiring builds a HostIssuer. No HTTP route builds
 // one, and the normal Create path has no flag that reaches it. Every other
 // caller keeps ErrNotOwnToken.
 type HostIssuer struct {
-	svc *Service
+	svc   *Service
+	store HostStore
 }
 
-// NewHostIssuer returns the issuer of the host command over svc. It
-// returns ErrNoTempAdminReader when svc has no temporary administrator
+// NewHostIssuer returns the issuer of the host command over svc and store.
+// It returns ErrNoTempAdminReader when svc has no temporary administrator
 // reader: without the record the issuer cannot prove that the person is a
-// temporary administrator, so it fails closed.
-func NewHostIssuer(svc *Service) (*HostIssuer, error) {
+// temporary administrator, so it fails closed. It returns
+// ErrMissingDependency when store is nil.
+func NewHostIssuer(svc *Service, store HostStore) (*HostIssuer, error) {
 	if svc == nil || svc.tempAdmins == nil {
 		return nil, ErrNoTempAdminReader
 	}
 
-	return &HostIssuer{svc: svc}, nil
+	if store == nil {
+		return nil, fmt.Errorf("%w: host store", ErrMissingDependency)
+	}
+
+	return &HostIssuer{svc: svc, store: store}, nil
 }
 
 // ErrNoTempAdminReader reports a HostIssuer over a Service that has no
 // temporary administrator reader.
 var ErrNoTempAdminReader = errors.New("the host issuer needs a temporary administrator reader")
 
+// HostInput names one recovery. Subject is the name of the person, and it
+// must name no principal. Reason is the text that the host operator gave.
+// CreatedBy names the host operator that runs the host command.
+type HostInput struct {
+	Subject   string
+	Reason    string
+	CreatedBy string
+}
+
+// HostResult is the result of a recovery: the new person, the ID of its
+// grant, its record, and its token with the secret, shown once.
+type HostResult struct {
+	Person  principal.Principal
+	GrantID string
+	Record  tempadmin.TempAdmin
+	Token   Token
+	Secret  Secret
+}
+
+// Recover makes the person in.Subject a temporary administrator in one
+// store transaction: the person, its site-administrator grant on the
+// installation, its record and its first token. The record and the token
+// share one expiry: tempadmin.Lifetime after now, or the maximum lifetime
+// of the token policy when that is shorter. The entry e names the host as
+// the subject. Each create gets its own copy of e with its action and
+// object, and the entry of the record holds the reason. A crash leaves
+// all four, or none.
+func (h *HostIssuer) Recover(ctx context.Context, e audit.Entry, in HostInput) (HostResult, error) {
+	r, secret, err := h.recovery(ctx, e, in, h.svc.Now())
+	if err != nil {
+		return HostResult{}, err
+	}
+
+	if err := h.store.CreateHostRecovery(ctx, r); err != nil {
+		if errors.Is(err, ErrNotOwnToken) {
+			return HostResult{}, hostRefusal("the store refused the first token")
+		}
+
+		return HostResult{}, fmt.Errorf("create temporary administrator %q: %w", in.Subject, err)
+	}
+
+	return HostResult{Person: r.Person, GrantID: r.Grant.ID, Record: r.Record, Token: r.Token, Secret: secret}, nil
+}
+
 // IssueFirstToken issues the first personal token of the principal
-// principalID, with the expiry expires and the audit entry e. It refuses
-// with identity.ErrDenied wrapping ErrNotOwnToken when any of these fails:
-//
-//   - the principal is a person that is not disabled, made at most
-//     HostFirstTokenWindow ago;
-//   - a working temporary administrator record names the principal;
-//   - the principal holds no token of any status;
-//   - the expiry lies after now and at most tempadmin.Lifetime from now.
+// principalID, with the expiry expires and the audit entry e. The store
+// checks the person, its record and its tokens in the transaction of the
+// insert (see HostStore.CreateFirstHostToken). It refuses with
+// identity.ErrDenied wrapping ErrNotOwnToken when a check fails or when
+// the expiry does not lie after now and at most tempadmin.Lifetime from
+// now.
 //
 // The token carries the name tempadmin.HostTokenName and the creator
 // tempadmin.HostSubject. The audit entry e records the creation of the
@@ -70,11 +158,6 @@ func (h *HostIssuer) IssueFirstToken(
 
 	at := s.Now()
 
-	p, err := s.hostTarget(ctx, principalID, at)
-	if err != nil {
-		return Token{}, Secret{}, fmt.Errorf("issue host access token: %w", err)
-	}
-
 	if want := at.Add(tempadmin.Lifetime); !expires.After(at) || expires.After(want) {
 		return Token{}, Secret{}, hostRefusal(fmt.Sprintf(
 			"the expiry must be after now and at most %s from now", tempadmin.Lifetime,
@@ -89,7 +172,7 @@ func (h *HostIssuer) IssueFirstToken(
 	n, err := s.newToken(tokenSpec{
 		at:          at,
 		expiresAt:   expiresAt,
-		principalID: p.ID,
+		principalID: principalID,
 		name:        tempadmin.HostTokenName,
 		kind:        KindPersonal,
 		createdBy:   tempadmin.HostSubject,
@@ -98,69 +181,100 @@ func (h *HostIssuer) IssueFirstToken(
 		return Token{}, Secret{}, err
 	}
 
-	if err := s.store.CreateToken(ctx, n.token, n.digest, change(e, at, TokenRef(p.ID, n.token.ID))); err != nil {
+	err = h.store.CreateFirstHostToken(ctx, n.token, n.digest, change(e, at, TokenRef(principalID, n.token.ID)))
+	if errors.Is(err, ErrNotOwnToken) {
+		return Token{}, Secret{}, hostRefusal(
+			"the person is not a new, enabled, working temporary administrator with no token",
+		)
+	}
+
+	if err != nil {
 		return Token{}, Secret{}, fmt.Errorf("create host access token: %w", err)
 	}
 
 	return n.token, n.secret, nil
 }
 
-// hostTarget reads the principal principalID and checks that the host may
-// issue its first token at the time at.
-func (s *Service) hostTarget(ctx context.Context, principalID string, at time.Time) (principal.Principal, error) {
-	p, err := s.principals.GetPrincipal(ctx, principalID)
-	if errors.Is(err, principal.ErrNotFound) {
-		return principal.Principal{}, fmt.Errorf("%w: %q", ErrPrincipalNotFound, principalID)
+// recovery builds the person, the grant, the record and the token of a
+// recovery at the time at, with their entries, and checks each. It answers
+// the secret of the token too.
+func (h *HostIssuer) recovery(
+	ctx context.Context, e audit.Entry, in HostInput, at time.Time,
+) (*HostRecovery, Secret, error) {
+	s := h.svc
+
+	if err := principal.ValidateSubject(in.Subject); err != nil {
+		return nil, Secret{}, fmt.Errorf("create temporary administrator: %w", err)
 	}
 
+	lifetime, err := s.MaxLifetime(ctx)
 	if err != nil {
-		return principal.Principal{}, fmt.Errorf("read principal: %w", err)
+		return nil, Secret{}, fmt.Errorf("read token policy: %w", err)
 	}
 
-	if p.Kind != principal.KindPerson || !p.DisabledAt.IsZero() {
-		return principal.Principal{}, hostRefusal("the principal is not an enabled person")
+	if lifetime <= 0 {
+		return nil, Secret{}, fmt.Errorf("%w: the maximum lifetime of the token policy is not positive", ErrInvalid)
 	}
 
-	if at.Sub(p.CreatedAt) > HostFirstTokenWindow {
-		return principal.Principal{}, hostRefusal("the person was not made by this run of the host command")
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{},
+		ID: s.newID(principal.IDPrefix), Subject: in.Subject, DisplayName: in.Subject,
+		Kind: principal.KindPerson, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
 	}
 
-	if recErr := s.hostRecord(ctx, p, at); recErr != nil {
-		return principal.Principal{}, recErr
+	if validErr := p.Validate(); validErr != nil {
+		return nil, Secret{}, fmt.Errorf("create temporary administrator: %w", validErr)
 	}
 
-	held, _, err := s.store.ListTokens(ctx, Query{
-		At: at, AfterCreatedAt: time.Time{}, PrincipalID: p.ID, AfterID: "", Filter: FilterAll,
-		Limit: 1, HasAfter: false,
+	g := access.Grant{
+		CreatedAt: at, Condition: nil, Object: identity.ServerObject(), ID: s.newID(access.GrantIDPrefix),
+		Role: access.RoleSiteAdministrator, CreatedBy: tempadmin.HostSubject,
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: p.ID},
+	}
+
+	rec := tempadmin.TempAdmin{
+		CreatedAt: at, ExpiresAt: at.Add(min(tempadmin.Lifetime, lifetime)),
+		PrincipalID: p.ID, Subject: in.Subject, CreatedBy: in.CreatedBy, Reason: in.Reason,
+	}
+
+	if validErr := rec.Validate(); validErr != nil {
+		return nil, Secret{}, fmt.Errorf("create temporary administrator: %w", validErr)
+	}
+
+	n, err := s.newToken(tokenSpec{
+		at: at, expiresAt: rec.ExpiresAt, principalID: p.ID,
+		name: tempadmin.HostTokenName, kind: KindPersonal, createdBy: tempadmin.HostSubject,
 	})
 	if err != nil {
-		return principal.Principal{}, fmt.Errorf("list tokens of the person: %w", err)
+		return nil, Secret{}, err
 	}
 
-	if len(held) > 0 {
-		return principal.Principal{}, hostRefusal("the person already holds a token")
-	}
+	recordEntry := change(withAction(e, tempadmin.Action), at, tempadmin.Ref(p.ID))
+	recordEntry.Changes = append(slices.Clone(recordEntry.Changes), audit.Change{
+		Key: "reason", Old: nil, New: in.Reason, Layer: "", TakesEffect: "",
+	})
 
-	return p, nil
+	return &HostRecovery{
+		Person:      p,
+		PersonEntry: change(withAction(e, string(identity.ActionServerManagePrincipals)), at, principal.Ref(p.ID)),
+		Grant:       g,
+		GrantEntry:  change(withAction(e, string(identity.ActionServerManageAccess)), at, access.GrantRef(g)),
+		Record:      rec,
+		RecordEntry: recordEntry,
+		Token:       n.token,
+		Digest:      n.digest,
+		TokenEntry: change(
+			withAction(e, string(identity.ActionServerManageTokens)), at, TokenRef(p.ID, n.token.ID),
+		),
+	}, n.secret, nil
 }
 
-// hostRecord checks that a working temporary administrator record names
-// the principal p at the time at.
-func (s *Service) hostRecord(ctx context.Context, p principal.Principal, at time.Time) error {
-	rec, err := s.tempAdmins.GetTempAdminBySubject(ctx, p.Subject)
-	if errors.Is(err, tempadmin.ErrNotFound) {
-		return hostRefusal("the person is not a working temporary administrator")
-	}
+// withAction returns e with the action action.
+func withAction(e audit.Entry, action string) audit.Entry {
+	e.Action = action
 
-	if err != nil {
-		return fmt.Errorf("read temporary administrator: %w", err)
-	}
-
-	if rec.PrincipalID != p.ID || !rec.ActiveAt(at) {
-		return hostRefusal("the person is not a working temporary administrator")
-	}
-
-	return nil
+	return e
 }
 
 // hostRefusal returns the refusal of the host issuer for the reason why:

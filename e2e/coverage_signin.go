@@ -37,7 +37,8 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	})
 
 	principals, err := principal.NewService(principal.Config{
-		Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)

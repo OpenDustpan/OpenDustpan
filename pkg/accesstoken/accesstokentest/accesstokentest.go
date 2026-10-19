@@ -31,6 +31,7 @@ import (
 // sweep exempts while they work.
 type Store interface {
 	accesstoken.Store
+	accesstoken.HostStore
 	principal.RecordStore
 	tempadmin.Store
 }
@@ -73,6 +74,11 @@ func Run(t *testing.T, newStore Factory) {
 			test: testSweepIgnoresBreakGlassDisable,
 		},
 		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
+		{name: "the first host token of a new temporary administrator", test: testFirstHostToken},
+		{name: "the first host token refuses each failed check", test: testFirstHostTokenRefusals},
+		{name: "concurrent first host tokens of one person: one wins", test: testConcurrentFirstHostTokens},
+		{name: "a host recovery writes the person, grant, record and token", test: testHostRecovery},
+		{name: "a failed host recovery changes nothing", test: testHostRecoveryRollsBack},
 		{name: "enable, then sweep: the principal stays enabled", test: testEnablePrincipal},
 		{name: "the sweep never disables a break-glass account", test: testSweepSkipsBreakGlass},
 		{name: "concurrent policy updates: each sees the one before", test: testConcurrentPolicyUpdates},
@@ -1224,6 +1230,7 @@ func mustTempAdmin(t *testing.T, s Store, id, subject string, created time.Time)
 		PrincipalID: id,
 		Subject:     subject,
 		CreatedBy:   tempadmin.HostSubject,
+		Reason:      "recovery test",
 	}
 
 	e := entryAt("tok-x", created)

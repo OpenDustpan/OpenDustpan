@@ -16,6 +16,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/breakglass"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -47,13 +49,15 @@ const maxIDLength = 64
 // TempAdmin is one temporary administrator. PrincipalID is the stable ID of
 // the principal, with the prefix "prn-". Subject is the name of the person
 // the host command passed. ExpiresAt is the end of the grant, at most
-// Lifetime after CreatedAt. CreatedBy names the host operator that made it.
+// Lifetime after CreatedAt. CreatedBy names the host operator that made it,
+// and Reason holds the text that the host operator gave for the create.
 type TempAdmin struct {
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
 	PrincipalID string
 	Subject     string
 	CreatedBy   string
+	Reason      string
 }
 
 // ActiveAt reports whether r works at now: now holds a time before the
@@ -64,8 +68,8 @@ func (r TempAdmin) ActiveAt(now time.Time) bool {
 
 // Validate reports whether r holds usable values: a principal ID in ID
 // form, a subject that principal.ValidateSubject accepts, a named creator,
-// and an expiry after the creation and at most Lifetime after it, in whole
-// milliseconds.
+// a reason that history.ValidateReason accepts, and an expiry after the
+// creation and at most Lifetime after it, in whole milliseconds.
 func (r TempAdmin) Validate() error {
 	if !ident.Valid(r.PrincipalID, maxIDLength) {
 		return fmt.Errorf("%w: principal %q", ErrInvalid, r.PrincipalID)
@@ -77,6 +81,10 @@ func (r TempAdmin) Validate() error {
 
 	if r.CreatedBy == "" {
 		return fmt.Errorf("%w: missing creator", ErrInvalid)
+	}
+
+	if err := history.ValidateReason(r.Reason); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
 	created := r.CreatedAt.UTC().Truncate(time.Millisecond)
@@ -91,6 +99,24 @@ func (r TempAdmin) Validate() error {
 	}
 
 	return nil
+}
+
+// ReviewUse returns the break-glass use of r that ends at end: the expiry
+// of r, or an earlier end. A second person reviews the audit entries of the
+// principal from the create to end. The use names the person of the record
+// and the host as the people that cannot review it.
+func (r TempAdmin) ReviewUse(end time.Time) breakglass.Use {
+	return breakglass.Use{
+		Kind:    breakglass.KindTempAdmin,
+		Ref:     r.PrincipalID,
+		Scope:   audit.ServerScope,
+		Object:  "",
+		Subject: r.Subject,
+		People:  []string{r.Subject, HostSubject},
+		Reason:  r.Reason,
+		At:      r.CreatedAt,
+		Until:   end,
+	}
 }
 
 // Ref returns the audit object of the temporary administrator of the
@@ -130,13 +156,14 @@ const HostTokenName = "host-recovery"
 type Store interface {
 	// CreateTempAdmin persists r. It returns ErrAlreadyExists when the
 	// principal already has a record, and principal.ErrNotFound when the
-	// principal does not exist.
+	// principal does not exist. A delete of the principal removes its
+	// record in the transaction of the delete.
 	CreateTempAdmin(ctx context.Context, r TempAdmin, e audit.Entry) error
 	// GetTempAdmin returns the record of the principal principalID, or
 	// ErrNotFound.
 	GetTempAdmin(ctx context.Context, principalID string) (TempAdmin, error)
-	// GetTempAdminBySubject returns the record of the person with the
-	// subject subject, or ErrNotFound.
+	// GetTempAdminBySubject returns the record of the live principal with
+	// the subject subject, or ErrNotFound.
 	GetTempAdminBySubject(ctx context.Context, subject string) (TempAdmin, error)
 	// ListTempAdmins returns every record, ordered by expiry. Expired
 	// records stay listed: the expiry keeps them as tombstones, so a
@@ -156,8 +183,8 @@ type Store interface {
 // authenticator decorator, the access token service and the API adapters
 // take it, so a reader needs no write port.
 type Reader interface {
-	// GetTempAdminBySubject returns the record of the person with the
-	// subject subject, or ErrNotFound.
+	// GetTempAdminBySubject returns the record of the live principal with
+	// the subject subject, or ErrNotFound.
 	GetTempAdminBySubject(ctx context.Context, subject string) (TempAdmin, error)
 	// ListTempAdmins returns every record, ordered by expiry, including
 	// the expired tombstones.

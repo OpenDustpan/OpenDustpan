@@ -710,13 +710,19 @@ func wireTempAdmins(cfg *settings) error {
 		return nil
 	}
 
+	principals, ok := cfg.namespaceStore.(tempadmin.Principals)
+	if !ok {
+		return nil
+	}
+
 	entries := serverAuditOf(cfg.namespaceStore)
 	if entries == nil {
 		return nil
 	}
 
 	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
-		Next: cfg.authenticator, Records: store, Expirer: store, Audit: entries, Now: cfg.now,
+		Next: cfg.authenticator, Records: store, Principals: principals, Request: requestOf,
+		Expirer: store, Audit: entries, Now: cfg.now,
 	})
 	if err != nil {
 		return fmt.Errorf("temporary administrator authenticator: %w", err)
@@ -725,6 +731,17 @@ func wireTempAdmins(cfg *settings) error {
 	cfg.authenticator = dec
 
 	return nil
+}
+
+// requestOf answers the client address and the request ID that the server
+// stored in ctx, for the audit entries of a temporary administrator.
+func requestOf(ctx context.Context) tempadmin.Request {
+	req := tempadmin.Request{SourceIP: "", RequestID: requestid.FromContext(ctx)}
+	if ip := clientip.FromContext(ctx); ip.IsValid() {
+		req.SourceIP = ip.String()
+	}
+
+	return req
 }
 
 // newTempAdminService builds the temporary administrator service, or nil
@@ -736,7 +753,7 @@ func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
 		return nil, nil //nolint:nilnil // No record store is a valid setup: expiry never runs.
 	}
 
-	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Now: cfg.now})
+	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: cfg.now})
 	if err != nil {
 		return nil, fmt.Errorf("temporary administrator service: %w", err)
 	}
@@ -2214,8 +2231,16 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 		tokens = grants
 	}
 
+	// Both SQL adapters keep the temporary administrators, so a sign-in
+	// through an identity provider cannot name one.
+	var temps principal.TempAdmins
+	if records, ok := cfg.namespaceStore.(principal.TempAdmins); ok {
+		temps = records
+	}
+
 	svc, err := principal.NewService(principal.Config{
-		Store: store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
+		TempAdmins: temps,
+		Store:      store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)

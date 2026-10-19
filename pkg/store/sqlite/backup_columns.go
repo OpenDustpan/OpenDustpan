@@ -543,6 +543,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColExpiresAtMs,
 				backupColCreatedAtMs,
 				backupColCreatedBy,
+				"reason",
 			},
 		},
 		{

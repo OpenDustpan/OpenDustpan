@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -115,7 +115,10 @@ func TestHostCreateTempAdmin(t *testing.T) {
 	ctx := t.Context()
 	db := hostTestDB(t)
 
-	creds := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "alice"))
+	creds := parseHostOutput(
+		t,
+		runHost(ctx, t, "host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice"),
+	)
 
 	checkHostExpiry(t, creds)
 
@@ -136,17 +139,19 @@ func TestHostRefusesAnExistingPerson(t *testing.T) {
 	ctx := t.Context()
 	db := hostTestDB(t)
 
-	runHost(ctx, t, "host", "create-temp-admin", "--database", db, "alice")
+	runHost(ctx, t, "host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice")
 
 	var stdout, stderr bytes.Buffer
 
-	err := run(ctx, []string{"host", "create-temp-admin", "--database", db, "alice"}, &stdout, &stderr)
+	args := []string{"host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice"}
+
+	err := run(ctx, args, &stdout, &stderr)
 	if err == nil {
 		t.Fatal("second host run succeeded, want a refusal")
 	}
 
 	if !strings.Contains(err.Error(), `person "alice" already exists`) ||
-		!strings.Contains(err.Error(), "opendustpan host create-temp-admin <person>") {
+		!strings.Contains(err.Error(), "opendustpan host create-temp-admin --reason <text> <person>") {
 		t.Fatalf("refusal = %v, want the person and the command that helps", err)
 	}
 }
@@ -288,10 +293,10 @@ func TestHostNeedsAPerson(t *testing.T) {
 	db := hostTestDB(t)
 
 	for _, args := range [][]string{
-		{"host", "create-temp-admin", "--database", db},
-		{"host", "create-temp-admin", "--database", db, "alice", "bob"},
-		{"host", "create-temp-admin", "--database", db, "admin"},
-		{"host", "create-temp-admin", "--database", db, "admin-2"},
+		{"host", "create-temp-admin", "--reason", "test recovery", "--database", db},
+		{"host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice", "bob"},
+		{"host", "create-temp-admin", "--reason", "test recovery", "--database", db, "admin"},
+		{"host", "create-temp-admin", "--reason", "test recovery", "--database", db, "admin-2"},
 	} {
 		var stdout, stderr bytes.Buffer
 
@@ -338,7 +343,10 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 
 	st.close()
 
-	creds := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "bob"))
+	creds := parseHostOutput(
+		t,
+		runHost(ctx, t, "host", "create-temp-admin", "--reason", "test recovery", "--database", db, "bob"),
+	)
 
 	if creds.person != "bob" {
 		t.Fatalf("person = %q, want bob", creds.person)
@@ -422,7 +430,10 @@ func TestHostShortPolicyLifetime(t *testing.T) {
 
 	setHostMaxLifetime(ctx, t, db, time.Hour)
 
-	creds := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "alice"))
+	creds := parseHostOutput(
+		t,
+		runHost(ctx, t, "host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice"),
+	)
 
 	requireHostExpiryAbout(t, creds.expires, time.Hour)
 
@@ -476,7 +487,9 @@ func TestHostRefusesWhenSQLiteFileIsInUse(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	err := run(ctx, []string{"host", "create-temp-admin", "--database", db, "alice"}, &stdout, &stderr)
+	args := []string{"host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice"}
+
+	err := run(ctx, args, &stdout, &stderr)
 	if err == nil {
 		t.Fatal("host run while the server holds the file succeeded, want a refusal")
 	}
@@ -524,26 +537,25 @@ func requireHostRecordExpiry(
 	}
 }
 
-// errFailToken reports the injected token failure of the cleanup test.
-var errFailToken = errors.New("injected token failure")
-
-// failTokenStore fails the token writes of the store it wraps, so a host
-// run fails at the token step after the person, the grant and the record.
-type failTokenStore struct {
+// failRecoveryStore makes the token of each host recovery outlive its
+// record, so the store refuses the token after it wrote the person, the
+// grant and the record in the same transaction.
+type failRecoveryStore struct {
 	store
 }
 
-// CreateToken implements accesstoken.TokenStore with an injected failure.
-func (f failTokenStore) CreateToken(
-	_ context.Context, _ accesstoken.Token, _ accesstoken.Digest, _ audit.Entry,
-) error {
-	return errFailToken
+// CreateHostRecovery implements accesstoken.HostStore with a token that
+// the store refuses.
+func (f failRecoveryStore) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecovery) error {
+	r.Token.ExpiresAt = r.Record.ExpiresAt.Add(time.Millisecond)
+
+	return f.store.CreateHostRecovery(ctx, r)
 }
 
-// TestHostTokenFailureCleansUp proves a token failure undoes the earlier
-// steps: no person, no live grant and no active record stay, so a retry
-// with the same name succeeds.
-func TestHostTokenFailureCleansUp(t *testing.T) {
+// TestHostFailureLeavesNothing proves that a failure at the token step
+// rolls back the person, the grant and the record of the same transaction,
+// so a retry with the same name succeeds.
+func TestHostFailureLeavesNothing(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
@@ -555,18 +567,29 @@ func TestHostTokenFailureCleansUp(t *testing.T) {
 
 	t.Cleanup(st.close)
 
-	if _, err := createTempAdmin(ctx, failTokenStore{store: st}, "alice"); err == nil {
-		t.Fatal("host run with a failing token store succeeded, want an error")
+	if _, err := createTempAdmin(ctx, failRecoveryStore{store: st}, aliceInput()); !errors.Is(
+		err, accesstoken.ErrNotOwnToken,
+	) {
+		t.Fatalf("host run with a refused token = %v, want ErrNotOwnToken", err)
 	}
 
 	requireHostCleanup(ctx, t, st)
 	requireHostRetry(ctx, t, st)
 }
 
+// aliceInput is the host input of the person alice.
+func aliceInput() hostInput {
+	return hostInput{person: "alice", reason: "every administrator lost access"}
+}
+
+// grantLister lists the grants on an object. Both SQL adapters implement
+// it.
+type grantLister interface {
+	ListGrantsOn(ctx context.Context, obj identity.Object, q access.GrantQuery) ([]access.ListedGrant, int64, error)
+}
+
 // requireHostCleanup proves the failed run left no person, no live grant
-// and no usable record: the person is gone, no grant stays live, and any
-// record left is an ended tombstone whose principal is gone, so a retry
-// with the same name starts clean.
+// and no record.
 func requireHostCleanup(ctx context.Context, t *testing.T, st store) {
 	t.Helper()
 
@@ -574,7 +597,12 @@ func requireHostCleanup(ctx context.Context, t *testing.T, st store) {
 		t.Fatalf("principal after a failed run = %v, want ErrNotFound", err)
 	}
 
-	listed, total, err := st.ListGrantsOn(ctx, identity.ServerObject(), access.GrantQuery{
+	lister, ok := st.(grantLister)
+	if !ok {
+		t.Fatal("the store lists no grants")
+	}
+
+	listed, total, err := lister.ListGrantsOn(ctx, identity.ServerObject(), access.GrantQuery{
 		AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: 100,
 	})
 	if err != nil {
@@ -585,34 +613,16 @@ func requireHostCleanup(ctx context.Context, t *testing.T, st store) {
 		t.Fatalf("grants after a failed run = %+v, want none live", listed)
 	}
 
-	requireHostRecordUnusable(ctx, t, st)
-}
-
-// requireHostRecordUnusable proves no usable record stays for the failed
-// person: either no record, or a tombstone whose principal is gone.
-func requireHostRecordUnusable(ctx context.Context, t *testing.T, st store) {
-	t.Helper()
-
-	rec, err := st.GetTempAdminBySubject(ctx, "alice")
-	if errors.Is(err, tempadmin.ErrNotFound) {
-		return
-	}
-
-	if err != nil {
-		t.Fatalf("record after a failed run = %v, want ErrNotFound or an ended record", err)
-	}
-
-	if _, err := st.GetPrincipal(ctx, rec.PrincipalID); !errors.Is(err, principal.ErrNotFound) {
-		t.Fatalf("principal %q of the failed record still exists, want it gone", rec.PrincipalID)
+	if list, err := st.ListTempAdmins(ctx); err != nil || len(list) != 0 {
+		t.Fatalf("records after a failed run = %+v, %v; want none", list, err)
 	}
 }
 
-// requireHostRetry proves a retry with the same name succeeds after the
-// cleanup and signs in.
+// requireHostRetry proves a retry with the same name succeeds and signs in.
 func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 	t.Helper()
 
-	made, err := createTempAdmin(ctx, st, "alice")
+	made, err := createTempAdmin(ctx, st, aliceInput())
 	if err != nil {
 		t.Fatalf("retry after a failed run: %v", err)
 	}
@@ -639,194 +649,105 @@ func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 	}
 }
 
-// errFailPerson reports the injected person-removal failure of the cleanup
-// test.
-var errFailPerson = errors.New("injected person failure")
-
-// failTokenPersonStore fails the token write and the person removal of the
-// store it wraps, so a host run fails at the token step and the person
-// undo fails too.
-type failTokenPersonStore struct {
-	store
-}
-
-// CreateToken implements accesstoken.TokenStore with an injected failure.
-func (f failTokenPersonStore) CreateToken(
-	_ context.Context, _ accesstoken.Token, _ accesstoken.Digest, _ audit.Entry,
-) error {
-	return errFailToken
-}
-
-// DeletePrincipal implements principal.RecordStore with an injected
-// failure.
-func (f failTokenPersonStore) DeletePrincipal(_ context.Context, _ string, _ audit.Entry) error {
-	return errFailPerson
-}
-
-// TestHostCleanupFailureNamesPerson proves a token failure with a failing
-// person undo reports the leftover person: the joined error keeps both the
-// token failure and the person that stays.
-func TestHostCleanupFailureNamesPerson(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-
-	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(st.close)
-
-	_, err = createTempAdmin(ctx, failTokenPersonStore{store: st}, "alice")
-	if err == nil {
-		t.Fatal("host run with failing token and person cleanup succeeded, want an error")
-	}
-
-	if !errors.Is(err, errFailToken) {
-		t.Fatalf("cleanup failure = %v, want the token failure", err)
-	}
-
-	if !errors.Is(err, errFailPerson) {
-		t.Fatalf("cleanup failure = %v, want the person cleanup failure", err)
-	}
-
-	if !strings.Contains(err.Error(), "alice") || !strings.Contains(err.Error(), "person") {
-		t.Fatalf("cleanup failure = %v, want it to name the leftover person", err)
-	}
-
-	leftover, getErr := st.GetPrincipalBySubject(ctx, "alice")
-	if getErr != nil {
-		t.Fatalf("leftover person alice: read = %v, want the person to stay", getErr)
-	}
-
-	if !strings.Contains(err.Error(), "DELETE /api/server/principals/"+leftover.ID) {
-		t.Fatalf("cleanup failure = %v, want it to name the principal delete route", err)
-	}
-
-	if strings.Contains(err.Error(), "host create-temp-admin") {
-		t.Fatalf("cleanup failure = %v, want no hint at host create-temp-admin", err)
-	}
-}
-
-// errFailGrant reports the injected grant-removal failure of the cleanup
-// test.
-var errFailGrant = errors.New("injected grant failure")
-
-// failTokenGrantStore fails the token write and the grant removal of the
-// store it wraps, so a host run fails at the token step and the grant
-// undo fails too.
-type failTokenGrantStore struct {
-	store
-}
-
-// CreateToken implements accesstoken.TokenStore with an injected failure.
-func (f failTokenGrantStore) CreateToken(
-	_ context.Context, _ accesstoken.Token, _ accesstoken.Digest, _ audit.Entry,
-) error {
-	return errFailToken
-}
-
-// RevokeGrant implements access.Store with an injected failure.
-func (f failTokenGrantStore) RevokeGrant(
-	_ context.Context, _ string, _ namespace.Fence, _ audit.Entry, _ access.GrantCheck,
-) error {
-	return errFailGrant
-}
-
-// TestHostCleanupFailureNamesGrant proves a token failure with a failing
-// grant undo reports the leftover grant: the joined error keeps both the
-// token failure and the grant that stays, and names the grant removal
-// route.
-func TestHostCleanupFailureNamesGrant(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-
-	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(st.close)
-
-	_, err = createTempAdmin(ctx, failTokenGrantStore{store: st}, "alice")
-	if err == nil {
-		t.Fatal("host run with failing token and grant cleanup succeeded, want an error")
-	}
-
-	if !errors.Is(err, errFailToken) {
-		t.Fatalf("cleanup failure = %v, want the token failure", err)
-	}
-
-	if !errors.Is(err, errFailGrant) {
-		t.Fatalf("cleanup failure = %v, want the grant cleanup failure", err)
-	}
-
-	if !strings.Contains(err.Error(), "DELETE /api/server/grants/") {
-		t.Fatalf("cleanup failure = %v, want it to name the grant removal route", err)
-	}
-
-	if strings.Contains(err.Error(), "host create-temp-admin") {
-		t.Fatalf("cleanup failure = %v, want no hint at host create-temp-admin", err)
-	}
-}
-
-// errFailRecord reports the injected record failure of the cleanup test.
-var errFailRecord = errors.New("injected record failure")
-
-// failRecordStore fails the temporary administrator record write of the
-// store it wraps, so a host run fails at the record step after the person
-// and the grant.
-type failRecordStore struct {
-	store
-}
-
-// CreateTempAdmin implements tempadmin.Store with an injected failure.
-func (f failRecordStore) CreateTempAdmin(
-	_ context.Context, _ tempadmin.TempAdmin, _ audit.Entry,
-) error {
-	return errFailRecord
-}
-
-// TestHostRecordFailureCleansUp proves a record failure undoes the earlier
-// steps: no person and no live grant stay, so a retry with the same name
-// succeeds.
-func TestHostRecordFailureCleansUp(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-
-	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(st.close)
-
-	if _, err := createTempAdmin(ctx, failRecordStore{store: st}, "alice"); err == nil {
-		t.Fatal("host run with a failing record store succeeded, want an error")
-	}
-
-	requireHostCleanup(ctx, t, st)
-	requireHostRetry(ctx, t, st)
-}
-
-// TestHostRecoveryOff proves that an operator turns the host command off
-// with the environment variable, and that other values leave it on.
+// TestHostRecoveryOff proves that the off switch takes true and 1, keeps
+// the command on for false, 0, an empty value and no value, and refuses
+// any other value.
 func TestHostRecoveryOff(t *testing.T) {
 	t.Parallel()
 
-	for value, want := range map[string]bool{"true": true, "TRUE": true, "": false, "false": false, "1": false} {
-		got := hostRecoveryOff(func(name string) string {
-			if name != hostOffEnv {
-				return "true"
-			}
+	const key = "DUSTPAN_DISABLE_HOST_RECOVERY"
 
-			return value
-		})
-		if got != want {
-			t.Errorf("hostRecoveryOff(%q) = %v, want %v", value, got, want)
+	for value, want := range map[string]error{
+		"true": errHostOff, "TRUE": errHostOff, "1": errHostOff,
+		"": nil, "false": nil, "0": nil, "yes": cli.ErrBadBool, "on": cli.ErrBadBool,
+	} {
+		got := hostAllowed(envOf(map[string]string{key: value}), modeBootstrap)
+		if !errors.Is(got, want) || (want == nil && got != nil) {
+			t.Errorf("off switch %q: err = %v, want %v", value, got, want)
 		}
+	}
+
+	if err := hostAllowed(envOf(nil), modeBootstrap); err != nil {
+		t.Errorf("no off switch: err = %v, want nil", err)
+	}
+}
+
+// TestHostRecoveryModes proves that the command runs in the modes
+// bootstrap and signed-request, and refuses the mode none and an unknown
+// mode.
+func TestHostRecoveryModes(t *testing.T) {
+	t.Parallel()
+
+	for mode, want := range map[string]error{
+		modeBootstrap: nil, modeSignedRequest: nil, modeNone: errHostModeNone, "token": errHostBadMode,
+	} {
+		got := hostAllowed(envOf(nil), mode)
+		if !errors.Is(got, want) || (want == nil && got != nil) {
+			t.Errorf("mode %q: err = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+// TestHostOffOpensNoStore runs the command end to end with the off switch,
+// with the mode none, and with a bad switch value, and proves that each run
+// refuses before it opens a store.
+func TestHostOffOpensNoStore(t *testing.T) { //nolint:paralleltest // It swaps the package opener.
+	saved := openStore
+
+	t.Cleanup(func() { openStore = saved })
+
+	openStore = func(context.Context, string, *slog.Logger) (store, error) {
+		t.Fatal("the host command opened a store")
+
+		return nil, errHostOff
+	}
+
+	cases := []struct {
+		want error
+		env  map[string]string
+		args []string
+	}{
+		{want: errHostOff, env: map[string]string{"DUSTPAN_DISABLE_HOST_RECOVERY": "1"}, args: nil},
+		{want: cli.ErrBadBool, env: map[string]string{"DUSTPAN_DISABLE_HOST_RECOVERY": "maybe"}, args: nil},
+		{want: errHostModeNone, env: nil, args: []string{"--recovery-mode", modeNone}},
+	}
+
+	for _, c := range cases {
+		var stdout, stderr bytes.Buffer
+
+		args := append(append([]string{"--reason", "lost access"}, c.args...), "alice")
+		in := hostIO{stdin: strings.NewReader(""), terminal: false, lookup: envOf(c.env)}
+
+		if err := hostCreateTempAdminWithIO(t.Context(), args, in, &stdout, &stderr); !errors.Is(err, c.want) {
+			t.Fatalf("host run %v with %v: err = %v, want %v", args, c.env, err, c.want)
+		}
+	}
+}
+
+// TestHostReason proves that the command needs a reason: from the flag, or
+// from the prompt on a terminal, and refuses a run with neither.
+func TestHostReason(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+
+	noTerminal := hostIO{stdin: strings.NewReader("ignored\n"), terminal: false, lookup: envOf(nil)}
+	if _, err := hostReason("", noTerminal, &stderr); !errors.Is(err, errHostNeedsReason) {
+		t.Fatalf("no reason and no terminal: err = %v, want errHostNeedsReason", err)
+	}
+
+	terminal := hostIO{stdin: strings.NewReader("  the last administrator left\nmore\n"), terminal: true, lookup: nil}
+
+	got, err := hostReason("", terminal, &stderr)
+	if err != nil || got != "the last administrator left" {
+		t.Fatalf("prompt reason = %q, %v; want the typed line", got, err)
+	}
+
+	if !strings.Contains(stderr.String(), "Reason") {
+		t.Fatalf("prompt = %q, want a reason prompt", stderr.String())
+	}
+
+	if got, err := hostReason(" from the flag ", noTerminal, &stderr); err != nil || got != "from the flag" {
+		t.Fatalf("flag reason = %q, %v; want the flag value", got, err)
 	}
 }

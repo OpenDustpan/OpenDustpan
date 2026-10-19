@@ -3,20 +3,21 @@ package tempadmin_test
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"slices"
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/clientip"
-	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/breakglass"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // baseTime is the fixed clock of the fakes, in UTC to the millisecond.
+// testReason is the reason of the records of the tests.
+const testReason = "every administrator lost access"
+
 func baseTime() time.Time {
 	return time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
 }
@@ -27,11 +28,41 @@ func baseTime() time.Time {
 type fakeStore struct {
 	records  map[string]tempadmin.TempAdmin
 	disabled map[string]bool
-	entries  []audit.Entry
+	// people maps a subject to the ID of its live principal, when it is
+	// not the principal of the record of the subject.
+	people  map[string]string
+	entries []audit.Entry
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{records: map[string]tempadmin.TempAdmin{}, disabled: map[string]bool{}, entries: nil}
+	return &fakeStore{
+		records: map[string]tempadmin.TempAdmin{}, disabled: map[string]bool{}, people: map[string]string{},
+		entries: nil,
+	}
+}
+
+// GetPrincipalBySubject answers the live principal of subject: the entry
+// of people, else the principal of the record of subject.
+func (f *fakeStore) GetPrincipalBySubject(_ context.Context, subject string) (principal.Principal, error) {
+	id, ok := f.people[subject]
+
+	if !ok {
+		for _, r := range f.records {
+			if r.Subject == subject {
+				id, ok = r.PrincipalID, true
+			}
+		}
+	}
+
+	if !ok {
+		return principal.Principal{}, principal.ErrNotFound
+	}
+
+	return principal.Principal{
+		CreatedAt: baseTime(), UpdatedAt: baseTime(), DisabledAt: time.Time{}, ID: id, Subject: subject,
+		DisplayName: subject, Kind: principal.KindPerson, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
+	}, nil
 }
 
 func (f *fakeStore) CreateTempAdmin(
@@ -133,7 +164,7 @@ func (f fakeAuthn) AuthenticateToken(_ context.Context, token string) (identity.
 
 // testService returns a Service over a fresh fake store with a fixed clock.
 func testService(store *fakeStore) *tempadmin.Service {
-	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Now: baseTime})
+	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: baseTime})
 	if err != nil {
 		panic(err)
 	}
@@ -175,7 +206,7 @@ func TestCreateSetsAFixedExpiry(t *testing.T) {
 	store := newFakeStore()
 	svc := testService(store)
 
-	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host"}
+	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason}
 
 	got, err := svc.Create(t.Context(), callerEntry(), in)
 	if err != nil {
@@ -215,13 +246,13 @@ func TestCreateRejectsABadSubject(t *testing.T) {
 		name  string
 		input tempadmin.Input
 	}{
-		{name: "empty subject", input: tempadmin.Input{Subject: "", PrincipalID: "prn-a", CreatedBy: "host"}},
+		{name: "empty subject", input: tempadmin.Input{Subject: "", PrincipalID: "prn-a", CreatedBy: "host", Reason: testReason}},
 		{
 			name:  "bootstrap subject",
-			input: tempadmin.Input{Subject: "admin", PrincipalID: "prn-a", CreatedBy: "host"},
+			input: tempadmin.Input{Subject: "admin", PrincipalID: "prn-a", CreatedBy: "host", Reason: testReason},
 		},
-		{name: "missing principal", input: tempadmin.Input{Subject: "alice", PrincipalID: "", CreatedBy: "host"}},
-		{name: "missing creator", input: tempadmin.Input{Subject: "alice", PrincipalID: "prn-a", CreatedBy: ""}},
+		{name: "missing principal", input: tempadmin.Input{Subject: "alice", PrincipalID: "", CreatedBy: "host", Reason: testReason}},
+		{name: "missing creator", input: tempadmin.Input{Subject: "alice", PrincipalID: "prn-a", CreatedBy: "", Reason: testReason}},
 	} {
 		_, err := svc.Create(t.Context(), callerEntry(), tc.input)
 		if err == nil {
@@ -263,7 +294,7 @@ func seedSweepRecords(t *testing.T, svc *tempadmin.Service) {
 func createSweepRecord(t *testing.T, svc *tempadmin.Service, id, subject string) {
 	t.Helper()
 
-	in := tempadmin.Input{Subject: subject, PrincipalID: id, CreatedBy: "host"}
+	in := tempadmin.Input{Subject: subject, PrincipalID: id, CreatedBy: "host", Reason: testReason}
 
 	if _, err := svc.Create(t.Context(), callerEntry(), in); err != nil {
 		t.Fatalf("create %s: %v", subject, err)
@@ -358,12 +389,27 @@ func requireSecondSweepDisablesNothing(t *testing.T, store *fakeStore, later *te
 
 // testServiceAt returns a Service over store with the clock fixed at now.
 func testServiceAt(store *fakeStore, now time.Time) *tempadmin.Service {
-	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Now: func() time.Time { return now }})
+	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: func() time.Time { return now }})
 	if err != nil {
 		panic(err)
 	}
 
 	return svc
+}
+
+// requestKey holds the client address and the request ID of a test
+// request in the context.
+type requestKey struct{}
+
+// testRequest answers the client address and the request ID that a test
+// stored under requestKey, as the HTTP adapter answers them.
+func testRequest(ctx context.Context) tempadmin.Request {
+	v, ok := ctx.Value(requestKey{}).([2]string)
+	if !ok {
+		return tempadmin.Request{SourceIP: "", RequestID: ""}
+	}
+
+	return tempadmin.Request{SourceIP: v[0], RequestID: v[1]}
 }
 
 // signInDecorator returns a Decorator over store that resolves caller for
@@ -374,11 +420,13 @@ func signInDecorator(
 	t.Helper()
 
 	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
-		Next:    fakeAuthn{principal: caller},
-		Records: store,
-		Expirer: store,
-		Audit:   audits,
-		Now:     func() time.Time { return baseTime().Add(time.Hour) },
+		Next:       fakeAuthn{principal: caller},
+		Records:    store,
+		Principals: store,
+		Request:    testRequest,
+		Expirer:    store,
+		Audit:      audits,
+		Now:        func() time.Time { return baseTime().Add(time.Hour) },
 	})
 	if err != nil {
 		t.Fatalf("new decorator: %v", err)
@@ -412,7 +460,7 @@ func TestDecoratorSetsTheFlagAndWritesASignInEntry(t *testing.T) {
 	store := newFakeStore()
 	svc := testService(store)
 
-	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host"}
+	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason}
 
 	_, err := svc.Create(t.Context(), callerEntry(), in)
 	if err != nil {
@@ -459,7 +507,7 @@ func TestDecoratorWritesOneSignInEntryPerRequest(t *testing.T) {
 	store := newFakeStore()
 	svc := testService(store)
 
-	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host"}
+	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason}
 
 	if _, err := svc.Create(t.Context(), callerEntry(), in); err != nil {
 		t.Fatalf("create temporary administrator: %v", err)
@@ -480,8 +528,7 @@ func TestDecoratorWritesOneSignInEntryPerRequest(t *testing.T) {
 	dec := signInDecorator(t, store, audits, caller)
 
 	ctx := tempadmin.WithSignInScope(t.Context())
-	ctx = clientip.WithAddr(ctx, netip.MustParseAddr("192.0.2.7"))
-	ctx = requestid.WithContext(ctx, "req-1")
+	ctx = context.WithValue(ctx, requestKey{}, [2]string{"192.0.2.7", "req-1"})
 
 	for i := range 2 {
 		checkSignedInWith(ctx, t, dec, i)
@@ -529,11 +576,13 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 
 	newDecorator := func(p identity.Principal) *tempadmin.Decorator {
 		dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
-			Next:    fakeAuthn{principal: p},
-			Records: store,
-			Expirer: store,
-			Audit:   audits,
-			Now:     nil,
+			Next:       fakeAuthn{principal: p},
+			Records:    store,
+			Principals: store,
+			Request:    nil,
+			Expirer:    store,
+			Audit:      audits,
+			Now:        nil,
 		})
 		if err != nil {
 			t.Fatalf("new decorator: %v", err)
@@ -589,7 +638,7 @@ func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 	store := newFakeStore()
 	svc := testService(store)
 
-	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host"}
+	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason}
 
 	rec, err := svc.Create(t.Context(), callerEntry(), in)
 	if err != nil {
@@ -608,10 +657,12 @@ func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 			TemporaryAdministrator: false,
 			TemporaryExpiresAt:     time.Time{},
 		}},
-		Records: store,
-		Expirer: store,
-		Audit:   audits,
-		Now:     func() time.Time { return rec.ExpiresAt },
+		Records:    store,
+		Principals: store,
+		Request:    nil,
+		Expirer:    store,
+		Audit:      audits,
+		Now:        func() time.Time { return rec.ExpiresAt },
 	})
 	if err != nil {
 		t.Fatalf("new decorator: %v", err)
@@ -662,11 +713,13 @@ func TestDecoratorKeepsBootstrapSubjectsVisible(t *testing.T) {
 	}
 
 	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
-		Next:    inner,
-		Records: store,
-		Expirer: store,
-		Audit:   audits,
-		Now:     nil,
+		Next:       inner,
+		Records:    store,
+		Principals: store,
+		Request:    nil,
+		Expirer:    store,
+		Audit:      audits,
+		Now:        nil,
 	})
 	if err != nil {
 		t.Fatalf("new decorator: %v", err)
@@ -691,6 +744,7 @@ func TestValidateSubjectKeepsBootstrapNamesOut(t *testing.T) {
 		PrincipalID: "prn-alice",
 		Subject:     "alice",
 		CreatedBy:   "host",
+		Reason:      testReason,
 	}
 
 	if err := r.Validate(); err != nil {
@@ -701,5 +755,109 @@ func TestValidateSubjectKeepsBootstrapNamesOut(t *testing.T) {
 
 	if err := r.Validate(); !errors.Is(err, principal.ErrReservedSubject) {
 		t.Fatalf("validate of a bootstrap name = %v, want ErrReservedSubject", err)
+	}
+}
+
+// TestDecoratorReusedSubjectNotLockedOut proves that a new person with the
+// subject of an old temporary administrator passes: the old record names
+// another principal, so it neither flags nor denies the new person.
+func TestDecoratorReusedSubjectNotLockedOut(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	audits := newFakeAudit()
+
+	old := tempadmin.Input{Subject: "alice", PrincipalID: "prn-old", CreatedBy: "host", Reason: testReason}
+	svc := testServiceAt(store, baseTime().Add(-48*time.Hour))
+	if _, err := svc.Create(t.Context(), callerEntry(), old); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	store.people["alice"] = "prn-new"
+
+	caller := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "tok-new",
+		TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+	}
+
+	got, err := signInDecorator(t, store, audits, caller).AuthenticateToken(t.Context(), "good")
+	if err != nil {
+		t.Fatalf("sign-in of the new alice: %v", err)
+	}
+
+	if got.TemporaryAdministrator || len(audits.entries) != 0 || store.disabled["prn-old"] {
+		t.Fatalf("sign-in = %+v, entries %d, old ended %v; want a plain caller and no write",
+			got, len(audits.entries), store.disabled["prn-old"])
+	}
+}
+
+// fakeReviews keeps the uses of the reviews it opens.
+type fakeReviews struct {
+	uses []breakglass.Use
+}
+
+func (f *fakeReviews) OpenReview(_ context.Context, u breakglass.Use) error {
+	if err := u.Validate(); err != nil {
+		return err
+	}
+
+	f.uses = append(f.uses, u)
+
+	return nil
+}
+
+// TestSweepOpensReviews proves that the sweep opens a review for each
+// ended record, also for a record that a sign-in ended first, with the
+// reason and the end of the record.
+func TestSweepOpensReviews(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	reviews := &fakeReviews{uses: nil}
+
+	for _, id := range []string{"prn-a", "prn-b"} {
+		in := tempadmin.Input{Subject: id, PrincipalID: id, CreatedBy: "host", Reason: testReason}
+		if _, err := testService(store).Create(t.Context(), callerEntry(), in); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+
+	store.disabled["prn-b"] = true
+
+	later := baseTime().Add(tempadmin.Lifetime)
+
+	svc, err := tempadmin.NewService(tempadmin.Config{
+		Store: store, Reviews: reviews, Now: func() time.Time { return later },
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	done, err := svc.Sweep(t.Context(), callerEntry())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if !slices.Equal(done, []string{"prn-a"}) || len(reviews.uses) != 2 {
+		t.Fatalf("sweep ended %v and opened %d reviews; want prn-a and 2", done, len(reviews.uses))
+	}
+
+	for _, u := range reviews.uses {
+		if u.Kind != breakglass.KindTempAdmin || u.Reason != testReason || !u.Until.Equal(later) {
+			t.Fatalf("review use = %+v, want a temp-admin use with the reason, until %s", u, later)
+		}
+	}
+}
+
+func TestValidateNeedsReason(t *testing.T) {
+	t.Parallel()
+
+	r := tempadmin.TempAdmin{
+		CreatedAt: baseTime(), ExpiresAt: baseTime().Add(time.Hour), PrincipalID: "prn-alice",
+		Subject: "alice", CreatedBy: "host", Reason: " ",
+	}
+
+	if err := r.Validate(); !errors.Is(err, tempadmin.ErrInvalid) {
+		t.Fatalf("validate with a blank reason = %v, want ErrInvalid", err)
 	}
 }

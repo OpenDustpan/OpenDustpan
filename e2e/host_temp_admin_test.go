@@ -119,7 +119,9 @@ type hostSession struct {
 func runHostBinary(ctx context.Context, t *testing.T, env *e2e.Env, person string) (string, time.Time) {
 	t.Helper()
 
-	res := env.RunBinary(ctx, t, "host", "create-temp-admin", "--database", env.DatabaseURL(t), person)
+	res := env.RunBinary(
+		ctx, t, "host", "create-temp-admin", "--reason", "e2e recovery", "--database", env.DatabaseURL(t), person,
+	)
 	if res.ExitCode != 0 {
 		t.Fatalf("host create-temp-admin exits %d (%s %s)", res.ExitCode, res.Stdout, res.Stderr)
 	}

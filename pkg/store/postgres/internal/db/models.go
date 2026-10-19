@@ -462,6 +462,7 @@ type TempAdmin struct {
 	ExpiresAtMs int64
 	CreatedAtMs int64
 	CreatedBy   string
+	Reason      string
 }
 
 type Update struct {

@@ -1,23 +1,29 @@
 package main
 
-// Recovery of a lost administrator through the host (break-glass): the host
-// command makes a temporary administrator for one named person, with a
-// fixed expiry and a personal access token. It opens the database named by
-// --database itself, like serve does: it needs no listener, no identity
-// provider and no DNS. The person comes from the command line, never from a
-// configuration file, and the command reads no token from one either: host
-// access is the credential, and the command prints the new secret once.
+// Recovery of a lost administrator through the host: the host command makes
+// a temporary administrator for one named person, with a fixed expiry and a
+// personal access token. It opens the database named by --database itself,
+// like serve does: it needs no listener, no identity provider and no DNS.
+// This is the one command besides serve that opens the database: host shell
+// access already controls the key and the database. The person comes from
+// the command line, never from a configuration file, and the command reads
+// no token from one either: host access is the credential, and the command
+// prints the new secret once.
 //
-//	opendustpan host create-temp-admin [--database sqlite:dustpan.db] <person>
+//	opendustpan host create-temp-admin [--database sqlite:dustpan.db] --reason <text> <person>
 //
-// The command makes a new person principal, grants it the
-// site-administrator role on the installation, issues its token, and
-// records the fixed expiry. The person must name no principal that exists:
-// the command never reuses one, so an expiry never ends a normal account.
-// Each step writes its audit entry. The exit code is 0 on success and 1 on
-// any refusal.
+// The command refuses when DUSTPAN_DISABLE_HOST_RECOVERY turns it off, when
+// that variable holds a value that is not a bool, and when the recovery mode
+// of the installation is none. It needs a reason: --reason, or a prompt on a
+// terminal. In one store transaction it makes a new person principal,
+// grants it the site-administrator role on the installation, records the
+// temporary administrator with the reason, and issues its token, each with
+// its audit entry. The person must name no principal that exists: the
+// command never reuses one, so an expiry never ends a normal account. The
+// exit code is 0 on success and 1 on any refusal.
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -29,11 +35,10 @@ import (
 	"strings"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -45,7 +50,7 @@ var (
 	// errHostNeedsPerson reports a host run without exactly one person
 	// name on the command line.
 	errHostNeedsPerson = errors.New(
-		"host create-temp-admin needs one person name: opendustpan host create-temp-admin <person>",
+		"host create-temp-admin needs one person name: opendustpan host create-temp-admin --reason <text> <person>",
 	)
 	// ErrPersonExists reports a host run that names a person that a
 	// principal already holds.
@@ -53,40 +58,37 @@ var (
 	// errHostOff reports a host run while the operator turned the command
 	// off.
 	errHostOff = errors.New(
-		"host create-temp-admin is off: unset " + hostOffEnv + " on the host, then run the command again",
+		"host create-temp-admin is off: unset DUSTPAN_DISABLE_HOST_RECOVERY on the host, then run the command again",
 	)
-	// errHostBadLifetime reports a token policy with no positive maximum
-	// lifetime.
-	errHostBadLifetime = errors.New("read token policy: maximum lifetime is not positive")
+	// errHostModeNone reports a host run on an installation with no
+	// break-glass.
+	errHostModeNone = errors.New(
+		"host create-temp-admin is off: the recovery mode is none (no break-glass): " +
+			"set DUSTPAN_RECOVERY_MODE=bootstrap on the host, then run the command again",
+	)
+	// errHostBadMode reports a recovery mode that the command does not know.
+	errHostBadMode = errors.New("unknown recovery mode: set DUSTPAN_RECOVERY_MODE to bootstrap, signed-request or none")
+	// errHostNeedsReason reports a host run with no reason.
+	errHostNeedsReason = errors.New(
+		"host create-temp-admin needs a reason: opendustpan host create-temp-admin --reason <text> <person>",
+	)
 )
 
-// hostOffEnv is the environment variable with which an operator turns the
-// host command off. The value "true" turns it off.
-const hostOffEnv = "DUSTPAN_DISABLE_HOST_RECOVERY"
+// Recovery modes of the installation. The host command runs in the modes
+// bootstrap and signed-request, and refuses in the mode none.
+const (
+	modeBootstrap     = "bootstrap"
+	modeSignedRequest = "signed-request"
+	modeNone          = "none"
+)
 
-// hostRecoveryOff reports whether the operator turned the host command off
-// in the environment that getenv reads.
-func hostRecoveryOff(getenv func(string) string) bool {
-	return strings.EqualFold(strings.TrimSpace(getenv(hostOffEnv)), "true")
-}
+// maxReasonBytes caps the reason that the host command reads from the
+// prompt, so the read never takes all memory.
+const maxReasonBytes = 4096
 
 // hostSubject is the subject of the audit entries of the host command: the
 // host itself acted, through no sign-in.
 const hostSubject = tempadmin.HostSubject
-
-// hostCaller is the caller the host command acts as: an administrator with
-// no stored token, like a bootstrap administrator.
-func hostCaller() identity.Principal {
-	return identity.Principal{
-		Subject:                hostSubject,
-		DisplayName:            hostSubject,
-		Admin:                  true,
-		TokenID:                "",
-		TokenExpiresAt:         time.Time{},
-		TemporaryAdministrator: false,
-		TemporaryExpiresAt:     time.Time{},
-	}
-}
 
 // hostEntry returns the audit entry of one host step: the host as the
 // subject, through the API channel, with the action of the caller. The
@@ -122,26 +124,48 @@ func hostEntry(action string) audit.Entry {
 // hostFlags holds the settings of the host command.
 type hostFlags struct {
 	common
+
+	reason string
+	mode   string
+}
+
+// hostIO holds what the host command reads besides its arguments: the
+// standard input of the reason prompt, whether it is a terminal, and the
+// environment.
+type hostIO struct {
+	stdin    io.Reader
+	terminal bool
+	lookup   cli.LookupFunc
 }
 
 // hostCreateTempAdmin runs the host command: it opens the database and
 // makes the person a temporary administrator, then prints the secret of
 // the new token once with its fixed expiry.
-func hostCreateTempAdmin(
-	ctx context.Context, args []string, stdout, stderr io.Writer,
+func hostCreateTempAdmin(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	in := hostIO{stdin: os.Stdin, terminal: isTerminal(os.Stdin, stderr), lookup: os.LookupEnv}
+
+	return hostCreateTempAdminWithIO(ctx, args, in, stdout, stderr)
+}
+
+// hostCreateTempAdminWithIO is hostCreateTempAdmin with an explicit
+// standard input, terminal flag and environment, so tests drive each.
+func hostCreateTempAdminWithIO(
+	ctx context.Context, args []string, in hostIO, stdout, stderr io.Writer,
 ) error {
 	var f hostFlags
 
 	fs := flag.NewFlagSet("host create-temp-admin", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	f.register(fs)
+	cli.ByFlag("reason").String(fs, &f.reason)
+	cli.ByFlag("recovery-mode").String(fs, &f.mode)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	if hostRecoveryOff(os.Getenv) {
-		return errHostOff
+	if err := hostAllowed(in.lookup, f.mode); err != nil {
+		return err
 	}
 
 	rest := fs.Args()
@@ -155,24 +179,12 @@ func hostCreateTempAdmin(
 		return err
 	}
 
-	logger := slog.New(slog.DiscardHandler)
-
-	st, err := openStore(ctx, f.database, logger)
+	reason, err := hostReason(f.reason, in, stderr)
 	if err != nil {
-		if errors.Is(err, sqlite.ErrInUse) {
-			return fmt.Errorf(
-				"host create-temp-admin: database %s is in use: stop the server that uses this file, then run the command again: %w",
-				f.database,
-				err,
-			)
-		}
-
 		return err
 	}
 
-	defer st.close()
-
-	made, err := createTempAdmin(ctx, st, person)
+	made, err := runHostCreate(ctx, f.database, hostInput{person: person, reason: reason})
 	if err != nil {
 		return err
 	}
@@ -186,6 +198,86 @@ func hostCreateTempAdmin(
 	return nil
 }
 
+// hostAllowed returns why the host command must not run: the off switch
+// in the environment that lookup reads is on or holds a value that is not
+// a bool, or the recovery mode is none or unknown. It opens no store.
+func hostAllowed(lookup cli.LookupFunc, mode string) error {
+	off, err := cli.HostRecoveryOff(lookup)
+	if err != nil {
+		return fmt.Errorf("host create-temp-admin: %w", err)
+	}
+
+	if off {
+		return errHostOff
+	}
+
+	switch strings.TrimSpace(mode) {
+	case modeBootstrap, modeSignedRequest:
+		return nil
+	case modeNone:
+		return errHostModeNone
+	default:
+		return fmt.Errorf("%w: %q", errHostBadMode, mode)
+	}
+}
+
+// hostReason answers the reason of the run: the flag value, or a line that
+// the operator types at a prompt on a terminal. A run with no reason, or
+// with a reason that history.ValidateReason refuses, fails.
+func hostReason(flagValue string, in hostIO, stderr io.Writer) (string, error) {
+	reason := strings.TrimSpace(flagValue)
+
+	if reason == "" && in.terminal {
+		if _, err := fmt.Fprint(stderr, "Reason for the temporary administrator: "); err != nil {
+			return "", fmt.Errorf("write the reason prompt: %w", err)
+		}
+
+		line, err := bufio.NewReader(io.LimitReader(in.stdin, maxReasonBytes)).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("read the reason: %w", err)
+		}
+
+		reason = strings.TrimSpace(line)
+	}
+
+	if reason == "" {
+		return "", errHostNeedsReason
+	}
+
+	if err := history.ValidateReason(reason); err != nil {
+		return "", fmt.Errorf("host create-temp-admin: %w", err)
+	}
+
+	return reason, nil
+}
+
+// runHostCreate opens the database and makes the temporary administrator
+// of in.
+func runHostCreate(ctx context.Context, database string, in hostInput) (hostMade, error) {
+	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler))
+	if err != nil {
+		if errors.Is(err, sqlite.ErrInUse) {
+			return hostMade{}, fmt.Errorf(
+				"host create-temp-admin: database %s is in use: stop the server that uses this file, then run the command again: %w",
+				database,
+				err,
+			)
+		}
+
+		return hostMade{}, err
+	}
+
+	defer st.close()
+
+	return createTempAdmin(ctx, st, in)
+}
+
+// hostInput names one run: the person and the reason.
+type hostInput struct {
+	person string
+	reason string
+}
+
 // hostMade is the result of a host create: the person, the secret of the
 // new token shown once, and its fixed expiry.
 type hostMade struct {
@@ -194,213 +286,65 @@ type hostMade struct {
 	expires time.Time
 }
 
-// createTempAdmin makes person a temporary administrator through the store
-// st: it reads the token policy first, sweeps the records that ended, makes
-// a new person principal, grants it the site-administrator role, records
-// the temporary administrator, and issues its personal token. The record
-// and the token share one lifetime: the token policy maximum when that is
-// below the fixed temporary administrator lifetime, or that lifetime
-// otherwise. Each step writes its audit entry. A step that fails after the
-// person exists undoes the earlier steps before the error returns, so no
-// live grant, person or record stays without a token.
-func createTempAdmin(ctx context.Context, st store, person string) (hostMade, error) {
-	var made hostMade
-
-	temps, err := tempadmin.NewService(tempadmin.Config{Store: st, Now: nil})
+// createTempAdmin makes in.person a temporary administrator through the
+// store st. It sweeps the records that ended first, then makes the person,
+// its site-administrator grant, its record and its token in one store
+// transaction, so a crash leaves all of them or none. The record and the
+// token share one lifetime: the token policy maximum when that is below
+// the fixed temporary administrator lifetime, or that lifetime otherwise.
+func createTempAdmin(ctx context.Context, st store, in hostInput) (hostMade, error) {
+	temps, err := tempadmin.NewService(tempadmin.Config{Store: st, Reviews: nil, Now: nil})
 	if err != nil {
-		return made, fmt.Errorf("temporary administrator service: %w", err)
+		return hostMade{}, fmt.Errorf("temporary administrator service: %w", err)
 	}
 
-	tokens, tokensErr := accesstoken.NewService(accesstoken.Config{
+	if _, sweepErr := temps.Sweep(ctx, hostEntry(tempadmin.Action)); sweepErr != nil {
+		return hostMade{}, fmt.Errorf("sweep ended temporary administrators: %w", sweepErr)
+	}
+
+	if _, readErr := st.GetPrincipalBySubject(ctx, in.person); readErr == nil {
+		return hostMade{}, personExists(in.person)
+	} else if !errors.Is(readErr, principal.ErrNotFound) {
+		return hostMade{}, fmt.Errorf("read principal %q: %w", in.person, readErr)
+	}
+
+	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
-	if tokensErr != nil {
-		return made, fmt.Errorf("access token service: %w", tokensErr)
-	}
-
-	lifetime, err := hostLifetime(ctx, tokens)
 	if err != nil {
-		return made, err
+		return hostMade{}, fmt.Errorf("access token service: %w", err)
 	}
 
-	_, sweepErr := temps.Sweep(ctx, hostEntry(tempadmin.Action))
-	if sweepErr != nil {
-		return made, fmt.Errorf("sweep ended temporary administrators: %w", sweepErr)
+	issuer, err := accesstoken.NewHostIssuer(tokens, st)
+	if err != nil {
+		return hostMade{}, fmt.Errorf("host token issuer: %w", err)
 	}
 
-	principals, principalsErr := principal.NewService(
-		principal.Config{Tokens: nil, Store: st, Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
+	got, err := issuer.Recover(ctx, hostEntry(""), accesstoken.HostInput{
+		Subject: in.person, Reason: in.reason, CreatedBy: hostOperator(),
+	})
+	if errors.Is(err, principal.ErrAlreadyExists) {
+		return hostMade{}, personExists(in.person)
+	}
+
+	if err != nil {
+		return hostMade{}, err
+	}
+
+	return hostMade{subject: in.person, secret: got.Secret.Reveal(), expires: got.Token.ExpiresAt}, nil
+}
+
+// personExists returns the refusal of a person name that a principal
+// already holds. Reusing it would end a normal account at the expiry of the
+// record, and a later enable would hand its grants back.
+func personExists(person string) error {
+	return fmt.Errorf(
+		"person %q already exists: pass a name that no principal holds: "+
+			"opendustpan host create-temp-admin --reason <text> <person>: %w",
+		person,
+		ErrPersonExists,
 	)
-	if principalsErr != nil {
-		return made, fmt.Errorf("principal service: %w", principalsErr)
-	}
-
-	p, personErr := personOf(ctx, st, principals, person)
-	if personErr != nil {
-		return made, personErr
-	}
-
-	grantID, grantErr := grantSiteAdmin(ctx, st, p)
-	if grantErr != nil {
-		return made, errors.Join(grantErr, dropPerson(ctx, st, p))
-	}
-
-	expires, expiresErr := tempExpires(ctx, temps, p, person, lifetime)
-	if expiresErr != nil {
-		return made, errors.Join(expiresErr, revokeHostGrant(ctx, st, grantID), dropPerson(ctx, st, p))
-	}
-
-	tok, secret, createErr := issueHostToken(ctx, tokens, p, expires, person)
-	if createErr != nil {
-		return made, errors.Join(
-			createErr,
-			endHostRecord(ctx, st, p.ID),
-			revokeHostGrant(ctx, st, grantID),
-			dropPerson(ctx, st, p),
-		)
-	}
-
-	return hostMade{subject: person, secret: secret.Reveal(), expires: tok.ExpiresAt}, nil
-}
-
-// hostLifetime answers the lifetime the host command uses for one record
-// and its token: the token policy maximum when that is below the fixed
-// temporary administrator lifetime, or that lifetime otherwise.
-func hostLifetime(ctx context.Context, tokens *accesstoken.Service) (time.Duration, error) {
-	policyMax, err := tokens.MaxLifetime(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("read token policy: %w", err)
-	}
-
-	if policyMax <= 0 {
-		return 0, errHostBadLifetime
-	}
-
-	return min(tempadmin.Lifetime, policyMax), nil
-}
-
-// tempExpires records the principal p as a temporary administrator for the
-// shared lifetime and answers its expiry.
-func tempExpires(
-	ctx context.Context, temps *tempadmin.Service, p principal.Principal, person string, lifetime time.Duration,
-) (time.Time, error) {
-	rec, err := temps.CreateWithLifetime(ctx, hostEntry(tempadmin.Action), tempadmin.Input{
-		Subject:     person,
-		PrincipalID: p.ID,
-		CreatedBy:   hostOperator(),
-	}, lifetime)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("record temporary administrator for %q: %w", person, err)
-	}
-
-	return rec.ExpiresAt, nil
-}
-
-// issueHostToken issues the personal recovery token of the principal p
-// with the expiry expires.
-func issueHostToken(
-	ctx context.Context, tokens *accesstoken.Service, p principal.Principal, expires time.Time, person string,
-) (accesstoken.Token, accesstoken.Secret, error) {
-	issuer, err := accesstoken.NewHostIssuer(tokens)
-	if err != nil {
-		return accesstoken.Token{}, accesstoken.Secret{}, fmt.Errorf("host token issuer: %w", err)
-	}
-
-	tok, secret, err := issuer.IssueFirstToken(ctx, hostEntry(string(identity.ActionServerManageTokens)), p.ID, expires)
-	if err != nil {
-		return accesstoken.Token{}, accesstoken.Secret{}, fmt.Errorf("issue access token for %q: %w", person, err)
-	}
-
-	return tok, secret, nil
-}
-
-// revokeHostGrant ends the grant grantID. No ID means the grant exists
-// already and keeps working, so there is nothing to undo. A grant that is
-// already gone stays gone.
-func revokeHostGrant(ctx context.Context, st store, grantID string) error {
-	if grantID == "" {
-		return nil
-	}
-
-	entry := hostCleanupEntry(string(identity.ActionServerManageAccess), access.GrantIDRef(grantID))
-
-	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
-
-	if err := st.RevokeGrant(ctx, grantID, fence, entry, nil); err != nil &&
-		!errors.Is(err, access.ErrNotFound) {
-		return fmt.Errorf(
-			"cleanup grant %q: DELETE /api/server/grants/{id} removes it: %w",
-			grantID,
-			err,
-		)
-	}
-
-	return nil
-}
-
-// dropPerson deletes the person p. A person that is already gone stays
-// gone: the delete also ends its grants, so no live grant stays.
-func dropPerson(ctx context.Context, st store, p principal.Principal) error {
-	entry := hostCleanupEntry(string(identity.ActionServerManagePrincipals), principal.Ref(p.ID))
-
-	if err := st.DeletePrincipal(ctx, p.ID, entry); err != nil && !errors.Is(err, principal.ErrNotFound) {
-		return fmt.Errorf(
-			"cleanup person %q: DELETE /api/server/principals/%s with a site administrator token: %w",
-			p.Subject,
-			p.ID,
-			err,
-		)
-	}
-
-	return nil
-}
-
-// endHostRecord ends the temporary administrator record of the principal
-// principalID. A record that is already ended or gone stays as it is.
-func endHostRecord(ctx context.Context, st store, principalID string) error {
-	entry := hostCleanupEntry(tempadmin.Action, tempadmin.Ref(principalID))
-
-	if err := st.ExpireTempAdmin(ctx, principalID, entry); err != nil &&
-		!errors.Is(err, tempadmin.ErrNotFound) && !errors.Is(err, tempadmin.ErrExpired) {
-		return fmt.Errorf(
-			"cleanup temporary administrator record for principal %q: it remains and expires at its expiry time: %w",
-			principalID,
-			err,
-		)
-	}
-
-	return nil
-}
-
-// hostCleanupEntry returns the audit entry of one undo step of the host
-// command: the host as the subject, in the server scope, with the action
-// and the object of the caller.
-func hostCleanupEntry(action, object string) audit.Entry {
-	return audit.Entry{
-		FenceVersion: 0,
-		At:           time.Now().UTC().Truncate(time.Millisecond),
-		Namespace:    audit.ServerScope,
-		Subject:      hostSubject,
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       action,
-		Object:       object,
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "",
-		UserAgent:    "",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-	}
 }
 
 // hostOperator names the OS user that runs the host command, for the
@@ -415,74 +359,4 @@ func hostOperator() string {
 	}
 
 	return "unknown"
-}
-
-// personOf makes a new person principal with the subject person. A subject
-// that a principal already holds is refused: reusing it would end a normal
-// account at the expiry of the record, and a later enable would hand its
-// grants back. A bootstrap name never reaches the store:
-// principal.ValidateSubject refuses it first.
-func personOf(
-	ctx context.Context, st store, principals *principal.Service, person string,
-) (principal.Principal, error) {
-	if _, err := st.GetPrincipalBySubject(ctx, person); err == nil {
-		return principal.Principal{}, fmt.Errorf(
-			"person %q already exists: pass a name that no principal holds: "+
-				"opendustpan host create-temp-admin <person>: %w",
-			person,
-			ErrPersonExists,
-		)
-	} else if !errors.Is(err, principal.ErrNotFound) {
-		return principal.Principal{}, fmt.Errorf("read principal %q: %w", person, err)
-	}
-
-	made, createErr := principals.CreatePrincipal(
-		ctx,
-		hostEntry(string(identity.ActionServerManagePrincipals)),
-		principal.Input{Subject: person, DisplayName: "", Kind: principal.KindPerson},
-	)
-	if createErr != nil {
-		return principal.Principal{}, fmt.Errorf("create principal %q: %w", person, createErr)
-	}
-
-	return made, nil
-}
-
-// grantSiteAdmin grants the person p the site-administrator role on the
-// installation. It answers the ID of the new grant, or no ID when the
-// grant exists already and keeps working.
-func grantSiteAdmin(ctx context.Context, st store, p principal.Principal) (string, error) {
-	authz, authzErr := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: nil, Principals: nil},
-	)
-	if authzErr != nil {
-		return "", fmt.Errorf("access authorizer: %w", authzErr)
-	}
-
-	grants, grantsErr := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil, BootstrapAdmins: nil,
-	})
-	if grantsErr != nil {
-		return "", fmt.Errorf("access service: %w", grantsErr)
-	}
-
-	made, grantErr := grants.Grant(
-		ctx,
-		hostEntry(string(identity.ActionServerManageAccess)),
-		hostCaller(),
-		access.GrantInput{
-			Object:  identity.ServerObject(),
-			Role:    access.RoleSiteAdministrator,
-			Subject: access.Subject{Kind: access.SubjectPrincipal, ID: p.ID},
-		},
-	)
-	if grantErr != nil {
-		if errors.Is(grantErr, access.ErrAlreadyExists) {
-			return "", nil
-		}
-
-		return "", fmt.Errorf("grant site-administrator to %q: %w", p.Subject, grantErr)
-	}
-
-	return made.ID, nil
 }
