@@ -1,6 +1,6 @@
 # 30. Backups and restore
 
-Status: accepted · 2026-10-11. Superseded in part by ADR 38 (restore) and ADR 39 (`backup check`). Decision 8 superseded in part by ADR 151. Route paths and `server:` action names superseded in part by ADR 210. The backup of one namespace added by ADR 218
+Status: accepted · 2026-10-11. Superseded in part by ADR 38 (restore) and ADR 39 (`backup check`). Decision 8 superseded in part by ADR 151. Route paths and `server:` action names superseded in part by ADR 210. The backup of one namespace added by ADR 218. The home region of a restore amended by ADR 248 (primary installation)
 
 ## Context
 

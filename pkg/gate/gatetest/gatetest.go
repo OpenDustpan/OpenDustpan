@@ -792,6 +792,22 @@ func EngineCases() []EngineCase {
 			Checks:   "A gate that gives an evaluation error, for example an overflow, is a diagnostic and not a match, the other gates still match, and the call returns no error.",
 		},
 		{
+			Name:     "limit-error-is-diagnostic",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.prod},
+			Policies: []gate.PolicyID{pid(fx.prod, "auth-overflow")},
+			Want:     nil,
+			Checks:   "An access limit that gives an evaluation error, for example an overflow of context.authAgeSeconds, gives no match and one diagnostic, and the call returns no error.",
+		},
+		{
+			Name:     "duplicate-policy-id-is-invalid",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "always")},
+			Want:     nil,
+			Checks:   "A policy set that holds two policies with one ID returns ErrInvalid.",
+		},
+		{
 			Name:     "no-compile-is-diagnostic",
 			Method:   gate.Engine.Evaluate,
 			Scopes:   []gate.Scope{fx.acme},
