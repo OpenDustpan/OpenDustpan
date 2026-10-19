@@ -54,8 +54,10 @@ accepted decisions:
 - **Ticket connection**: the stored object of OpenDustpan that names one
   change system, its address, its credential and its field map.
 
-The product manager proposes these terms for the glossary. `GLOSSARY.md` gets them when the owner
-accepts this RFC.
+The product manager proposes these terms for the glossary. `GLOSSARY.md`
+gets "Change ticket" when the owner accepts this RFC, and the _Avoid_
+note of "Change order" then points at it. This pull request does not
+edit `GLOSSARY.md`.
 
 ### What a change system offers
 
@@ -64,6 +66,9 @@ The spikes must check each fact that has the mark "(spike)".
 
 **Jira Service Management (Cloud).**
 
+- All calls of a service account go to
+  `https://api.atlassian.com/ex/jira/{cloudId}/...`. A call with an API
+  token goes to the site URL.
 - Create a request: `POST /rest/servicedeskapi/request`, with
   `serviceDeskId`, `requestTypeId`, `requestFieldValues` (a map of field
   IDs to values) and optional `raiseOnBehalfOf`. A dry run exists:
@@ -75,14 +80,20 @@ The spikes must check each fact that has the mark "(spike)".
   affected services) are custom fields. Their IDs differ on each site
   (spike). So a ticket connection needs a field map.
 - No idempotency key exists on the create call (spike). An issue entity
-  property can hold our key, and a search can find it.
+  property can hold our key. A JQL search of entity properties needs an
+  app module that indexes the property, so a plain API user cannot use
+  it (spike). Q8 uses a field that the create call sets.
   Source: <https://developer.atlassian.com/cloud/jira/platform/jira-entity-properties/>
 - Webhooks: a webhook with a `secret` carries `X-Hub-Signature` as
   `sha256=<HMAC of the body>`. Each delivery has
   `X-Atlassian-Webhook-Identifier`, which stays the same across retries.
   Jira tries a failed delivery again up to five times, about 5 to 15
   minutes apart. Webhooks of OAuth 2.0 apps use bearer authentication
-  instead of a secret.
+  instead of a secret. A webhook that the REST API registers expires
+  after 30 days, and a `PUT` refreshes it. A webhook with basic
+  authentication and a secret comes from the admin route of the site.
+  That route needs the Jira administrator permission (not confirmed;
+  spike).
   Source: <https://developer.atlassian.com/cloud/jira/platform/webhooks/>
 - Authentication: an API token of a user with HTTP basic authentication.
   Source: <https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/>.
@@ -104,16 +115,17 @@ The spikes must check each fact that has the mark "(spike)".
   `.../change/standard/{template}` and `.../change/emergency`. It has
   `GET .../change/{sys_id}`, `GET .../change/{sys_id}/nextstates`,
   `PATCH .../change/{sys_id}` with name-value pairs of the fields, and a
-  conflict check. A `POST` or `PATCH` needs the role `change_manager`,
-  `itil` or `admin`. ServiceNow gives one reference for each release.
+  conflict check. A `POST` or `PATCH` needs the role `itil`,
+  `change_manager` or `admin`. ServiceNow gives one reference for each release.
   Source: <https://www.servicenow.com/docs/r/api-reference/rest-apis/change-management-api.html>
 - Fields of a change request include `short_description`, `description`,
   `cmdb_ci`, `assignment_group`, `start_date`, `end_date`, `risk`,
   `impact`, `state`, `approval` and `correlation_id` (same source). The
-  `approval` field has values such as `requested`, `approved` and
-  `rejected` (spike). The numbers of `state` depend on the change model of
+  `approval` field has values such as `not requested`, `requested`,
+  `approved` and `rejected` (spike). The numbers of `state` depend on the change model of
   the instance (same source).
-- `GET .../change` takes name-value filters (same source). So a search by
+- `GET .../change` takes name-value filters (same source). They are
+  exclusive with `sysparm_query`: a call uses one of the two. So a search by
   `correlation_id` can find a ticket that an earlier try created (spike).
 - Authentication: HTTP basic authentication of an integration user, or
   OAuth 2.0. The client credentials grant for inbound integrations exists
@@ -174,8 +186,8 @@ example, the `approval` value `rejected` of ServiceNow maps to `refused`.
 The spikes give each mapping table.
 
 The check name of the ticket also goes into `externalChecks`: `passed`
-for `approved`, `failed` for `refused`, `canceled` or `closed`, `pending`
-for `open`, and `timedOut` after the timeout. So a gate that reads only
+for `approved` when `inWindow` is `true` (`approved && inWindow`), `failed` for `refused`, `canceled` or `closed`, `pending`
+for `open`, and for `approved` when the window has not started, and `timedOut` after the timeout. So a gate that reads only
 `externalChecks` also works.
 
 A starter gate, `change-ticket-approved`, ships in `evaluate` mode (ADR
@@ -189,7 +201,12 @@ A starter gate, `change-ticket-approved`, ships in `evaluate` mode (ADR
 ```
 
 The starter gate fails closed. It reads `available` as ADR 226 decision 3
-asks.
+asks. A ticket with no window gets `inWindow == false`, so the gate
+denies it.
+
+`refused` is the state of a ticket in the change system. "Rejected" is
+what an approver in OpenDustpan does to a change order (ADR 225 decision
+8). The two words keep the two records apart.
 
 ## Q2. How long can a change wait for a ticket? (blocks Q1 A)
 
@@ -201,10 +218,21 @@ external check to 1 hour.
 | A. A ticket check has a timeout of 1 hour to 30 days, default 7 days (proposed) | The same range as an approval rule (ADR 225 decision 1). The change waits in the approval wait, as for people. | A second timeout range for one concept. ADR 226 decision 10 needs an amendment. |
 | B. Keep 1 hour, and start the change again later | No ADR change. | A person must start each change again after the board meets. The plan can be stale then. |
 
-**Proposal (product manager): A.** While the ticket is `open`, the change
-waits in the approval wait with a new cause, `change-ticket`. The job
-state value stays `awaiting-approval` (ADR 225 decision 8). The shortest
-timeout of the requirements and of the ticket holds.
+**Proposal (product manager): A.** While the ticket is `open`, or
+`approved` with a window that has not started, the change stays in the
+approval wait with the cause `change-ticket`. Each read that changes
+`state` or `inWindow` evaluates `change.planned` again. A deny ends the
+change, as a rejection does. The job state value stays `awaiting-approval`
+(ADR 225 decision 8). The shortest timeout of the requirements and of the
+ticket holds.
+
+Option A amends ADR 226 decision 10 twice:
+
+1. The timeout range of a ticket check is 1 hour to 30 days, not 1 hour.
+2. The answer of a ticket check comes from a read of the server through the
+   API of the change system, not from a signed callback (Q3).
+
+The check `passed` needs `approved && inWindow`.
 
 ## Q3. What does OpenDustpan send, and what does it read?
 
@@ -231,8 +259,25 @@ addition to the `job.*` types of `notify.Types`:
   system refuses the credential or each try of a write fails.
 
 A ticket connection reads the outbox with its own cursor (ADR 145
-decision 9). It is not a sink. A sink can lose a notification after a
+decision 9). It is not a sink. A ticket connection records its creator. Before each
+open and each write, the server applies the two checks of ADR 145
+decision 15 to that creator and to the ticket rule. When a check fails,
+the server suspends the connection and sends `change-ticket.sync-failed`.
+A sink can lose a notification after a
 day of failures (ADR 145 decision 19). A ticket must not lose its close.
+
+When the cursor resumes after a stop, a reconcile pass writes each open
+ticket from the current state of its change. Then the cursor reads the
+notifications that follow. A note to a ticket that is already closed
+answers `ErrConflict`. The adapter counts that as success.
+
+The fields that leave the installation are: the change ID, the unit
+references, the plan counts, the operation, the cost delta, the decision
+record ID, the console link and the planned window. Each is optional in
+the field map. The default sends the change ID, the unit references, the
+counts and the console link. The approver names and email addresses that
+a change system reports stay in the decision record for the life of the
+record (ADR 229 decision 5), and in backups.
 
 ### What OpenDustpan reads
 
@@ -251,6 +296,17 @@ credential of the ticket connection, before each evaluation. So a forged
 callback can cause one more read, and nothing else. The server also reads
 each open ticket at an interval (proposed: 5 minutes), so a lost callback
 delays a change by at most that interval.
+
+Three limits keep a callback harmless:
+
+- A callback causes a read only for a ticket that the server holds open
+  for that connection, and at most one read for each ticket in each 30
+  seconds.
+- The route answers 204 to each request, also for an unknown connection
+  and for a bad signature. The answer gives no information.
+- The route is `POST /api/v1/namespaces/{namespace}/ticket-callbacks/{connection ID}`
+  for a connection of a namespace. A connection of the installation uses
+  `POST /api/v1/ticket-callbacks/{connection ID}`.
 
 Benchmark: Stripe does not promise the order of its webhook events, and
 tells a receiver that it can get the object through the API.
@@ -332,7 +388,9 @@ A **ticket rule** says which changes open a ticket: a ticket connection, a
 Cedar `when` over the facts of `change.planned`, and a timeout. It has a
 `mode`, `enforce` or `evaluate`, as an ownership rule has (ADR 225
 decision 9). A rule in `evaluate` mode opens no ticket and only writes to
-the decision record.
+the decision record. The check at save refuses a ticket rule that reads
+`changeTicket`, with `gate.ErrInvalid`. The rule runs before a ticket
+exists, so the fact has no meaning there.
 
 New actions: `namespace:manage-ticket-connections` and
 `namespace:read-ticket-connections`, and the same at the installation.
@@ -347,7 +405,10 @@ goes on the explicit public list of the route test.
 inputs cancels the old ticket and opens a new one. An approval in the
 change system is about the plan that the ticket shows. With identical
 digest inputs, the ticket stays, under the same rule as the signature
-carry-over (ADR 225 decision 12).
+carry-over (ADR 225 decision 12). The change stays in the approval wait
+with the cause `change-ticket` until the new ticket is `approved` and
+inside its window (Q2). A read of the canceled ticket does not change
+the facts of the new plan.
 
 **The record (product manager).** The decision record (ADR 229) holds,
 for each change ticket:
@@ -381,10 +442,15 @@ For each option:
   `notify.SinkSealer` does. A new value gets a new ref. No configuration
   file and no environment variable holds it.
 - The adapter asks for the smallest scope or role that the operations
-  need. For ServiceNow that is a role that can write `change_request`, for
-  example `itil` or `sn_change_writer` (spike).
+  need. For ServiceNow that is the role `itil` or `change_manager`
+  (spike).
 - Calls go through `egresshttp` with no redirect, HTTPS only, and the
   dial guard.
+- A change of the base URL or of the auth kind voids each secret of the
+  ticket connection. A person must put each secret again before the next
+  call. For Jira Service Management with a service account, the host is
+  fixed (`api.atlassian.com/ex/jira/{cloudId}`), and the connection stores
+  only the cloud ID.
 - Trust rules (ADR 54) are about workloads that call OpenDustpan. The
   change systems do not send an OIDC token with a callback (spike). This
   is why a callback is a hint only (Q3).
@@ -395,24 +461,38 @@ Inbound callbacks:
   `X-Hub-Signature`. The server drops a duplicate by its
   `X-Atlassian-Webhook-Identifier`.
 - ServiceNow: the business rule or flow sends a header with a token of
-  the ticket connection. The server compares it in constant time. An
-  administrator can also sign the body with the scheme of
-  `notify.Sign`.
+  the ticket connection. The server compares it in constant time. The
+  inbound token is its own secret ref and has two active values, so a
+  rotation has no gap (ADR 145 decision 22). An administrator can also
+  sign the body with the scheme of `notify.Sign`.
 
 ## Q8. Idempotency and retries
 
 - **The ticket key.** Each ticket has a key:
   `<installation ID>/<change ID>/<plan digest>`. ServiceNow stores it in
-  `correlation_id`. Jira Service Management stores it in an issue entity
-  property. Before each create, the adapter searches for the key. A
-  found ticket is the answer of `Open`.
+  `correlation_id`. Jira Service Management stores it in a field that the
+  create call sets (a text custom field of the field map, or a label). The
+  spike checks that JQL finds it right after the create. Before each
+  create, the adapter searches for the key. A found ticket is the answer
+  of `Open`.
+- **Key length.** The digest is 64 hexadecimal characters, so the full key
+  leaves 34 characters for two IDs, and two UUIDs do not fit in 100
+  characters. The product manager proposes the first 16 characters of the
+  digest. The key then has at most 100 characters when the two IDs have 82
+  characters together. The spike checks the field limit of each system.
 - **One writer.** Each open and each write is a durable operation with
   one owner and a lease (`pkg/durable`), so two instances never create
-  two tickets at the same time.
+  two tickets at the same time. The call timeout of the adapter is shorter
+  than the lease. The owner records "create started" in the fenced
+  operation before the call.
 - **A lost answer.** When a create succeeded and the server did not get its answer,
   the next try finds the ticket through the search. A search index can
   lag (spike). When the adapter finds two tickets with one key, it keeps
-  the oldest and cancels the others with a note.
+  the oldest and cancels the others with a note. ServiceNow has no unique
+  `correlation_id`. When a duplicate is already approved, or is the ticket
+  that the decision record cites, the adapter does not cancel it. It
+  keeps that ticket, cancels the others, and sends
+  `change-ticket.sync-failed` so that a person decides.
 - **Retries.** The schedule of ADR 145 decision 18: 30 seconds, then
   double, up to 1 hour, at most 15 tries, and `Retry-After` up to 24
   hours. `ErrAuth` and `ErrPermanent` stop at once and send
@@ -432,8 +512,8 @@ Inbound callbacks:
 | A. A customer request of a change request type (proposed for the spike) | Works with Jira Service Management alone. The approvals API exists. | The custom field IDs differ on each site, so the field map needs setup. |
 | B. Deployment gating | The change system creates the change request itself, and Jira shows the gate in its own view. | It needs a Jira Software project and a link from a pipeline and an environment to the service. The model of a pipeline does not fit a change order of several units. |
 
-**Proposal (product manager):** spike both, and build A first. Both fit
-the port of Q4.
+**Proposal (product manager):** spike both. If the owner later decides to
+build, build A first. Both fit the port of Q4.
 
 ## What stays out of scope
 
@@ -448,7 +528,9 @@ the port of Q4.
   cannot wait (ADR 224 decision 16). A later RFC can open a ticket after
   such a write.
 - Change systems on a private network, for example Jira Data Center
-  behind a firewall. The dial guard refuses private addresses (open question 4).
+  behind a firewall. The dial guard refuses private addresses (open
+  question 4). Jira Data Center is a different adapter: it uses a personal
+  access token and has no service accounts.
 - A claim of compliance. A starter pack with the starter gate is
   "designed against" a control framework, for example SOC 2 CC8.1 or
   ISO/IEC 27001:2022 Annex A 8.32 (ADR 222 decision 9).
@@ -475,18 +557,25 @@ the port of Q4.
 1. **Q1.** Is a ticket approval a fact that a gate reads (A), or a
    signature of a new kind (B, which changes ADR 225 decision 7)?
 2. **Q2.** Can a ticket check wait up to 30 days, as an approval rule
-   can? This amends ADR 226 decision 10.
+   can, and can its answer come from a server read instead of the
+   signed callback? This amends ADR 226 decision 10 twice: the timeout
+   and the source of the answer.
 3. **First-party or community.** RFC 51 asks whether these adapters live
    in this repository. The product manager proposes the two adapters in
    this repository, with fakes of each API in the conformance suite. A
    test against a real instance needs a developer instance of each system
    and a credential for CI. Who owns those accounts?
 4. **Private change systems.** Can a ticket connection name a private
-   address, with an allowlist for each installation? Or does version 1
-   refuse them?
+   address, with an allowlist for each installation? An operator of the
+   installation sets the allowlist, and a namespace never does, because a
+   hosted installation has other tenants (ADR 215 and 220). Or does
+   version 1 refuse them?
 5. **Slice order.** Does the core part (the fact group, the ticket rule,
    the outbox cursor and the port with its suite) land before the first
    adapter, or with it?
+6. **The other proposals.** Do you accept the other proposals of the
+   product manager (Q3 to Q8) as written, or do you want any of them as a
+   separate question?
 
 ## Outcome
 
