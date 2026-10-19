@@ -15,7 +15,7 @@ the same list.
 | `--region` | `DUSTPAN_REGION` | `region` | `local` |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
 | `--console-dir` | `DUSTPAN_CONSOLE_DIR` | `console-dir` | (none) |
-| `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none). A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with `Access-Control-Expose-Headers: Retry-After, ETag` on answers to requests. |
+| `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none). A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with `Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests. |
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |

@@ -14,9 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -193,9 +195,85 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 		return
 	}
 
-	w.Header().Set("ETag", created.ETag())
-	w.Header().Set("Location", location(obj.Namespace(), created))
-	h.writeProfile(ctx, w, http.StatusCreated, created, &rev)
+	h.send(ctx, w, createdAnswer(obj), profile.Written{Profile: created, Revision: &rev})
+}
+
+// answerFunc makes the answer of a write from the result that the store
+// passes: a profile.Written. The answer is the same when a store keeps it
+// for a replay.
+type answerFunc func(result any) (idempotency.Answer, error)
+
+// createdAnswer answers a create: 201 with the profile, its first revision,
+// its ETag and its Location.
+func createdAnswer(obj identity.Object) answerFunc {
+	return func(result any) (idempotency.Answer, error) {
+		w, ok := result.(profile.Written)
+		if !ok || w.Revision == nil {
+			return idempotency.Answer{}, errWrittenResult
+		}
+
+		a, err := profileAnswer(http.StatusCreated, w.Profile, w.Revision)
+		if err != nil {
+			return idempotency.Answer{}, err
+		}
+
+		a.Headers["Location"] = location(obj.Namespace(), w.Profile)
+
+		return a, nil
+	}
+}
+
+// savedAnswer answers a write of a revision with status: the profile, the
+// revision and the ETag.
+func savedAnswer(status int) answerFunc {
+	return func(result any) (idempotency.Answer, error) {
+		w, ok := result.(profile.Written)
+		if !ok || w.Revision == nil {
+			return idempotency.Answer{}, errWrittenResult
+		}
+
+		return profileAnswer(status, w.Profile, w.Revision)
+	}
+}
+
+// deletedAnswer answers a delete: 204 with no body.
+func deletedAnswer() answerFunc {
+	return func(any) (idempotency.Answer, error) {
+		return idempotency.Answer{Headers: map[string]string{}, Body: nil, Status: http.StatusNoContent}, nil
+	}
+}
+
+var errWrittenResult = errors.New("the store passed a result that is not a written profile")
+
+// profileAnswer is the answer of a write: the profile with the revision that
+// the write made.
+func profileAnswer(status int, p profile.Profile, rev *profile.Revision) (idempotency.Answer, error) {
+	entry := toProfile(p)
+	r := toRevision(*rev)
+	entry.LatestRevision = &r
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(entry); err != nil {
+		return idempotency.Answer{}, fmt.Errorf("encode profile: %w", err)
+	}
+
+	return idempotency.Answer{
+		Headers: map[string]string{"Content-Type": "application/json", "ETag": p.ETag()},
+		Body:    buf.Bytes(),
+		Status:  status,
+	}, nil
+}
+
+// send writes the answer that build makes for the result of a write.
+func (h *Handler) send(ctx context.Context, w http.ResponseWriter, build answerFunc, written profile.Written) {
+	a, err := build(written)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	idempotent.Write(w, a)
 }
 
 func location(ns namespace.Name, p profile.Profile) string {
@@ -426,7 +504,9 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request, p identity.Prin
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	var none profile.Written
+
+	h.send(ctx, w, deletedAnswer(), none)
 }
 
 // listRevisions serves GET /profiles/{profile}/revisions.
@@ -560,8 +640,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, p identity.Princ
 		return
 	}
 
-	w.Header().Set("ETag", updated.ETag())
-	h.writeProfile(ctx, w, op.status, updated, &rev)
+	h.send(ctx, w, savedAnswer(op.status), profile.Written{Profile: updated, Revision: &rev})
 }
 
 // readOptions reads the revision path value and the showSecrets query value.

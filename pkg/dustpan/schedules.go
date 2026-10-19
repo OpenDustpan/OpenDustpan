@@ -30,6 +30,7 @@ const (
 	inactivityScheduleName  = "inactivity-disable"
 	deletedScheduleName     = "deleted-sweep"
 	signInPruneScheduleName = "signin-prune"
+	idempotencyScheduleName = "idempotency-sweep"
 
 	jobScheduleVersion = 1
 )
@@ -42,6 +43,7 @@ const (
 	kindInactivity  durable.Kind = inactivityScheduleName
 	kindDeleted     durable.Kind = deletedScheduleName
 	kindSignInPrune durable.Kind = signInPruneScheduleName
+	kindIdempotency durable.Kind = idempotencyScheduleName
 )
 
 // durableOwner returns the owner name of the job runner: the instance ID
@@ -77,6 +79,13 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		specs = append(specs, durable.ScheduleSpec{
 			Name: signInPruneScheduleName, Kind: kindSignInPrune, Version: jobScheduleVersion,
 			Interval: s.signInPruneEvery, Input: nil,
+		})
+	}
+
+	if s.idempotency != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: idempotencyScheduleName, Kind: kindIdempotency, Version: jobScheduleVersion,
+			Interval: s.idempotencyEvery, Input: nil,
 		})
 	}
 
@@ -126,6 +135,21 @@ func (s *Server) jobKinds() []durable.KindSpec {
 			Steps: []durable.Step{
 				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
 					s.pruneSignInRequestsOnce(ctx)
+
+					return nil, nil
+				}},
+			},
+		})
+	}
+
+	if s.idempotency != nil {
+		kinds = append(kinds, durable.KindSpec{
+			Kind:       kindIdempotency,
+			Version:    jobScheduleVersion,
+			MinVersion: jobScheduleVersion,
+			Steps: []durable.Step{
+				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+					s.sweepIdempotencyOnce(ctx)
 
 					return nil, nil
 				}},
@@ -216,6 +240,7 @@ func (s *Server) startSweeps(ctx context.Context, sweeps *sync.WaitGroup) error 
 		sweeps.Go(func() { s.sweepInactive(ctx) })
 		sweeps.Go(func() { s.sweepDeleted(ctx) })
 		sweeps.Go(func() { s.pruneSignInRequests(ctx) })
+		sweeps.Go(func() { s.sweepIdempotency(ctx) })
 
 		return nil
 	}

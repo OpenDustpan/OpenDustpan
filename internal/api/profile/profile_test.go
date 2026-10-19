@@ -14,11 +14,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -96,9 +99,68 @@ func (testAuthz) ListObjects(_ context.Context, p identity.Principal, _ identity
 type fixture struct {
 	handler *apiprofile.Handler
 	store   *sqlite.Store
+	// denied holds the actions that testAuthz refuses. A test can add one
+	// while no request runs.
+	denied map[identity.Action]bool
+	clock  *testClock
 }
 
+// testClock is the clock of the Idempotency-Key middleware.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = c.now.Add(d)
+}
+
+// newFixture returns a handler that takes the Idempotency-Key header.
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
+	t.Helper()
+
+	return buildFixture(t, keyMiddleware, deny...)
+}
+
+// newFixtureWithoutKeys returns a handler with no store of replay records.
+func newFixtureWithoutKeys(t *testing.T) fixture {
+	t.Helper()
+
+	return buildFixture(t, noMiddleware)
+}
+
+// keyMiddleware returns the Idempotency-Key middleware over the store.
+func keyMiddleware(t *testing.T, store *sqlite.Store, clock *testClock) *idempotent.Middleware {
+	t.Helper()
+
+	idem, err := idempotent.New(idempotent.Config{
+		Store:  store.Idempotency(idempotencytest.TestWrapper(t, 1)),
+		Logger: slog.New(slog.DiscardHandler), Now: clock.Now, MaxBodyBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("idempotency middleware: %v", err)
+	}
+
+	return idem
+}
+
+// noMiddleware returns no middleware: the handler refuses the header.
+func noMiddleware(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware { return nil }
+
+func buildFixture(
+	t *testing.T, middleware func(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware,
+	deny ...identity.Action,
+) fixture {
 	t.Helper()
 
 	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -147,15 +209,19 @@ func newFixture(t *testing.T, deny ...identity.Action) fixture {
 		t.Fatalf("profile service: %v", err)
 	}
 
+	clock := &testClock{mu: sync.Mutex{}, now: time.Now()}
+
+	idem := middleware(t, store, clock)
+
 	handler, err := apiprofile.NewHandler(apiprofile.Config{
-		Profiles: svc, Authenticator: testAuthn{}, Authorizer: authz, Sessions: nil,
+		Profiles: svc, Authenticator: testAuthn{}, Authorizer: authz, Sessions: nil, Idempotency: idem,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, store: store}
+	return fixture{handler: handler, store: store, denied: denied, clock: clock}
 }
 
 const base = "/api/dustpan/v1/namespaces/acme/profiles"
@@ -613,7 +679,8 @@ func TestCreateRefusesASecretInAList(t *testing.T) {
 func TestIdempotencyKeyIsRefusedNotIgnored(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	// A server with no store of replay records refuses the key.
+	f := newFixtureWithoutKeys(t)
 	body := jsonString(t, map[string]string{"name": "a", "document": minimalDoc})
 
 	got := f.do(t, send("admin", http.MethodPost, base, body).withHeader("Idempotency-Key", "k1"))
@@ -661,8 +728,10 @@ func TestRoutesDeclareActions(t *testing.T) {
 			t.Fatalf("route %q must be authorized with actions and a resolver", pattern)
 		}
 
-		if route.IdempotencyKey {
-			t.Errorf("route %q takes the key, but no route can yet", pattern)
+		if mutating := route.Method != http.MethodGet; route.IdempotencyKey != mutating ||
+			(route.Answer != nil) != mutating {
+			t.Errorf("route %q: takes the key = %t, has an answer = %t, want both %t",
+				pattern, route.IdempotencyKey, route.Answer != nil, mutating)
 		}
 	}
 
@@ -726,7 +795,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiprofile.NewHandler(apiprofile.Config{
-		Profiles: nil, Authenticator: nil, Authorizer: nil, Sessions: nil, Logger: nil, Now: nil,
+		Profiles: nil, Authenticator: nil, Authorizer: nil, Sessions: nil, Idempotency: nil, Logger: nil, Now: nil,
 	})
 	if err == nil {
 		t.Error("NewHandler accepted an empty config")

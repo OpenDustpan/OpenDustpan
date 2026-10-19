@@ -174,7 +174,7 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	lists := make(map[string][]string, len(backup.Tables)+len(backup.ControlTables))
+	lists := make(map[string][]string, len(backup.Tables)+len(backup.ControlTables)+len(backup.EmptiedTables))
 
 	for _, spec := range sqliteBackupTables() {
 		lists[spec.table] = spec.columns
@@ -184,11 +184,19 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		lists[spec.table] = spec.columns
 	}
 
+	for _, spec := range sqliteEmptiedTables() {
+		lists[spec.table] = spec.columns
+	}
+
 	if err := s.checkListedTables(ctx, backup.Tables, lists, "backup"); err != nil {
 		return err
 	}
 
 	if err := s.checkListedTables(ctx, backup.ControlTables, lists, "control"); err != nil {
+		return err
+	}
+
+	if err := s.checkListedTables(ctx, backup.EmptiedTables, lists, "emptied"); err != nil {
 		return err
 	}
 

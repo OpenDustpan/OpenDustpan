@@ -22,6 +22,7 @@ const (
 	backupColNamespace   = "namespace"
 	backupColNamespaceID = "namespace_id"
 	backupColReason      = "reason"
+	backupColWrapperID   = "wrapper_id"
 	backupColSequence    = "sequence"
 	backupColSize        = "size"
 	backupColStackID     = "stack_id"
@@ -189,7 +190,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespace,
 				backupColStackID,
-				"wrapper_id",
+				backupColWrapperID,
 				"ciphertext",
 				backupColCreatedAtMs,
 			},
@@ -262,7 +263,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColTool,
 				"unit_name",
 				backupColVersion,
-				"body",
+				backupColBody,
 				backupColUpdatedAtMs,
 			},
 		},
@@ -274,7 +275,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "gate_records",
 			columns: []string{
 				"id", backupColNamespaceID, "point", "change_kind", "change_id", backupColAtMs, "last_at_ms", "count",
-				"refusal_key", "body",
+				"refusal_key", backupColBody,
 			},
 		},
 		{
@@ -465,6 +466,24 @@ func sqliteControlTables() []sqliteBackupTable {
 	return slices.Concat(core, sqliteRunnerControlTables())
 }
 
+// sqliteEmptiedTables lists the column list of every table of
+// backup.EmptiedTables. CheckCoverage compares each list with the live schema.
+func sqliteEmptiedTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableIdempotencyRecords,
+			columns: []string{
+				"principal", "method", "path", "idem_key", "fingerprint", "token", "status", "headers", backupColBody,
+				backupColCreatedAtMs,
+			},
+		},
+		{
+			table:   backup.TableIdempotencyServerKey,
+			columns: []string{"id", "wrapped_key", backupColWrapperID},
+		},
+	}
+}
+
 // sqliteSessionBackupTables lists the column lists of the session and
 // sign-in request tables.
 func sqliteSessionBackupTables() []sqliteBackupTable {
@@ -504,7 +523,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "installation_secret_keys",
-			columns: []string{"scope_id", "wrapper_id", "ciphertext", backupColCreatedAtMs},
+			columns: []string{"scope_id", backupColWrapperID, "ciphertext", backupColCreatedAtMs},
 		},
 		{
 			table: "sign_in_providers",
