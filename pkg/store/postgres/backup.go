@@ -449,6 +449,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			table: backup.TableTempAdmins,
 			columns: []string{
 				pgColPrincipalID, pgColSubject, pgColExpiresAtMs, pgColCreatedAtMs, pgColCreatedBy, "reason",
+				"ended_at_ms",
 			},
 			orderBy: []string{pgColPrincipalID},
 		},

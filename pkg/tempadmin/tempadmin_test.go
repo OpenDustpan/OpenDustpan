@@ -1,9 +1,12 @@
 package tempadmin_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,14 +33,16 @@ type fakeStore struct {
 	disabled map[string]bool
 	// people maps a subject to the ID of its live principal, when it is
 	// not the principal of the record of the subject.
-	people  map[string]string
+	people map[string]string
+	// fail maps a principal ID to the error that its expiry returns.
+	fail    map[string]error
 	entries []audit.Entry
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		records: map[string]tempadmin.TempAdmin{}, disabled: map[string]bool{}, people: map[string]string{},
-		entries: nil,
+		fail: map[string]error{}, entries: nil,
 	}
 }
 
@@ -47,9 +52,9 @@ func (f *fakeStore) GetPrincipalBySubject(_ context.Context, subject string) (pr
 	id, ok := f.people[subject]
 
 	if !ok {
-		for _, r := range f.records {
-			if r.Subject == subject {
-				id, ok = r.PrincipalID, true
+		for key := range f.records {
+			if f.records[key].Subject == subject {
+				id, ok = f.records[key].PrincipalID, true
 			}
 		}
 	}
@@ -92,9 +97,9 @@ func (f *fakeStore) GetTempAdmin(_ context.Context, id string) (tempadmin.TempAd
 }
 
 func (f *fakeStore) GetTempAdminBySubject(_ context.Context, subject string) (tempadmin.TempAdmin, error) {
-	for _, r := range f.records {
-		if r.Subject == subject {
-			return r, nil
+	for key := range f.records {
+		if f.records[key].Subject == subject {
+			return f.records[key], nil
 		}
 	}
 
@@ -104,8 +109,8 @@ func (f *fakeStore) GetTempAdminBySubject(_ context.Context, subject string) (te
 func (f *fakeStore) ListTempAdmins(_ context.Context) ([]tempadmin.TempAdmin, error) {
 	out := make([]tempadmin.TempAdmin, 0, len(f.records))
 
-	for _, r := range f.records {
-		out = append(out, r)
+	for key := range f.records {
+		out = append(out, f.records[key])
 	}
 
 	slices.SortFunc(out, func(a, b tempadmin.TempAdmin) int {
@@ -116,14 +121,21 @@ func (f *fakeStore) ListTempAdmins(_ context.Context) ([]tempadmin.TempAdmin, er
 }
 
 func (f *fakeStore) ExpireTempAdmin(_ context.Context, id string, e audit.Entry) error {
-	if _, ok := f.records[id]; !ok {
+	r, ok := f.records[id]
+	if !ok {
 		return tempadmin.ErrNotFound
 	}
 
-	if f.disabled[id] {
+	if err := f.fail[id]; err != nil {
+		return err
+	}
+
+	if !r.EndedAt.IsZero() {
 		return tempadmin.ErrExpired
 	}
 
+	r.EndedAt = e.At
+	f.records[id] = r
 	f.disabled[id] = true
 	f.entries = append(f.entries, e)
 
@@ -164,7 +176,7 @@ func (f fakeAuthn) AuthenticateToken(_ context.Context, token string) (identity.
 
 // testService returns a Service over a fresh fake store with a fixed clock.
 func testService(store *fakeStore) *tempadmin.Service {
-	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: baseTime})
+	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: baseTime, Logger: nil})
 	if err != nil {
 		panic(err)
 	}
@@ -323,7 +335,7 @@ func sweepAfterExpiry(t *testing.T, store *fakeStore) *tempadmin.Service {
 
 	later := testServiceAt(store, baseTime().Add(tempadmin.Lifetime).Add(time.Minute))
 
-	done, err := later.Sweep(t.Context(), callerEntry())
+	done, err := later.Sweep(t.Context(), serverEntry())
 	if err != nil {
 		t.Fatalf("sweep after expiry: %v", err)
 	}
@@ -339,6 +351,15 @@ func sweepAfterExpiry(t *testing.T, store *fakeStore) *tempadmin.Service {
 	requireExpirySubjects(t, store)
 
 	return later
+}
+
+// serverEntry is the entry of the server for a sweep: it names no
+// subject, so the sweep names SweepSubject.
+func serverEntry() audit.Entry {
+	e := callerEntry()
+	e.Subject = ""
+
+	return e
 }
 
 // requireExpirySubjects proves each expiry entry carries the sweep subject.
@@ -389,7 +410,9 @@ func requireSecondSweepDisablesNothing(t *testing.T, store *fakeStore, later *te
 
 // testServiceAt returns a Service over store with the clock fixed at now.
 func testServiceAt(store *fakeStore, now time.Time) *tempadmin.Service {
-	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: func() time.Time { return now }})
+	svc, err := tempadmin.NewService(tempadmin.Config{
+		Store: store, Reviews: nil, Now: func() time.Time { return now }, Logger: nil,
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -427,6 +450,7 @@ func signInDecorator(
 		Expirer:    store,
 		Audit:      audits,
 		Now:        func() time.Time { return baseTime().Add(time.Hour) },
+		Logger:     nil,
 	})
 	if err != nil {
 		t.Fatalf("new decorator: %v", err)
@@ -583,6 +607,7 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 			Expirer:    store,
 			Audit:      audits,
 			Now:        nil,
+			Logger:     nil,
 		})
 		if err != nil {
 			t.Fatalf("new decorator: %v", err)
@@ -663,6 +688,7 @@ func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 		Expirer:    store,
 		Audit:      audits,
 		Now:        func() time.Time { return rec.ExpiresAt },
+		Logger:     nil,
 	})
 	if err != nil {
 		t.Fatalf("new decorator: %v", err)
@@ -720,6 +746,7 @@ func TestDecoratorKeepsBootstrapSubjectsVisible(t *testing.T) {
 		Expirer:    store,
 		Audit:      audits,
 		Now:        nil,
+		Logger:     nil,
 	})
 	if err != nil {
 		t.Fatalf("new decorator: %v", err)
@@ -741,6 +768,7 @@ func TestValidateSubjectKeepsBootstrapNamesOut(t *testing.T) {
 	r := tempadmin.TempAdmin{
 		CreatedAt:   baseTime(),
 		ExpiresAt:   baseTime().Add(tempadmin.Lifetime),
+		EndedAt:     time.Time{},
 		PrincipalID: "prn-alice",
 		Subject:     "alice",
 		CreatedBy:   "host",
@@ -807,8 +835,8 @@ func (f *fakeReviews) OpenReview(_ context.Context, u breakglass.Use) error {
 }
 
 // TestSweepOpensReviews proves that the sweep opens a review for each
-// ended record, also for a record that a sign-in ended first, with the
-// reason and the end of the record.
+// record that it ends, with the reason and the end of the record, and
+// skips a record that a sign-in ended first.
 func TestSweepOpensReviews(t *testing.T) {
 	t.Parallel()
 
@@ -822,12 +850,15 @@ func TestSweepOpensReviews(t *testing.T) {
 		}
 	}
 
+	ended := store.records["prn-b"]
+	ended.EndedAt = baseTime().Add(tempadmin.Lifetime)
+	store.records["prn-b"] = ended
 	store.disabled["prn-b"] = true
 
 	later := baseTime().Add(tempadmin.Lifetime)
 
 	svc, err := tempadmin.NewService(tempadmin.Config{
-		Store: store, Reviews: reviews, Now: func() time.Time { return later },
+		Store: store, Reviews: reviews, Now: func() time.Time { return later }, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -838,8 +869,8 @@ func TestSweepOpensReviews(t *testing.T) {
 		t.Fatalf("sweep: %v", err)
 	}
 
-	if !slices.Equal(done, []string{"prn-a"}) || len(reviews.uses) != 2 {
-		t.Fatalf("sweep ended %v and opened %d reviews; want prn-a and 2", done, len(reviews.uses))
+	if !slices.Equal(done, []string{"prn-a"}) || len(reviews.uses) != 1 {
+		t.Fatalf("sweep ended %v and opened %d reviews; want prn-a and 1", done, len(reviews.uses))
 	}
 
 	for _, u := range reviews.uses {
@@ -853,11 +884,210 @@ func TestValidateNeedsReason(t *testing.T) {
 	t.Parallel()
 
 	r := tempadmin.TempAdmin{
-		CreatedAt: baseTime(), ExpiresAt: baseTime().Add(time.Hour), PrincipalID: "prn-alice",
+		CreatedAt: baseTime(), ExpiresAt: baseTime().Add(time.Hour), EndedAt: time.Time{}, PrincipalID: "prn-alice",
 		Subject: "alice", CreatedBy: "host", Reason: " ",
 	}
 
 	if err := r.Validate(); !errors.Is(err, tempadmin.ErrInvalid) {
 		t.Fatalf("validate with a blank reason = %v, want ErrInvalid", err)
 	}
+}
+
+// testLogger returns a logger that writes text to buf.
+func testLogger(buf *bytes.Buffer) *slog.Logger {
+	opts := &slog.HandlerOptions{AddSource: false, Level: slog.LevelInfo, ReplaceAttr: nil}
+
+	return slog.New(slog.NewTextHandler(buf, opts))
+}
+
+// errDriver is a store error with driver text that no log line may show.
+var errDriver = errors.New("pq: relation temp_admins does not exist")
+
+// TestSweepContinuesPastAFailure proves that a failed expiry of one record
+// does not stop the sweep: the other record ends, the sweep answers
+// ErrSweepIncomplete, and the log names the principal with no driver text.
+func TestSweepContinuesPastAFailure(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+
+	for _, id := range []string{"prn-a", "prn-b"} {
+		createSweepRecord(t, testService(store), id, id)
+	}
+
+	store.fail["prn-a"] = errDriver
+
+	var logs bytes.Buffer
+
+	svc, err := tempadmin.NewService(tempadmin.Config{
+		Store: store, Reviews: nil, Now: func() time.Time { return baseTime().Add(tempadmin.Lifetime) },
+		Logger: testLogger(&logs),
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	done, err := svc.Sweep(t.Context(), serverEntry())
+	if !errors.Is(err, tempadmin.ErrSweepIncomplete) {
+		t.Fatalf("sweep with a failed record: err = %v, want ErrSweepIncomplete", err)
+	}
+
+	if !slices.Equal(done, []string{"prn-b"}) {
+		t.Fatalf("sweep ended %v, want prn-b past the failure of prn-a", done)
+	}
+
+	if !strings.Contains(logs.String(), "prn-a") || strings.Contains(logs.String(), "pq:") {
+		t.Fatalf("log = %q, want the principal and no driver text", logs.String())
+	}
+}
+
+// TestSweepWarnsWithNoReviews proves that a sweep with no Reviews writes
+// one warning for each record that it ends: no break-glass review opens.
+func TestSweepWarnsWithNoReviews(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	createSweepRecord(t, testService(store), "prn-a", "alice")
+
+	var logs bytes.Buffer
+
+	svc, err := tempadmin.NewService(tempadmin.Config{
+		Store: store, Reviews: nil, Now: func() time.Time { return baseTime().Add(tempadmin.Lifetime) },
+		Logger: testLogger(&logs),
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	for range 2 {
+		if _, err := svc.Sweep(t.Context(), serverEntry()); err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+	}
+
+	if got := strings.Count(logs.String(), "no break-glass review opens"); got != 1 ||
+		!strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("log = %q, want one warning that no review opens", logs.String())
+	}
+}
+
+// TestHostSweepKeepsTheHostSubject proves that a sweep with the entry of
+// the host command writes its expiry entries with the subject @host.
+func TestHostSweepKeepsTheHostSubject(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	createSweepRecord(t, testService(store), "prn-a", "alice")
+
+	host := callerEntry()
+	host.Subject = tempadmin.HostSubject
+
+	if _, err := testServiceAt(store, baseTime().Add(tempadmin.Lifetime)).Sweep(t.Context(), host); err != nil {
+		t.Fatalf("host sweep: %v", err)
+	}
+
+	if last := store.entries[len(store.entries)-1]; last.Subject != tempadmin.HostSubject {
+		t.Fatalf("expiry subject = %q, want %q", last.Subject, tempadmin.HostSubject)
+	}
+}
+
+// TestValidateRefusesHiddenRunes proves that a reason or a creator with a
+// control character or a format character, such as a direction override or
+// a zero-width space, is refused.
+func TestValidateRefusesHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	base := tempadmin.TempAdmin{
+		CreatedAt: baseTime(), ExpiresAt: baseTime().Add(time.Hour), EndedAt: time.Time{}, PrincipalID: "prn-alice",
+		Subject: "alice", CreatedBy: "host", Reason: testReason,
+	}
+
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid record: %v", err)
+	}
+
+	for _, bad := range []string{"lost\u202eaccess", "lost\u200baccess", "lost\x07access", "lost\u0085access"} {
+		reason := base
+		reason.Reason = bad
+
+		if err := reason.Validate(); !errors.Is(err, tempadmin.ErrInvalid) {
+			t.Errorf("reason %q: err = %v, want ErrInvalid", bad, err)
+		}
+
+		if err := tempadmin.ValidateReason(bad); err == nil {
+			t.Errorf("ValidateReason(%q) = nil, want an error", bad)
+		}
+
+		creator := base
+		creator.CreatedBy = bad
+
+		if err := creator.Validate(); !errors.Is(err, tempadmin.ErrInvalid) {
+			t.Errorf("creator %q: err = %v, want ErrInvalid", bad, err)
+		}
+	}
+}
+
+// TestDecoratorLogsTheExpiry proves that a use after the expiry logs that
+// no break-glass review opens when it ends the record, and that a failed
+// expiry logs the principal with no driver text and still denies the use.
+func TestDecoratorLogsTheExpiry(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		fail error
+		want string
+		name string
+	}{
+		{name: "the use ends the record", fail: nil, want: "no break-glass review opens"},
+		{name: "the expiry fails", fail: errDriver, want: "temporary administrator expiry failed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := expiredUseLog(t, c.fail)
+			if !strings.Contains(out, c.want) || !strings.Contains(out, "prn-alice") || strings.Contains(out, "pq:") {
+				t.Fatalf("log = %q, want %q with the principal and no driver text", out, c.want)
+			}
+		})
+	}
+}
+
+// expiredUseLog makes alice a temporary administrator, uses her token at
+// the expiry with the store failing the expiry with fail when it is not
+// nil, and answers the log of the decorator. The use must be denied.
+func expiredUseLog(t *testing.T, fail error) string {
+	t.Helper()
+
+	store := newFakeStore()
+
+	rec, err := testService(store).Create(t.Context(), callerEntry(), tempadmin.Input{
+		Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason,
+	})
+	if err != nil {
+		t.Fatalf("create temporary administrator: %v", err)
+	}
+
+	if fail != nil {
+		store.fail["prn-alice"] = fail
+	}
+
+	var logs bytes.Buffer
+
+	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
+		Next: fakeAuthn{principal: identity.Principal{
+			Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "tok-alice",
+			TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		}},
+		Records: store, Principals: store, Request: nil, Expirer: store, Audit: newFakeAudit(),
+		Now: func() time.Time { return rec.ExpiresAt }, Logger: testLogger(&logs),
+	})
+	if err != nil {
+		t.Fatalf("new decorator: %v", err)
+	}
+
+	if _, err := dec.AuthenticateToken(t.Context(), "good"); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("use after the expiry = %v, want ErrUnauthenticated", err)
+	}
+
+	return logs.String()
 }

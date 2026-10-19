@@ -722,7 +722,7 @@ func wireTempAdmins(cfg *settings) error {
 
 	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
 		Next: cfg.authenticator, Records: store, Principals: principals, Request: requestOf,
-		Expirer: store, Audit: entries, Now: cfg.now,
+		Expirer: store, Audit: entries, Now: cfg.now, Logger: cfg.logger,
 	})
 	if err != nil {
 		return fmt.Errorf("temporary administrator authenticator: %w", err)
@@ -753,7 +753,7 @@ func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
 		return nil, nil //nolint:nilnil // No record store is a valid setup: expiry never runs.
 	}
 
-	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: cfg.now})
+	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: cfg.now, Logger: cfg.logger})
 	if err != nil {
 		return nil, fmt.Errorf("temporary administrator service: %w", err)
 	}

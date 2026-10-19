@@ -41,21 +41,17 @@ type HostRecovery struct {
 // all commit, or nothing does. An entry that fails validation gives
 // audit.ErrInvalidEntry and changes nothing.
 type HostStore interface {
-	// CreateFirstHostToken persists the token t with the digest d and
-	// appends e. It inserts t only when all of these hold at t.CreatedAt:
-	// the principal of t is a live, enabled person of the installation,
-	// made at most HostFirstTokenWindow before t.CreatedAt and not after
-	// it; a temporary administrator record names the principal and works
-	// past t.CreatedAt and at least to t.ExpiresAt; and the principal holds
-	// no token of any status. Else it returns ErrNotOwnToken and changes
-	// nothing. Of two concurrent calls for one principal, at most one
-	// succeeds.
-	CreateFirstHostToken(ctx context.Context, t Token, d Digest, e audit.Entry) error
 	// CreateHostRecovery persists the person, the grant, the record and
 	// the token of r, and appends their four entries. It returns
 	// principal.ErrAlreadyExists when a principal holds the subject or the
-	// ID of the person, and ErrNotOwnToken when the token fails the checks
-	// of CreateFirstHostToken.
+	// ID of the person. It inserts the token only when all of these hold
+	// at the time of the token: the principal is a live, enabled person of
+	// the installation, made at most HostFirstTokenWindow before the token
+	// and not after it; the record names the principal and works past the
+	// time and at least to the expiry of the token; and the principal holds
+	// no token of any status. Else it returns ErrNotOwnToken and changes
+	// nothing. Of two concurrent calls for one subject, at most one
+	// succeeds.
 	CreateHostRecovery(ctx context.Context, r *HostRecovery) error
 }
 
@@ -136,65 +132,6 @@ func (h *HostIssuer) Recover(ctx context.Context, e audit.Entry, in HostInput) (
 	return HostResult{Person: r.Person, GrantID: r.Grant.ID, Record: r.Record, Token: r.Token, Secret: secret}, nil
 }
 
-// IssueFirstToken issues the first personal token of the principal
-// principalID, with the expiry expires and the audit entry e. The store
-// checks the person, its record and its tokens in the transaction of the
-// insert (see HostStore.CreateFirstHostToken). It refuses with
-// identity.ErrDenied wrapping ErrNotOwnToken when a check fails or when
-// the expiry does not lie after now and at most tempadmin.Lifetime from
-// now.
-//
-// The token carries the name tempadmin.HostTokenName and the creator
-// tempadmin.HostSubject. The audit entry e records the creation of the
-// token in the same transaction as the token.
-func (h *HostIssuer) IssueFirstToken(
-	ctx context.Context, e audit.Entry, principalID string, expires time.Time,
-) (Token, Secret, error) {
-	s := h.svc
-
-	if err := s.requireFresh(ctx, e.Subject); err != nil {
-		return Token{}, Secret{}, err
-	}
-
-	at := s.Now()
-
-	if want := at.Add(tempadmin.Lifetime); !expires.After(at) || expires.After(want) {
-		return Token{}, Secret{}, hostRefusal(fmt.Sprintf(
-			"the expiry must be after now and at most %s from now", tempadmin.Lifetime,
-		))
-	}
-
-	expiresAt, err := s.expiry(ctx, at, expires)
-	if err != nil {
-		return Token{}, Secret{}, err
-	}
-
-	n, err := s.newToken(tokenSpec{
-		at:          at,
-		expiresAt:   expiresAt,
-		principalID: principalID,
-		name:        tempadmin.HostTokenName,
-		kind:        KindPersonal,
-		createdBy:   tempadmin.HostSubject,
-	})
-	if err != nil {
-		return Token{}, Secret{}, err
-	}
-
-	err = h.store.CreateFirstHostToken(ctx, n.token, n.digest, change(e, at, TokenRef(principalID, n.token.ID)))
-	if errors.Is(err, ErrNotOwnToken) {
-		return Token{}, Secret{}, hostRefusal(
-			"the person is not a new, enabled, working temporary administrator with no token",
-		)
-	}
-
-	if err != nil {
-		return Token{}, Secret{}, fmt.Errorf("create host access token: %w", err)
-	}
-
-	return n.token, n.secret, nil
-}
-
 // recovery builds the person, the grant, the record and the token of a
 // recovery at the time at, with their entries, and checks each. It answers
 // the secret of the token too.
@@ -234,7 +171,7 @@ func (h *HostIssuer) recovery(
 	}
 
 	rec := tempadmin.TempAdmin{
-		CreatedAt: at, ExpiresAt: at.Add(min(tempadmin.Lifetime, lifetime)),
+		CreatedAt: at, ExpiresAt: at.Add(min(tempadmin.Lifetime, lifetime)), EndedAt: time.Time{},
 		PrincipalID: p.ID, Subject: in.Subject, CreatedBy: in.CreatedBy, Reason: in.Reason,
 	}
 

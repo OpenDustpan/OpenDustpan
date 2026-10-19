@@ -33,6 +33,16 @@ func HostRecoveryOff(lookup LookupFunc) (bool, error) {
 	return EnvBoolStrict(lookup, ByFlag("disable-host-recovery").Env)
 }
 
+// EnvWith reads the variable key with lookup, or answers fallback when it
+// is unset, as Env does with the process environment.
+func EnvWith(lookup LookupFunc, key, fallback string) string {
+	if value, ok := lookup(key); ok {
+		return value
+	}
+
+	return fallback
+}
+
 // EnvBoolStrict reads the bool variable key with lookup: true for `true`
 // or `1`, false when it is unset, empty, `false` or `0`, with no case and
 // no surrounding space. Any other value returns ErrBadBool.

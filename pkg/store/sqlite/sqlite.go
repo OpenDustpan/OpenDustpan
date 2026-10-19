@@ -231,6 +231,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// noMigrate makes Open apply no migration and refuse a database with
+	// a pending one.
+	noMigrate bool
 	// processGuard holds the lock on the guard file next to the database,
 	// so a second store cannot open the same file. Close releases it.
 	processGuard *processGuard
@@ -270,6 +273,14 @@ func WithLogger(logger *slog.Logger) Option {
 // minimum refuses.
 func WithBinaryVersion(version string) Option {
 	return func(s *Store) { s.binaryVersion = version }
+}
+
+// WithoutMigrate makes Open check the schema and apply no migration. Open
+// then refuses a database with a pending migration with
+// schema.ErrMigrationsPending. A command that only writes rows uses it, so
+// the server stays the one process that changes the schema.
+func WithoutMigrate() Option {
+	return func(s *Store) { s.noMigrate = true }
 }
 
 // Open opens (creating if needed) the database file at path and migrates it.
@@ -317,6 +328,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		busyWarned:          false,
 		keepAccessHook:      nil,
 		binaryVersion:       "",
+		noMigrate:           false,
 		processGuard:        guard,
 		stepTxBound:         DefaultStepTransactionBound,
 	}
@@ -1165,6 +1177,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 	if checkErr != nil {
 		return fmt.Errorf("check schema: %w", checkErr)
+	}
+
+	if s.noMigrate && len(plan.Pending) > 0 {
+		return fmt.Errorf("%w: %d", schema.ErrMigrationsPending, len(plan.Pending))
 	}
 
 	for _, m := range plan.Pending {

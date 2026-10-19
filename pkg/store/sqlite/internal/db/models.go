@@ -463,6 +463,7 @@ type TempAdmin struct {
 	CreatedAtMs int64
 	CreatedBy   string
 	Reason      string
+	EndedAtMs   sql.NullInt64
 }
 
 type Update struct {

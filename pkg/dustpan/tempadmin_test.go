@@ -322,6 +322,7 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 	r := tempadmin.TempAdmin{
 		CreatedAt:   base,
 		ExpiresAt:   base.Add(tempadminRecordLife),
+		EndedAt:     time.Time{},
 		PrincipalID: p.ID,
 		Subject:     "alice",
 		CreatedBy:   "tester",

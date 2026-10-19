@@ -463,6 +463,7 @@ type TempAdmin struct {
 	CreatedAtMs int64
 	CreatedBy   string
 	Reason      string
+	EndedAtMs   pgtype.Int8
 }
 
 type Update struct {

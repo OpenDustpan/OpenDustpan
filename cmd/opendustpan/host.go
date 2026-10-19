@@ -15,10 +15,12 @@ package main
 // The command refuses when DUSTPAN_DISABLE_HOST_RECOVERY turns it off, when
 // that variable holds a value that is not a bool, and when the recovery mode
 // of the installation is none. It needs a reason: --reason, or a prompt on a
-// terminal. In one store transaction it makes a new person principal,
-// grants it the site-administrator role on the installation, records the
-// temporary administrator with the reason, and issues its token, each with
-// its audit entry. The person must name no principal that exists: the
+// terminal. It applies no migration: it refuses a database with a pending
+// migration, so the server stays the one process that changes the schema.
+// In one store transaction it makes a new person principal, grants it the
+// site-administrator role on the installation, records the temporary
+// administrator with the reason, and issues its token, each with its audit
+// entry. The person must name no principal that exists: the
 // command never reuses one, so an expiry never ends a normal account. The
 // exit code is 0 on success and 1 on any refusal.
 
@@ -38,8 +40,8 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
@@ -68,6 +70,9 @@ var (
 	)
 	// errHostBadMode reports a recovery mode that the command does not know.
 	errHostBadMode = errors.New("unknown recovery mode: set DUSTPAN_RECOVERY_MODE to bootstrap, signed-request or none")
+	// errHostMigrationsPending reports a host run on a database with a
+	// pending migration.
+	errHostMigrationsPending = errors.New("host create-temp-admin applies no migration")
 	// errHostNeedsReason reports a host run with no reason.
 	errHostNeedsReason = errors.New(
 		"host create-temp-admin needs a reason: opendustpan host create-temp-admin --reason <text> <person>",
@@ -81,6 +86,12 @@ const (
 	modeSignedRequest = "signed-request"
 	modeNone          = "none"
 )
+
+// hostReviewNote is the line that the host command writes to standard error
+// after a create: no store keeps break-glass reviews yet, so no review opens
+// at the expiry.
+const hostReviewNote = "note: no break-glass review opens for this temporary administrator yet: " +
+	"review its audit entries by hand after the expiry"
 
 // maxReasonBytes caps the reason that the host command reads from the
 // prompt, so the read never takes all memory.
@@ -158,7 +169,9 @@ func hostCreateTempAdminWithIO(
 	fs.SetOutput(stderr)
 	f.register(fs)
 	cli.ByFlag("reason").String(fs, &f.reason)
-	cli.ByFlag("recovery-mode").String(fs, &f.mode)
+
+	mode := cli.ByFlag("recovery-mode")
+	fs.StringVar(&f.mode, mode.Flag, cli.EnvWith(in.lookup, mode.Env, mode.Default), mode.Help)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -195,6 +208,10 @@ func hostCreateTempAdminWithIO(
 		return fmt.Errorf("write host output: %w", err)
 	}
 
+	if _, err := fmt.Fprintln(stderr, hostReviewNote); err != nil {
+		return fmt.Errorf("write host note: %w", err)
+	}
+
 	return nil
 }
 
@@ -223,7 +240,7 @@ func hostAllowed(lookup cli.LookupFunc, mode string) error {
 
 // hostReason answers the reason of the run: the flag value, or a line that
 // the operator types at a prompt on a terminal. A run with no reason, or
-// with a reason that history.ValidateReason refuses, fails.
+// with a reason that tempadmin.ValidateReason refuses, fails.
 func hostReason(flagValue string, in hostIO, stderr io.Writer) (string, error) {
 	reason := strings.TrimSpace(flagValue)
 
@@ -244,17 +261,25 @@ func hostReason(flagValue string, in hostIO, stderr io.Writer) (string, error) {
 		return "", errHostNeedsReason
 	}
 
-	if err := history.ValidateReason(reason); err != nil {
+	if err := tempadmin.ValidateReason(reason); err != nil {
 		return "", fmt.Errorf("host create-temp-admin: %w", err)
 	}
 
 	return reason, nil
 }
 
-// runHostCreate opens the database and makes the temporary administrator
-// of in.
+// runHostCreate opens the database with no migration and makes the
+// temporary administrator of in.
 func runHostCreate(ctx context.Context, database string, in hostInput) (hostMade, error) {
-	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler))
+	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler), openNoMigrate)
+	if errors.Is(err, schema.ErrMigrationsPending) {
+		return hostMade{}, fmt.Errorf(
+			"%w: database %s has pending migrations: back up the database, "+
+				"start opendustpan serve --database %s with this binary to apply them, then run the command again: %w",
+			errHostMigrationsPending, database, database, err,
+		)
+	}
+
 	if err != nil {
 		if errors.Is(err, sqlite.ErrInUse) {
 			return hostMade{}, fmt.Errorf(
@@ -293,7 +318,7 @@ type hostMade struct {
 // token share one lifetime: the token policy maximum when that is below
 // the fixed temporary administrator lifetime, or that lifetime otherwise.
 func createTempAdmin(ctx context.Context, st store, in hostInput) (hostMade, error) {
-	temps, err := tempadmin.NewService(tempadmin.Config{Store: st, Reviews: nil, Now: nil})
+	temps, err := tempadmin.NewService(tempadmin.Config{Store: st, Reviews: nil, Now: nil, Logger: nil})
 	if err != nil {
 		return hostMade{}, fmt.Errorf("temporary administrator service: %w", err)
 	}

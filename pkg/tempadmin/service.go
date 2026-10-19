@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -27,6 +28,9 @@ type Config struct {
 	Reviews Reviews
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
+	// Logger takes a warning for each record that a sweep ends with no
+	// review, and for each expiry that fails. Nil discards them.
+	Logger *slog.Logger
 }
 
 // Service implements the temporary administrator use cases.
@@ -39,6 +43,7 @@ type Service struct {
 	store   Store
 	reviews Reviews
 	now     func() time.Time
+	logger  *slog.Logger
 }
 
 // NewService returns a Service. Store is required.
@@ -52,7 +57,12 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{store: cfg.Store, reviews: cfg.Reviews, now: now}, nil
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
+	return &Service{store: cfg.Store, reviews: cfg.Reviews, now: now, logger: logger}, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -113,21 +123,24 @@ func (s *Service) ExpiredAt(ctx context.Context, now time.Time) ([]TempAdmin, er
 
 	var out []TempAdmin
 
-	for _, r := range all {
-		if !r.ActiveAt(now) {
-			out = append(out, r)
+	for i := range all {
+		if !all[i].ActiveAt(now) {
+			out = append(out, all[i])
 		}
 	}
 
 	return out, nil
 }
 
-// Sweep disables every record that ends at or before the time of the
-// Service clock, each with an entry from e, and returns the principal IDs
-// it disabled, ordered by expiry. It opens the review of each record that
-// it ends, when the Service has Reviews. A record that already ended is
-// skipped: ExpireTempAdmin answers ErrExpired for it and writes no second
-// entry.
+// Sweep ends every record that ends at or before the time of the Service
+// clock and that did not end yet, each with an entry from e, and returns
+// the principal IDs it ended, ordered by expiry. The entry names the
+// subject of e, or SweepSubject when e names none. It opens the review of
+// each record that it ends when the Service has Reviews, and logs a warning
+// for each one when it has none. A failed expiry of one record does not
+// stop the sweep: Sweep logs it with no driver text, continues with the
+// next record, and at the end returns ErrSweepIncomplete with the IDs it
+// ended.
 func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 	now := s.Now()
 
@@ -136,45 +149,77 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 		return nil, err
 	}
 
+	if e.Subject == "" {
+		e.Subject = SweepSubject
+	}
+
 	var done []string
 
-	for _, r := range expired {
-		err := s.store.ExpireTempAdmin(ctx, r.PrincipalID, expireEntry(e, now, Ref(r.PrincipalID)))
-		if errors.Is(err, ErrNotFound) {
+	failed := 0
+
+	for i := range expired {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return done, fmt.Errorf("sweep temporary administrators: %w", ctxErr)
+		}
+
+		r := &expired[i]
+		if !r.EndedAt.IsZero() {
 			continue
 		}
 
-		if err != nil && !errors.Is(err, ErrExpired) {
-			return done, fmt.Errorf("expire temporary administrator for %q: %w", r.Subject, err)
-		}
+		err := s.store.ExpireTempAdmin(ctx, r.PrincipalID, expireEntry(e, now, Ref(r.PrincipalID)))
 
-		// A sign-in after the expiry can end the record first, so the
-		// review opens for each ended record. An open of a review that
-		// exists makes no second review.
-		if openErr := s.openReview(ctx, r); openErr != nil {
-			return done, openErr
-		}
+		switch {
+		case errors.Is(err, ErrNotFound), errors.Is(err, ErrExpired):
+			// A delete or a use after the expiry ended the record first.
+		case err != nil:
+			failed++
 
-		if err == nil {
+			s.logger.WarnContext(ctx, "temporary administrator expiry failed",
+				slog.String("principal", r.PrincipalID))
+		default:
 			done = append(done, r.PrincipalID)
+
+			if !s.openReview(ctx, r) {
+				failed++
+			}
 		}
+	}
+
+	if failed > 0 {
+		return done, fmt.Errorf("%w: %d of %d records", ErrSweepIncomplete, failed, len(expired))
 	}
 
 	return done, nil
 }
 
-// openReview opens the review of the ended record r, when the Service has
-// Reviews.
-func (s *Service) openReview(ctx context.Context, r TempAdmin) error {
+// openReview opens the review of the ended record r and reports whether
+// that worked. With no Reviews, it logs a warning that no review opens, so
+// an operator reviews the audit entries by hand.
+func (s *Service) openReview(ctx context.Context, r *TempAdmin) bool {
 	if s.reviews == nil {
-		return nil
+		warnNoReview(ctx, s.logger, r.PrincipalID)
+
+		return true
 	}
 
 	if err := s.reviews.OpenReview(ctx, r.ReviewUse(r.ExpiresAt)); err != nil {
-		return fmt.Errorf("open the review of temporary administrator %q: %w", r.Subject, err)
+		s.logger.WarnContext(ctx, "open the break-glass review of a temporary administrator failed",
+			slog.String("principal", r.PrincipalID))
+
+		return false
 	}
 
-	return nil
+	return true
+}
+
+// warnNoReview logs that a temporary administrator ended and that no
+// break-glass review opens for it.
+func warnNoReview(ctx context.Context, logger *slog.Logger, principalID string) {
+	logger.WarnContext(ctx,
+		"temporary administrator ended: no break-glass review opens for it yet: "+
+			"review its audit entries by hand",
+		slog.String("principal", principalID))
 }
 
 // insertRecord shares the create of Create and CreateWithLifetime.
@@ -203,6 +248,7 @@ func (s *Service) insertRecord(
 	r := TempAdmin{
 		CreatedAt:   at,
 		ExpiresAt:   at.Add(lifetime),
+		EndedAt:     time.Time{},
 		PrincipalID: in.PrincipalID,
 		Subject:     in.Subject,
 		CreatedBy:   in.CreatedBy,
@@ -248,9 +294,9 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	return e
 }
 
-// expireEntry completes the entry of a sweep for the expiry of one record:
-// the subject SweepSubject, because the server runs the sweep on its own
-// schedule and no person acts.
+// expireEntry completes the entry e of the caller for the expiry of one
+// record at the time at. The subject stays the subject of e: SweepSubject
+// for the server, HostSubject for the host command.
 func expireEntry(e audit.Entry, at time.Time, object string) audit.Entry {
 	e.At = at
 	e.Namespace = audit.ServerScope
@@ -258,7 +304,6 @@ func expireEntry(e audit.Entry, at time.Time, object string) audit.Entry {
 	e.Outcome = audit.OutcomeSuccess
 	e.Object = object
 	e.Action = Action
-	e.Subject = SweepSubject
 
 	return e
 }

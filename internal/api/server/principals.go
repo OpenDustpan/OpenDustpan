@@ -224,13 +224,14 @@ func (h *Handler) markTempAdmin(ctx context.Context, body any) (any, error) {
 	}
 }
 
-// activeTempAdmins answers the records that work at now, by subject.
+// activeTempAdmins answers the records that work at now, by principal ID,
+// so a new person with the subject of an old record is not marked.
 func activeTempAdmins(records []tempadmin.TempAdmin, now time.Time) map[string]tempadmin.TempAdmin {
 	active := make(map[string]tempadmin.TempAdmin, len(records))
 
-	for _, rec := range records {
-		if rec.ActiveAt(now) {
-			active[rec.Subject] = rec
+	for i := range records {
+		if records[i].ActiveAt(now) {
+			active[records[i].PrincipalID] = records[i]
 		}
 	}
 
@@ -244,7 +245,7 @@ func markOneTempAdmin(res principalResponse, active map[string]tempadmin.TempAdm
 		return res
 	}
 
-	rec, ok := active[res.Subject]
+	rec, ok := active[res.ID]
 	if !ok {
 		return res
 	}

@@ -517,7 +517,7 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 
 	open := func() (store, error) {
 		if st == nil {
-			opened, err := openStore(ctx, f.database, logger)
+			opened, err := openStore(ctx, f.database, logger, openMigrate)
 			if err != nil {
 				return nil, err
 			}
@@ -1556,20 +1556,37 @@ type postgresStore struct{ *postgres.Store }
 
 func (s postgresStore) close() { s.Close() }
 
+// openMode says whether openStore applies the pending migrations.
+type openMode int
+
+const (
+	// openMigrate applies the pending migrations, as serve does at start.
+	openMigrate openMode = iota
+	// openNoMigrate applies none and refuses a database with a pending
+	// migration.
+	openNoMigrate
+)
+
 // openStore opens the persistence adapter that --database names. Only serve
 // and host create-temp-admin call it: serve runs the server, and host
 // create-temp-admin recovers a lost administrator through the database,
 // after its off switch and the recovery mode allow it. Every other command
 // is a client of the REST API. The gate test swaps it for a function that
 // fails the test, so a future client command that opens a store fails the
-// test.
+// test. The mode says whether Open applies pending migrations: serve
+// applies them, and the host command applies none and refuses a database
+// with a pending migration.
 //
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
-var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {
+var openStore = func(ctx context.Context, database string, logger *slog.Logger, mode openMode) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"),
-			sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version))
+		opts := []sqlite.Option{sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version)}
+		if mode == openNoMigrate {
+			opts = append(opts, sqlite.WithoutMigrate())
+		}
+
+		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"), opts...)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite store: %w", err)
 		}
@@ -1578,7 +1595,12 @@ var openStore = func(ctx context.Context, database string, logger *slog.Logger) 
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		s, err := postgres.Open(ctx, database, postgres.WithBinaryVersion(version))
+		opts := []postgres.Option{postgres.WithBinaryVersion(version)}
+		if mode == openNoMigrate {
+			opts = append(opts, postgres.WithoutMigrate())
+		}
+
+		s, err := postgres.Open(ctx, database, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("open postgres store: %w", err)
 		}

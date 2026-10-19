@@ -31,6 +31,20 @@ A security review of the command found these problems:
   of a deleted temporary administrator found the old record, and the
   decorator denied the new person.
 
+A second security review of the change found more problems:
+
+- The decision and the help of `--reason` said that a review opens at the
+  expiry, but no store keeps break-glass reviews yet, so no review opens.
+- The command applied pending migrations, so a recovery run could change
+  the schema of a database that a server of another version uses.
+- The expiry ended only the site-administrator grant and the tokens with
+  the name `host-recovery`. A temporary administrator could give itself
+  another grant, join a group or make a second token, and keep that access
+  after the expiry.
+- The port had a method that issued the first token on its own. No
+  production code called it, and it was one more exception to the
+  own-token rule.
+
 A decision of the product manager has the label "(product manager)" and a
 "Benchmark:" line. The product manager decided on behalf of the project
 owner. The other decisions are the fixes of the review.
@@ -66,9 +80,11 @@ owner. The other decisions are the fixes of the review.
    - The command needs a reason: `--reason`, or a line that the operator
      types at a prompt on a terminal. With no reason, the command refuses.
    - The audit entry of the create of the record holds the reason.
-   - At the expiry or the end of the temporary administrator, a
-     second-person review of its audit entries opens (`pkg/breakglass`,
-     ADR 142), with the kind `temp-admin`.
+   - The second-person review of its audit entries (`pkg/breakglass`, ADR
+     142, with the kind `temp-admin`) opens only when `pkg/breakglass` has
+     a store adapter. Until then no review opens: see "Not decided here".
+     The command writes one line to standard error that says so, and the
+     server writes one warning when it ends a record with no review.
 
    A temporary administrator is not a "break-glass account" of ADR 70
    decisions 23 to 25: its principal has no `break_glass` flag, it is not
@@ -99,17 +115,25 @@ owner. The other decisions are the fixes of the review.
    The setting `--recovery-mode` (`DUSTPAN_RECOVERY_MODE`) holds it:
    `bootstrap` (mode 1, the default), `signed-request` (mode 2) or `none`
    (mode 3). The command refuses `none` and an unknown value.
+   `--recovery-mode` must match the first-boot choice of ADR 57. When that
+   choice is stored, a later change makes the stored choice win over the
+   setting. The command reads the variable through the same environment
+   lookup as the off switch.
 7. **One transaction.** The command makes the person, its
    site-administrator grant on the installation, its record and its token
    in one store transaction, with the four audit entries. A crash leaves
    all of them or none.
-8. **The store checks the first token.** The store inserts the first token
-   only when all of these hold at the time of the token. The principal is a
-   live, enabled person of the installation, made at most five minutes
-   before and not after. A record names the principal and works past the
-   time and to the expiry of the token. The principal holds no token of any
-   status. Else the store returns `ErrNotOwnToken`. Of two concurrent issues
-   for one person, at most one succeeds.
+8. **The store checks the first token.** In the transaction of the
+   recovery, the store inserts the token only when all of these hold at the
+   time of the token. The principal is a live, enabled person of the
+   installation, made at most five minutes before and not after. A record
+   names the principal and works past the time and to the expiry of the
+   token. The principal holds no token of any status. Else the store
+   returns `ErrNotOwnToken`. Of two concurrent recoveries for one person, at
+   most one succeeds. SQLite holds the write lock of the database for the
+   transaction. PostgreSQL pins READ COMMITTED and takes the advisory lock
+   of the server audit scope first, so the second recovery reads the rows
+   of the first in a new statement snapshot.
 9. **The record belongs to one principal.** The decorator compares the
    principal of the record with the principal of the caller. The delete of
    a principal deletes its record in the same transaction. A new person
@@ -122,24 +146,67 @@ owner. The other decisions are the fixes of the review.
     address and the request ID and gives them to the decorator.
 12. **Only the host command reaches the host issuer.** A test lists each
     package of the module with `go list` and fails when a package other
-    than `cmd/opendustpan` names the host issuer.
+    than `cmd/opendustpan` names the host issuer. It also fails when a
+    package other than `pkg/accesstoken` and its conformance suite calls
+    `CreateHostRecovery`.
+
+### Fixes of the second review
+
+13. **The expiry ends all access of the principal (product manager).** In
+    one transaction, the expiry marks the record ended, disables the
+    principal, ends every grant that the principal holds and every grant on
+    it, ends every group membership of the principal and ends every live
+    token of the principal, whatever its name. An operator then reads the
+    audit entries of the principal from the create to the expiry, and
+    checks the principals, the grants and the tokens that it made for
+    others: the expiry does not end those.
+
+    Benchmark: ADR 70. The access of a break-glass account ends fully at
+    the end of its window.
+14. **The host command applies no migration (product manager).** The
+    command opens the store without migrating. When the database has a
+    pending migration, it refuses and names the command that applies them:
+    `opendustpan serve` of the same binary. The server stays the one
+    process that changes the schema.
+
+    Benchmark: the administration tools of Keycloak and GitLab refuse a
+    schema that does not match their version.
+15. **The port issues no token on its own.** `HostStore` keeps only
+    `CreateHostRecovery`. The change deletes `IssueFirstToken` and
+    `CreateFirstHostToken`: no production code called them, and each was
+    one more exception to the own-token rule.
+16. **The record keeps its end.** The record has an end time. The sweep
+    skips a record that ended, and a failed expiry of one record does not
+    stop the sweep: the server logs the principal, with no driver text, and
+    continues with the next record. The decorator logs a failed expiry in
+    the same way. The expiry entries of a sweep that the host command runs
+    have the subject `@host`. The expiry entries of the server have the
+    subject `@server`.
+17. **No hidden characters.** The reason and the creator refuse control
+    characters (Unicode Cc) and format characters (Unicode Cf), such as a
+    direction override, so the text in the audit log shows what the operator typed.
+18. **The banner follows the principal ID.** The API marks a principal as
+    a temporary administrator by the principal ID of the record, not by
+    its subject.
+19. **The window uses the process clock.** The window of the first token
+    and the expiry use the clock of the process that writes. A clock skew
+    between instances moves the expiry by the skew. The project accepts this.
 
 ## Not decided here
 
 - The store of break-glass reviews. `pkg/breakglass` has no store adapter
   in either dialect yet. The server opens the review of decision 3 when
-  that adapter exists. Until then, the expiry writes its audit entry and
+  that adapter exists, for each record that ends, by the sweep or by a use
+  after the expiry. Until then, the expiry writes its audit entry and
   opens no review.
-- Whether the server also reads `DUSTPAN_RECOVERY_MODE`, and how the mode
-  where the server keeps the mode that the operator chose at first boot
-  (ADR 57, "Not decided here").
 
 ## Consequences
 
 - The client gate test of ADR 39 decision 4 allows `host
   create-temp-admin` to open a store. The command opens it only after the
   off switch and the mode allow it, and a test proves that.
-- The host recovery guide names the reason, the modes, the off switch and
-  the four audit entries of a create.
+- The host recovery guide names the reason, the modes, the off switch, the
+  four audit entries of a create, the refusal of a pending migration, and
+  what the expiry ends and what an operator checks after it.
 - An expired temporary administrator keeps its name: the principal stays,
   disabled, until a site administrator deletes it.

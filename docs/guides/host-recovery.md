@@ -21,8 +21,13 @@ The command runs only when the installation allows host recovery:
   with `--recovery-mode` or `DUSTPAN_RECOVERY_MODE`. When the mode is `none`,
   the installation has no break-glass: the command refuses, and the operator
   restores from a backup. To use the command, set the mode to `bootstrap`.
-- `DUSTPAN_DISABLE_HOST_RECOVERY` does not turn the command off. See
+- `DUSTPAN_DISABLE_HOST_RECOVERY` is not `true` or `1`. See
   [Turn the command off](#turn-the-command-off).
+- The database has no pending migration. The command applies no migration:
+  on a database with a pending migration it refuses and names the command
+  that applies them. Back up the database, start `opendustpan serve
+  --database <database>` of the same binary once, then run the command
+  again.
 
 ## Make the temporary administrator
 
@@ -46,6 +51,12 @@ and its fixed expiry:
 person: alice
 token: <secret>
 expires: 2026-10-09T12:00:00Z
+```
+
+On standard error it writes one note:
+
+```text
+note: no break-glass review opens for this temporary administrator yet: review its audit entries by hand after the expiry
 ```
 
 The expiry is at most 24 hours after the create, or the maximum lifetime of
@@ -101,12 +112,21 @@ command again.
 
 ## What the expiry does
 
-At the fixed expiry the server disables the principal, ends its
-site-administrator grant and ends its host-recovery token, and keeps the
-record, so a later use is still denied.
+At the fixed expiry the server ends all access of the temporary
+administrator in one transaction: it disables the principal, ends every
+grant that the principal holds and every grant on it, ends every group
+membership of the principal and ends its tokens. It keeps the record, so
+a later use is still denied.
 Each step writes an audit entry in the scope `@server` with the action
 `server:manage-temporary-administrators`: the create, each sign-in, and
 the expiry.
+
+No break-glass review opens for this temporary administrator yet: review
+its audit entries by hand after the expiry. The server writes one warning
+to its log when it ends a record with no review. Read the audit entries of
+the principal from the create to the expiry, and check the principals, the
+grants and the tokens that it made for others: the expiry does not end
+those.
 
 The name of an expired temporary administrator stays taken: the principal
 stays, disabled. To use the name again, a site administrator deletes the

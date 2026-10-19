@@ -1967,20 +1967,20 @@ VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT DO NOTHING;
 
 -- name: GetTempAdmin :one
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
 FROM temp_admins WHERE principal_id = $1;
 
 -- name: GetTempAdminBySubject :one
 -- Answers the record of the live principal with the subject. A record of a
 -- deleted principal never answers, so a new person with a reused subject
 -- is not the old temporary administrator.
-SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason
+SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason, t.ended_at_ms
 FROM temp_admins t
 JOIN principals p ON p.id = t.principal_id
 WHERE p.subject = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: ListTempAdmins :many
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id;
 
 -- name: CreateFirstHostToken :execrows
@@ -2006,22 +2006,19 @@ ON CONFLICT DO NOTHING;
 -- name: DeleteTempAdmin :execrows
 DELETE FROM temp_admins WHERE principal_id = $1;
 
--- name: RevokeTempAdminSiteGrants :execrows
--- Ends every live site-administrator grant of the principal on the
--- installation at the expiry of its temporary administrator record. The
--- rows stay for the access-review history. Revoked grants never come back:
--- an enable after the expiry finds no grant to restore.
-UPDATE grants SET revoked_at_ms = $1, revoked_by = $2
-WHERE subject_kind = 'principal' AND subject_id = $3 AND role = 'site-administrator'
-  AND target = $4 AND revoked_at_ms IS NULL;
-
--- name: RevokeTempAdminHostTokens :execrows
--- Ends the live host-recovery tokens of the principal at the expiry of its
--- temporary administrator record. Tokens that already ended stay as they
--- are.
+-- name: RevokeTempAdminTokens :execrows
+-- Ends every live token of the principal at the expiry of its temporary
+-- administrator record, whatever its name. Tokens that already ended stay
+-- as they are.
 UPDATE access_tokens SET revoked_at_ms = $1
-WHERE principal_id = $2 AND name = $3 AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
-  AND expires_at_ms > $4;
+WHERE principal_id = $2 AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND expires_at_ms > $3;
+
+-- name: EndTempAdmin :execrows
+-- Marks the record of the principal as ended at the expiry. A record that
+-- already ended stays as it is, so a repeated expiry changes nothing.
+UPDATE temp_admins SET ended_at_ms = $1
+WHERE principal_id = $2 AND ended_at_ms IS NULL;
 
 -- name: DisablePrincipalForExpiry :execrows
 -- Disables the principal at the expiry of its temporary administrator

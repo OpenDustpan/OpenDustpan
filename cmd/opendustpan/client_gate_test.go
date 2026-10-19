@@ -52,7 +52,7 @@ func TestNonServeCommandsOpenNoStore(t *testing.T) {
 	t.Setenv(adminTokenEnvVar, "test-token")
 
 	previous := openStore
-	openStore = func(_ context.Context, _ string, _ *slog.Logger) (store, error) {
+	openStore = func(_ context.Context, _ string, _ *slog.Logger, _ openMode) (store, error) {
 		t.Error(errGateStoreOpened.Error())
 
 		return nil, errGateStoreOpened

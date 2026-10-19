@@ -960,3 +960,103 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		t.Fatalf("error body = %q, want a JSON error with code 500", body)
 	}
 }
+
+// fixedTempAdmins is a temporary administrator reader that lists the
+// records that its pointer holds at the time of the read.
+type fixedTempAdmins struct {
+	records *[]tempadmin.TempAdmin
+}
+
+func (f fixedTempAdmins) GetTempAdminBySubject(
+	_ context.Context, subject string,
+) (tempadmin.TempAdmin, error) {
+	for i := range *f.records {
+		if (*f.records)[i].Subject == subject {
+			return (*f.records)[i], nil
+		}
+	}
+
+	return tempadmin.TempAdmin{}, tempadmin.ErrNotFound
+}
+
+func (f fixedTempAdmins) ListTempAdmins(_ context.Context) ([]tempadmin.TempAdmin, error) {
+	return *f.records, nil
+}
+
+// TestTempAdminFlagFollowsThePrincipalID proves that the banner flag
+// follows the principal ID of the record, not its subject: a record of an
+// old principal with the subject of a new person does not mark the new
+// person.
+func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
+	t.Parallel()
+
+	records := []tempadmin.TempAdmin{}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Backups:          nil,
+		Restores:         nil,
+		Version:          "",
+		Journal:          nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		Now:              nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		TempAdmins:       fixedTempAdmins{records: &records},
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Schema:           stubSchema{migrations: nil},
+		Principals:       newTestPrincipals(t),
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var alice principalDoc
+
+	mustCall(t, handler, apiCall{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","displayName":"Alice","kind":"person"}`, http.StatusCreated,
+	}, &alice)
+
+	record := func(principalID string) tempadmin.TempAdmin {
+		created := time.Now().UTC().Truncate(time.Millisecond)
+
+		return tempadmin.TempAdmin{
+			CreatedAt: created, ExpiresAt: created.Add(time.Hour), EndedAt: time.Time{},
+			PrincipalID: principalID, Subject: "alice@example.com", CreatedBy: "operator", Reason: "lost access",
+		}
+	}
+
+	for _, c := range []struct {
+		principalID string
+		want        bool
+	}{
+		{principalID: "prn-old", want: false},
+		{principalID: alice.ID, want: true},
+	} {
+		records = []tempadmin.TempAdmin{record(c.principalID)}
+
+		var got struct {
+			TemporaryAdministrator bool `json:"temporaryAdministrator"`
+		}
+
+		mustCall(t, handler, apiCall{http.MethodGet, "/api/server/principals/" + alice.ID, "", http.StatusOK}, &got)
+
+		if got.TemporaryAdministrator != c.want {
+			t.Fatalf("record of %s: temporaryAdministrator = %v, want %v",
+				c.principalID, got.TemporaryAdministrator, c.want)
+		}
+	}
+}

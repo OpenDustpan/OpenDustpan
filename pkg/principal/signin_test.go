@@ -310,7 +310,7 @@ func TestSignInRefusesTempAdmin(t *testing.T) {
 	f.put(t, stored("prn-plain", "corp:plain"))
 
 	rec := tempadmin.TempAdmin{
-		CreatedAt: temp.CreatedAt, ExpiresAt: temp.CreatedAt.Add(time.Hour), PrincipalID: temp.ID,
+		CreatedAt: temp.CreatedAt, ExpiresAt: temp.CreatedAt.Add(time.Hour), EndedAt: time.Time{}, PrincipalID: temp.ID,
 		Subject: temp.Subject, CreatedBy: "operator", Reason: "every administrator lost access",
 	}
 

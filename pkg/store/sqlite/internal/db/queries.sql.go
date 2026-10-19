@@ -2335,6 +2335,26 @@ func (q *Queries) EndSessionsWithSubjectPrefix(ctx context.Context, arg EndSessi
 	return result.RowsAffected()
 }
 
+const endTempAdmin = `-- name: EndTempAdmin :execrows
+UPDATE temp_admins SET ended_at_ms = ?
+WHERE principal_id = ? AND ended_at_ms IS NULL
+`
+
+type EndTempAdminParams struct {
+	EndedAtMs   sql.NullInt64
+	PrincipalID string
+}
+
+// Marks the record of the principal as ended at the expiry. A record that
+// already ended stays as it is, so a repeated expiry changes nothing.
+func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endTempAdmin, arg.EndedAtMs, arg.PrincipalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const failRunningBackups = `-- name: FailRunningBackups :exec
 UPDATE backups
 SET state = 'failed', error = ?, ended_at_ms = ?
@@ -3839,7 +3859,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 }
 
 const getTempAdmin = `-- name: GetTempAdmin :one
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
 FROM temp_admins WHERE principal_id = ?
 `
 
@@ -3853,12 +3873,13 @@ func (q *Queries) GetTempAdmin(ctx context.Context, principalID string) (TempAdm
 		&i.CreatedAtMs,
 		&i.CreatedBy,
 		&i.Reason,
+		&i.EndedAtMs,
 	)
 	return i, err
 }
 
 const getTempAdminBySubject = `-- name: GetTempAdminBySubject :one
-SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason
+SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason, t.ended_at_ms
 FROM temp_admins t
 JOIN principals p ON p.id = t.principal_id
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL
@@ -3877,6 +3898,7 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 		&i.CreatedAtMs,
 		&i.CreatedBy,
 		&i.Reason,
+		&i.EndedAtMs,
 	)
 	return i, err
 }
@@ -6982,7 +7004,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 }
 
 const listTempAdmins = `-- name: ListTempAdmins :many
-SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id
 `
 
@@ -7002,6 +7024,7 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 			&i.CreatedAtMs,
 			&i.CreatedBy,
 			&i.Reason,
+			&i.EndedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -8003,59 +8026,23 @@ func (q *Queries) RevokeGrantsOnTarget(ctx context.Context, arg RevokeGrantsOnTa
 	return result.RowsAffected()
 }
 
-const revokeTempAdminHostTokens = `-- name: RevokeTempAdminHostTokens :execrows
+const revokeTempAdminTokens = `-- name: RevokeTempAdminTokens :execrows
 UPDATE access_tokens SET revoked_at_ms = ?
-WHERE principal_id = ? AND name = ? AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
-  AND expires_at_ms > CAST(?4 AS INTEGER)
+WHERE principal_id = ? AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND expires_at_ms > CAST(?3 AS INTEGER)
 `
 
-type RevokeTempAdminHostTokensParams struct {
+type RevokeTempAdminTokensParams struct {
 	RevokedAtMs sql.NullInt64
 	PrincipalID string
-	Name        string
 	ExpiresAtMs int64
 }
 
-// Ends the live host-recovery tokens of the principal at the expiry of its
-// temporary administrator record. Tokens that already ended stay as they
-// are.
-func (q *Queries) RevokeTempAdminHostTokens(ctx context.Context, arg RevokeTempAdminHostTokensParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, revokeTempAdminHostTokens,
-		arg.RevokedAtMs,
-		arg.PrincipalID,
-		arg.Name,
-		arg.ExpiresAtMs,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const revokeTempAdminSiteGrants = `-- name: RevokeTempAdminSiteGrants :execrows
-UPDATE grants SET revoked_at_ms = ?, revoked_by = ?
-WHERE subject_kind = 'principal' AND subject_id = ? AND role = 'site-administrator'
-  AND target = ? AND revoked_at_ms IS NULL
-`
-
-type RevokeTempAdminSiteGrantsParams struct {
-	RevokedAtMs sql.NullInt64
-	RevokedBy   string
-	SubjectID   string
-	Target      string
-}
-
-// Ends every live site-administrator grant of the principal on the
-// installation at the expiry of its temporary administrator record. The
-// rows stay for the access-review history. Revoked grants never come back:
-// an enable after the expiry finds no grant to restore.
-func (q *Queries) RevokeTempAdminSiteGrants(ctx context.Context, arg RevokeTempAdminSiteGrantsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, revokeTempAdminSiteGrants,
-		arg.RevokedAtMs,
-		arg.RevokedBy,
-		arg.SubjectID,
-		arg.Target,
-	)
+// Ends every live token of the principal at the expiry of its temporary
+// administrator record, whatever its name. Tokens that already ended stay
+// as they are.
+func (q *Queries) RevokeTempAdminTokens(ctx context.Context, arg RevokeTempAdminTokensParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeTempAdminTokens, arg.RevokedAtMs, arg.PrincipalID, arg.ExpiresAtMs)
 	if err != nil {
 		return 0, err
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -14,28 +16,31 @@ import (
 
 var _ accesstoken.HostStore = (*Store)(nil)
 
-// CreateFirstHostToken implements accesstoken.HostStore. The transaction
-// takes the lock of the server audit scope before the insert, so two calls
-// for one principal run one after the other, and the insert of the second
-// reads the token of the first.
-func (s *Store) CreateFirstHostToken(
-	ctx context.Context, t accesstoken.Token, d accesstoken.Digest, e audit.Entry,
-) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return insertFirstHostToken(ctx, q, t, d)
-	})
-}
-
 // CreateHostRecovery implements accesstoken.HostStore: the person, the
 // grant, the record and the token of r, and their four entries, in one
 // transaction.
+//
+// The transaction pins READ COMMITTED, so a server default of REPEATABLE
+// READ or SERIALIZABLE does not change it. It takes the advisory lock of
+// the server audit scope first, so two recoveries run one after the
+// other. Under READ COMMITTED each later statement takes a new snapshot,
+// so the second recovery reads the rows that the first one committed: the
+// unique subject refuses its person with principal.ErrAlreadyExists, and
+// the token check finds the token of the first.
 func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecovery) error {
 	entries, err := hostRecoveryEntries(r)
 	if err != nil {
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	opts := pgx.TxOptions{
+		IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite, DeferrableMode: pgx.NotDeferrable,
+		BeginQuery: "", CommitQuery: "",
+	}
+
+	txErr := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+		q := s.queries.WithTx(tx)
+
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
@@ -52,6 +57,11 @@ func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecov
 
 		return nil
 	})
+	if txErr != nil {
+		return fmt.Errorf("transaction: %w", txErr)
+	}
+
+	return nil
 }
 
 // hostRecoveryEntries checks r and answers its four entries in the order
@@ -94,8 +104,8 @@ func insertHostRecovery(ctx context.Context, q *db.Queries, r *accesstoken.HostR
 	return insertFirstHostToken(ctx, q, r.Token, r.Digest)
 }
 
-// insertFirstHostToken inserts t in the transaction of q when every check
-// of accesstoken.HostStore.CreateFirstHostToken holds, or returns
+// insertFirstHostToken inserts t in the transaction of q when every token
+// check of accesstoken.HostStore.CreateHostRecovery holds, or returns
 // accesstoken.ErrNotOwnToken.
 func insertFirstHostToken(ctx context.Context, q *db.Queries, t accesstoken.Token, d accesstoken.Digest) error {
 	n, err := q.CreateFirstHostToken(ctx, db.CreateFirstHostTokenParams{

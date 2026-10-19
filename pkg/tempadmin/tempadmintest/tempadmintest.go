@@ -24,11 +24,13 @@ import (
 )
 
 // Store is the store under test: the temporary administrator port with the
-// principal records that it refers to, and the grants and the access tokens
-// that the expiry ends.
+// principal records that it refers to, and the grants, the group
+// memberships and the access tokens that the expiry ends.
 type Store interface {
 	tempadmin.Store
 	principal.RecordStore
+	principal.GroupStore
+	principal.MemberStore
 	access.GrantStore
 	accesstoken.Store
 }
@@ -54,7 +56,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "expiry of a missing record is ErrNotFound", test: testExpireMissing},
 		{name: "a second expiry is ErrExpired and writes nothing", test: testExpireTwice},
 		{name: "expiry ends the site-administrator grant", test: testExpireEndsGrant},
-		{name: "expiry ends the host-recovery tokens", test: testExpireEndsTokens},
+		{name: "expiry ends every grant and group membership", test: testExpireEndsAllAccess},
+		{name: "expiry ends every live token, whatever its name", test: testExpireEndsTokens},
 		{
 			name: "expiry after a manual disable still ends the grants and the tokens",
 			test: testExpireAfterManualDisable,
@@ -99,6 +102,9 @@ const reason = "every administrator lost access"
 
 // alicePrincipalID is the principal ID of alice in the suite.
 const alicePrincipalID = "prn-alice"
+
+// groupPageLimit is the page size of a group listing of the suite.
+const groupPageLimit = 10
 
 // tokenLifetimeHours is the lifetime in hours of the tokens of the suite.
 const tokenLifetimeHours = 48
@@ -165,6 +171,7 @@ func mustRecord(t *testing.T, s Store, id, subject string, created int) tempadmi
 	r := tempadmin.TempAdmin{
 		CreatedAt:   at(created),
 		ExpiresAt:   at(created).Add(tempadmin.Lifetime),
+		EndedAt:     time.Time{},
 		PrincipalID: id,
 		Subject:     subject,
 		CreatedBy:   createdBy,
@@ -212,6 +219,10 @@ func testRoundTrip(t *testing.T, s Store) {
 	}
 
 	equalRecord(t, got, want)
+
+	if !got.EndedAt.IsZero() {
+		t.Fatalf("new record ended at %s, want no end", got.EndedAt)
+	}
 }
 
 func testBySubject(t *testing.T, s Store) {
@@ -237,6 +248,7 @@ func testDuplicate(t *testing.T, s Store) {
 	dup := tempadmin.TempAdmin{
 		CreatedAt:   at(minuteLater),
 		ExpiresAt:   at(minuteLater).Add(tempadmin.Lifetime),
+		EndedAt:     time.Time{},
 		PrincipalID: alicePrincipalID,
 		Subject:     "alice",
 		CreatedBy:   createdBy,
@@ -253,6 +265,7 @@ func testMissingPrincipal(t *testing.T, s Store) {
 	r := tempadmin.TempAdmin{
 		CreatedAt:   at(0),
 		ExpiresAt:   at(0).Add(tempadmin.Lifetime),
+		EndedAt:     time.Time{},
 		PrincipalID: "prn-ghost",
 		Subject:     "ghost",
 		CreatedBy:   createdBy,
@@ -309,6 +322,14 @@ func testExpire(t *testing.T, s Store) {
 	}
 
 	equalRecord(t, got, want)
+
+	if !got.EndedAt.Equal(at(minuteBase)) {
+		t.Fatalf("record ended at %s, want the time of the expiry entry %s", got.EndedAt, at(minuteBase))
+	}
+
+	if live, liveErr := s.GetTempAdmin(t.Context(), alicePrincipalID); liveErr != nil || live.EndedAt.IsZero() {
+		t.Fatalf("record after expiry = %+v, %v; want an ended record", live, liveErr)
+	}
 
 	p, err := s.GetPrincipal(t.Context(), alicePrincipalID)
 	if err != nil {
@@ -429,7 +450,78 @@ func testExpireEndsTokens(t *testing.T, s Store) {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
 
-	checkHostRevoked(t, s)
+	checkTokensRevoked(t, s)
+}
+
+// mustGroupMember makes the local group id and adds the principal
+// principalID to it.
+func mustGroupMember(t *testing.T, s Store, id, principalID string) {
+	t.Helper()
+
+	g := principal.Group{
+		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: "Group " + id, Description: "",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
+
+	if err := s.CreateGroup(t.Context(), g, entry(principal.GroupRef(id))); err != nil {
+		t.Fatalf("create group %q: %v", id, err)
+	}
+
+	m := principal.Membership{
+		AddedAt: at(0), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: principalID,
+		Source: "", SourceID: "", State: "", Pinned: false,
+	}
+
+	if err := s.AddMember(t.Context(), m, entry(principal.GroupRef(id)), nil); err != nil {
+		t.Fatalf("add %q to group %q: %v", principalID, id, err)
+	}
+}
+
+// mustRoleGrant gives the principal principalID a grant of role on the
+// installation.
+func mustRoleGrant(t *testing.T, s Store, id, principalID, role string) {
+	t.Helper()
+
+	g := access.Grant{
+		CreatedAt: at(0), Condition: nil, Object: identity.ServerObject(), ID: id, Role: role,
+		CreatedBy: tempadmin.HostSubject, Subject: access.Subject{Kind: access.SubjectPrincipal, ID: principalID},
+	}
+
+	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	if err := s.CreateGrant(t.Context(), g, fence, entry(access.GrantRef(g)), nil); err != nil {
+		t.Fatalf("grant %s to %q: %v", role, principalID, err)
+	}
+}
+
+// testExpireEndsAllAccess proves that the expiry ends every grant that the
+// principal holds, not only the site-administrator grant, and every group
+// membership of the principal, so no access stays after the window.
+func testExpireEndsAllAccess(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
+	mustGrant(t, s, "grt-alice", alicePrincipalID)
+	mustRoleGrant(t, s, "grt-alice-audit", alicePrincipalID, access.RoleAuditor)
+	mustGroupMember(t, s, "grp-ops", alicePrincipalID)
+
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	checkGrantsGone(t, s, alicePrincipalID)
+
+	groups, total, err := s.ListGroupsOf(t.Context(), alicePrincipalID, principal.Query{
+		After: "", Low: "", High: "", Limit: groupPageLimit,
+	})
+	if err != nil {
+		t.Fatalf("groups after expiry: %v", err)
+	}
+
+	if total != 0 || len(groups) != 0 {
+		t.Fatalf("groups after expiry = %+v (%d), want none", groups, total)
+	}
 }
 
 // disableBySweep disables the principal id through the inactivity sweep,
@@ -482,27 +574,20 @@ func checkGrantsGone(t *testing.T, s Store, id string) {
 	}
 }
 
-// checkHostRevoked fails unless the host-recovery token is revoked and the
-// token of another name still works.
-func checkHostRevoked(t *testing.T, s Store) {
+// checkTokensRevoked fails unless the host-recovery token and the token
+// of another name are both revoked.
+func checkTokensRevoked(t *testing.T, s Store) {
 	t.Helper()
 
-	host, err := s.GetToken(t.Context(), "tok-host")
-	if err != nil {
-		t.Fatalf("get host token after expiry: %v", err)
-	}
+	for _, id := range []string{"tok-host", "tok-laptop"} {
+		tok, err := s.GetToken(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get token %q after expiry: %v", id, err)
+		}
 
-	if host.RevokedAt.IsZero() {
-		t.Fatal("host token after expiry is not revoked")
-	}
-
-	other, err := s.GetToken(t.Context(), "tok-laptop")
-	if err != nil {
-		t.Fatalf("get other token after expiry: %v", err)
-	}
-
-	if !other.RevokedAt.IsZero() {
-		t.Fatal("token of another name is revoked, want only the host-recovery tokens ended")
+		if tok.RevokedAt.IsZero() {
+			t.Fatalf("token %q after expiry is not revoked, want every live token ended", id)
+		}
 	}
 }
 
@@ -521,7 +606,7 @@ func testExpireAfterManualDisable(t *testing.T, s Store) {
 	}
 
 	checkGrantsGone(t, s, alicePrincipalID)
-	checkHostRevoked(t, s)
+	checkTokensRevoked(t, s)
 }
 
 func testBySubjectAfterRecreate(t *testing.T, s Store) {

@@ -544,6 +544,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColCreatedBy,
 				"reason",
+				"ended_at_ms",
 			},
 		},
 		{

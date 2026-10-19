@@ -12,7 +12,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -34,6 +36,9 @@ var (
 	ErrExpired = errors.New("temporary administrator expired")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
+	// ErrSweepIncomplete reports a sweep in which the expiry or the review
+	// of at least one record failed.
+	ErrSweepIncomplete = errors.New("temporary administrator sweep incomplete")
 )
 
 // Lifetime is the longest time a temporary administrator works after its
@@ -51,9 +56,12 @@ const maxIDLength = 64
 // the host command passed. ExpiresAt is the end of the grant, at most
 // Lifetime after CreatedAt. CreatedBy names the host operator that made it,
 // and Reason holds the text that the host operator gave for the create.
+// EndedAt is the time the expiry ended the record, or the zero time while
+// it did not end.
 type TempAdmin struct {
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
+	EndedAt     time.Time
 	PrincipalID string
 	Subject     string
 	CreatedBy   string
@@ -67,9 +75,10 @@ func (r TempAdmin) ActiveAt(now time.Time) bool {
 }
 
 // Validate reports whether r holds usable values: a principal ID in ID
-// form, a subject that principal.ValidateSubject accepts, a named creator,
-// a reason that history.ValidateReason accepts, and an expiry after the
-// creation and at most Lifetime after it, in whole milliseconds.
+// form, a subject that principal.ValidateSubject accepts, a named creator
+// with no control or format character, a reason that ValidateReason
+// accepts, and an expiry after the creation and at most Lifetime after it,
+// in whole milliseconds.
 func (r TempAdmin) Validate() error {
 	if !ident.Valid(r.PrincipalID, maxIDLength) {
 		return fmt.Errorf("%w: principal %q", ErrInvalid, r.PrincipalID)
@@ -83,7 +92,11 @@ func (r TempAdmin) Validate() error {
 		return fmt.Errorf("%w: missing creator", ErrInvalid)
 	}
 
-	if err := history.ValidateReason(r.Reason); err != nil {
+	if hasHiddenRune(r.CreatedBy) {
+		return fmt.Errorf("%w: the creator holds a control or format character", ErrInvalid)
+	}
+
+	if err := ValidateReason(r.Reason); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
@@ -99,6 +112,30 @@ func (r TempAdmin) Validate() error {
 	}
 
 	return nil
+}
+
+// ValidateReason reports whether reason is a usable reason of a temporary
+// administrator: history.ValidateReason accepts it, and it holds no format
+// character, such as a direction override, that could hide text in the
+// audit log.
+func ValidateReason(reason string) error {
+	if err := history.ValidateReason(reason); err != nil {
+		return err
+	}
+
+	if hasHiddenRune(reason) {
+		return fmt.Errorf("%w: the reason holds a format character", history.ErrInvalidReason)
+	}
+
+	return nil
+}
+
+// hasHiddenRune reports whether s holds a control character (Cc) or a
+// format character (Cf).
+func hasHiddenRune(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)
+	})
 }
 
 // ReviewUse returns the break-glass use of r that ends at end: the expiry
@@ -166,16 +203,17 @@ type Store interface {
 	// the subject subject, or ErrNotFound.
 	GetTempAdminBySubject(ctx context.Context, subject string) (TempAdmin, error)
 	// ListTempAdmins returns every record, ordered by expiry. Expired
-	// records stay listed: the expiry keeps them as tombstones, so a
-	// caller whose record is not active is still denied.
+	// records stay listed with their EndedAt: the expiry keeps them as
+	// tombstones, so a caller whose record is not active is still denied.
 	ListTempAdmins(ctx context.Context) ([]TempAdmin, error)
 	// ExpireTempAdmin ends the temporary administrator of the principal
-	// principalID at e.At, with the entry e: it disables the principal,
-	// ends every site-administrator grant of the principal on the
-	// installation, ends the host-recovery tokens of the principal, and
-	// keeps the record as a tombstone, so a later use is still denied. It
-	// returns ErrNotFound when no record exists, and ErrExpired when the
-	// record already ended: a repeated expiry writes no second entry.
+	// principalID at e.At, with the entry e, in one transaction: it sets
+	// the EndedAt of the record, disables the principal, ends every grant
+	// that the principal holds and every grant on it, ends every group
+	// membership of the principal and every live token of the principal,
+	// and keeps the record as a tombstone, so a later use is still denied.
+	// It returns ErrNotFound when no record exists, and ErrExpired when
+	// the record already ended: a repeated expiry writes no second entry.
 	ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error
 }
 

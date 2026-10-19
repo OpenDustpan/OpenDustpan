@@ -1,7 +1,6 @@
 package accesstoken_test
 
 import (
-	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -44,7 +43,7 @@ func newHostFixture(t *testing.T) hostFixture {
 
 	f.svc = svc
 
-	temps, err := tempadmin.NewService(tempadmin.Config{Store: f.store, Reviews: nil, Now: f.clock.Now})
+	temps, err := tempadmin.NewService(tempadmin.Config{Store: f.store, Reviews: nil, Now: f.clock.Now, Logger: nil})
 	if err != nil {
 		t.Fatalf("temporary administrator service: %v", err)
 	}
@@ -79,155 +78,6 @@ func hostCaller() identity.Principal {
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: tempadmin.HostSubject, DisplayName: tempadmin.HostSubject, Admin: true,
 		TokenID: "", TokenExpiresAt: time.Time{},
-	}
-}
-
-// TestHostIssuerFirstToken issues the first token and proves its name,
-// creator, expiry, use and audit entry.
-func TestHostIssuerFirstToken(t *testing.T) {
-	t.Parallel()
-
-	f := newHostFixture(t)
-	ctx := t.Context()
-	expires := f.clock.Now().Add(time.Hour)
-
-	tok, secret, err := f.issuer.IssueFirstToken(ctx, hostAuditEntry(), f.person.ID, expires)
-	if err != nil {
-		t.Fatalf("issue first token: %v", err)
-	}
-
-	if tok.Name != tempadmin.HostTokenName || tok.CreatedBy != tempadmin.HostSubject ||
-		tok.PrincipalID != f.person.ID || !tok.ExpiresAt.Equal(expires) {
-		t.Fatalf("token = %+v, want the host token of the person that ends at %s", tok, expires)
-	}
-
-	if _, authErr := f.svc.AuthenticateToken(ctx, secret.Reveal()); authErr != nil {
-		t.Fatalf("authenticate before expiry: %v", authErr)
-	}
-
-	requireHostTokenAudit(ctx, t, &f, tok)
-
-	f.clock.Advance(time.Hour + time.Millisecond)
-
-	if _, authErr := f.svc.AuthenticateToken(ctx, secret.Reveal()); !errors.Is(authErr, identity.ErrUnauthenticated) {
-		t.Fatalf("authenticate after expiry: err = %v, want ErrUnauthenticated", authErr)
-	}
-}
-
-// requireHostTokenAudit proves that exactly one audit entry records the
-// creation of the host token tok.
-func requireHostTokenAudit(ctx context.Context, t *testing.T, f *hostFixture, tok accesstoken.Token) {
-	t.Helper()
-
-	listing, err := f.store.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
-	if err != nil {
-		t.Fatalf("list audit entries: %v", err)
-	}
-
-	var found int
-
-	for i := range listing.Entries {
-		e := listing.Entries[i]
-		if e.Action == string(identity.ActionServerManageTokens) && e.Subject == tempadmin.HostSubject &&
-			e.Object == accesstoken.TokenRef(f.person.ID, tok.ID) && e.Outcome == audit.OutcomeSuccess {
-			found++
-		}
-	}
-
-	if found != 1 {
-		t.Fatalf("audit entries for the host token = %d, want 1 in %+v", found, listing.Entries)
-	}
-}
-
-// TestHostIssuerRefusals proves that the exception stays narrow: each other
-// token the host asks for gets ErrNotOwnToken.
-func TestHostIssuerRefusals(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		run  func(t *testing.T, f hostFixture) error
-	}{
-		{"second token", func(t *testing.T, f hostFixture) error {
-			t.Helper()
-
-			_, _, err := f.issuer.IssueFirstToken(
-				t.Context(), hostAuditEntry(), f.person.ID, f.clock.Now().Add(time.Hour),
-			)
-			if err != nil {
-				t.Fatalf("first token: %v", err)
-			}
-
-			_, _, err = f.issuer.IssueFirstToken(
-				t.Context(), hostAuditEntry(), f.person.ID, f.clock.Now().Add(time.Hour),
-			)
-
-			return err
-		}},
-		{"token of a service principal", func(t *testing.T, f hostFixture) error {
-			t.Helper()
-
-			_, _, err := f.issuer.IssueFirstToken(
-				t.Context(), hostAuditEntry(), f.service.ID, f.clock.Now().Add(time.Hour),
-			)
-
-			return err
-		}},
-		{"person with no temporary administrator record", func(t *testing.T, f hostFixture) error {
-			t.Helper()
-
-			other, err := f.principals.CreatePrincipal(t.Context(), caller(),
-				principal.Input{Subject: "bob@example.com", DisplayName: "", Kind: principal.KindPerson})
-			if err != nil {
-				t.Fatalf("create person: %v", err)
-			}
-
-			_, _, err = f.issuer.IssueFirstToken(
-				t.Context(), hostAuditEntry(), other.ID, f.clock.Now().Add(time.Hour),
-			)
-
-			return err
-		}},
-		{"person made long ago", func(t *testing.T, f hostFixture) error {
-			t.Helper()
-
-			f.clock.Advance(accesstoken.HostFirstTokenWindow + time.Minute)
-
-			_, _, err := f.issuer.IssueFirstToken(
-				t.Context(), hostAuditEntry(), f.person.ID, f.clock.Now().Add(time.Hour),
-			)
-
-			return err
-		}},
-		{"expiry beyond the temporary administrator lifetime", func(t *testing.T, f hostFixture) error {
-			t.Helper()
-
-			_, _, err := f.issuer.IssueFirstToken(
-				t.Context(), hostAuditEntry(), f.person.ID, f.clock.Now().Add(tempadmin.Lifetime+time.Hour),
-			)
-
-			return err
-		}},
-		{"expiry in the past", func(t *testing.T, f hostFixture) error {
-			t.Helper()
-
-			_, _, err := f.issuer.IssueFirstToken(
-				t.Context(), hostAuditEntry(), f.person.ID, f.clock.Now().Add(-time.Hour),
-			)
-
-			return err
-		}},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			err := tc.run(t, newHostFixture(t))
-			if !errors.Is(err, accesstoken.ErrNotOwnToken) || !errors.Is(err, identity.ErrDenied) {
-				t.Fatalf("err = %v, want ErrNotOwnToken wrapped with ErrDenied", err)
-			}
-		})
 	}
 }
 
@@ -267,13 +117,16 @@ func TestHostIssuerNeedsReader(t *testing.T) {
 }
 
 // TestHostIssuerOnlyInHostCommand proves that no package of the module
-// but the host command in cmd/opendustpan reaches the host issuer. It lists
-// every package with go list and reads each non-test file of each one.
+// but the host command in cmd/opendustpan reaches the host issuer, and that
+// no package but this one and its conformance suite calls
+// CreateHostRecovery. It lists every package
+// with go list and reads each non-test file of each one.
 func TestHostIssuerOnlyInHostCommand(t *testing.T) {
 	t.Parallel()
 
 	const (
 		self  = "opendustpan.org/opendustpan/pkg/accesstoken"
+		suite = self + "/accesstokentest"
 		host  = "opendustpan.org/opendustpan/cmd/opendustpan"
 		lines = "{{.ImportPath}}|{{.Dir}}|{{join .GoFiles \",\"}}"
 	)
@@ -290,16 +143,30 @@ func TestHostIssuerOnlyInHostCommand(t *testing.T) {
 		}
 
 		for name := range strings.SplitSeq(parts[2], ",") {
-			if usesHostIssuer(t, filepath.Join(parts[1], name), self) && parts[0] != host {
+			uses := hostUsesOf(t, filepath.Join(parts[1], name), self)
+
+			if uses.issuer && parts[0] != host {
 				t.Errorf("%s/%s uses the host issuer: only %s may", parts[0], name, host)
+			}
+
+			if uses.recovery && parts[0] != suite {
+				t.Errorf("%s/%s calls CreateHostRecovery: only the host issuer of %s may", parts[0], name, self)
 			}
 		}
 	}
 }
 
-// usesHostIssuer reports whether the Go file path names HostIssuer or
-// NewHostIssuer of the package self.
-func usesHostIssuer(t *testing.T, path, self string) bool {
+// hostUses holds what one Go file names of the host path: the host issuer
+// of the package accesstoken, and the store method CreateHostRecovery.
+type hostUses struct {
+	issuer   bool
+	recovery bool
+}
+
+// hostUsesOf reports whether the Go file path names HostIssuer or
+// NewHostIssuer of the package self, and whether it names a method or a
+// field CreateHostRecovery of any value.
+func hostUsesOf(t *testing.T, path, self string) hostUses {
 	t.Helper()
 
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
@@ -320,11 +187,7 @@ func usesHostIssuer(t *testing.T, path, self string) bool {
 		}
 	}
 
-	if alias == "" {
-		return false
-	}
-
-	found := false
+	var uses hostUses
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
@@ -332,15 +195,19 @@ func usesHostIssuer(t *testing.T, path, self string) bool {
 			return true
 		}
 
-		if x, isIdent := sel.X.(*ast.Ident); isIdent && x.Name == alias &&
-			(sel.Sel.Name == "HostIssuer" || sel.Sel.Name == "NewHostIssuer") {
-			found = true
+		if sel.Sel.Name == "CreateHostRecovery" {
+			uses.recovery = true
 		}
 
-		return !found
+		if x, isIdent := sel.X.(*ast.Ident); isIdent && alias != "" && x.Name == alias &&
+			(sel.Sel.Name == "HostIssuer" || sel.Sel.Name == "NewHostIssuer") {
+			uses.issuer = true
+		}
+
+		return true
 	})
 
-	return found
+	return uses
 }
 
 // TestHostIssuerRecover makes a temporary administrator in one call and

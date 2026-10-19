@@ -33,117 +33,6 @@ func hostToken(id, principalID string, created time.Time) accesstoken.Token {
 	}
 }
 
-// newTempAdminPerson makes the person id at made with a record that
-// starts at made and works for a day.
-func newTempAdminPerson(t *testing.T, s Store, id string, made time.Time) {
-	t.Helper()
-
-	mustPrincipalAt(t, s, id, principal.KindPerson, made)
-	mustTempAdmin(t, s, id, id, made)
-}
-
-func testFirstHostToken(t *testing.T, s Store) {
-	t.Helper()
-
-	made := at(10)
-	newTempAdminPerson(t, s, "prn-temp", made)
-
-	tok := hostToken("tok-1", "prn-temp", made.Add(time.Minute))
-	if err := s.CreateFirstHostToken(t.Context(), tok, digest(1), entryAt("tok-1", tok.CreatedAt)); err != nil {
-		t.Fatalf("first host token: %v", err)
-	}
-
-	equalToken(t, mustGet(t, s, "tok-1"), tok)
-
-	again := hostToken("tok-2", "prn-temp", made.Add(2*time.Minute))
-	err := s.CreateFirstHostToken(t.Context(), again, digest(2), entryAt("tok-2", again.CreatedAt))
-	wantErr(t, "second host token", err, accesstoken.ErrNotOwnToken)
-}
-
-func testFirstHostTokenRefusals(t *testing.T, s Store) {
-	t.Helper()
-
-	made := at(10)
-
-	newTempAdminPerson(t, s, "prn-temp", made)
-	mustPrincipalAt(t, s, "prn-plain", principal.KindPerson, made)
-	mustPrincipalAt(t, s, "prn-svc", principal.KindService, made)
-	mustTempAdmin(t, s, "prn-svc", "prn-svc", made)
-
-	late := hostToken("tok-late", "prn-temp", made.Add(accesstoken.HostFirstTokenWindow+time.Millisecond))
-	early := hostToken("tok-early", "prn-temp", made.Add(-time.Millisecond))
-	long := hostToken("tok-long", "prn-temp", made.Add(time.Minute))
-	long.ExpiresAt = made.Add(tempadmin.Lifetime + time.Millisecond)
-
-	cases := []struct {
-		tok  accesstoken.Token
-		name string
-	}{
-		{name: "no record", tok: hostToken("tok-plain", "prn-plain", made.Add(time.Minute))},
-		{name: "not a person", tok: hostToken("tok-svc", "prn-svc", made.Add(time.Minute))},
-		{name: "after the window", tok: late},
-		{name: "before the person", tok: early},
-		{name: "past the record", tok: long},
-		{name: "no principal", tok: hostToken("tok-none", "prn-none", made.Add(time.Minute))},
-	}
-
-	for i := range cases {
-		c := &cases[i]
-		err := s.CreateFirstHostToken(t.Context(), c.tok, digest(10+i), entryAt(c.tok.ID, c.tok.CreatedAt))
-		wantErr(t, c.name, err, accesstoken.ErrNotOwnToken)
-
-		if _, err := s.GetToken(t.Context(), c.tok.ID); !errors.Is(err, accesstoken.ErrNotFound) {
-			t.Fatalf("%s: token read = %v, want ErrNotFound", c.name, err)
-		}
-	}
-
-	ended := made.Add(tempadmin.Lifetime)
-	expired := hostToken("tok-expired", "prn-temp", ended)
-	expired.ExpiresAt = ended.Add(time.Hour)
-
-	err := s.CreateFirstHostToken(t.Context(), expired, digest(30), entryAt("tok-expired", ended))
-	wantErr(t, "expired record", err, accesstoken.ErrNotOwnToken)
-}
-
-func testConcurrentFirstHostTokens(t *testing.T, s Store) {
-	t.Helper()
-
-	made := at(10)
-	newTempAdminPerson(t, s, "prn-temp", made)
-
-	const writers = 2
-
-	errs := make([]error, writers)
-
-	var wg sync.WaitGroup
-
-	for i := range writers {
-		wg.Go(func() {
-			id := "tok-" + strconv.Itoa(i)
-			tok := hostToken(id, "prn-temp", made.Add(time.Minute))
-			errs[i] = s.CreateFirstHostToken(t.Context(), tok, digest(i), entryAt(id, tok.CreatedAt))
-		})
-	}
-
-	wg.Wait()
-
-	won := 0
-
-	for i, err := range errs {
-		switch {
-		case err == nil:
-			won++
-		case errors.Is(err, accesstoken.ErrNotOwnToken):
-		default:
-			t.Fatalf("issue %d: %v, want nil or ErrNotOwnToken", i, err)
-		}
-	}
-
-	if won != 1 {
-		t.Fatalf("%d issues won, want 1", won)
-	}
-}
-
 // recovery returns a host recovery of the person id, named by subject, at
 // the time when.
 func recovery(id, subject string, when time.Time) accesstoken.HostRecovery {
@@ -161,7 +50,7 @@ func recovery(id, subject string, when time.Time) accesstoken.HostRecovery {
 	}
 
 	rec := tempadmin.TempAdmin{
-		CreatedAt: when, ExpiresAt: when.Add(time.Hour), PrincipalID: id, Subject: subject,
+		CreatedAt: when, ExpiresAt: when.Add(time.Hour), EndedAt: time.Time{}, PrincipalID: id, Subject: subject,
 		CreatedBy: "operator", Reason: "every administrator lost access",
 	}
 
@@ -221,6 +110,12 @@ func testHostRecoveryRollsBack(t *testing.T, s Store) {
 	bad := recovery("prn-bad", "carol", at(10))
 	bad.TokenEntry.Subject = ""
 
+	late := recovery("prn-late", "dave", at(10))
+	late.Token.CreatedAt = late.Person.CreatedAt.Add(accesstoken.HostFirstTokenWindow + time.Millisecond)
+
+	early := recovery("prn-early", "erin", at(10))
+	early.Token.CreatedAt = early.Person.CreatedAt.Add(-time.Millisecond)
+
 	cases := []struct {
 		want error
 		name string
@@ -228,6 +123,8 @@ func testHostRecoveryRollsBack(t *testing.T, s Store) {
 	}{
 		{name: "token past the record", r: long, want: accesstoken.ErrNotOwnToken},
 		{name: "refused entry", r: bad, want: audit.ErrInvalidEntry},
+		{name: "token after the window", r: late, want: accesstoken.ErrNotOwnToken},
+		{name: "token before the person", r: early, want: accesstoken.ErrNotOwnToken},
 	}
 
 	for i := range cases {
@@ -245,5 +142,48 @@ func testHostRecoveryRollsBack(t *testing.T, s Store) {
 		if _, err := s.GetToken(ctx, c.r.Token.ID); !errors.Is(err, accesstoken.ErrNotFound) {
 			t.Fatalf("%s: token read = %v, want ErrNotFound", c.name, err)
 		}
+	}
+}
+
+func testConcurrentHostRecoveries(t *testing.T, s Store) {
+	t.Helper()
+
+	const writers = 2
+
+	errs := make([]error, writers)
+
+	var wg sync.WaitGroup
+
+	for i := range writers {
+		wg.Go(func() {
+			r := recovery("prn-temp-"+strconv.Itoa(i), "alice", at(10))
+			r.Digest = digest(i)
+			errs[i] = s.CreateHostRecovery(t.Context(), &r)
+		})
+	}
+
+	wg.Wait()
+
+	won := 0
+
+	for i, err := range errs {
+		id := "prn-temp-" + strconv.Itoa(i)
+
+		switch {
+		case err == nil:
+			won++
+
+			equalToken(t, mustGet(t, s, "tok-"+id), recovery(id, "alice", at(10)).Token)
+		case errors.Is(err, principal.ErrAlreadyExists):
+			if _, getErr := s.GetToken(t.Context(), "tok-"+id); !errors.Is(getErr, accesstoken.ErrNotFound) {
+				t.Fatalf("token of the refused recovery %d: %v, want ErrNotFound", i, getErr)
+			}
+		default:
+			t.Fatalf("recovery %d: %v, want nil or principal.ErrAlreadyExists", i, err)
+		}
+	}
+
+	if won != 1 {
+		t.Fatalf("%d recoveries won, want 1", won)
 	}
 }

@@ -296,7 +296,7 @@ var Settings = []*Setting{
 	),
 	stringSetting(
 		"reason", "", "",
-		"reason for the temporary administrator, stored in its audit entry and its review",
+		"reason for the temporary administrator, stored in the audit entry of the create",
 		referenceNone,
 	),
 	stringSetting(

@@ -16,18 +16,31 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
-// hostTestDB returns a fresh SQLite database URL in a temporary directory.
+// hostTestDB returns the SQLite database URL of a fresh, migrated database
+// in a temporary directory, as serve leaves it: the host command applies no
+// migration.
 func hostTestDB(t *testing.T) string {
 	t.Helper()
 
-	return "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+	db := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+
+	st, err := openStore(t.Context(), db, slog.New(slog.DiscardHandler), openMigrate)
+	if err != nil {
+		t.Fatalf("migrate the test database: %v", err)
+	}
+
+	st.close()
+
+	return db
 }
 
 // runHost runs the host command with args and returns its standard output.
+// It proves that the command writes the review note to standard error.
 func runHost(ctx context.Context, t *testing.T, args ...string) string {
 	t.Helper()
 
@@ -35,6 +48,10 @@ func runHost(ctx context.Context, t *testing.T, args ...string) string {
 
 	if err := run(ctx, args, &stdout, &stderr); err != nil {
 		t.Fatalf("host %s: %v (%s)", strings.Join(args, " "), err, stderr.String())
+	}
+
+	if stderr.String() != hostReviewNote+"\n" {
+		t.Fatalf("host stderr = %q, want the review note line", stderr.String())
 	}
 
 	return stdout.String()
@@ -86,7 +103,7 @@ func parseHostOutput(t *testing.T, out string) hostCredentials {
 func openHostStore(ctx context.Context, t *testing.T, db string) *sqlite.Store {
 	t.Helper()
 
-	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler))
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -315,7 +332,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	ctx := t.Context()
 	db := hostTestDB(t)
 
-	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler))
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -448,7 +465,7 @@ func TestHostShortPolicyLifetime(t *testing.T) {
 func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped time.Duration) {
 	t.Helper()
 
-	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler))
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -560,7 +577,7 @@ func TestHostFailureLeavesNothing(t *testing.T) {
 
 	ctx := t.Context()
 
-	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler), openMigrate)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -696,7 +713,7 @@ func TestHostOffOpensNoStore(t *testing.T) { //nolint:paralleltest // It swaps t
 
 	t.Cleanup(func() { openStore = saved })
 
-	openStore = func(context.Context, string, *slog.Logger) (store, error) {
+	openStore = func(context.Context, string, *slog.Logger, openMode) (store, error) {
 		t.Fatal("the host command opened a store")
 
 		return nil, errHostOff
@@ -749,5 +766,91 @@ func TestHostReason(t *testing.T) {
 
 	if got, err := hostReason(" from the flag ", noTerminal, &stderr); err != nil || got != "from the flag" {
 		t.Fatalf("flag reason = %q, %v; want the flag value", got, err)
+	}
+}
+
+// TestHostWritesTheReviewNote proves that a host run writes the one line
+// that says no break-glass review opens, on standard error and not on
+// standard output.
+func TestHostWritesTheReviewNote(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"host", "create-temp-admin", "--reason", "test recovery", "--database", hostTestDB(t), "alice"}
+
+	if err := run(t.Context(), args, &stdout, &stderr); err != nil {
+		t.Fatalf("host run: %v", err)
+	}
+
+	const want = "note: no break-glass review opens for this temporary administrator yet: " +
+		"review its audit entries by hand after the expiry\n"
+
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+	}
+
+	if strings.Contains(stdout.String(), "note:") {
+		t.Fatalf("stdout = %q, want no note", stdout.String())
+	}
+}
+
+// TestHostRefusesPendingMigrations proves that the host command applies no
+// migration: on a database with a pending migration it refuses, names the
+// command that applies them, and leaves the schema as it was.
+func TestHostRefusesPendingMigrations(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice"}
+
+	err := run(ctx, args, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("host run on an empty database succeeded, want a refusal")
+	}
+
+	if !errors.Is(err, errHostMigrationsPending) || !errors.Is(err, schema.ErrMigrationsPending) {
+		t.Fatalf("host run on an empty database = %v, want errHostMigrationsPending", err)
+	}
+
+	if !strings.Contains(err.Error(), "opendustpan serve --database "+db) {
+		t.Fatalf("refusal = %v, want the serve command that applies the migrations", err)
+	}
+
+	st := openHostStore(ctx, t, db)
+
+	if list, listErr := st.ListTempAdmins(ctx); listErr != nil || len(list) != 0 {
+		t.Fatalf("records after the refusal = %+v, %v; want none", list, listErr)
+	}
+}
+
+// TestHostReadsTheModeThroughLookup proves that the command reads
+// DUSTPAN_RECOVERY_MODE through its environment lookup, as it reads the off
+// switch, and refuses the mode none before it opens a store.
+func TestHostReadsTheModeThroughLookup(t *testing.T) { //nolint:paralleltest // It swaps the package opener.
+	saved := openStore
+
+	t.Cleanup(func() { openStore = saved })
+
+	openStore = func(context.Context, string, *slog.Logger, openMode) (store, error) {
+		t.Fatal("the host command opened a store")
+
+		return nil, errHostModeNone
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	in := hostIO{
+		stdin: strings.NewReader(""), terminal: false,
+		lookup: envOf(map[string]string{"DUSTPAN_RECOVERY_MODE": modeNone}),
+	}
+
+	err := hostCreateTempAdminWithIO(t.Context(), []string{"--reason", "lost access", "alice"}, in, &stdout, &stderr)
+	if !errors.Is(err, errHostModeNone) {
+		t.Fatalf("host run with DUSTPAN_RECOVERY_MODE=none: err = %v, want errHostModeNone", err)
 	}
 }

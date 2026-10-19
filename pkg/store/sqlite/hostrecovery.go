@@ -14,23 +14,11 @@ import (
 
 var _ accesstoken.HostStore = (*Store)(nil)
 
-// CreateFirstHostToken implements accesstoken.HostStore. The transaction
-// holds the write lock of the database, so two calls for one principal run
-// one after the other, and the second finds the token of the first.
-func (s *Store) CreateFirstHostToken(
-	ctx context.Context, t accesstoken.Token, d accesstoken.Digest, e audit.Entry,
-) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return insertFirstHostToken(ctx, q, t, d)
-	})
-}
-
 // CreateHostRecovery implements accesstoken.HostStore: the person, the
 // grant, the record and the token of r, and their four entries, in one
 // transaction.
+// The transaction holds the write lock of the database, so two recoveries
+// run one after the other, and the second reads the rows of the first.
 func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecovery) error {
 	entries, err := hostRecoveryEntries(r)
 	if err != nil {
@@ -95,8 +83,8 @@ func insertHostRecovery(ctx context.Context, q *db.Queries, r *accesstoken.HostR
 	return insertFirstHostToken(ctx, q, r.Token, r.Digest)
 }
 
-// insertFirstHostToken inserts t in the transaction of q when every check
-// of accesstoken.HostStore.CreateFirstHostToken holds, or returns
+// insertFirstHostToken inserts t in the transaction of q when every token
+// check of accesstoken.HostStore.CreateHostRecovery holds, or returns
 // accesstoken.ErrNotOwnToken.
 func insertFirstHostToken(ctx context.Context, q *db.Queries, t accesstoken.Token, d accesstoken.Digest) error {
 	n, err := q.CreateFirstHostToken(ctx, db.CreateFirstHostTokenParams{

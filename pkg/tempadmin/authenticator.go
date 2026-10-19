@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -16,8 +17,9 @@ import (
 // tombstone. Store implements it.
 type Expirer interface {
 	// ExpireTempAdmin ends the temporary administrator of the principal
-	// principalID at e.At, with the entry e. It returns ErrNotFound when
-	// no record exists, and ErrExpired when the record already ended.
+	// principalID at e.At, with the entry e, as Store.ExpireTempAdmin
+	// does. It returns ErrNotFound when no record exists, and ErrExpired
+	// when the record already ended.
 	ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error
 }
 
@@ -60,6 +62,9 @@ type DecoratorConfig struct {
 	Audit audit.ServerStore
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
+	// Logger takes a warning for each record that a use after the expiry
+	// ends, and for each such expiry that fails. Nil discards them.
+	Logger *slog.Logger
 }
 
 // Decorator is an identity.Authenticator that marks the temporary
@@ -81,12 +86,13 @@ type Decorator struct {
 	expirer    Expirer
 	audit      audit.ServerStore
 	now        func() time.Time
+	logger     *slog.Logger
 }
 
 var _ identity.Authenticator = (*Decorator)(nil)
 
-// NewDecorator returns a Decorator. Every dependency but Request and Now is
-// required.
+// NewDecorator returns a Decorator. Every dependency but Request, Now and
+// Logger is required.
 func NewDecorator(cfg DecoratorConfig) (*Decorator, error) {
 	switch {
 	case cfg.Next == nil:
@@ -111,9 +117,14 @@ func NewDecorator(cfg DecoratorConfig) (*Decorator, error) {
 		request = func(context.Context) Request { return Request{SourceIP: "", RequestID: ""} }
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
 	return &Decorator{
 		next: cfg.Next, records: cfg.Records, principals: cfg.Principals, request: request,
-		expirer: cfg.Expirer, audit: cfg.Audit, now: now,
+		expirer: cfg.Expirer, audit: cfg.Audit, now: now, logger: logger,
 	}, nil
 }
 
@@ -259,7 +270,9 @@ func (d *Decorator) ownsRecord(ctx context.Context, subject string, rec TempAdmi
 // expire ends the expired record rec with an expiry entry, then denies
 // the use. The record stays as a tombstone, so a later use is denied too.
 // Any store failure denies the use as well, so no use passes without its
-// record ending first.
+// record ending first. A failure is logged with the principal and no
+// driver text. A record that this use ends logs that no break-glass review
+// opens for it.
 func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 	now := d.Now()
 	req := d.request(ctx)
@@ -268,7 +281,7 @@ func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 		FenceVersion: 0,
 		At:           time.Time{},
 		Namespace:    "",
-		Subject:      rec.Subject,
+		Subject:      SweepSubject,
 		IDPSubject:   "",
 		TokenID:      "",
 		Action:       "",
@@ -288,8 +301,13 @@ func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 		Hash:         "",
 		Sequence:     0,
 	}, now, Ref(rec.PrincipalID)))
-	if err != nil {
-		return fmt.Errorf("%w: %w", identity.ErrUnauthenticated, ErrExpired)
+
+	switch {
+	case err == nil:
+		warnNoReview(ctx, d.logger, rec.PrincipalID)
+	case errors.Is(err, ErrExpired), errors.Is(err, ErrNotFound):
+	default:
+		d.logger.WarnContext(ctx, "temporary administrator expiry failed", slog.String("principal", rec.PrincipalID))
 	}
 
 	return fmt.Errorf("%w: %w", identity.ErrUnauthenticated, ErrExpired)
