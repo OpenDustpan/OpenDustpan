@@ -319,9 +319,12 @@ func TestCallerAccessGrantedBy(t *testing.T) {
 	f.seed(t, "erin", "", identity.Object{})
 
 	// unit:read-secrets is missing for the caller. The built-in roles
-	// that hold it are secret-viewer, admin, account-administrator and
-	// site-administrator, in catalog order.
-	wantBuiltIn := []string{"secret-viewer", "admin", "account-administrator", "site-administrator"}
+	// that hold it are secret-viewer, writer, maintainer, admin,
+	// account-administrator and site-administrator, in catalog order.
+	wantBuiltIn := []string{
+		"secret-viewer", "writer", "maintainer", "admin",
+		"account-administrator", "site-administrator",
+	}
 
 	got := callerMissing(t, f, "erin", "acme")
 	if len(got.Actions) != 0 || len(got.Grants) != 0 || got.Object != "acme" {

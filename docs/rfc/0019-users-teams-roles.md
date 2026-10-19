@@ -220,7 +220,10 @@ Lead decisions under owner delegation, 2026-10-13:
   the owner: `viewer`, `auditor`, `secret-viewer`, `writer`, `maintainer` and
   `admin`. `docs/research/m4-built-in-roles.md` gives the facts behind it.
   `pkg/access/roles.go` holds the actions of each role. A planner role waits
-  for a route that separates a plan from an apply.
+  for a route that separates a plan from an apply. On 2026-10-19 the owner
+  decided that `writer` and `maintainer` also hold `unit:read-secrets`: a
+  role that can apply can read every secret value of the state. Benchmark:
+  HCP Terraform workspace Write includes read and write of state versions.
 - Grant history. A revoke ends a grant and keeps its row, and the delete of
   a custom role ends the role. A delete of a principal or a group revokes
   its grants in the same transaction. Each grant and role change writes its

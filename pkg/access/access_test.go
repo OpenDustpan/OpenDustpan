@@ -327,6 +327,7 @@ func TestContainment(t *testing.T) {
 		{identity.NamespaceObject("acme"), identity.ActionNamespaceRead, true},
 		{other, read, false},
 		{web, identity.ActionUnitWrite, false},
+		{web, identity.ActionUnitReadSecrets, false},
 	})
 	assertChecks(t, f.authz, coll, []check{
 		{web, read, true},
@@ -351,7 +352,10 @@ func TestGroupGrants(t *testing.T) {
 
 	f.grant(t, ops, access.RoleWriter, identity.NamespaceObject("acme"))
 
-	assertChecks(t, f.authz, member, []check{{web, identity.ActionUnitWrite, true}})
+	assertChecks(t, f.authz, member, []check{
+		{web, identity.ActionUnitWrite, true},
+		{web, identity.ActionUnitReadSecrets, true},
+	})
 	assertChecks(t, f.authz, outsider, []check{{web, identity.ActionUnitRead, false}})
 
 	err := f.store.RemoveMember(
