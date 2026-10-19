@@ -2,9 +2,11 @@ package gate
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/pkg/catalog"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -42,10 +44,13 @@ func (l Level) segments() (int, bool) {
 	}
 }
 
-// maxSegmentLength bounds a blueprint name, a blueprint version and a
-// profile name in a scope key, before encoding. The owner package of each
-// object keeps its own stricter rules.
+// maxSegmentLength bounds a profile name in a scope key, before encoding.
 const maxSegmentLength = 300
+
+// MaxScopeKeyLength is the length in bytes of the longest scope key: a unit
+// scope with a namespace of 100 bytes, a tool of 100 bytes and a name of 300
+// bytes that each encode to three bytes. ParseScopeKey refuses a longer key.
+const MaxScopeKeyLength = len("unit/") + 100 + len("/") + 100 + len("/") + 3*300
 
 // Scope is where a gate, an access limit, an approval rule, an ownership
 // rule, a path set or a setting applies. Its scope key is one of:
@@ -54,7 +59,7 @@ const maxSegmentLength = 300
 //	namespace/<namespace>
 //	collection/<namespace>/<collection>
 //	unit/<namespace>/<tool>/<name>
-//	blueprint/<blueprint>/<version>
+//	blueprint/<blueprint>/<version number>
 //	profile/<namespace>/<profile>
 //
 // Each variable segment is percent-encoded, so a segment never holds '/'.
@@ -96,16 +101,19 @@ func UnitScope(ns namespace.Name, tool, name string) (Scope, error) {
 }
 
 // BlueprintScope returns the scope of one blueprint version: the blueprint
-// name and the version string.
-func BlueprintScope(name, version string) (Scope, error) {
-	if !validSegment(name) || !validSegment(version) {
-		return Scope{}, fmt.Errorf("%w: blueprint scope %q version %q", ErrInvalid, name, version)
+// name, which must pass catalog.ValidName, and the version number, from 1.
+// The key follows the current decision and holds no namespace.
+func BlueprintScope(name string, version int) (Scope, error) {
+	if !catalog.ValidName(name) || version < 1 {
+		return Scope{}, fmt.Errorf("%w: blueprint scope %q version %d", ErrInvalid, name, version)
 	}
 
-	return Scope{level: LevelBlueprint, seg: [3]string{name, version, ""}}, nil
+	return Scope{level: LevelBlueprint, seg: [3]string{name, strconv.Itoa(version), ""}}, nil
 }
 
-// ProfileScope returns the scope of the profile name of ns.
+// ProfileScope returns the scope of the profile name of ns. No owner package
+// of profiles holds a name grammar yet, so the name is 1 to 300 bytes of
+// valid UTF-8.
 func ProfileScope(ns namespace.Name, name string) (Scope, error) {
 	if !validSegment(name) {
 		return Scope{}, fmt.Errorf("%w: profile scope %q", ErrInvalid, name)
@@ -114,8 +122,8 @@ func ProfileScope(ns namespace.Name, name string) (Scope, error) {
 	return Scope{level: LevelProfile, seg: [3]string{ns.String(), name, ""}}, nil
 }
 
-// validSegment reports whether s can be a blueprint or profile segment:
-// 1 to 300 bytes of valid UTF-8.
+// validSegment reports whether s can be a profile segment: 1 to 300 bytes of
+// valid UTF-8.
 func validSegment(s string) bool {
 	return s != "" && len(s) <= maxSegmentLength && utf8.ValidString(s)
 }
@@ -168,17 +176,22 @@ func (s Scope) Unit() (identity.Object, bool) {
 // BlueprintVersion names one version of one blueprint.
 type BlueprintVersion struct {
 	Name    string
-	Version string
+	Version int
 }
 
 // Blueprint returns the blueprint version of a blueprint scope, and false
 // for any other level.
 func (s Scope) Blueprint() (BlueprintVersion, bool) {
 	if s.level != LevelBlueprint {
-		return BlueprintVersion{Name: "", Version: ""}, false
+		return BlueprintVersion{Name: "", Version: 0}, false
 	}
 
-	return BlueprintVersion{Name: s.seg[0], Version: s.seg[1]}, true
+	v, err := strconv.Atoi(s.seg[1])
+	if err != nil {
+		return BlueprintVersion{Name: "", Version: 0}, false
+	}
+
+	return BlueprintVersion{Name: s.seg[0], Version: v}, true
 }
 
 // Profile returns the profile name of a profile scope, and false for any
@@ -229,11 +242,39 @@ func (s Scope) String() string {
 	return s.Key()
 }
 
-// ParseScopeKey parses s as a scope key. It returns ErrInvalid for an
-// unknown level, a wrong count of segments, a segment that is not in the
-// canonical percent-encoding, and a segment that fails the rules of its
-// object.
+// MarshalText returns the scope key. The zero Scope gives the empty text.
+func (s Scope) MarshalText() ([]byte, error) {
+	return []byte(s.Key()), nil
+}
+
+// UnmarshalText parses text with ParseScopeKey. The empty text gives the
+// zero Scope.
+func (s *Scope) UnmarshalText(text []byte) error {
+	if len(text) == 0 {
+		*s = Scope{level: "", seg: [3]string{}}
+
+		return nil
+	}
+
+	scope, err := ParseScopeKey(string(text))
+	if err != nil {
+		return err
+	}
+
+	*s = scope
+
+	return nil
+}
+
+// ParseScopeKey parses s as a scope key. It returns ErrInvalid for a key
+// longer than MaxScopeKeyLength, an unknown level, a wrong count of
+// segments, a segment that is not in the canonical percent-encoding, and a
+// segment that fails the rules of its object.
 func ParseScopeKey(s string) (Scope, error) {
+	if len(s) > MaxScopeKeyLength {
+		return Scope{}, fmt.Errorf("%w: scope key of %d bytes, the most is %d", ErrInvalid, len(s), MaxScopeKeyLength)
+	}
+
 	scope, rest, err := cutScopeKey(s)
 	if err != nil {
 		return Scope{}, err
@@ -294,7 +335,7 @@ func buildScope(level Level, seg [3]string) (Scope, error) {
 	}
 
 	if level == LevelBlueprint {
-		return BlueprintScope(seg[0], seg[1])
+		return parseBlueprintScope(seg[0], seg[1])
 	}
 
 	ns, err := namespace.ParseName(seg[0])
@@ -320,6 +361,40 @@ func buildScope(level Level, seg [3]string) (Scope, error) {
 	}
 
 	return CollectionScope(ns, c), nil
+}
+
+// parseBlueprintScope parses the segments of a blueprint scope key. The
+// version is a decimal number from 1, with no sign and no leading zero.
+func parseBlueprintScope(name, version string) (Scope, error) {
+	n, ok := parseVersionNumber(version)
+	if !ok || strconv.Itoa(n) != version {
+		return Scope{}, fmt.Errorf("%w: blueprint version %q is not a number from 1", ErrInvalid, version)
+	}
+
+	return BlueprintScope(name, n)
+}
+
+// UnitChain returns the scopes whose configuration holds for unit, widest
+// first: the installation, the namespace of the unit, the collection of the
+// unit when it has one, and the unit. Give the empty collection name for a
+// unit in no collection. It returns ErrInvalid for an object that is not a
+// unit.
+func UnitChain(unit identity.Object, c collection.Name) ([]Scope, error) {
+	if !unit.IsUnit() {
+		return nil, fmt.Errorf("%w: %q is not a unit", ErrInvalid, unit.String())
+	}
+
+	u, err := UnitScope(unit.Namespace(), unit.Tool(), unit.UnitName())
+	if err != nil {
+		return nil, err
+	}
+
+	chain := []Scope{InstallationScope(), NamespaceScope(unit.Namespace())}
+	if c != "" {
+		chain = append(chain, CollectionScope(unit.Namespace(), c))
+	}
+
+	return append(chain, u), nil
 }
 
 // unreserved reports whether c is an unreserved character of RFC 3986,

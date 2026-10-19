@@ -1,7 +1,9 @@
 package gate
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -26,6 +28,10 @@ const (
 	// MaxSimulateRecords bounds the stored records of one simulate call.
 	MaxSimulateRecords = 1000
 )
+
+// AccessRefusalWindow is the window in which refusals of one principal, one
+// action and one access limit share one decision record.
+const AccessRefusalWindow = 60 * time.Second
 
 // The bounds of an approval count, an approval timeout and a fresh
 // authentication window.
@@ -57,14 +63,60 @@ func (l AccessLimit) PolicyID() PolicyID {
 	return PolicyID{Scope: l.Scope, ID: l.ID}
 }
 
+// Ref returns the scope, the ID and the version of l.
+func (l AccessLimit) Ref() ObjectRef {
+	return ObjectRef{Scope: l.Scope, ID: l.ID, Version: l.Version}
+}
+
 // FreshAuth is an optional fresh authentication window: none, 0 or 60 to
 // 900 seconds. None asks for no fresh authentication of its own. 0 asks
 // for one at each step. No value turns the check off.
+//
+// Its JSON form is null for none and the count of seconds otherwise, under
+// the name freshAuthSeconds.
 type FreshAuth struct {
 	// Set is false for none.
 	Set bool
 	// Seconds is the window when Set is true.
 	Seconds int
+}
+
+// The JSON form of a fresh authentication window.
+var (
+	_ json.Marshaler   = FreshAuth{Set: false, Seconds: 0}
+	_ json.Unmarshaler = (*FreshAuth)(nil)
+)
+
+// MarshalJSON returns null for none, and the count of seconds otherwise.
+func (f FreshAuth) MarshalJSON() ([]byte, error) {
+	if !f.Set {
+		return []byte("null"), nil
+	}
+
+	return []byte(strconv.Itoa(f.Seconds)), nil
+}
+
+// UnmarshalJSON reads null as none, and a number with ParseFreshAuth.
+func (f *FreshAuth) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*f = NoFreshAuth()
+
+		return nil
+	}
+
+	var seconds int
+	if err := json.Unmarshal(data, &seconds); err != nil {
+		return fmt.Errorf("%w: freshAuthSeconds: %w", ErrInvalid, err)
+	}
+
+	parsed, err := ParseFreshAuth(seconds)
+	if err != nil {
+		return err
+	}
+
+	*f = parsed
+
+	return nil
 }
 
 // NoFreshAuth returns the window none.
@@ -87,11 +139,11 @@ func ParseFreshAuth(seconds int) (FreshAuth, error) {
 // unit in its context. An approver also needs the approve action of the
 // object, and is a person in a session.
 type Approvers struct {
-	Groups []string
-	Users  []string
+	Groups []string `json:"groups"`
+	Users  []string `json:"users"`
 	// UnitOwners reads the owners of the unit from the context at the
 	// scope of the rule or at a wider scope only.
-	UnitOwners bool
+	UnitOwners bool `json:"unitOwners"`
 }
 
 // Empty reports whether a names no approver.
@@ -118,6 +170,11 @@ type ApprovalRule struct {
 	// Timeout is 1 hour to 30 days. The zero value means the default of 7
 	// days.
 	Timeout time.Duration
+}
+
+// Ref returns the scope, the ID and the version of r.
+func (r ApprovalRule) Ref() ObjectRef {
+	return ObjectRef{Scope: r.Scope, ID: r.ID, Version: r.Version}
 }
 
 // ApprovalDefault is the requirement that a namespace, a collection or a
@@ -164,6 +221,11 @@ type OwnershipRule struct {
 	Reads []ID
 }
 
+// Ref returns the scope, the ID and the version of r.
+func (r OwnershipRule) Ref() ObjectRef {
+	return ObjectRef{Scope: r.Scope, ID: r.ID, Version: r.Version}
+}
+
 // PathSet is a named set of 1 to 64 glob patterns of a scope. Go matches
 // the globs against the changed paths and gives the facts
 // paths.touches["<ID>"] and paths.only["<ID>"].
@@ -172,6 +234,11 @@ type PathSet struct {
 	ID      ID
 	Version int64
 	Globs   []string
+}
+
+// Ref returns the scope, the ID and the version of p.
+func (p PathSet) Ref() ObjectRef {
+	return ObjectRef{Scope: p.Scope, ID: p.ID, Version: p.Version}
 }
 
 // CarryOver is the signature carry-over setting of one scope.

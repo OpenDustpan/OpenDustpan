@@ -144,7 +144,10 @@ func TestPolicyIDRoundTrip(t *testing.T) {
 	g := gate.Gate{
 		Scope: gate.NamespaceScope("acme"), ID: "no-destroy", Version: 0, DecisionPoint: gate.PointChangePlanned,
 		Condition: "", Unless: "", Outcome: gate.OutcomeDeny, Message: "", Mode: gate.ModeEnforce,
-		OnError: gate.OnErrorFail, Final: false, State: gate.StateValid, Reads: nil,
+		OnError: gate.OnErrorFail, Final: false, CheckedWith: gate.CheckedWith{
+			Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0},
+		},
+		State: gate.StateValid, Reads: nil,
 	}
 	if g.PolicyID().String() != "namespace/acme/no-destroy" {
 		t.Fatalf("Gate.PolicyID() = %q", g.PolicyID())

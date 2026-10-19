@@ -12,11 +12,13 @@
 //
 // The package is tool-neutral. A unit is a scope with a tool, a namespace
 // and the tool's own name. Each tool adapter reaches the decision point
-// state.write through the Evaluator port, and no adapter calls another.
+// state.write through Service.Evaluate, and no adapter calls another.
 //
-// The package holds the types, the identifier grammar and the ports. The
-// policy engine port has a linked adapter and an adapter for an external
-// service. The store port has one adapter for each SQL dialect.
+// The package holds the types, the identifier grammar, the ports and the
+// Service. The policy engine port has a linked adapter and an adapter for an
+// external service. The store port has one adapter for each SQL dialect. A
+// consumer of the Service declares its own interface with the one method
+// that it calls.
 package gate
 
 import (
@@ -59,7 +61,7 @@ var (
 	ErrUnavailable = errors.New("the policy engine is unavailable")
 	// ErrNotFound reports a gate, a limit, a rule, a path set or a decision
 	// record that does not exist in the scope that the call names.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound = errors.New("gate: object not found")
 	// ErrConflict reports a write whose expected version is not the stored
 	// version.
 	ErrConflict = errors.New("the stored version changed")
@@ -106,8 +108,8 @@ func Code(err error) (string, bool) {
 // (Err) and names the decision record that explains it. Each tool adapter
 // writes Messages, the code of Err and Record in its own error shape.
 type RefusalError struct {
-	// Err is the sentinel: ErrDenied, ErrLimited, ErrRuleFailed or
-	// ErrUnavailable.
+	// Err is the sentinel: ErrDenied, ErrLimited, ErrRuleFailed, ErrFinal
+	// or ErrUnavailable.
 	Err error
 	// Record is the ID of the decision record.
 	Record RecordID
@@ -279,20 +281,31 @@ func (o Outcome) Rule() (ID, bool) {
 	return ID(rule), true
 }
 
-// State is the check state of a stored gate. After an upgrade of the
-// engine or of a fact schema, the server checks each stored gate again at
-// start.
+// State is the check state of a gate. No store holds it. The Service
+// computes it when it loads the configuration: a gate whose CheckedWith is
+// not the engine version and the schema version of the current build is
+// checked again with Engine.Check, and a diagnostic of the gate gives
+// StateInvalid. So each region computes the same state from the same
+// stored gate, with no fence and no audit entry.
 type State string
 
 // The states of a gate.
 const (
 	// StateValid is a gate that passed its last check.
 	StateValid State = "valid"
-	// StateInvalid is a gate that failed the check after an upgrade. In
-	// enforce mode, it gives ErrRuleFailed at each evaluation until a
-	// person saves it again.
+	// StateInvalid is a gate that fails the check of the current engine or
+	// fact schema. In enforce mode, it gives ErrRuleFailed at each
+	// evaluation until a person saves it again.
 	StateInvalid State = "invalid"
 )
+
+// CheckedWith names the engine version and the fact schema version that a
+// gate passed at its last save.
+type CheckedWith struct {
+	// Engine is the value of Engine.Version at the save.
+	Engine string
+	Schema SchemaVersion
+}
 
 // Gate is a stored rule at one decision point. Its Cedar policy ID is the
 // PolicyID of its scope and its ID. Condition and Unless are Cedar
@@ -326,7 +339,11 @@ type Gate struct {
 	// Final stops a narrower scope from shadowing the gate and from
 	// passing it with a break-glass.
 	Final bool
-	// State is the result of the last check of the stored gate.
+	// CheckedWith is the engine and the schema that the gate passed at its
+	// last save. The Service sets it and the store keeps it.
+	CheckedWith CheckedWith
+	// State is computed at load (see State). The store ignores it on write
+	// and gives the empty state on read.
 	State State
 	// Reads holds the IDs of the path sets that Condition and Unless read.
 	// The service fills it from the parsed policy, so the store can refuse
@@ -337,4 +354,9 @@ type Gate struct {
 // PolicyID returns the Cedar policy ID of g.
 func (g Gate) PolicyID() PolicyID {
 	return PolicyID{Scope: g.Scope, ID: g.ID}
+}
+
+// Ref returns the scope, the ID and the version of g.
+func (g Gate) Ref() ObjectRef {
+	return ObjectRef{Scope: g.Scope, ID: g.ID, Version: g.Version}
 }

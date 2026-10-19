@@ -9,9 +9,42 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate/gatetest"
 )
 
-// portTypes maps each port to the interface types whose methods a case
-// can name. A case of gatetest.PortObjects names a method of each kind.
-func portTypes() map[gatetest.Port][]reflect.Type {
+// newHarness returns a fresh store in memory, which also makes the
+// namespaces.
+func newHarness(*testing.T) gatetest.Harness {
+	s := newMemStore()
+
+	return gatetest.Harness{Store: s, Domain: s}
+}
+
+func TestObjectsConformance(t *testing.T) {
+	t.Parallel()
+
+	t.Run("gate", func(t *testing.T) {
+		t.Parallel()
+		gatetest.RunObjects[gate.Gate](t, newHarness)
+	})
+	t.Run("access-limit", func(t *testing.T) {
+		t.Parallel()
+		gatetest.RunObjects[gate.AccessLimit](t, newHarness)
+	})
+	t.Run("approval-rule", func(t *testing.T) {
+		t.Parallel()
+		gatetest.RunObjects[gate.ApprovalRule](t, newHarness)
+	})
+	t.Run("ownership-rule", func(t *testing.T) {
+		t.Parallel()
+		gatetest.RunObjects[gate.OwnershipRule](t, newHarness)
+	})
+	t.Run("path-set", func(t *testing.T) {
+		t.Parallel()
+		gatetest.RunObjects[gate.PathSet](t, newHarness)
+	})
+}
+
+// portOf maps each port to the interface types of its methods. A case of
+// gatetest.PortObjects names the method of one kind.
+func portOf() map[gatetest.Port][]reflect.Type {
 	return map[gatetest.Port][]reflect.Type{
 		gatetest.PortObjects: {
 			reflect.TypeFor[gate.Objects[gate.Gate]](),
@@ -20,110 +53,108 @@ func portTypes() map[gatetest.Port][]reflect.Type {
 			reflect.TypeFor[gate.Objects[gate.OwnershipRule]](),
 			reflect.TypeFor[gate.Objects[gate.PathSet]](),
 		},
-		gatetest.PortSettings:   {reflect.TypeFor[gate.Settings]()},
-		gatetest.PortStateStore: {reflect.TypeFor[gate.StateStore]()},
-		gatetest.PortRecords:    {reflect.TypeFor[gate.Records]()},
-		gatetest.PortEngine:     {reflect.TypeFor[gate.Engine]()},
+		gatetest.PortSettings: {reflect.TypeFor[gate.Settings]()},
+		gatetest.PortStore:    {reflect.TypeFor[gate.Store]()},
+		gatetest.PortRecords:  {reflect.TypeFor[gate.Records]()},
 	}
 }
 
-func TestCasesNameMethodsOfThePorts(t *testing.T) {
+// TestStoreCaseMethodsMatchPorts checks that the method expression of each
+// case takes the interface of its port as its first argument.
+func TestStoreCaseMethodsMatchPorts(t *testing.T) {
 	t.Parallel()
 
-	types := portTypes()
+	ports := portOf()
 
-	for _, list := range [][]gatetest.Case{gatetest.StoreCases(), gatetest.EngineCases()} {
-		for _, c := range list {
-			ts, ok := types[c.Port]
-			if !ok {
-				t.Fatalf("case %s: unknown port %q", c.Name, c.Port)
-			}
-
-			for _, typ := range ts {
-				if _, ok := typ.MethodByName(c.Method); !ok {
-					t.Fatalf("case %s: %s has no method %s", c.Name, typ, c.Method)
-				}
-			}
+	for _, c := range gatetest.StoreCases() {
+		types, ok := ports[c.Port]
+		if !ok {
+			t.Fatalf("case %s: unknown port %q", c.Name, c.Port)
 		}
+
+		checkMethod(t, c.Name, c.Method, types)
+	}
+
+	for _, c := range gatetest.EngineCases() {
+		checkMethod(t, c.Name, c.Method, []reflect.Type{reflect.TypeFor[gate.Engine]()})
 	}
 }
 
-func TestCaseCounts(t *testing.T) {
-	t.Parallel()
+func checkMethod(t *testing.T, name string, method any, ports []reflect.Type) {
+	t.Helper()
 
-	if n := len(gatetest.StoreCases()); n != 51 {
-		t.Fatalf("StoreCases() has %d cases, want 51: a record of the table does not parse", n)
-	}
-
-	if n := len(gatetest.EngineCases()); n != 26 {
-		t.Fatalf("EngineCases() has %d cases, want 26: a record of the table does not parse", n)
+	m := reflect.TypeOf(method)
+	if m == nil || m.Kind() != reflect.Func || m.NumIn() == 0 || !slices.Contains(ports, m.In(0)) {
+		t.Fatalf("case %s: method %T is not a method expression of %v", name, method, ports)
 	}
 }
 
-func TestCasesAreWellFormed(t *testing.T) {
+func TestStoreCasesAreWellFormed(t *testing.T) {
 	t.Parallel()
 
 	kinds := []gatetest.Kind{
 		gatetest.KindGate, gatetest.KindAccessLimit, gatetest.KindApprovalRule,
 		gatetest.KindOwnershipRule, gatetest.KindPathSet,
 	}
+	seen := map[string]bool{}
 
-	for _, list := range [][]gatetest.Case{gatetest.StoreCases(), gatetest.EngineCases()} {
-		seen := map[string]bool{}
+	for _, c := range gatetest.StoreCases() {
+		if c.Name == "" || c.Checks == "" || seen[c.Name] {
+			t.Fatalf("case %q: a case has a unique name and a behavior to check", c.Name)
+		}
 
-		for _, c := range list {
-			if c.Name == "" || c.Checks == "" || seen[c.Name] {
-				t.Fatalf("case %q: a case has a unique name and a behavior to check", c.Name)
-			}
+		seen[c.Name] = true
 
-			seen[c.Name] = true
-
-			for _, k := range c.Kinds {
-				if c.Port != gatetest.PortObjects || !slices.Contains(kinds, k) {
-					t.Fatalf("case %s: kind %q", c.Name, k)
-				}
+		for _, k := range c.Kinds {
+			if c.Port != gatetest.PortObjects || !slices.Contains(kinds, k) {
+				t.Fatalf("case %s: kind %q", c.Name, k)
 			}
 		}
+
+		checkFixtures(t, c.Name, c.Scopes, c.Policies)
 	}
 }
 
-// TestCaseFixturesParse checks each scope key and policy ID of the cases
-// with the functions of package gate, so the cases use the grammar that the
-// adapters store.
-func TestCaseFixturesParse(t *testing.T) {
+func TestEngineCasesAreWellFormed(t *testing.T) {
 	t.Parallel()
 
-	for _, list := range [][]gatetest.Case{gatetest.StoreCases(), gatetest.EngineCases()} {
-		for _, c := range list {
-			checkFixtures(t, c)
+	seen := map[string]bool{}
+
+	for _, c := range gatetest.EngineCases() {
+		if c.Name == "" || c.Checks == "" || seen[c.Name] {
+			t.Fatalf("case %q: a case has a unique name and a behavior to check", c.Name)
 		}
+
+		seen[c.Name] = true
+
+		checkFixtures(t, c.Name, c.Scopes, c.Policies)
 	}
 }
 
-// checkFixtures checks that each scope key and policy ID of c parses and
-// formats back to the same text.
-func checkFixtures(t *testing.T, c gatetest.Case) {
+// checkFixtures checks that each scope and policy ID of a case formats to
+// a text that parses back to the same value, so the cases use the grammar
+// that the adapters store.
+func checkFixtures(t *testing.T, name string, scopes []gate.Scope, policies []gate.PolicyID) {
 	t.Helper()
 
-	for _, key := range c.Scopes {
-		s, err := gate.ParseScopeKey(key)
-		if err != nil || s.Key() != key {
-			t.Fatalf("case %s: scope key %q: %v", c.Name, key, err)
+	for _, s := range scopes {
+		got, err := gate.ParseScopeKey(s.Key())
+		if err != nil || got != s {
+			t.Fatalf("case %s: scope %q: %v", name, s.Key(), err)
 		}
 	}
 
-	for _, id := range c.Policies {
-		p, err := gate.ParsePolicyID(id)
-		if err != nil || p.String() != id {
-			t.Fatalf("case %s: policy ID %q: %v", c.Name, id, err)
+	for _, p := range policies {
+		got, err := gate.ParsePolicyID(p.String())
+		if err != nil || got != p {
+			t.Fatalf("case %s: policy ID %q: %v", name, p, err)
 		}
 	}
 }
 
-// TestObjectCasesUseRoutedScopes checks that each case of a write of
-// gate.Objects that is to commit uses scopes with the configuration routes.
-// The case scope-without-routes-refused is the one case that writes to
-// other scopes.
+// TestObjectCasesUseRoutedScopes checks that each case of gate.Objects
+// uses scopes with the configuration routes. The case
+// scope-without-routes-refused is the one case that writes to other scopes.
 func TestObjectCasesUseRoutedScopes(t *testing.T) {
 	t.Parallel()
 
@@ -132,10 +163,9 @@ func TestObjectCasesUseRoutedScopes(t *testing.T) {
 			continue
 		}
 
-		for _, key := range c.Scopes {
-			s, err := gate.ParseScopeKey(key)
-			if err != nil || !s.HoldsConfig() {
-				t.Fatalf("case %s: scope %q holds no configuration routes", c.Name, key)
+		for _, s := range c.Scopes {
+			if !s.HoldsConfig() {
+				t.Fatalf("case %s: scope %q holds no configuration routes", c.Name, s)
 			}
 		}
 	}

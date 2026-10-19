@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"encoding"
 	"fmt"
 	"strings"
 
@@ -103,15 +104,46 @@ type PolicyID struct {
 	ID    ID
 }
 
+// MaxPolicyIDLength is the length in bytes of the longest policy ID: the
+// longest scope key, "/", and the longest built-in gate ID. ParsePolicyID
+// refuses a longer text.
+const MaxPolicyIDLength = MaxScopeKeyLength + len("/") + len(builtinPrefix) + maxIDLength
+
 // String returns <scope key>/<ID>.
 func (p PolicyID) String() string {
 	return p.Scope.Key() + "/" + string(p.ID)
 }
 
+// MarshalText returns the policy ID as String gives it.
+func (p PolicyID) MarshalText() ([]byte, error) {
+	return []byte(p.String()), nil
+}
+
+// UnmarshalText parses text with ParsePolicyID.
+func (p *PolicyID) UnmarshalText(text []byte) error {
+	id, err := ParsePolicyID(string(text))
+	if err != nil {
+		return err
+	}
+
+	*p = id
+
+	return nil
+}
+
 // ParsePolicyID parses s as <scope key>/<ID>. A built-in gate ID is valid
-// only at the installation scope. It returns ErrInvalid for any other
-// form.
+// only at the installation scope. It returns ErrInvalid for a text longer
+// than MaxPolicyIDLength and for any other form.
 func ParsePolicyID(s string) (PolicyID, error) {
+	if len(s) > MaxPolicyIDLength {
+		return PolicyID{}, fmt.Errorf(
+			"%w: policy ID of %d bytes, the most is %d",
+			ErrInvalid,
+			len(s),
+			MaxPolicyIDLength,
+		)
+	}
+
 	scope, rest, err := cutScopeKey(s)
 	if err != nil {
 		return PolicyID{}, err
@@ -167,6 +199,23 @@ func OwnersRequirement(id ID) RequirementName {
 	return RequirementName(ownersPrefix + string(id))
 }
 
+// MarshalText returns the requirement name.
+func (n RequirementName) MarshalText() ([]byte, error) {
+	return []byte(n), nil
+}
+
+// UnmarshalText parses text with ParseRequirementName.
+func (n *RequirementName) UnmarshalText(text []byte) error {
+	name, err := ParseRequirementName(string(text))
+	if err != nil {
+		return err
+	}
+
+	*n = name
+
+	return nil
+}
+
 // ParseRequirementName returns s when it is a requirement name, or
 // ErrInvalid.
 func ParseRequirementName(s string) (RequirementName, error) {
@@ -219,6 +268,30 @@ func NewRecordID() RecordID {
 	return RecordID(ident.NewID(recordPrefix))
 }
 
+// MarshalText returns the record ID. The empty ID gives the empty text.
+func (id RecordID) MarshalText() ([]byte, error) {
+	return []byte(id), nil
+}
+
+// UnmarshalText parses text with ParseRecordID. The empty text gives the
+// empty ID, for a decision with no record.
+func (id *RecordID) UnmarshalText(text []byte) error {
+	if len(text) == 0 {
+		*id = ""
+
+		return nil
+	}
+
+	parsed, err := ParseRecordID(string(text))
+	if err != nil {
+		return err
+	}
+
+	*id = parsed
+
+	return nil
+}
+
 // ParseRecordID returns s when it is a record ID, or ErrInvalid.
 func ParseRecordID(s string) (RecordID, error) {
 	rest, ok := strings.CutPrefix(s, recordPrefix)
@@ -234,3 +307,18 @@ func ParseRecordID(s string) (RecordID, error) {
 
 	return RecordID(s), nil
 }
+
+// The text forms of the identifiers. A JSON document holds each one as its
+// text.
+var (
+	_ encoding.TextMarshaler   = Scope{level: "", seg: [3]string{}}
+	_ encoding.TextUnmarshaler = (*Scope)(nil)
+	_ encoding.TextMarshaler   = PolicyID{Scope: Scope{level: "", seg: [3]string{}}, ID: ""}
+	_ encoding.TextUnmarshaler = (*PolicyID)(nil)
+	_ encoding.TextMarshaler   = RequirementName("")
+	_ encoding.TextUnmarshaler = (*RequirementName)(nil)
+	_ encoding.TextMarshaler   = SchemaVersion{Subject: "", Major: 0, Minor: 0}
+	_ encoding.TextUnmarshaler = (*SchemaVersion)(nil)
+	_ encoding.TextMarshaler   = RecordID("")
+	_ encoding.TextUnmarshaler = (*RecordID)(nil)
+)

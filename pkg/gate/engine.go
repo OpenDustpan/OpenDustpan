@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -70,6 +71,16 @@ type Request struct {
 	Access *AccessFacts
 }
 
+// Validate returns ErrInvalid when r sets neither Facts nor Access, or
+// both. An engine adapter calls it for each request.
+func (r Request) Validate() error {
+	if (r.Facts == nil) == (r.Access == nil) {
+		return fmt.Errorf("%w: request %q: set exactly one of Facts and Access", ErrInvalid, r.ID)
+	}
+
+	return nil
+}
+
 // Diagnostic is one error of the engine for one policy.
 type Diagnostic struct {
 	Policy  PolicyID
@@ -93,27 +104,35 @@ type Answer struct {
 // use the linked adapter, so an outage of the service never refuses every
 // call.
 type Engine interface {
+	// Version names the engine and its version, for example
+	// "cedar-go/1.2.3". A gate stores the version that it passed at save
+	// (CheckedWith), so the Service checks it again after an upgrade.
+	Version() string
 	// Check parses and type-checks policies against schema, and stores
 	// nothing. It refuses a policy that does not parse, that holds a
 	// second policy, that names an action, an unknown fact or an unknown
 	// attribute, that uses has on an attribute of the schema, that reads a
 	// field of a group with available and not the flag, or that has a type
 	// error. It refuses an access limit whose effect is permit. It returns
-	// a *CheckError that wraps ErrInvalid and holds one diagnostic for each
-	// refused policy. An external adapter returns ErrUnavailable when the
-	// service does not answer or its answer does not authenticate.
-	Check(ctx context.Context, schema Schema, policies []Policy) error
+	// one diagnostic for each refused policy, in the order of policies, and
+	// a nil error. It returns ErrInvalid only for a schema that it cannot
+	// use. An external adapter returns ErrUnavailable when the service does
+	// not answer or its answer does not authenticate.
+	Check(ctx context.Context, schema Schema, policies []Policy) ([]Diagnostic, error)
 	// Evaluate evaluates set for each request, and returns one answer for
-	// each request in request order. An error of one policy is a
-	// diagnostic of its answer, never an error of the call. It returns
-	// ErrUnavailable when the engine does not answer, when an answer does
-	// not echo each request ID, or when an answer names a policy ID that is
-	// not in set. It returns ErrInvalid for a set that it cannot compile.
+	// each request in request order. An error of one policy, also a policy
+	// that does not compile, is a diagnostic of each answer, never an error
+	// of the call. It returns ErrUnavailable when the engine does not
+	// answer, when an answer does not echo each request ID, or when an
+	// answer names a policy ID that is not in set. It returns ErrInvalid
+	// only for a schema that it cannot use, or a request that fails
+	// Request.Validate.
 	Evaluate(ctx context.Context, set PolicySet, requests []Request) ([]Answer, error)
 }
 
-// CheckError is the error of a refused Check: one diagnostic for each
-// refused policy. It wraps ErrInvalid.
+// CheckError is the error that the Service gives for a save whose policies
+// have diagnostics: one diagnostic for each refused policy. It wraps
+// ErrInvalid.
 type CheckError struct {
 	Diagnostics []Diagnostic
 }

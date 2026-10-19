@@ -1,30 +1,37 @@
 // Package gatetest holds the conformance cases of the ports of package
-// gate: the store ports (gate.Objects, gate.Settings, gate.StateStore and
+// gate: the store ports (gate.Objects, gate.Settings, gate.Store and
 // gate.Records) and the policy engine port (gate.Engine).
 //
-// This version holds the case list as data: the name of each case, the
-// port method that it calls, the kinds, scopes and policy IDs that it
-// uses, and the behavior that it must check. No adapter exists yet. The
-// first store adapter and the first engine adapter add the Run functions
-// that execute each case by its name, and an adapter in memory in the
-// tests of this package runs them first.
+// RunObjects executes the rules of gate.Objects for one scope against a
+// store adapter. The other cases are Go values: the port method that each
+// one calls, the kinds, scopes and policy IDs that it uses, the error that
+// it wants, and the behavior that it must check. A rename of a port method
+// or of a fixture breaks the build of this package. The first store adapter
+// and the first engine adapter add the Run functions that execute each
+// named case, and the store in memory in the tests of this package runs
+// them first.
 //
-// In the tables, the unit web/prod of the tool pulumi is in the collection
+// In the cases, the unit web/prod of the tool pulumi is in the collection
 // prod of acme, and the unit net of the tool opentofu is in no collection.
 package gatetest
 
-import "strings"
+import (
+	"slices"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
 
 // Port names a port of package gate.
 type Port string
 
 // The ports that the cases check.
 const (
-	PortObjects    Port = "Objects"
-	PortSettings   Port = "Settings"
-	PortStateStore Port = "StateStore"
-	PortRecords    Port = "Records"
-	PortEngine     Port = "Engine"
+	PortObjects  Port = "Objects"
+	PortSettings Port = "Settings"
+	PortStore    Port = "Store"
+	PortRecords  Port = "Records"
 )
 
 // Kind names one kind of gate.Objects. A case of PortObjects with no kind
@@ -40,573 +47,901 @@ const (
 	KindPathSet       Kind = "path-set"
 )
 
-// Case is one conformance case.
-type Case struct {
+// StoreCase is one conformance case of a store port.
+type StoreCase struct {
 	// Name is the subtest name. It is unique in its list.
 	Name string
-	// Port and Method name the port method that the case calls first.
-	Port   Port
-	Method string
+	// Port is the port of Method.
+	Port Port
+	// Method is the method expression of the port method that the case
+	// calls first, for example gate.Settings.PutCarryOver. A case of
+	// PortObjects with no Kinds names the method of gate.Objects[gate.Gate]
+	// for each kind.
+	Method any
 	// Kinds limits a case of PortObjects to these kinds. Empty means each
 	// kind.
 	Kinds []Kind
-	// Scopes holds the scope keys that the case writes or reads.
-	Scopes []string
+	// Scopes holds the scopes that the case writes or reads.
+	Scopes []gate.Scope
 	// Policies holds the policy IDs that the case uses.
-	Policies []string
+	Policies []gate.PolicyID
+	// Want is the sentinel that the case checks with errors.Is, or nil for
+	// a case that commits.
+	Want error
 	// Checks is the behavior that the case must check.
 	Checks string
 }
 
+// EngineCase is one conformance case of gate.Engine. Each adapter runs each
+// case. The cases whose name starts with "external-" run for the adapter of
+// an external service only.
+type EngineCase struct {
+	Name     string
+	Method   any
+	Scopes   []gate.Scope
+	Policies []gate.PolicyID
+	Want     error
+	Checks   string
+}
+
+// fixtures holds the scopes of the cases.
+type fixtures struct {
+	installation, acme, globex, prod, staging              gate.Scope
+	webProd, acmeNet, globexNet, blueprintWeb, profileBase gate.Scope
+}
+
+// newFixtures returns the scopes of the cases.
+func newFixtures() fixtures {
+	return fixtures{
+		installation: gate.InstallationScope(),
+		acme:         gate.NamespaceScope("acme"),
+		globex:       gate.NamespaceScope("globex"),
+		prod:         gate.CollectionScope("acme", "prod"),
+		staging:      gate.CollectionScope("acme", "staging"),
+		webProd:      must(gate.UnitScope("acme", "pulumi", "web/prod")),
+		acmeNet:      must(gate.UnitScope("acme", "opentofu", "net")),
+		globexNet:    must(gate.UnitScope("globex", "opentofu", "net")),
+		blueprintWeb: must(gate.BlueprintScope("web", 1)),
+		profileBase:  must(gate.ProfileScope("acme", "base")),
+	}
+}
+
+// must returns s, and panics on err. The scopes of the cases are fixed, so
+// a panic is a fault of this package that its tests find.
+func must(s gate.Scope, err error) gate.Scope {
+	if err != nil {
+		panic(err)
+	}
+
+	return s
+}
+
+// pid returns the policy ID of id at scope.
+func pid(scope gate.Scope, id gate.ID) gate.PolicyID {
+	return gate.PolicyID{Scope: scope, ID: id}
+}
+
 // StoreCases returns the conformance cases of the store ports.
-func StoreCases() []Case {
-	return parseCases(storeTable)
+func StoreCases() []StoreCase {
+	fx := newFixtures()
+
+	return slices.Concat(objectCases(&fx), objectRuleCases(&fx), settingsCases(&fx), recordCases(&fx))
+}
+
+// objectCases returns the cases of gate.Objects that hold for each kind.
+func objectCases(fx *fixtures) []StoreCase {
+	return []StoreCase{
+		{
+			Name: "put-new-has-version-1", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
+			Checks: "Put with prev 0 of a new ID returns version 1, and Get returns the object with version 1.",
+		},
+		{
+			Name:     "put-new-of-existing-id-conflicts",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrConflict,
+			Checks:   "Put with prev 0 of an ID that the scope holds returns ErrConflict and changes nothing.",
+		},
+		{
+			Name: "put-replace-increments-version", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
+			Checks: "Put with prev equal to the stored version replaces the object and returns that version plus 1.",
+		},
+		{
+			Name: "put-stale-version-conflicts", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: gate.ErrConflict,
+			Checks: "Put with prev that is not the stored version returns ErrConflict and changes nothing.",
+		},
+		{
+			Name: "put-replace-unknown-not-found", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "Put with prev above 0 of an ID that the scope does not hold returns ErrNotFound.",
+		},
+		{
+			Name: "same-id-in-two-scopes", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acmeNet, fx.globexNet}, Policies: nil, Want: nil,
+			Checks: "Two scopes each hold an object with one ID, and Get of each scope returns its own object.",
+		},
+		{
+			Name: "unit-name-with-slash", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.webProd}, Policies: nil, Want: nil,
+			Checks: "An object of the unit web/prod is stored and read back with the same scope.",
+		},
+		{
+			Name: "get-other-scope-not-found", Port: PortObjects, Method: gate.Objects[gate.Gate].Get, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme, fx.globex}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "Get of an ID that only another scope holds returns ErrNotFound.",
+		},
+		{
+			Name: "list-own-scope-by-id", Port: PortObjects, Method: gate.Objects[gate.Gate].List, Kinds: nil,
+			Scopes: []gate.Scope{fx.installation, fx.acme, fx.prod}, Policies: nil, Want: nil,
+			Checks: "List returns the objects of its scope only, ordered by ID, and none of a wider or narrower scope.",
+		},
+		{
+			Name: "delete-removes", Port: PortObjects, Method: gate.Objects[gate.Gate].Delete, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
+			Checks: "Delete with the stored version removes the object, and Get then returns ErrNotFound.",
+		},
+		{
+			Name:     "delete-stale-version-conflicts",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Delete,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrConflict,
+			Checks:   "Delete with another version returns ErrConflict and keeps the object.",
+		},
+		{
+			Name: "delete-unknown-not-found", Port: PortObjects, Method: gate.Objects[gate.Gate].Delete, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "Delete of an ID that the scope does not hold returns ErrNotFound.",
+		},
+		{
+			Name: "delete-other-scope-not-found", Port: PortObjects, Method: gate.Objects[gate.Gate].Delete, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme, fx.globex}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "Delete of an ID that only another scope holds returns ErrNotFound and keeps the object.",
+		},
+		{
+			Name:     "installation-takes-zero-fence",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.installation},
+			Policies: nil,
+			Want:     nil,
+			Checks:   "A write at the installation with the zero fence and an entry in audit.ServerScope commits and appends the entry.",
+		},
+		{
+			Name:     "stale-fence-changes-nothing",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.prod},
+			Policies: nil,
+			Want:     namespace.ErrFenced,
+			Checks:   "After a bump of the failover version, Put and Delete with the old fence return namespace.ErrFenced, change nothing and append no entry.",
+		},
+		{
+			Name:     "fence-of-other-namespace-refused",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme, fx.globex},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "A write at a scope of acme with the fence of globex, or with the zero fence, returns ErrInvalid and changes nothing.",
+		},
+		{
+			Name:     "entry-of-other-scope-refused",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     audit.ErrInvalidEntry,
+			Checks:   "A write with an audit entry of another scope, or an entry that fails validation, returns audit.ErrInvalidEntry, changes nothing and appends nothing.",
+		},
+		{
+			Name: "entry-in-same-transaction", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
+			Checks: "Each committed write appends exactly its entry, and each refused write appends none.",
+		},
+		{
+			Name: "scope-without-routes-refused", Port: PortObjects, Method: gate.Objects[gate.Gate].Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.blueprintWeb, fx.profileBase}, Policies: nil, Want: gate.ErrInvalid,
+			Checks: "A write at a blueprint version or a profile scope returns ErrInvalid.",
+		},
+		{
+			Name:     "scope-limit",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrLimit,
+			Checks:   "A new object above the limit of its kind for one scope returns ErrLimit, and a replace at the limit commits.",
+		},
+	}
+}
+
+// objectRuleCases returns the cases of gate.Objects that hold for one kind.
+func objectRuleCases(fx *fixtures) []StoreCase {
+	return []StoreCase{
+		{
+			Name:   "final-gate-of-wider-scope-shadow",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.Gate].Put,
+			Kinds:  []Kind{KindGate},
+			Scopes: []gate.Scope{
+				fx.installation,
+				fx.acme,
+				fx.prod,
+				fx.webProd,
+			},
+			Policies: []gate.PolicyID{pid(fx.installation, "no-destroy"), pid(fx.prod, "no-destroy")},
+			Want:     gate.ErrFinal,
+			Checks:   "A gate with the ID of a final gate of a wider scope returns ErrFinal at each narrower scope, also at a unit of the collection of the final gate.",
+		},
+		{
+			Name:   "final-gate-of-unrelated-collection",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.Gate].Put,
+			Kinds:  []Kind{KindGate},
+			Scopes: []gate.Scope{
+				fx.staging,
+				fx.webProd,
+			},
+			Policies: []gate.PolicyID{pid(fx.staging, "no-destroy"), pid(fx.webProd, "no-destroy")},
+			Want:     nil,
+			Checks:   "A final gate of a collection that is not the collection of the unit does not stop a gate of the unit with its ID.",
+		},
+		{
+			Name:   "non-final-gate-of-wider-scope",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.Gate].Put,
+			Kinds:  []Kind{KindGate},
+			Scopes: []gate.Scope{
+				fx.acme,
+				fx.webProd,
+			},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap"), pid(fx.webProd, "cost-cap")},
+			Want:     nil,
+			Checks:   "A gate with the ID of a gate of a wider scope that is not final commits, at either scope first.",
+		},
+		{
+			Name:   "final-gate-over-narrower-gate",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.Gate].Put,
+			Kinds:  []Kind{KindGate},
+			Scopes: []gate.Scope{
+				fx.acme,
+				fx.prod,
+				fx.webProd,
+			},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-destroy"), pid(fx.webProd, "no-destroy")},
+			Want:     gate.ErrFinal,
+			Checks:   "A save at acme of a final gate, or a change that sets Final, returns ErrFinal when a narrower scope holds a gate with its ID, and the error names that scope.",
+		},
+		{
+			Name:   "gate-rule-must-resolve",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.Gate].Put,
+			Kinds:  []Kind{KindGate},
+			Scopes: []gate.Scope{
+				fx.acme,
+				fx.prod,
+			},
+			Policies: []gate.PolicyID{pid(fx.acme, "dba-review")},
+			Want:     gate.ErrInvalid,
+			Checks:   "A gate whose outcome names a rule that its scope and each wider scope do not hold returns ErrInvalid. A rule of a narrower scope does not resolve.",
+		},
+		{
+			Name:   "gate-path-sets-must-resolve",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.Gate].Put,
+			Kinds:  []Kind{KindGate},
+			Scopes: []gate.Scope{
+				fx.acme,
+			},
+			Policies: []gate.PolicyID{pid(fx.acme, "network-only")},
+			Want:     gate.ErrInvalid,
+			Checks:   "A gate whose Reads names a path set that does not resolve returns ErrInvalid.",
+		},
+		{
+			Name:     "final-gate-weaker-needs-reason",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    []Kind{KindGate},
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-destroy")},
+			Want:     gate.ErrFinal,
+			Checks:   "A change of a final gate that is weaker (a switch to evaluate, a clear of Final, or a change of the decision point, the condition, Unless, the outcome or OnError), or its Delete, with no reason in the audit entry returns ErrFinal. With a reason it commits, and the entry holds the reason.",
+		},
+		{
+			Name:     "gate-state-not-stored",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.Gate].Put,
+			Kinds:    []Kind{KindGate},
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "Put keeps CheckedWith and ignores State, and Get returns the empty State.",
+		},
+		{
+			Name:     "rule-of-wider-scope-shadow",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.ApprovalRule].Put,
+			Kinds:    []Kind{KindApprovalRule},
+			Scopes:   []gate.Scope{fx.installation, fx.acme},
+			Policies: nil,
+			Want:     gate.ErrFinal,
+			Checks:   "An approval rule with the ID of a rule of a wider scope returns ErrFinal.",
+		},
+		{
+			Name:     "rule-over-narrower-rule",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.ApprovalRule].Put,
+			Kinds:    []Kind{KindApprovalRule},
+			Scopes:   []gate.Scope{fx.acme, fx.webProd},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "An approval rule at acme with the ID of a rule of a narrower scope returns ErrInvalid, and the error names that scope.",
+		},
+		{
+			Name:   "rule-named-by-gate-delete",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.ApprovalRule].Delete,
+			Kinds:  []Kind{KindApprovalRule},
+			Scopes: []gate.Scope{
+				fx.acme,
+				fx.webProd,
+			},
+			Policies: []gate.PolicyID{pid(fx.webProd, "dba-review")},
+			Want:     gate.ErrInvalid,
+			Checks:   "Delete of a rule that a stored gate names returns ErrInvalid, the error names the policy ID of each gate, and the rule stays.",
+		},
+		{
+			Name:     "rule-of-final-gate-needs-reason",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.ApprovalRule].Put,
+			Kinds:    []Kind{KindApprovalRule},
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-destroy")},
+			Want:     gate.ErrFinal,
+			Checks:   "Put of an approval rule that a final gate names, with no reason in the audit entry, returns ErrFinal. With a reason it commits.",
+		},
+		{
+			Name:     "path-set-of-wider-scope-shadow",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.PathSet].Put,
+			Kinds:    []Kind{KindPathSet},
+			Scopes:   []gate.Scope{fx.acme, fx.prod},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "A path set with the ID of a path set of a wider scope returns ErrInvalid.",
+		},
+		{
+			Name:     "path-set-over-narrower-path-set",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.PathSet].Put,
+			Kinds:    []Kind{KindPathSet},
+			Scopes:   []gate.Scope{fx.acme, fx.prod},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "A path set at acme with the ID of a path set of a narrower scope returns ErrInvalid, and the error names that scope.",
+		},
+		{
+			Name:   "path-set-read-delete",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.PathSet].Delete,
+			Kinds:  []Kind{KindPathSet},
+			Scopes: []gate.Scope{
+				fx.acme,
+			},
+			Policies: []gate.PolicyID{pid(fx.acme, "network-only")},
+			Want:     gate.ErrInvalid,
+			Checks:   "Delete of a path set that a stored gate, approval default or ownership rule reads returns ErrInvalid, names each reader, and the path set stays.",
+		},
+		{
+			Name:     "path-set-of-final-gate-needs-reason",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.PathSet].Put,
+			Kinds:    []Kind{KindPathSet},
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "network-only")},
+			Want:     gate.ErrFinal,
+			Checks:   "Put of a path set that a final gate reads, with no reason in the audit entry, returns ErrFinal. With a reason it commits.",
+		},
+		{
+			Name:     "ownership-path-sets-must-resolve",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.OwnershipRule].Put,
+			Kinds:    []Kind{KindOwnershipRule},
+			Scopes:   []gate.Scope{fx.prod},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "An ownership rule whose Reads names a path set that does not resolve returns ErrInvalid.",
+		},
+		{
+			Name:   "concurrent-shadow",
+			Port:   PortObjects,
+			Method: gate.Objects[gate.Gate].Put,
+			Kinds:  []Kind{KindGate},
+			Scopes: []gate.Scope{
+				fx.acme,
+				fx.webProd,
+			},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-destroy"), pid(fx.webProd, "no-destroy")},
+			Want:     gate.ErrFinal,
+			Checks:   "A final gate of acme and a gate of web/prod with the same ID, saved at the same time, never both commit.",
+		},
+	}
+}
+
+// settingsCases returns the cases of gate.Settings and gate.Store.
+func settingsCases(fx *fixtures) []StoreCase {
+	return []StoreCase{
+		{
+			Name: "approval-default-none", Port: PortSettings, Method: gate.Settings.ApprovalDefault, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "A scope with no approval default returns ErrNotFound.",
+		},
+		{
+			Name:     "approval-default-round-trip",
+			Port:     PortSettings,
+			Method:   gate.Settings.PutApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme, fx.prod, fx.webProd},
+			Policies: nil,
+			Want:     nil,
+			Checks:   "PutApprovalDefault stores each field, follows the version rules of Objects.Put, and appends its entry.",
+		},
+		{
+			Name:     "approval-default-not-at-installation",
+			Port:     PortSettings,
+			Method:   gate.Settings.PutApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.installation},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "PutApprovalDefault at the installation returns ErrInvalid.",
+		},
+		{
+			Name:     "approval-default-path-sets-must-resolve",
+			Port:     PortSettings,
+			Method:   gate.Settings.PutApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.prod},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "An approval default whose Reads names a path set that does not resolve returns ErrInvalid.",
+		},
+		{
+			Name:     "approval-default-delete",
+			Port:     PortSettings,
+			Method:   gate.Settings.DeleteApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     nil,
+			Checks:   "DeleteApprovalDefault with the stored version removes the default, appends its entry, and ApprovalDefault then returns ErrNotFound.",
+		},
+		{
+			Name:     "approval-default-delete-none",
+			Port:     PortSettings,
+			Method:   gate.Settings.DeleteApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrNotFound,
+			Checks:   "DeleteApprovalDefault of a scope with no default returns ErrNotFound.",
+		},
+		{
+			Name:     "approval-default-delete-stale",
+			Port:     PortSettings,
+			Method:   gate.Settings.DeleteApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrConflict,
+			Checks:   "DeleteApprovalDefault with another version returns ErrConflict and keeps the default.",
+		},
+		{
+			Name:     "approval-default-delete-at-installation",
+			Port:     PortSettings,
+			Method:   gate.Settings.DeleteApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.installation},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "DeleteApprovalDefault at the installation returns ErrInvalid.",
+		},
+		{
+			Name: "carry-over-default-off", Port: PortSettings, Method: gate.Settings.CarryOver, Kinds: nil,
+			Scopes: []gate.Scope{fx.installation, fx.acme}, Policies: nil, Want: nil,
+			Checks: "A scope with no stored setting returns off with version 0.",
+		},
+		{
+			Name: "carry-over-round-trip", Port: PortSettings, Method: gate.Settings.PutCarryOver, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme, fx.prod, fx.webProd}, Policies: nil, Want: nil,
+			Checks: "PutCarryOver stores on and forbidden with the version rules of Objects.Put.",
+		},
+		{
+			Name:     "carry-over-off-deletes",
+			Port:     PortSettings,
+			Method:   gate.Settings.PutCarryOver,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     nil,
+			Checks:   "PutCarryOver of off deletes the stored setting and returns version 0, CarryOver then returns off with version 0, and the next put takes prev 0.",
+		},
+		{
+			Name: "carry-over-on-at-installation", Port: PortSettings, Method: gate.Settings.PutCarryOver, Kinds: nil,
+			Scopes: []gate.Scope{fx.installation}, Policies: nil, Want: gate.ErrInvalid,
+			Checks: "PutCarryOver of on at the installation returns ErrInvalid, and forbidden commits.",
+		},
+		{
+			Name: "settings-fence", Port: PortSettings, Method: gate.Settings.PutCarryOver, Kinds: nil,
+			Scopes: []gate.Scope{fx.prod}, Policies: nil, Want: namespace.ErrFenced,
+			Checks: "A setting write with a stale fence returns namespace.ErrFenced and changes nothing.",
+		},
+		{
+			Name:     "snapshot-chain-in-order",
+			Port:     PortStore,
+			Method:   gate.Store.Snapshot,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.installation, fx.acme, fx.prod, fx.webProd},
+			Policies: nil,
+			Want:     nil,
+			Checks:   "Snapshot returns each kind and each setting of each named scope, in the order of the scopes and then by ID, and none of a scope that is not named.",
+		},
+		{
+			Name: "snapshot-one-transaction", Port: PortStore, Method: gate.Store.Snapshot, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme, fx.webProd}, Policies: nil, Want: nil,
+			Checks: "A Snapshot that runs while a write commits sees all of the write or none of it.",
+		},
+		{
+			Name: "snapshot-zero-scope", Port: PortStore, Method: gate.Store.Snapshot, Kinds: nil,
+			Scopes: nil, Policies: nil, Want: gate.ErrInvalid,
+			Checks: "Snapshot with a zero scope returns ErrInvalid.",
+		},
+	}
+}
+
+// recordCases returns the cases of gate.Records.
+func recordCases(fx *fixtures) []StoreCase {
+	return []StoreCase{
+		{
+			Name:   "record-round-trip",
+			Port:   PortRecords,
+			Method: gate.Records.Put,
+			Kinds:  nil,
+			Scopes: []gate.Scope{
+				fx.acme,
+				fx.webProd,
+			},
+			Policies: []gate.PolicyID{pid(fx.installation, "builtin/plan-readable"), pid(fx.webProd, "cost-cap")},
+			Want:     nil,
+			Checks:   "Put and Get keep each field: the fact document of each unit, the path set versions, each policy result, the requirements with carried signatures, the fixed controls and the result.",
+		},
+		{
+			Name: "record-other-namespace-not-found", Port: PortRecords, Method: gate.Records.Get, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme, fx.globex}, Policies: nil, Want: gate.ErrNotFound,
+			Checks: "Get of a record of acme with the namespace globex returns ErrNotFound.",
+		},
+		{
+			Name: "record-used-id", Port: PortRecords, Method: gate.Records.Put, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: gate.ErrConflict,
+			Checks: "Put of a used record ID returns ErrConflict and keeps the first record.",
+		},
+		{
+			Name:     "record-fence",
+			Port:     PortRecords,
+			Method:   gate.Records.Put,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme, fx.globex},
+			Policies: nil,
+			Want:     namespace.ErrFenced,
+			Checks:   "Put with a stale fence returns namespace.ErrFenced, and with the fence of another namespace ErrInvalid.",
+		},
+		{
+			Name:   "record-of-installation-object",
+			Port:   PortRecords,
+			Method: gate.Records.NoteRefusal,
+			Kinds:  nil,
+			Scopes: []gate.Scope{
+				fx.installation,
+			},
+			Policies: []gate.PolicyID{pid(fx.installation, "no-agent-tokens")},
+			Want:     nil,
+			Checks:   "A refusal of an access limit on an installation object is stored with the zero fence and the namespace audit.ServerScope, and Get with audit.ServerScope reads it.",
+		},
+		{
+			Name: "list-by-change-oldest-first", Port: PortRecords, Method: gate.Records.ListByChange, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
+			Checks: "ListByChange returns the records of one change, oldest first, and none of another change.",
+		},
+		{
+			Name:     "query-window-and-limit",
+			Port:     PortRecords,
+			Method:   gate.Records.Query,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "Query returns the records of its point with At in [From, To), newest first, at most Limit, and returns ErrInvalid for a limit of 0 or above 1000.",
+		},
+		{
+			Name:     "note-refusal-coalesces",
+			Port:     PortRecords,
+			Method:   gate.Records.NoteRefusal,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-agent-secrets")},
+			Want:     nil,
+			Checks:   "A second refusal of the same subject, action and limit within AccessRefusalWindow returns the first ID, adds 1 to Count and sets LastAt.",
+		},
+		{
+			Name:   "note-refusal-new-record",
+			Port:   PortRecords,
+			Method: gate.Records.NoteRefusal,
+			Kinds:  nil,
+			Scopes: []gate.Scope{
+				fx.acme,
+			},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-agent-secrets"), pid(fx.acme, "no-destroy")},
+			Want:     nil,
+			Checks:   "A refusal after the window, of another subject, action or limit, stores a new record with Count 1.",
+		},
+	}
 }
 
 // EngineCases returns the conformance cases of the policy engine port.
-// Each adapter runs each case. The cases whose name starts with
-// "external-" run for the adapter of an external service only.
-func EngineCases() []Case {
-	return parseCases(engineTable)
+func EngineCases() []EngineCase {
+	fx := newFixtures()
+
+	return []EngineCase{
+		{
+			Name: "version-names-engine", Method: gate.Engine.Version, Scopes: nil, Policies: nil, Want: nil,
+			Checks: "Version returns a text that is not empty and that is the same for each call.",
+		},
+		{
+			Name: "empty-set-matches-nothing", Method: gate.Engine.Evaluate, Scopes: nil, Policies: nil, Want: nil,
+			Checks: "An empty policy set gives one answer for each request, with no match and no diagnostic.",
+		},
+		{
+			Name:     "condition-matches",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "A gate with context.cost.available && context.cost.deltaMonthly > 10000 matches a document with a delta of 15000 and not one of 5000.",
+		},
+		{
+			Name:     "empty-condition-is-true",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "always")},
+			Want:     nil,
+			Checks:   "A gate with an empty condition matches each request of its decision point.",
+		},
+		{
+			Name:     "unless-exempts",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "no-destroy")},
+			Want:     nil,
+			Checks:   "A gate that matches does not match when its unless is true.",
+		},
+		{
+			Name:     "action-is-pinned",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "A gate of change.planned never matches a request of change.apply or state.write.",
+		},
+		{
+			Name:   "matched-ids-keep-scope",
+			Method: gate.Engine.Evaluate,
+			Scopes: []gate.Scope{fx.installation, fx.acme, fx.webProd},
+			Policies: []gate.PolicyID{
+				pid(fx.installation, "cost-cap"),
+				pid(fx.acme, "cost-cap"),
+				pid(fx.webProd, "cost-cap"),
+			},
+			Want:   nil,
+			Checks: "Three gates with one ID in three scopes that each match are three distinct matched policy IDs, equal to the IDs of the set.",
+		},
+		{
+			Name:     "builtin-id",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.installation},
+			Policies: []gate.PolicyID{pid(fx.installation, "builtin/plan-readable")},
+			Want:     nil,
+			Checks:   "A built-in gate matches with its policy ID installation/builtin/plan-readable.",
+		},
+		{
+			Name:     "principal-groups-are-parents",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "sre-only")},
+			Want:     nil,
+			Checks:   "A gate with unless { principal in OpenDustpan::Group::\"sre\" } does not match a principal with the group sre.",
+		},
+		{
+			Name:     "path-set-attributes",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.prod},
+			Policies: []gate.PolicyID{pid(fx.prod, "network-only")},
+			Want:     nil,
+			Checks:   "A gate that reads context.paths.available && context.paths.only[\"network\"] matches when Go gave only true for the path set network.",
+		},
+		{
+			Name:     "error-is-diagnostic",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "overflow"), pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "A gate that gives an evaluation error, for example an overflow, is a diagnostic and not a match, the other gates still match, and the call returns no error.",
+		},
+		{
+			Name:     "no-compile-is-diagnostic",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "risk"), pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "A gate that does not compile against the schema is a diagnostic of each answer, the other gates still match, and the call returns no error.",
+		},
+		{
+			Name:     "request-needs-one-context",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap")},
+			Want:     gate.ErrInvalid,
+			Checks:   "A request with neither Facts nor Access, or with both, returns ErrInvalid.",
+		},
+		{
+			Name:     "answers-in-request-order",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.webProd, fx.acmeNet},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "Evaluate of two requests returns two answers in request order, each echoing its request ID.",
+		},
+		{
+			Name:     "access-limit-forbids",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.prod},
+			Policies: []gate.PolicyID{pid(fx.prod, "no-agent-destroy")},
+			Want:     nil,
+			Checks:   "An access limit set with the fixed permit gives the forbid policy as matched for an agent principal, and nothing for a person.",
+		},
+		{
+			Name:     "deterministic",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "The same set and requests give the same answers, also when the policies come in another order.",
+		},
+		{
+			Name:     "canceled-context",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   nil,
+			Policies: nil,
+			Want:     nil,
+			Checks:   "Evaluate with a canceled context returns an error that wraps the context error or ErrUnavailable, and no answer.",
+		},
+		{
+			Name:     "external-wrong-answer",
+			Method:   gate.Engine.Evaluate,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap"), pid(fx.acme, "unknown")},
+			Want:     gate.ErrUnavailable,
+			Checks:   "For the external adapter: an answer that does not authenticate, that does not echo the request ID or the set version, or that names acme/unknown, which is not in the set, returns ErrUnavailable.",
+		},
+		{
+			Name:     "check-accepts-valid",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-cap"), pid(fx.acme, "no-agent-destroy")},
+			Want:     nil,
+			Checks:   "Check of a valid gate and a valid forbid limit returns no diagnostic and a nil error.",
+		},
+		{
+			Name:     "check-refuses-permit-limit",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "permit-all")},
+			Want:     nil,
+			Checks:   "Check of an access limit with the effect permit returns one diagnostic for it and a nil error.",
+		},
+		{
+			Name:     "check-refuses-second-policy",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "injection")},
+			Want:     nil,
+			Checks:   "A condition that closes the clause and starts a second policy gives a diagnostic.",
+		},
+		{
+			Name:     "check-refuses-action",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "names-action")},
+			Want:     nil,
+			Checks:   "A condition that names action gives a diagnostic.",
+		},
+		{
+			Name:     "check-refuses-unknown-attribute",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "risk")},
+			Want:     nil,
+			Checks:   "A condition that reads context.risk.score, which the schema does not name, gives a diagnostic.",
+		},
+		{
+			Name:     "check-refuses-has-on-schema-attribute",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "has-cost")},
+			Want:     nil,
+			Checks:   "A condition with context has cost gives a diagnostic.",
+		},
+		{
+			Name:     "check-refuses-unread-available",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "cost-no-flag")},
+			Want:     nil,
+			Checks:   "A condition that reads context.cost.deltaMonthly and not context.cost.available gives a diagnostic.",
+		},
+		{
+			Name:     "check-refuses-type-error",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "type-error")},
+			Want:     nil,
+			Checks:   "A condition that compares context.plan.destroy with a string gives a diagnostic.",
+		},
+		{
+			Name:     "check-refuses-group-of-other-point",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "write-cost")},
+			Want:     nil,
+			Checks:   "A gate of state.write that reads the group cost, which state.write does not hold, gives a diagnostic.",
+		},
+		{
+			Name:     "check-refuses-unknown-path-set",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.prod},
+			Policies: []gate.PolicyID{pid(fx.prod, "unknown-set")},
+			Want:     nil,
+			Checks:   "A gate that reads paths.touches of a path set that the schema of its scope does not hold gives a diagnostic.",
+		},
+		{
+			Name:     "check-one-diagnostic-each",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: []gate.PolicyID{pid(fx.acme, "risk"), pid(fx.acme, "type-error"), pid(fx.acme, "cost-cap")},
+			Want:     nil,
+			Checks:   "Check of two refused policies and one valid policy returns one diagnostic for each refused policy, by policy ID, in the order of the policies.",
+		},
+		{
+			Name:     "check-unusable-schema",
+			Method:   gate.Engine.Check,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "Check with a schema version that the engine does not know returns ErrInvalid.",
+		},
+	}
 }
-
-// parseCases reads a table: records separated by a blank line, one
-// "field: value" on each line, and a line that starts with a space
-// continues the value of the line before it. A line with an unknown field
-// gives a case with no name, which the tests of this package refuse.
-func parseCases(table string) []Case {
-	recs := strings.Split(strings.TrimSpace(table), "\n\n")
-	cases := make([]Case, 0, len(recs))
-
-	for _, rec := range recs {
-		cases = append(cases, parseCase(rec))
-	}
-
-	return cases
-}
-
-// parseCase reads one record of a table.
-func parseCase(rec string) Case {
-	fields := map[string]string{}
-	last := ""
-
-	for line := range strings.SplitSeq(rec, "\n") {
-		if strings.HasPrefix(line, " ") && last != "" {
-			fields[last] += " " + strings.TrimSpace(line)
-
-			continue
-		}
-
-		key, value, _ := strings.Cut(line, ": ")
-		fields[key] = value
-		last = key
-	}
-
-	port, method, _ := strings.Cut(fields["calls"], ".")
-	c := Case{
-		Name: fields["name"], Port: Port(port), Method: method, Kinds: nil,
-		Scopes: strings.Fields(fields["scopes"]), Policies: strings.Fields(fields["policies"]),
-		Checks: fields["checks"],
-	}
-
-	for k := range strings.FieldsSeq(fields["kinds"]) {
-		c.Kinds = append(c.Kinds, Kind(k))
-	}
-
-	for key := range fields {
-		switch key {
-		case "name", "calls", "kinds", "scopes", "policies", "checks":
-		default:
-			c.Name = ""
-		}
-	}
-
-	return c
-}
-
-// storeTable holds the cases of gate.Objects, gate.Settings,
-// gate.StateStore and gate.Records.
-const storeTable = `
-name: put-new-has-version-1
-calls: Objects.Put
-scopes: namespace/acme
-checks: Put with prev 0 of a new ID returns version 1, and Get returns the object with
-  version 1.
-
-name: put-new-of-existing-id-conflicts
-calls: Objects.Put
-scopes: namespace/acme
-checks: Put with prev 0 of an ID that the scope holds returns ErrConflict and changes nothing.
-
-name: put-replace-increments-version
-calls: Objects.Put
-scopes: namespace/acme
-checks: Put with prev equal to the stored version replaces the object and returns that version
-  plus 1.
-
-name: put-stale-version-conflicts
-calls: Objects.Put
-scopes: namespace/acme
-checks: Put with prev that is not the stored version returns ErrConflict and changes nothing.
-
-name: put-replace-unknown-not-found
-calls: Objects.Put
-scopes: namespace/acme
-checks: Put with prev above 0 of an ID that the scope does not hold returns ErrNotFound.
-
-name: same-id-in-two-scopes
-calls: Objects.Put
-scopes: unit/acme/opentofu/net unit/globex/opentofu/net
-checks: Two scopes each hold an object with one ID, and Get of each scope returns its own
-  object.
-
-name: unit-name-with-slash
-calls: Objects.Put
-scopes: unit/acme/pulumi/web%2Fprod
-checks: An object of the unit web/prod is stored and read back with the same scope.
-
-name: get-other-scope-not-found
-calls: Objects.Get
-scopes: namespace/acme namespace/globex
-checks: Get of an ID that only another scope holds returns ErrNotFound.
-
-name: list-own-scope-by-id
-calls: Objects.List
-scopes: installation namespace/acme collection/acme/prod
-checks: List returns the objects of its scope only, ordered by ID, and none of a wider or
-  narrower scope.
-
-name: in-orders-by-scope-then-id
-calls: Objects.In
-scopes: installation namespace/acme collection/acme/prod unit/acme/pulumi/web%2Fprod
-checks: In returns the objects of each scope in the order of the scopes, then by ID, and none of
-  a scope that is not named.
-
-name: delete-removes
-calls: Objects.Delete
-scopes: namespace/acme
-checks: Delete with the stored version removes the object, and Get then returns ErrNotFound.
-
-name: delete-stale-version-conflicts
-calls: Objects.Delete
-scopes: namespace/acme
-checks: Delete with another version returns ErrConflict and keeps the object.
-
-name: delete-unknown-not-found
-calls: Objects.Delete
-scopes: namespace/acme
-checks: Delete of an ID that the scope does not hold returns ErrNotFound.
-
-name: installation-takes-zero-fence
-calls: Objects.Put
-scopes: installation
-checks: A write at the installation with the zero fence and an entry in audit.ServerScope
-  commits and appends the entry.
-
-name: stale-fence-changes-nothing
-calls: Objects.Put
-scopes: collection/acme/prod
-checks: After a bump of the failover version, Put and Delete with the old fence return
-  namespace.ErrFenced, change nothing and append no entry.
-
-name: fence-of-other-namespace-refused
-calls: Objects.Put
-scopes: namespace/acme namespace/globex
-checks: A write at a scope of acme with the fence of globex, or with the zero fence, returns
-  ErrInvalid and changes nothing.
-
-name: entry-of-other-scope-refused
-calls: Objects.Put
-scopes: namespace/acme
-checks: A write with an audit entry of another scope returns audit.ErrInvalidEntry, changes
-  nothing and appends nothing.
-
-name: entry-in-same-transaction
-calls: Objects.Put
-scopes: namespace/acme
-checks: Each committed write appends exactly its entry, and each refused write appends none.
-
-name: scope-without-routes-refused
-calls: Objects.Put
-scopes: blueprint/web/1.0.0 profile/acme/base
-checks: A write at a blueprint version or a profile scope returns ErrInvalid.
-
-name: scope-limit
-calls: Objects.Put
-scopes: namespace/acme
-checks: A new object above the limit of its kind for one scope returns ErrLimit, and a replace
-  at the limit commits.
-
-name: final-gate-of-wider-scope-shadow
-calls: Objects.Put
-kinds: gate
-scopes: installation namespace/acme collection/acme/prod unit/acme/pulumi/web%2Fprod
-policies: installation/no-destroy collection/acme/prod/no-destroy
-checks: A gate with the ID of a final gate of a wider scope returns ErrFinal at each narrower
-  scope, also at a unit that the collection of the final gate holds.
-
-name: final-gate-of-unrelated-collection
-calls: Objects.Put
-kinds: gate
-scopes: collection/acme/staging unit/acme/pulumi/web%2Fprod
-policies: collection/acme/staging/no-destroy unit/acme/pulumi/web%2Fprod/no-destroy
-checks: A final gate of a collection that does not hold the unit does not stop a gate of the
-  unit with its ID.
-
-name: non-final-gate-of-wider-scope
-calls: Objects.Put
-kinds: gate
-scopes: namespace/acme unit/acme/pulumi/web%2Fprod
-policies: namespace/acme/cost-cap unit/acme/pulumi/web%2Fprod/cost-cap
-checks: A gate with the ID of a gate of a wider scope that is not final commits.
-
-name: gate-rule-must-resolve
-calls: Objects.Put
-kinds: gate
-scopes: namespace/acme collection/acme/prod
-policies: namespace/acme/dba-review
-checks: A gate whose outcome names a rule that its scope and each wider scope do not hold
-  returns ErrInvalid. A rule of a narrower scope does not resolve.
-
-name: gate-path-sets-must-resolve
-calls: Objects.Put
-kinds: gate
-scopes: namespace/acme
-policies: namespace/acme/network-only
-checks: A gate whose Reads names a path set that does not resolve returns ErrInvalid.
-
-name: rule-of-wider-scope-shadow
-calls: Objects.Put
-kinds: approval-rule
-scopes: installation namespace/acme
-checks: An approval rule with the ID of a rule of a wider scope that holds the scope returns
-  ErrFinal.
-
-name: rule-named-by-gate-delete
-calls: Objects.Delete
-kinds: approval-rule
-scopes: namespace/acme unit/acme/pulumi/web%2Fprod
-policies: unit/acme/pulumi/web%2Fprod/dba-review
-checks: Delete of a rule that a stored gate names returns ErrInvalid, the error names the policy
-  ID of each gate, and the rule stays.
-
-name: path-set-of-wider-scope-shadow
-calls: Objects.Put
-kinds: path-set
-scopes: namespace/acme collection/acme/prod
-checks: A path set with the ID of a path set of a wider scope that holds the scope returns
-  ErrInvalid.
-
-name: path-set-read-delete
-calls: Objects.Delete
-kinds: path-set
-scopes: namespace/acme
-policies: namespace/acme/network-only
-checks: Delete of a path set that a stored gate, approval default or ownership rule reads
-  returns ErrInvalid, names each reader, and the path set stays.
-
-name: ownership-path-sets-must-resolve
-calls: Objects.Put
-kinds: ownership-rule
-scopes: collection/acme/prod
-checks: An ownership rule whose Reads names a path set that does not resolve returns ErrInvalid.
-
-name: concurrent-shadow
-calls: Objects.Put
-kinds: gate
-scopes: namespace/acme unit/acme/pulumi/web%2Fprod
-policies: namespace/acme/no-destroy unit/acme/pulumi/web%2Fprod/no-destroy
-checks: A final gate of acme and a gate of web/prod with the same ID, saved at the same time,
-  never both commit.
-
-name: approval-default-none
-calls: Settings.ApprovalDefault
-scopes: namespace/acme
-checks: A scope with no approval default returns ErrNotFound.
-
-name: approval-default-round-trip
-calls: Settings.PutApprovalDefault
-scopes: namespace/acme collection/acme/prod unit/acme/pulumi/web%2Fprod
-checks: PutApprovalDefault stores each field, follows the version rules of Objects.Put, and
-  appends its entry.
-
-name: approval-default-not-at-installation
-calls: Settings.PutApprovalDefault
-scopes: installation
-checks: PutApprovalDefault at the installation returns ErrInvalid.
-
-name: approval-default-path-sets-must-resolve
-calls: Settings.PutApprovalDefault
-scopes: collection/acme/prod
-checks: An approval default whose Reads names a path set that does not resolve returns
-  ErrInvalid.
-
-name: carry-over-default-off
-calls: Settings.CarryOver
-scopes: installation namespace/acme
-checks: A scope with no stored setting returns off with version 0.
-
-name: carry-over-round-trip
-calls: Settings.PutCarryOver
-scopes: namespace/acme collection/acme/prod unit/acme/pulumi/web%2Fprod
-checks: PutCarryOver stores on, off and forbidden with the version rules of Objects.Put.
-
-name: carry-over-on-at-installation
-calls: Settings.PutCarryOver
-scopes: installation
-checks: PutCarryOver of on at the installation returns ErrInvalid, and forbidden commits.
-
-name: settings-fence
-calls: Settings.PutCarryOver
-scopes: collection/acme/prod
-checks: A setting write with a stale fence returns namespace.ErrFenced and changes nothing.
-
-name: set-state-keeps-version
-calls: StateStore.SetState
-scopes: namespace/acme
-policies: namespace/acme/cost-cap
-checks: SetState to invalid keeps the version, Get returns the state, and no audit entry is
-  appended.
-
-name: set-state-stale-version
-calls: StateStore.SetState
-scopes: namespace/acme
-policies: namespace/acme/cost-cap
-checks: SetState with another version returns ErrConflict, and with an unknown gate ErrNotFound.
-
-name: save-clears-invalid
-calls: Objects.Put
-kinds: gate
-scopes: namespace/acme
-policies: namespace/acme/cost-cap
-checks: After SetState to invalid, a Put of the gate by a person stores the state that Put
-  names, so a save clears invalid.
-
-name: record-round-trip
-calls: Records.Put
-scopes: namespace/acme unit/acme/pulumi/web%2Fprod
-policies: installation/builtin/plan-readable unit/acme/pulumi/web%2Fprod/cost-cap
-checks: Put and Get keep each field: the fact document of each unit, the path set versions, each
-  policy result, the requirements with carried signatures, the fixed controls and the
-  result.
-
-name: record-other-namespace-not-found
-calls: Records.Get
-scopes: namespace/acme namespace/globex
-checks: Get of a record of acme with the namespace globex returns ErrNotFound.
-
-name: record-used-id
-calls: Records.Put
-scopes: namespace/acme
-checks: Put of a used record ID returns ErrConflict and keeps the first record.
-
-name: record-fence
-calls: Records.Put
-scopes: namespace/acme namespace/globex
-checks: Put with a stale fence returns namespace.ErrFenced, and with the fence of another
-  namespace ErrInvalid.
-
-name: record-of-installation-object
-calls: Records.NoteRefusal
-scopes: installation
-policies: installation/no-agent-tokens
-checks: A refusal of an access limit on an installation object is stored with the zero fence and
-  read with the empty namespace.
-
-name: list-by-change-oldest-first
-calls: Records.ListByChange
-scopes: namespace/acme
-checks: ListByChange returns the records of one change, oldest first, and none of another
-  change.
-
-name: query-window-and-limit
-calls: Records.Query
-scopes: namespace/acme
-checks: Query returns the records of its point with At in [From, To), newest first, at most
-  Limit, and returns ErrInvalid for a limit of 0 or above 1000.
-
-name: note-refusal-coalesces
-calls: Records.NoteRefusal
-scopes: namespace/acme
-policies: namespace/acme/no-agent-secrets
-checks: A second refusal of the same subject, action and limit within the window returns the
-  first ID, adds 1 to Count and sets LastAt.
-
-name: note-refusal-new-record
-calls: Records.NoteRefusal
-scopes: namespace/acme
-policies: namespace/acme/no-agent-secrets namespace/acme/no-destroy
-checks: A refusal after the window, of another subject, action or limit, stores a new record
-  with Count 1.
-`
-
-// engineTable holds the cases of gate.Engine.
-const engineTable = `
-name: empty-set-matches-nothing
-calls: Engine.Evaluate
-checks: An empty policy set gives one answer for each request, with no match and no diagnostic.
-
-name: condition-matches
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/cost-cap
-checks: A gate with context.cost.available && context.cost.deltaMonthly > 10000 matches a
-  document with a delta of 15000 and not one of 5000.
-
-name: empty-condition-is-true
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/always
-checks: A gate with an empty condition matches each request of its decision point.
-
-name: unless-exempts
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/no-destroy
-checks: A gate that matches does not match when its unless is true.
-
-name: action-is-pinned
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/cost-cap
-checks: A gate of change.planned never matches a request of change.apply or state.write.
-
-name: matched-ids-keep-scope
-calls: Engine.Evaluate
-scopes: installation namespace/acme unit/acme/pulumi/web%2Fprod
-policies: installation/cost-cap namespace/acme/cost-cap unit/acme/pulumi/web%2Fprod/cost-cap
-checks: Three gates with one ID in three scopes that each match are three distinct matched
-  policy IDs, equal to the IDs of the set.
-
-name: builtin-id
-calls: Engine.Evaluate
-scopes: installation
-policies: installation/builtin/plan-readable
-checks: A built-in gate matches with its policy ID installation/builtin/plan-readable.
-
-name: principal-groups-are-parents
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/sre-only
-checks: A gate with unless { principal in OpenDustpan::Group::"sre" } does not match a principal
-  with the group sre.
-
-name: path-set-attributes
-calls: Engine.Evaluate
-scopes: collection/acme/prod
-policies: collection/acme/prod/network-only
-checks: A gate that reads context.paths.available && context.paths.only["network"] matches when
-  Go gave only true for the path set network.
-
-name: error-is-diagnostic
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/overflow namespace/acme/cost-cap
-checks: A gate that gives an evaluation error, for example an overflow, is a diagnostic and not
-  a match, the other gates still match, and the call returns no error.
-
-name: answers-in-request-order
-calls: Engine.Evaluate
-scopes: unit/acme/pulumi/web%2Fprod unit/acme/opentofu/net
-policies: namespace/acme/cost-cap
-checks: Evaluate of two requests returns two answers in request order, each echoing its request
-  ID.
-
-name: access-limit-forbids
-calls: Engine.Evaluate
-scopes: collection/acme/prod
-policies: collection/acme/prod/no-agent-destroy
-checks: An access limit set with the fixed permit gives the forbid policy as matched for an
-  agent principal, and nothing for a person.
-
-name: deterministic
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/cost-cap
-checks: The same set and requests give the same answers, also when the policies come in another
-  order.
-
-name: canceled-context
-calls: Engine.Evaluate
-checks: Evaluate with a canceled context returns an error that wraps the context error or
-  ErrUnavailable, and no answer.
-
-name: external-wrong-answer
-calls: Engine.Evaluate
-scopes: namespace/acme
-policies: namespace/acme/cost-cap namespace/acme/unknown
-checks: For the external adapter: an answer that does not authenticate, that does not echo the
-  request ID or the set version, or that names namespace/acme/unknown, which is not in the
-  set, returns ErrUnavailable.
-
-name: check-accepts-valid
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/cost-cap namespace/acme/no-agent-destroy
-checks: Check of a valid gate and a valid forbid limit returns nil.
-
-name: check-refuses-permit-limit
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/permit-all
-checks: Check of an access limit with the effect permit returns a *CheckError that wraps
-  ErrInvalid.
-
-name: check-refuses-second-policy
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/injection
-checks: A condition that closes the clause and starts a second policy is refused.
-
-name: check-refuses-action
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/names-action
-checks: A condition that names action is refused.
-
-name: check-refuses-unknown-attribute
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/risk
-checks: A condition that reads context.risk.score, which the schema does not name, is refused.
-
-name: check-refuses-has-on-schema-attribute
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/has-cost
-checks: A condition with context has cost is refused.
-
-name: check-refuses-unread-available
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/cost-no-flag
-checks: A condition that reads context.cost.deltaMonthly and not context.cost.available is
-  refused.
-
-name: check-refuses-type-error
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/type-error
-checks: A condition that compares context.plan.destroy with a string is refused.
-
-name: check-refuses-group-of-other-point
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/write-cost
-checks: A gate of state.write that reads the group cost, which state.write does not hold, is
-  refused.
-
-name: check-refuses-unknown-path-set
-calls: Engine.Check
-scopes: collection/acme/prod
-policies: collection/acme/prod/unknown-set
-checks: A gate that reads paths.touches of a path set that the schema of its scope does not hold
-  is refused.
-
-name: check-one-diagnostic-each
-calls: Engine.Check
-scopes: namespace/acme
-policies: namespace/acme/risk namespace/acme/type-error namespace/acme/cost-cap
-checks: Check of two refused policies and one valid policy returns a *CheckError with one
-  diagnostic for each refused policy, by policy ID.
-`

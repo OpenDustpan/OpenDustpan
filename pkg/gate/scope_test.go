@@ -24,7 +24,7 @@ func mustUnit(t *testing.T, tool, name string) gate.Scope {
 func TestScopeKeyRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	blueprint, err := gate.BlueprintScope("web service", "1.2.0")
+	blueprint, err := gate.BlueprintScope("web-service", 12)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestScopeKeyRoundTrip(t *testing.T) {
 			gate.LevelUnit,
 		},
 		{"unit with UTF-8", mustUnit(t, "pulumi", "é"), "unit/acme/pulumi/%C3%A9", gate.LevelUnit},
-		{"blueprint", blueprint, "blueprint/web%20service/1.2.0", gate.LevelBlueprint},
+		{"blueprint", blueprint, "blueprint/web-service/12", gate.LevelBlueprint},
 		{"profile", profile, "profile/acme/prod%2Feu", gate.LevelProfile},
 	}
 
@@ -122,6 +122,11 @@ func TestParseScopeKeyRefuses(t *testing.T) {
 		{"raw space", "unit/acme/pulumi/a b"},
 		{"raw reserved", "unit/acme/pulumi/a:b"},
 		{"blueprint empty version", "blueprint/web/"},
+		{"blueprint version 0", "blueprint/web/0"},
+		{"blueprint leading zero", "blueprint/web/01"},
+		{"blueprint dotted version", "blueprint/web/1.2.0"},
+		{"blueprint uppercase name", "blueprint/Web/1"},
+		{"blueprint encoded name", "blueprint/web%20service/1"},
 		{"profile bad namespace", "profile/@acme/p"},
 		{"level case", "Namespace/acme"},
 	}
@@ -148,12 +153,14 @@ func TestScopeConstructorsRefuse(t *testing.T) {
 		t.Fatalf("UnitScope with no tool: %v, want ErrInvalid", err)
 	}
 
-	if _, err := gate.BlueprintScope("", "1"); !errors.Is(err, gate.ErrInvalid) {
-		t.Fatalf("BlueprintScope with no name: %v, want ErrInvalid", err)
+	for _, name := range []string{"", "Web", "web service", "1web", strings.Repeat("a", 64)} {
+		if _, err := gate.BlueprintScope(name, 1); !errors.Is(err, gate.ErrInvalid) {
+			t.Fatalf("BlueprintScope(%q) = %v, want ErrInvalid: the name must pass catalog.ValidName", name, err)
+		}
 	}
 
-	if _, err := gate.BlueprintScope("web", strings.Repeat("1", 301)); !errors.Is(err, gate.ErrInvalid) {
-		t.Fatalf("BlueprintScope with a long version: %v, want ErrInvalid", err)
+	if _, err := gate.BlueprintScope("web", 0); !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("BlueprintScope with version 0: %v, want ErrInvalid", err)
 	}
 
 	if _, err := gate.ProfileScope("acme", "\xff"); !errors.Is(err, gate.ErrInvalid) {
@@ -202,12 +209,12 @@ func TestScopeAccessorsWideLevels(t *testing.T) {
 		t.Fatal("the installation holds the config routes and no approval default")
 	}
 
-	bp, err := gate.BlueprintScope("web", "2")
+	bp, err := gate.BlueprintScope("web", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if v, ok := bp.Blueprint(); !ok || v.Name != "web" || v.Version != "2" || bp.HoldsConfig() {
+	if v, ok := bp.Blueprint(); !ok || v.Name != "web" || v.Version != 2 || bp.HoldsConfig() {
 		t.Fatalf("blueprint scope: %#v %v config %v", v, ok, bp.HoldsConfig())
 	}
 
