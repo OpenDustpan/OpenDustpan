@@ -387,7 +387,18 @@ func sqliteBackupTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(base, sqliteIdentityBackupTables(), sqliteSessionBackupTables(), sqliteImportBackupTables())
+	return slices.Concat(base, sqliteLaterBackupTables())
+}
+
+// sqliteLaterBackupTables lists the column lists of the tables that follow the
+// base list in the order of backup.Tables.
+func sqliteLaterBackupTables() []sqliteBackupTable {
+	return slices.Concat(
+		sqliteIdentityBackupTables(),
+		sqliteSessionBackupTables(),
+		sqliteImportBackupTables(),
+		sqliteProfileBackupTables(),
+	)
 }
 
 // sqliteControlTables lists the column list of every table of

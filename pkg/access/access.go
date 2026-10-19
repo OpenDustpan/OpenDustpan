@@ -159,6 +159,10 @@ var families = map[identity.Action]Family{
 	identity.ActionUnitReadAccess:                 FamilyData,
 	identity.ActionUnitSetContext:                 FamilyData,
 	identity.ActionNamespaceSetContext:            FamilyData,
+	identity.ActionProfileRead:                    FamilyData,
+	identity.ActionProfileWrite:                   FamilyData,
+	identity.ActionProfileOpen:                    FamilyData,
+	identity.ActionProfileManage:                  FamilyData,
 
 	identity.ActionCallerRead:     FamilySelf,
 	identity.ActionRoleRead:       FamilySelf,

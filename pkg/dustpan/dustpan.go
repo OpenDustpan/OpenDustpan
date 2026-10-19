@@ -47,6 +47,7 @@ import (
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
+	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -73,6 +74,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -152,6 +154,7 @@ type settings struct {
 	// blobStore. Every other user reads blobStore.
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
+	profileStore         profile.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
 	logger               *slog.Logger
@@ -288,6 +291,12 @@ func WithBlobStore(s blob.Store) Option {
 // object takes at most one eighth of maxBytes.
 func WithBlobCache(maxBytes int64) Option {
 	return func(o *settings) { o.blobCacheBytes = maxBytes }
+}
+
+// WithProfileStore sets the store of profiles. It is optional: without it the
+// server serves no profile route.
+func WithProfileStore(st profile.Store) Option {
+	return func(o *settings) { o.profileStore = st }
 }
 
 // WithInventoryReader sets the inventory projection reader. Required.
@@ -586,6 +595,7 @@ func defaultSettings() *settings {
 		blobCacheBytes:          0,
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
+		profileStore:            nil,
 		authenticator:           nil,
 		authorizer:              nil,
 		logger:                  slog.New(slog.DiscardHandler),
@@ -881,6 +891,7 @@ type adapters struct {
 	inventory   http.Handler
 	audit       http.Handler
 	context     http.Handler
+	profiles    http.Handler
 	tfe         http.Handler
 	tofuHTTP    http.Handler
 	server      http.Handler
@@ -950,13 +961,8 @@ func newAdapters(
 	}
 
 	serverAPI, restores, err := newInstallationAPI(cfg, installationDeps{
-		services: svc,
-		backups:  backups,
-		maint:    maint,
-		observed: observed,
-		chain:    chain,
-		policies: sessionPolicies,
-		signIn:   signIn,
+		services: svc, backups: backups, maint: maint, observed: observed, chain: chain, policies: sessionPolicies,
+		signIn: signIn,
 	})
 	if err != nil {
 		return adapters{}, err
@@ -967,6 +973,7 @@ func newAdapters(
 		inventory:   neutral.inventory,
 		audit:       neutral.audit,
 		context:     neutral.context,
+		profiles:    neutral.profiles,
 		tfe:         tfeAPI,
 		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
@@ -984,6 +991,8 @@ type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
 	context   http.Handler
+	// profiles is nil when no profile store is set.
+	profiles http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1004,7 +1013,12 @@ func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 		return neutralHandlers{}, err
 	}
 
-	return neutralHandlers{inventory: units, audit: entries, context: contexts}, nil
+	profiles, err := newProfileHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	return neutralHandlers{inventory: units, audit: entries, context: contexts, profiles: profiles}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -1950,6 +1964,45 @@ func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("context api: %w", err)
+	}
+
+	return handler, nil
+}
+
+// newProfileHandler builds the profile API, or returns nil when no profile
+// store is set.
+func newProfileHandler(svc services, cfg *settings) (http.Handler, error) {
+	if cfg.profileStore == nil {
+		return nil, nil //nolint:nilnil // No profile API: no profile store is set.
+	}
+
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
+	profiles, err := profile.NewService(profile.Config{
+		Store:      cfg.profileStore,
+		Namespaces: cfg.namespaceStore,
+		Sealer:     svc.secrets,
+		Audit:      entries,
+		Authorizer: cfg.authorizer,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("profile service: %w", err)
+	}
+
+	handler, err := profileapi.NewHandler(profileapi.Config{
+		Profiles:      profiles,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
+		Logger:        cfg.logger,
+		Now:           cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("profile api: %w", err)
 	}
 
 	return handler, nil
@@ -3009,6 +3062,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.context, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	// A path under the prefix that no handler serves answers 404 in the shape

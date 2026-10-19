@@ -2789,3 +2789,78 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(lock_key)::text, 0));
 SELECT namespace_id
 FROM gate_records
 WHERE id = sqlc.arg(id);
+
+-- name: InsertProfile :exec
+-- A new live profile in the namespace with the stable ID namespace_id.
+INSERT INTO profiles (
+    namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(name), sqlc.arg(latest), sqlc.arg(created_by),
+    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms), 0
+);
+
+-- name: InsertProfileRevision :exec
+INSERT INTO profile_revisions (
+    namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(profile_id), sqlc.arg(number), sqlc.arg(document), sqlc.arg(document_sha256),
+    sqlc.arg(author), sqlc.arg(created_at_ms), sqlc.arg(reason)
+);
+
+-- name: GetLiveProfileByID :one
+SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+FROM profiles
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0;
+
+-- name: GetLiveProfileByName :one
+SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+FROM profiles
+WHERE namespace_id = sqlc.arg(namespace_id) AND name = sqlc.arg(name) AND deleted_at_ms = 0;
+
+-- name: CountLiveProfiles :one
+SELECT COUNT(*)
+FROM profiles
+WHERE namespace_id = sqlc.arg(namespace_id) AND deleted_at_ms = 0;
+
+-- name: ListLiveProfiles :many
+-- The live profiles of a namespace after the name after_name, ordered by name.
+-- A folder limits the list to the names that start with folder and a slash.
+SELECT namespace_id, id, name, latest, created_by, created_at_ms, updated_at_ms, deleted_at_ms
+FROM profiles
+WHERE namespace_id = sqlc.arg(namespace_id)
+  AND deleted_at_ms = 0
+  AND name > sqlc.arg(after_name)
+  AND (CAST(sqlc.arg(folder) AS TEXT) = ''
+       OR substr(name, 1, length(CAST(sqlc.arg(folder) AS TEXT)) + 1) = CAST(sqlc.arg(folder) AS TEXT) || '/')
+ORDER BY name
+LIMIT sqlc.arg(page_limit);
+
+-- name: GetProfileRevision :one
+SELECT namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
+FROM profile_revisions
+WHERE namespace_id = sqlc.arg(namespace_id) AND profile_id = sqlc.arg(profile_id) AND number = sqlc.arg(number);
+
+-- name: ListProfileRevisions :many
+-- The revisions of a profile with a number below before_number, newest first.
+SELECT namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
+FROM profile_revisions
+WHERE namespace_id = sqlc.arg(namespace_id) AND profile_id = sqlc.arg(profile_id)
+  AND number < sqlc.arg(before_number)
+ORDER BY number DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: MoveProfileLatest :execrows
+-- Moves the newest revision from base to next. It changes no row when the
+-- newest revision is another.
+UPDATE profiles
+SET latest = sqlc.arg(next), updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
+  AND latest = sqlc.arg(base);
+
+-- name: MarkProfileDeleted :execrows
+-- Frees the name of a live profile. A non-zero if_latest must be the newest
+-- revision.
+UPDATE profiles
+SET deleted_at_ms = sqlc.arg(deleted_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
+  AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
