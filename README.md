@@ -411,7 +411,8 @@ flag and environment variable of `opendustpan serve`.
 ## Development
 
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
-golangci-lint, NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
+golangci-lint, the module age check (no module version is younger than 14
+days), NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
 check, the docs lint and the tests with the race detector. goleak fails a test
 package that leaves a goroutine running. The `Makefile` lists the tool
 versions to install. NilAway and govulncheck need no install. Set
