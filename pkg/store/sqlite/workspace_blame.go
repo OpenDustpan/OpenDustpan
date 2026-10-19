@@ -84,10 +84,15 @@ func checkBlameOrder(ctx context.Context, q *db.Queries, b workspace.ItemBlame) 
 		)
 	}
 
-	_, err = q.GetWorkspaceBlameItem(ctx, db.GetWorkspaceBlameItemParams{
+	item, err := q.GetWorkspaceBlameItem(ctx, db.GetWorkspaceBlameItemParams{
 		WorkspaceID: b.Workspace.String(), StateVersionID: b.StateVersion.String(),
 	})
 	if err == nil {
+		if item.Ordinal == b.Ordinal {
+			// A concurrent record of the same blame won the race: no change.
+			return true, nil
+		}
+
 		return false, fmt.Errorf("%w: state version %s already has a blame", workspace.ErrInvalidBlame, b.StateVersion)
 	}
 

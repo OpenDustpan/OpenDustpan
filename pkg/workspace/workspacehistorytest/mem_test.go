@@ -127,7 +127,11 @@ func (m *mem) RecordResourceChanges(
 	}
 
 	key := itemKey{workspace: b.Workspace, stateVersion: b.StateVersion}
-	if _, found := m.ordinals[key]; found {
+	if ordinal, found := m.ordinals[key]; found {
+		if ordinal == b.Ordinal {
+			return nil
+		}
+
 		return fmt.Errorf("%w: state version %s already has a blame", workspace.ErrInvalidBlame, b.StateVersion)
 	}
 

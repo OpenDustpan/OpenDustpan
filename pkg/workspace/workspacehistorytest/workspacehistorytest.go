@@ -16,6 +16,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +61,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a fence of another namespace refuses a record", test: testFenceOfOtherNamespace},
 		{name: "a record that skips an ordinal is refused", test: testSkippedOrdinal},
 		{name: "a state version with a blame is refused at another ordinal", test: testSecondBlame},
+		{name: "concurrent records of the same blame all succeed and store it once", test: testConcurrentRecord},
 		{name: "summaries count the rows by kind and leave out a state version without a blame", test: testSummaries},
 	}
 
@@ -536,6 +538,43 @@ func testSecondBlame(t *testing.T, s Store) {
 	}
 }
 
+func testConcurrentRecord(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+
+	const writers = 8
+
+	for ordinal := int64(1); ordinal <= 5; ordinal++ {
+		var wg sync.WaitGroup
+
+		errs := make([]error, writers)
+
+		for i := range writers {
+			wg.Go(func() {
+				b := blame("ws-one", ordinal, row("ws-one", ordinal, addrVPC, workspace.ResourceCreated))
+				errs[i] = s.RecordResourceChanges(t.Context(), "acme", b, f)
+			})
+		}
+
+		wg.Wait()
+
+		for i, err := range errs {
+			if err != nil {
+				t.Errorf("ordinal %d, writer %d: err = %v, want nil", ordinal, i, err)
+			}
+		}
+
+		got, err := s.ItemChanges(t.Context(), "ws-one", svOf(ordinal))
+		if err != nil || got.Ordinal != ordinal || len(got.Changes) != 1 {
+			t.Fatalf("blame of ordinal %d = %+v, %v, want one row at that ordinal", ordinal, got, err)
+		}
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 5 {
+		t.Errorf("cursor = %d, %v, want 5", cursor, err)
+	}
+}
+
 func testSummaries(t *testing.T, s Store) {
 	t.Helper()
 	f := makeNamespace(t, s)
@@ -596,6 +635,8 @@ func testSummaries(t *testing.T, s Store) {
 		t.Errorf("summaries of ws-two = %+v, %v, want its one item", other, err)
 	}
 
+	checkSummaryEdges(t, s, want[svOf(1)])
+
 	none, err := s.ItemSummaries(t.Context(), "ws-one", nil)
 	if err != nil || len(none) != 0 {
 		t.Errorf("summaries of no state version = %+v, %v, want none", none, err)
@@ -615,5 +656,21 @@ func testWorkspacesApart(t *testing.T, s Store) {
 
 	if cursor, err := s.BlameCursor(t.Context(), "ws-two"); err != nil || cursor != 1 {
 		t.Errorf("cursor of ws-two = %d, %v, want 1", cursor, err)
+	}
+}
+
+// checkSummaryEdges checks ItemSummaries for an unknown workspace and for a
+// repeated state version. first is the summary of svOf(1) in ws-one.
+func checkSummaryEdges(t *testing.T, s Store, first workspace.ItemSummary) {
+	t.Helper()
+
+	unknown, err := s.ItemSummaries(t.Context(), "ws-missing", []workspace.StateVersionID{svOf(1)})
+	if err != nil || unknown == nil || len(unknown) != 0 {
+		t.Errorf("summaries of an unknown workspace = %+v, %v, want an empty map and nil", unknown, err)
+	}
+
+	twice, err := s.ItemSummaries(t.Context(), "ws-one", []workspace.StateVersionID{svOf(1), svOf(1)})
+	if err != nil || len(twice) != 1 || twice[svOf(1)] != first {
+		t.Errorf("summaries with a repeated state version = %+v, %v, want one entry", twice, err)
 	}
 }
