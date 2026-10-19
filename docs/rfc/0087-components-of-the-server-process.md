@@ -40,8 +40,8 @@ HTTP capacity without more background workers, or the opposite. A slow
 backup or a long audit chain migration runs in the same process that
 answers the Pulumi CLI and OpenTofu.
 
-The spike lists 21 items that break or drift with 2 or more instances
-(M1 to M21). The fixes do not need components. With the default "all",
+The spike lists 24 items that break or drift with 2 or more instances
+(M1 to M24). The fixes do not need components. With the default "all",
 each instance runs every part, and the fixes make that safe. Components
 come after the cap of the Helm chart goes (ADR 246 decision 12).
 
@@ -76,8 +76,8 @@ role, service, mode."
 
 ## Proposal (product manager)
 
-The product manager designed the proposal against the Temporal server model. It does not
-claim to match Temporal.
+The product manager designed the proposal against the Temporal server
+model. It does not claim to match Temporal.
 
 ### Components
 
@@ -102,6 +102,11 @@ needs: the store and its migrations, the key-encryption key check,
   solo operator changes nothing.
 - An unknown name stops the start, and the error names the valid
   components.
+- Components and module switches are separate. A module switch
+  ([ADR 211](../adr/0211-optional-modules-and-the-capabilities-document.md))
+  is an installation setting and applies to each component. A component
+  is a setting of one process. The capabilities document lists modules,
+  not components, and each `api` process answers it the same.
 - `opendustpan dev` takes no flag and always runs `all`.
 - The start log and the version row of the instance (ADR 72 decision 11)
   record the components. The installation API lists them for each
@@ -118,8 +123,10 @@ needs: the store and its migrations, the key-encryption key check,
 - `api` is ready when the store and the blob store answer, and the audit
   chain gate admits requests (spike item M16).
 - `worker` is ready when the store answers and its claim loop ran in the
-  last 2 claim intervals. A worker that cannot claim is not ready, so
-  Kubernetes restarts it.
+  last 2 claim intervals. A worker that cannot claim is not ready. A
+  rollout then stops, and an alert on unready pods fires. A failed
+  readiness probe does not restart a pod. Only the liveness probe does.
+  Owner question 8.
 - `/health/ready/<component>` answers for one component, so that a probe
   of a process with `all` can check one part.
 
@@ -151,10 +158,13 @@ the operation waits. So:
 | M13, M15 Audit sinks | `worker` |
 | M14, M18 Settings drift | Each process at start |
 | M16 Readiness | Each component |
-| M17 Inventory retention sweep | `worker` (schedule). `api` starts a sweep on request as an operation |
+| M17 Inventory retention sweep | `worker` (schedule). `api` starts a sweep on request as an operation. This changes the route from an inline sweep to a durable operation (`internal/api/server/deleted.go:97` runs it inline today). |
 | M19 Pulumi blob orphan sweep | `api` (request path) |
 | M20 Ticker fallback | `worker`. A process with `worker` refuses to start without a durable store |
 | M21 Sign-in throttle | `api` |
+| M22 Audit chain gauge | `worker` writes the check result. Each process reads it at scrape time |
+| M23 Pulumi update lease expiry, session expiry | `api` (request path) |
+| M24 Bootstrap admin tokens | Each process at start |
 | S1 Migrations | Each process at start |
 | S2 Schedules and operations | `worker` |
 | S3 Audit chain migration | `worker` |
@@ -194,12 +204,12 @@ goes:
    only `worker` reads (for example `--backup-target`) refuse on a process
    without `worker`, or does the process ignore it? Recommendation:
    ignore, and log at start that the flag has no effect.
-6. **RFC 79 open question 6: does a lease partition stop writes?** RFC 79
-   section 5 makes a home region refuse writes and signatures when it
-   cannot renew its home lease at the control home. So a network
-   partition from the control home stops the writes of each namespace in
-   the regions that it cuts off. In this RFC, the renewal of the home
-   lease is background work, so it runs on `worker`. Options:
+6. **RFC 79 open question 6: does a lease partition stop writes?** The
+   owner answers it in RFC 79. RFC 79 section 5 makes a home region
+   refuse writes and signatures when it cannot renew its home lease at
+   the control home. So a network partition from the control home stops
+   the writes of each namespace in the regions that it cuts off. The
+   options a to d are as RFC 79 writes them:
    a. **Stop writes (RFC 79 proposal).** Consistency first. No two homes
       write one namespace. A partition is an outage of writes in the
       cut-off region. The docs publish the lease time with the lag.
@@ -214,13 +224,20 @@ goes:
    d. **A quorum of members as the lease authority.** A home renews at a
       majority of members. Only the minority side of a partition stops.
       It costs a consensus protocol in the server.
-   And for components: when the `worker` processes of a home region stop,
-   the home lease is not renewed. Does that also stop writes on `api`
-   (the same rule as a partition), or does `api` renew the lease too?
    Recommendation: option a for the first federation, as RFC 79
-   proposes. Each process with `api` or `worker` renews the home lease,
-   so that the loss of all workers does not stop writes.
+   proposes.
+7. **Which processes renew the home lease?** When the `worker` processes
+   of a home region stop, the home lease is not renewed. Does that also
+   stop writes on `api` (the same rule as a partition)? Recommendation:
+   each process renews the home lease, whatever its components, so that
+   the loss of all `worker` processes does not stop writes. A process
+   with only `api` then does background work for the lease.
+8. **Liveness of `worker`.** Does the `worker` liveness probe also check
+   the claim loop? A failed readiness probe does not restart a pod. A
+   liveness probe that checks the claim loop restarts a stuck worker, and
+   it can also restart all workers when the database is down.
 
 ## Outcome
 
 Empty until the RFC is accepted (link the ADR) or dropped (say why).
+When this RFC is accepted, the Outcome of RFC 7 links the ADR.
