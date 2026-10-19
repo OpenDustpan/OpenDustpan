@@ -30,15 +30,14 @@ import (
 // fmt.Errorf and %w, and never returns an error of its HTTP client or of
 // the forge API alone.
 var (
-	// ErrNotFound reports a repository, a ref, a commit, a file, a review
-	// request or a comment that the forge does not have, or that the
-	// credential of the connection cannot see. The forge APIs answer both
+	// ErrNotFound reports a repository, a ref, a commit, a file or a review
+	// request that the forge does not have, or that the credential of the
+	// connection cannot see. The forge APIs answer both
 	// cases the same, so the port does too.
 	ErrNotFound = errors.New("forge object not found")
 	// ErrConflict reports a change whose base moved: a file of a commit
 	// that changed after the base commit, a branch that exists with
-	// another head, or a merge of a review request whose head is not the
-	// expected commit.
+	// another head, or a review request that merged.
 	ErrConflict = errors.New("forge object changed after the base")
 	// ErrRefused reports a change that the forge refused for a rule of the
 	// forge: branch protection, a ruleset, a required check or review, or
@@ -54,7 +53,7 @@ var (
 	// can pass. UnavailableError wraps it with the wait time that the forge
 	// gave.
 	ErrUnavailable = errors.New("forge is not available")
-	// ErrTooLarge reports a file, a diff or a request above the limit that
+	// ErrTooLarge reports a file or a request above the limit that
 	// the caller gave or that the forge applies.
 	ErrTooLarge = errors.New("forge object is too large")
 	// ErrUnsupported reports an operation that the forge, or the auth kind
@@ -148,24 +147,23 @@ type Connection struct {
 	// example the app ID and the installation ID of a GitHub App.
 	Params map[string]string
 	// Push is true when the connection may write to repositories. A
-	// connection with no push access reads only.
+	// connection with no push access reads only: its Capabilities list no
+	// CapCommit and no CapReview.
 	Push bool
 }
 
 // Credential is one credential set of a connection, unsealed for one
-// Open. Secret holds the private key of an app or the token. EventSecret
-// holds the secret that the forge uses to sign the events that it sends for
-// the connection. The server seals both in the same set. Two sets are
-// active during a rotation, and an event is valid when it matches the
-// EventSecret of either set. The adapter never logs a secret and never
-// returns a part of one in an error or in an event.
+// Open. Secret holds the private key of an app or the token. The secret
+// that signs the events of the forge is not here: it belongs to the app
+// registration of the forge, not to a connection, and the server gives it
+// to ParseEvent. The adapter never logs a secret and never returns a part
+// of one in an error or in an event.
 type Credential struct {
 	// SetID names the credential set, so that a log line can name the set
 	// that failed without a part of the secret.
-	SetID       string
-	Secret      []byte
-	EventSecret []byte
-	CreatedAt   time.Time
+	SetID     string
+	Secret    []byte
+	CreatedAt time.Time
 }
 
 // Opener makes a Forge for one connection and one credential set. Each
@@ -225,9 +223,10 @@ type Commits interface {
 	// req.NewBranch, it creates the branch at req.Base. It returns
 	// ErrConflict when a file of req.Changes differs at the head of the
 	// branch from req.Base, or when a new branch exists with another
-	// head. It returns ErrRefused when branch protection or a missing
-	// permission stops the commit, and ErrInvalid for a request that
-	// fails ValidateCommit.
+	// head. It returns ErrNotFound for a missing repository, and for a
+	// missing branch when req.NewBranch is not set. It returns ErrRefused
+	// when branch protection or a missing permission stops the commit, and
+	// ErrInvalid for a request that fails ValidateCommit.
 	Commit(ctx context.Context, repo string, req CommitRequest) (Commit, error)
 	// FindCommit returns the newest commit on ref, at or after since,
 	// whose message has the trailer line trailer, for example
@@ -250,8 +249,9 @@ type Reviews interface {
 	// returns ErrNotFound for a review request that does not exist.
 	ReadReview(ctx context.Context, repo, id string) (Review, error)
 	// CloseReview closes the review request id with no merge. A review
-	// request that is closed already returns nil. It returns ErrConflict
-	// for a review request that merged.
+	// request that is closed already returns nil. It returns ErrNotFound
+	// for a review request that does not exist, and ErrConflict for a
+	// review request that merged.
 	CloseReview(ctx context.Context, repo, id string) error
 }
 
@@ -262,7 +262,8 @@ type Tokens interface {
 	// An app connection answers a token that reads only repo and expires in
 	// at most one hour, with Scoped set. A token connection answers its own
 	// token with Scoped not set. It returns ErrUnsupported when the auth
-	// kind has no token for the git protocol. A token with Scoped not set
+	// kind has no token for the git protocol, and ErrNotFound for a
+	// missing repository. A token with Scoped not set
 	// stays in the server: a caller that gives a token to a runner refuses
 	// it.
 	RepoToken(ctx context.Context, repo string) (Token, error)
@@ -270,14 +271,16 @@ type Tokens interface {
 
 // Events checks an event that the forge sent to the server.
 type Events interface {
-	// ParseEvent checks the signature or the token of r with the
-	// EventSecret of the credential, and returns the event. It returns
-	// ErrSignature for a request that does not match, ErrInvalid for a
+	// ParseEvent checks the signature or the token of r against each of
+	// secrets, which are the active event secrets of the app registration
+	// or of the hook, and returns the event. The event is valid when it
+	// matches any one of them. It returns ErrSignature for a request that
+	// matches none of them, ErrInvalid for a
 	// body that it cannot parse, and ErrUnsupported for a kind of event
 	// that the port does not name. It makes no call to the forge. An
 	// event is a hint: the server reads the object through the API before
 	// it changes a record.
-	ParseEvent(ctx context.Context, r EventRequest) (Event, error)
+	ParseEvent(ctx context.Context, r EventRequest, secrets [][]byte) (Event, error)
 }
 
 // Account is an account of a forge. ID is the stable ID that the forge
@@ -507,30 +510,21 @@ const (
 	// EventPing is the test event that a forge sends when a person sets
 	// up a webhook.
 	EventPing EventKind = "ping"
-	// EventPush is a push to a branch or a tag.
-	EventPush EventKind = "push"
 	// EventReview is a review request that opened, changed its head,
 	// merged or closed.
 	EventReview EventKind = "review"
-	// EventComment is a new or edited comment on a review request.
-	EventComment EventKind = "comment"
 )
 
 // Event is a forge event. DeliveryID is the ID that the forge gives to the
-// delivery, and stays the same across retries of the forge. Ref, Before
-// and After are set for EventPush. ReviewID is set for EventReview and
-// EventComment. CommentID is set for EventComment. InstallationID is set
+// delivery, and stays the same across retries of the forge. ReviewID is set
+// for EventReview. InstallationID is set
 // when the forge sends the events of many installations of one app to one
 // address, for example a GitHub App. The server maps it to the connection.
 type Event struct {
 	DeliveryID     string
 	Kind           EventKind
 	Repo           string
-	Ref            string
-	Before         string
-	After          string
 	ReviewID       string
-	CommentID      string
 	InstallationID string
 	Sender         Account
 }
@@ -552,13 +546,15 @@ const (
 	// with Scoped set or not.
 	CapGitAccess Capability = "git-access"
 	// CapRepoToken covers RepoToken when it answers a token with Scoped
-	// set: one repository, read only, one hour at most.
+	// set: one repository, read only, one hour at most. A forge that lists
+	// CapRepoToken also lists CapGitAccess.
 	CapRepoToken Capability = "repo-token"
 	// CapEvents covers ParseEvent.
 	CapEvents Capability = "events"
 )
 
-// Capabilities is the set of capabilities of a forge connection.
+// Capabilities is the set of capabilities of a forge connection. With Push
+// not set, the list has no commit and no review.
 type Capabilities []Capability
 
 // Has reports whether c holds capability.
@@ -600,8 +596,6 @@ const (
 	ConsumerCatalog Consumer = "catalog"
 	// ConsumerCauseDiff reads the cause diff of a change order.
 	ConsumerCauseDiff Consumer = "cause-diff"
-	// ConsumerTriggers starts a job on a push, a tag or a review request.
-	ConsumerTriggers Consumer = "triggers"
 )
 
 // Needs returns the capabilities that consumer needs from a connection. It
@@ -620,8 +614,6 @@ func Needs(consumer Consumer) Capabilities {
 		return Capabilities{CapFiles}
 	case ConsumerCauseDiff:
 		return Capabilities{CapCompare}
-	case ConsumerTriggers:
-		return Capabilities{CapEvents, CapFiles, CapCompare}
 	}
 
 	return nil

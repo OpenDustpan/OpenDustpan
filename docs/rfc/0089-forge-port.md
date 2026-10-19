@@ -1,13 +1,13 @@
 ---
 rfc: 89
 title: The Forge port, what each consumer needs from a forge, and the forge connection API
-status: discussing
+status: proposed answers; waiting for owner acceptance
 created: 2026-10-19
 ---
 
 # RFC 89. The Forge port, what each consumer needs from a forge, and the forge connection API
 
-Status: discussing. An agent wrote this RFC for issue #886 under the
+Status: proposed answers; waiting for owner acceptance. An agent wrote this RFC for issue #886 under the
 direction of the project manager. It proposes the shape of the `Forge` port
 before the GitHub adapter. The pull request of this RFC also adds the port
 as Go interfaces in `pkg/forge` and an empty conformance suite in
@@ -81,11 +81,10 @@ consumer, and nothing tests that the adapters agree.
    `pkg/forge` describe the behavior, not this RFC.
 8. A comment command never approves, never makes an approval intent or an
    approve link, and never confirms a gate. The summary comment can link to
-   the console page of the job, where the plan is on screen. The command
-   list is limited to commands that start a plan or show a status, and each
+   the console page of the job, where the plan is on screen. Each
    command runs as the linked principal with its actions (owner decision of
    19 October 2026: an approval needs the plan on screen; ADR 146 decision
-   8).
+   8). Q8 proposes a command list.
 
 ## The consumers, and what each needs from a forge
 
@@ -97,7 +96,7 @@ consumer, and nothing tests that the adapters agree.
 | Change order cause diff (`cause-diff`, ADR 196) | Each read of the review | The file diff from base to head, with a byte limit, and an ancestor check. | `Compare` | `compare` |
 | Source fetch (`fetch`, ADR 135) | The `source.fetch` operation, in the server | A credential for the git protocol. The token can be the long-lived token of the connection: it stays in the server. | `RepoToken` | `git-access` |
 | Runner git (`runner-git`, ADR 130 decision 11) | A runner step in the git credential mode `forge` | A token that reads one repository only and expires soon. The runner path refuses a token with `Scoped` not set. | `RepoToken` | `repo-token` |
-| Triggers (`triggers`, RFC 24) | A push, a tag, a review request that opens or changes its head | Signed events. The changed paths from the old head to the new head, to find the affected units. | `ParseEvent`, `Compare`, `Head` | `events`, `files`, `compare` |
+| Triggers (RFC 24) (proposed, no Go constant yet) | A push, a tag, a review request that opens or changes its head | Signed events. The changed paths from the old head to the new head, to find the affected units. | `ParseEvent`, `Compare`, `Head` | `events`, `files`, `compare` |
 | Review request feedback (RFC 27) (proposed, no Go constant yet) | After a plan, and after an apply | A status on the head commit for each unit. One summary comment that the server edits in place. A merge at an expected head, for "apply before merge" (RFC 12). | `SetStatus`, `PutComment`, `MergeReview` (proposed) | `status`, `comment`, `merge` (proposed) |
 | Comment commands (RFC 27) (proposed, no Go constant yet) | A new comment on a review request | A signed event. A read of the comment through the API, with the stable ID of its author, before the server acts. A reply. | `ParseEvent`, `ReadComment`, `PutComment`, `ReadReview` | `events`, `comment`, `review` (proposed) |
 
@@ -105,8 +104,8 @@ consumer, and nothing tests that the adapters agree.
 rows that have a constant. `TestNeeds` in `pkg/forge` lists the same rows,
 one for one. The server checks the map when a feature names a connection, so
 that a feature that a connection cannot serve fails at configuration time,
-not in a job. The first seven rows are in the Go interface now. The last
-two rows wait for the RFCs that need them.
+not in a job. The first six rows are in the Go interface now. The last
+three rows wait for the RFCs that need them.
 
 ## The proposed port
 
@@ -152,12 +151,14 @@ type Forge interface {
 ```
 
 `Connection` and `Credential` are structs of the package. `Credential` holds
-the `Secret` (the private key of an app or a token), the `EventSecret` (the
-secret that signs the events of the forge for the connection), the set ID
-and the creation time. The server seals the two secrets in the same
-credential set (ADR 213 decision 7). When two sets are active, an event is
-valid when it matches the `EventSecret` of either set: the service opens the
-forge with one set after the other. Who makes the event secret is Q9.
+the `Secret` (the private key of an app or a token), the set ID and the
+creation time. It holds no event secret. The event secret belongs to the
+app registration (below, "Webhook intake"), not to a connection (PM
+decision). No registration type exists in Go yet, so `ParseEvent` takes the
+active event secrets as an argument: the intake reads them for the hook ID
+and gives them all to the call. An event is valid when it matches any one of
+them, which is how two active secrets work during a rotation. Who makes the
+event secret is Q9.
 
 Every adapter implements every method. A method that the forge, or the
 auth kind of the connection, cannot do returns `ErrUnsupported`, and
@@ -178,7 +179,9 @@ The capabilities:
 | `repo-token` | `RepoToken` with `Token.Scoped` set: one repository, read only, at most 1 hour |
 | `events` | `ParseEvent` |
 
-A connection with `repo-token` also lists `git-access`. The capabilities
+With `Push` not set, the list has no `commit` and no `review`. The
+capability `repo-token` implies `git-access`: a connection that lists
+`repo-token` also lists `git-access`. The capabilities
 `merge`, `status` and `comment` are proposed with their methods (below).
 
 ### Methods and their errors
@@ -195,13 +198,13 @@ answer, a server error or a rate limit). The adapter wraps a sentinel with
 | `Head(repo, ref)` | The commit at the head of a branch or a tag, with its time. | `ErrNotFound` |
 | `ReadFile(repo, commit, path, limit)` | The content and the blob ID of one file at one full commit ID. | `ErrNotFound`, `ErrTooLarge` |
 | `Compare(repo, base, head, limit)` | Each changed file (added, modified, deleted, renamed), the patch up to `limit` bytes with `Truncated`, and whether `base` is an ancestor of `head`. | `ErrNotFound` |
-| `Commit(repo, req)` | One commit of 1 to 64 file changes (at most 4 MiB) on `req.Branch`, all or none. With `NewBranch`, it creates the branch at `req.Base`. | `ErrConflict` when a changed file differs at the head of the branch from `req.Base`, or a new branch exists with another head. `ErrRefused` for branch protection or a missing permission. `ErrInvalid` and `ErrTooLarge` from `ValidateCommit`, with no call. |
+| `Commit(repo, req)` | One commit of 1 to 64 file changes (at most 4 MiB) on `req.Branch`, all or none. With `NewBranch`, it creates the branch at `req.Base`. | `ErrNotFound` for a missing repository, or a missing branch with `NewBranch` not set. `ErrConflict` when a changed file differs at the head of the branch from `req.Base`, or a new branch exists with another head. `ErrRefused` for branch protection or a missing permission. `ErrInvalid` and `ErrTooLarge` from `ValidateCommit`, with no call. |
 | `FindCommit(repo, ref, trailer, since)` | The newest commit on `ref`, at or after `since`, whose message has the trailer line. | `ErrNotFound` |
 | `OpenReview(repo, req)` | A review request from `req.Branch` into `req.Target`. An open review request of the same branch and the same target is returned, not duplicated. | `ErrNotFound` for a missing branch, `ErrRefused` |
 | `ReadReview(repo, id)` | The state (`open`, `merged`, `closed`), the head, and the merge time and merge commit after a merge. | `ErrNotFound` |
-| `CloseReview(repo, id)` | Closes with no merge. A closed one returns nil. | `ErrConflict` for a merged one |
-| `RepoToken(repo)` | A token for the git protocol. An app connection answers a token that reads only `repo` and expires in at most 1 hour, with `Scoped` set. A `token` connection answers its own token with `Scoped` not set. | `ErrUnsupported` when the auth kind has no token for the git protocol. The runner path refuses a token with `Scoped` not set, so the long-lived token never leaves the server. |
-| `ParseEvent(r)` | Checks the signature or token of an event with the `EventSecret` of the credential, and returns a forge-neutral event: `ping`, `push`, `review` or `comment`, with the delivery ID and, for an app, the installation ID. No call to the forge. | `ErrSignature`, `ErrInvalid`, `ErrUnsupported` for another kind |
+| `CloseReview(repo, id)` | Closes with no merge. A closed one returns nil. | `ErrNotFound` for a missing one, `ErrConflict` for a merged one |
+| `RepoToken(repo)` | A token for the git protocol. An app connection answers a token that reads only `repo` and expires in at most 1 hour, with `Scoped` set. A `token` connection answers its own token with `Scoped` not set. | `ErrUnsupported` when the auth kind has no token for the git protocol. `ErrNotFound` for a missing repository. The runner path refuses a token with `Scoped` not set, so the long-lived token never leaves the server. |
+| `ParseEvent(r, secrets)` | Checks the signature or token of an event against each active event secret of the registration, and returns a forge-neutral event: `ping` or `review` (`push` and `comment` wait for their consumers), with the delivery ID and, for an app, the installation ID. No call to the forge. | `ErrSignature`, `ErrInvalid`, `ErrUnsupported` for another kind |
 
 The sentinels are `ErrNotFound`, `ErrConflict`, `ErrRefused`, `ErrAuth`,
 `ErrUnavailable`, `ErrTooLarge`, `ErrUnsupported`, `ErrSignature` and
@@ -214,7 +217,8 @@ wiring maps `ErrUnavailable` to
 `catalog.ErrForgeUnavailable` and `changeorder.ErrForgeUnavailable`, and
 `ErrConflict` and `ErrRefused` to a failed write-back job (ADR 101
 decision 3). The forge APIs answer "not found" for a repository that the
-credential cannot see, so `ErrNotFound` covers both, as the forge does.
+credential cannot see, so `ErrNotFound` covers both, as the forge does. Each method returns
+`ErrNotFound` for a missing repository.
 
 **The conflict rule of `Commit`.** ADR 101 decision 3 fails a write-back
 only when an edited key changed after the base. The port checks at the
@@ -292,11 +296,11 @@ is not found.
 `pkg/forge/forgetest.Run` takes a factory of a `Harness`: the `Forge`
 under test, a fresh repository, and a `Fixture` that changes the
 repository outside the port (a push by another author, branch protection,
-a merge by a person, a comment, a signed event, a revoked credential).
+a merge by a person, a signed event, a redelivery, a revoked credential).
 Each adapter runs it against a recorded or a fake API of its forge, as
 issue #886 asks for GitHub.
 
-The suite lists 60 table-driven cases (`forgetest.CaseNames`). Each case
+The suite lists 63 table-driven cases (`forgetest.CaseNames`). Each case
 has no body yet and skips with "not implemented". A case gets its body
 before an adapter implements the methods that it covers (CLAUDE.md: a new
 port method gets conformance tests before any adapter implements it). A
@@ -304,15 +308,17 @@ case of a capability that the forge does not list skips for that forge.
 The `Harness` holds the `Opener`, the `Connection` and the `Credential`, so
 that a case can open the forge again with a bad secret or with a second
 credential set. The `Fixture` makes the events with a secret that the case
-gives, and can make the forge fail with a server error or a rate limit. The
+gives (the kind may be one that the port does not name), repeats a
+delivery with `Redeliver` so that a retried delivery keeps its delivery ID,
+and can make the forge fail with a server error or a rate limit. The
 case "an operation outside the capabilities is unsupported" checks that such
 a method returns `ErrUnsupported`. The case "no error and no event holds a
 part of the secret" puts a canary in the secret and in the event secret, and
-checks each error text and each field of each event.
+checks each error text and each field of each event. The case "parse event of an app has the installation ID" skips when `Connection.Auth` is not `app`. The case "a connection with no push access lists no commit and no review" checks the rule of `Push`, and the case "a forge with repo-token also lists git-access" checks the rule above.
 
 ## How the auth kinds map to the port
 
-A connection has a kind (`github`, `gitlab` or `bridge`), an auth kind
+A connection has a kind (`github` or `gitlab`; a bridge kind waits for Q5), an auth kind
 (`app` or `token`), the API address of the forge, parameters that are not
 secret, and a push flag. The credential sets are sealed (ADR 213 decision
 7). `Opener.Open` gets one unsealed set, and the service tries the next
@@ -446,13 +452,20 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   answers it. A GitHub App has one webhook URL for all its installations,
   so the hook ID belongs to an app registration: the connections of one
   namespace with the same app ID share one hook ID and one event secret.
+  The event secret belongs to the app registration, not to a connection (PM
+  decision). The registration holds the app ID, the hook ID and the sealed
+  event secrets, two during a rotation. A `token` connection has a
+  registration of its own, with one connection. The create call refuses with
+  409 an app ID that a connection of another namespace uses.
   `ParseEvent` puts the installation ID of the event in `Event`, and the
   server maps it to the connection whose installation ID parameter matches.
   An event for an installation that no connection names is dropped with 204
   and counted in `forge_event_rejected_total` with the reason
   `unknown-installation`.
-- The route reads at most 2 MiB of body (proposed), finds the connection
-  by the hook ID, and calls `ParseEvent`. It answers 204 to each request,
+- The route reads at most 2 MiB of body (proposed), finds the registration
+  by the hook ID, and calls `ParseEvent` with the active event secrets of
+  that hook ID. The intake checks the event against those secrets before it
+  trusts `InstallationID`. It answers 204 to each request,
   also for an unknown hook ID and a bad signature. The metric
   `forge_event_rejected_total` counts the rejects by reason and connection.
   A body above the limit is dropped with 204, counted as
@@ -472,8 +485,8 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   durable operation. The effects run as durable operations in the `worker`
   component: the reads through the API, the review watcher, the start of a
   trigger. An `api` process never claims an operation.
-- The event secret is part of the credential set (`Credential.EventSecret`).
-  Who makes it, and whether the server answers it, is Q9. Where the events go
+- The event secret is part of the app registration, not of the credential
+  set. Who makes it, and whether the server answers it, is Q9. Where the events go
   after a promotion, or at a replica that does not forward, is Q10.
 
 ## The forge connection REST API
@@ -487,7 +500,7 @@ entry with no part of a credential (ADR 213 decision 7).
 | --- | --- | --- | --- |
 | `GET .../forge-connections` | Lists the connections: ID, kind, auth kind, API address, parameters that are not secret, push flag, default flag, hook ID, and for each credential set its ID and creation time. Never a secret. | `namespace:read-forge-connections` | the namespace |
 | `GET .../forge-connections/{id}` | Reads one connection, as in the list. | `namespace:read-forge-connections` | the namespace |
-| `POST .../forge-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). | `namespace:manage-forge-connections` | the namespace |
+| `POST .../forge-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). Fails with 409 for an app ID that a connection of another namespace uses. | `namespace:manage-forge-connections` | the namespace |
 | `PATCH .../forge-connections/{id}` | Changes the API address, the parameters or the push flag. Never a credential. | `namespace:manage-forge-connections` | the namespace |
 | `DELETE .../forge-connections/{id}` | Deletes the connection and all its credential sets. Fails with 409 for the default connection (ADR 213 decision 8), and for a connection that a code location, a Catalog request home or a job that is not terminal names. | `namespace:manage-forge-connections` | the namespace |
 | `POST .../forge-connections/{id}/make-default` | Makes this connection the default. A custom method (ADR 210 decision 5). | `namespace:manage-forge-connections` | the namespace |
@@ -498,12 +511,15 @@ entry with no part of a credential (ADR 213 decision 7).
 | `POST /forge-events/{hook ID}` | Webhook intake, above. | none (public list) | none |
 
 The built-in roles: `admin` gets both actions. `maintainer` gets
-`namespace:read-forge-connections` (proposed). `namespace:manage-forge-connections`
+`namespace:read-forge-connections` and, by default,
+`namespace:use-forge-connection` (proposed, Q6). `namespace:manage-forge-connections`
 follows the pattern of `namespace:manage-runners` and
 `namespace:read-runners`. Who can name a connection in a code location is
 Q6.
 
 ## Open questions for the owner
+
+Q7 is not here: ADR 213 decision 7 decided it (see "Not in this RFC").
 
 **Q1. Where does the port live?**
 
@@ -608,28 +624,8 @@ request home?**
 Recommendation: B, with C as a later option. A connection can read every
 repository that its credential reaches, so to name it is to pass its
 access to a job. Benchmark: AWS asks for `iam:PassRole` to give a role to
-a service, in addition to the action on the service.
-
-**Q7. Does an operator-wide GitHub App come later?**
-
-ADR 213 decision 7 decides the first version: each namespace registers its
-own app, and the private key is a sealed credential of the namespace. The
-open part is only an app that the operator of the installation registers
-once.
-
-- A. No. Each namespace keeps its own app. (decided by ADR 213 decision 7)
-- B. Later, an operator-wide app. A namespace connection holds only an
-  installation ID, and the private key is a secret of the installation. This
-  needs an RFC against ADR 213 decision 7 and ADR 220, because one key would
-  serve many namespaces.
-
-Recommendation: A, and no RFC for B until an operator asks for it. With B,
-the server must prove that the person who connects an installation
-administers that GitHub account. A setup URL with an installation ID can be
-forged. GitHub tells an app to check the installation with a user access
-token (`GET /user/installations`). Benchmark: HCP Terraform offers a shared
-GitHub App and per-organization VCS providers. Source:
-<https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/best-practices-for-creating-a-github-app>.
+a service, in addition to the action on the service. The built-in
+`maintainer` role gets `namespace:use-forge-connection` by default.
 
 **Q8. Who can run a comment command?**
 
@@ -643,15 +639,16 @@ GitHub App and per-organization VCS providers. Source:
 Recommendation: A. In each option, a comment command never approves, never
 makes an approval intent or an approve link, and never confirms a gate. The
 summary comment can link to the console page of the job, where the plan is on
-screen. The command list is limited to commands that start a plan or show a
-status, and each command runs as the linked principal with its actions (rule
-8 of the accepted decisions above). Benchmark: SOC 2 CC6.1 asks for
+screen. Each command runs as the linked principal with its actions (rule 8 of the
+accepted decisions above). The command list is limited to commands that
+start a plan or show a status (proposed). This drops `apply` and `unlock`
+from RFC 27. RFC 89 answers this question for RFC 27. Benchmark: SOC 2 CC6.1 asks for
 authentication and authorization by the system that acts. Atlantis trusts
 the permission of the forge, and adds a team allowlist as an option.
 
 **Q9. Who makes the event secret, and how does it rotate?**
 
-The event secret is in the credential set. ADR 213 decision 7 says that the
+The event secret is in the app registration. ADR 213 decision 7 says that the
 server never answers a credential.
 
 - A. The server makes a random secret when a person creates the connection
@@ -663,10 +660,10 @@ server never answers a credential.
   webhook secret of a GitHub App. The server never answers it. (proposed)
 - C. A mix: B for an app, A for a `token` connection.
 
-Rotation is the same for each option: a new credential set carries a new
-event secret, both sets are active during the rotation, the server accepts an
-event that matches either set, and the person changes the secret in the
-webhook of the forge before the person removes the old set.
+Rotation is the same for each option: a new event secret is added to the
+registration, both secrets are active during the rotation, the server accepts an
+event that matches either secret, and the person changes the secret in the
+webhook of the forge before the person removes the old secret.
 
 Recommendation: B, because it needs no exception to ADR 213 decision 7. The
 cost is that the person makes a long random value. The console can offer a
@@ -695,8 +692,8 @@ design already needs the poll.
 
 **Q11. Which merge method does `MergeReview` use?**
 
-The method is only proposed (see "Proposed methods"). The question is open
-now because it changes `job.verify`.
+The method is only proposed (see "Proposed methods"). The question does not
+block this RFC: RFC 12 owns it, and it changes `job.verify`.
 
 - A. The method is a parameter of the call, and the code location sets it.
   The default is a merge commit. (proposed)
@@ -709,6 +706,47 @@ rebase merge makes new commits, so the check may report `unverified` for a
 change that did land. A merge commit keeps the delivered commit. Benchmark:
 GitHub offers the three methods in the API (`merge_method`), and a repository
 can allow only some of them, so the call can be refused (`ErrRefused`).
+
+## Hard to change later
+
+- **The path `POST /forge-events/{hook ID}`.** Each configured webhook of a
+  forge stores this address, so a change needs a change in the forge for each
+  webhook. It follows the pattern of ADR 210 decision 2 for a path that an
+  external system stores.
+- **One hook ID for each app registration.** The hook ID is in the stored
+  address of each webhook, so it does not change after the first webhook
+  stores it.
+
+## Not in this RFC
+
+- **An operator-wide GitHub App (was Q7).** ADR 213 decision 7 decides it:
+  each namespace registers its own app, and the private key is a sealed
+  credential of the namespace. An operator-wide app needs an RFC against ADR
+  213 decision 7 and ADR 220, when an operator asks for it.
+
+## Proposed answers (PM)
+
+One line for each open question, with its benchmark. The owner decides.
+
+- **Q1: A.** The Google Go style guide puts an interface in the package that
+  uses it.
+- **Q2: A.** GitHub does not send a failed delivery again, so the server
+  fetches the object through the API (the pattern of ADR 100 decision 15).
+- **Q3: A, C later.** ADR 130 decision 11. GitHub Actions gives each job a
+  `GITHUB_TOKEN` that reaches only its own repository.
+- **Q4: B, if a spike confirms signed commits from a fine-grained token.**
+  GitHub signs the commits that it makes for an app. The person is in the
+  trailer and in the audit entry.
+- **Q5: A.** GitHub self-hosted runners and HCP Terraform agents only make
+  outbound connections.
+- **Q6: B, with `maintainer` by default.** AWS asks for `iam:PassRole` in
+  addition to the action on the service.
+- **Q8: A.** Linked accounts only. A comment never approves.
+- **Q9: B.** GitHub takes the app webhook secret from the person. This needs
+  no exception to ADR 213 decision 7.
+- **Q10: C.** Events are hints with a poll (ADR 248).
+- **Q11: A, deferred to RFC 12.** GitHub offers `merge_method`. A merge commit
+  keeps the check of `job.verify` exact.
 
 ## Outcome
 

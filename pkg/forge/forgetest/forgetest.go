@@ -32,10 +32,13 @@ type Harness struct {
 	// Connection is the connection that Forge was opened with.
 	Connection forge.Connection
 	// Credential is the credential set that Forge was opened with. Its
-	// Secret and its EventSecret are values that no other case uses, so that
+	// Secret and the EventSecret are values that no other case uses, so that
 	// the case "no error and no event holds a part of the secret" can find
 	// them in a text.
 	Credential forge.Credential
+	// EventSecret is the active event secret of the app registration or of
+	// the hook of the connection. A case gives it to ParseEvent.
+	EventSecret []byte
 	// Forge is the adapter under test, opened with Connection and Credential,
 	// and accepted by the forge.
 	Forge forge.Forge
@@ -59,8 +62,12 @@ type Fixture interface {
 	// Merge merges the review request id, as a person does in the forge.
 	Merge(ctx context.Context, id string) error
 	// Event returns a request of kind as the forge sends it, signed with
-	// secret.
+	// secret. The kind may be one that the port does not name, to test
+	// ErrUnsupported.
 	Event(ctx context.Context, kind forge.EventKind, secret []byte) (forge.EventRequest, error)
+	// Redeliver returns the request again, as the forge sends a retry: the
+	// same body, the same delivery ID and a new signature time.
+	Redeliver(ctx context.Context, r forge.EventRequest) (forge.EventRequest, error)
 	// Refuse makes the forge refuse the credential of the connection from
 	// now on, as after a revocation.
 	Refuse(ctx context.Context) error
@@ -91,6 +98,7 @@ func cases() []testCase {
 		{"check answers the account of the credential", "", nil},
 		{"open refuses another kind, a missing parameter and a bad secret, and makes no call", "", nil},
 		{"a refused credential is ErrAuth on each method", "", nil},
+		{"a missing repository is not found on each method", "", nil},
 		{"an operation outside the capabilities is unsupported", "", nil},
 		{"no error and no event holds a part of the secret", "", nil},
 		{"a forge that does not answer is ErrUnavailable", "", nil},
@@ -119,6 +127,8 @@ func cases() []testCase {
 		{"commit to a new branch that exists with another head is a conflict", forge.CapCommit, nil},
 		{"two commits to the same new branch: one passes, one is a conflict", forge.CapCommit, nil},
 		{"commit to a protected branch is refused", forge.CapCommit, nil},
+		{"commit to a missing branch is not found", forge.CapCommit, nil},
+		{"a connection with no push access lists no commit and no review", "", nil},
 		{"commit that fails validation makes no call", forge.CapCommit, nil},
 		{"commit above the size limit is too large and makes no call", forge.CapCommit, nil},
 		{"commit keeps the author and the trailer", forge.CapCommit, nil},
@@ -138,6 +148,7 @@ func cases() []testCase {
 		{"read review request after a close with no merge", forge.CapReview, nil},
 		{"read a missing review request is not found", forge.CapReview, nil},
 		{"close review request twice is nil", forge.CapReview, nil},
+		{"close a missing review request is not found", forge.CapReview, nil},
 		{"close of a merged review request is a conflict", forge.CapReview, nil},
 
 		// Tokens.
@@ -145,16 +156,16 @@ func cases() []testCase {
 		{"repo token of an app cannot write", forge.CapRepoToken, nil},
 		{"repo token of an app expires within one hour", forge.CapRepoToken, nil},
 		{"repo token of a token connection is not scoped", forge.CapGitAccess, nil},
+		{"a forge with repo-token also lists git-access", forge.CapRepoToken, nil},
 
 		// Events.
 		{"parse ping event", forge.CapEvents, nil},
-		{"parse push event with a valid signature", forge.CapEvents, nil},
 		{"parse review event with a valid signature", forge.CapEvents, nil},
-		{"parse comment event with a valid signature", forge.CapEvents, nil},
 		{"parse event with a wrong signature fails", forge.CapEvents, nil},
 		{"parse event with a changed body is a signature error", forge.CapEvents, nil},
 		{"parse signed event with a body that does not parse is invalid", forge.CapEvents, nil},
 		{"parse event of a kind outside the port is unsupported", forge.CapEvents, nil},
+		// Skips when Connection.Auth is not AuthApp.
 		{"parse event of an app has the installation ID", forge.CapEvents, nil},
 		{"each of two active event secrets verifies an event", forge.CapEvents, nil},
 		{"a retried delivery keeps its delivery ID", forge.CapEvents, nil},

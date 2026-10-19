@@ -141,7 +141,6 @@ func TestNeeds(t *testing.T) {
 		{forge.ConsumerRunnerGit, forge.Capabilities{forge.CapRepoToken}},
 		{forge.ConsumerCatalog, forge.Capabilities{forge.CapFiles}},
 		{forge.ConsumerCauseDiff, forge.Capabilities{forge.CapCompare}},
-		{forge.ConsumerTriggers, forge.Capabilities{forge.CapEvents, forge.CapFiles, forge.CapCompare}},
 	}
 
 	for _, c := range cases {
@@ -172,7 +171,6 @@ func TestMissing(t *testing.T) {
 		{forge.ConsumerRunnerGit, forge.Capabilities{forge.CapRepoToken}},
 		{forge.ConsumerCatalog, nil},
 		{forge.ConsumerCauseDiff, nil},
-		{forge.ConsumerTriggers, nil},
 	}
 
 	for _, c := range cases {
