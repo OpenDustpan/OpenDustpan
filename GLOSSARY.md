@@ -475,7 +475,7 @@ _Avoid_: Fork, enterprise edition, cloud edition
 
 ## Flagged ambiguities
 
-- **Copy** is every text that a user reads: the console, `README.md`, `docs/guides/`, `docs/reference/`, `docs/explanation/`, CLI output, and the text of API errors and messages. Copy follows ADR 73. Code, API field names, wire values, metrics and logs keep the glossary terms. A `_Copy says_` line gives the word that copy uses instead.
+- **Copy** is every text that a user reads: the console, `README.md`, `docs/guides/`, `docs/reference/`, `docs/explanation/`, CLI output, and the text of API errors and messages. Copy follows ADR 251. Code, API field names, wire values, metrics and logs keep the glossary terms. A `_Copy says_` line gives the word that copy uses instead.
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
 

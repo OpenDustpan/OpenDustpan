@@ -92,7 +92,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 - Cross-tool features never merge tool models (ADR 13). Shared code calls a
   stack or workspace a "unit", referenced as tool + namespace + the tool's own
   name. "Unit" stays in code and in the API. Copy says "stack", "workspace",
-  or "stacks and workspaces" (ADR 73). Authorization uses tool-neutral
+  or "stacks and workspaces" (ADR 251). Authorization uses tool-neutral
   actions on those references. The
   console's cross-tool views read the inventory projection. Each tool package
   publishes to it in the same transaction as its own writes. User-facing text

@@ -1,4 +1,4 @@
-# 73. Copy rules for user-facing text
+# 251. Copy rules for user-facing text
 
 Status: accepted · 2026-10-19
 
