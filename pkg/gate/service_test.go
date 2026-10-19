@@ -150,7 +150,10 @@ func TestEvaluateRefusesBadChange(t *testing.T) {
 	badPoint := jobWrite(t, "net", true, false)
 	badPoint.Point = "job.start"
 
-	for _, c := range []gate.Change{noUnit, badPoint} {
+	notUnit := jobWrite(t, "net", true, false)
+	notUnit.Units = []identity.Object{identity.NamespaceObject("acme")}
+
+	for _, c := range []gate.Change{noUnit, badPoint, notUnit} {
 		if _, err := svc.Evaluate(t.Context(), c); !errors.Is(err, gate.ErrInvalid) {
 			t.Fatalf("Evaluate(%s, %d units) = %v, want ErrInvalid", c.Point, len(c.Units), err)
 		}

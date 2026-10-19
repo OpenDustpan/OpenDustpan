@@ -315,8 +315,13 @@ type UnitRef struct {
 	identity.Object
 }
 
-// MarshalText returns the wire form of the reference.
+// MarshalText returns the wire form of the reference. It returns an error
+// that wraps ErrInvalid when the reference is not the reference of a unit.
 func (u UnitRef) MarshalText() ([]byte, error) {
+	if !u.IsUnit() {
+		return nil, fmt.Errorf("%w: %q is not the reference of a unit", ErrInvalid, u.String())
+	}
+
 	return []byte(u.String()), nil
 }
 

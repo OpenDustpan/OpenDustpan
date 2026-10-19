@@ -277,6 +277,12 @@ func TestTextFormsRefuse(t *testing.T) {
 		}
 	}
 
+	var zero gate.UnitResult
+
+	if _, err := json.Marshal(zero); !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("Marshal(UnitResult with a zero Unit) = %v, want ErrInvalid", err)
+	}
+
 	var fa gate.FreshAuth
 	if err := json.Unmarshal([]byte(`30`), &fa); !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("freshAuthSeconds 30 = %v, want ErrInvalid", err)

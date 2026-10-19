@@ -205,6 +205,15 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 		return Decision{}, fmt.Errorf("%w: the change names no unit", ErrInvalid)
 	}
 
+	for i := range c.Units {
+		if !c.Units[i].IsUnit() {
+			return Decision{}, fmt.Errorf(
+				"%w: %q (unit %d of the change) is not the reference of a unit",
+				ErrInvalid, c.Units[i].String(), i,
+			)
+		}
+	}
+
 	if err := ctx.Err(); err != nil {
 		return Decision{}, fmt.Errorf("evaluate %s: %w", point, err)
 	}
