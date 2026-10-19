@@ -105,6 +105,10 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionBlueprintRead,
 		identity.ActionBlueprintSetContext,
 		identity.ActionUnitRedact,
+		identity.ActionProfileRead,
+		identity.ActionProfileWrite,
+		identity.ActionProfileOpen,
+		identity.ActionProfileManage,
 	} {
 		lowered := strings.ToLower(string(a))
 		if strings.Contains(lowered, "stack") || strings.Contains(lowered, "pulumi") {

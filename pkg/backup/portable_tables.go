@@ -693,5 +693,5 @@ func portableSpec() []PortableTable {
 		},
 	}
 
-	return slices.Concat(core, portableImportTables(), portableRunnerTables())
+	return slices.Concat(core, portableImportTables(), portableRunnerTables(), portableProfileTables())
 }

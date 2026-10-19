@@ -418,6 +418,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	seed := seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
 	checkImportRowCounts(t, ps.src, sum)
+	checkProfileRowCounts(t, ps.src, sum)
 	requireSeededGate(t, ps.src, sum)
 
 	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
@@ -430,6 +431,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 
 	checkRestoredSuspendedMember(t, ps.dst)
 	checkRestoredImports(t, ps.dst, seed.acme, seed.imports)
+	checkRestoredProfiles(t, ps.dst, seed.acme, seed.profiles)
 
 	again, sum2, _ := exportPortable(t, ps.dst)
 	requireSeededGate(t, ps.dst, sum2)

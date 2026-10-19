@@ -123,6 +123,8 @@ var Tables = []string{
 	"runner_pools",
 	"runner_join_tokens",
 	"runners",
+	"profiles",
+	"profile_revisions",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

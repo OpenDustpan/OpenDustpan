@@ -635,8 +635,8 @@ func checkCORSHeaders(t *testing.T, h http.Header, tc corsRow) {
 		return
 	}
 
-	if got := h.Get("Access-Control-Expose-Headers"); got != "Retry-After" {
-		t.Fatalf("Access-Control-Expose-Headers = %q, want Retry-After", got)
+	if got := h.Get("Access-Control-Expose-Headers"); got != "Retry-After, ETag" {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want Retry-After, ETag", got)
 	}
 }
 
