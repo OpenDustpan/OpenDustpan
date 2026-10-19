@@ -1,6 +1,6 @@
 # 211. Optional modules, one switch each, and the capabilities document
 
-Status: accepted · 2026-10-18. Accepts part of RFC 7 and part of RFC 52. Extends ADR 8
+Status: accepted · 2026-10-18. Accepts part of RFC 7 and part of RFC 52. Extends ADR 8. Extended by ADR 249
 
 ## Context
 
