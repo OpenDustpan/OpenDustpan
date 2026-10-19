@@ -122,14 +122,16 @@ var (
 	// ErrEntryNotFound reports that a scope holds no entry at a sequence.
 	ErrEntryNotFound = errors.New("audit entry not found")
 	// ErrInvalidReason reports a reason that is longer than MaxReasonLen code
-	// points, that is not valid UTF-8, or that holds a control character.
+	// points, that is not valid UTF-8, or that holds a control character, a
+	// format character or a line or paragraph separator.
 	ErrInvalidReason = errors.New("invalid reason")
 )
 
 // ValidateReason reports whether reason can be the reason of an entry. An
 // empty reason is valid. It returns ErrInvalidReason for a reason with more
 // than MaxReasonLen Unicode code points, for bytes that are not valid UTF-8,
-// and for a control character, which includes a line break.
+// and for a control or format character or a line or paragraph separator,
+// which includes a line break and the bidirectional overrides.
 func ValidateReason(reason string) error {
 	if !utf8.ValidString(reason) {
 		return fmt.Errorf("%w: not valid UTF-8", ErrInvalidReason)
@@ -139,11 +141,18 @@ func ValidateReason(reason string) error {
 		return fmt.Errorf("%w: longer than %d characters", ErrInvalidReason, MaxReasonLen)
 	}
 
-	if strings.ContainsFunc(reason, unicode.IsControl) {
+	if strings.ContainsFunc(reason, isHiddenRune) {
 		return fmt.Errorf("%w: holds a control character", ErrInvalidReason)
 	}
 
 	return nil
+}
+
+// isHiddenRune reports whether r is a control character (Cc), a format
+// character (Cf, for example U+202E), a line separator (Zl, U+2028) or a
+// paragraph separator (Zp, U+2029).
+func isHiddenRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 // Entry is one append-only record of an action in a namespace. Namespace and
@@ -310,6 +319,9 @@ const hashNoCount = '-'
 // source IP, user agent, channel, kind, outcome, request ID, previous hash,
 // value count, object ID, changes (the canonical JSON of EncodeChanges, empty
 // when e has no changes), fence version and reason. Numeric fields use decimal text.
+// The reason stays last. The fields principalKind and jobID of the planned
+// principal-kind change go between the fence version and the reason. This is
+// allowed because no tag shipped an audit entry with the reason.
 // A value count that is not set writes one "-" in place of the field, so no
 // count and the count 0 ("1:0") differ. No field is optional: a field that e
 // does not set writes "0:". The length prefix makes the encoding injective:

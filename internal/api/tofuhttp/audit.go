@@ -121,7 +121,7 @@ func (h *Handler) appendOverrideAudit(
 // a reason, so the entry holds none.
 func (h *Handler) forceUnlockEntry(r *http.Request, c call, obj identity.Object) audit.Entry {
 	return audit.Entry{
-		At:           time.Now().UTC(),
+		At:           time.Time{},
 		Namespace:    obj.Namespace(),
 		Subject:      c.principal.Subject,
 		IDPSubject:   "",

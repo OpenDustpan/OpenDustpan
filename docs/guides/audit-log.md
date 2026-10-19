@@ -72,8 +72,9 @@ An entry holds these fields:
   `takesEffect`. A `startup` or `config-file` entry holds its settings
   here.
 - `reason`: the text that a person gave for the action, else omitted. It has
-  at most 500 Unicode code points and no control character. A force-unlock
-  can carry one.
+  at most 500 Unicode code points. A reason that is too long, or that holds
+  a control character, a format character or a line or paragraph
+  separator, is refused. A force-unlock can carry one.
 - Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
   never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
@@ -93,8 +94,11 @@ An entry holds these fields:
   fixed order: the decimal value count, the stable ID of the unit, the
   canonical JSON of the changes (sorted by key) as the store holds it, the
   decimal failover version of the namespace (0 in `@server`), and the
-  reason. No field is optional. An entry with no value count writes one `-` in place of the
-  count, so an entry with no count (`-`) and an entry with the count 0
+  reason. The reason stays last. A later field, for example the principal
+  kind and the job ID of a planned change, goes between the failover version
+  and the reason: no tag shipped an audit entry with a reason, so this change
+  of the order is allowed. No field is optional. An entry with no value count
+  writes one `-` in place of the count, so an entry with no count (`-`) and an entry with the count 0
   (`1:0`) have different hashes. Because each field carries its length,
   two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
@@ -118,6 +122,11 @@ releases the lock, so a release without its entry does not happen.
 
 A force-unlock of a state that the client encrypted also writes an entry of
 the kind `override`, as a forced write does.
+
+Maintenance mode also writes this entry. When it starts, it releases each
+lock that it finds. Each release writes one `change` entry with the action
+`unit:write-forced`, the subject `maintenance` and the reason
+`maintenance mode started`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.

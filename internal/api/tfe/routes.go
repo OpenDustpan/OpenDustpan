@@ -639,7 +639,10 @@ func (h *Handler) writeDenied(ctx context.Context, w http.ResponseWriter, req re
 		return
 	}
 
-	h.writeForbidden(ctx, w, "forbidden: this request needs the action "+string(req.action))
+	h.writeForbidden(
+		ctx, w,
+		"forbidden: the action "+string(req.action)+" on "+req.object.String()+" was refused",
+	)
 }
 
 // hidden reports whether p cannot read obj: a unit without unit:read, or a

@@ -212,7 +212,7 @@ func parseForceUnlock(body []byte) (forceUnlockAttributes, error) {
 // subject, the unit ID, the changes and the new state version.
 func forceUnlockEntry(r *http.Request, p identity.Principal, obj identity.Object, reason string) audit.Entry {
 	return audit.Entry{
-		At:           time.Now().UTC(),
+		At:           time.Time{},
 		Namespace:    obj.Namespace(),
 		Subject:      p.Subject,
 		IDPSubject:   "",

@@ -368,7 +368,8 @@ func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 }
 
 // TestValidateReason proves the limits of a reason: at most 500 Unicode code
-// points, valid UTF-8 and no control character.
+// points, valid UTF-8 and no control character, format character or
+// line or paragraph separator.
 func TestValidateReason(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +388,10 @@ func TestValidateReason(t *testing.T) {
 		{"null byte", "first\x00second", true},
 		{"delete character", "first\x7fsecond", true},
 		{"C1 control character", "first\u0085second", true},
+		{"right-to-left override", "first\u202esecond", true},
+		{"line separator", "first\u2028second", true},
+		{"paragraph separator", "first\u2029second", true},
+		{"zero width joiner", "first\u200dsecond", true},
 		{"invalid UTF-8", "first\xffsecond", true},
 	}
 

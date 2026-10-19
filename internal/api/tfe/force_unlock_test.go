@@ -3,6 +3,7 @@ package tfe_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -280,30 +281,81 @@ func TestForceUnlockErrorCodes(t *testing.T) {
 	}
 }
 
-// TestForceUnlockDeniedNamesTheAction proves that a principal without
-// unit:write-forced gets 403 whose detail names the action, and that the
-// service is not called. A principal that has unit:manage and not
-// unit:write-forced is refused too.
+// refusingAuthorizer refuses unit:write-forced with the given cause, so a test
+// proves that the 403 text holds for a cause that is not a missing role.
+type refusingAuthorizer struct {
+	cause string
+}
+
+func (r refusingAuthorizer) Authorize(
+	_ context.Context,
+	_ identity.Principal,
+	action identity.Action,
+	_ identity.Object,
+) error {
+	if action == identity.ActionUnitWriteForced {
+		return fmt.Errorf("%w: %s", identity.ErrDenied, r.cause)
+	}
+
+	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (refusingAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
+// TestForceUnlockDeniedNamesTheAction proves that a refused force-unlock gets
+// 403 whose detail names the action and the object and is true for every
+// cause of the refusal, and that the service is not called. A principal that
+// has unit:manage and not unit:write-forced is refused too. The causes are a
+// missing role and an address that the IP allowlist refuses.
 func TestForceUnlockDeniedNamesTheAction(t *testing.T) {
 	t.Parallel()
 
-	ws := newRecordingForceUnlock(nil)
-	authz := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitWriteForced: true}}
-	handler := forceUnlockHandler(t, ws, authz)
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, workspaceRequest(t, http.MethodPost, forceUnlockTarget, ""))
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
+	cases := []struct {
+		name  string
+		authz identity.Authorizer
+	}{
+		{
+			"missing role",
+			selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitWriteForced: true}},
+		},
+		{"IP allowlist", refusingAuthorizer{cause: "source address 203.0.113.9 is not in the allowlist"}},
 	}
 
-	if detail := decodeErrors(t, rec).Errors[0].Detail; !strings.Contains(detail, "unit:write-forced") {
-		t.Fatalf("detail = %q, want it to name unit:write-forced", detail)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if calls := ws.recorded(); len(calls) != 0 {
-		t.Fatalf("service calls = %+v, want none", calls)
+			ws := newRecordingForceUnlock(nil)
+			handler := forceUnlockHandler(t, ws, tc.authz)
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, workspaceRequest(t, http.MethodPost, forceUnlockTarget, ""))
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
+			}
+
+			detail := decodeErrors(t, rec).Errors[0].Detail
+			if !strings.Contains(detail, "the action unit:write-forced on ") ||
+				!strings.HasSuffix(detail, " was refused") {
+				t.Fatalf("detail = %q, want the action, the object and \"was refused\"", detail)
+			}
+
+			if strings.Contains(detail, "needs") {
+				t.Fatalf("detail = %q, must not claim a cause", detail)
+			}
+
+			if calls := ws.recorded(); len(calls) != 0 {
+				t.Fatalf("service calls = %+v, want none", calls)
+			}
+		})
 	}
 }
 

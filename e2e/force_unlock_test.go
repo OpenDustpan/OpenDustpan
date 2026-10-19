@@ -142,6 +142,7 @@ func runForceUnlockScenario(t *testing.T, cli e2e.Install, store e2e.Store) {
 	run.checkRefusals(t)
 	run.checkAllowed(t)
 	run.checkAudit(t)
+	run.checkCustomRole(t)
 }
 
 // call sends one TFE API request as person and returns the status and the body.
@@ -344,5 +345,62 @@ func (r *forceUnlockRun) checkAudit(t *testing.T) {
 			reasons,
 			forceUnlockReason,
 		)
+	}
+}
+
+// unlockerRole is the custom role of the scenario. It holds the read action
+// that the route needs to show the workspace to its caller and the action of
+// the force-unlock, and no other write action.
+const unlockerRole = "lock-breaker"
+
+// checkCustomRole proves that a custom role that holds unit:write-forced is
+// enough: a person with that role releases a lock that the maintainer holds,
+// and the log names that person.
+func (r *forceUnlockRun) checkCustomRole(t *testing.T) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	principalCall(ctx, t, r.env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"` + unlockerRole + `","actions":["unit:read","unit:write-forced"]}`, http.StatusCreated,
+	}, nil)
+
+	dee := issueRefusalPerson(ctx, t, r.env, "dee", unlockerRole)
+
+	held := r.lock(t, r.maintainer)
+	if held.id == "" {
+		t.Fatal("workspace document shows no lock ID after the maintainer locks")
+	}
+
+	if status, body := r.forceUnlock(t, dee, ""); status != http.StatusOK {
+		t.Fatalf("API force-unlock as %s with the custom role answers %d: %s", dee.name, status, body)
+	}
+
+	if still := r.current(t); still.id != "" {
+		t.Fatalf("lock after the force-unlock by the custom role is %+v, want none", still)
+	}
+
+	entries, err := fetchAuditEntries(ctx, r.env, refusalNamespace)
+	if err != nil {
+		t.Fatalf("list %s audit entries: %v", refusalNamespace, err)
+	}
+
+	subject := e2e.SignInSubject(dee.name + "@example.com")
+	found := 0
+
+	for i := range entries {
+		e := &entries[i]
+		if e.Action == "unit:write-forced" && e.Subject == subject {
+			found++
+
+			if e.Kind != "change" || e.Outcome != "success" || e.Reason != "" {
+				t.Fatalf("force-unlock entry %+v of the custom role, want a successful change with no reason", e)
+			}
+		}
+	}
+
+	if found != 1 {
+		t.Fatalf("force-unlock entries by %s = %d, want 1", subject, found)
 	}
 }
