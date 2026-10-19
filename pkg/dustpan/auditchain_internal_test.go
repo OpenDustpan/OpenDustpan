@@ -82,6 +82,7 @@ func approver() audit.Entry {
 		Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "req-1",
 		PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
@@ -118,6 +119,7 @@ func createServicePrincipal(t *testing.T, chain *auditChain, subject string) {
 		UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	if err := st.CreatePrincipal(t.Context(), p, e); err != nil {
@@ -645,6 +647,7 @@ func pendingTestEntry() audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

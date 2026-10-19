@@ -304,6 +304,7 @@ func TestTrimToFitKeepsAuditChainFields(t *testing.T) {
 		Hash:         "hash-value",
 		Sequence:     7,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	rec := audit.ToRecord(entry)

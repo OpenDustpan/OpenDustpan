@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -27,7 +29,7 @@ const fenceLineagePrefix = "lin-"
 // outputs with the data key of the scope. The store checks the lock,
 // the revision and the serial in the transaction that writes the fence.
 func (s *Service) releaseWithFence(
-	ctx context.Context, w Workspace, cur StateVersion, by string,
+	ctx context.Context, w Workspace, cur StateVersion, by string, entry audit.Entry,
 ) (Workspace, error) {
 	if by == "" {
 		return Workspace{}, fmt.Errorf("force-unlock %s: %w: no principal", w.Ref, ErrInvalidState)
@@ -74,7 +76,9 @@ func (s *Service) releaseWithFence(
 	released.UpdatedAt = sv.FinalizedAt
 	released.Revision++
 
-	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, cur.ID, fence); fenceErr != nil {
+	entry.Version = strconv.FormatInt(sv.Serial, 10)
+
+	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, cur.ID, fence, entry); fenceErr != nil {
 		return Workspace{}, s.fenceRefused(ctx, w, sv, fence, fenceErr)
 	}
 
@@ -192,7 +196,8 @@ func fenceContent(plain []byte, lineage string, serial int64) ([]byte, error) {
 	if encrypted {
 		return nil, fmt.Errorf(
 			"%w: The state is encrypted by the client, so the server cannot fence it. "+
-				"Let the run that holds the lock finish; it releases the lock",
+				"Let the run that holds the lock finish; it releases the lock. "+
+				"Or force-unlock with the unit:write-forced action and both forced-write switches on",
 			ErrClientEncrypted,
 		)
 	}

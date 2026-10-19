@@ -564,12 +564,25 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 }
 
 // ReleaseUnfenced saves a released unit under the forced-write override, unless a fault fires first.
-func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (s *Store) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
 	if err := s.before(ctx, "ReleaseUnfenced"); err != nil {
 		return err
 	}
 
-	return s.inner.ReleaseUnfenced(ctx, w, fence)
+	return s.inner.ReleaseUnfenced(ctx, w, fence, e)
+}
+
+// SaveReleased saves a released unit with its audit entry, unless a fault fires first.
+func (s *Store) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	if err := s.before(ctx, "SaveReleased"); err != nil {
+		return err
+	}
+
+	return s.inner.SaveReleased(ctx, w, fence, e)
 }
 
 // DeleteWorkspace soft-deletes the workspace called ref, unless a fault
@@ -674,15 +687,17 @@ func (s *Store) FinalizeStateVersion(
 
 // FenceAndUnlock releases the lock and makes the fence version current,
 // unless a fault fires first.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (s *Store) FenceAndUnlock(
 	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	expect workspace.StateVersionID, fence namespace.Fence,
+	expect workspace.StateVersionID, fence namespace.Fence, e audit.Entry,
 ) error {
 	if err := s.before(ctx, "FenceAndUnlock"); err != nil {
 		return err
 	}
 
-	return s.inner.FenceAndUnlock(ctx, w, sv, expect, fence)
+	return s.inner.FenceAndUnlock(ctx, w, sv, expect, fence, e)
 }
 
 // CurrentStateVersion returns the workspace's current state, unless a fault

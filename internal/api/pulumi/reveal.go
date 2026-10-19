@@ -324,6 +324,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
