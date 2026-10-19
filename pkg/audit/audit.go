@@ -320,8 +320,9 @@ const hashNoCount = '-'
 // value count, object ID, changes (the canonical JSON of EncodeChanges, empty
 // when e has no changes), fence version and reason. Numeric fields use decimal text.
 // The reason stays last. The fields principalKind and jobID of the planned
-// principal-kind change go between the fence version and the reason. This is
-// allowed because no tag shipped an audit entry with the reason.
+// principal-kind change go between the fence version and the reason. No tag
+// shipped an audit entry, so an entry from an earlier build does not keep its
+// hash.
 // A value count that is not set writes one "-" in place of the field, so no
 // count and the count 0 ("1:0") differ. No field is optional: a field that e
 // does not set writes "0:". The length prefix makes the encoding injective:

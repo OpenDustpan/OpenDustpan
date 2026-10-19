@@ -96,8 +96,9 @@ An entry holds these fields:
   decimal failover version of the namespace (0 in `@server`), and the
   reason. The reason stays last. A later field, for example the principal
   kind and the job ID of a planned change, goes between the failover version
-  and the reason: no tag shipped an audit entry with a reason, so this change
-  of the order is allowed. No field is optional. An entry with no value count
+  and the reason: no release shipped an audit entry, so the order can change,
+  and an entry from an earlier build does not keep its hash. No field is
+  optional. An entry with no value count
   writes one `-` in place of the count, so an entry with no count (`-`) and an entry with the count 0
   (`1:0`) have different hashes. Because each field carries its length,
   two different entries never give the same encoding.
