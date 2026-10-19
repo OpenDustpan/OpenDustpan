@@ -87,6 +87,10 @@ A purge cannot be undone.
 - 404: the namespace has no deleted unit with this tool and ID. A live unit
   or a purged unit also answers 404.
 - 409: a live unit holds the name, or a failover fenced the write.
+- 409: the new name holds the gates of a deleted unit. Purge or restore that
+  unit first.
+- 409: a live unit holds the name of the deleted unit and shares its gates.
+  Delete the live unit, then restore the deleted unit under its name.
 - 421: the namespace is not homed in this region.
 
 A restore and a purge of the same unit can run at the same time. Each runs

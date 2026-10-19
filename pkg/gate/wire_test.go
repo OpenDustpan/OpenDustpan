@@ -165,7 +165,7 @@ func fullRecord(t *testing.T) gate.Record {
 		Warnings:   []string{"budget at 82 percent"},
 		AutoApply:  false,
 		Controls:   []gate.FixedControl{{Kind: gate.ControlFreeze, Passed: true, Detail: ""}},
-		BreakGlass: "", Result: gate.ResultAwaitingApproval, Count: 1, LastAt: at,
+		BreakGlass: "", Result: gate.ResultAwaitingApproval, Action: "", Count: 1, LastAt: at,
 	}
 }
 

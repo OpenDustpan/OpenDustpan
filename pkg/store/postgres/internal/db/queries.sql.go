@@ -663,6 +663,56 @@ func (q *Queries) CopyStackTagsToInventoryLabels(ctx context.Context, stackID st
 	return err
 }
 
+const copyUnitGateObjects = `-- name: CopyUnitGateObjects :exec
+INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
+SELECT o.namespace_id, CAST($1 AS TEXT), o.kind, o.id, o.level, o.tool,
+       CAST($2 AS TEXT), o.version, o.body, o.updated_at_ms
+FROM gate_objects AS o
+WHERE o.namespace_id = $3 AND o.level = 'unit' AND o.tool = $4
+  AND o.unit_name = $5
+`
+
+type CopyUnitGateObjectsParams struct {
+	NewScopeKey string
+	NewUnitName string
+	NamespaceID string
+	Tool        string
+	OldUnitName string
+}
+
+// Copies the configuration of a unit to the scope of its new name, in the
+// transaction of a rename.
+func (q *Queries) CopyUnitGateObjects(ctx context.Context, arg CopyUnitGateObjectsParams) error {
+	_, err := q.db.Exec(ctx, copyUnitGateObjects,
+		arg.NewScopeKey,
+		arg.NewUnitName,
+		arg.NamespaceID,
+		arg.Tool,
+		arg.OldUnitName,
+	)
+	return err
+}
+
+const copyUnitGateReferences = `-- name: CopyUnitGateReferences :exec
+INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
+SELECT r.ref_kind, r.ref_id, r.namespace_id, CAST($1 AS TEXT), r.owner_kind, r.owner_id
+FROM gate_references AS r
+WHERE r.namespace_id = $2 AND r.scope_key = $3
+`
+
+type CopyUnitGateReferencesParams struct {
+	NewScopeKey string
+	NamespaceID string
+	OldScopeKey string
+}
+
+// Copies the references of the configuration of a unit to the scope of its
+// new name, in the transaction of a rename.
+func (q *Queries) CopyUnitGateReferences(ctx context.Context, arg CopyUnitGateReferencesParams) error {
+	_, err := q.db.Exec(ctx, copyUnitGateReferences, arg.NewScopeKey, arg.NamespaceID, arg.OldScopeKey)
+	return err
+}
+
 const countAccessToken = `-- name: CountAccessToken :one
 SELECT COUNT(*) FROM access_tokens WHERE id = $1
 `
@@ -766,6 +816,26 @@ func (q *Queries) CountEndedGrantRecords(ctx context.Context, arg CountEndedGran
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const countGateObjects = `-- name: CountGateObjects :one
+SELECT COUNT(*)
+FROM gate_objects
+WHERE namespace_id = $1 AND scope_key = $2 AND kind = $3
+`
+
+type CountGateObjectsParams struct {
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+}
+
+// The count of objects of one kind in one scope.
+func (q *Queries) CountGateObjects(ctx context.Context, arg CountGateObjectsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countGateObjects, arg.NamespaceID, arg.ScopeKey, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countGrantsOn = `-- name: CountGrantsOn :one
@@ -1123,6 +1193,27 @@ WHERE workspace_id = $1 AND status = 'finalized'
 
 func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countStateVersions, workspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnitGateObjects = `-- name: CountUnitGateObjects :one
+SELECT COUNT(*)
+FROM gate_objects
+WHERE namespace_id = $1 AND level = 'unit' AND tool = $2
+  AND unit_name = $3
+`
+
+type CountUnitGateObjectsParams struct {
+	NamespaceID string
+	Tool        string
+	UnitName    string
+}
+
+// The count of configuration objects that the unit called unit_name holds.
+func (q *Queries) CountUnitGateObjects(ctx context.Context, arg CountUnitGateObjectsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnitGateObjects, arg.NamespaceID, arg.Tool, arg.UnitName)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2017,6 +2108,59 @@ func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error
 	return err
 }
 
+const deleteGateObject = `-- name: DeleteGateObject :execrows
+DELETE FROM gate_objects
+WHERE namespace_id = $1 AND scope_key = $2
+  AND kind = $3 AND id = $4 AND version = $5
+`
+
+type DeleteGateObjectParams struct {
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+	ID          string
+	PrevVersion int64
+}
+
+// Removes an object when its version is the expected one. Its references go
+// with it.
+func (q *Queries) DeleteGateObject(ctx context.Context, arg DeleteGateObjectParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteGateObject,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.Kind,
+		arg.ID,
+		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteGateReferences = `-- name: DeleteGateReferences :exec
+DELETE FROM gate_references
+WHERE namespace_id = $1 AND scope_key = $2
+  AND owner_kind = $3 AND owner_id = $4
+`
+
+type DeleteGateReferencesParams struct {
+	NamespaceID string
+	ScopeKey    string
+	OwnerKind   string
+	OwnerID     string
+}
+
+func (q *Queries) DeleteGateReferences(ctx context.Context, arg DeleteGateReferencesParams) error {
+	_, err := q.db.Exec(ctx, deleteGateReferences,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.OwnerKind,
+		arg.OwnerID,
+	)
+	return err
+}
+
 const deleteGroup = `-- name: DeleteGroup :execrows
 UPDATE principal_groups SET deleted_at_ms = $1
 WHERE id = $2 AND deleted_at_ms IS NULL
@@ -2251,6 +2395,23 @@ func (q *Queries) DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deleteScopeGateObjects = `-- name: DeleteScopeGateObjects :exec
+DELETE FROM gate_objects
+WHERE namespace_id = $1 AND scope_key = $2
+`
+
+type DeleteScopeGateObjectsParams struct {
+	NamespaceID string
+	ScopeKey    string
+}
+
+// Deletes the configuration of one scope, for example a collection that a
+// delete removes. The references go with it.
+func (q *Queries) DeleteScopeGateObjects(ctx context.Context, arg DeleteScopeGateObjectsParams) error {
+	_, err := q.db.Exec(ctx, deleteScopeGateObjects, arg.NamespaceID, arg.ScopeKey)
+	return err
+}
+
 const deleteSecretKeysOfStack = `-- name: DeleteSecretKeysOfStack :exec
 DELETE FROM secret_keys
 WHERE stack_id = $1
@@ -2334,6 +2495,25 @@ type DeleteUnitContextParams struct {
 // Deletes the entries of a unit and of its resources, both sources.
 func (q *Queries) DeleteUnitContext(ctx context.Context, arg DeleteUnitContextParams) error {
 	_, err := q.db.Exec(ctx, deleteUnitContext, arg.NamespaceID, arg.ObjectID)
+	return err
+}
+
+const deleteUnitGateObjects = `-- name: DeleteUnitGateObjects :exec
+DELETE FROM gate_objects
+WHERE namespace_id = $1 AND level = 'unit' AND tool = $2
+  AND unit_name = $3
+`
+
+type DeleteUnitGateObjectsParams struct {
+	NamespaceID string
+	Tool        string
+	UnitName    string
+}
+
+// Deletes the configuration of a unit that a purge removes. The references go
+// with it.
+func (q *Queries) DeleteUnitGateObjects(ctx context.Context, arg DeleteUnitGateObjectsParams) error {
+	_, err := q.db.Exec(ctx, deleteUnitGateObjects, arg.NamespaceID, arg.Tool, arg.UnitName)
 	return err
 }
 
@@ -2791,6 +2971,35 @@ func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVer
 	return result.RowsAffected(), nil
 }
 
+const findGateRefusal = `-- name: FindGateRefusal :one
+SELECT id, count, body
+FROM gate_records
+WHERE namespace_id = $1 AND refusal_key = $2 AND refusal_key <> ''
+  AND last_at_ms >= $3
+ORDER BY last_at_ms DESC, id COLLATE "C" DESC
+LIMIT 1
+`
+
+type FindGateRefusalParams struct {
+	NamespaceID string
+	RefusalKey  string
+	SinceMs     int64
+}
+
+type FindGateRefusalRow struct {
+	ID    string
+	Count int64
+	Body  string
+}
+
+// The newest record of a refusal key whose last refusal is not before since_ms.
+func (q *Queries) FindGateRefusal(ctx context.Context, arg FindGateRefusalParams) (FindGateRefusalRow, error) {
+	row := q.db.QueryRow(ctx, findGateRefusal, arg.NamespaceID, arg.RefusalKey, arg.SinceMs)
+	var i FindGateRefusalRow
+	err := row.Scan(&i.ID, &i.Count, &i.Body)
+	return i, err
+}
+
 const finishBackup = `-- name: FinishBackup :execrows
 UPDATE backups
 SET state = $1, error = $2, ended_at_ms = $3
@@ -2876,6 +3085,29 @@ func (q *Queries) FirstWorkspaceStateFinalize(ctx context.Context, workspaceID s
 	var finalized_at_ms int64
 	err := row.Scan(&finalized_at_ms)
 	return finalized_at_ms, err
+}
+
+const gateUnitCollection = `-- name: GateUnitCollection :one
+SELECT m.collection_key
+FROM namespaces AS n
+JOIN inventory AS i ON i.namespace = n.name
+JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
+WHERE n.id = $1 AND i.tool = $2 AND i.name = $3
+`
+
+type GateUnitCollectionParams struct {
+	NamespaceID string
+	Tool        string
+	UnitName    string
+}
+
+// The key of the collection that holds a unit now. A unit in no collection has
+// no row.
+func (q *Queries) GateUnitCollection(ctx context.Context, arg GateUnitCollectionParams) (string, error) {
+	row := q.db.QueryRow(ctx, gateUnitCollection, arg.NamespaceID, arg.Tool, arg.UnitName)
+	var collection_key string
+	err := row.Scan(&collection_key)
+	return collection_key, err
 }
 
 const getAccessToken = `-- name: GetAccessToken :one
@@ -3517,6 +3749,70 @@ func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) 
 	var failover_version int64
 	err := row.Scan(&failover_version)
 	return failover_version, err
+}
+
+const getGateObject = `-- name: GetGateObject :one
+SELECT version, body
+FROM gate_objects
+WHERE namespace_id = $1 AND scope_key = $2
+  AND kind = $3 AND id = $4
+`
+
+type GetGateObjectParams struct {
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+	ID          string
+}
+
+type GetGateObjectRow struct {
+	Version int64
+	Body    string
+}
+
+// One configuration object of a scope.
+func (q *Queries) GetGateObject(ctx context.Context, arg GetGateObjectParams) (GetGateObjectRow, error) {
+	row := q.db.QueryRow(ctx, getGateObject,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.Kind,
+		arg.ID,
+	)
+	var i GetGateObjectRow
+	err := row.Scan(&i.Version, &i.Body)
+	return i, err
+}
+
+const getGateRecord = `-- name: GetGateRecord :one
+SELECT body
+FROM gate_records
+WHERE id = $1 AND namespace_id = $2
+`
+
+type GetGateRecordParams struct {
+	ID          string
+	NamespaceID string
+}
+
+func (q *Queries) GetGateRecord(ctx context.Context, arg GetGateRecordParams) (string, error) {
+	row := q.db.QueryRow(ctx, getGateRecord, arg.ID, arg.NamespaceID)
+	var body string
+	err := row.Scan(&body)
+	return body, err
+}
+
+const getGateRecordByID = `-- name: GetGateRecordByID :one
+SELECT namespace_id
+FROM gate_records
+WHERE id = $1
+`
+
+// The namespace of the record with an ID, in any namespace.
+func (q *Queries) GetGateRecordByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getGateRecordByID, id)
+	var namespace_id string
+	err := row.Scan(&namespace_id)
+	return namespace_id, err
 }
 
 const getGrant = `-- name: GetGrant :one
@@ -5023,6 +5319,103 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 	return err
 }
 
+const insertGateObject = `-- name: InsertGateObject :exec
+INSERT INTO gate_objects (namespace_id, scope_key, kind, id, level, tool, unit_name, version, body, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10)
+`
+
+type InsertGateObjectParams struct {
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+	ID          string
+	Level       string
+	Tool        string
+	UnitName    string
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
+}
+
+func (q *Queries) InsertGateObject(ctx context.Context, arg InsertGateObjectParams) error {
+	_, err := q.db.Exec(ctx, insertGateObject,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.Kind,
+		arg.ID,
+		arg.Level,
+		arg.Tool,
+		arg.UnitName,
+		arg.Version,
+		arg.Body,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const insertGateRecord = `-- name: InsertGateRecord :exec
+INSERT INTO gate_records (id, namespace_id, point, change_kind, change_id, at_ms, last_at_ms, count, refusal_key, body)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10)
+`
+
+type InsertGateRecordParams struct {
+	ID          string
+	NamespaceID string
+	Point       string
+	ChangeKind  string
+	ChangeID    string
+	AtMs        int64
+	LastAtMs    int64
+	Count       int64
+	RefusalKey  string
+	Body        string
+}
+
+func (q *Queries) InsertGateRecord(ctx context.Context, arg InsertGateRecordParams) error {
+	_, err := q.db.Exec(ctx, insertGateRecord,
+		arg.ID,
+		arg.NamespaceID,
+		arg.Point,
+		arg.ChangeKind,
+		arg.ChangeID,
+		arg.AtMs,
+		arg.LastAtMs,
+		arg.Count,
+		arg.RefusalKey,
+		arg.Body,
+	)
+	return err
+}
+
+const insertGateReference = `-- name: InsertGateReference :exec
+INSERT INTO gate_references (ref_kind, ref_id, namespace_id, scope_key, owner_kind, owner_id)
+VALUES ($1, $2, $3, $4,
+        $5, $6)
+`
+
+type InsertGateReferenceParams struct {
+	RefKind     string
+	RefID       string
+	NamespaceID string
+	ScopeKey    string
+	OwnerKind   string
+	OwnerID     string
+}
+
+func (q *Queries) InsertGateReference(ctx context.Context, arg InsertGateReferenceParams) error {
+	_, err := q.db.Exec(ctx, insertGateReference,
+		arg.RefKind,
+		arg.RefID,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.OwnerKind,
+		arg.OwnerID,
+	)
+	return err
+}
+
 const insertInventoryChange = `-- name: InsertInventoryChange :exec
 INSERT INTO inventory_changes (
     namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
@@ -6113,6 +6506,199 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 	return items, nil
 }
 
+const listGateObjects = `-- name: ListGateObjects :many
+SELECT id, version, body
+FROM gate_objects
+WHERE namespace_id = $1 AND scope_key = $2 AND kind = $3
+ORDER BY id COLLATE "C"
+`
+
+type ListGateObjectsParams struct {
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+}
+
+type ListGateObjectsRow struct {
+	ID      string
+	Version int64
+	Body    string
+}
+
+// The objects of one kind in one scope, ordered by ID.
+func (q *Queries) ListGateObjects(ctx context.Context, arg ListGateObjectsParams) ([]ListGateObjectsRow, error) {
+	rows, err := q.db.Query(ctx, listGateObjects, arg.NamespaceID, arg.ScopeKey, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGateObjectsRow
+	for rows.Next() {
+		var i ListGateObjectsRow
+		if err := rows.Scan(&i.ID, &i.Version, &i.Body); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGateObjectsOfScope = `-- name: ListGateObjectsOfScope :many
+SELECT kind, id, version, body
+FROM gate_objects
+WHERE namespace_id = $1 AND scope_key = $2
+ORDER BY kind COLLATE "C", id COLLATE "C"
+`
+
+type ListGateObjectsOfScopeParams struct {
+	NamespaceID string
+	ScopeKey    string
+}
+
+type ListGateObjectsOfScopeRow struct {
+	Kind    string
+	ID      string
+	Version int64
+	Body    string
+}
+
+// Every object and setting of one scope, ordered by kind and ID.
+func (q *Queries) ListGateObjectsOfScope(ctx context.Context, arg ListGateObjectsOfScopeParams) ([]ListGateObjectsOfScopeRow, error) {
+	rows, err := q.db.Query(ctx, listGateObjectsOfScope, arg.NamespaceID, arg.ScopeKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGateObjectsOfScopeRow
+	for rows.Next() {
+		var i ListGateObjectsOfScopeRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.ID,
+			&i.Version,
+			&i.Body,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGateRecordsByChange = `-- name: ListGateRecordsByChange :many
+SELECT body
+FROM gate_records
+WHERE namespace_id = $1 AND change_kind = $2
+  AND change_id = $3
+ORDER BY at_ms, id COLLATE "C"
+`
+
+type ListGateRecordsByChangeParams struct {
+	NamespaceID string
+	ChangeKind  string
+	ChangeID    string
+}
+
+func (q *Queries) ListGateRecordsByChange(ctx context.Context, arg ListGateRecordsByChangeParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listGateRecordsByChange, arg.NamespaceID, arg.ChangeKind, arg.ChangeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var body string
+		if err := rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		items = append(items, body)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGateReferrers = `-- name: ListGateReferrers :many
+SELECT o.scope_key, o.kind, o.id, o.version, o.body
+FROM gate_references AS r
+JOIN gate_objects AS o
+    ON o.namespace_id = r.namespace_id AND o.scope_key = r.scope_key AND o.kind = r.owner_kind AND o.id = r.owner_id
+WHERE r.ref_kind = $1 AND r.ref_id = $2
+  AND (
+      $3::text = 'installation'
+      OR ($3::text = 'namespace' AND o.namespace_id = $4)
+      OR (o.namespace_id = $4 AND o.scope_key = $5)
+      OR ($3::text = 'collection' AND o.level = 'unit' AND o.namespace_id = $4
+          AND EXISTS (
+              SELECT 1
+              FROM namespaces AS n
+              JOIN inventory AS i ON i.namespace = n.name
+              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
+              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+                AND m.collection_key = $6))
+  )
+ORDER BY o.scope_key COLLATE "C", o.kind COLLATE "C", o.id COLLATE "C"
+`
+
+type ListGateReferrersParams struct {
+	RefKind       string
+	RefID         string
+	Level         string
+	NamespaceID   string
+	ScopeKey      string
+	CollectionKey string
+}
+
+type ListGateReferrersRow struct {
+	ScopeKey string
+	Kind     string
+	ID       string
+	Version  int64
+	Body     string
+}
+
+// The objects, in the scope and in the scopes after it (see
+// ListNarrowerGateObjects), that name the approval rule or the path set.
+func (q *Queries) ListGateReferrers(ctx context.Context, arg ListGateReferrersParams) ([]ListGateReferrersRow, error) {
+	rows, err := q.db.Query(ctx, listGateReferrers,
+		arg.RefKind,
+		arg.RefID,
+		arg.Level,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.CollectionKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGateReferrersRow
+	for rows.Next() {
+		var i ListGateReferrersRow
+		if err := rows.Scan(
+			&i.ScopeKey,
+			&i.Kind,
+			&i.ID,
+			&i.Version,
+			&i.Body,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGrantsOn = `-- name: ListGrantsOn :many
 SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.object_kind, g.namespace,
   g.condition, g.created_at_ms, g.created_by,
@@ -6877,6 +7463,73 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 	return items, nil
 }
 
+const listNarrowerGateObjects = `-- name: ListNarrowerGateObjects :many
+SELECT o.scope_key, o.version, o.body
+FROM gate_objects AS o
+WHERE o.kind = $1 AND o.id = $2
+  AND (
+      $3::text = 'installation'
+      OR ($3::text = 'namespace' AND o.namespace_id = $4)
+      OR (o.namespace_id = $4 AND o.scope_key = $5)
+      OR ($3::text = 'collection' AND o.level = 'unit' AND o.namespace_id = $4
+          AND EXISTS (
+              SELECT 1
+              FROM namespaces AS n
+              JOIN inventory AS i ON i.namespace = n.name
+              JOIN collection_members AS m ON m.unit_id = i.unit_id AND m.namespace = n.name
+              WHERE n.id = o.namespace_id AND i.tool = o.tool AND i.name = o.unit_name
+                AND m.collection_key = $6))
+  )
+ORDER BY o.scope_key COLLATE "C"
+`
+
+type ListNarrowerGateObjectsParams struct {
+	Kind          string
+	ID            string
+	Level         string
+	NamespaceID   string
+	ScopeKey      string
+	CollectionKey string
+}
+
+type ListNarrowerGateObjectsRow struct {
+	ScopeKey string
+	Version  int64
+	Body     string
+}
+
+// The objects of one kind and ID in the scope and in the scopes after it: for
+// the installation, every scope; for a namespace, every scope of the
+// namespace; for a collection, the collection and the units that it holds
+// now; for a unit, the unit. level, namespace_id, scope_key and
+// collection_key describe the scope.
+func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerGateObjectsParams) ([]ListNarrowerGateObjectsRow, error) {
+	rows, err := q.db.Query(ctx, listNarrowerGateObjects,
+		arg.Kind,
+		arg.ID,
+		arg.Level,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.CollectionKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNarrowerGateObjectsRow
+	for rows.Next() {
+		var i ListNarrowerGateObjectsRow
+		if err := rows.Scan(&i.ScopeKey, &i.Version, &i.Body); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listObjectContext = `-- name: ListObjectContext :many
 SELECT tool, source, fields, warning, item_id, item_seq, updated_at_ms, updated_by
 FROM object_context
@@ -7082,6 +7735,46 @@ func (q *Queries) ListRoles(ctx context.Context) ([]ListRolesRow, error) {
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listScopeGateObjectKeys = `-- name: ListScopeGateObjectKeys :many
+SELECT kind, id, scope_key
+FROM gate_objects
+WHERE namespace_id = $1 AND scope_key = $2
+ORDER BY kind, id
+`
+
+type ListScopeGateObjectKeysParams struct {
+	NamespaceID string
+	ScopeKey    string
+}
+
+type ListScopeGateObjectKeysRow struct {
+	Kind     string
+	ID       string
+	ScopeKey string
+}
+
+// The kind, ID and scope key of the configuration of one scope that a delete
+// removes, for the audit entry of the delete.
+func (q *Queries) ListScopeGateObjectKeys(ctx context.Context, arg ListScopeGateObjectKeysParams) ([]ListScopeGateObjectKeysRow, error) {
+	rows, err := q.db.Query(ctx, listScopeGateObjectKeys, arg.NamespaceID, arg.ScopeKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListScopeGateObjectKeysRow
+	for rows.Next() {
+		var i ListScopeGateObjectKeysRow
+		if err := rows.Scan(&i.Kind, &i.ID, &i.ScopeKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -7409,6 +8102,48 @@ func (q *Queries) ListTempAdmins(ctx context.Context) ([]TempAdmin, error) {
 	return items, nil
 }
 
+const listUnitGateObjectKeys = `-- name: ListUnitGateObjectKeys :many
+SELECT kind, id, scope_key
+FROM gate_objects
+WHERE namespace_id = $1 AND level = 'unit' AND tool = $2
+  AND unit_name = $3
+ORDER BY kind, id
+`
+
+type ListUnitGateObjectKeysParams struct {
+	NamespaceID string
+	Tool        string
+	UnitName    string
+}
+
+type ListUnitGateObjectKeysRow struct {
+	Kind     string
+	ID       string
+	ScopeKey string
+}
+
+// The kind, ID and scope key of the configuration of a unit that a purge
+// removes, for the audit entry of the purge.
+func (q *Queries) ListUnitGateObjectKeys(ctx context.Context, arg ListUnitGateObjectKeysParams) ([]ListUnitGateObjectKeysRow, error) {
+	rows, err := q.db.Query(ctx, listUnitGateObjectKeys, arg.NamespaceID, arg.Tool, arg.UnitName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnitGateObjectKeysRow
+	for rows.Next() {
+		var i ListUnitGateObjectKeysRow
+		if err := rows.Scan(&i.Kind, &i.ID, &i.ScopeKey); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -7563,6 +8298,17 @@ func (q *Queries) LockDurableOperation(ctx context.Context, id string) (DurableO
 		&i.UpdatedAtMs,
 	)
 	return i, err
+}
+
+const lockGateRefusal = `-- name: LockGateRefusal :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Takes a lock until the end of the transaction on one refusal key of a
+// namespace, so two refusals of one key at the same time share one record.
+func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
+	_, err := q.db.Exec(ctx, lockGateRefusal, lockKey)
+	return err
 }
 
 const lockServerAuditScope = `-- name: LockServerAuditScope :exec
@@ -8110,6 +8856,51 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.BlobMd5,
 	)
 	return err
+}
+
+const queryGateRecords = `-- name: QueryGateRecords :many
+SELECT body
+FROM gate_records
+WHERE namespace_id = $1 AND point = $2
+  AND at_ms >= $3 AND at_ms < $4
+ORDER BY at_ms DESC, id COLLATE "C" DESC
+LIMIT $5
+`
+
+type QueryGateRecordsParams struct {
+	NamespaceID string
+	Point       string
+	FromMs      int64
+	ToMs        int64
+	MaxRows     int32
+}
+
+// The records of a decision point with at_ms from from_ms up to, not
+// including, to_ms, newest first.
+func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, queryGateRecords,
+		arg.NamespaceID,
+		arg.Point,
+		arg.FromMs,
+		arg.ToMs,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var body string
+		if err := rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		items = append(items, body)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
@@ -9450,6 +10241,65 @@ func (q *Queries) UpdateExists(ctx context.Context, arg UpdateExistsParams) (boo
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const updateGateObject = `-- name: UpdateGateObject :execrows
+UPDATE gate_objects
+SET version = $1, body = $2, updated_at_ms = $3
+WHERE namespace_id = $4 AND scope_key = $5
+  AND kind = $6 AND id = $7 AND version = $8
+`
+
+type UpdateGateObjectParams struct {
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+	ID          string
+	PrevVersion int64
+}
+
+// Replaces an object when its version is the expected one.
+func (q *Queries) UpdateGateObject(ctx context.Context, arg UpdateGateObjectParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateGateObject,
+		arg.Version,
+		arg.Body,
+		arg.UpdatedAtMs,
+		arg.NamespaceID,
+		arg.ScopeKey,
+		arg.Kind,
+		arg.ID,
+		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateGateRefusal = `-- name: UpdateGateRefusal :exec
+UPDATE gate_records
+SET count = $1, last_at_ms = $2, body = $3
+WHERE id = $4
+`
+
+type UpdateGateRefusalParams struct {
+	Count    int64
+	LastAtMs int64
+	Body     string
+	ID       string
+}
+
+func (q *Queries) UpdateGateRefusal(ctx context.Context, arg UpdateGateRefusalParams) error {
+	_, err := q.db.Exec(ctx, updateGateRefusal,
+		arg.Count,
+		arg.LastAtMs,
+		arg.Body,
+		arg.ID,
+	)
+	return err
 }
 
 const updateGroup = `-- name: UpdateGroup :execrows

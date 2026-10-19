@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -198,7 +199,9 @@ var migrations embed.FS
 type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
-	path    string
+	// gate serves the ports of gate.Store over this store.
+	gate *gatestore.Store
+	path string
 	// mu guards conn and queries across the online restore swap: readers
 	// hold it shared, and the swap holds it exclusive while it renames the
 	// database file. Lock order with stagingMu is stagingMu before mu.
@@ -330,24 +333,8 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, errors.Join(err, guard.release())
 	}
 
-	s := &Store{
-		conn:                conn,
-		queries:             db.New(conn),
-		path:                resolved,
-		mu:                  sync.RWMutex{},
-		stagingMu:           sync.Mutex{},
-		stagingPath:         "",
-		guardCancel:         nil,
-		guardDone:           nil,
-		logger:              slog.New(slog.DiscardHandler),
-		lastTruncateSuccess: time.Now(),
-		busyWarned:          false,
-		keepAccessHook:      nil,
-		binaryVersion:       "",
-		noMigrate:           false,
-		processGuard:        guard,
-		stepTxBound:         DefaultStepTransactionBound,
-	}
+	s := newStore(conn, resolved, guard)
+
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -362,6 +349,32 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	go s.guardLoop(guardCtx)
 
 	return s, nil
+}
+
+// newStore returns the store on conn, before the options and the migration.
+func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
+	s := &Store{
+		conn:                conn,
+		queries:             db.New(conn),
+		path:                path,
+		mu:                  sync.RWMutex{},
+		stagingMu:           sync.Mutex{},
+		stagingPath:         "",
+		guardCancel:         nil,
+		guardDone:           nil,
+		logger:              slog.New(slog.DiscardHandler),
+		lastTruncateSuccess: time.Now(),
+		busyWarned:          false,
+		keepAccessHook:      nil,
+		binaryVersion:       "",
+		noMigrate:           false,
+		processGuard:        guard,
+		stepTxBound:         DefaultStepTransactionBound,
+		gate:                nil,
+	}
+	s.gate = gatestore.New(gateRunner{s: s})
+
+	return s
 }
 
 // maxSymlinkChain caps the links resolveDatabasePath follows at one path:
@@ -773,6 +786,11 @@ func (s *Store) RenameStack(
 		}
 
 		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
+		from := unitGate{ns: oldRef.Namespace, tool: inventoryTool, name: stackUnitName(oldRef)}
+
+		if gateErr := moveUnitGate(ctx, q, from, stackUnitName(newRef)); gateErr != nil {
+			return gateErr
+		}
 
 		row, err := q.GetStack(ctx, db.GetStackParams{
 			Namespace: newRef.Namespace.String(),
