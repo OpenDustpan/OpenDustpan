@@ -1163,6 +1163,10 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, err
 	}
 
+	if err := checkAllowedOrigins(cfg.allowedOrigins); err != nil {
+		return baseurl.Resolver{}, err
+	}
+
 	base, err := baseurl.Parse(cfg.publicURL)
 	if err != nil {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
