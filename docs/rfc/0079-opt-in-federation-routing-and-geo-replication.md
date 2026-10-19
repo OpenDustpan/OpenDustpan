@@ -257,5 +257,5 @@ Dropped on 2026-10-19. The project owner decided the federation model in
 [ADR 248](../adr/0248-federation-model.md) records it. There are no
 regions, no control home, no namespace directory with one writer, no home
 lease and no automatic promotion, and a partition does not stop writes.
-Section 8 (joins between namespaces) moves into ADR 248 decision 16, with
+Section 8 (joins between namespaces) moves into the "Not decided" section of ADR 248, with
 "installation" for "region". Open questions 3 and 6 are moot.

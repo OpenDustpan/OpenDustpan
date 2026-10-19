@@ -106,7 +106,7 @@ _Avoid_: Cluster, instance (one server process), deployment
 
 **Instance**:
 One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
-_Avoid_: Node, replica, host
+_Avoid_: Node, replica (alone), host
 
 **Installation kind**:
 The marker of an installation that says which server command may open its data: `dev` or `production` (ADR 237). The first command that starts on a new database claims it, and no API or command changes it after that. `opendustpan serve` claims `production`. An SDK server claims `production` unless it sets another kind. `opendustpan dev` claims `dev`. Each command refuses a database of the other kind. It is not the installation state (`normal` or maintenance mode).

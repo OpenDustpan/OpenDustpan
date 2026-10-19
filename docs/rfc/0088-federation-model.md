@@ -285,6 +285,7 @@ the decision and stay.
 | 87 (PR #880) | Open question 6 (does a lease partition stop writes) | Moot. The owner decision is option c: a partition stops nothing, and only an operator promotes. |
 | 87 (PR #880) | Open question 7 (which processes renew the home lease), and the sentence in "Components" on the renewal of the home lease | Moot. There is no home lease. Delete the sentence. |
 | 37 | Terms ("home region in that installation"). Design point 1 option A "for regions". Design point 3 "Regions in one installation". Design point 5 "Regions, replication and backups". | Rename to installations. Keep the split of replication and backup, and the recovery objectives. |
+| 36 | Scope ("in one region", "Geo replication between regions stays with ADR 4") | Rename to installation. Point geo replication to this RFC. |
 | 2 | "A namespace homed elsewhere", listing from a standby region | Rename. |
 | 4 | "Unit of tenancy, home region and fencing", two home regions in one view | Rename. |
 | 8 | A backup stays in the home region, and a restore into another region | Rename to installation. |
@@ -402,7 +403,7 @@ status.
    ADR 248)
 2. Replace the "Regions" section of GLOSSARY.md with "Federation" (done in
    the pull request of ADR 248)
-3. Rename regions to installations in RFCs 1, 2, 4, 8, 17, 37, 68 and 76
+3. Rename regions to installations in RFCs 1, 2, 4, 8, 17, 36, 37, 68 and 76
    (RFC 79 gets the status `dropped` in the pull request of ADR 248)
 4. Delete open questions 6 and 7 and the home lease sentence from RFC 87
    (done in the pull request of RFC 87)
