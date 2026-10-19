@@ -203,8 +203,9 @@ func TestHealthReadyOK(t *testing.T) {
 		t.Fatalf("media type = %q, want application/json", got)
 	}
 
-	if strings.TrimSpace(body) != `{"status":"ok"}` {
-		t.Fatalf("GET /health/ready body %q, want %q", body, `{"status":"ok"}`)
+	want := `{"status":"ok","components":[{"name":"api","status":"ok"},{"name":"worker","status":"ok"}]}`
+	if strings.TrimSpace(body) != want {
+		t.Fatalf("GET /health/ready body %q, want %q", body, want)
 	}
 }
 
@@ -227,21 +228,21 @@ func TestHealthReadyFailures(t *testing.T) {
 			name:       "store fails",
 			storePing:  failPing(errStoreCanary),
 			blobPing:   nil,
-			wantBody:   `{"status":"unavailable","failed":["store"]}`,
+			wantBody:   `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["store"]},{"name":"worker","status":"unavailable","failed":["store"]}]}`,
 			wantAbsent: []string{"blob", errStoreCanary.Error(), errBlobCanary.Error()},
 		},
 		{
 			name:       "blob fails",
 			storePing:  nil,
 			blobPing:   failPing(errBlobCanary),
-			wantBody:   `{"status":"unavailable","failed":["blob"]}`,
+			wantBody:   `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["blob"]},{"name":"worker","status":"ok"}]}`,
 			wantAbsent: []string{"store", errStoreCanary.Error(), errBlobCanary.Error()},
 		},
 		{
 			name:       "both fail",
 			storePing:  failPing(errStoreCanary),
 			blobPing:   failPing(errBlobCanary),
-			wantBody:   `{"status":"unavailable","failed":["store","blob"]}`,
+			wantBody:   `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["store","blob"]},{"name":"worker","status":"unavailable","failed":["store"]}]}`,
 			wantAbsent: []string{errStoreCanary.Error(), errBlobCanary.Error()},
 		},
 	}
@@ -292,8 +293,8 @@ func TestHealthReadySlowCheck(t *testing.T) {
 		storeSlow bool
 		wantBody  string
 	}{
-		{name: "slow store", storeSlow: true, wantBody: `{"status":"unavailable","failed":["store"]}`},
-		{name: "slow blob", storeSlow: false, wantBody: `{"status":"unavailable","failed":["blob"]}`},
+		{name: "slow store", storeSlow: true, wantBody: `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["store"]},{"name":"worker","status":"unavailable","failed":["store"]}]}`},
+		{name: "slow blob", storeSlow: false, wantBody: `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["blob"]},{"name":"worker","status":"ok"}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -13,6 +13,7 @@ the same list.
 | `--config` | `DUSTPAN_CONFIG` | (none) | (none) |
 | `--database` | `DUSTPAN_DATABASE` | `database` | `sqlite:dustpan.db` (or `postgres://...`) |
 | `--region` | `DUSTPAN_REGION` | `region` | `local` |
+| `--components` | `DUSTPAN_COMPONENTS` | `components` | `all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts durable operations, but never claims one. `worker` runs the durable operations, the schedules, the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 on each route except the probes and the metrics route. An unknown name stops the start. See the several instances guide (docs/guides/several-instances.md) |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
 | `--console-dir` | `DUSTPAN_CONSOLE_DIR` | `console-dir` | (none) |
 | `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none). A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with `Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests. |

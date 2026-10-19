@@ -155,6 +155,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:       nil,
 		Now:           nil,
 		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
@@ -211,6 +212,7 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:       nil,
 		TempAdmins:    nil,
 		Now:           nil,
 		Authenticator: tokenAuthenticator{},
@@ -261,6 +263,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -336,6 +339,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:       nil,
 		Now:           nil,
 		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
@@ -394,6 +398,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 	t.Helper()
 
 	cfg := apiserver.Config{
+		Workers:       nil,
 		TempAdmins:    nil,
 		Now:           nil,
 		Authenticator: tokenAuthenticator{},

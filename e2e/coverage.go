@@ -1017,6 +1017,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Workers:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},
 		Authorizer:       coverageAuthorizer{},

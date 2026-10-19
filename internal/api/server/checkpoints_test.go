@@ -52,6 +52,7 @@ func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
 		Authenticator:    tokenAuthenticator{},

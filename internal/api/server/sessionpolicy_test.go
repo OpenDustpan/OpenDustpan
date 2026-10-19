@@ -46,6 +46,7 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},

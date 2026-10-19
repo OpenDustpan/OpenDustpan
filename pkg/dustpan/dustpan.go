@@ -223,6 +223,14 @@ type settings struct {
 	// jobClaimer claims the phases of runner jobs for the runners of the
 	// protocol, or is nil. See WithJobClaimer.
 	jobClaimer job.Claimer
+	// components are the components this process runs. See WithComponents.
+	components Components
+	// operationLease is the lease period of a claim on a durable operation,
+	// or 0 for the default. See WithOperationLease.
+	operationLease time.Duration
+	// watch reads the worker state. assemble sets it before it builds the
+	// adapters.
+	watch *workerWatch
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -571,6 +579,10 @@ type Server struct {
 	durableOwner    string
 	inactivityEvery time.Duration
 	deletedEvery    time.Duration
+	// components are the components this process runs. watch reads the
+	// worker state for the readiness probe, the metric and the start gate.
+	components Components
+	watch      *workerWatch
 }
 
 // services holds the domain services that NewServer wires together.
@@ -654,6 +666,9 @@ func defaultSettings() *settings {
 		durableStore:            nil,
 		runners:                 nil,
 		jobClaimer:              nil,
+		components:              AllComponents(),
+		operationLease:          0,
+		watch:                   nil,
 	}
 }
 
@@ -839,7 +854,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	// One registry holds every family: the request, runtime and build
 	// families, and the readiness failure counter of the probe.
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
-	registry := observed.Registry()
+
+	cfg.watch = newWorkerWatch(cfg)
 
 	deleted, err := newDeletedSweeper(svc, cfg, observed)
 	if err != nil {
@@ -865,17 +881,9 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
-	var backupRegistry backup.Registry
-	if reg, ok := cfg.namespaceStore.(backup.Registry); ok {
-		backupRegistry = reg
-	}
+	backupRegistry, restoreRegistry := registriesOf(cfg.namespaceStore)
 
-	var restoreRegistry backup.RestoreRegistry
-	if reg, ok := cfg.namespaceStore.(backup.RestoreRegistry); ok {
-		restoreRegistry = reg
-	}
-
-	return &Server{
+	srv := &Server{
 		handler:          handler,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
@@ -889,7 +897,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		restores:         adapters.restores,
 		restoreRegistry:  restoreRegistry,
 		now:              cfg.now,
-		registry:         registry,
+		registry:         observed.Registry(),
 		tlsCertFile:      cfg.tlsCertFile,
 		tlsKeyFile:       cfg.tlsKeyFile,
 		observed:         observed,
@@ -907,7 +915,35 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		inactivityEvery:  sweepEvery,
 		deletedEvery:     deletedSweepEvery,
 		idempotency:      cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-	}, nil
+		components: cfg.components,
+		watch:      cfg.watch,
+	}
+
+	cfg.watch.specs = srv.jobSchedules
+	registerWatchMetrics(observed.Registry(), cfg.watch)
+
+	return srv, nil
+}
+
+// registriesOf returns the backup and restore registries that the namespace
+// store keeps, or nil for a store that keeps none.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the ports.
+func registriesOf(store namespace.Store) (backup.Registry, backup.RestoreRegistry) {
+	var (
+		backups  backup.Registry
+		restores backup.RestoreRegistry
+	)
+
+	if reg, ok := store.(backup.Registry); ok {
+		backups = reg
+	}
+
+	if reg, ok := store.(backup.RestoreRegistry); ok {
+		restores = reg
+	}
+
+	return backups, restores
 }
 
 // adapters holds the HTTP adapters that routes mounts.
@@ -921,7 +957,7 @@ type adapters struct {
 	tfe         http.Handler
 	tofuHTTP    http.Handler
 	server      http.Handler
-	ready       http.Handler
+	ready       *readiness
 	maintenance *maintenance.Watcher
 	restores    *backup.RestoreService
 	chain       *auditChain
@@ -1001,7 +1037,7 @@ func newAdapters(
 		tfe:             tfeAPI,
 		tofuHTTP:        tofuHTTPAPI,
 		server:          serverAPI,
-		ready:           newReadiness(cfg, observed),
+		ready:           newReadiness(cfg, observed, chain),
 		maintenance:     watcher,
 		restores:        restores,
 		chain:           chain,
@@ -1055,14 +1091,22 @@ func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 
 // newReadiness builds the readiness probe: it pings the store and the blob
 // store, and counts its failures on observed.
-func newReadiness(cfg *settings, observed *metrics.ServerMetrics) http.Handler {
-	return newReadinessHandler(
-		cfg.namespaceStore,
-		cfg.blobStore,
-		readinessTimeout,
-		observed.ReadinessFailures(),
-		cfg.logger,
-	)
+func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditChain) *readiness {
+	var admits func(context.Context) bool
+	if chain != nil {
+		admits = chain.admits
+	}
+
+	return newComponentReadiness(readinessSettings{
+		components:  cfg.components,
+		store:       cfg.namespaceStore,
+		blobs:       cfg.blobStore,
+		watch:       cfg.watch,
+		chainAdmits: admits,
+		timeout:     readinessTimeout,
+		failures:    observed.ReadinessFailures(),
+		logger:      cfg.logger,
+	})
 }
 
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
@@ -1185,16 +1229,8 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("%w: WithWorkspaceStore", ErrMissingOption)
 	}
 
-	if cfg.stateStore == nil {
-		return baseurl.Resolver{}, fmt.Errorf("%w: WithStateStore", ErrMissingOption)
-	}
-
-	if cfg.blobStore == nil {
-		return baseurl.Resolver{}, fmt.Errorf("%w: WithBlobStore", ErrMissingOption)
-	}
-
-	if cfg.inventoryReader == nil {
-		return baseurl.Resolver{}, fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
+	if err := checkStoreOptions(cfg); err != nil {
+		return baseurl.Resolver{}, err
 	}
 
 	if cfg.secretWrapper == nil {
@@ -1219,6 +1255,23 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	}
 
 	return base, checkRetention(cfg.softDeleteRetention)
+}
+
+// checkStoreOptions refuses a missing state store, blob store or inventory
+// reader, and a set of components that names none.
+func checkStoreOptions(cfg *settings) error {
+	switch {
+	case len(cfg.components.Names()) == 0:
+		return fmt.Errorf("%w: WithComponents names no component", ErrMissingOption)
+	case cfg.stateStore == nil:
+		return fmt.Errorf("%w: WithStateStore", ErrMissingOption)
+	case cfg.blobStore == nil:
+		return fmt.Errorf("%w: WithBlobStore", ErrMissingOption)
+	case cfg.inventoryReader == nil:
+		return fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
+	default:
+		return nil
+	}
 }
 
 // newWorkspaceService builds the OpenTofu workspace service, which seals
@@ -1469,7 +1522,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	if s.durable == nil {
+	if s.durable == nil && s.components.Has(ComponentWorker) {
 		// The first run of the inactivity disable ends before the hook and
 		// before the server serves a request. A slow database delays the start
 		// by firstSweepLimit at most: the hourly runs try again.
@@ -1498,13 +1551,13 @@ func (s *Server) Run(ctx context.Context) error {
 	// The chain check and the migration loop stop when Run returns, also
 	// after a serve error, and Run returns only after they stopped.
 	checkCtx, stopCheck := context.WithCancel(ctx)
-	waitCheck := s.startAuditChain(checkCtx)
+	waitCheck := s.workerOnly(func() func() { return s.startAuditChain(checkCtx) })
 
 	sweepCtx, stopSweeps := context.WithCancel(ctx)
 
 	var sweeps sync.WaitGroup
 
-	if err := s.startSweeps(sweepCtx, &sweeps); err != nil {
+	if err := s.startBackground(sweepCtx, &sweeps); err != nil {
 		stopCheck()
 		waitCheck()
 		stopSweeps()
@@ -1515,7 +1568,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
 	shipCtx, stopShipper := context.WithCancel(ctx)
-	waitShipper := s.startAuditShipper(shipCtx)
+	waitShipper := s.workerOnly(func() func() { return s.startAuditShipper(shipCtx) })
 
 	defer func() {
 		stopCheck()
@@ -1527,6 +1580,39 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// workerOnly runs start when the process runs the worker component, and
+// answers the function that waits for what start began. Without the worker
+// component it starts nothing and answers a function that returns at once.
+func (s *Server) workerOnly(start func() func()) func() {
+	if !s.components.Has(ComponentWorker) {
+		return func() {}
+	}
+
+	return start()
+}
+
+// startBackground starts the job schedules and the runner for a process
+// that runs the worker component. A process with only the api component
+// claims nothing. It makes sure that the schedules exist in the store, so
+// that a missing worker shows as a schedule that nobody claims.
+func (s *Server) startBackground(ctx context.Context, sweeps *sync.WaitGroup) error {
+	if s.components.Has(ComponentWorker) {
+		return s.startSweeps(ctx, sweeps)
+	}
+
+	if s.durable == nil {
+		return nil
+	}
+
+	for _, spec := range s.jobSchedules() {
+		if _, err := s.durable.EnsureSchedule(ctx, spec); err != nil {
+			return fmt.Errorf("ensure schedule %s: %w", spec.Name, err)
+		}
+	}
+
+	return nil
 }
 
 // sweepEvery is the period of the inactivity disable. The inactivity period
@@ -2271,6 +2357,7 @@ func newServerHandler(
 		Now:          cfg.now,
 		AuditChain:   auditChainPort(deps.chain),
 		AuditSinks:   sinks,
+		Workers:      cfg.watch,
 		SignIn:       deps.signIn,
 	})
 	if err != nil {
@@ -2837,7 +2924,7 @@ func debugRoute(pattern string) bool {
 	}
 
 	switch name {
-	case "/health/live", "/health/ready", "/api/server/metrics":
+	case "/health/live", "/health/ready", "/health/ready/{component}", metricsPath:
 		return true
 	default:
 		return false
@@ -3143,8 +3230,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("GET /health/ready", a.ready)
+	mux.HandleFunc("GET /health/ready/{component}", a.ready.ServeOne)
 
-	if cfg.consoleDir != "" {
+	if cfg.consoleDir != "" && cfg.components.Has(ComponentAPI) {
 		console, err := consoleHandler(cfg.consoleDir)
 		if err != nil {
 			return nil, err
@@ -3162,7 +3250,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
 
-	return withRequestCache(withRequestLog(gated, addr, cfg.logger, cfg.authenticator, observed)), nil
+	return withRequestCache(withRequestLog(
+		gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
+	)), nil
 }
 
 // newClientIPResolver builds the client address resolver of the server from

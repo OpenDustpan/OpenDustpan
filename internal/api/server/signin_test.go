@@ -184,6 +184,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:        nil,
 		TempAdmins:     nil,
 		Now:            nil,
 		Authenticator:  tokenAuthenticator{},
@@ -1014,6 +1015,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:        nil,
 		TempAdmins:     nil,
 		Now:            nil,
 		Authenticator:  tokenAuthenticator{},

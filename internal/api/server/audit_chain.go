@@ -143,6 +143,10 @@ func (h *Handler) approveAuditChain(
 		return
 	}
 
+	if !h.admitStart(ctx, w) {
+		return
+	}
+
 	if err := h.auditChain.Approve(ctx, callerEntry(r, p, audit.ActionSetChain)); err != nil {
 		h.writeError(ctx, w, err)
 

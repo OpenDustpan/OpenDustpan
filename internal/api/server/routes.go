@@ -79,6 +79,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes := append([]Route{}, h.coreRoutes()...)
 	routes = append(routes, h.backupRoutes()...)
 	routes = append(routes, h.checkRoutes()...)
+	routes = append(routes, h.workerRoutes()...)
 	routes = append(routes, h.restoreRoutes()...)
 	routes = append(routes, h.maintenanceRoutes()...)
 	routes = append(routes, h.auditChainRoutes()...)

@@ -199,7 +199,7 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 	}
 
 	scheduler, err := durable.NewScheduler(durable.SchedulerConfig{
-		Store:         s.durable,
+		Store:         s.tracked(),
 		Schedules:     specs,
 		MaxFirstDelay: 0,
 		ErrorBackoff:  durable.Backoff{Base: 0, Max: 0},
@@ -211,10 +211,10 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 	}
 
 	runner, err := durable.NewRunner(durable.RunnerConfig{
-		Store:        s.durable,
+		Store:        s.tracked(),
 		Owner:        s.durableOwner,
 		Kinds:        s.jobKinds(),
-		Lease:        0,
+		Lease:        s.leaseSetting(),
 		RenewEvery:   0,
 		PollEvery:    jobPollEvery(specs),
 		MaxAttempts:  0,
@@ -230,6 +230,26 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 	}
 
 	return scheduler, runner, nil
+}
+
+// leaseSetting returns the configured lease period, or 0 for the default.
+func (s *Server) leaseSetting() time.Duration {
+	if s.watch == nil {
+		return 0
+	}
+
+	return s.watch.lease
+}
+
+// tracked returns the durable store with the claim recorder around it.
+//
+//nolint:ireturn // The scheduler and the runner take the port.
+func (s *Server) tracked() DurableStore {
+	if s.watch == nil {
+		return s.durable
+	}
+
+	return trackingStore{DurableStore: s.durable, watch: s.watch}
 }
 
 // startSweeps starts the background sweeps on ctx: the durable job schedules

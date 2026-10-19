@@ -48,6 +48,53 @@ Console sessions live in the database. Each instance accepts a session that anot
 
 Give each instance the same sign-in providers and client secrets. The browser returns from the identity provider to the URL in `--public-url`. The load balancer can send that request to any instance.
 
+## Run the components in separate processes
+
+A process runs one or more components. The `--components` flag (`DUSTPAN_COMPONENTS`) selects them. The default is `all`.
+
+| Component | What it runs |
+| --- | --- |
+| `api` | Each HTTP route: the Pulumi Cloud-compatible API, the TFE-compatible API, the tool-neutral APIs, the installation API and the console files. It starts a durable operation, but it never claims one. |
+| `worker` | The durable operations, the job schedules, the audit shipper and the audit chain check. |
+
+```sh
+opendustpan serve --components api      # scale this for HTTP capacity
+opendustpan serve --components worker   # scale this for background work
+```
+
+An unknown name stops the start. The error names the valid components: `all`, `api` and `worker`.
+
+Each process, whatever its components, runs the store, the key-encryption key check, `/health/live`, `/health/ready` and the metrics route. Each process migrates the database at start, under a lock, so the start order of the processes does not matter. A process that runs `worker` without `api` listens on its port for the probes and the metrics route only. Each other route answers 404. Send client traffic only to `api` processes.
+
+The module switches of the installation apply to each component. The capabilities document lists modules, not components.
+
+### Flags that a component does not read
+
+Some flags matter to one component only. For example, `--console-dir` and `--oidc-*` matter to `api`, and `--audit-sink` matters to `worker`. A process whose components do not read a flag ignores it. The start log has one line for each such flag, `setting has no effect: no selected component reads it`. The flag does not stop the start. Give each process the same settings if you want one configuration for all processes.
+
+### Readiness
+
+`/health/ready` answers for the components of the process and lists each one with its state. `/health/ready/api` and `/health/ready/worker` answer for one component. A component that the process does not run answers 404.
+
+- `api` is ready when the store and the blob store answer and the audit chain admits requests.
+- `worker` is ready when the store answers and its claim loop ran in the last 2 claim intervals. A claim interval is the longer of the poll period and the lease period.
+
+`/health/live` is the same for each component: it answers when the process runs, and it does not check the claim loop.
+
+### No worker
+
+With `api` processes only, nobody runs the background work. Three signs show that:
+
+- `/health/ready/worker` of a `worker` process answers 503 when its claim loop stops.
+- The metric `dustpan_oldest_unclaimed_operation_age_seconds` shows how long the oldest unclaimed operation or due schedule waits. It is 0 when none waits.
+- `GET /api/server/worker` of the installation API lists each due schedule and each operation that no worker claimed for more than 2 lease periods. It needs the action `server:observe`.
+
+Sometimes no worker claims work for 2 lease periods. An `api` process then refuses each request that inserts a durable operation with 503. Today that is the approval of an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process makes the schedules at start. So the check also works on an installation that never had a worker.
+
+`GET /api/server/components` lists the components of the process that answers.
+
+A backup or a restore runs in the process that took the request, so it needs no worker. Send the request to an `api` process that has enough time and memory for it.
+
 ## Settings that stay on one host
 
 Some targets write to the disk of the host that runs the instance. Each instance then holds a part of the data.

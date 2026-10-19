@@ -156,6 +156,8 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		deletedEvery:     scheduleTestEvery,
 		idempotency:      nil,
 		idempotencyEvery: 0,
+		components:       AllComponents(),
+		watch:            nil,
 	}
 }
 

@@ -102,12 +102,16 @@ type auditChain struct {
 	runner *durable.Runner
 	// migrationsRunning reports whether the runner loop runs.
 	migrationsRunning atomic.Bool
-	limit             time.Duration
-	setting           audit.ChainSetting
-	mu                sync.Mutex
-	rec               audit.ChainRecord
-	readAt            time.Time
-	read              bool
+	// runsMigrations is true when this process runs the worker component,
+	// so its own loop must run for an approval. A process without the worker
+	// leaves the migration to the loop of a worker process.
+	runsMigrations bool
+	limit          time.Duration
+	setting        audit.ChainSetting
+	mu             sync.Mutex
+	rec            audit.ChainRecord
+	readAt         time.Time
+	read           bool
 }
 
 // Messages of the audit chain gate.
@@ -193,6 +197,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		durableOps:        nil,
 		runner:            nil,
 		migrationsRunning: atomic.Bool{},
+		runsMigrations:    cfg.components.Has(ComponentWorker),
 		limit:             maintenance.DefaultCacheLimit,
 		setting:           cfg.auditChain,
 		mu:                sync.Mutex{},
@@ -408,7 +413,7 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 // checkApprovalGate refuses an approval while the migration loop stops,
 // by a service principal for a change to off, or without a fresh MFA step.
 func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) error {
-	if !c.migrationsRunning.Load() {
+	if c.runsMigrations && !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
 	}
 
@@ -1459,4 +1464,12 @@ func (s *Server) startAuditChain(ctx context.Context) func() {
 		waitCheck()
 		waitMigrations()
 	}
+}
+
+// admits reports whether the audit chain gate lets requests through: the
+// stored chain state matches the setting of the process and no change waits.
+func (c *auditChain) admits(ctx context.Context) bool {
+	rec := c.current(ctx)
+
+	return c.setting.State() == rec.State && !rec.Pending
 }
