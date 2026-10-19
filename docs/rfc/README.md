@@ -55,7 +55,7 @@ both together.
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209) |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
-| [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft; module switches and the capabilities document accepted (ADR 211) |
+| [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | accepted (ADRs 211, 249) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted; the backup of one namespace (ADR 218) |
 | [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft; the branding preset setting accepted (ADR 212), operator branding accepted (ADR 235) |
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
@@ -134,4 +134,5 @@ both together.
 | [84](0084-backstage-plugin-open-questions.md) | Open questions of the Backstage plugin | discussing |
 | [85](0085-gate-rows-of-a-unit-that-a-name-outlives.md) | Gate rows of a unit that its name outlives: key by unit ID, refuse the name, or move the rows to a tombstone key | draft |
 | [86](0086-change-tickets-in-external-change-systems.md) | Change tickets in external change systems, and what the core needs for them | discussing |
+| [87](0087-components-of-the-server-process.md) | Components of the server process, and a start flag that selects them | accepted (ADR 249) |
 | [88](0088-federation-model.md) | Federation model: installations, request forwarding, asynchronous replication, manual failover | accepted (ADR 248) |

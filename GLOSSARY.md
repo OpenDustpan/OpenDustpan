@@ -108,6 +108,10 @@ _Avoid_: Cluster, instance (one server process), deployment
 One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
 _Avoid_: Node, replica (alone), host
 
+**Component**:
+A part of the server that a process runs: `api` or `worker` (ADR 249). One process runs one or more components, and a start flag selects the components. All components run by default. A component is a setting of one process. A module switch is a setting of the installation.
+_Avoid_: Role (ADR 52 uses it for a set of actions), service, mode, duty
+
 **Installation kind**:
 The marker of an installation that says which server command may open its data: `dev` or `production` (ADR 237). The first command that starts on a new database claims it, and no API or command changes it after that. `opendustpan serve` claims `production`. An SDK server claims `production` unless it sets another kind. `opendustpan dev` claims `dev`. Each command refuses a database of the other kind. It is not the installation state (`normal` or maintenance mode).
 _Avoid_: Mode, purpose, origin
