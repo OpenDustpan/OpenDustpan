@@ -1,6 +1,6 @@
 # 51. Collections: a named set of units in a namespace
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13 · the home region amended by ADR 248 (primary installation)
 
 ## Context
 

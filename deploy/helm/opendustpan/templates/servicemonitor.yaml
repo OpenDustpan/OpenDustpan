@@ -4,6 +4,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "opendustpan.fullname" $ }}
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "opendustpan.labels" $ | nindent 4 }}
     {{- with .labels }}

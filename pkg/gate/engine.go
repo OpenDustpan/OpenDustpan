@@ -112,7 +112,8 @@ type Engine interface {
 	// nothing. It refuses a policy that does not parse, that holds a
 	// second policy, that names an action, an unknown fact or an unknown
 	// attribute, that uses has on an attribute of the schema, that reads a
-	// field of a group with available and not the flag, or that has a type
+	// field of a group with available in a clause that does not read the
+	// flag, or that has a type
 	// error. It refuses an access limit whose effect is permit. It returns
 	// one diagnostic for each refused policy, in the order of policies, and
 	// a nil error. It returns ErrInvalid only for a schema that it cannot
@@ -125,8 +126,8 @@ type Engine interface {
 	// of the call. It returns ErrUnavailable when the engine does not
 	// answer, when an answer does not echo each request ID, or when an
 	// answer names a policy ID that is not in set. It returns ErrInvalid
-	// only for a schema that it cannot use, or a request that fails
-	// Request.Validate.
+	// only for a schema that it cannot use, a request that fails
+	// Request.Validate, or a set that holds two policies with one ID.
 	Evaluate(ctx context.Context, set PolicySet, requests []Request) ([]Answer, error)
 }
 
