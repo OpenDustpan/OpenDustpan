@@ -12,6 +12,7 @@
 package workspacehistorytest
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strconv"
@@ -24,9 +25,13 @@ import (
 )
 
 // Store is every persistence port the suite exercises: namespaces for the
-// fence, and workspace.BlameStore under test.
+// fence, the creation of workspaces that the rows belong to, and
+// workspace.BlameStore under test.
 type Store interface {
 	namespace.Store
+	// CreateWorkspace is the method of workspace.Store that makes a
+	// workspace. The suite needs no other method of that port.
+	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
 	workspace.BlameStore
 }
 
@@ -48,6 +53,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a record at or below the cursor changes nothing", test: testRepeat},
 		{name: "resource history answers newest first in pages", test: testResourceHistory},
 		{name: "a stale fence refuses a record", test: testFenced},
+		{name: "a record for an unknown workspace is refused", test: testUnknownWorkspace},
+		{name: "a record for a workspace of another namespace is refused", test: testOtherNamespace},
+		{name: "a malformed blame is refused and changes nothing", test: testInvalidBlame},
+		{name: "a record keeps the rows of each workspace apart", test: testWorkspacesApart},
 	}
 
 	for _, tc := range cases {
@@ -66,20 +75,56 @@ func suiteTime() time.Time {
 // fenceVersion is the failover version of the namespace of the suite.
 const fenceVersion = 2
 
-// makeNamespace creates the namespace "acme" and returns its fence.
+// makeNamespace creates the namespace "acme" with the workspaces "ws-one" and
+// "ws-two", and returns its fence.
 func makeNamespace(t *testing.T, s Store) namespace.Fence {
+	t.Helper()
+
+	f := makeNamespaceNamed(t, s, "acme")
+	makeWorkspace(t, s, f, "ws-one")
+	makeWorkspace(t, s, f, "ws-two")
+
+	return f
+}
+
+// makeNamespaceNamed creates the namespace name and returns its fence.
+func makeNamespaceNamed(t *testing.T, s Store, name namespace.Name) namespace.Fence {
 	t.Helper()
 
 	err := s.CreateNamespace(t.Context(), namespace.Namespace{
 		ID:        namespace.NewID(),
-		CreatedAt: suiteTime(), Name: "acme", HomeRegion: "local", FailoverVersion: fenceVersion,
+		CreatedAt: suiteTime(), Name: name, HomeRegion: "local", FailoverVersion: fenceVersion,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
-		t.Fatalf("create namespace: %v", err)
+		t.Fatalf("create namespace %q: %v", name, err)
 	}
 
-	return namespace.Fence{Namespace: "acme", FailoverVersion: fenceVersion}
+	return namespace.Fence{Namespace: name, FailoverVersion: fenceVersion}
+}
+
+// makeWorkspace creates a workspace with the ID id in the namespace of f. Its
+// name is the ID.
+func makeWorkspace(t *testing.T, s Store, f namespace.Fence, id workspace.ID) {
+	t.Helper()
+
+	name, err := workspace.ParseName(id.String())
+	if err != nil {
+		t.Fatalf("workspace name %q: %v", id, err)
+	}
+
+	err = s.CreateWorkspace(t.Context(), workspace.Workspace{
+		CreatedAt: suiteTime(),
+		UpdatedAt: suiteTime(),
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:        id,
+		Ref:       workspace.Ref{Namespace: f.Namespace, Name: name},
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:  1,
+	}, f)
+	if err != nil {
+		t.Fatalf("create workspace %q: %v", id, err)
+	}
 }
 
 // svOf returns the state version ID of ordinal.
@@ -291,5 +336,121 @@ func testFenced(t *testing.T, s Store) {
 
 	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 0 {
 		t.Errorf("a fenced record moved the cursor to %d, %v", cursor, err)
+	}
+}
+
+func testUnknownWorkspace(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+
+	err := s.RecordResourceChanges(
+		t.Context(),
+		"acme",
+		blame("ws-missing", 1, row("ws-missing", 1, addrVPC, workspace.ResourceCreated)),
+		f,
+	)
+	if !errors.Is(err, workspace.ErrNotFound) {
+		t.Errorf("record for an unknown workspace err = %v, want ErrNotFound", err)
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-missing"); err != nil || cursor != 0 {
+		t.Errorf("cursor of an unknown workspace = %d, %v, want 0", cursor, err)
+	}
+}
+
+func testOtherNamespace(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+	other := makeNamespaceNamed(t, s, "beta")
+	makeWorkspace(t, s, other, "ws-beta")
+
+	err := s.RecordResourceChanges(
+		t.Context(),
+		"acme",
+		blame("ws-beta", 1, row("ws-beta", 1, addrVPC, workspace.ResourceCreated)),
+		f,
+	)
+	if !errors.Is(err, workspace.ErrNotFound) {
+		t.Errorf("record with the fence of another namespace err = %v, want ErrNotFound", err)
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-beta"); err != nil || cursor != 0 {
+		t.Errorf("cursor of the workspace of another namespace = %d, %v, want 0", cursor, err)
+	}
+}
+
+func testInvalidBlame(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+
+	wrongOrdinal := row("ws-one", 2, addrVPC, workspace.ResourceCreated)
+	wrongOrdinal.Ordinal = 3
+
+	wrongVersion := row("ws-one", 2, addrVPC, workspace.ResourceCreated)
+	wrongVersion.StateVersion = svOf(9)
+
+	wrongWorkspace := row("ws-two", 2, addrVPC, workspace.ResourceCreated)
+
+	badKind := row("ws-one", 2, addrVPC, "moved")
+	emptyAddress := row("ws-one", 2, "", workspace.ResourceCreated)
+
+	opaqueWithRow := blame("ws-one", 2, row("ws-one", 2, addrVPC, workspace.ResourceCreated))
+	opaqueWithRow.Opaque = true
+
+	noVersion := blame("ws-one", 2)
+	noVersion.StateVersion = ""
+
+	cases := []struct {
+		name string
+		b    workspace.ItemBlame
+	}{
+		{name: "a row of another ordinal", b: blame("ws-one", 2, wrongOrdinal)},
+		{name: "a row of another state version", b: blame("ws-one", 2, wrongVersion)},
+		{name: "a row of another workspace", b: blame("ws-one", 2, wrongWorkspace)},
+		{name: "an unknown kind", b: blame("ws-one", 2, badKind)},
+		{name: "an empty address", b: blame("ws-one", 2, emptyAddress)},
+		{
+			name: "two rows with one address",
+			b: blame(
+				"ws-one",
+				2,
+				row("ws-one", 2, addrVPC, workspace.ResourceCreated),
+				row("ws-one", 2, addrVPC, workspace.ResourceUpdated),
+			),
+		},
+		{name: "an opaque blame with a row", b: opaqueWithRow},
+		{name: "an ordinal below 1", b: blame("ws-one", 0)},
+		{name: "no state version", b: noVersion},
+	}
+
+	for _, tc := range cases {
+		err := s.RecordResourceChanges(t.Context(), "acme", tc.b, f)
+		if !errors.Is(err, workspace.ErrInvalidBlame) {
+			t.Errorf("%s: err = %v, want ErrInvalidBlame", tc.name, err)
+		}
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 0 {
+		t.Errorf("a refused record moved the cursor to %d, %v", cursor, err)
+	}
+
+	if b, err := s.ItemChanges(t.Context(), "ws-one", svOf(2)); err != nil || len(b.Changes) != 0 {
+		t.Errorf("a refused record left %d rows, %v", len(b.Changes), err)
+	}
+}
+
+func testWorkspacesApart(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+	mustRecord(t, s, f, blame("ws-one", 1, row("ws-one", 1, addrVPC, workspace.ResourceCreated)))
+	mustRecord(t, s, f, blame("ws-two", 1, row("ws-two", 1, addrSubnet, workspace.ResourceCreated)))
+
+	got, err := s.ItemChanges(t.Context(), "ws-two", svOf(1))
+	if err != nil || len(got.Changes) != 1 || got.Changes[0].Address != addrSubnet || got.Workspace != "ws-two" {
+		t.Errorf("blame of ws-two = %+v, %v, want its one row", got, err)
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-two"); err != nil || cursor != 1 {
+		t.Errorf("cursor of ws-two = %d, %v, want 1", cursor, err)
 	}
 }

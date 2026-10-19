@@ -407,7 +407,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
-				{Name: "workspace_id", Kind: KindText},
+				{Name: portColWorkspaceID, Kind: KindText},
 				{Name: portColStatus, Kind: KindText},
 				{Name: "serial", Kind: KindInteger},
 				{Name: "lineage", Kind: KindText},
@@ -693,5 +693,5 @@ func portableSpec() []PortableTable {
 		},
 	}
 
-	return slices.Concat(core, portableImportTables())
+	return slices.Concat(core, portableImportTables(), portableBlameTables())
 }

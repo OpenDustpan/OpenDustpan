@@ -253,6 +253,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupPurge(t, s, acme)
 	seedBackupSignIn(t, s)
 	imports := seedBackupImports(t, s, acme)
+	seedBlameRows(t, s, blameSeed{ns: acme, w: net, first: current.ID.String(), second: pending.ID.String()})
 	seedBackupGate(t, s, acme)
 
 	return backupSeed{

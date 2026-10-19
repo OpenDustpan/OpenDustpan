@@ -333,7 +333,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "state_versions",
 			columns: []string{
 				"id",
-				"workspace_id",
+				backupColWorkspaceID,
 				backupColStatus,
 				"serial",
 				"lineage",
@@ -387,7 +387,10 @@ func sqliteBackupTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(base, sqliteIdentityBackupTables(), sqliteSessionBackupTables(), sqliteImportBackupTables())
+	return slices.Concat(
+		base, sqliteIdentityBackupTables(), sqliteSessionBackupTables(),
+		sqliteImportBackupTables(), sqliteBlameBackupTables(),
+	)
 }
 
 // sqliteControlTables lists the column list of every table of
@@ -399,7 +402,7 @@ func sqliteControlTables() []sqliteBackupTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", "kind", "input", "version", "state", "attempt", "expiries", "failures",
+				"id", "start_key", backupColKind, "input", "version", "state", "attempt", "expiries", "failures",
 				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
 				"not_before_ms", "created_at_ms", "updated_at_ms",
 			},

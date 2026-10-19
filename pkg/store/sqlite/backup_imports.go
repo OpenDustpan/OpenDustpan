@@ -12,8 +12,8 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespaceID,
 				"id",
-				"kind",
-				"address",
+				backupColKind,
+				backupColAddress,
 				"selection",
 				"credential",
 				"profile",

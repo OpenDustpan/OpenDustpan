@@ -23,20 +23,28 @@ func TestSuite(t *testing.T) {
 type mem struct {
 	namespaces map[namespace.Name]namespace.Namespace
 	cursors    map[workspace.ID]int64
-	opaque     map[workspace.StateVersionID]bool
-	lineage    map[workspace.StateVersionID]bool
-	ordinals   map[workspace.StateVersionID]int64
+	owners     map[workspace.ID]namespace.Name
+	opaque     map[itemKey]bool
+	lineage    map[itemKey]bool
+	ordinals   map[itemKey]int64
 	rows       []workspace.ResourceChange
 	mu         sync.Mutex
+}
+
+// itemKey names one state version of one workspace.
+type itemKey struct {
+	workspace    workspace.ID
+	stateVersion workspace.StateVersionID
 }
 
 func newMem() *mem {
 	return &mem{
 		namespaces: map[namespace.Name]namespace.Namespace{},
 		cursors:    map[workspace.ID]int64{},
-		opaque:     map[workspace.StateVersionID]bool{},
-		lineage:    map[workspace.StateVersionID]bool{},
-		ordinals:   map[workspace.StateVersionID]int64{},
+		owners:     map[workspace.ID]namespace.Name{},
+		opaque:     map[itemKey]bool{},
+		lineage:    map[itemKey]bool{},
+		ordinals:   map[itemKey]int64{},
 		rows:       nil,
 		mu:         sync.Mutex{},
 	}
@@ -47,6 +55,15 @@ func (m *mem) CreateNamespace(_ context.Context, ns namespace.Namespace) error {
 	defer m.mu.Unlock()
 
 	m.namespaces[ns.Name] = ns
+
+	return nil
+}
+
+func (m *mem) CreateWorkspace(_ context.Context, w workspace.Workspace, _ namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.owners[w.ID] = w.Ref.Namespace
 
 	return nil
 }
@@ -89,14 +106,23 @@ func (m *mem) RecordResourceChanges(
 		return namespace.ErrFenced
 	}
 
+	if err := b.Validate(); err != nil {
+		return err
+	}
+
+	if owner, ok := m.owners[b.Workspace]; !ok || owner != ns {
+		return workspace.ErrNotFound
+	}
+
 	if m.cursors[b.Workspace] >= b.Ordinal {
 		return nil
 	}
 
+	key := itemKey{workspace: b.Workspace, stateVersion: b.StateVersion}
 	m.rows = append(m.rows, b.Changes...)
-	m.ordinals[b.StateVersion] = b.Ordinal
-	m.opaque[b.StateVersion] = b.Opaque
-	m.lineage[b.StateVersion] = b.LineageChanged
+	m.ordinals[key] = b.Ordinal
+	m.opaque[key] = b.Opaque
+	m.lineage[key] = b.LineageChanged
 	m.cursors[b.Workspace] = b.Ordinal
 
 	return nil
@@ -137,13 +163,14 @@ func (m *mem) ItemChanges(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	key := itemKey{workspace: id, stateVersion: sv}
 	b := workspace.ItemBlame{
 		Workspace:      id,
 		StateVersion:   sv,
 		Changes:        []workspace.ResourceChange{},
-		Ordinal:        m.ordinals[sv],
-		Opaque:         m.opaque[sv],
-		LineageChanged: m.lineage[sv],
+		Ordinal:        m.ordinals[key],
+		Opaque:         m.opaque[key],
+		LineageChanged: m.lineage[key],
 	}
 
 	for i := range m.rows {

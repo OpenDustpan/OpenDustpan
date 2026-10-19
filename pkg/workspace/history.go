@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/history"
@@ -30,6 +31,12 @@ func (e *NoStateAtError) Error() string {
 func (e *NoStateAtError) Is(target error) bool {
 	return target == ErrNoStateAt
 }
+
+// ErrInvalidBlame reports an ItemBlame that the store cannot keep: a row of
+// another workspace, state version or ordinal, an unknown kind or an empty
+// address, two rows with one address, a row on an opaque blame, an ordinal
+// below 1, or no state version.
+var ErrInvalidBlame = errors.New("invalid blame")
 
 // ResourceChangeKind is what one state version did to one resource
 // instance, by address.
@@ -92,6 +99,65 @@ type ItemBlame struct {
 	LineageChanged bool
 }
 
+// Validate returns ErrInvalidBlame, with the reason, when b is a blame that
+// a BlameStore cannot keep. Every store calls it before it writes.
+func (b ItemBlame) Validate() error {
+	switch {
+	case b.Workspace == "":
+		return fmt.Errorf("%w: no workspace", ErrInvalidBlame)
+	case b.StateVersion == "":
+		return fmt.Errorf("%w: no state version", ErrInvalidBlame)
+	case b.Ordinal < 1:
+		return fmt.Errorf("%w: ordinal %d is below 1", ErrInvalidBlame, b.Ordinal)
+	case b.Opaque && len(b.Changes) > 0:
+		return fmt.Errorf("%w: an opaque state version has no row", ErrInvalidBlame)
+	}
+
+	seen := make(map[string]bool, len(b.Changes))
+
+	for i := range b.Changes {
+		r := &b.Changes[i]
+
+		if err := r.validateIn(b, i); err != nil {
+			return err
+		}
+
+		if seen[r.Address] {
+			return fmt.Errorf("%w: address %q occurs twice", ErrInvalidBlame, r.Address)
+		}
+
+		seen[r.Address] = true
+	}
+
+	return nil
+}
+
+// validateIn returns ErrInvalidBlame when the row r, at place i, is not a
+// valid row of the blame b.
+func (r *ResourceChange) validateIn(b ItemBlame, i int) error {
+	if r.Workspace != b.Workspace || r.StateVersion != b.StateVersion || r.Ordinal != b.Ordinal {
+		return fmt.Errorf("%w: row %d is not a row of this state version", ErrInvalidBlame, i)
+	}
+
+	if r.Address == "" || !r.Kind.valid() || r.ChangedPaths < 0 {
+		return fmt.Errorf(
+			"%w: row %d has an empty address, an unknown kind or a negative count", ErrInvalidBlame, i,
+		)
+	}
+
+	return nil
+}
+
+// valid reports whether k is one of the kinds of a resource change.
+func (k ResourceChangeKind) valid() bool {
+	switch k {
+	case ResourceCreated, ResourceUpdated, ResourceReplaced, ResourceDeleted:
+		return true
+	}
+
+	return false
+}
+
 // BlameStore is the persistence port of the blame of workspaces. The blame
 // operation compares each finalized state version with the previous
 // readable one, in the order of finalizes, and writes the rows with this
@@ -100,9 +166,12 @@ type BlameStore interface {
 	// RecordResourceChanges writes the blame b, and moves the blame cursor
 	// of the workspace b.Workspace to b.Ordinal, in one transaction with the
 	// fence of ns. When the cursor is at or past b.Ordinal, it answers nil
-	// and changes nothing, so a repeated run writes no row twice. It does not
-	// check that the workspace exists: the blame operation reads it first.
-	// It returns namespace.ErrFenced when the fence is stale.
+	// and changes nothing, so a repeated run writes no row twice. It returns
+	// ErrInvalidBlame for a blame that the store cannot keep, before it
+	// writes anything. It returns ErrNotFound when the workspace
+	// b.Workspace does not exist in ns, also for a workspace of another
+	// namespace, and namespace.ErrFenced when the fence is stale. A workspace
+	// in the retention period of a delete exists.
 	RecordResourceChanges(ctx context.Context, ns namespace.Name, b ItemBlame, fence namespace.Fence) error
 	// BlameCursor returns the last ordinal that the blame operation compared
 	// for the workspace id, or 0 when it compared none.
