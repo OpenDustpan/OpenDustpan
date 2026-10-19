@@ -22,6 +22,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -824,6 +826,11 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 // DurableStore implements storetest.DurableHolder.
 func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The capability returns the port.
 	return s.DurableOperations()
+}
+
+// IdempotencyStore implements storetest.IdempotencyHolder.
+func (s *backupStore) IdempotencyStore() idempotency.Store { //nolint:ireturn // The capability returns the port.
+	return s.Idempotency(idempotencytest.TestWrapper(s.t, 1))
 }
 
 // CurrentStagingID implements storetest.StagingWitness: the path of the

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -42,10 +43,13 @@ type Route struct {
 	Actions []identity.Action
 	Resolve ObjectResolver
 	// IdempotencyKey says that the route takes the Idempotency-Key header.
-	// No route takes it yet: a request with the header answers 400, so the
-	// server never ignores a key without an error.
+	// A request with the header to a route that does not take it answers
+	// 400, so the server never ignores a key without an error.
 	IdempotencyKey bool
-	Serve          RouteHandler
+	// Answer makes the answer of a route that takes the key from the result
+	// of its write. It is nil for a route that does not take the key.
+	Answer func(obj identity.Object) answerFunc
+	Serve  RouteHandler
 }
 
 const (
@@ -62,22 +66,37 @@ func (h *Handler) buildRoutes() []Route {
 	manage := []identity.Action{identity.ActionProfileManage}
 
 	return []Route{
-		h.route(http.MethodGet, profilesPath, read, h.list),
-		h.route(http.MethodPost, profilesPath, write, h.create),
-		h.route(http.MethodGet, profilePath, read, h.get),
-		h.route(http.MethodDelete, profilePath, manage, h.delete),
-		h.route(http.MethodGet, revisionsPath, read, h.listRevisions),
-		h.route(http.MethodPost, revisionsPath, write, h.save),
-		h.route(http.MethodGet, revisionsPath+"/{revision}", read, h.readRevision),
+		h.readRoute(profilesPath, read, h.list),
+		h.keyedRoute(http.MethodPost, profilesPath, write, h.create, createdAnswer),
+		h.readRoute(profilePath, read, h.get),
+		h.keyedRoute(http.MethodDelete, profilePath, manage, h.delete, func(identity.Object) answerFunc {
+			return deletedAnswer()
+		}),
+		h.readRoute(revisionsPath, read, h.listRevisions),
+		h.keyedRoute(http.MethodPost, revisionsPath, write, h.save, func(identity.Object) answerFunc {
+			return savedAnswer(http.StatusCreated)
+		}),
+		h.readRoute(revisionsPath+"/{revision}", read, h.readRevision),
 	}
 }
 
-// route makes one authorized row. No route takes the Idempotency-Key header
-// yet.
-func (*Handler) route(method, path string, actions []identity.Action, serve RouteHandler) Route {
+// readRoute makes one authorized GET row. A read does not take the
+// Idempotency-Key header.
+func (*Handler) readRoute(path string, actions []identity.Action, serve RouteHandler) Route {
+	return Route{
+		Method: http.MethodGet, Path: path, Scope: ScopeAuthorized, Actions: actions, Resolve: resolveNamespace,
+		IdempotencyKey: false, Answer: nil, Serve: serve,
+	}
+}
+
+// keyedRoute makes one authorized row that takes the Idempotency-Key header.
+// answer makes the answer that the route keeps for a replay.
+func (*Handler) keyedRoute(
+	method, path string, actions []identity.Action, serve RouteHandler, answer func(identity.Object) answerFunc,
+) Route {
 	return Route{
 		Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions, Resolve: resolveNamespace,
-		IdempotencyKey: false, Serve: serve,
+		IdempotencyKey: true, Answer: answer, Serve: serve,
 	}
 }
 
@@ -171,8 +190,8 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 			}
 		}
 
-		if mutating(r.Method) && !route.IdempotencyKey && r.Header.Get("Idempotency-Key") != "" {
-			h.writeError(ctx, w, errIdempotencyKey)
+		if mutating(r.Method) && idempotent.Present(r) {
+			h.serveKeyed(w, r, route, p, obj)
 
 			return
 		}
@@ -181,10 +200,35 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 	}
 }
 
+// serveKeyed serves a mutating request that has the Idempotency-Key header.
+// The caller has authorized it: a replay never skips the check of the action.
+func (h *Handler) serveKeyed(
+	w http.ResponseWriter, r *http.Request, route Route, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+
+	if !route.IdempotencyKey || h.idem == nil {
+		h.writeError(ctx, w, errIdempotencyKey)
+
+		return
+	}
+
+	err := h.idem.Handle(w, r, idempotent.Call{
+		Principal:    p.Subject,
+		Build:        route.Answer(obj),
+		SecretAnswer: nil,
+		Required:     false,
+		Serve:        func(w http.ResponseWriter, r *http.Request) { route.Serve(w, r, p, obj) },
+	})
+	if err != nil {
+		h.writeError(ctx, w, err)
+	}
+}
+
 // errIdempotencyKey is the answer to a key on a route that does not take it.
 var errIdempotencyKey = badRequest(
 	"request.idempotency-key-unsupported",
-	"this route does not take the Idempotency-Key header yet: send the request without it",
+	"this route does not take the Idempotency-Key header: send the request without it",
 )
 
 // mutating reports whether the method changes data.

@@ -1186,13 +1186,14 @@ func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 	}
 
 	want := append(backup.TablesCopy(), backup.ControlTables...)
+	want = append(want, backup.EmptiedTables...)
 	slices.Sort(want)
 
 	got := slices.Clone(schema)
 	slices.Sort(got)
 
 	if !slices.Equal(got, want) {
-		t.Fatalf("schema tables = %q, want backup.Tables and backup.ControlTables %q", got, want)
+		t.Fatalf("schema tables = %q, want backup.Tables, backup.ControlTables and backup.EmptiedTables %q", got, want)
 	}
 }
 

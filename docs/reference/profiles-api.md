@@ -122,9 +122,46 @@ revisions takes the same two values.
 
 ## The key for a safe retry
 
-No route takes the header `Idempotency-Key` yet. A write with the header
-answers 400 with the error code `request.idempotency-key-unsupported` and
-changes nothing, so the server never ignores a key without an error.
+Each write takes the header `Idempotency-Key`. The write routes are the
+create (`POST /profiles`), the save (`POST /profiles/{profile}/revisions`) and
+the delete (`DELETE /profiles/{profile}`). The header is optional. A client
+that retries a call that timed out sends the same key again, and the server
+does the write one time.
+
+- **The key.** A string of 1 to 255 printable ASCII characters. Use a random
+  value, for example a UUID. A key that is not valid answers 400 with the
+  error code `request.idempotency-key-invalid` and changes nothing.
+- **The scope.** The server keeps the first answer for the caller, the method,
+  the path and the key. The same key from another caller, or on another path,
+  is a new key. A caller never sees the answer of another caller.
+- **A replay.** A request with a known key and the same body, query and
+  `If-Match` header gets the first answer again, with its status and its headers, and the server
+  does not write again. The answer has the header `Idempotent-Replayed: true`.
+  The server checks the permissions of the caller again before it sends the
+  answer. A caller that lost the permission gets 403.
+- **Another request.** The server compares the body, the query and `If-Match`.
+  The same key with another body, query or `If-Match` answers 422 with
+  the error code `request.idempotency-key-reused` and changes nothing.
+- **A request that runs.** A request with a key whose first request has not
+  ended answers 409 with the error code `request.idempotency-key-in-progress`.
+  Try again later. A first request that has no answer after 5 minutes (for
+  example after a crash) expires. The next request with the key then does the
+  write.
+- **Which answers the server keeps.** The server keeps the answer of a write
+  that succeeded. It does not keep an error answer, so a retry with the same
+  key after the client fixes the cause does the write. The server never keeps
+  400, 401, 403, 404, 409, 412, 422, 423, 429 or 5xx.
+- **For how long.** 24 hours from the first request. A restore of a backup
+  deletes all keys. A change of the key-encryption key, or the loss of it,
+  deletes all keys too: the server cannot open the key of its hashes, so it
+  makes a new one.
+- **What the server keeps.** The first answer, and a keyed hash of the request
+  body. The server never keeps the body. The answer of a write holds no secret
+  value.
+
+A server that has no store of keys answers 400 with the error code
+`request.idempotency-key-unsupported` to a write with the header. The server
+never ignores a key without an error.
 
 ## Errors
 
@@ -137,9 +174,9 @@ errors, `errorCode`.
 | 401 | No valid token |
 | 403 | The caller lacks the action, or a routing change lacks `profile:open` |
 | 404 | An unknown namespace, profile or revision |
-| 409 | A name in use |
+| 409 | A name in use, or a request with a key whose first request has not ended |
 | 412 | `If-Match` does not match the newest revision |
-| 422 | A document above a limit, or a `schemaVersion` above 1 |
+| 422 | A document above a limit, a `schemaVersion` above 1, or a key that a request with another body used |
 | 428 | A write with no `If-Match` |
 
 ## Backups and deletes

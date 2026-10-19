@@ -81,7 +81,9 @@ func (p *Profiles) Create(
 	p.store.mu.RLock()
 	defer p.store.mu.RUnlock()
 
-	err := p.inAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	written := profile.Written{Profile: pr, Revision: &r}
+
+	err := p.inAuditedTx(ctx, fence, e, &written, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, pr.Namespace)
 		if err != nil {
 			return err
@@ -321,7 +323,9 @@ func (p *Profiles) Save(
 
 	var updated profile.Profile
 
-	err := p.inAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	var written profile.Written
+
+	err := p.inAuditedTx(ctx, fence, e, &written, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, at.Namespace)
 		if err != nil {
 			return err
@@ -354,6 +358,7 @@ func (p *Profiles) Save(
 
 		row.Latest, row.UpdatedAtMs = int64(r.Number), codec.Millis(r.CreatedAt)
 		updated = codec.ProfileFromRow(at.Namespace, codec.ProfileRow(row))
+		written = profile.Written{Profile: updated, Revision: &r}
 
 		return nil
 	})
@@ -383,7 +388,9 @@ func (p *Profiles) Delete(ctx context.Context, at profile.Anchor, fence namespac
 	p.store.mu.RLock()
 	defer p.store.mu.RUnlock()
 
-	return p.inAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	var written profile.Written
+
+	return p.inAuditedTx(ctx, fence, e, &written, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, at.Namespace)
 		if err != nil {
 			return err
@@ -414,9 +421,12 @@ func (p *Profiles) Delete(ctx context.Context, at profile.Anchor, fence namespac
 }
 
 // inAuditedTx runs fn and appends each entry of es in the same fenced
-// transaction. It checks every entry before the transaction starts.
+// transaction. It checks every entry before the transaction starts. When ctx
+// carries an idempotency.Completion, the transaction also stores its answer
+// for written, which fn fills before it returns.
 func (p *Profiles) inAuditedTx(
-	ctx context.Context, fence namespace.Fence, es []audit.Entry, fn func(q *db.Queries) error,
+	ctx context.Context, fence namespace.Fence, es []audit.Entry, written *profile.Written,
+	fn func(q *db.Queries) error,
 ) error {
 	if len(es) == 0 {
 		return fmt.Errorf("%w: a write needs at least one audit entry", profile.ErrInvalid)
@@ -447,6 +457,6 @@ func (p *Profiles) inAuditedTx(
 			}
 		}
 
-		return nil
+		return finishCompletion(ctx, q, *written)
 	})
 }
