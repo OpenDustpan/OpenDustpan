@@ -211,6 +211,10 @@ _Avoid_: Token, guard
 A caller whose identity OpenDustpan checked: a person, a service or a workload. Each principal has a principal home: the installation or one namespace (ADR 215).
 _Avoid_: User (when the caller can be a machine), actor
 
+**Principal kind**:
+What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload`. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
+_Avoid_: Principal type, account type, token kind (a token kind is `personal` or `service`)
+
 **Principal of a namespace**:
 A principal whose home is one namespace. It can only hold grants on its namespace or on an object inside it. It can be a member of a group of its namespace only. A service principal of a namespace is made by a holder of `namespace:manage-principals` (ADR 67). With `identity.principalHome: namespace`, a person who signs in through the identity provider of a namespace is a principal of that namespace (ADR 215). A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its service principals.
 _Avoid_: Namespace service account, local principal
@@ -481,7 +485,7 @@ A JSON Pointer to one value in the state document of one version, as the tool st
 _Avoid_: Attribute path (except for OpenTofu), key
 
 **Reveal**:
-A request from a person to see the plain text of a secret value. The reveal call answers the plain value at one masked value path of one version (ADR 41, decision 4). It needs `unit:read` and `unit:read-secrets`. Its routes are `POST /api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal` in the Pulumi Cloud-compatible API and `POST /api/v2/state-versions/{state_version_id}/actions/reveal` in the TFE-compatible API. The call writes an audit entry of the kind `reveal` before it answers.
+A request from a person to see the plain text of a secret value. The reveal call answers the plain value at one masked value path of one version (ADR 41, decision 4). It needs `unit:read` and `unit:read-secrets`. Its routes are `POST /api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal` in the Pulumi Cloud-compatible API and `POST /api/v2/state-versions/{state_version_id}/actions/reveal` in the TFE-compatible API. The call writes an audit entry of the kind `reveal` before it answers. A state download by a person also writes a `reveal` entry, with the value path of the whole state (ADR 240).
 _Avoid_: Decrypt (that is the Pulumi CLI's protocol), unmask, show secrets
 
 **Audit entry**:
@@ -501,7 +505,7 @@ An output adapter of the port `pkg/logsink` that delivers structured records to 
 _Avoid_: Log target, log destination, exporter
 
 **Kind of access**:
-The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The server cannot see who runs a CLI command, so `tofu state pull` writes a `tool-operation` entry. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log). ADR 52 adds `read-access`: a read of the access-review export of an object.
+The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The principal kind decides the kind of a state download, never the declared channel (ADR 240). A download with a session or an access token of a principal of the kind `person` writes `reveal`. This includes `tofu state pull` with a personal token or the bootstrap admin token. A download with a service token, a token from a trust rule or a job token writes `tool-operation`. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log). ADR 52 adds `read-access`: a read of the access-review export of an object.
 _Avoid_: Audit type, `log-decryption` as a kind
 
 **Value count**:

@@ -1,0 +1,12 @@
+# Refused: a backup schedule with the target none.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+backup:
+  schedule:
+    enabled: true
+    tokenSecret:
+      name: opendustpan-backup-token

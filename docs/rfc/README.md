@@ -83,7 +83,7 @@ both together.
 | [32](0032-object-storage.md) | Object storage adapters | accepted; no bucket of the customer (ADR 221) |
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | accepted |
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
-| [35](0035-packaging.md) | Packaging and installation | draft |
+| [35](0035-packaging.md) | Packaging and installation | draft; TLS, binaries and the image accepted (ADR 27), the Helm chart accepted (ADR 246) |
 | [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
 | [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
@@ -128,3 +128,5 @@ both together.
 | [77](0077-open-points-of-the-gate-model.md) | Open points of the gate model | accepted (ADRs 222 to 230) |
 | [78](0078-localization-open-questions.md) | Localization open questions: translated docs, the translation machine, the server formatter and the edges | discussing; translated docs, the translation agent, the formatter, the product name in chat, `resolvedLanguage` and reports of one string accepted (ADRs 232, 234 and 235) |
 | [79](0079-opt-in-federation-routing-and-geo-replication.md) | Opt-in federation of installations, routing and geo-replication | draft |
+| [80](0080-console-sessions-on-the-tfe-compatible-api.md) | Console sessions on the TFE-compatible API, and fresh authentication for force-unlock and the state download | draft |
+| [82](0082-a-namespace-in-the-blueprint-scope-key.md) | A namespace in the scope key of a blueprint version | discussing |

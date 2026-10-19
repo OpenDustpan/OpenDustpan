@@ -1,0 +1,9 @@
+# Refused: the s3 blob store with no bucket.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+blobStore:
+  type: s3

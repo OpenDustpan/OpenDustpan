@@ -1,0 +1,11 @@
+# Refused: an AWS region variable.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+server:
+  extraEnv:
+    - name: AWS_DEFAULT_REGION
+      value: eu-west-1

@@ -1,6 +1,6 @@
 # 226. Facts: typed, versioned fact documents
 
-Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 115 decision 13, the name of ADR 135 decision 6, and ADR 144 decision 14. Supersedes in part ADR 194 decisions 6 and 8, and ADR 201 decision 5. Accepts RFC 49
+Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 115 decision 13, the name of ADR 135 decision 6, and ADR 144 decision 14. Supersedes in part ADR 194 decisions 6 and 8, and ADR 201 decision 5. Accepts RFC 49. Decision 4 superseded in part by ADR 240
 
 ## Context
 
