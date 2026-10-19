@@ -106,6 +106,22 @@ func (m *memReader) ListUnits(_ context.Context, ns namespace.Name) ([]coreinven
 	return out, nil
 }
 
+func (m *memReader) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
+	if m.err != nil {
+		return coreinventory.Entry{}, m.err
+	}
+
+	for _, entries := range m.entries {
+		for i := range entries {
+			if entries[i].UnitID == unitID {
+				return entries[i], nil
+			}
+		}
+	}
+
+	return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
+}
+
 // stubAuthenticator denies every token. Tests that send no token never reach it.
 type stubAuthenticator struct{}
 

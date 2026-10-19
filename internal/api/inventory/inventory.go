@@ -485,6 +485,8 @@ func classify(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, collection.ErrInvalidName):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, coreinventory.ErrUnitNotFound):
+		return http.StatusNotFound, "unit not found"
 	case errors.Is(err, collection.ErrNotFound), errors.Is(err, collection.ErrUnitNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, collection.ErrAlreadyExists), errors.Is(err, collection.ErrNotEmpty),

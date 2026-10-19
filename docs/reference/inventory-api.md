@@ -13,6 +13,7 @@ page is relative to that prefix.
 | Method and path | Action | Answer |
 | --- | --- | --- |
 | `GET /namespaces/{namespace}/units` | `namespace:read`, then `unit:read` on each unit | One page of the units that the caller can read |
+| `GET /units/{unit_id}` | `unit:read` on the unit, and `namespace:read` on its namespace | One unit |
 | `GET /namespaces/{namespace}/deleted-units` | `namespace:read`, then `unit:read` on each unit | One page of the deleted units |
 | `GET /namespaces/{namespace}/collections` | `collection:read` | The collections of the namespace |
 | `POST /namespaces/{namespace}/collections` | `collection:create` | A new collection |
@@ -71,6 +72,30 @@ The list is in the order of the unit ID. It answers one page. The answer has
 `nextPageToken` when a later page exists, and has no such field on the last
 page. Send the value as `pageToken` to read the next page, with the same
 namespace and the same filters. A `pageToken` from another query answers 400.
+
+## One unit by its ID
+
+`GET /api/dustpan/v1/units/{unit_id}` answers one unit entry with the same
+fields as an item of the unit list. The unit ID is unique in the installation,
+so the path has no namespace. Use it when a client holds only a unit ID, for
+example from a `consoleUrl`.
+
+The server answers 404 with `{"code": 404, "message": "unit not found"}` in
+these cases:
+
+- The unit ID is not known.
+- The unit is deleted. Read a deleted unit from the list of deleted units.
+- The caller has no `unit:read` on the unit.
+- The caller has no `namespace:read` on the namespace of the unit.
+
+The four answers have the same body. A caller cannot learn from the answer
+whether a unit exists. The server answers 401 when the request has no valid
+token.
+
+```sh
+curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
+  "https://dustpan.example/api/dustpan/v1/units/$UNIT_ID"
+```
 
 ### Query values
 

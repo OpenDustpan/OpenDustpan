@@ -329,7 +329,7 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 	handler := newTestHandler(t)
 
 	for _, route := range handler.Routes() {
-		if isCollectionRoute(route) {
+		if isCollectionRoute(route) || route.DeniedAsNotFound {
 			continue
 		}
 
@@ -449,7 +449,7 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 	handler := newTestHandler(t)
 
 	for _, route := range handler.Routes() {
-		if isCollectionRoute(route) {
+		if isCollectionRoute(route) || route.DeniedAsNotFound {
 			continue
 		}
 

@@ -565,6 +565,23 @@ LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.colle
 WHERE i.namespace = $1
 ORDER BY i.tool, i.name;
 
+-- name: GetInventoryEntryByUnitID :one
+-- One live unit by its stable ID, which is unique in the installation.
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.unit_id = $1;
+
+-- name: ListInventoryUnitLabels :many
+-- Every label of one live unit.
+SELECT label_key, label_value
+FROM inventory_labels
+WHERE unit_id = $1
+ORDER BY label_key;
+
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,

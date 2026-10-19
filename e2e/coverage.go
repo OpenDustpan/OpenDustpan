@@ -788,6 +788,10 @@ func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinve
 	return nil, nil
 }
 
+func (coverageReader) GetUnit(_ context.Context, _ string) (coreinventory.Entry, error) {
+	return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
+}
+
 func (coverageReader) ListDeletedUnits(_ context.Context, _ namespace.Name) ([]coreinventory.DeletedEntry, error) {
 	return nil, nil
 }
@@ -1574,6 +1578,12 @@ func consoleAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/units",
 			CoveringTest: "TestListUnitsBothTools",
 			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/units/{unitID}",
+			CoveringTest: "TestCLIs (checkInventoryUnitByID)",
+			Reason: "Console-only: no CLI reads a unit by its ID. The harness " +
+				"steps read a stack and a workspace by ID.",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/v2/workspaces/{id}",
