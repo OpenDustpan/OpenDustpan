@@ -395,6 +395,23 @@ func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurable
 	return result.RowsAffected()
 }
 
+const claimInstallationKind = `-- name: ClaimInstallationKind :execrows
+UPDATE installation
+SET kind = ?
+WHERE id = 1 AND kind IS NULL
+`
+
+// Stores the kind in the seeded row only when no kind is stored: a
+// compare-and-set, so several instances on one new database all claim and one
+// wins. It changes nothing when a kind is stored or the row is missing.
+func (q *Queries) ClaimInstallationKind(ctx context.Context, kind sql.NullString) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimInstallationKind, kind)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
 UPDATE update_journal SET operation_ids = '[]'
 WHERE stack_id = ? AND update_id = ?
@@ -4069,6 +4086,21 @@ func (q *Queries) GetImportUnit(ctx context.Context, arg GetImportUnitParams) (I
 		&i.Findings,
 	)
 	return i, err
+}
+
+const getInstallationKind = `-- name: GetInstallationKind :one
+SELECT kind
+FROM installation
+WHERE id = 1
+`
+
+// The installation kind: dev, production or NULL before the first claim. The
+// migration seeds the one row; a missing row is a fault.
+func (q *Queries) GetInstallationKind(ctx context.Context) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getInstallationKind)
+	var kind sql.NullString
+	err := row.Scan(&kind)
+	return kind, err
 }
 
 const getInstallationSecretKey = `-- name: GetInstallationSecretKey :one

@@ -93,7 +93,10 @@ func newStoredProviders(
 func (s *storedProviders) Provider(ctx context.Context, id string) (serverapi.SignInProvider, bool, error) {
 	var none serverapi.SignInProvider
 
-	if !session.ValidProviderID(id) || s.admin.Static(id) {
+	// Defense in depth: the API refuses to store the ID "dev" and the
+	// configuration refuses it too. This check stays for a database that
+	// holds such a row from before, so that the row never signs a person in.
+	if !session.ValidProviderID(id) || id == session.DevProviderID || s.admin.Static(id) {
 		return none, false, nil
 	}
 

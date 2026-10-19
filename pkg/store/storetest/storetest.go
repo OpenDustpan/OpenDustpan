@@ -301,12 +301,12 @@ func testPing(t *testing.T, s Store) {
 
 // closeStore closes s. The built-in adapters close with different signatures,
 // so it accepts both.
-func closeStore(t *testing.T, s Store) {
+func closeStore(t *testing.T, s any) {
 	t.Helper()
 
 	var err error
 
-	switch c := any(s).(type) {
+	switch c := s.(type) {
 	case interface{ Close() error }:
 		err = c.Close()
 	case interface{ Close() }:

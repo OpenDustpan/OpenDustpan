@@ -452,6 +452,17 @@ var Settings = []*Setting{
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
 		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
 	).WithSensitive(),
+	envSetting(
+		DevDataDirEnv,
+		"The parent of the data directory of `dev`. The data directory is `dev` in it. `--ephemeral` "+
+			"ignores it, and `--data-dir` wins over it.",
+	),
+	envSetting(
+		DevAdminTokenEnv,
+		"The administrator token of `dev`, in place of a token that `dev` makes. At least 32 bytes. "+
+			"`dev` clears the variable from its environment after the read, and `dev.env` takes "+
+			"the token from the variable in the shell that loads it.",
+	).WithSensitive(),
 
 	stringSetting(
 		history.PlanRetentionFlag, history.PlanRetentionEnv, retentionDefault,

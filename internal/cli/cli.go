@@ -30,6 +30,7 @@ const (
 	commandCheck           = "check"
 	commandCreate          = "create"
 	commandCreateTempAdmin = "create-temp-admin"
+	commandDev             = "dev"
 	commandHealth          = "health"
 	commandHost            = "host"
 	commandNamespace       = "namespace"
