@@ -259,7 +259,10 @@ func (s *Service) insertRecord(
 		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w", err)
 	}
 
-	if err := s.store.CreateTempAdmin(ctx, r, change(e, at, Ref(r.PrincipalID))); err != nil {
+	entry := change(e, at, Ref(r.PrincipalID))
+	entry.Reason = r.Reason
+
+	if err := s.store.CreateTempAdmin(ctx, r, entry); err != nil {
 		return TempAdmin{}, fmt.Errorf("create temporary administrator for %q: %w", in.Subject, err)
 	}
 

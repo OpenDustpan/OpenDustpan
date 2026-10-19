@@ -45,29 +45,31 @@ type AuditChainState struct {
 }
 
 type AuditEntry struct {
-	Namespace    string
-	Sequence     int64
-	Subject      string
-	IdpSubject   string
-	TokenID      string
-	Action       string
-	Object       string
-	Version      string
-	ValuePath    string
-	AtMs         int64
-	SourceIp     string
-	UserAgent    string
-	Channel      string
-	Kind         string
-	Outcome      string
-	RequestID    string
-	PrevHash     string
-	Hash         string
-	ValueCount   pgtype.Int8
-	Changes      pgtype.Text
-	ObjectID     string
-	FenceVersion int64
-	Reason       string
+	Namespace     string
+	Sequence      int64
+	Subject       string
+	IdpSubject    string
+	TokenID       string
+	Action        string
+	Object        string
+	Version       string
+	ValuePath     string
+	AtMs          int64
+	SourceIp      string
+	UserAgent     string
+	Channel       string
+	Kind          string
+	Outcome       string
+	RequestID     string
+	PrevHash      string
+	Hash          string
+	ValueCount    pgtype.Int8
+	Changes       pgtype.Text
+	ObjectID      string
+	FenceVersion  int64
+	Reason        string
+	PrincipalKind string
+	JobID         string
 }
 
 type AuditSinkCursor struct {
@@ -417,6 +419,28 @@ type PrincipalGroup struct {
 	DeletedAtMs pgtype.Int8
 }
 
+type Profile struct {
+	NamespaceID string
+	ID          string
+	Name        string
+	Latest      int64
+	CreatedBy   string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	DeletedAtMs int64
+}
+
+type ProfileRevision struct {
+	NamespaceID    string
+	ProfileID      string
+	Number         int64
+	Document       string
+	DocumentSha256 string
+	Author         string
+	CreatedAtMs    int64
+	Reason         string
+}
+
 type Restore struct {
 	ID          string
 	State       string
@@ -437,6 +461,88 @@ type Role struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	DeletedAtMs pgtype.Int8
+}
+
+type Runner struct {
+	ID                     string
+	NamespaceID            string
+	PoolID                 string
+	Name                   string
+	Kind                   string
+	Isolation              string
+	Labels                 string
+	Release                string
+	KeyPublic              []byte
+	KeyCreatedAtMs         int64
+	PreviousKeyPublic      []byte
+	PreviousKeyCreatedAtMs int64
+	RotatedAtMs            int64
+	JoinedWith             string
+	Draining               bool
+	RetiredAtMs            int64
+	LastSeenAtMs           int64
+	JoinedAtMs             int64
+}
+
+type RunnerClaim struct {
+	OperationID string
+	Token       int64
+	ClaimedAtMs int64
+	JobID       string
+	Phase       int64
+}
+
+type RunnerHandoffToken struct {
+	Sha256      string
+	OperationID string
+	Token       int64
+	RunnerID    string
+	IssuedAtMs  int64
+	ExpiresAtMs int64
+	UsedAtMs    int64
+}
+
+type RunnerJoinToken struct {
+	ID          string
+	NamespaceID string
+	PoolID      string
+	Sha256      string
+	CreatedBy   string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+	UsedAtMs    int64
+	UsedBy      string
+	RevokedAtMs int64
+}
+
+type RunnerNonce struct {
+	Subject     string
+	Nonce       string
+	ExpiresAtMs int64
+}
+
+type RunnerPool struct {
+	ID          string
+	NamespaceID string
+	Name        string
+	Purpose     string
+	LeaseMs     int64
+	Concurrency int64
+	Isolation   string
+	GitMode     string
+	GitHelper   string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+type RunnerSession struct {
+	ID             string
+	OperationID    string
+	Token          int64
+	RunnerID       string
+	KeyPublic      []byte
+	KeyCreatedAtMs int64
+	CreatedAtMs    int64
 }
 
 type SchemaMigration struct {
@@ -641,4 +747,34 @@ type Workspace struct {
 	AllowUnlockedWrites   bool
 	DeletedAtMs           pgtype.Int8
 	DeletedName           pgtype.Text
+}
+
+type WorkspaceBlameCursor struct {
+	WorkspaceID string
+	Ordinal     int64
+}
+
+type WorkspaceBlameItem struct {
+	WorkspaceID    string
+	StateVersionID string
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
+	ResourceCount  int64
+}
+
+type WorkspaceResourceChange struct {
+	WorkspaceID    string
+	StateVersionID string
+	Address        string
+	Ordinal        int64
+	Kind           string
+	AtMs           int64
+	BySubject      string
+	ByTokenID      string
+	ByJobID        string
+	ChangedPaths   int64
+	Restored       bool
+	Forced         bool
+	LineageChanged bool
 }

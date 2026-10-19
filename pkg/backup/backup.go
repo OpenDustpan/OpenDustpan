@@ -120,6 +120,14 @@ var Tables = []string{
 	"imports_purged",
 	"import_units",
 	"import_ledger",
+	"workspace_blame_cursors",
+	"workspace_blame_items",
+	"workspace_resource_changes",
+	"runner_pools",
+	"runner_join_tokens",
+	"runners",
+	"profiles",
+	"profile_revisions",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

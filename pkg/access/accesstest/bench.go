@@ -85,6 +85,9 @@ func Bench(b *testing.B, s BenchStore) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	b.Run("check", func(b *testing.B) {

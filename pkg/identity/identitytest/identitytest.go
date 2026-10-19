@@ -79,6 +79,9 @@ func Run(t *testing.T, newAuthorizer AuthorizerFactory) {
 			Admin:                  true,
 			TokenID:                "",
 			TokenExpiresAt:         time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		}
 		authz := newAuthorizer(t)
 
@@ -363,6 +366,9 @@ func testAdminPasses(t *testing.T, authz identity.Authorizer) {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	objs := testObjects(t)
@@ -388,6 +394,9 @@ func testDenied(t *testing.T, authz identity.Authorizer) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	objs := testObjects(t)
@@ -413,6 +422,9 @@ func testDenialNamesObject(t *testing.T, authz identity.Authorizer) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	objs := testObjects(t)
@@ -450,6 +462,9 @@ func testUnitsDistinct(t *testing.T, authz identity.Authorizer) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	errA := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, unitA)
@@ -529,6 +544,9 @@ func testUnitGrant(t *testing.T) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	if err := authz.Authorize(t.Context(), alice, identity.ActionUnitRead, unitA); err != nil {
@@ -588,6 +606,9 @@ func testNamespaceGrant(t *testing.T) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	objs := []identity.Object{insideA, insideB}
@@ -628,6 +649,9 @@ func testAdminDespiteGrants(t *testing.T) {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	if err := authz.Authorize(t.Context(), admin, identity.ActionUnitRead, unitB); err != nil {
@@ -648,6 +672,9 @@ func testAdminListsAll(t *testing.T, authz identity.Authorizer) {
 		Admin:                  true,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	for _, action := range testActions() {
@@ -675,6 +702,9 @@ func testListsNone(t *testing.T, authz identity.Authorizer) {
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	for _, action := range testActions() {
@@ -715,6 +745,9 @@ func testListUnitGrant(t *testing.T) {
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
@@ -758,6 +791,9 @@ func testListNamespaceGrant(t *testing.T) {
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
@@ -811,6 +847,9 @@ func testListWithinAuthorize(t *testing.T) {
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	for _, under := range []identity.Authorizer{

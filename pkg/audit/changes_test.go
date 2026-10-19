@@ -105,7 +105,7 @@ func TestComputeHashCoversTheChanges(t *testing.T) {
 	with.Changes = changesFixture()
 
 	got := audit.ComputeHash(with, "")
-	if want := encodedHash("", hashTail{"-", "", canonicalFixture, "0", ""}); got != want {
+	if want := encodedHash("", hashTail{"-", "", canonicalFixture, "0", "", "", ""}); got != want {
 		t.Fatalf("hash with changes = %s, want %s", got, want)
 	}
 

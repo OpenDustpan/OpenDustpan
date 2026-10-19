@@ -127,6 +127,7 @@ type backupSeed struct {
 	backedUp   backup.Record
 	audit      []audit.Entry
 	imports    *seededImports
+	profiles   *seededProfiles
 }
 
 // seedBackupStore fills s through the real ports: namespaces, stacks with
@@ -253,6 +254,8 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupPurge(t, s, acme)
 	seedBackupSignIn(t, s)
 	imports := seedBackupImports(t, s, acme)
+	seedBlameRows(t, s, blameSeed{ns: acme, w: net, first: current.ID.String(), second: pending.ID.String()})
+	profiles := seedBackupProfiles(t, s, acme)
 	seedBackupGate(t, s, acme)
 
 	return backupSeed{
@@ -273,6 +276,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		backedUp:   backedUp,
 		audit:      entries,
 		imports:    imports,
+		profiles:   profiles,
 	}
 }
 
@@ -686,29 +690,31 @@ func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Toke
 // an installation store takes.
 func ServerChange(at time.Time, object string) audit.Entry {
 	return audit.Entry{
-		At:           at,
-		Namespace:    audit.ServerScope,
-		Subject:      "admin",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "server:manage-principals",
-		Object:       object,
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "storetest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
-		Reason:       "",
+		At:            at,
+		Namespace:     audit.ServerScope,
+		Subject:       "admin",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "server:manage-principals",
+		Object:        object,
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "storetest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -846,29 +852,31 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 		}
 
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
-			At:           now(),
-			Namespace:    acme.Name,
-			Subject:      "admin",
-			IDPSubject:   "",
-			TokenID:      "",
-			Action:       "unit:decrypt",
-			Object:       "pulumi:" + acme.Name.String() + "/web/prod",
-			Version:      "",
-			ValuePath:    "",
-			ValueCount:   count,
-			Changes:      changes,
-			SourceIP:     "192.0.2.1",
-			UserAgent:    "test",
-			Channel:      audit.ChannelAPI,
-			Kind:         kind,
-			Outcome:      audit.OutcomeSuccess,
-			RequestID:    fmt.Sprintf("req-%d", i),
-			ObjectID:     "",
-			PrevHash:     "",
-			Hash:         "",
-			Sequence:     0,
-			FenceVersion: 0,
-			Reason:       "",
+			At:            now(),
+			Namespace:     acme.Name,
+			Subject:       "admin",
+			IDPSubject:    "",
+			TokenID:       "",
+			Action:        "unit:decrypt",
+			Object:        "pulumi:" + acme.Name.String() + "/web/prod",
+			Version:       "",
+			ValuePath:     "",
+			ValueCount:    count,
+			Changes:       changes,
+			SourceIP:      "192.0.2.1",
+			UserAgent:     "test",
+			Channel:       audit.ChannelAPI,
+			Kind:          kind,
+			Outcome:       audit.OutcomeSuccess,
+			RequestID:     fmt.Sprintf("req-%d", i),
+			ObjectID:      "",
+			PrevHash:      "",
+			Hash:          "",
+			Sequence:      0,
+			FenceVersion:  0,
+			Reason:        "",
+			PrincipalKind: "",
+			JobID:         "",
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)

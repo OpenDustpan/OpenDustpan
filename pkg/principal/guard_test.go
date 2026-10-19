@@ -72,6 +72,9 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	p, err := svc.CreatePrincipal(

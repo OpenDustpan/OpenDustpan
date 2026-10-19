@@ -248,8 +248,8 @@ A console on another origin sends a preflight request. For an origin in
 `--allowed-origins`, the server allows the headers `Authorization`,
 `Content-Type`, `Dustpan-Channel` and `X-Dustpan-CSRF`, and the methods GET,
 POST, PUT, PATCH and DELETE, with credentials. It caches the answer for 600
-seconds. On an answer to a request, the server sets `Access-Control-Expose-Headers: Retry-After`,
-so that the console can read the wait time of a 503 answer. A request from
+seconds. On an answer to a request, the server sets `Access-Control-Expose-Headers: Retry-After, ETag`,
+so that the console can read the wait time of a 503 answer and the `ETag` of a profile. A request from
 another origin gets no CORS headers.
 
 The server answers CORS on `/api/` (including the TFE-compatible API at

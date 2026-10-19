@@ -1,11 +1,14 @@
 package inventory
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -49,9 +52,18 @@ type Route struct {
 	// Actions lists the actions the route needs. Only authorized routes set
 	// it, and the wrapper authorizes every entry on the resolved object.
 	Actions []identity.Action
+	// NamespaceActions lists actions that the wrapper authorizes on the
+	// namespace of the resolved object, before Actions. Only authorized routes
+	// set it.
+	NamespaceActions []identity.Action
 	// Resolve returns the object that Actions apply to. Only authorized
 	// routes set it.
 	Resolve ObjectResolver
+	// DeniedAsNotFound makes the wrapper answer 404 when the Authorizer
+	// denies an action, with the body of an unknown object, so the answer
+	// does not tell a caller that the object exists. Only routes that find
+	// an object by its ID alone set it.
+	DeniedAsNotFound bool
 	// Serve handles the request after the wrapper has enforced the row.
 	Serve RouteHandler
 }
@@ -73,38 +85,59 @@ func (h *Handler) buildRoutes() []Route {
 			// The object is the namespace of the path. The handler then
 			// removes every entry whose unit the caller may not read
 			// (unit:read on the reference).
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionNamespaceRead},
-			Resolve: resolveCollectionNamespace,
-			Serve:   h.listUnits,
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{identity.ActionNamespaceRead},
+			Resolve:          resolveCollectionNamespace,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            h.listUnits,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   v1Prefix + "/namespaces/-/units/{unitID}",
+			// The object is the unit of the path, found by its ID alone. The
+			// caller needs unit:read on the unit and namespace:read on its
+			// namespace. A denied caller gets the 404 of an unknown unit.
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{identity.ActionUnitRead},
+			NamespaceActions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve:          h.resolveUnitByID,
+			DeniedAsNotFound: true,
+			Serve:            h.getUnit,
 		},
 		{
 			Method: http.MethodGet,
 			Path:   v1Prefix + "/namespaces/{namespace}/deleted-units",
 			// The object is the namespace of the path. The handler then
 			// removes every entry whose unit the caller may not read.
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionNamespaceRead},
-			Resolve: resolveCollectionNamespace,
-			Serve:   h.listDeletedUnits,
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{identity.ActionNamespaceRead},
+			Resolve:          resolveCollectionNamespace,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            h.listDeletedUnits,
 		},
 		{
 			Method: http.MethodPost,
 			Path:   "/api/inventory/deleted-units/{tool}/{unitID}/restore",
 			// The object is the deleted unit: its reference under the name
 			// before the delete, with its stable ID.
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRestore},
-			Resolve: h.resolveDeletedUnit,
-			Serve:   h.restoreUnit,
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{identity.ActionUnitRestore},
+			Resolve:          h.resolveDeletedUnit,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            h.restoreUnit,
 		},
 		{
-			Method:  http.MethodDelete,
-			Path:    "/api/inventory/deleted-units/{tool}/{unitID}",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitPurge},
-			Resolve: h.resolveDeletedUnit,
-			Serve:   h.purgeUnit,
+			Method:           http.MethodDelete,
+			Path:             "/api/inventory/deleted-units/{tool}/{unitID}",
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{identity.ActionUnitPurge},
+			Resolve:          h.resolveDeletedUnit,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            h.purgeUnit,
 		},
 	}
 
@@ -122,6 +155,7 @@ func (h *Handler) Routes() []Route {
 	for i, route := range h.routes {
 		out[i] = route
 		out[i].Actions = append([]identity.Action(nil), route.Actions...)
+		out[i].NamespaceActions = append([]identity.Action(nil), route.NamespaceActions...)
 	}
 
 	return out
@@ -243,14 +277,46 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 			return
 		}
 
-		for _, action := range route.Actions {
-			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
-				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
+		if err := h.authorizeRoute(ctx, route, p, obj); err != nil {
+			h.writeError(ctx, w, err)
 
-				return
-			}
+			return
 		}
 
 		route.Serve(w, r, p, obj)
 	}
+}
+
+// authorizeRoute authorizes every action of route: NamespaceActions on the
+// namespace of obj, then Actions on obj. For a route with DeniedAsNotFound,
+// a denial gives the error of an unknown object.
+func (h *Handler) authorizeRoute(
+	ctx context.Context, route Route, p identity.Principal, obj identity.Object,
+) error {
+	check := func(action identity.Action, target identity.Object) error {
+		err := h.authz.Authorize(ctx, p, action, target)
+		if err == nil {
+			return nil
+		}
+
+		if route.DeniedAsNotFound && errors.Is(err, identity.ErrDenied) {
+			return coreinventory.ErrUnitNotFound
+		}
+
+		return fmt.Errorf("authorize %s: %w", action, err)
+	}
+
+	for _, action := range route.NamespaceActions {
+		if err := check(action, identity.NamespaceObject(obj.Namespace())); err != nil {
+			return err
+		}
+	}
+
+	for _, action := range route.Actions {
+		if err := check(action, obj); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

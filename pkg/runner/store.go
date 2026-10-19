@@ -133,15 +133,29 @@ type MemberStore interface {
 
 // SessionStore is the persistence port for handoff tokens and job sessions.
 //
-// The claim time of a claim of a runner is the IssuedAt of its first
-// handoff token, or the now of its first RunnerRenew if that comes first.
-// The store records it once for each claim. A new handoff token for the
-// same claim never moves it. The coordinator asks for the handoff token
-// right after the claim, so the claim time is at most one renewal after
-// the claim. MaxSessionWait counts from the claim time.
+// The claim time of a claim of a runner is the database time of its
+// RecordClaim, which the poll calls right after the claim. The store
+// records it once for each claim. A claim with no record gets the IssuedAt
+// of its first handoff token as its claim time, and a new handoff token for
+// the same claim never moves it. MaxSessionWait counts from the claim time.
+//
+// A claim is live while its operation is running with the owner and the
+// token of the claim, and its lease did not pass on the clock of the
+// database. A lease that passed ends the claim for every method of this
+// port, as an expiry does.
 type SessionStore interface {
+	// RecordClaim records the claim c of its runner, with the job and the
+	// phase that it works on (job is empty for a sweep), and the claim time:
+	// the time of the database. It runs in its own transaction. A second
+	// call for the same claim changes nothing. It returns ErrClaimLost when
+	// c is not live.
+	RecordClaim(ctx context.Context, c durable.Claim, job string, phase int) error
+	// LookupClaim returns what RecordClaim stored for the claim c, and
+	// whether the claim has a job session. It returns ErrNotFound for a
+	// claim with no record, and ErrClaimLost when c is not live.
+	LookupClaim(ctx context.Context, c durable.Claim) (ClaimRecord, error)
 	// IssueHandoffToken stores t for the live claim c of the runner
-	// t.Runner, and records the claim time t.IssuedAt when c has none. It
+	// t.Runner, and records the claim time t.IssuedAt when c has no record. It
 	// returns ErrClaimLost when c is not the live claim of its operation,
 	// or when the owner of c is not t.Runner, so a runner never gets a
 	// token for the claim of another runner. It returns ErrInvalid when
@@ -162,20 +176,25 @@ type SessionStore interface {
 	OpenSession(ctx context.Context, sha256 string, k Key, now time.Time) (Session, error)
 	// RunnerRenew is the renewal of the claim c by its runner, before the
 	// launcher opens a session. In one transaction, with the rules of
-	// CheckRunnerRenew, it:
+	// CheckRunnerRenew, it checks the fence (namespace.ErrFenced for a stale
+	// fence) and then:
 	//   - returns ErrClaimLost when c is not live, or when its owner is not
 	//     the runner of the request;
 	//   - returns ErrSessionOpen when the claim has a job session. It does
 	//     not renew: the launcher renews the claim through its session.
-	//   - releases the claim, as SweepClaimer.Release and job.Claimer do,
-	//     and returns ErrClaimLost, when now is later than MaxSessionWait
-	//     after the claim time and the claim has no session. This is the
-	//     one error after which the store has changed something.
-	//   - else moves the expiry of c to now plus d and returns the claim.
+	//   - returns ErrSessionWaitPassed (it wraps ErrClaimLost) when now is
+	//     later than MaxSessionWait after the claim time and the claim has
+	//     no session. It changes nothing: the caller releases the claim
+	//     through job.Claimer or SweepClaimer, which apply their own rules.
+	//   - else moves the expiry of c to the time of the database plus d and
+	//     returns the claim.
 	//
-	// It records the claim time now when c has none. It returns
-	// ErrInvalid for a d that is not positive.
-	RunnerRenew(ctx context.Context, c durable.Claim, d time.Duration, now time.Time) (durable.Claim, error)
+	// The argument now is only for the session wait limit. It returns
+	// ErrClaimLost for a claim with no record (RecordClaim), and ErrInvalid
+	// for a d that is not positive.
+	RunnerRenew(
+		ctx context.Context, c durable.Claim, fence namespace.Fence, d time.Duration, now time.Time,
+	) (durable.Claim, error)
 	// Session returns the session id, or ErrNotFound. It returns
 	// ErrClaimLost when the claim of the session is no longer live, so a
 	// launcher of a claim that another claim replaced writes nothing, and
@@ -204,29 +223,32 @@ type SessionStore interface {
 // sweeps owns the adapter. The protocol adds no rule to it.
 type SweepClaimer interface {
 	// Claim takes one sweep of req.Kinds that can run, and returns its
-	// work. It returns durable.ErrNoWork when no sweep can run now, and
+	// work and the fence of the namespace of the pool. It returns
+	// durable.ErrNoWork when no sweep can run now, and
 	// ErrInvalid for a request with no owner, a kind that is not a
 	// SweepKind, or a lease that is not positive.
 	Claim(ctx context.Context, req durable.ClaimRequest) (SweepClaim, error)
 	// Renew moves the expiry of c to now plus d on the clock of the
 	// store, and returns the new claim. It returns ErrClaimLost when c is
-	// not live.
-	Renew(ctx context.Context, c durable.Claim, d time.Duration) (durable.Claim, error)
+	// not live, and namespace.ErrFenced when the fence is stale.
+	Renew(ctx context.Context, c durable.Claim, fence namespace.Fence, d time.Duration) (durable.Claim, error)
 	// Release gives the sweep back before its report, so that the next
 	// claim runs it from its start. It returns ErrClaimLost when c is not
-	// live.
-	Release(ctx context.Context, c durable.Claim) error
+	// live, and namespace.ErrFenced when the fence is stale.
+	Release(ctx context.Context, c durable.Claim, fence namespace.Fence) error
 	// Report stores the report of the sweep from r, and ends the claim and
 	// the operation in one transaction: the upload of the report is the
 	// end of a sweep. It returns ErrClaimLost when c is not live, and
-	// ErrInvalid for a report above the limit of the design of sweeps.
-	Report(ctx context.Context, c durable.Claim, r io.Reader) error
+	// ErrInvalid for a report above the limit of the design of sweeps. It
+	// returns namespace.ErrFenced when the fence is stale.
+	Report(ctx context.Context, c durable.Claim, fence namespace.Fence, r io.Reader) error
 }
 
-// SweepClaim is one claimed sweep: the claim and the work of the
-// coordinator.
+// SweepClaim is one claimed sweep: the claim, the fence of the namespace of
+// the pool and the work of the coordinator.
 type SweepClaim struct {
 	Claim durable.Claim
+	Fence namespace.Fence
 	Work  Work
 }
 
@@ -249,10 +271,27 @@ type Rotation struct {
 }
 
 // Joined is the result of MemberStore.Join: the runner, and whether the
-// join was a join again of a runner of the same name.
+// join was a join again of a runner of the same name. For a join again,
+// PreviousKeyID is the ID of the key that the runner had before the join,
+// and EndedClaims holds the operation IDs of the claims that the join
+// ended. Both are empty for a first join.
 type Joined struct {
-	Runner   Runner
-	Rejoined bool
+	Runner        Runner
+	Rejoined      bool
+	PreviousKeyID string
+	EndedClaims   []string
+}
+
+// ClaimRecord is what RecordClaim stored for a claim.
+type ClaimRecord struct {
+	// Job is the ID of the job of the phase, or empty for a sweep.
+	Job string
+	// Phase is the index of the phase of the job.
+	Phase int
+	// ClaimedAt is the claim time, on the clock of the database.
+	ClaimedAt time.Time
+	// HasSession is true when the claim has a job session.
+	HasSession bool
 }
 
 // JoinAudit returns the audit entries of a join, from its result. The

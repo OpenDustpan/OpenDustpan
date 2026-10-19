@@ -63,6 +63,56 @@ type Principal struct {
 	// TemporaryExpiresAt is the fixed end of a temporary administrator.
 	// It is the zero time for every other caller.
 	TemporaryExpiresAt time.Time
+	// Kind is the kind of the principal record that acted: person, service
+	// or workload. The empty value is an unknown kind, for example for a
+	// bootstrap admin token, which has no record. An authenticator outside
+	// this repository that does not fill it gets the stricter treatment of
+	// a person.
+	Kind Kind
+	// Credential is the kind of the credential of the request. The empty
+	// value counts as CredentialAccessToken.
+	Credential Credential
+	// JobID is the job whose token authenticated the request. It is empty
+	// for every other credential.
+	JobID string
+}
+
+// Kind is the kind of a principal record. Its values equal the kinds of a
+// principal record of the principal package.
+type Kind string
+
+// The kinds of a principal.
+const (
+	KindPerson   Kind = "person"
+	KindService  Kind = "service"
+	KindWorkload Kind = "workload"
+)
+
+// Credential names the kind of credential that authenticated a request.
+type Credential string
+
+// The credentials of a request.
+const (
+	// CredentialSession is a console session. A session belongs to a person.
+	CredentialSession Credential = "session"
+	// CredentialAccessToken is a personal or service access token.
+	CredentialAccessToken Credential = "access-token"
+	// CredentialJobToken is the token of a job.
+	CredentialJobToken Credential = "job-token"
+	// CredentialTrustToken is a token from a trust rule of a workload.
+	CredentialTrustToken Credential = "trust-token"
+)
+
+// ActsAsPerson reports whether a person acts through the request: the
+// credential is a session or an access token, and the kind is person or
+// unknown. An empty credential counts as an access token, and an unknown
+// kind counts as a person, so the answer fails closed.
+func (p Principal) ActsAsPerson() bool {
+	if p.Credential == CredentialJobToken || p.Credential == CredentialTrustToken {
+		return false
+	}
+
+	return p.Kind == "" || p.Kind == KindPerson
 }
 
 // Action is something a principal wants to do.
@@ -405,6 +455,21 @@ const (
 	// the server destroys its content and keeps its metadata. It cannot be
 	// undone. Its object is a unit.
 	ActionUnitRedact Action = "unit:redact"
+
+	// ActionProfileRead allows reading the metadata, the revisions and the
+	// documents of a profile with sealed secrets, and listing profiles. Its
+	// object is the namespace that holds the profile.
+	ActionProfileRead Action = "profile:read"
+	// ActionProfileWrite allows creating a profile and saving a revision.
+	// Its object is the namespace that holds the profile.
+	ActionProfileWrite Action = "profile:write"
+	// ActionProfileOpen allows reading the secret values of a profile and
+	// saving a routing change. Its object is the namespace that holds the
+	// profile.
+	ActionProfileOpen Action = "profile:open"
+	// ActionProfileManage allows deleting a profile. Its object is the
+	// namespace that holds the profile.
+	ActionProfileManage Action = "profile:manage"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
@@ -840,6 +905,9 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 			Admin:          true,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		},
 		token: []byte(token),
 	}, nil
@@ -913,6 +981,9 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 				Admin:                  true,
 				TokenID:                "",
 				TokenExpiresAt:         time.Time{},
+				Kind:                   "",
+				Credential:             "",
+				JobID:                  "",
 			},
 		)
 		hashes = append(hashes, sum)
@@ -926,8 +997,8 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 // every action with no grant.
 func (s *StaticTokens) AdminSubjects() []string {
 	out := make([]string, 0, len(s.principals))
-	for _, p := range s.principals {
-		out = append(out, p.Subject)
+	for i := range s.principals {
+		out = append(out, s.principals[i].Subject)
 	}
 
 	return out

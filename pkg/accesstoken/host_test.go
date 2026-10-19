@@ -78,6 +78,9 @@ func hostCaller() identity.Principal {
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: tempadmin.HostSubject, DisplayName: tempadmin.HostSubject, Admin: true,
 		TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 }
 

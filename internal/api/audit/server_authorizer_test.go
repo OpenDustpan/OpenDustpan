@@ -30,6 +30,9 @@ func (realTokenAuthenticator) AuthenticateToken(_ context.Context, token string)
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 

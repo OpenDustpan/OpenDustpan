@@ -175,6 +175,9 @@ func principal(subject string, admin bool) identity.Principal {
 	return identity.Principal{
 		Subject: subject, DisplayName: "", Admin: admin, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 }
 

@@ -120,8 +120,10 @@ func sweepDeleteEntry(object string) audit.Entry {
 		Object: object, Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0,
-		Reason:       "",
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -353,6 +355,10 @@ type plainReader struct{}
 
 func (plainReader) ListUnits(context.Context, namespace.Name) ([]inventory.Entry, error) {
 	return []inventory.Entry{}, nil
+}
+
+func (plainReader) GetUnit(context.Context, string) (inventory.Entry, error) {
+	return inventory.Entry{}, inventory.ErrUnitNotFound
 }
 
 // TestRetentionSweepNeedsItsPorts proves that a server whose inventory

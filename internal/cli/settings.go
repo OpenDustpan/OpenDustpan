@@ -136,7 +136,10 @@ var Settings = []*Setting{
 	stringSetting(
 		"allowed-origins", "DUSTPAN_ALLOWED_ORIGINS", "",
 		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)",
-		referenceNone,
+		referenceNone+". A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an "+
+			"optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or "+
+			"fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
+			"`Access-Control-Expose-Headers: Retry-After, ETag` on answers to requests.",
 	).WithFile("allowed-origins"),
 	stringSetting(
 		"tls-cert", "DUSTPAN_TLS_CERT", "",
@@ -296,7 +299,7 @@ var Settings = []*Setting{
 	),
 	stringSetting(
 		"reason", "", "",
-		"reason for the temporary administrator, stored in the audit entry of the create",
+		"reason for the temporary administrator, at most 500 characters, stored in the audit entry of the create",
 		referenceNone,
 	),
 	stringSetting(

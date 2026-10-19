@@ -100,6 +100,9 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
 	tables = append(tables, pgCopyImportTables()...)
+	tables = append(tables, pgCopyBlameTables()...)
+	tables = append(tables, pgCopyRunnerTables()...)
+	tables = append(tables, pgCopyProfileTables()...)
 
 	return tables
 }
@@ -188,7 +191,7 @@ func pgInventoryChangeTables() []pgCopyTable {
 			table: "inventory_changes",
 			columns: []string{
 				pgColNamespaceID, pgColSeq, pgColAtMs, pgColTool, pgColUnitID, pgColName, pgColDisplayName,
-				pgColStatus, "collection", "kind", "resource_count",
+				pgColStatus, "collection", pgColKind, pgColResourceCount,
 			},
 			orderBy: []string{pgColNamespaceID, pgColSeq},
 		},
@@ -297,7 +300,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "state_versions",
 			columns: []string{
-				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", pgColSize,
+				"id", pgColWorkspaceID, pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
 				"sensitive_marks", "fenced_by", "unlocked_write",
@@ -310,7 +313,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id", "fence_version", pgColReason,
+				"changes", "object_id", "fence_version", "principal_kind", "job_id", pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
@@ -333,7 +336,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 // compares each list with the live columns, so a migration that adds a column
 // fails until its author adds the column here.
 func pgControlTables() []pgCopyTable {
-	return []pgCopyTable{
+	core := []pgCopyTable{
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
@@ -377,6 +380,8 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 	}
+
+	return slices.Concat(core, pgRunnerControlTables())
 }
 
 // pgCopySessionTables holds the COPY columns of the session and sign-in

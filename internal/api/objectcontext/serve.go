@@ -45,7 +45,7 @@ func (h *Handler) readContext(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	src := requestSource{h: h, p: p, t: t}
+	src := &requestSource{h: h, p: p, t: t}
 
 	reader, err := objectcontext.NewReader(objectcontext.Sources{
 		Inventory: src, Context: h.entries, Access: src,
@@ -193,28 +193,30 @@ func readPatch(w http.ResponseWriter, r *http.Request) (objectcontext.Patch, err
 // sets its time, and the store sets its changes.
 func auditEntry(r *http.Request, p identity.Principal, t target) audit.Entry {
 	return audit.Entry{
-		At:           time.Time{},
-		Namespace:    t.ns.Name,
-		Subject:      p.Subject,
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       string(objectcontext.SetAction(t.ref.Kind)),
-		Object:       t.obj.String(),
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      sessionauth.AuditChannel(r, channelHeader),
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    requestid.FromContext(r.Context()),
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		Changes:      nil,
-		ObjectID:     t.obj.UnitID(),
-		FenceVersion: 0,
-		Reason:       "",
+		At:            time.Time{},
+		Namespace:     t.ns.Name,
+		Subject:       p.Subject,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        string(objectcontext.SetAction(t.ref.Kind)),
+		Object:        t.obj.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		SourceIP:      clientip.String(r),
+		UserAgent:     truncateUserAgent(r.UserAgent()),
+		Channel:       sessionauth.AuditChannel(r, channelHeader),
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     requestid.FromContext(r.Context()),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		Changes:       nil,
+		ObjectID:      t.obj.UnitID(),
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
