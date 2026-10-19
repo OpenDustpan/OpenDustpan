@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 )
 
@@ -138,27 +139,39 @@ func componentNotFound(w http.ResponseWriter, _ *http.Request) {
 const metricsPath = "/api/server/metrics"
 
 // workerOnlyPath reports whether a process without the api component still
-// serves path: a probe or the metrics route.
-func workerOnlyPath(path string) bool {
-	switch {
-	case path == "/health/live", path == "/health/ready", path == metricsPath:
-		return true
-	case strings.HasPrefix(path, "/health/ready/"):
-		return true
-	default:
+// serves path: a probe or the metrics route. It accepts only a path that is
+// already clean, so a path with a dot segment, a double slash or a trailing
+// slash is never one of them. /health/ready/ takes one component name.
+func workerOnlyPath(p string) bool {
+	if p == "" || path.Clean(p) != p {
 		return false
 	}
+
+	switch p {
+	case "/health/live", "/health/ready", metricsPath:
+		return true
+	}
+
+	name, found := strings.CutPrefix(p, "/health/ready/")
+
+	return found && name != "" && !strings.Contains(name, "/")
 }
 
 // gateComponents answers 404 on each route except the probes and the metrics
 // route when the set holds no api component. With api it returns next.
+//
+// Defense in depth: the mux of a process without the api component mounts no
+// API handler either (see routes), so this gate is the first of two layers
+// that each stop a request alone. The gate checks both the decoded path and
+// the escaped path, each clean, so an encoded dot segment cannot slip past
+// a check that reads only one form.
 func gateComponents(next http.Handler, set Components) http.Handler {
 	if set.api {
 		return next
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !workerOnlyPath(r.URL.Path) {
+		if !workerOnlyPath(r.URL.Path) || !workerOnlyPath(r.URL.EscapedPath()) {
 			componentNotFound(w, r)
 
 			return

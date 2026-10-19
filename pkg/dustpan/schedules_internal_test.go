@@ -126,6 +126,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
 		tempAdmins:       nil,
 		handler:          nil,
+		ungated:          nil,
 		logger:           slog.New(slog.DiscardHandler),
 		listenAddr:       "",
 		listener:         nil,

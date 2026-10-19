@@ -9,9 +9,12 @@ package durabletest_test
 import (
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 )
 
@@ -37,6 +40,59 @@ func TestMemSchedules(t *testing.T) {
 
 		return durabletest.NewMem().ScheduleHarness()
 	})
+}
+
+func TestMemHeartbeats(t *testing.T) {
+	t.Parallel()
+
+	durabletest.RunHeartbeats(t, func(t *testing.T) durabletest.HeartbeatHarness {
+		t.Helper()
+
+		return durabletest.NewMem().HeartbeatHarness()
+	})
+}
+
+// TestMemBeatPrunesStaleOwners proves that a beat deletes the beats that are
+// older than the retention time, and keeps the others.
+func TestMemBeatPrunesStaleOwners(t *testing.T) {
+	t.Parallel()
+
+	m := durabletest.NewMem()
+	m.OldBeat("dead", durable.HeartbeatRetention+time.Minute)
+	m.OldBeat("alive", durable.HeartbeatRetention-time.Minute)
+
+	if err := m.HeartbeatHarness().Open(t, 0).Beat(t.Context(), "new"); err != nil {
+		t.Fatalf("Beat: %v", err)
+	}
+
+	if got := m.BeatOwners(); !slices.Equal(got, []string{"alive", "new"}) {
+		t.Errorf("owners after a beat = %q, want [alive new]", got)
+	}
+}
+
+// TestHeartbeatSuiteSensitivity runs the heartbeat case that must catch a
+// store that takes the time from the clock of the instance, and checks that
+// this case fails.
+func TestHeartbeatSuiteSensitivity(t *testing.T) {
+	t.Parallel()
+
+	const catcher = "an_instance_clock_ahead_or_behind_cannot_move_a_beat"
+
+	if rule := os.Getenv(durabletestFake); rule != "" {
+		durabletest.RunHeartbeats(t, func(t *testing.T) durabletest.HeartbeatHarness {
+			t.Helper()
+
+			return durabletest.BrokenHeartbeatHarness(rule)
+		})
+
+		return
+	}
+
+	out := runSuiteCaseAgainstFake(t, "TestHeartbeatSuiteSensitivity", durabletest.BreakClock, catcher)
+
+	if !strings.Contains(out, "--- FAIL: TestHeartbeatSuiteSensitivity/"+catcher+" ") {
+		t.Fatalf("the case %s did not fail against the store that breaks %q:\n%s", catcher, durabletest.BreakClock, out)
+	}
 }
 
 // TestScheduleSuiteSensitivity runs, for each broken store, the schedule

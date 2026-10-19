@@ -2,6 +2,7 @@ package dustpan_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -203,10 +204,37 @@ func TestHealthReadyOK(t *testing.T) {
 		t.Fatalf("media type = %q, want application/json", got)
 	}
 
-	want := `{"status":"ok","components":[{"name":"api","status":"ok"},{"name":"worker","status":"ok"}]}`
-	if strings.TrimSpace(body) != want {
-		t.Fatalf("GET /health/ready body %q, want %q", body, want)
+	if got := oldFields(t, body); got != `{"status":"ok"}` {
+		t.Fatalf("GET /health/ready fields status and failed %q, want %q (body %q)", got, `{"status":"ok"}`, body)
 	}
+
+	if !strings.Contains(body, `"components":[{"name":"api","status":"ok","info":{"audit-chain":"admits"}},`+
+		`{"name":"worker","status":"ok"}]`) {
+		t.Fatalf("GET /health/ready body %q does not list the components", body)
+	}
+}
+
+// oldFields returns the fields of the readiness body from before components
+// existed: status, and failed when it is present. A client that read only
+// those fields keeps working, so they must stay as they were.
+func oldFields(t *testing.T, body string) string {
+	t.Helper()
+
+	var doc struct {
+		Status string   `json:"status"`
+		Failed []string `json:"failed,omitempty"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	return string(out)
 }
 
 // readyFailureCase is one failing-check case of TestHealthReadyFailures.
@@ -228,21 +256,21 @@ func TestHealthReadyFailures(t *testing.T) {
 			name:       "store fails",
 			storePing:  failPing(errStoreCanary),
 			blobPing:   nil,
-			wantBody:   `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["store"]},{"name":"worker","status":"unavailable","failed":["store"]}]}`,
+			wantBody:   `{"status":"unavailable","failed":["store"]}`,
 			wantAbsent: []string{"blob", errStoreCanary.Error(), errBlobCanary.Error()},
 		},
 		{
 			name:       "blob fails",
 			storePing:  nil,
 			blobPing:   failPing(errBlobCanary),
-			wantBody:   `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["blob"]},{"name":"worker","status":"ok"}]}`,
+			wantBody:   `{"status":"unavailable","failed":["blob"]}`,
 			wantAbsent: []string{"store", errStoreCanary.Error(), errBlobCanary.Error()},
 		},
 		{
 			name:       "both fail",
 			storePing:  failPing(errStoreCanary),
 			blobPing:   failPing(errBlobCanary),
-			wantBody:   `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["store","blob"]},{"name":"worker","status":"unavailable","failed":["store"]}]}`,
+			wantBody:   `{"status":"unavailable","failed":["store","blob"]}`,
 			wantAbsent: []string{errStoreCanary.Error(), errBlobCanary.Error()},
 		},
 	}
@@ -271,8 +299,8 @@ func checkReadyFailure(t *testing.T, tc readyFailureCase) {
 		t.Fatalf("media type = %q, want application/json", got)
 	}
 
-	if strings.TrimSpace(body) != tc.wantBody {
-		t.Fatalf("GET /health/ready body %q, want %q", body, tc.wantBody)
+	if got := oldFields(t, body); got != tc.wantBody {
+		t.Fatalf("GET /health/ready fields status and failed %q, want %q (body %q)", got, tc.wantBody, body)
 	}
 
 	for _, absent := range tc.wantAbsent {
@@ -293,8 +321,8 @@ func TestHealthReadySlowCheck(t *testing.T) {
 		storeSlow bool
 		wantBody  string
 	}{
-		{name: "slow store", storeSlow: true, wantBody: `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["store"]},{"name":"worker","status":"unavailable","failed":["store"]}]}`},
-		{name: "slow blob", storeSlow: false, wantBody: `{"status":"unavailable","components":[{"name":"api","status":"unavailable","failed":["blob"]},{"name":"worker","status":"ok"}]}`},
+		{name: "slow store", storeSlow: true, wantBody: `{"status":"unavailable","failed":["store"]}`},
+		{name: "slow blob", storeSlow: false, wantBody: `{"status":"unavailable","failed":["blob"]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -317,8 +345,8 @@ func TestHealthReadySlowCheck(t *testing.T) {
 				t.Fatalf("GET /health/ready status %d, want %d (body %q)", status, http.StatusServiceUnavailable, body)
 			}
 
-			if strings.TrimSpace(body) != tc.wantBody {
-				t.Fatalf("GET /health/ready body %q, want %q", body, tc.wantBody)
+			if got := oldFields(t, body); got != tc.wantBody {
+				t.Fatalf("GET /health/ready fields status and failed %q, want %q (body %q)", got, tc.wantBody, body)
 			}
 
 			if elapsed > 30*time.Second {

@@ -532,7 +532,10 @@ func WithBackupTarget(target blob.Store, name string) Option {
 
 // Server is a configured OpenDustpan server.
 type Server struct {
-	handler         http.Handler
+	handler http.Handler
+	// ungated is the handler before the component gate. Only the tests read
+	// it.
+	ungated         http.Handler
 	logger          *slog.Logger
 	listenAddr      string
 	listener        net.Listener
@@ -876,7 +879,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
-	handler, err := routes(adapters, cfg, observed)
+	handlers, err := routes(adapters, cfg, observed)
 	if err != nil {
 		return nil, err
 	}
@@ -884,7 +887,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	backupRegistry, restoreRegistry := registriesOf(cfg.namespaceStore)
 
 	srv := &Server{
-		handler:          handler,
+		handler:          handlers.served,
+		ungated:          handlers.ungated,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
 		listener:         cfg.listener,
@@ -919,8 +923,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		watch:      cfg.watch,
 	}
 
-	cfg.watch.specs = srv.jobSchedules
-	registerWatchMetrics(observed.Registry(), cfg.watch)
+	cfg.watch.attach(srv, observed.Registry())
 
 	return srv, nil
 }
@@ -1598,6 +1601,10 @@ func (s *Server) workerOnly(start func() func()) func() {
 // claims nothing. It makes sure that the schedules exist in the store, so
 // that a missing worker shows as a schedule that nobody claims.
 func (s *Server) startBackground(ctx context.Context, sweeps *sync.WaitGroup) error {
+	if s.watch != nil {
+		s.watch.begin(ctx)
+	}
+
 	if s.components.Has(ComponentWorker) {
 		return s.startSweeps(ctx, sweeps)
 	}
@@ -1876,8 +1883,13 @@ func (s *Server) runStartUp(ctx context.Context) error {
 // adapters fence with the swap (PostgreSQL in the same transaction, SQLite in
 // the staged file before the rename), so a crash after the swap already lands
 // fenced; this is the crash recovery for a stop before it.
+//
+// Only a process that runs the api component takes backups and restores
+// today, so only that process fails them at start: a worker-only process
+// that restarts leaves the backups and restores of the api processes alone,
+// and fences no namespace.
 func (s *Server) failStoppedRestores(ctx context.Context) error {
-	if s.restoreRegistry == nil {
+	if s.restoreRegistry == nil || !s.components.Has(ComponentAPI) {
 		return nil
 	}
 
@@ -1940,7 +1952,15 @@ func (s *Server) startUp(ctx context.Context) error {
 		}
 	}
 
-	if s.backupRegistry == nil {
+	return s.failStoppedBackups(ctx)
+}
+
+// failStoppedBackups marks every running backup failed: the server stopped
+// during it. A backup runs in the process that took the request, which has
+// the api component. A process without it must not fail the backups of the
+// others when it starts.
+func (s *Server) failStoppedBackups(ctx context.Context) error {
+	if s.backupRegistry == nil || !s.components.Has(ComponentAPI) {
 		return nil
 	}
 
@@ -3164,8 +3184,10 @@ func mountV1(mux *http.ServeMux, h http.Handler, wrap func(http.Handler) http.Ha
 	}
 }
 
-func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Handler, error) {
-	mux := http.NewServeMux()
+// mountAPI mounts the handlers of the api component on mux: the tool APIs,
+// the installation API, the runner protocol, service discovery and the
+// console files.
+func mountAPI(mux *http.ServeMux, a adapters, cfg *settings) error {
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
 	// /api/, so the inventory restore, purge and move routes, the OpenTofu
 	// routes and the installation routes reach their own adapters while every
@@ -3222,6 +3244,37 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	// version endpoints under /api/v2/ pass the maintenance gate, so the
 	// CLI still meets the 503 refusal that names maintenance.
 	mux.Handle("GET /.well-known/terraform.json", a.tfe)
+
+	if cfg.consoleDir != "" {
+		console, err := consoleHandler(cfg.consoleDir)
+		if err != nil {
+			return err
+		}
+
+		mux.Handle("/", console)
+	}
+
+	return nil
+}
+
+// buildMux builds the root mux: the handlers of the api component, when the
+// process runs it, and the probes and the metrics route.
+func buildMux(a adapters, cfg *settings) (*http.ServeMux, error) {
+	mux := http.NewServeMux()
+	// Defense in depth: gateComponents answers 404 for a process without the
+	// api component, and this mount is a second layer that does not rely on
+	// it. A process without the api component mounts no API handler, so the
+	// mux holds only the probes and the metrics route, and a request that gets
+	// past the gate, or a gate that a later change removes, still reaches
+	// nothing.
+	if cfg.components.Has(ComponentAPI) {
+		if err := mountAPI(mux, a, cfg); err != nil {
+			return nil, err
+		}
+	} else {
+		mux.Handle("GET "+metricsPath, withCORS(a.server, cfg.allowedOrigins))
+	}
+
 	// The probes have their own prefix, so that ingress controllers that serve
 	// /healthz themselves cannot answer for this server (ADR 34). Liveness
 	// checks nothing; readiness pings the store and the blob store. Both stay
@@ -3232,27 +3285,40 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	mux.Handle("GET /health/ready", a.ready)
 	mux.HandleFunc("GET /health/ready/{component}", a.ready.ServeOne)
 
-	if cfg.consoleDir != "" && cfg.components.Has(ComponentAPI) {
-		console, err := consoleHandler(cfg.consoleDir)
-		if err != nil {
-			return nil, err
-		}
+	return mux, nil
+}
 
-		mux.Handle("/", console)
+// routeHandlers holds the handler that the server serves, and the same handler
+// before the component gate. The tests send hostile requests to the second, to
+// show that the mux of a process without the api component holds no API route
+// whatever the gate does.
+type routeHandlers struct {
+	served  http.Handler
+	ungated http.Handler
+}
+
+// routes builds the handlers of the server.
+func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHandlers, error) {
+	mux, err := buildMux(a, cfg)
+	if err != nil {
+		return routeHandlers{}, err
 	}
 
 	resolver, err := newClientIPResolver(cfg)
 	if err != nil {
-		return nil, err
+		return routeHandlers{}, err
 	}
 
 	addr := requestAddr{resolver: resolver, warns: newWarnLimiter(cfg.now)}
 
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
 
-	return withRequestCache(withRequestLog(
-		gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
-	)), nil
+	return routeHandlers{
+		served: withRequestCache(withRequestLog(
+			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
+		)),
+		ungated: gated,
+	}, nil
 }
 
 // newClientIPResolver builds the client address resolver of the server from

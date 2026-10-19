@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,14 +16,15 @@ import (
 
 // WithOperationLease sets the lease period of a claim on a durable
 // operation. The worker takes claims with this lease. An api process counts
-// 2 of these periods without a worker claim before it refuses the start of
-// an operation. Zero means the default of the durable runner.
+// 2 of these periods without a worker claim or claim renewal before it
+// refuses the start of an operation. Zero means the default of the durable
+// runner.
 func WithOperationLease(d time.Duration) Option {
 	return func(o *settings) { o.operationLease = d }
 }
 
-// stuckLeases is the number of lease periods without a claim after which a
-// worker counts as stuck or absent.
+// stuckLeases is the number of lease periods without a worker heartbeat
+// after which a worker counts as stuck or absent.
 const stuckLeases = 2
 
 // watchListLimit bounds the operations that one report reads. The pending
@@ -34,43 +36,64 @@ const watchListLimit = 500
 // and the start gate share one read of the store within this time.
 const watchTTL = 2 * time.Second
 
+// silentName names the metric of the time without a worker heartbeat.
+const silentName = "dustpan_worker_silent_seconds"
+
 // oldestUnclaimedName names the metric of the oldest unclaimed operation or
 // due schedule.
 const oldestUnclaimedName = "dustpan_oldest_unclaimed_operation_age_seconds"
 
-// workerWatch reads the durable store to tell whether a worker claims work.
-// It also records when this process last asked the store for a claim.
+// workerWatch tells whether a worker runs. A worker records a heartbeat in
+// the store each time it claims or renews a claim, at most once in a quarter
+// of the lease period. Every time that the watch compares comes from the
+// clock of the store, so the clock of an api process, which may differ,
+// never moves a result. The clock of this process serves only to rate-limit
+// the heartbeat, to keep the report cache and to time the claim loop of this
+// process.
 type workerWatch struct {
 	store      DurableStore
 	specs      func() []durable.ScheduleSpec
 	lease      time.Duration
 	pollEvery  time.Duration
 	components Components
+	owner      string
+	logger     *slog.Logger
 	now        func() time.Time
 
+	// lastActive and lastBeat are times of the clock of this process in Unix
+	// nanoseconds. lastBeat is 0 before the first heartbeat.
 	lastActive atomic.Int64
+	lastBeat   atomic.Int64
 
 	mu       sync.Mutex
 	cached   server.WorkerReport
 	cachedAt time.Time
 	cachedOK bool
+	// watchedFrom is the time of the store when this process began to watch.
+	// A worker that never beat counts as silent from then on, so a start
+	// right after the process began is never a missing worker.
+	watchedFrom time.Time
 }
 
 // newWorkerWatch builds the watch of cfg. The claim loop counts as running
 // from the start of the process.
 func newWorkerWatch(cfg *settings) *workerWatch {
 	w := &workerWatch{
-		store:      cfg.durableStore,
-		specs:      func() []durable.ScheduleSpec { return nil },
-		lease:      cfg.operationLease,
-		pollEvery:  durable.DefaultPollEvery,
-		components: cfg.components,
-		now:        cfg.now,
-		lastActive: atomic.Int64{},
-		mu:         sync.Mutex{},
-		cached:     emptyReport(),
-		cachedAt:   time.Time{},
-		cachedOK:   false,
+		store:       cfg.durableStore,
+		specs:       func() []durable.ScheduleSpec { return nil },
+		lease:       cfg.operationLease,
+		pollEvery:   durable.DefaultPollEvery,
+		components:  cfg.components,
+		owner:       cfg.instanceID,
+		logger:      cfg.logger,
+		now:         cfg.now,
+		lastActive:  atomic.Int64{},
+		lastBeat:    atomic.Int64{},
+		mu:          sync.Mutex{},
+		cached:      emptyReport(),
+		cachedAt:    time.Time{},
+		cachedOK:    false,
+		watchedFrom: time.Time{},
 	}
 
 	w.touch()
@@ -85,6 +108,10 @@ func registerWatchMetrics(registry *metrics.Registry, w *workerWatch) {
 		return
 	}
 
+	registry.RegisterFunc(silentName,
+		"Seconds since a worker last claimed or renewed a claim, on the clock of the store.",
+		w.silent)
+
 	registry.RegisterFunc(oldestUnclaimedName,
 		"Seconds that the oldest unclaimed durable operation or due schedule waits, 0 when none waits.",
 		w.oldestUnclaimed)
@@ -94,6 +121,7 @@ func registerWatchMetrics(registry *metrics.Registry, w *workerWatch) {
 func emptyReport() server.WorkerReport {
 	return server.WorkerReport{
 		LeaseSeconds:           0,
+		SilentSeconds:          0,
 		OldestUnclaimedSeconds: 0,
 		Stuck:                  false,
 		Operations:             nil,
@@ -142,6 +170,15 @@ func (w *workerWatch) AdmitStart(ctx context.Context) error {
 	return fmt.Errorf("%w for more than %d lease periods", server.ErrNoWorker, stuckLeases)
 }
 
+// attach gives the watch what it reads from the server, which exists after
+// the watch, and registers its metrics in registry.
+func (w *workerWatch) attach(srv *Server, registry *metrics.Registry) {
+	w.specs = srv.jobSchedules
+	w.owner = srv.durableOwner
+
+	registerWatchMetrics(registry, w)
+}
+
 // touch records that this process asked the store for work now.
 func (w *workerWatch) touch() {
 	w.lastActive.Store(w.now().UnixNano())
@@ -171,9 +208,36 @@ func (w *workerWatch) claimLoopRan() bool {
 	return w.now().Sub(last) <= 2*interval
 }
 
-// read reads the unclaimed operations and the due schedules. An operation is
-// unclaimed when it is pending past its not-before time, or running with an
-// expired claim.
+// begin records the time of the store at which this process began to watch.
+// A failed read leaves it unset: the first report sets it.
+func (w *workerWatch) begin(ctx context.Context) {
+	if w.store == nil {
+		return
+	}
+
+	beat, err := w.store.LastBeat(ctx)
+	if err != nil {
+		return
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.setWatchedFrom(beat.Now)
+}
+
+// setWatchedFrom keeps the first time that it gets. The caller holds w.mu.
+func (w *workerWatch) setWatchedFrom(at time.Time) {
+	if w.watchedFrom.IsZero() {
+		w.watchedFrom = at
+	}
+}
+
+// read reads the last heartbeat, the unclaimed operations and the due
+// schedules. A worker counts as stuck when no worker claimed or renewed a
+// claim for more than 2 lease periods. The unclaimed work is information
+// only: a schedule that old workers do not know, or one long job, leaves
+// work unclaimed while the workers are alive. The caller holds w.mu.
 func (w *workerWatch) read(ctx context.Context) (server.WorkerReport, error) {
 	report := emptyReport()
 	report.LeaseSeconds = w.leasePeriod().Seconds()
@@ -182,7 +246,22 @@ func (w *workerWatch) read(ctx context.Context) (server.WorkerReport, error) {
 		return report, nil
 	}
 
-	if err := w.readOperations(ctx, &report); err != nil {
+	beat, err := w.store.LastBeat(ctx)
+	if err != nil {
+		return emptyReport(), fmt.Errorf("read worker heartbeat: %w", err)
+	}
+
+	w.setWatchedFrom(beat.Now)
+
+	silentFrom := w.watchedFrom
+	if beat.At.After(silentFrom) {
+		silentFrom = beat.At
+	}
+
+	report.SilentSeconds = max(beat.Now.Sub(silentFrom), 0).Seconds()
+	report.Stuck = report.SilentSeconds > (stuckLeases * w.leasePeriod()).Seconds()
+
+	if err := w.readOperations(ctx, &report, beat.Now); err != nil {
 		return emptyReport(), err
 	}
 
@@ -190,16 +269,13 @@ func (w *workerWatch) read(ctx context.Context) (server.WorkerReport, error) {
 		return emptyReport(), err
 	}
 
-	report.Stuck = report.OldestUnclaimedSeconds > (stuckLeases * w.leasePeriod()).Seconds()
-
 	return report, nil
 }
 
 // readOperations adds the unclaimed operations to report. It lists only
 // those that wait longer than 2 lease periods, and counts all of them in the
-// oldest age.
-func (w *workerWatch) readOperations(ctx context.Context, report *server.WorkerReport) error {
-	now := w.now()
+// oldest age. now is the time of the store.
+func (w *workerWatch) readOperations(ctx context.Context, report *server.WorkerReport, now time.Time) error {
 	limit := stuckLeases * w.leasePeriod()
 
 	ops, err := w.store.List(ctx, durable.Filter{
@@ -230,7 +306,8 @@ func (w *workerWatch) readOperations(ctx context.Context, report *server.WorkerR
 	return nil
 }
 
-// readSchedules adds the due schedules to report.
+// readSchedules adds the due schedules to report. The schedule carries the
+// time of the store.
 func (w *workerWatch) readSchedules(ctx context.Context, report *server.WorkerReport) error {
 	for _, spec := range w.specs() {
 		sched, err := w.store.GetSchedule(ctx, spec.Name)
@@ -252,6 +329,53 @@ func (w *workerWatch) readSchedules(ctx context.Context, report *server.WorkerRe
 	}
 
 	return nil
+}
+
+// beatIfDue records a heartbeat in the store when none went out in the last
+// quarter of the lease period. A failed write is logged and tried again at
+// the next claim: a missing heartbeat never stops a claim.
+func (w *workerWatch) beatIfDue(ctx context.Context) {
+	if w.store == nil {
+		return
+	}
+
+	nowNs := w.now().UnixNano()
+	last := w.lastBeat.Load()
+
+	if last != 0 && nowNs-last < int64(w.leasePeriod()/heartbeatDivisor) {
+		return
+	}
+
+	if !w.lastBeat.CompareAndSwap(last, nowNs) {
+		return
+	}
+
+	if err := w.store.Beat(ctx, w.owner); err != nil {
+		w.lastBeat.Store(last)
+
+		if ctx.Err() == nil {
+			w.logger.WarnContext(ctx, "worker heartbeat failed", slog.String("error", err.Error()))
+		}
+	}
+}
+
+// heartbeatDivisor makes the heartbeat period a quarter of the lease period,
+// so that a worker beats about 8 times before an api process counts it
+// absent.
+const heartbeatDivisor = 4
+
+// silent returns the metric value: seconds without a worker heartbeat, or 0
+// when a read fails.
+func (w *workerWatch) silent() float64 {
+	ctx, cancel := context.WithTimeout(context.Background(), readinessTimeout)
+	defer cancel()
+
+	report, err := w.WorkerReport(ctx)
+	if err != nil {
+		return 0
+	}
+
+	return report.SilentSeconds
 }
 
 // oldestUnclaimed returns the metric value: seconds that the oldest
@@ -288,7 +412,8 @@ func unclaimedSince(op *durable.Operation, now time.Time) (time.Time, bool) {
 }
 
 // trackingStore wraps the durable store of the worker and records each
-// claim and each renewal as a sign that the claim loop runs.
+// claim and each renewal as a sign that the claim loop runs, in this process
+// and, as a heartbeat, in the store.
 type trackingStore struct {
 	DurableStore
 
@@ -298,6 +423,7 @@ type trackingStore struct {
 // Claim records the attempt and claims through the wrapped store.
 func (t trackingStore) Claim(ctx context.Context, req durable.ClaimRequest) (durable.Operation, error) {
 	t.watch.touch()
+	t.watch.beatIfDue(ctx)
 
 	op, err := t.DurableStore.Claim(ctx, req)
 	if err != nil {
@@ -310,6 +436,7 @@ func (t trackingStore) Claim(ctx context.Context, req durable.ClaimRequest) (dur
 // Extend records the renewal and extends through the wrapped store.
 func (t trackingStore) Extend(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
 	t.watch.touch()
+	t.watch.beatIfDue(ctx)
 
 	claim, err := t.DurableStore.Extend(ctx, c, lease)
 	if err != nil {

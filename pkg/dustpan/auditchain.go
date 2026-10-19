@@ -591,15 +591,20 @@ func (c *auditChain) startUp(ctx context.Context) error {
 // continues the migration, and the start sets no wait of its own while it
 // runs.
 func (c *auditChain) startUpRecord(ctx context.Context) (audit.ChainRecord, error) {
-	drainCtx, cancel := context.WithTimeout(ctx, auditChainDrainTimeout)
-	defer cancel()
+	// A process without the worker component claims no durable operation,
+	// also not at start. It reads the stored record, and a worker process
+	// continues a migration that an earlier instance left.
+	if c.runsMigrations {
+		drainCtx, cancel := context.WithTimeout(ctx, auditChainDrainTimeout)
+		defer cancel()
 
-	if err := c.drainMigrations(drainCtx); err != nil {
-		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(drainCtx.Err(), context.DeadlineExceeded) {
-			return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+		if err := c.drainMigrations(drainCtx); err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(drainCtx.Err(), context.DeadlineExceeded) {
+				return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+			}
+
+			c.logger.WarnContext(ctx, "audit chain drain timed out; the background runner continues the migration")
 		}
-
-		c.logger.WarnContext(ctx, "audit chain drain timed out; the background runner continues the migration")
 	}
 
 	rec, err := c.store.ChainRecord(ctx)

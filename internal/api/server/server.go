@@ -118,7 +118,7 @@ type Config struct {
 	AuditSinks AuditSinkSource
 	// Workers reports the components of the process and the state of the
 	// worker, and refuses the start of a durable operation when no worker
-	// claimed work. Nil means no refusal and an empty report.
+	// claimed or renewed a claim. Nil means no refusal and an empty report.
 	Workers WorkerSource
 	// SignIn is the console sign-in through OpenID Connect providers. Nil
 	// means no sign-in: the sign-in routes are not mounted, and the

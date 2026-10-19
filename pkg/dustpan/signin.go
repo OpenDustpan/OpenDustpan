@@ -242,9 +242,11 @@ func bindingOf(cfg *settings, signIn *serverapi.SignIn) providerBinding {
 
 // bindSignInProviders binds each provider of the console sign-in to its
 // issuer, and refuses the start when the issuer of a provider ID changed:
-// the subject of a person holds the provider ID, not the issuer.
+// the subject of a person holds the provider ID, not the issuer. Only the api
+// component serves the console sign-in, so a process without it binds
+// nothing and never stops at a bound issuer that changed.
 func (s *Server) bindSignInProviders(ctx context.Context) error {
-	if s.signInProviders.store == nil {
+	if s.signInProviders.store == nil || !s.components.Has(ComponentAPI) {
 		return nil
 	}
 

@@ -26,15 +26,18 @@ func TestUnreadFlags(t *testing.T) {
 
 	resolved := []cli.Resolved{
 		resolvedFrom("console-dir", cli.SourceFlag),
-		resolvedFrom("audit-sink", cli.SourceEnv),
+		resolvedFrom("oidc-issuer", cli.SourceEnv),
 		resolvedFrom("listen", cli.SourceFlag),
 		resolvedFrom("max-state-bytes", cli.SourceDefault),
 	}
 
 	cases := []unreadCase{
 		{name: "all read everything", selected: []string{cli.ComponentAPI, cli.ComponentWorker}, want: nil},
-		{name: "worker ignores the api flags", selected: []string{cli.ComponentWorker}, want: []string{"console-dir"}},
-		{name: "api ignores the worker flags", selected: []string{cli.ComponentAPI}, want: []string{"audit-sink"}},
+		{
+			name: "worker ignores the api flags", selected: []string{cli.ComponentWorker},
+			want: []string{"console-dir", "oidc-issuer"},
+		},
+		{name: "api reads every flag in the table", selected: []string{cli.ComponentAPI}, want: nil},
 	}
 
 	for _, tc := range cases {

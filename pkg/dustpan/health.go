@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -48,18 +49,29 @@ type readiness struct {
 const (
 	checkStore        = "store"
 	checkBlob         = "blob"
-	checkAuditChain   = "audit-chain"
 	checkClaimLoop    = "claim-loop"
+	infoAuditChain    = "audit-chain"
+	chainAdmits       = "admits"
+	chainWaits        = "waiting"
 	statusOK          = "ok"
 	statusUnavailable = "unavailable"
 )
 
 // componentChecks are the checks of one component. The pings run with the
-// timeout of the probe. The tests are cheap checks of the process state.
+// timeout of the probe. The tests are cheap checks of the process state. The
+// infos only report state: they never make the probe answer 503.
 type componentChecks struct {
 	name  Component
 	pings []readinessCheck
 	tests []stateCheck
+	infos []stateInfo
+}
+
+// stateInfo is a named state of the process that the readiness body reports
+// and that never fails the probe.
+type stateInfo struct {
+	name  string
+	value func(ctx context.Context) string
 }
 
 // stateCheck is a named check that reads state in the process.
@@ -101,9 +113,12 @@ func newReadinessHandler(
 // newComponentReadiness returns the readiness probe over the components of
 // the process. GET /health/ready answers for all of them and lists each.
 // GET /health/ready/{component} answers for one. Every component pings the
-// store; the api component also pings the blob store and checks that the
-// audit chain admits requests; the worker component also checks that its
-// claim loop ran in the last 2 claim intervals.
+// store; the api component also pings the blob store; the worker component also checks that its
+// claim loop ran in the last 2 claim intervals. The state of the audit chain
+// gate is information in the body of the api component and never makes the
+// probe answer 503: while a change of the chain waits for approval, the
+// installation stays in maintenance mode and the approval needs the api
+// processes to stay in the pool of the Service.
 func newComponentReadiness(cfg readinessSettings) *readiness {
 	rd := &readiness{
 		checks: nil, timeout: cfg.timeout, failures: cfg.failures, logger: cfg.logger, parts: nil,
@@ -114,9 +129,16 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 			name:  ComponentAPI,
 			pings: []readinessCheck{{name: checkStore, ping: cfg.store}, {name: checkBlob, ping: cfg.blobs}},
 			tests: nil,
+			infos: nil,
 		}
 		if cfg.chainAdmits != nil {
-			part.tests = append(part.tests, stateCheck{name: checkAuditChain, ok: cfg.chainAdmits})
+			part.infos = append(part.infos, stateInfo{name: infoAuditChain, value: func(ctx context.Context) string {
+				if cfg.chainAdmits(ctx) {
+					return chainAdmits
+				}
+
+				return chainWaits
+			}})
 		}
 
 		rd.parts = append(rd.parts, part)
@@ -129,6 +151,7 @@ func newComponentReadiness(cfg readinessSettings) *readiness {
 			tests: []stateCheck{
 				{name: checkClaimLoop, ok: func(context.Context) bool { return cfg.watch.claimLoopRan() }},
 			},
+			infos: nil,
 		})
 	}
 
@@ -180,14 +203,20 @@ type readinessDoc struct {
 
 // componentDoc is the state of one component in the readiness body.
 type componentDoc struct {
-	Name   Component `json:"name"`
-	Status string    `json:"status"`
-	Failed []string  `json:"failed,omitempty"`
+	Name   Component         `json:"name"`
+	Status string            `json:"status"`
+	Failed []string          `json:"failed,omitempty"`
+	Info   map[string]string `json:"info,omitempty"`
 }
 
-// componentsDoc is the readiness body of a process with components.
+// componentsDoc is the readiness body of a process with components. Status
+// and Failed keep the meaning that they have in readinessDoc: Failed names
+// the checks that failed in any component, and stays absent when all pass.
+// Components is the list of the components of the process with the state of
+// each.
 type componentsDoc struct {
 	Status     string         `json:"status"`
+	Failed     []string       `json:"failed,omitempty"`
 	Components []componentDoc `json:"components"`
 }
 
@@ -202,12 +231,18 @@ func (rd *readiness) writeJSON(ctx context.Context, w http.ResponseWriter, statu
 
 // serveComponents answers for the components in parts.
 func (rd *readiness) serveComponents(w http.ResponseWriter, r *http.Request, parts []componentChecks) {
-	doc := componentsDoc{Status: statusOK, Components: make([]componentDoc, 0, len(parts))}
+	doc := componentsDoc{Status: statusOK, Failed: nil, Components: make([]componentDoc, 0, len(parts))}
 
 	for _, part := range parts {
 		state := rd.run(r.Context(), part)
 		if state.Status != statusOK {
 			doc.Status = statusUnavailable
+		}
+
+		for _, name := range state.Failed {
+			if !slices.Contains(doc.Failed, name) {
+				doc.Failed = append(doc.Failed, name)
+			}
 		}
 
 		doc.Components = append(doc.Components, state)
@@ -233,11 +268,20 @@ func (rd *readiness) run(ctx context.Context, part componentChecks) componentDoc
 		}
 	}
 
-	if len(failed) == 0 {
-		return componentDoc{Name: part.name, Status: statusOK, Failed: nil}
+	var info map[string]string
+
+	if len(part.infos) > 0 {
+		info = make(map[string]string, len(part.infos))
+		for _, item := range part.infos {
+			info[item.name] = item.value(ctx)
+		}
 	}
 
-	return componentDoc{Name: part.name, Status: statusUnavailable, Failed: failed}
+	if len(failed) == 0 {
+		return componentDoc{Name: part.name, Status: statusOK, Failed: nil, Info: info}
+	}
+
+	return componentDoc{Name: part.name, Status: statusUnavailable, Failed: failed, Info: info}
 }
 
 // pingAll pings every check with its own timeout and returns the names of the

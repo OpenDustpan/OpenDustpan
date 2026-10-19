@@ -10,11 +10,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 )
 
-// DurableStore keeps the durable operations and the job schedules. Both SQL
-// adapters serve it from the same database connection as the other ports.
+// DurableStore keeps the durable operations, the job schedules and the
+// heartbeats of the workers. Both SQL adapters serve it from the same
+// database connection as the other ports.
 type DurableStore interface {
 	durable.Store
 	durable.ScheduleStore
+	durable.HeartbeatStore
 }
 
 // WithDurableStore sets the store of the durable job schedules. With it the

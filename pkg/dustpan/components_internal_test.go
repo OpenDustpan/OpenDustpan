@@ -2,14 +2,13 @@ package dustpan
 
 import (
 	"context"
-	"errors"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -40,17 +39,21 @@ func workerOnly() Components { return Components{api: false, worker: true} }
 // newTestWatch returns a watch over store with the given clock.
 func newTestWatch(store DurableStore, set Components, lease time.Duration, now func() time.Time) *workerWatch {
 	return &workerWatch{
-		store:      store,
-		specs:      func() []durable.ScheduleSpec { return nil },
-		lease:      lease,
-		pollEvery:  time.Second,
-		components: set,
-		now:        now,
-		lastActive: atomic.Int64{},
-		mu:         sync.Mutex{},
-		cached:     emptyReport(),
-		cachedAt:   time.Time{},
-		cachedOK:   false,
+		store:       store,
+		specs:       func() []durable.ScheduleSpec { return nil },
+		lease:       lease,
+		pollEvery:   time.Second,
+		components:  set,
+		owner:       "test-" + time.Now().Format("150405.000000"),
+		logger:      slog.New(slog.DiscardHandler),
+		now:         now,
+		lastActive:  atomic.Int64{},
+		lastBeat:    atomic.Int64{},
+		mu:          sync.Mutex{},
+		cached:      emptyReport(),
+		cachedAt:    time.Time{},
+		cachedOK:    false,
+		watchedFrom: time.Time{},
 	}
 }
 
@@ -197,60 +200,6 @@ func TestUnclaimedSince(t *testing.T) {
 			got, ok := unclaimedSince(&tc.op, now)
 			if ok != tc.ok || (ok && !got.Equal(tc.want)) {
 				t.Fatalf("unclaimedSince = %v, %v; want %v, %v", got, ok, tc.want, tc.ok)
-			}
-		})
-	}
-}
-
-// admitCase is one case of TestAdmitStart.
-type admitCase struct {
-	name    string
-	set     Components
-	elapsed time.Duration
-	wantErr bool
-}
-
-// TestAdmitStart proves the start gate on a fake clock and a store that holds
-// one old pending operation.
-func TestAdmitStart(t *testing.T) {
-	t.Parallel()
-
-	st := openTestStore(t)
-
-	_, _, err := st.DurableOperations().Start(t.Context(), durable.StartRequest{
-		Key: "k", Kind: "any", Version: 0, Input: nil,
-	})
-	if err != nil {
-		t.Fatalf("start operation: %v", err)
-	}
-
-	created := time.Now()
-	lease := time.Second
-
-	cases := []admitCase{
-		{name: "api within 2 leases", set: apiOnly(), elapsed: lease, wantErr: false},
-		{name: "api past 2 leases", set: apiOnly(), elapsed: 3 * lease, wantErr: true},
-		{name: "all past 2 leases", set: AllComponents(), elapsed: 3 * lease, wantErr: false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			w := newTestWatch(
-				st.DurableOperations(),
-				tc.set,
-				lease,
-				func() time.Time { return created.Add(tc.elapsed) },
-			)
-
-			admitErr := w.AdmitStart(t.Context())
-			if tc.wantErr != (admitErr != nil) {
-				t.Fatalf("AdmitStart = %v, want error = %v", admitErr, tc.wantErr)
-			}
-
-			if tc.wantErr && !errors.Is(admitErr, server.ErrNoWorker) {
-				t.Fatalf("AdmitStart = %v, want ErrNoWorker", admitErr)
 			}
 		})
 	}

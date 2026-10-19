@@ -9,12 +9,12 @@ import (
 )
 
 // ErrNoWorker reports a request that starts a durable operation while no
-// worker claimed work for 2 lease periods. The request answers 503.
+// worker claimed or renewed a claim for 2 lease periods. The request answers 503.
 var ErrNoWorker = errors.New("no worker claimed work")
 
 // noWorkerMessage is the answer to a request that ErrNoWorker refuses. It
 // names the command that helps.
-const noWorkerMessage = "no worker claimed work for 2 lease periods: " +
+const noWorkerMessage = "no worker claimed or renewed a claim for 2 lease periods: " +
 	"start a worker with opendustpan serve --components worker"
 
 // UnclaimedOperation is a durable operation that no worker holds. Seconds is
@@ -34,10 +34,15 @@ type DueSchedule struct {
 }
 
 // WorkerReport is what the installation API reports about the worker
-// component: each due schedule and each unclaimed operation older than 2
-// lease periods.
+// component: the time since the last worker heartbeat, each due schedule and
+// each unclaimed operation older than 2 lease periods. Stuck is true when no
+// worker claimed or renewed a claim for more than 2 lease periods. The due
+// schedules and the unclaimed operations are information only.
 type WorkerReport struct {
-	LeaseSeconds           float64
+	LeaseSeconds float64
+	// SilentSeconds is the time since a worker last claimed or renewed a
+	// claim, on the clock of the store.
+	SilentSeconds          float64
 	OldestUnclaimedSeconds float64
 	Stuck                  bool
 	Operations             []UnclaimedOperation
@@ -52,8 +57,8 @@ type WorkerSource interface {
 	// WorkerReport answers the due schedules and the unclaimed operations.
 	WorkerReport(ctx context.Context) (WorkerReport, error)
 	// AdmitStart answers nil when a request may start a durable operation,
-	// and an error wrapping ErrNoWorker when no worker claimed work for 2
-	// lease periods.
+	// and an error wrapping ErrNoWorker when no worker claimed or renewed a
+	// claim for 2 lease periods.
 	AdmitStart(ctx context.Context) error
 }
 
@@ -98,6 +103,7 @@ type dueScheduleJSON struct {
 type workerResponse struct {
 	Components             []string                 `json:"components"`
 	LeaseSeconds           float64                  `json:"leaseSeconds"`
+	SilentSeconds          float64                  `json:"silentSeconds"`
 	OldestUnclaimedSeconds float64                  `json:"oldestUnclaimedSeconds"`
 	Stuck                  bool                     `json:"stuck"`
 	Operations             []unclaimedOperationJSON `json:"operations"`
@@ -144,7 +150,7 @@ func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request, _ identity.P
 	ctx := r.Context()
 
 	body := workerResponse{
-		Components: []string{}, LeaseSeconds: 0, OldestUnclaimedSeconds: 0, Stuck: false,
+		Components: []string{}, LeaseSeconds: 0, SilentSeconds: 0, OldestUnclaimedSeconds: 0, Stuck: false,
 		Operations: []unclaimedOperationJSON{}, Schedules: []dueScheduleJSON{},
 	}
 
@@ -158,6 +164,7 @@ func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request, _ identity.P
 
 		body.Components = h.workers.Components()
 		body.LeaseSeconds = report.LeaseSeconds
+		body.SilentSeconds = report.SilentSeconds
 		body.OldestUnclaimedSeconds = report.OldestUnclaimedSeconds
 		body.Stuck = report.Stuck
 

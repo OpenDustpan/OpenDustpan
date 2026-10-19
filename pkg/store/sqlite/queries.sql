@@ -2156,6 +2156,19 @@ SET next_run_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER) + interval_ms,
 WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
     AND next_run_at_ms <= CAST(sqlc.arg('now_ms') AS INTEGER);
 
+-- Durable heartbeats. Every time comes from DatabaseNowMs, the clock of the
+-- store, read in the transaction of the write.
+
+-- name: UpsertDurableHeartbeat :exec
+INSERT INTO durable_heartbeats (owner, at_ms) VALUES (sqlc.arg('owner'), sqlc.arg('now_ms'))
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms;
+
+-- name: DeleteStaleDurableHeartbeats :exec
+DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms');
+
+-- name: GetLatestDurableHeartbeat :one
+SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1;
+
 -- Sign-in failure budget. The upsert is one atomic write, so concurrent adds
 -- each count once. The window comes from DatabaseNowMs, the clock of the
 -- store, read in the same transaction as the write, so the clock of an
