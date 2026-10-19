@@ -12,7 +12,7 @@ func portableProfileTables() []PortableTable {
 				{Name: "id", Kind: KindText},
 				{Name: "name", Kind: KindText},
 				{Name: "latest", Kind: KindInteger},
-				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: "updated_at_ms", Kind: KindTime},
 				{Name: "deleted_at_ms", Kind: KindTime},

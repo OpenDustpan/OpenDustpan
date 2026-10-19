@@ -120,6 +120,9 @@ var Tables = []string{
 	"imports_purged",
 	"import_units",
 	"import_ledger",
+	"runner_pools",
+	"runner_join_tokens",
+	"runners",
 	"profiles",
 	"profile_revisions",
 }

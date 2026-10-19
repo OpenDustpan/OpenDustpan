@@ -35,6 +35,10 @@ var ControlTables = []string{
 	TableBackups,
 	TableRestores,
 	TableInstallation,
+	"runner_claims",
+	"runner_handoff_tokens",
+	"runner_sessions",
+	"runner_nonces",
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

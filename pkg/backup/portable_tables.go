@@ -155,7 +155,7 @@ func portableSpec() []PortableTable {
 				{Name: portColUpdateID, Kind: KindText},
 				{Name: portColArrival, Kind: KindInteger},
 				{Name: "blob_key", Kind: KindText},
-				{Name: "sha256", Kind: KindBytes},
+				{Name: portColSHA256, Kind: KindBytes},
 				{Name: "md5", Kind: KindBytes},
 				{Name: portColSize, Kind: KindInteger},
 				{Name: "lowest_sequence", Kind: KindInteger},
@@ -171,7 +171,7 @@ func portableSpec() []PortableTable {
 				{Name: portColUpdateID, Kind: KindText},
 				{Name: portColSequence, Kind: KindInteger},
 				{Name: portColArrival, Kind: KindInteger},
-				{Name: "sha256", Kind: KindBytes},
+				{Name: portColSHA256, Kind: KindBytes},
 			},
 		},
 		{
@@ -533,7 +533,7 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColExpiresAtMs, Kind: KindTime},
 				{Name: "last_used_at_ms", Kind: KindTime},
-				{Name: "revoked_at_ms", Kind: KindTime},
+				{Name: portColRevokedAtMs, Kind: KindTime},
 				{Name: "replaced_by", Kind: KindText},
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColDisabledAtMs, Kind: KindTime},
@@ -644,7 +644,7 @@ func portableSpec() []PortableTable {
 				{Name: "condition", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColCreatedBy, Kind: KindText},
-				{Name: "revoked_at_ms", Kind: KindTime},
+				{Name: portColRevokedAtMs, Kind: KindTime},
 				{Name: "revoked_by", Kind: KindText},
 			},
 		},
@@ -693,5 +693,5 @@ func portableSpec() []PortableTable {
 		},
 	}
 
-	return slices.Concat(core, portableImportTables(), portableProfileTables())
+	return slices.Concat(core, portableImportTables(), portableRunnerTables(), portableProfileTables())
 }
