@@ -200,6 +200,8 @@ If a check looks redundant, keep it, and give it a comment. The comment says tha
 
 A security change is not done without a test for each step and a comment on each redundant check.
 
+Never print, echo, log or copy the environment or a secret. Do not use `env`, `printenv`, `set` or `cat /proc/*/environ`. Do not use a command that writes a secret to the output. Do not write a secret to a file in the repository, a commit, a pull request, an issue or a message. Read a variable by its name only, for example to check that it is set. To get a test database, start your own local PostgreSQL. If a secret is printed by mistake, stop and report it to the PM, so that the owner can rotate it.
+
 ## Voice (UI text, errors, docs)
 
 Exact, short, calm. Sentence case. Name the thing and the number. Errors say
