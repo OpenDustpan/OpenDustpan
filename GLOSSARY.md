@@ -77,7 +77,7 @@ The source kind `upload`. A client sends each version of a unit to the import, o
 _Avoid_: Manual import, push
 
 **Import unit**:
-One unit that an import moves, with its source unit, its target name, its state and its ledger (`unitimport.ImportUnit`, ADR 241 decision 7).
+One unit that an import moves, with its source unit, its target name, its state and its ledger (`unitimport.ImportUnit`, ADR 241 decision 7). A failed import unit with committed versions is partial. A release soft-deletes a failed or partial target unit.
 _Avoid_: Import item, import task
 
 **Import ledger**:
@@ -89,7 +89,7 @@ The result of the dry run of an import (ADR 241 decision 8). It gives each unit 
 _Avoid_: Plan (alone), preview (alone)
 
 **Import hold**:
-The manual lock that an import puts on each target unit (ADR 241 decision 12). It starts at the create of the unit and ends at the release or the cancel of the import. While it holds a unit, only the import writes state, and a Pulumi preview can still run (ADR 244 decision 12).
+The manual lock that an import puts on each target unit (ADR 241 decision 12). It starts at the create of the unit and ends at the release or the cancel of the import. Only the release or the cancel ends it. While it holds a unit, only the import writes state. Each other route that writes state, renames or deletes the unit answers 423. A Pulumi preview can still run (ADR 244 decision 12).
 _Avoid_: Import lock, freeze
 
 **Move check**:

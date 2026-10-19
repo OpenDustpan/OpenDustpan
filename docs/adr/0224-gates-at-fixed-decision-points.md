@@ -1,6 +1,6 @@
 # 224. Gates at fixed decision points
 
-Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 17 ("A policy check on every change"). Supersedes ADR 103 decision 1, ADR 112 decisions 6 and 7, and ADR 113 decisions 8 and 9 in part. Supersedes ADR 114, except decision 4 and the request signature of decision 8. Supersedes the `expr` rules of ADR 115 decision 2, and ADR 201 decision 11
+Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 17 ("A policy check on every change"). Supersedes ADR 103 decision 1, ADR 112 decisions 6 and 7, and ADR 113 decisions 8 and 9 in part. Supersedes ADR 114, except decision 4 and the request signature of decision 8. Supersedes the `expr` rules of ADR 115 decision 2, and ADR 201 decision 11. Decision 16 extended by ADR 241
 
 ## Context
 

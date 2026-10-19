@@ -1,6 +1,6 @@
 # 244. The move check, the guide pages and the e2e steps
 
-Status: accepted · 2026-10-19. Part of ADR 241. Extends ADR 213 decision 10. Answers part of RFC 66
+Status: accepted · 2026-10-19. Part of ADR 241. Supersedes in part ADR 213 decision 10. Extends ADR 29 decision 6. Accepts RFC 81 question 4. Answers part of RFC 66
 
 ## Context
 
@@ -41,7 +41,11 @@ Facts:
    one move check of the scope namespace when it goes to `holding`. A person
    can also make one at any time, for example for a unit that the CLI path of
    the guide moved. A move check without an import needs a source and a
-   credential, with the rules of ADR 241 decision 4.
+   credential, with the rules of ADR 241 decisions 4 and 6: the address
+   holds no userinfo, no query and no fragment
+   (`import.address-invalid`), its host matches the login block of the
+   profile (`import.source-address-mismatch`), and the principal has
+   `profile:open` on the profile.
 
    Benchmark: `tfmigrate plan` runs a plan after the change of state and
    fails when the plan has changes. GitLab shows the result of each relation
@@ -53,8 +57,10 @@ Facts:
    from the source bytes and from the latest target item:
    - **Pulumi CLI:** the masked digest (the SHA-256 of the deployment in
      canonical JSON, with each secret value replaced by the marker of its
-     value path, as in ADR 41 decision 2), the count of resources, the count
-     of secret values and the secrets provider.
+     value path, as in ADR 41 decision 2, and with no
+     `secrets_providers.state`, which the import rewrites, ADR 242 decision
+     8), the count of resources, the count of secret values and the
+     secrets provider.
    - **OpenTofu:** the SHA-256 and the MD5 of the bytes, the serial, the
      lineage, the count of resource instances and the names of the outputs.
    - **Client-encrypted OpenTofu state:** the SHA-256 and the MD5 of the
@@ -89,7 +95,10 @@ Facts:
      against the target workspace, and sends the `change_summary` message to
      the evidence route. `opendustpan import check --plan` runs the command
      and sends the message. The report says "reported by the client",
-     because the server did not see the plan.
+     because the server did not see the plan. A client can forge a report,
+     and a forced release (decision 11) can follow a `pending` check. The
+     report labels the evidence, and `move-check.md` says that a client
+     report is the claim of the person who sent it.
    - **A plan job.** When the unit has a code location and a runner pool
      (ADR 100), the person can ask the check to start a plan job. A job
      with no change passes the step (ADR 213 decision 3).
@@ -107,7 +116,7 @@ Facts:
    | `carry.client-encryption` | warning | the state is client-encrypted (ADR 242 decision 14) |
    | `carry.reference` | error | the state reads another unit (a Pulumi `StackReference` or an OpenTofu `terraform_remote_state`) that is not in the namespace |
    | `carry.not-moved` | warning | the source has a part that ADR 242 lists as lost, for example variables, schedules or team access |
-   | `carry.access` | warning | the target unit has no grant other than the grants of its namespace and collections |
+   | `carry.access` | warning | the target unit has no grant other than the grants of its namespace and collections. The finding names the users and teams of the source where the source gives them, as text (decision 16) |
    | `carry.profile` | warning | the source has variables or config, and the target unit has no profile attachment (ADR 203) |
    | `carry.terraform-version` | warning | ADR 242 decision 15 |
 
@@ -118,7 +127,9 @@ Facts:
    list of findings is code in `pkg/unitimport`. A test lists each table of
    the backup table list (`backup.Tables`) that holds a unit ID, and fails
    when the table has no finding and no entry in an explicit list of tables
-   that need none. So a new feature that binds to a unit cannot ship
+   that need none. The import tables `imports`, `import_units` and
+   `import_ledger` (ADR 241 decision 25) are on that list: they record the
+   move itself, and the ledger rows stay with the unit. So a new feature that binds to a unit cannot ship
    without a decision on the move check.
 
    Benchmark: the route test of ADR 17, which fails for a route with no
@@ -166,6 +177,11 @@ Facts:
     | `POST move-checks/{id}/evidence` | `movecheck:run` |
     | `POST move-checks/{id}/plan-jobs` | `movecheck:run` and `unit:run-plan` |
     | `POST move-checks/{id}/rerun` | `movecheck:run` |
+
+    The declaration of `POST move-checks` and `POST move-checks/{id}/rerun`
+    says that their body can hold a credential (ADR 241 decision 21). The
+    canary test covers both routes. Their idempotency record holds a keyed
+    hash of the body without its credential field.
 11. **A release needs a passed check, unless forced (product manager).** A
     `release` of an import (ADR 241 decision 15) answers 409 with the error
     code `import.check-not-passed` when the latest move check of the import
@@ -175,7 +191,8 @@ Facts:
 
     Benchmark: a `tfmigrate` migration fails when the plan has changes,
     unless the migration file sets `force`.
-12. **A preview under the import lock (extends ADR 213 decision 10).** While
+12. **A preview under the import hold (supersedes in part ADR 213 decision
+    10).** While
     the manual lock of an import covers a unit, the Pulumi Cloud-compatible
     API accepts the start of an update of the kind `preview` on that unit
     from a principal with `unit:run-plan`. It refuses every other kind with
@@ -240,8 +257,12 @@ Facts:
        `import.source-denied`. A private source address with no allowlist
        entry fails with `import.source-address-refused`. A stop of the
        instance of an ephemeral credential gives `paused` with
-       `credential-needed`. A target name that exists gives `skipped`. No
-       output, log line or audit entry holds a canary credential.
+       `credential-needed`. A target name that exists gives `skipped`. An
+       address with userinfo fails with `import.address-invalid`. Real
+       `tofu apply -lock=false` with the unlocked override against a unit
+       that the import hold covers gets 423, and the message
+       names the import. No output, log line or audit entry holds a canary
+       credential.
     7. **Namespace check.** Three units, one with a `StackReference` to a
        stack that the import did not move, give one `carry.reference` error
        and two passed units. An import of the third stack, and a `rerun`,
@@ -251,6 +272,21 @@ Facts:
     each with OpenDustpan as the source, an S3-compatible server, the
     OpenTofu `http` backend and the upload. It never says that the suite
     tested Pulumi Cloud, HCP Terraform, Terraform Enterprise or Amazon S3.
+    It says that a source that redirects a download to another host can
+    fail (ADR 243 decision 11), and that an installation behind an outbound
+    proxy imports through the upload source (ADR 241 decision 6).
+
+### Source users and teams
+
+16. **Report only (product manager, RFC 81 question 4).** An import and a
+    move check never map a user or a team of the source to a principal of
+    OpenDustpan, and never apply a grant. The `carry.access` finding names
+    the users and teams of the source as text, where the source gives them.
+    A later decision can add a proposal that an administrator accepts.
+
+    Benchmark: `tfmigrate` moves state only and changes no access. The
+    GitLab importers keep the contributions of a source user on a
+    placeholder user until an owner reassigns them and the user accepts.
 
 ## What this ADR replaces
 
@@ -261,9 +297,10 @@ replaces:
   OpenTofu lock, or the start of a Pulumi update) fails." For the manual
   lock of an import only, the start of a Pulumi update of the kind
   `preview` passes (decision 12).
-- **ADR 29, decision 6:** the checks after an import by hand. The move
-  check of this ADR does them through the API. The guide keeps the checks by
-  hand for the CLI path.
+
+This ADR also extends ADR 29 decision 6, the checks after an import by
+hand. The move check of this ADR does them through the API. The guide keeps
+the checks by hand for the CLI path.
 
 ## Relation to RFC 66
 
@@ -274,9 +311,8 @@ This ADR answers these questions of RFC 66 for an import into OpenDustpan:
 - One unit or a namespace: both, one unit first (decision 1).
 - How the list stays current: decision 7.
 
-It does not answer if the tooling maps a source principal to a target
-principal. Decision 6 only reports a missing grant. RFC 81 holds the
-question.
+- A source principal and a target principal: the tooling reports, and
+  never maps (decision 16).
 
 ## Consequences
 

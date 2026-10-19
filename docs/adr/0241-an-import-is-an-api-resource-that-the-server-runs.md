@@ -1,6 +1,6 @@
 # 241. An import is an API resource that the server runs
 
-Status: accepted · 2026-10-19. ADRs 242 to 244 give the other parts. Supersedes in part ADR 29 decisions 1, 5 and 8. Answers part of RFC 42 and RFC 66. RFC 81 holds the open questions
+Status: accepted · 2026-10-19. ADRs 242 to 244 give the other parts. Supersedes in part ADR 29 decisions 1, 5 and 8, and ADR 213 decision 10. Extends ADR 203 decision 1, ADR 224 decision 16 and ADR 145 decision 5. Answers part of RFC 42 and RFC 66. Accepts RFC 81
 
 ## Context
 
@@ -104,7 +104,12 @@ Facts:
    - **A profile of the namespace.** The import names a profile (ADR 200)
      and the path of a login block in it. At each run step, the server opens
      the profile as a direct open of the consumer `import` (ADR 203), and
-     the open writes its own audit entry. The profile can hold a static
+     the open writes its own audit entry. The consumer `import` behaves like
+     `observe`: the credential never leaves the server, and no open session
+     stores it. The server checks `profile:open` on the profile for the
+     principal of the import at the create, at each `run` and `resume`, and
+     at each claim of the durable operation. A failed check pauses the import
+     with the reason `import.denied`. The profile can hold a static
      token as a sealed secret, or get a short-lived credential through the
      issuer of the namespace (ADR 204), for example a role at a cloud for an
      S3 bucket. With the issuer, no long-lived credential exists anywhere.
@@ -113,6 +118,10 @@ Facts:
      it in memory for that run only. The server never writes it to SQL, to
      the blob store or to any other instance. When the run ends, the
      instance drops it.
+
+   The idempotency record of `run` and `resume` holds a keyed hash of the
+   body without its credential field, so the record holds no part of the
+   credential.
 
    An ephemeral credential and a durable operation do not mix. So an import
    with an ephemeral credential runs only on the instance that took the
@@ -129,9 +138,12 @@ Facts:
    as the first choice. Workload identity federation (ADR 204) follows the
    advice of each large cloud to use short-lived credentials over keys.
 5. **The credential has a type and never prints (product manager).** The
-   Go type of a credential (ADR 243) has no exported field. Its `String`,
-   `GoString` and `LogValue` methods answer `[credential]`, and its JSON
-   encoding fails. The canary test of ADR 32 covers each route of this ADR
+   Go type of a credential (ADR 243) has no exported field. Its `Format`,
+   `String`, `GoString` and `LogValue` methods answer `[credential]`, so
+   every `fmt` verb prints `[credential]`, also `%d`, `%o`, `%b`, `%c` and
+   `%U`. Its JSON and text encodings fail. Its `Clear` method writes zeros
+   over its bytes, as a best effort: a copy that a request made stays in
+   memory until the garbage collector frees it. The canary test of ADR 32 covers each route of this ADR
    and each source adapter.
 
    Benchmark: the `slog.LogValuer` pattern of the Go standard library for
@@ -143,6 +155,44 @@ Facts:
    from public addresses, and the upload source (decision 3) is the way for
    a private source. A refused address fails the dry run with the error
    code `import.source-address-refused` and names the allowlist setting.
+
+   - **The address holds no credential.** The address is an absolute URL
+     with a host. It has no userinfo, no query and no fragment. Else the
+     dry run fails with `import.address-invalid`
+     (`unitimport.CheckAddress`). The source of a move check (ADR 244
+     decision 2) follows the same rule.
+   - **The address matches the login block.** A login block that an import
+     uses declares the host of its source. The import refuses an address
+     with another host with `import.source-address-mismatch`. So a
+     principal with `import:run` cannot send the credential of a profile to
+     a host that they pick.
+   - **Each request, also a URL that the source answers.** A URL in an
+     answer of the source (for example a download URL of a state version
+     on another host, or the link to the next page) is a new request. It
+     goes through `egresshttp` and the same checks. The credential goes
+     only to the origin (the scheme, the host and the port) of the address.
+     A request to another origin carries no credential. `egresshttp`
+     refuses a redirect to another host, so a source that redirects a
+     download to object storage on another host can fail. The support
+     statement of ADR 244 decision 15 says so.
+   - **TLS.** The adapters always check the TLS certificate of the source.
+     No option turns the check off. A private certificate authority comes
+     through the trust store of the system. `egresshttp` sets
+     `Proxy: nil`, so an installation that reaches the internet only
+     through an outbound proxy cannot import from a remote source. The
+     upload source is then the way.
+   - **An installation with more than one tenant (product manager).** The
+     egress allowlist covers the whole installation. So on an installation
+     with more than one tenant (ADR 215, ADR 220), an entry that one
+     feature or one tenant needs is also a source address that each import
+     can reach. On such an installation, an import refuses each CIDR entry
+     of the allowlist, unless the operator turns on CIDR entries for
+     imports with `--import-allow-cidr-entries`. A refused address fails
+     with `import.source-address-refused`.
+
+     Benchmark: GitLab has a setting that refuses requests to the local
+     network from webhooks and integrations, and an administrator can
+     allow them.
 
 ### The import object
 
@@ -160,14 +210,32 @@ Facts:
    unit: `planned`, `skipped`, `running`, `paused`, `imported`, `failed`
    and `canceled`. One transition table in `pkg/unitimport` decides each
    transition, as `job.Next` does for jobs (ADR 100 decision 7).
+
+   **Failed and partial units (product manager).** When each import unit
+   ends and at least one unit committed a version, the import goes to
+   `holding`, also when other units failed. Each import unit shows its own
+   state, its error code and its count of committed versions. A failed
+   import unit with committed versions is **partial**. The import goes to
+   `failed` only when no import unit committed a version. A release
+   (decision 15) soft-deletes each failed or partial target unit (ADR 47),
+   and keeps the history of each imported unit.
+
+   Benchmark: GitLab and the GitHub Enterprise Importer show the result of
+   each project or repository of a group migration, and the migration ends
+   with the failed ones listed, not as one failure.
 8. **A dry run comes first (product manager).** A create of an import is
    the dry run. The server reads the source and writes the plan of the
    import: each unit with its target name, its count of versions, its
    bytes, its secrets provider, and the three classes of ADR 242
-   decision 1 (ADR 242), and each finding of the move check that the server can
-   give before the move (ADR 244 decision 6). The dry run sends only read
-   requests to the source. It writes nothing to a unit. The import is then
-   `planned`. A `run` starts the move. A `run` on an import whose plan is
+   decision 1, and each finding of the move check that the server can
+   give before the move (ADR 244 decision 6). The plan also gives the
+   capabilities of the source (ADR 243 decision 3) and each request that a
+   person cannot see in the source. The dry run sends only read requests
+   to the source, and one sample decrypt for each unit under the service
+   secrets provider (ADR 242 decision 8). A sample decrypt is a POST that
+   changes nothing in the source. A source that refuses it fails that unit
+   in the plan with `import.source-decrypt-refused`, before the run. The
+   dry run writes nothing to a unit. The import is then `planned`. A `run` starts the move. A `run` on an import whose plan is
    older than 24 hours answers 409 with the error code `import.plan-stale`.
    A new dry run on the same import refreshes the plan.
 
@@ -187,8 +255,10 @@ Facts:
 10. **Into a new unit only (product manager).** An import creates each
     target unit. A target name that a unit of the namespace already holds,
     deleted units included (ADR 47), makes that import unit `skipped` with
-    the error code `import.target-exists`. An import never merges history
-    into a unit that has its own history.
+    the error code `import.target-exists`. A unit that the hold of the same
+    import covers is not a conflict: the create of the target unit is
+    idempotent (decision 12). An import never merges history into a unit
+    that has its own history.
 
     Benchmark: `pulumi stack import` of a full history and the state
     version replay of ADR 29 both need an empty target to keep the order of
@@ -209,6 +279,31 @@ Facts:
     unit, no OpenTofu lock request succeeds and no Pulumi update starts
     while the import moves its history. The writes of the import itself do
     not go through a tool lock, so the lock does not stop them.
+
+    - **Only the import ends the hold.** Only the release (decision 15) or
+      the cancel (decision 16) of the import deletes its manual lock. The
+      lock route answers 409 with the error code `import.hold` for the
+      manual lock of an import, also for its holder and for a person with
+      `unit:manage`. The message names the import and its `cancel` and
+      `release` routes. This changes ADR 213 decision 10 for the manual lock
+      of an import only.
+    - **The write checks the hold.** `Tool.Write` checks, in its
+      transaction, that the hold `import <import ID>` still covers the unit.
+      If not, the write fails, and the import unit goes to `paused` with
+      the error code `import.hold-removed`.
+    - **No other write while the hold covers a unit.** While the hold covers
+      a unit, each route that writes state, renames or deletes the unit
+      answers 423 and names the import. This covers the unlocked override of
+      the HTTP backend (ADR 44, `unit:write-unlocked`), a forced write (ADR
+      50), a rollback, a restore, a rename and a delete. `Tool.Write` fails
+      on a deleted unit with `import.target-deleted`.
+    - **The create is idempotent.** `Tool.Create` creates the unit, puts the
+      hold on it, records the unit as the target of its import unit and
+      publishes the unit to the inventory (decision 18), in one fenced
+      transaction. When the name exists and the hold of the same import
+      covers it, `Tool.Create` answers that unit. So a resume after a crash
+      between the create and the next step continues with its own target
+      and does not skip it.
 13. **The import does not change the source by default (product
     manager).** The import sends only read requests to the source. It never
     deletes in the source. For a source that has a lock API, the option
@@ -232,8 +327,11 @@ Facts:
     When each import unit ends, the import goes to `holding`. It keeps
     its manual locks. While it is `holding`, a `resume` moves each new
     version of each source unit, so the team can bring the target up to
-    date just before the switch. A `release` call deletes the manual locks
-    and sets the import to `released`. After the release, the team points
+    date just before the switch. A `resume` while `holding` that moves new
+    versions meets the gate again (decision 23) and reserves the quota for
+    the new versions (decision 24). A `release` call soft-deletes each
+    failed or partial target unit (decision 7), deletes the manual locks,
+    settles the quota reservation and sets the import to `released`. After the release, the team points
     its CLIs and runners at OpenDustpan. A `resume` after the release
     answers 409 with the error code `import.released`, because the target
     units now have their own history.
@@ -241,11 +339,19 @@ Facts:
     Benchmark: AWS Database Migration Service copies the full data, then
     copies the ongoing changes until the cutover. GitLab direct transfer
     and the GitHub Enterprise Importer leave the source in place.
-16. **Cancel.** A `cancel` stops the run at the next version. It soft-deletes
-    each target unit that the import created and that the import has not
-    released (ADR 47), so a restore within the retention period gets it
-    back. It never changes the source. A `cancel` after a release answers
-    409 with the error code `import.released`.
+16. **Cancel (product manager).** A `cancel` stops the run at the next
+    version. It purges each target unit that the import created and never
+    released, with its history items and its ledger rows. These units hold
+    only copies, and the import did not change the source, so the purge
+    loses no data.
+    So a new import into the same names does not fail with
+    `import.target-exists`. The cancel frees the quota reservation
+    (decision 24). It never changes the source. A `cancel` after a release
+    answers 409 with the error code `import.released`.
+
+    Benchmark: a stopped task of AWS Database Migration Service changes
+    nothing in the source, and a new task can load into empty tables
+    again.
 
 ### Audit, inventory and events
 
@@ -264,9 +370,11 @@ Facts:
     a source URL, or a value of the state. The source host alone names the
     source.
 18. **The inventory.** Each tool package publishes each target unit to the
-    inventory in the same transaction as the write of its first version
-    (ADR 13). The inventory item of the unit gets the field `importID`
-    while the import holds the unit. The inventory change log (ADR 150
+    inventory in the transaction of `Tool.Create`, and again in the
+    transaction of each `Tool.Write` (ADR 13). So a held unit with no
+    version yet is in the inventory, and the quotas of ADR 115 count it.
+    The inventory item of the unit gets the field `importID` while the
+    import holds the unit. The inventory change log (ADR 150
     decision 16) records the unit at the time of the import, not at the
     time of the source versions. So the inventory at a time before the
     import does not show the unit. The view of the unit at a time (ADR 150
@@ -274,6 +382,7 @@ Facts:
 19. **Events.** The event catalog of ADR 145 gets `import.planned`,
     `import.unit-failed`, `import.holding`, `import.released` and
     `import.failed`, so a team can get a notice when a long import ends.
+    This extends the catalog of ADR 145 decision 5.
 
 ### Actions, routes and the CLI
 
@@ -285,9 +394,12 @@ Facts:
     - `import:cancel`: cancel.
     - `import:release`: release.
 
-    A `run` and a `resume` also need `unit:manage` and `unit:write` on the
-    reference of each target unit. The server checks them at the `run`, and
-    again before the first write of each import unit. An import unit whose
+    A `run` and a `resume` also need `unit:manage`, `unit:write` and
+    `unit:lock` on the reference of each target unit, because the import
+    hold is a manual lock (ADR 213 decision 10). With a profile credential,
+    they also need `profile:open` on the profile (decision 4). The server
+    checks them at the `run`, and again before the first write of each
+    import unit. An import unit whose
     check fails is `skipped` with the error code `import.denied`, and the
     other units go on. The built-in role `admin` has each `import` action.
     The role `maintainer` has `import:read`.
@@ -302,6 +414,7 @@ Facts:
     | `POST imports` | `import:run` (the dry run) |
     | `GET imports`, `GET imports/{id}` | `import:read` |
     | `GET imports/{id}/units`, `GET imports/{id}/units/{unit}` | `import:read` |
+    | `GET imports/{id}/units/{unit}/ledger` | `import:read` |
     | `POST imports/{id}/plan` | `import:run` (a new dry run) |
     | `POST imports/{id}/run`, `POST imports/{id}/resume` | `import:run` |
     | `PUT imports/{id}/units/{unit}/uploads/{sequence}` | `import:run` |
@@ -309,14 +422,75 @@ Facts:
     | `POST imports/{id}/release` | `import:release` |
 
     The declaration of the `run` and `resume` routes says that their body
-    can hold a credential, so a test checks that no log line, no audit
-    entry and no idempotency record holds it. The routes of the move check
-    are in ADR 244.
+    can hold a credential, so the canary test checks that no log line, no
+    audit entry and no idempotency record holds it. The routes of the move
+    check are in ADR 244, and two of them also take a credential (ADR 244
+    decision 10).
+
+    The upload route takes the bytes of one version as its body, and the
+    source fields of the version in headers: `Dustpan-Source-At` (an RFC
+    3339 time), `Dustpan-Source-Actor` (text) and
+    `Dustpan-Source-Metadata` (the tool metadata as base64 JSON, for
+    example the kind of a Pulumi update). Each of these values is a claim of
+    the client. The history item marks them "reported by the client" (ADR
+    242 decision 3), and the plan of the upload source says so.
+
+    A `GET` of a purged import (decision 25) answers 404 with the error code
+    `import.purged`. The ledger route still answers the ledger rows of a
+    unit after the purge of its import.
 22. **The CLI.** `opendustpan import` is a client command (ADR 39). It
     calls the routes above. Its subcommands are `plan`, `run`, `resume`,
     `status`, `upload`, `check`, `release` and `cancel`. It reads an
     ephemeral credential from an environment variable or from standard
     input, never from a flag, as ADR 23 decision 1 requires.
+
+### Gates, quotas and retention
+
+These decisions close RFC 81 questions 1, 2 and 7.
+
+23. **An import meets `state.write` once for each import unit (product
+    manager).** Before the first write of each import unit, the server
+    evaluates the gates of `state.write` (ADR 224 decision 16) with the
+    `operation.kind` value `unit-import`. It is not `import`, which is the
+    kind of a Pulumi update, and not `state-import`, which is the kind of a
+    `pulumi stack import`. The facts get an `import` object with the source
+    kind, the source host, the count of versions, the bytes and the target
+    unit. The `import` object is a new minor version of the fact schema of
+    `state.write` (ADR 226 decision 2). A `deny` makes that import unit
+    `skipped` with `import.denied`. A requirement holds the unit in
+    `planned` until a person meets it. The 24-hour rule of
+    `import.plan-stale` (decision 8) does not apply while a unit waits on a
+    requirement. A `resume` while `holding` that moves new versions
+    evaluates the gates again for each unit that gets new versions. This
+    extends the table of ADR 224 decision 16.
+
+    Benchmark: `tfmigrate` plans and applies one migration file as one
+    change, not one change for each state version. The GitLab project
+    import runs one import for each project, not one for each relation.
+24. **The dry run reports, the run reserves (product manager).** The dry
+    run reports the units and the bytes against each quota of the namespace
+    (ADR 115). The `run` reserves them before the first write, and fails
+    with the quota error of ADR 115 when a quota is short. A `resume` while
+    `holding` reserves again for the new versions. The upload source
+    reserves at each upload, because its dry run has no bytes yet. A
+    `cancel` frees the reservation, and a `release` settles it.
+
+    Benchmark: the GitLab project import refuses an export file above the
+    maximum import size before the import starts. `tfmigrate plan` shows the
+    whole change before `tfmigrate apply`.
+25. **Retention (product manager).** The ledger rows of a unit stay as long
+    as the unit, and a purge of the unit (ADR 47) deletes them. The import
+    record and its plan stay for 400 days after the release or the cancel.
+    The purge of an import record keeps each ledger row and the `importID`
+    of each history item. No foreign key cascades from the import record to
+    them. A `GET` of a purged import answers `import.purged`. The audit
+    entries of the import stay under the retention of the audit log (ADR
+    68). The tables `imports`, `import_units` and `import_ledger` are in
+    `backup.Tables`.
+
+    Benchmark: GitLab keeps the import status of a project after the
+    import ends. 400 days is more than the 12 months that PCI DSS v4.0.1
+    requirement 10.5.1 asks for an audit history.
 
 ## What this ADR replaces
 
@@ -332,6 +506,18 @@ replaces:
   ADR 29 still loses them.
 - **ADR 29, decision 8:** "No new server code." The import tool is server
   code.
+- **ADR 213, decision 10:** the holder of a manual lock, or a person with
+  `unit:manage` on the object of the lock, can end it. For the
+  manual lock of an import, only the release or the cancel of the import
+  ends it (decision 12).
+
+This ADR also extends:
+
+- **ADR 203, decision 1:** the list of consumers gets the consumer
+  `import`, which behaves like `observe` (decision 4).
+- **ADR 224, decision 16:** the table gets the `operation.kind` value
+  `unit-import` (decision 23).
+- **ADR 145, decision 5:** the catalog gets the types of decision 19.
 
 ## Consequences
 
@@ -353,8 +539,7 @@ replaces:
 - An import with an ephemeral credential does not survive the stop of its
   instance. It pauses, and a person or a script must call `resume` with the
   credential. A profile with the issuer of the namespace avoids this.
-- Which gate an import meets (ADR 224) is open in RFC 81 question 1. The
-  routes of decision 21 do not ship before it has an answer.
 - `notify.Types` gets the types of decision 19, so the reference page of
   the catalog changes with them (ADR 145 decision 5).
-- RFC 81 holds the questions that need the owner.
+- The fact schema of `state.write` gets a new minor version with the
+  `import` object (decision 23).

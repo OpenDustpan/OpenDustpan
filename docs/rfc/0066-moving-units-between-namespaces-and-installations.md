@@ -9,7 +9,7 @@ created: 2026-10-12
 
 Status: draft. ADR 244 answers part of it for an import into OpenDustpan:
 the scope, the form (a REST API with a CLI) and the check of one unit, then
-of a whole namespace. RFC 81 holds the mapping of principals. The project owner asked for this RFC on 2026-10-12, in the
+of a whole namespace. ADR 244 decision 16 reports source principals and never maps them. The project owner asked for this RFC on 2026-10-12, in the
 answers to RFC 17. ADR 47 decided that a unit never moves between
 namespaces, and that export and import are the way out. This RFC asks what
 help a person needs for that way, and when. It decides nothing.

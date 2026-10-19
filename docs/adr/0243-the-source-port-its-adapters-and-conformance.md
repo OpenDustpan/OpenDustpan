@@ -1,6 +1,6 @@
 # 243. The source port, its adapters and their conformance suites
 
-Status: accepted · 2026-10-19. Part of ADR 241
+Status: accepted · 2026-10-19. Part of ADR 241. Accepts RFC 81 questions 6 and 8
 
 ## Context
 
@@ -47,8 +47,9 @@ Facts:
    - `Head` answers the ID of the newest version of one unit, for the
      writer check (ADR 241 decision 14).
 
-   Each version carries its ID, its time, its size, the SHA-256 of its
-   bytes, the source actor as text, and a metadata document. The metadata
+   Each version carries its ID, its time in the source, its size, the
+   SHA-256 of its bytes, the source actor as text, a metadata document,
+   and a mark for values that a client reported (decision 7). The metadata
    document is the tool part of a version, for example the update kind and
    message of a Pulumi update, or the serial and lineage of a state
    version. The core never parses it. It passes it to the `Tool` port.
@@ -73,23 +74,38 @@ Facts:
    implements it, and `pkg/unitimport` consumes it. So the core never reads
    a checkpoint or a state file. Its methods:
    - `Tool` answers the tool name of its units.
-   - `Create` creates the target unit with the manual lock of ADR 241
-     decision 12, in one fenced transaction.
+   - `Create` creates the target unit with the import hold of ADR 241
+     decision 12, with the source metadata of the unit (the stack tags of a
+     Pulumi stack, or the description and tags of an OpenTofu workspace,
+     ADR 242 decisions 5 and 12). In the same fenced transaction, it records
+     the unit as the target of its import unit and publishes the unit to
+     the inventory with the import ID (ADR 241 decision 18). `Create` is
+     idempotent: when the name exists and the hold of the same import
+     covers it, it answers that unit.
    - `Write` writes one source version as one history item, with its times
      and its source fields (ADR 242 decision 3), its ledger row, and the
-     inventory publish, in one fenced transaction. It takes the decrypt
-     function of the source when the source has one.
+     inventory publish, in one fenced transaction. In that transaction, it
+     checks that the hold of the import still covers the unit
+     (`ErrHoldRemoved`) and that the unit is not deleted
+     (`ErrTargetDeleted`). It takes the decrypt function of the source when
+     the source has one.
    - `Facts` reads the facts of the move check (ADR 244 decision 3) from the
      bytes of a version. `LatestFacts` reads them from the latest state item
      of a target unit. Both use the same code, so the same bytes give the
      same facts on both sides.
 5. **The `Store` and `UnitStore` ports.** `Store` keeps imports and their
-   plans. `UnitStore` keeps the import units and reads their ledgers. Each
-   applies each transition of the table in a fenced transaction. A
-   transition that the table does not allow returns `ErrTransition`.
-   `Tool.Write` writes the ledger rows in its own transaction, because the
-   SQL adapter serves every port from one database (the rule of
-   `namespace.Store`). Two ports keep each interface at most eight methods,
+   plans: `SetPlan` writes the plan of a dry run (the counts, the bytes,
+   the capabilities, the findings, the requests and the quota
+   reservation), and `Purge` deletes the record of an ended import after
+   its retention (ADR 241 decision 25). `Get` of a purged import returns
+   `ErrPurged`. `UnitStore` keeps the import units and reads their ledgers.
+   `SetCounts` writes the count of source versions after the writer check
+   and the count of committed versions. Each port applies each transition
+   of the table in a fenced transaction. A transition that the table does
+   not allow returns `ErrTransition`. `Tool.Write` writes the ledger rows
+   in its own transaction, and `Tool.Create` writes the target of the
+   import unit in its own transaction, because the SQL adapter serves
+   every port from one database (the rule of `namespace.Store`). Two ports keep each interface at most eight methods,
    the limit of the `interfacebloat` linter.
 
 ### Conformance
@@ -106,12 +122,27 @@ Facts:
      limit, and a canary credential that must not reach an error text or a
      log line. When the adapter implements `Decrypter` or `Locker`, the
      suite checks them too.
-   - **The tool suite** checks `Create`, `Write` with each source field,
-     the fence error, a crash between the blob and the row (no ledger row,
-     no item), a second write of the same version, and that `Facts` of the
-     source bytes equals `LatestFacts` after the write.
+   - **The tool suite** checks `Create` with the source metadata, the
+     target of the import unit and the inventory publish with the import ID
+     in its transaction, and a second `Create` after a crash that answers
+     the same unit. It checks `Write` with each source field, the fence
+     error, a crash between the blob and the row (no ledger row, no item),
+     a second write of the same version, a write after the removal of the
+     hold (`ErrHoldRemoved`), a write to a deleted unit
+     (`ErrTargetDeleted`), and that `Facts` of the source bytes equals
+     `LatestFacts` after the write.
    - **The store suite** checks each transition of the table and the fence,
-     for `Store` and `UnitStore`.
+     for `Store` and `UnitStore`. It checks `SetPlan`, `SetCounts`, and
+     `Purge`: after a purge, `Get` returns `ErrPurged`, and the ledger rows
+     and the import ID of each history item stay.
+   - **The source suite** also checks that a URL in an answer of the source
+     that names another origin gets no credential, and that a version that
+     stops sending bytes fails with `ErrSourceUnreachable` at the idle-read
+     timeout of decision 11.
+
+   The suites land before the first adapter. The port fields and methods
+   that `pkg/unitimport` has now get their tests in the suites before an
+   adapter implements them.
 
    The goroutine check of ADR 36 runs in each package of the suites.
 
@@ -122,7 +153,12 @@ Facts:
    network adapter. Its versions are the bodies of the upload route (ADR 241
    decision 21), in the order of their sequence numbers. The server streams
    each body to the blob store (ADR 45), with the state size limit of ADR 26
-   decision 4. It runs the source suite with a fixture that uploads.
+   decision 4. The time, the actor and the metadata of each version come
+   from the headers of the upload route. The source marks each such
+   version `ClientReported`, so each reader labels these values "reported
+   by the client". Each upload reserves its bytes against the quotas (ADR
+   241 decision 24). It runs the source suite with a fixture that
+   uploads.
 
 ### The first adapters
 
@@ -150,12 +186,14 @@ Facts:
 
    Benchmark: the order of RFC 42 ("the gap that only OpenDustpan fills")
    and the e2e steps of ADR 29 that already exist.
-9. **Source kinds name a protocol, not a product (product manager).** The
+9. **Source kinds name a protocol, not a product (product manager, RFC 81
+   question 8).** The
    API value of a source kind names the protocol that the adapter speaks
    (`tfe-api`, `pulumi-service`, `s3`, `opentofu-http`, `upload`). The docs
    page names the products that each kind works with, in the words of
    CLAUDE.md: "works with the Pulumi CLI", "a TFE-compatible API". The
-   console shows the product names only as "works with" text.
+   console shows the product names only as "works with" text, with no logo
+   and no colors of another project.
 
    Benchmark: the `backend "s3"` and `backend "http"` blocks of OpenTofu
    name a protocol. The `cloud` block of OpenTofu works with more than one
@@ -169,9 +207,22 @@ Facts:
     Benchmark: ADR 60 decision 12 builds the OTLP sink with the standard
     library, with no dependency.
 11. **Bounds of a source request.** Each adapter sends its requests through
-    `egresshttp` (ADR 241 decision 6). It reads at most the state size
-    limit for one version, and at most `egress.MaxBodyBytes` for one other
-    answer. One import sends at most 4 requests at a time to its source. On
+    `egresshttp` (ADR 241 decision 6), also each request to a URL that the
+    source answers (a download URL, the link to the next page). The
+    credential goes only to the origin of the address of the import. A
+    redirect to another host fails, because `egresshttp` refuses it. So a
+    source that redirects a state download to object storage on another
+    host can fail, and the support statement of ADR 244 decision 15 says
+    so.
+
+    The whole-request timeout of `egress.Timeout` (30 seconds) is too short
+    for a large state version. So the stream of one version has its own
+    deadline, sized to the state size limit at a floor rate of 1 MiB/s,
+    and an idle-read timeout of 30 seconds with no byte. The adapter reads
+    at most the state size limit of ADR 26 decision 4 for one version, and
+    also for a document of a version (the `json-state` document, the
+    outputs document, the metadata). It reads at most
+    `egress.MaxBodyBytes` for each other answer. One import sends at most 4 requests at a time to its source. On
     429 or 503, an adapter waits for the `Retry-After` of the answer, at
     most 60 seconds, then uses the back-off of `pkg/durable`. A request
     that a person cannot see in the source (a decrypt, a lock) is in the
@@ -180,6 +231,18 @@ Facts:
     option that registers a source kind and the function that opens its
     adapter. An adapter outside this repository runs the source suite of
     decision 6.
+13. **Source adapters run only in the server, for now (product manager,
+    RFC 81 question 6).** The `opendustpan import upload` command reads with
+    the CLI of each tool and sends each version to the upload route. It
+    does not run the source adapters of this ADR on the workstation. So
+    one path runs adapters (the server), and one path uploads (the
+    workstation). A later decision can run the adapters in the CLI when a
+    team asks for it.
+
+    Benchmark: the GitLab project import takes an export file that the
+    user uploads, next to its imports from a remote API.
+    `tofu init -migrate-state` and `tfmigrate` run on the workstation with
+    the credentials there.
 
 ## Consequences
 

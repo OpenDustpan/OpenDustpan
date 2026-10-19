@@ -1,16 +1,15 @@
 ---
 rfc: 81
 title: Open questions of the import tool and the move check
-status: discussing
+status: accepted
 created: 2026-10-19
 ---
 
 # RFC 81. Open questions of the import tool and the move check
 
-Status: discussing. ADRs 241 to 244 record the design of the import tool
-and the move check, after the owner decision of 2026-10-17. This RFC holds
-the questions that need the project owner. Each question has options and a
-recommendation of the product manager. Nothing here is decided.
+Status: accepted. The product manager decided each question on 2026-10-19
+for the owner, as the recommendation gives it. ADRs 241 to 244 record the
+decisions.
 
 ## Problem
 
@@ -124,9 +123,7 @@ tool's CLI, so it moves only what the CLI reads (the current state, or each
   credential only on the workstation. It doubles the places where an
   adapter runs.
 
-**Recommendation: A now, B when a team asks for it.** OpenDustpan Cloud
-reaches public sources only (ADR 241 decision 6), so B may come first
-there.
+**Recommendation: A now, B when a team asks for it.**
 
 ## 7. Retention of imports and ledgers
 
@@ -160,5 +157,24 @@ as ours.
 
 ## Outcome
 
-Empty until the owner answers the questions (link the ADR) or drops the
-RFC (say why).
+The product manager decided each question on 2026-10-19, with a benchmark
+for each decision in the ADR.
+
+1. **A.** `state.write` once for each import unit, with the
+   `operation.kind` value `unit-import`. A `resume` while `holding` that
+   moves new versions evaluates the gates again. The plan-stale rule does
+   not apply while a unit waits on a requirement. The `import` fact object
+   is a new minor version of the fact schema of `state.write` (ADR 241
+   decision 23).
+2. **A.** The dry run reports, and the run reserves. A `resume` while
+   `holding` reserves again, the upload source reserves at each upload, a
+   cancel frees and a release settles (ADR 241 decision 24).
+3. **A.** No engine events, run logs or plans now (ADR 242 decision 16).
+4. **A.** Report only (ADR 244 decision 16).
+5. **A.** No server-side re-encryption of passphrase or KMS secrets (ADR
+   242 decision 10).
+6. **A.** Upload only for workstation sources (ADR 243 decision 13).
+7. **A.** The ledger rows stay with the unit, and the import record stays
+   for 400 days. The purge keeps the ledger rows and the `importID` of each
+   history item (ADR 241 decision 25).
+8. **A.** "Works with" text only, no logo (ADR 243 decision 9).

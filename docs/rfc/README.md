@@ -129,4 +129,4 @@ both together.
 | [78](0078-localization-open-questions.md) | Localization open questions: translated docs, the translation machine, the server formatter and the edges | discussing; translated docs, the translation agent, the formatter, the product name in chat, `resolvedLanguage` and reports of one string accepted (ADRs 232, 234 and 235) |
 | [79](0079-opt-in-federation-routing-and-geo-replication.md) | Opt-in federation of installations, routing and geo-replication | draft |
 | [80](0080-console-sessions-on-the-tfe-compatible-api.md) | Console sessions on the TFE-compatible API, and fresh authentication for force-unlock and the state download | draft |
-| [81](0081-open-questions-of-the-import-tool.md) | Open questions of the import tool and the move check | discussing |
+| [81](0081-open-questions-of-the-import-tool.md) | Open questions of the import tool and the move check | accepted (ADRs 241 to 244) |

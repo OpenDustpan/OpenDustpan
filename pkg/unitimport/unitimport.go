@@ -19,9 +19,14 @@ package unitimport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -33,12 +38,27 @@ var (
 	ErrInvalid = errors.New("import request is not valid")
 	// ErrNotFound reports an import or an import unit that does not exist.
 	ErrNotFound = errors.New("import not found")
+	// ErrPurged reports an import record that the retention purged. Its
+	// ledger rows and the import ID of each history item stay.
+	ErrPurged = errors.New("import purged")
 	// ErrTransition reports a change of state that the transition table
 	// does not allow.
 	ErrTransition = errors.New("import state change is not allowed")
 	// ErrTargetExists reports a target name that a unit of the namespace
-	// already holds, deleted units included.
+	// already holds, deleted units included, and that the hold of the same
+	// import does not cover.
 	ErrTargetExists = errors.New("target unit already exists")
+	// ErrTargetDeleted reports a write to a target unit that is deleted.
+	ErrTargetDeleted = errors.New("target unit is deleted")
+	// ErrHoldRemoved reports a write to a target unit that the import hold
+	// no longer covers.
+	ErrHoldRemoved = errors.New("import hold no longer covers the unit")
+	// ErrAddressInvalid reports a source address that is not an absolute
+	// URL with a host, or that holds userinfo, a query or a fragment.
+	ErrAddressInvalid = errors.New("source address is not valid")
+	// ErrAddressMismatch reports a source address whose host is not the
+	// host that the login block of the profile declares.
+	ErrAddressMismatch = errors.New("source address does not match the login block")
 	// ErrCredentialNeeded reports a run step that has no credential: the
 	// instance that held an ephemeral credential stopped or lost its claim.
 	ErrCredentialNeeded = errors.New("source credential is needed")
@@ -85,8 +105,9 @@ const (
 const redacted = "[credential]"
 
 // Credential is a source credential in memory. It has no exported field,
-// it prints as "[credential]", and its JSON and text encodings fail, so it
-// cannot reach a log line, an error text or a stored record.
+// it prints as "[credential]" with every fmt verb, and its JSON and text
+// encodings fail, so it cannot reach a log line, an error text or a stored
+// record.
 type Credential struct {
 	secret []byte
 }
@@ -101,6 +122,22 @@ func (c Credential) Bytes() []byte { return append([]byte(nil), c.secret...) }
 
 // Empty reports whether c holds no credential.
 func (c Credential) Empty() bool { return len(c.secret) == 0 }
+
+// Clear writes zeros over the bytes of c. Each copy of c shares these
+// bytes, so Clear clears every copy, and Empty stays false. Clear is best
+// effort: a copy that Bytes returned, or a copy that the runtime made,
+// stays in memory until the garbage collector frees it.
+func (c Credential) Clear() { clear(c.secret) }
+
+// Format writes the redacted form for every verb, so an integer or a rune
+// verb (%d, %o, %b, %c, %U) never prints the bytes.
+func (Credential) Format(f fmt.State, _ rune) {
+	// fmt.State writes to the buffer of fmt, which never fails, and Format
+	// has no error to return.
+	if _, err := io.WriteString(f, redacted); err != nil {
+		return
+	}
+}
 
 // String returns the redacted form.
 func (Credential) String() string { return redacted }
@@ -120,6 +157,54 @@ func (Credential) MarshalJSON() ([]byte, error) { return nil, errEncode }
 // MarshalText always fails.
 func (Credential) MarshalText() ([]byte, error) { return nil, errEncode }
 
+// CheckAddress checks a source address. The address is an absolute URL
+// with a host, and it holds no userinfo, no query and no fragment, so no
+// credential is in a stored address. It wraps ErrAddressInvalid.
+func CheckAddress(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%w: the address does not parse as a URL", ErrAddressInvalid)
+	}
+
+	switch {
+	case u.Scheme == "" || u.Host == "" || u.Opaque != "":
+		return fmt.Errorf("%w: the address needs a scheme and a host", ErrAddressInvalid)
+	case u.User != nil:
+		return fmt.Errorf("%w: the address holds userinfo", ErrAddressInvalid)
+	case u.RawQuery != "" || u.ForceQuery:
+		return fmt.Errorf("%w: the address holds a query", ErrAddressInvalid)
+	case strings.Contains(raw, "#"):
+		return fmt.Errorf("%w: the address holds a fragment", ErrAddressInvalid)
+	}
+
+	return nil
+}
+
+// MaxSourceActorBytes is the limit of a source actor in bytes.
+const MaxSourceActorBytes = 256
+
+// SanitizeSourceActor returns the text of a source actor that a history
+// item can keep: valid UTF-8 with no control character, at most
+// MaxSourceActorBytes bytes. A source actor is a claim of the source, so
+// a reader shows it as text only.
+func SanitizeSourceActor(s string) string {
+	var b strings.Builder
+
+	for _, r := range strings.ToValidUTF8(s, string(utf8.RuneError)) {
+		if unicode.IsControl(r) {
+			continue
+		}
+
+		if b.Len()+utf8.RuneLen(r) > MaxSourceActorBytes {
+			break
+		}
+
+		b.WriteRune(r)
+	}
+
+	return b.String()
+}
+
 // Selection names the units of a source that an import reads: each name,
 // or every unit when Names is empty.
 type Selection struct {
@@ -136,17 +221,21 @@ type SourceUnit struct {
 // VersionID identifies a version in its source. The core keeps it opaque.
 type VersionID string
 
-// SourceVersion is one version of a source unit. Metadata is the tool part
-// of the version as JSON, for example the kind and message of a Pulumi
-// update, or the serial and lineage of a state version. Only the Tool port
-// reads it.
+// SourceVersion is one version of a source unit. At is the time in the
+// source, and Actor is the user or the run in the source, as text. Both
+// are claims of the source. Metadata is the tool part of the version as
+// JSON, for example the kind and message of a Pulumi update, or the serial
+// and lineage of a state version. Only the Tool port reads it.
+// ClientReported is true when a client sent At, Actor and Metadata with an
+// upload, so a reader labels them "reported by the client".
 type SourceVersion struct {
-	ID       VersionID
-	At       time.Time
-	Size     int64
-	SHA256   string
-	Actor    string
-	Metadata []byte
+	ID             VersionID
+	At             time.Time
+	Size           int64
+	SHA256         string
+	Actor          string
+	Metadata       []byte
+	ClientReported bool
 }
 
 // Source reads one kind of source. Each method wraps ErrSourceNotFound,
@@ -185,7 +274,8 @@ type Locker interface {
 // write. It is nil when the source has no Decrypter.
 type DecryptFunc func(ctx context.Context, ciphertexts [][]byte) ([][]byte, error)
 
-// LedgerRow records one committed source version of an import unit.
+// LedgerRow records one committed source version of an import unit. A
+// ledger row stays with its unit after the purge of its import record.
 type LedgerRow struct {
 	ImportID     string
 	ImportUnitID string
@@ -197,17 +287,23 @@ type LedgerRow struct {
 }
 
 // CreateRequest asks a Tool to create the target unit of an import unit,
-// with the manual lock of the import on it.
+// with the import hold on it. Description and Tags are the source
+// metadata of the unit: the stack tags of a Pulumi stack, or the
+// description and tags of an OpenTofu workspace.
 type CreateRequest struct {
-	Fence      namespace.Fence
-	Name       string
-	ImportID   string
-	LockHolder string
+	Fence        namespace.Fence
+	Name         string
+	ImportID     string
+	ImportUnitID string
+	LockHolder   string
+	Description  string
+	Tags         map[string]string
 }
 
 // WriteRequest asks a Tool to write one source version as one history
 // item. The Tool writes the item, the ledger row and the inventory publish
-// in one fenced transaction.
+// in one fenced transaction. Ledger.ImportID names the import whose hold
+// must cover the unit.
 type WriteRequest struct {
 	Fence   namespace.Fence
 	Unit    history.Unit
@@ -238,16 +334,23 @@ type Facts struct {
 }
 
 // Tool writes the imported versions of one tool into its own model.
-// Create wraps ErrTargetExists. Write wraps ErrSourceChanged when the
-// ledger holds the version with another digest, and returns the fence
-// error of the namespace for a stale fence. LatestFacts wraps
-// history.ErrItemNotFound for a unit with no state.
+// Create and Write publish the unit to the inventory, with the import ID,
+// in their own transaction. Create wraps ErrTargetExists. Write wraps
+// ErrSourceChanged when the ledger holds the version with another digest,
+// ErrHoldRemoved when the import hold no longer covers the unit, and
+// ErrTargetDeleted for a deleted unit. Both wrap namespace.ErrFenced for a
+// stale fence. LatestFacts wraps history.ErrItemNotFound for a unit with no
+// state.
 type Tool interface {
 	// Tool returns the tool name of the units, as in history.Unit.
 	Tool() string
-	// Create creates the target unit with the manual lock of the import.
+	// Create creates the target unit with the import hold on it, and
+	// records the unit as the Target of the import unit, in one
+	// transaction. Create is idempotent: when the name exists and the hold
+	// of the same import covers it, Create returns that unit.
 	Create(ctx context.Context, req CreateRequest) (history.Unit, error)
-	// Write writes one source version as one history item.
+	// Write writes one source version as one history item. It checks in
+	// its transaction that the hold of the import still covers the unit.
 	Write(ctx context.Context, req WriteRequest) (WriteResult, error)
 	// Facts reads the facts of the bytes of one version.
 	Facts(ctx context.Context, body io.Reader) (Facts, error)
@@ -308,7 +411,34 @@ type Options struct {
 	LockSource bool
 }
 
-// Import is one import of a namespace.
+// Capability is an optional capability of a source.
+type Capability string
+
+// The capabilities of a source.
+const (
+	// CapabilityDecrypt is the Decrypter capability.
+	CapabilityDecrypt Capability = "decrypt"
+	// CapabilityLock is the Locker capability.
+	CapabilityLock Capability = "lock"
+)
+
+// Plan is the import plan that a dry run writes. Requests lists each
+// request to the source that a person cannot see in the source, for
+// example the sample decrypt of each unit or a lock. Reservation is the ID
+// of the quota reservation, empty until a run reserves.
+type Plan struct {
+	At           time.Time
+	Units        int
+	Versions     int
+	Bytes        int64
+	Capabilities []Capability
+	Findings     []Finding
+	Requests     []string
+	Reservation  string
+}
+
+// Import is one import of a namespace. EndedAt is the time of its release
+// or its cancel. The retention purges the record 400 days after it.
 type Import struct {
 	ID          string
 	Namespace   namespace.Name
@@ -323,20 +453,26 @@ type Import struct {
 	Reason      string
 	CreatedBy   string
 	CreatedAt   time.Time
-	PlannedAt   time.Time
+	Plan        Plan
+	EndedAt     time.Time
 }
 
-// ImportUnit is one unit that an import moves.
+// ImportUnit is one unit that an import moves. Versions, Bytes,
+// SecretsProvider and Findings come from the plan. Committed counts the
+// ledger rows. A failed unit with committed versions is partial.
 type ImportUnit struct {
-	ID         string
-	ImportID   string
-	Source     SourceUnit
-	TargetName string
-	Target     history.Unit
-	State      UnitState
-	ErrorCode  string
-	Versions   int
-	Committed  int
+	ID              string
+	ImportID        string
+	Source          SourceUnit
+	TargetName      string
+	Target          history.Unit
+	State           UnitState
+	ErrorCode       string
+	Versions        int
+	Committed       int
+	Bytes           int64
+	SecretsProvider string
+	Findings        []Finding
 }
 
 // Filter selects imports of a namespace.
@@ -344,10 +480,10 @@ type Filter struct {
 	States []State
 }
 
-// Store keeps imports. Each write takes the fence of the namespace and
-// checks it in the same transaction. Get wraps ErrNotFound. Transition
-// wraps ErrTransition for a change that the transition table does not
-// allow.
+// Store keeps imports and their plans. Each write takes the fence of the
+// namespace and checks it in the same transaction. Get wraps ErrNotFound,
+// and ErrPurged for a purged import. Transition wraps ErrTransition for a
+// change that the transition table does not allow.
 type Store interface {
 	// Create stores a new import in StatePlanning.
 	Create(ctx context.Context, fence namespace.Fence, imp Import) (Import, error)
@@ -357,11 +493,18 @@ type Store interface {
 	List(ctx context.Context, ns namespace.Name, f Filter) ([]Import, error)
 	// Transition moves an import from one state to another, with a reason.
 	Transition(ctx context.Context, fence namespace.Fence, id string, from, to State, reason string) error
+	// SetPlan replaces the plan of an import in StatePlanning or
+	// StatePlanned, or the reservation of its plan.
+	SetPlan(ctx context.Context, fence namespace.Fence, id string, plan Plan) error
+	// Purge deletes the record of an ended import and keeps its ID as
+	// purged. It deletes no ledger row and no history item.
+	Purge(ctx context.Context, fence namespace.Fence, id string) error
 }
 
 // UnitStore keeps the import units of an import and reads their ledgers.
-// The Tool port writes each ledger row, in the transaction of its history
-// item. Each write takes the fence of the namespace and checks it in the
+// The Tool port writes each ledger row in the transaction of its history
+// item, and the Target of each import unit in the transaction of Create.
+// Each write takes the fence of the namespace and checks it in the
 // same transaction. Unit wraps ErrNotFound. TransitionUnit wraps
 // ErrTransition for a change that the transition table does not allow.
 type UnitStore interface {
@@ -374,6 +517,10 @@ type UnitStore interface {
 	// TransitionUnit moves an import unit from one state to another, with
 	// the error code of a failed or skipped unit.
 	TransitionUnit(ctx context.Context, fence namespace.Fence, id, unitID string, from, to UnitState, code string) error
+	// SetCounts sets the count of source versions of an import unit, after
+	// the writer check finds new versions, and its count of committed
+	// versions.
+	SetCounts(ctx context.Context, fence namespace.Fence, id, unitID string, versions, committed int) error
 	// Ledger returns the ledger rows of an import unit, oldest first.
 	Ledger(ctx context.Context, ns namespace.Name, id, unitID string) ([]LedgerRow, error)
 }
