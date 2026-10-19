@@ -25,7 +25,10 @@ unit (ADR 49 decision 3).
 
 A force-unlock writes a fence version with a new lineage (ADR 44 decision
 1). The server cannot set the lineage of a state that the client encrypted.
-A release of such a lock writes no fence, so the stale job can still write.
+A release of such a lock writes no fence. So on `main` it is an override
+that needs the switch and `unit:write-forced` (ADR 44 decision 4). When
+the switch is off, it answers 409. The text of that 409 says that the
+server cannot fence the state. It does not name the switch or the action.
 
 The workspace document has the attribute `permissions.can-force-unlock`. On
 `main` it follows `unit:manage`.
@@ -58,15 +61,16 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
    hold `unit:write-forced`. An administrator gives the force-unlock to an
    on-call group with a grant of that role on a namespace, a collection or
    a unit. The built-in role set does not change.
-4. **A client-encrypted state also needs the switch.** The release of a
-   lock on a client-encrypted state writes no fence version. It is an
-   override, as a forced write is (ADR 44 decision 4). So it needs
-   `unit:write-forced` and the effective forced-write switch: the switch of
-   the namespace and the switch of the unit (ADR 44 decision 6). When the
-   switch is off, the release answers 409 and changes nothing. The error
-   names the switch and the action (ADR 44 decision 8). A release with the
-   switch on writes the `override` audit entry of ADR 44 decision 7. This
-   applies to both adapters.
+4. **A client-encrypted state also needs the switch, as on `main`.** The
+   release of a lock on a client-encrypted state writes no fence version.
+   It stays an override, as a forced write is (ADR 44 decision 4). So it
+   needs `unit:write-forced` and the effective forced-write switch: the
+   switch of the namespace and the switch of the unit (ADR 44 decision 6).
+   When the switch is off, the release answers 409 and changes nothing. A
+   release with the switch on writes the `override` audit entry of ADR 44
+   decision 7. This applies to both adapters. The only new work is the
+   error text: the 409 names the switch and the action (ADR 44 decision
+   8).
 5. **`can-force-unlock` follows the same action.** The attribute
    `permissions.can-force-unlock` of the workspace document is true only
    when the caller has `unit:write-forced` on the unit. It does not read
@@ -77,7 +81,8 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
    step for each OpenTofu version in its matrix: a principal with
    `maintainer` gets 403 on `tofu force-unlock` through the `cloud` block,
    and a principal with a custom role that holds `unit:write-forced`
-   releases the lock.
+   releases the lock. The step also checks that the CLI output of the
+   403 names the action.
 
 ## The other gaps of the workspace page
 
@@ -88,7 +93,8 @@ implementation briefs.
 
 - **G1. A reason on a force-unlock.** The route accepts the optional
   `data.attributes.reason`, 1 to 500 Unicode code points, as the manual
-  lock of ADR 213 decision 10. The reason stays optional on the wire,
+  lock of ADR 213 decision 10. The "500 characters" of ADR 213 means the
+  same unit: Unicode code points. The reason stays optional on the wire,
   because `tofu force-unlock` sends no body.
 - **G2. An audit entry for each force-unlock.** One entry of the kind
   `change` with the action `unit:write-forced` (ADR 60 decision 4). It
@@ -96,10 +102,13 @@ implementation briefs.
   the reason, in a new optional field (ADR 60 decision 5). The store writes
   it in the transaction of the release. The `override` entry of a
   client-encrypted state stays. The change covers both adapters.
-- **G3. The expected lock.** The workspace document gets
-  `attributes.lock-id`. A force-unlock accepts `data.attributes.lock-id`
-  and `data.attributes.lock-holder`. A lock that does not match answers
-  409 and changes nothing.
+- **G3. The expected lock.** The domain already has the check:
+  `ForceUnlockLock` refuses a lock that does not match with
+  `ErrLockMismatch`, and the http backend uses it. Only the TFE route and
+  the document attribute are new. The workspace document gets
+  `attributes.lock-id`. The TFE force-unlock accepts
+  `data.attributes.lock-id` and `data.attributes.lock-holder`. A lock that
+  does not match answers 409 and changes nothing.
 - **G4. Change counts and the resource count** of a state version, from
   the resource change rows of ADR 150. The value is `null` while the blame
   cursor has not passed the version, and for an `opaque` version (ADR 150
@@ -125,7 +134,7 @@ ADR 210 covers its route. G6 is open in RFC 80. G7 is ADR 240.
   for OpenTofu and `unit:write` for the Pulumi cancel (ADR 20). RFC 19 can
   still remove the difference.
 - The route table of `internal/api/tfe`, the route test, the attribute
-  `can-force-unlock` and the release of a client-encrypted state change in
+  `can-force-unlock` and the 409 text of a client-encrypted release change in
   one change, with its e2e step first (ADR 12).
 - The security model guide and the OpenTofu guide say which action a
   force-unlock needs, in the same change (ADR 214).
