@@ -4,6 +4,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ include "opendustpan.backupServiceAccountName" $ }}
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "opendustpan.backupLabels" $ | nindent 4 }}
 automountServiceAccountToken: false
@@ -12,6 +13,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ include "opendustpan.fullname" $ }}-backup
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "opendustpan.backupLabels" $ | nindent 4 }}
 spec:

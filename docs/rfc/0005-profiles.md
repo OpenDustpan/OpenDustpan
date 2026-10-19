@@ -379,8 +379,6 @@ ADRs in these points. Each point stays open until the owner decides it.
   on any value.
 - A save with a `$secret` writes the document text again. The spacing can
   change (ADR 201 decision 1).
-- A request with `Idempotency-Key` answers 400 until an idempotency store
-  exists. ADR 210 decision 6 requires each mutating route to take the key.
 - The Store port differs from ADR 200 decision 4: `Revision` and `Revisions`
   also take the namespace, `Save` takes an `Anchor` (namespace, ID, newest
   revision read) instead of `id` and `base`, and `Save` returns the `Profile`,

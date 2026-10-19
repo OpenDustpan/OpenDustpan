@@ -635,8 +635,8 @@ func checkCORSHeaders(t *testing.T, h http.Header, tc corsRow) {
 		return
 	}
 
-	if got := h.Get("Access-Control-Expose-Headers"); got != "Retry-After, ETag" {
-		t.Fatalf("Access-Control-Expose-Headers = %q, want Retry-After, ETag", got)
+	if got := h.Get("Access-Control-Expose-Headers"); got != "Retry-After, ETag, Idempotent-Replayed" {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want Retry-After, ETag, Idempotent-Replayed", got)
 	}
 }
 
@@ -656,7 +656,7 @@ func checkPreflightHeaders(t *testing.T, h http.Header) {
 	}
 
 	allowHeaders := strings.Split(h.Get("Access-Control-Allow-Headers"), ", ")
-	for _, want := range []string{"Authorization", "Content-Type", "Dustpan-Channel", "X-Dustpan-CSRF"} {
+	for _, want := range []string{"Authorization", "Content-Type", "Dustpan-Channel", "Idempotency-Key", "If-Match", "X-Dustpan-CSRF"} {
 		if !slices.Contains(allowHeaders, want) {
 			t.Fatalf("Access-Control-Allow-Headers = %q, want %q", allowHeaders, want)
 		}

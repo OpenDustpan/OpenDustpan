@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 )
 
 // consoleHandler serves a built single-page app from dir, for GET and HEAD
@@ -74,7 +76,7 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
 			h.Set(
 				"Access-Control-Allow-Headers",
-				"Authorization, Content-Type, Dustpan-Channel, If-Match, X-Dustpan-CSRF",
+				"Authorization, Content-Type, Dustpan-Channel, "+idempotent.Header+", If-Match, X-Dustpan-CSRF",
 			)
 			h.Set("Access-Control-Max-Age", "600")
 			w.WriteHeader(http.StatusNoContent)
@@ -82,7 +84,7 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 			return
 		}
 
-		h.Set("Access-Control-Expose-Headers", "Retry-After, ETag")
+		h.Set("Access-Control-Expose-Headers", "Retry-After, ETag, "+idempotent.ReplayedHeader)
 
 		next.ServeHTTP(w, r)
 	})

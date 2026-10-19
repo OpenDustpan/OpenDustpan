@@ -52,6 +52,8 @@ func sweepChainServer(
 		durableOwner:     "",
 		inactivityEvery:  0,
 		deletedEvery:     0,
+		idempotency:      nil,
+		idempotencyEvery: 0,
 	}
 }
 

@@ -1,0 +1,17 @@
+# Scoped ignores for the misconfiguration scan. Each entry names one file
+# group and gives the reason. Do not widen a path.
+misconfigurations:
+  - id: KSV-0011
+    paths:
+      - "deploy/helm/charttest/testdata/*.golden.yaml"
+    statement: >-
+      The chart sets no CPU limit by default. A CPU limit throttles the
+      server below its node capacity, and the operator sets one in
+      resources.limits.cpu. The golden files render the default values.
+  - id: KSV-0125
+    paths:
+      - "deploy/helm/charttest/testdata/*.golden.yaml"
+    statement: >-
+      The default image is ghcr.io/opendustpan/opendustpan, the registry of
+      this project. The check trusts a fixed list of registries that does
+      not hold it. The operator sets image.repository and image.digest.

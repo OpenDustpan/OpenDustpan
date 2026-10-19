@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo checks-agent
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -46,8 +46,8 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 
 # The vulnerability database and the misconfiguration checks come from
-# mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is a
-# line in .trivyignore with its reason.
+# mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
+# entry in .trivyignore.yaml, scoped by path, with its reason in statement.
 #
 # The license scan writes a JSON report, and scripts/trivy-license-gate.py checks
 # it. The gate fails on an unknown, restricted (HIGH, for example GPL) or
@@ -63,8 +63,8 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 TRIVY_CANARY_MODULE := github.com/xen0n/gosmopolitan@v1.3.0
 TRIVY_LICENSE_FLAGS := --scanners license --disable-telemetry --skip-version-check --no-progress
 
-trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile), secrets in the tree, and dependency licenses.
-	trivy fs --scanners vuln,misconfig,secret --exit-code 1 \
+trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile, Helm chart output), secrets in the tree, and dependency licenses.
+	trivy fs --scanners vuln,misconfig,secret --exit-code 1 --ignorefile .trivyignore.yaml \
 		--disable-telemetry --skip-version-check --no-progress .
 	go mod download
 	go mod download $(TRIVY_CANARY_MODULE)
@@ -196,3 +196,6 @@ demo: build ## Run the server with the web console and demo data on 127.0.0.1:80
 
 image-smoke: ## Build the container image and run the local smoke test (needs docker; not part of check).
 	./scripts/smoke-image.sh
+
+compose-smoke: ## Start the stack of deploy/compose and drive the real Pulumi CLI and OpenTofu against it (needs docker with compose and openssl; not part of check).
+	E2E_COMPOSE=1 go test -tags e2e -race -count=1 -timeout 30m -run '^TestComposeQuickstart$$' ./e2e/...

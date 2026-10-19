@@ -139,7 +139,7 @@ var Settings = []*Setting{
 		referenceNone+". A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an "+
 			"optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or "+
 			"fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
-			"`Access-Control-Expose-Headers: Retry-After, ETag` on answers to requests.",
+			"`Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests.",
 	).WithFile("allowed-origins"),
 	stringSetting(
 		"tls-cert", "DUSTPAN_TLS_CERT", "",
