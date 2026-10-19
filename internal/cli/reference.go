@@ -15,6 +15,7 @@ func Reference() string {
 	writeServeSettings(&out)
 	writeConfigFile(&out)
 	writeSecrets(&out)
+	writeStepInputs(&out)
 	writeClients(&out)
 
 	return out.String()
@@ -233,6 +234,27 @@ func writeSecrets(out *strings.Builder) {
 	out.WriteString("key file in use, never the key. An operator who loses the key file loses\n")
 	out.WriteString("every secret that the key encrypts, and nobody can recover them. A key file\n")
 	out.WriteString("next to the data does not protect a backup of that data.\n")
+	out.WriteString("\n")
+}
+
+// writeStepInputs writes the section of the variables that the launcher sets
+// for the process of a step, from the declarations that carry the step mark.
+func writeStepInputs(out *strings.Builder) {
+	out.WriteString("## Variables of a step\n")
+	out.WriteString("\n")
+	out.WriteString("The launcher sets these variables for the process of each step of a job. The\n")
+	out.WriteString("server does not read them, and no flag or file key sets them. A step cannot\n")
+	out.WriteString("set a variable with the prefix `DUSTPAN_`: the launcher refuses it.\n")
+	out.WriteString("\n")
+	out.WriteString("| Environment | Value |\n")
+	out.WriteString("| --- | --- |\n")
+
+	for _, setting := range Settings {
+		if setting.StepInput {
+			out.WriteString("| `" + setting.Env + "` | " + setting.Doc + " |\n")
+		}
+	}
+
 	out.WriteString("\n")
 }
 
