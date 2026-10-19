@@ -261,3 +261,47 @@ func TestAuditChannel(t *testing.T) {
 		t.Fatalf("channel of a session request that declares api = %q, want console", got)
 	}
 }
+
+// TestRefuseDevSubjects proves the layer of the session cookie check: with
+// the option, the session of a dev person authenticates nothing, whatever the
+// case of the subject, and the sessions of other people pass. Without the
+// option, the session of a dev person passes, as on a dev installation.
+func TestRefuseDevSubjects(t *testing.T) {
+	t.Parallel()
+
+	secret := newSecret(t)
+
+	for _, tc := range []struct {
+		subject string
+		refuse  bool
+		want    error
+	}{
+		{subject: "dev:admin", refuse: true, want: identity.ErrUnauthenticated},
+		{subject: "DEV:admin", refuse: true, want: identity.ErrUnauthenticated},
+		{subject: "dev:admin", refuse: false, want: nil},
+		{subject: "corp:alice", refuse: true, want: nil},
+		{subject: "developer", refuse: true, want: nil},
+	} {
+		match := aliceMatch()
+		match.Owner.Subject = tc.subject
+
+		var opts []sessionauth.Option
+		if tc.refuse {
+			opts = append(opts, sessionauth.RefuseDevSubjects())
+		}
+
+		c, err := sessionauth.New(&fakeSessions{err: nil, match: match, calls: 0}, []string{consoleOrigin}, opts...)
+		if err != nil {
+			t.Fatalf("new checker: %v", err)
+		}
+
+		p, _, err := c.Authenticate(request(t, http.MethodGet, secret.Reveal(), nil))
+		if !errors.Is(err, tc.want) {
+			t.Errorf("subject %q, refuse %t: err = %v, want %v", tc.subject, tc.refuse, err, tc.want)
+		}
+
+		if tc.want != nil && p.Subject != "" {
+			t.Errorf("subject %q: a refused session returned the principal %q", tc.subject, p.Subject)
+		}
+	}
+}

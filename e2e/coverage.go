@@ -1042,6 +1042,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		SessionPolicy:    coverageSessionPolicies(tb),
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		InstallationKind: "",
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -1150,12 +1151,37 @@ func CoverageAllowlist() []AllowEntry {
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
 		signInAllowEntries(),
+		devAllowEntries(),
 		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
 	)
+}
+
+// devCoveringTest names the test that proves the routes of the dev command
+// instead of a CLI: no CLI reads the capabilities document or signs in with
+// the code of the first run.
+const devCoveringTest = "TestDevCommand"
+
+// devAllowEntries returns the capabilities document and the sign-in with the
+// one-time code of the dev command. The steps of devCoveringTest start the
+// real binary on a pseudo terminal, play the browser with the code from the
+// banner, and read the document with and without the token.
+func devAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/capabilities", CoveringTest: devCoveringTest,
+			Reason: "Console and client route: no CLI reads the capabilities document. The harness " +
+				"step reads it from a dev server with and without the token.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/sign-in/dev-code", CoveringTest: devCoveringTest,
+			Reason: "Console route: only the one-time link of the dev command signs in with the code. " +
+				"The harness step plays the browser with the code from the banner of the real binary.",
+		},
+	}
 }
 
 // auditSinkCoveringTest names the test that proves the audit sink list

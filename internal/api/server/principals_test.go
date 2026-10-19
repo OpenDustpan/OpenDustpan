@@ -92,6 +92,7 @@ func newAuditedPrincipalHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -440,6 +441,24 @@ func refusalCases(aliceID, groupID string) []refusalCase {
 				method: http.MethodPost,
 				path:   "/api/server/principals",
 				body:   `{"subject":"admin-2","kind":"service"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "reserved dev person",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"dev:admin","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "reserved dev prefix, upper case",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"DEV:someone","kind":"person"}`,
 				want:   http.StatusBadRequest,
 			},
 		},
@@ -911,6 +930,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",
@@ -993,6 +1013,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",

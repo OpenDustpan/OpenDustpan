@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -46,19 +47,28 @@ const testProvider = "corp"
 // no cookie: the start of a sign-in sends the browser to the identity
 // provider, and a callback with no sign-in cookie fails.
 func wantPublicStatus(route apiserver.Route) int {
-	if route.Path == "/api/server/sign-in/{provider}" {
+	switch route.Path {
+	case "/api/server/sign-in/{provider}":
 		return http.StatusFound
+	case "/api/dustpan/v1/sign-in/dev-code":
+		return http.StatusForbidden
+	case "/api/dustpan/v1/capabilities":
+		return http.StatusOK
 	}
 
 	return http.StatusBadRequest
 }
 
 // publicPatterns lists the routes that need no sign-in: the start and the
-// callback of a sign-in, which run before the person has a session.
+// callback of a sign-in, which run before the person has a session, the
+// sign-in with the one-time code of the dev command, and the capabilities
+// document, which answers the API version to every caller.
 func publicPatterns() []string {
 	return []string{
 		"GET /api/server/sign-in/{provider}",
 		"GET /api/server/sign-in/{provider}/callback",
+		"POST /api/dustpan/v1/sign-in/dev-code",
+		"GET /api/dustpan/v1/capabilities",
 	}
 }
 
@@ -265,30 +275,36 @@ func newServiceBackedHandler(
 		t.Fatalf("session service: %v", err)
 	}
 
+	devCode, _, err := devcode.Make(nil)
+	if err != nil {
+		t.Fatalf("make dev sign-in code: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Now:            nil,
-		TempAdmins:     nil,
-		Authenticator:  authn,
-		Authorizer:     authz,
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     namespaces,
-		Backups:        service,
-		Restores:       restores,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "test",
-		Schema:         st,
-		Journal:        st,
-		Principals:     seedRoutePrincipals(t, st),
-		Tokens:         seedRouteTokens(t, st),
-		Access:         seedRouteAccess(t, st),
-		Audit:          st,
-		OnAuditFailure: nil,
-		DeletedUnits:   stubSweeper{},
-		AuditChain:     stubAuditChain{},
-		AuditSinks:     nil,
-		IPAllowlists:   allow,
-		SessionPolicy:  sessionPolicies,
+		InstallationKind: "",
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    authn,
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          service,
+		Restores:         restores,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           st,
+		Journal:          st,
+		Principals:       seedRoutePrincipals(t, st),
+		Tokens:           seedRouteTokens(t, st),
+		Access:           seedRouteAccess(t, st),
+		Audit:            st,
+		OnAuditFailure:   nil,
+		DeletedUnits:     stubSweeper{},
+		AuditChain:       stubAuditChain{},
+		AuditSinks:       nil,
+		IPAllowlists:     allow,
+		SessionPolicy:    sessionPolicies,
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
@@ -301,6 +317,8 @@ func newServiceBackedHandler(
 					Source:      principal.SourceOIDC,
 				},
 			},
+			DevCode:  devCode,
+			DevAdmin: bootstrapAdmin,
 		},
 		CheckpointEpochs: fakeEpochs{},
 	})
@@ -1375,6 +1393,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -1516,6 +1535,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1551,6 +1571,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},

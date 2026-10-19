@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -68,6 +69,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
 		{name: "apply keeps the installation state of the target", test: testRestoreKeepsInstallationState},
+		{name: "apply keeps the installation kind of the target", test: testRestoreKeepsInstallationKind},
 		{
 			name: "a restore keeps the backups, restores and installation rows of the target",
 			test: testRestoreKeepsControlRows,
@@ -813,6 +815,78 @@ func testRestoreKeepsInstallationState(t *testing.T, newStore RestoreFactory) {
 			t.Fatalf("installation state after the swap of a %s backup = %q, want the target state %q",
 				tc.source, got, tc.target)
 		}
+	}
+}
+
+// testRestoreKeepsInstallationKind proves that a backup leaves the installation
+// kind out and a restore keeps the kind of the live row: after the swap, a
+// claim of another kind still returns the kind of the target. A store without
+// the kind port skips the case.
+func testRestoreKeepsInstallationKind(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	cases := []struct {
+		name string
+		// source and target are the kinds claimed before the backup and the
+		// restore; empty claims nothing.
+		source installation.Kind
+		target installation.Kind
+		// other is the kind that the claim after the swap asks for, and want
+		// the kind that the claim must return.
+		other installation.Kind
+		want  installation.Kind
+	}{
+		{
+			name: "a dev target stays dev after a production backup", source: installation.KindProduction,
+			target: installation.KindDev, other: installation.KindProduction, want: installation.KindDev,
+		},
+		{
+			name: "a dev target stays dev after a backup with no kind", source: "",
+			target: installation.KindDev, other: installation.KindProduction, want: installation.KindDev,
+		},
+		{
+			name: "a target with no kind takes none from a dev backup", source: installation.KindDev,
+			target: "", other: installation.KindProduction, want: installation.KindProduction,
+		},
+	}
+
+	for _, tc := range cases {
+		ctx := t.Context()
+		ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+		from, okSrc := ps.src.(installation.KindStore)
+		to, okDst := ps.dst.(installation.KindStore)
+
+		if !okSrc || !okDst {
+			t.Skip("the store has no installation kind")
+		}
+
+		claimKindIfSet(t, from, tc.source)
+		claimKindIfSet(t, to, tc.target)
+
+		applySnapshot(t, ps)
+
+		got, err := to.ClaimKind(ctx, tc.other)
+		if err != nil {
+			t.Fatalf("%s: claim %q after the swap: %v", tc.name, tc.other, err)
+		}
+
+		if got != tc.want {
+			t.Fatalf("%s: claim %q after the swap = %q, want %q", tc.name, tc.other, got, tc.want)
+		}
+	}
+}
+
+// claimKindIfSet claims kind in s, and claims nothing for an empty kind.
+func claimKindIfSet(t *testing.T, s installation.KindStore, kind installation.Kind) {
+	t.Helper()
+
+	if kind == "" {
+		return
+	}
+
+	if _, err := s.ClaimKind(t.Context(), kind); err != nil {
+		t.Fatalf("claim %q: %v", kind, err)
 	}
 }
 

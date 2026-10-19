@@ -377,7 +377,7 @@ func pgControlTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableInstallation,
-			columns: []string{"id", pgColState},
+			columns: []string{"id", pgColState, "kind"},
 			orderBy: []string{"id"},
 		},
 	}
@@ -998,8 +998,8 @@ func newStagingSchema() (string, error) {
 
 // createStagingSchema creates the staging schema and replays every migration
 // in it, so its tables with their foreign keys match the live schema. The
-// migration DDL runs with the search path on the staging schema only: the
-// live tables stay untouched. It records every migration in the staging
+// migration DDL runs with the search path on the staging schema and its own
+// control schema: the live tables stay untouched. It records every migration in the staging
 // schema_migrations, so the staged data carries its own schema version.
 func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 	all, err := migrate.Load(migrations, "migrations")
@@ -1020,7 +1020,11 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 	}
 
 	return inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(staging)); err != nil {
+		// The control schema of the staging schema comes second. The migration
+		// that moves the installation table makes it, and a later migration
+		// that changes a control table finds the table through it.
+		path := pgIdent(staging) + ", " + pgIdent(staging+"_control")
+		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+path); err != nil {
 			return fmt.Errorf("set staging search path: %w", err)
 		}
 

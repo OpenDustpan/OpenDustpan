@@ -37,7 +37,7 @@ func LoadAdminTokensFrom(lookup func(key string) (string, bool)) ([]string, erro
 	}
 
 	if path, ok := lookup(AdminTokenFileEnvVar); ok && strings.TrimSpace(path) != "" {
-		return readAdminTokenFile(strings.TrimSpace(path))
+		return ReadAdminTokenFile(strings.TrimSpace(path))
 	}
 
 	return nil, fmt.Errorf(
@@ -48,9 +48,9 @@ func LoadAdminTokensFrom(lookup func(key string) (string, bool)) ([]string, erro
 	)
 }
 
-// readAdminTokenFile reads the tokens in path. Like the key-encryption key
+// ReadAdminTokenFile reads the tokens in the file at path. Like the key-encryption key
 // file, it refuses a file that group or other users can access.
-func readAdminTokenFile(path string) ([]string, error) {
+func ReadAdminTokenFile(path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: stat file: %w", AdminTokenFileEnvVar, err)

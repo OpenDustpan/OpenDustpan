@@ -250,6 +250,14 @@ func TestProviderAdminCreateRefusals(t *testing.T) {
 		t.Fatalf("create with no secret = %v, want ErrInvalidProvider", err)
 	}
 
+	// The ID of the dev sign-in would let a provider compose "dev:admin".
+	bad = corpInput()
+	bad.ID = session.DevProviderID
+
+	if _, err := f.admin.Create(t.Context(), sessionCallerEntry(), bad); !errors.Is(err, session.ErrInvalidProvider) {
+		t.Fatalf("create with the reserved ID = %v, want ErrInvalidProvider", err)
+	}
+
 	bad = corpInput()
 	bad.ID, bad.Issuer = "delta", "not a url"
 

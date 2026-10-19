@@ -310,6 +310,7 @@ type ImportsPurged struct {
 type Installation struct {
 	ID    int64
 	State string
+	Kind  pgtype.Text
 }
 
 type InstallationSecretKey struct {

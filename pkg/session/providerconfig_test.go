@@ -38,6 +38,7 @@ func TestProviderConfigValidate(t *testing.T) {
 		name   string
 		change func(*session.ProviderConfig)
 	}{
+		{"reserved ID of the dev sign-in", func(p *session.ProviderConfig) { p.ID = session.DevProviderID }},
 		{"upper-case ID", func(p *session.ProviderConfig) { p.ID = "Corp" }},
 		{"ID over 32 bytes", func(p *session.ProviderConfig) { p.ID = "a" + strings.Repeat("b", 32) }},
 		{"relative issuer", func(p *session.ProviderConfig) { p.Issuer = "idp.example" }},
