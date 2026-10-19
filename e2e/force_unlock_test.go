@@ -361,12 +361,15 @@ func (r *forceUnlockRun) checkCustomRole(t *testing.T) {
 
 	ctx := t.Context()
 
+	var role e2eRole
+
 	principalCall(ctx, t, r.env, principalStep{
 		http.MethodPost, "/api/server/roles",
 		`{"name":"` + unlockerRole + `","actions":["unit:read","unit:write-forced"]}`, http.StatusCreated,
-	}, nil)
+	}, &role)
 
-	dee := issueRefusalPerson(ctx, t, r.env, "dee", unlockerRole)
+	// A grant names a custom role by its ID.
+	dee := issueRefusalPerson(ctx, t, r.env, "dee", role.ID)
 
 	held := r.lock(t, r.maintainer)
 	if held.id == "" {
