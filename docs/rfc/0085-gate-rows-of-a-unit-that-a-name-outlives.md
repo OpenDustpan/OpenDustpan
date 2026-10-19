@@ -73,6 +73,8 @@ decision.
   of the unit remove it?
 - Does the same problem apply to a collection that a delete frees? A delete
   of a collection removes its rows now, so the expected answer is no.
+- When two deleted units share one name, a purge or a restore under a new name
+  of one takes the rows of both. Option C resolves this.
 
 ## Outcome
 

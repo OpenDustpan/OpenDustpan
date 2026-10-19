@@ -129,6 +129,17 @@ func RunGate(t *testing.T, newStore GateFactory) {
 		}
 	})
 
+	t.Run("a restore under a new name is refused when a live unit holds the old name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range gateUnitCases() {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				testGateRestoreAfterReuse(t, newStore(t), tc)
+			})
+		}
+	})
+
 	t.Run("a purge with a full entry ends its changes with the count left out", func(t *testing.T) {
 		t.Parallel()
 		testGatePurgeChangeCap(t, newStore(t))
@@ -750,6 +761,69 @@ func testGateRestoreNewName(t *testing.T, s GateStore, tc gateUnitCase) {
 	err = s.PathSets().Delete(t.Context(), ref, fence, en)
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("Delete(path set read by the restored unit's gate) = %v, want gate.ErrInvalid", err)
+	}
+}
+
+// testGateRestoreAfterReuse checks that a restore under a new name is refused
+// when a live unit holds the old name, because the live unit shares the gates
+// of the deleted unit and a move would take its access limits from it.
+func testGateRestoreAfterReuse(t *testing.T, s GateStore, tc gateUnitCase) {
+	t.Helper()
+
+	d := gateDomain{s: s}
+
+	fence, err := d.CreateNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("CreateNamespace() = %v", err)
+	}
+
+	if err = d.CreateUnit(t.Context(), "acme", tc.tool, tc.unit, ""); err != nil {
+		t.Fatalf("CreateUnit() = %v", err)
+	}
+
+	en := gateEntry("acme", "namespace:manage-gates")
+	set := gate.PathSet{Scope: gate.NamespaceScope("acme"), ID: "network", Version: 0, Globs: []string{"net/**"}}
+
+	if _, err = s.PathSets().Put(t.Context(), set, 0, fence, en); err != nil {
+		t.Fatalf("Put(path set) = %v", err)
+	}
+
+	unit := unitScopeOf(t, tc.tool, tc.unit)
+	putGateAt(t, s, unit, fence)
+
+	deleted := deletedUnit{tc: tc, fence: fence, id: softDeleteUnitID(t, s, tc, fence)}
+
+	if err = d.CreateUnit(t.Context(), "acme", tc.tool, tc.unit, ""); err != nil {
+		t.Fatalf("CreateUnit(again) = %v", err)
+	}
+
+	limit := gate.AccessLimit{Scope: unit, ID: "no-agents", Version: 0, Policy: `forbid (principal, action, resource);`}
+	if _, err = s.AccessLimits().Put(t.Context(), limit, 0, fence, en); err != nil {
+		t.Fatalf("Put(access limit) = %v", err)
+	}
+
+	fresh := tc.unit + "-new"
+
+	err = deleted.restoreAs(t, s, bareName(fresh))
+	if !errors.Is(err, errAlreadyExists(tc)) {
+		t.Fatalf("restore under a new name while a live unit holds the old name = %v, want ErrAlreadyExists", err)
+	}
+
+	limits, err := s.AccessLimits().List(t.Context(), unit)
+	if err != nil {
+		t.Fatalf("List(access limits) = %v", err)
+	}
+
+	if len(limits) != 1 {
+		t.Fatalf("access limits of the live unit = %d, want 1", len(limits))
+	}
+
+	if n := gateCount(t, s, unit); n != 1 {
+		t.Fatalf("gates of the live unit = %d, want 1", n)
+	}
+
+	if n := gateCount(t, s, unitScopeOf(t, tc.tool, fresh)); n != 0 {
+		t.Fatalf("gates of the new name = %d, want 0", n)
 	}
 }
 

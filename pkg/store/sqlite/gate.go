@@ -651,11 +651,42 @@ func restoreUnitGate(ctx context.Context, q *db.Queries, u unitGate, name string
 		return nil, err
 	}
 
+	if len(moved) > 0 {
+		if sharedErr := sharedNameError(ctx, q, u); sharedErr != nil {
+			return nil, sharedErr
+		}
+	}
+
 	if moveErr := moveUnitGate(ctx, q, u, name); moveErr != nil {
 		return nil, moveErr
 	}
 
 	return gatestore.MovedChanges(moved, room), nil
+}
+
+// sharedNameError returns the refusal of a restore under a new name when a
+// live unit of the tool holds the name of the deleted unit u. The live unit
+// shares the gates of u, and a move would take its access limits from it.
+func sharedNameError(ctx context.Context, q *db.Queries, u unitGate) error {
+	_, err := q.GetInventoryUnit(ctx, db.GetInventoryUnitParams{Namespace: u.ns.String(), Tool: u.tool, Name: u.name})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("select inventory unit: %w", err)
+	}
+	if u.tool == workspaceInventoryTool {
+		return fmt.Errorf(
+			"%w: the live workspace %s holds the gates of the deleted workspace; restore the deleted workspace under its name after you delete the live workspace",
+			workspace.ErrAlreadyExists,
+			u.name,
+		)
+	}
+	return fmt.Errorf(
+		"%w: the live stack %s holds the gates of the deleted stack; restore the deleted stack under its name after you delete the live stack",
+		stack.ErrAlreadyExists,
+		u.name,
+	)
 }
 
 // purgeUnitGate deletes the gates, access limits, rules and path sets that the
