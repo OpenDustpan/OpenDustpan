@@ -811,3 +811,22 @@ func TestHostRecordFailureCleansUp(t *testing.T) {
 	requireHostCleanup(ctx, t, st)
 	requireHostRetry(ctx, t, st)
 }
+
+// TestHostRecoveryOff proves that an operator turns the host command off
+// with the environment variable, and that other values leave it on.
+func TestHostRecoveryOff(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]bool{"true": true, "TRUE": true, "": false, "false": false, "1": false} {
+		got := hostRecoveryOff(func(name string) string {
+			if name != hostOffEnv {
+				return "true"
+			}
+
+			return value
+		})
+		if got != want {
+			t.Errorf("hostRecoveryOff(%q) = %v, want %v", value, got, want)
+		}
+	}
+}

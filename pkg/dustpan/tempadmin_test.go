@@ -28,14 +28,22 @@ func tempadminBase() time.Time {
 	return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC)
 }
 
+// The record ends tempadminRecordLife after the create. The host token ends
+// at the longest lifetime the host issuer allows, so at tempadminAfterRecord
+// the record ended and the token still lives.
+const (
+	tempadminRecordLife  = 12 * time.Hour
+	tempadminAfterRecord = 13 * time.Hour
+)
+
 // tempadminEntry returns a valid audit entry in the scope @server for one
 // store write of the expiry test at at.
-func tempadminEntry(at time.Time, subject, action, object string) audit.Entry {
+func tempadminEntry(at time.Time, action, object string) audit.Entry {
 	return audit.Entry{
 		FenceVersion: 0,
 		At:           at,
 		Namespace:    audit.ServerScope,
-		Subject:      subject,
+		Subject:      tempadmin.HostSubject,
 		IDPSubject:   "",
 		TokenID:      "",
 		Action:       action,
@@ -95,7 +103,7 @@ func TestExpiredTempAdminStaysDenied(t *testing.T) {
 
 	// Past the fixed expiry the token still lives, but the record ended:
 	// every answer denies the use.
-	now = base.Add(tempadmin.Lifetime).Add(time.Hour)
+	now = base.Add(tempadminAfterRecord)
 
 	requireExpiredDenied(t, callUser, token)
 	checkTempAdminEnded(t, st, base)
@@ -278,7 +286,7 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		GroupCount:  0,
 	}
 
-	e := tempadminEntry(base, tempadmin.HostSubject, tempadmin.Action, principal.Ref(p.ID))
+	e := tempadminEntry(base, tempadmin.Action, principal.Ref(p.ID))
 
 	if err := st.CreatePrincipal(ctx, p, e); err != nil {
 		t.Fatalf("create principal: %v", err)
@@ -296,7 +304,6 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 
 	grantEntry := tempadminEntry(
 		base,
-		tempadmin.HostSubject,
 		string(identity.ActionServerManageAccess),
 		access.GrantRef(g),
 	)
@@ -312,35 +319,32 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		t.Fatalf("access token service: %v", err)
 	}
 
-	admin := identity.Principal{
-		Subject: "admin", DisplayName: "admin", Admin: true,
-		TokenID: "", TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
-	}
-
-	expires := base.Add(2 * tempadmin.Lifetime)
-
-	_, issued, err := tokens.Create(
-		ctx,
-		admin,
-		tempadminEntry(base, "admin", string(identity.ActionServerManageTokens), ""),
-		accesstoken.ScopePersonal,
-		accesstoken.Input{PrincipalID: p.ID, Name: tempadmin.HostTokenName, ExpiresAt: expires},
-	)
-	if err != nil {
-		t.Fatalf("issue host token: %v", err)
-	}
-
 	r := tempadmin.TempAdmin{
 		CreatedAt:   base,
-		ExpiresAt:   base.Add(tempadmin.Lifetime),
+		ExpiresAt:   base.Add(tempadminRecordLife),
 		PrincipalID: p.ID,
 		Subject:     "alice",
 		CreatedBy:   "tester",
 	}
 
-	recordEntry := tempadminEntry(base, tempadmin.HostSubject, tempadmin.Action, tempadmin.Ref(p.ID))
-	if err := st.CreateTempAdmin(ctx, r, recordEntry); err != nil {
-		t.Fatalf("record temporary administrator: %v", err)
+	recordEntry := tempadminEntry(base, tempadmin.Action, tempadmin.Ref(p.ID))
+	if createErr := st.CreateTempAdmin(ctx, r, recordEntry); createErr != nil {
+		t.Fatalf("record temporary administrator: %v", createErr)
+	}
+
+	issuer, err := accesstoken.NewHostIssuer(tokens)
+	if err != nil {
+		t.Fatalf("host issuer: %v", err)
+	}
+
+	_, issued, err := issuer.IssueFirstToken(
+		ctx,
+		tempadminEntry(base, string(identity.ActionServerManageTokens), ""),
+		p.ID,
+		base.Add(tempadmin.Lifetime),
+	)
+	if err != nil {
+		t.Fatalf("issue host token: %v", err)
 	}
 
 	return issued.Reveal()
@@ -359,7 +363,7 @@ func checkTempAdminEnded(t *testing.T, st *sqlite.Store, base time.Time) {
 		t.Fatalf("get principal: %v", err)
 	}
 
-	if !p.DisabledAt.Equal(base.Add(tempadmin.Lifetime).Add(time.Hour)) {
+	if !p.DisabledAt.Equal(base.Add(tempadminAfterRecord)) {
 		t.Fatalf("principal disabled at = %s, want the time of the first expired use", p.DisabledAt)
 	}
 
@@ -381,7 +385,7 @@ func checkTempAdminEnded(t *testing.T, st *sqlite.Store, base time.Time) {
 		t.Fatalf("record after expiry = %v, want the tombstone", err)
 	}
 
-	if rec.ActiveAt(base.Add(tempadmin.Lifetime).Add(time.Hour)) {
+	if rec.ActiveAt(base.Add(tempadminAfterRecord)) {
 		t.Fatal("tombstone is still active after its expiry")
 	}
 }

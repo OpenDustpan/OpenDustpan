@@ -271,6 +271,11 @@ var Settings = []*Setting{
 			"(DUSTPAN_DISABLE_PULUMI_JOURNALING=true)",
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	).WithFile("disable-pulumi-journaling"),
+	boolSetting(
+		"disable-host-recovery", "DUSTPAN_DISABLE_HOST_RECOVERY",
+		"turn the host command off, so it makes no temporary administrator (DUSTPAN_DISABLE_HOST_RECOVERY=true)",
+		"(none: the host command is on). Set `true` in the environment of the operator account to turn it off",
+	),
 	stringSetting(
 		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "on",
 		"hash chain of the audit log: on or off. A change starts the server in maintenance mode "+

@@ -50,18 +50,29 @@ var (
 	// ErrPersonExists reports a host run that names a person that a
 	// principal already holds.
 	ErrPersonExists = errors.New("person already exists")
+	// errHostOff reports a host run while the operator turned the command
+	// off.
+	errHostOff = errors.New(
+		"host create-temp-admin is off: unset " + hostOffEnv + " on the host, then run the command again",
+	)
 	// errHostBadLifetime reports a token policy with no positive maximum
 	// lifetime.
 	errHostBadLifetime = errors.New("read token policy: maximum lifetime is not positive")
 )
 
+// hostOffEnv is the environment variable with which an operator turns the
+// host command off. The value "true" turns it off.
+const hostOffEnv = "DUSTPAN_DISABLE_HOST_RECOVERY"
+
+// hostRecoveryOff reports whether the operator turned the host command off
+// in the environment that getenv reads.
+func hostRecoveryOff(getenv func(string) string) bool {
+	return strings.EqualFold(strings.TrimSpace(getenv(hostOffEnv)), "true")
+}
+
 // hostSubject is the subject of the audit entries of the host command: the
 // host itself acted, through no sign-in.
 const hostSubject = tempadmin.HostSubject
-
-// hostTokenName is the name of the personal token the host command issues.
-// One name for every recovery token, so the token list shows their origin.
-const hostTokenName = tempadmin.HostTokenName
 
 // hostCaller is the caller the host command acts as: an administrator with
 // no stored token, like a bootstrap administrator.
@@ -127,6 +138,10 @@ func hostCreateTempAdmin(
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	if hostRecoveryOff(os.Getenv) {
+		return errHostOff
 	}
 
 	rest := fs.Args()
@@ -287,8 +302,12 @@ func tempExpires(
 func issueHostToken(
 	ctx context.Context, tokens *accesstoken.Service, p principal.Principal, expires time.Time, person string,
 ) (accesstoken.Token, accesstoken.Secret, error) {
-	tok, secret, err := tokens.Create(ctx, hostCaller(), hostEntry(string(identity.ActionServerManageTokens)),
-		accesstoken.ScopePersonal, accesstoken.Input{PrincipalID: p.ID, Name: hostTokenName, ExpiresAt: expires})
+	issuer, err := accesstoken.NewHostIssuer(tokens)
+	if err != nil {
+		return accesstoken.Token{}, accesstoken.Secret{}, fmt.Errorf("host token issuer: %w", err)
+	}
+
+	tok, secret, err := issuer.IssueFirstToken(ctx, hostEntry(string(identity.ActionServerManageTokens)), p.ID, expires)
 	if err != nil {
 		return accesstoken.Token{}, accesstoken.Secret{}, fmt.Errorf("issue access token for %q: %w", person, err)
 	}

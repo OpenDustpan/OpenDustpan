@@ -2210,6 +2210,18 @@ func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceI
 	return err
 }
 
+const deleteTempAdmin = `-- name: DeleteTempAdmin :execrows
+DELETE FROM temp_admins WHERE principal_id = $1
+`
+
+func (q *Queries) DeleteTempAdmin(ctx context.Context, principalID string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTempAdmin, principalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteUnitContext = `-- name: DeleteUnitContext :exec
 DELETE FROM object_context
 WHERE namespace_id = $1 AND object_kind IN ('unit', 'resource') AND object_id = $2
@@ -2240,18 +2252,6 @@ type DeleteUnitOutputContextParams struct {
 func (q *Queries) DeleteUnitOutputContext(ctx context.Context, arg DeleteUnitOutputContextParams) error {
 	_, err := q.db.Exec(ctx, deleteUnitOutputContext, arg.NamespaceID, arg.ObjectID)
 	return err
-}
-
-const deleteTempAdmin = `-- name: DeleteTempAdmin :execrows
-DELETE FROM temp_admins WHERE principal_id = $1
-`
-
-func (q *Queries) DeleteTempAdmin(ctx context.Context, principalID string) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteTempAdmin, principalID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const deleteUpdatesOfStack = `-- name: DeleteUpdatesOfStack :exec

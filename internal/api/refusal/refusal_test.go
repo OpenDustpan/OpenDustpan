@@ -207,6 +207,7 @@ func TestNoStoreWritesNothing(t *testing.T) {
 	err := rec.Authorize(t.Context(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", http.NoBody),
 		identity.Principal{
 			Subject: "bo@example.com", TokenID: "tok-1", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		},
 		identity.ActionUnitWrite, identity.NamespaceObject("team"))
 	if !errors.Is(err, identity.ErrDenied) {
@@ -230,6 +231,7 @@ func checkRefusal(t *testing.T, tc refusalCase) {
 	err := rec.Authorize(t.Context(), req,
 		identity.Principal{
 			Subject: tc.subject, TokenID: "tok-1", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		}, identity.ActionUnitWrite, tc.obj)
 
 	if !errors.Is(err, tc.wantErr) {

@@ -47,6 +47,22 @@ The grant makes the person a site administrator until the expiry.
 A name that a principal already holds is refused: run the command again
 with a name that no principal holds.
 
+## What the command may do
+
+A person normally makes only its own tokens, after a sign-in. Recovery has
+no sign-in, so the host command has one narrow exception: it issues the
+first token of the temporary administrator that the same run just made.
+The token ends at the fixed expiry, at most 24 hours after the create.
+The command never issues a second token or a token for another person,
+and no API route reaches this exception.
+The create of the person and of the token each write an audit entry.
+
+## Turn the command off
+
+Set `DUSTPAN_DISABLE_HOST_RECOVERY=true` in the environment of the
+operator account on the host. The command then refuses to run and says
+so. Unset the variable to use the command again.
+
 ## What the expiry does
 
 At the fixed expiry the server disables the principal, ends its
