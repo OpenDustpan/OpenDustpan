@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -137,6 +138,10 @@ type SignIn struct {
 	Admin     *session.ProviderAdmin
 	Providers []SignInProvider
 	Origins   []string
+	// DevCode is the one-time code of opendustpan dev. With it, the handler
+	// mounts the route that signs a browser in as the dev administrator.
+	// Nil mounts no such route.
+	DevCode *devcode.Code
 }
 
 // StoredProviders finds the sign-in providers that the API keeps.
@@ -155,6 +160,7 @@ type signInState struct {
 	admin     *session.ProviderAdmin
 	providers map[string]SignInProvider
 	checker   *sessionauth.Checker
+	devCode   *devcode.Code
 }
 
 // provider returns the sign-in provider id: a provider of the
@@ -210,7 +216,7 @@ func newSignInState(cfg *SignIn) (*signInState, error) {
 
 	return &signInState{
 		sessions: cfg.Sessions, limiter: cfg.Limiter, stored: cfg.Stored, admin: cfg.Admin, providers: providers,
-		checker: checker,
+		checker: checker, devCode: cfg.DevCode,
 	}, nil
 }
 
@@ -748,6 +754,8 @@ func classifySignIn(err error) (int, string, bool) {
 		return http.StatusBadRequest, errSignInFailed.Error(), true
 	case errors.Is(err, errNoSession):
 		return http.StatusNotFound, errNoSession.Error(), true
+	case errors.Is(err, errDevCode):
+		return http.StatusForbidden, errDevCode.Error(), true
 	case errors.Is(err, errSignInRefused), errors.Is(err, errCSRF), errors.Is(err, errOtherSite):
 		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, errFreshParam):

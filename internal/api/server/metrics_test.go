@@ -66,6 +66,7 @@ func newMetricsHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    authn,

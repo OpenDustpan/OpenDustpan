@@ -21,6 +21,7 @@ func sweepChainServer(
 	t.Helper()
 
 	return &Server{
+		kind:             kindState{store: nil, kind: ""},
 		tempAdmins:       nil,
 		handler:          nil,
 		logger:           slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})),

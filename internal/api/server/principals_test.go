@@ -92,6 +92,7 @@ func newAuditedPrincipalHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -911,6 +912,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",
@@ -993,6 +995,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		InstallationKind: "",
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",

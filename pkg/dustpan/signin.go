@@ -63,7 +63,7 @@ var errSignInSetup = errors.New("console sign-in")
 // keeps them, the API manages the providers in addition to those of cfg.
 func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Service) (*serverapi.SignIn, error) {
 	stores, stored := cfg.namespaceStore.(providerStores)
-	if len(cfg.oidcProviders) == 0 && (!stored || !storedSignInReady(cfg, policies)) {
+	if len(cfg.oidcProviders) == 0 && cfg.devCode == nil && (!stored || !storedSignInReady(cfg, policies)) {
 		return nil, nil //nolint:nilnil // No provider is a valid setup: the sign-in routes stay unmounted.
 	}
 
@@ -91,7 +91,7 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 
 	in := &serverapi.SignIn{
 		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...),
+		Origins: append([]string{origin}, cfg.allowedOrigins...), DevCode: cfg.devCode,
 	}
 
 	if cfg.gate != nil {

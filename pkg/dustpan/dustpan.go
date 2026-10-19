@@ -56,6 +56,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -68,6 +69,7 @@ import (
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -210,6 +212,12 @@ type settings struct {
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
+	// installationKind, kindStore and devCode are the installation kind, the
+	// store that keeps it and the one-time sign-in code of opendustpan dev.
+	// See WithInstallationKind, WithInstallationKindStore and WithDevSignIn.
+	installationKind installation.Kind
+	kindStore        installation.KindStore
+	devCode          *devcode.Code
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -551,6 +559,9 @@ type Server struct {
 	// signInProviders binds each provider of the console sign-in to its
 	// issuer at the start, or is the zero value with no console sign-in.
 	signInProviders providerBinding
+	// kind is the installation kind of this server and the store that keeps
+	// its claim.
+	kind kindState
 	// durable keeps the job schedules, or is nil without them. inactivityEvery
 	// and deletedEvery are the periods of those schedules.
 	durable         DurableStore
@@ -629,6 +640,9 @@ func defaultSettings() *settings {
 		backupTarget:            nil,
 		backupTargetName:        "",
 		beforeServe:             nil,
+		installationKind:        "",
+		kindStore:               nil,
+		devCode:                 nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainOn,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
@@ -887,6 +901,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		signInRequests:   adapters.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, adapters.signIn),
+		kind:             kindState{kind: cfg.installationKind, store: cfg.kindStore},
 		durable:          cfg.durableStore,
 		durableOwner:     durableOwner(cfg),
 		inactivityEvery:  sweepEvery,
@@ -1279,8 +1294,9 @@ func newUpdateService(
 	return updates, nil
 }
 
-// checkTLSAndAllowlist validates the TLS pair and the IP allowlist switch
-// of cfg. It keeps checkSettings under the complexity limit.
+// checkTLSAndAllowlist validates the TLS pair, the IP allowlist switch and the
+// installation kind of cfg. It keeps checkSettings under the complexity
+// limit.
 func checkTLSAndAllowlist(cfg *settings) error {
 	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
 		missing := "WithTLS certificate file"
@@ -1299,7 +1315,7 @@ func checkTLSAndAllowlist(cfg *settings) error {
 		)
 	}
 
-	return nil
+	return checkKindSettings(cfg)
 }
 
 // newServices builds the domain services from validated settings. It reads
@@ -1828,6 +1844,10 @@ func (s *Server) fenceStoppedRestore(ctx context.Context) error {
 // adapters already name the backup step in their error text, so startUp
 // adds no second prefix.
 func (s *Server) startUp(ctx context.Context) error {
+	if err := s.claimInstallationKind(ctx); err != nil {
+		return err
+	}
+
 	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
 		return err
 	}
@@ -2250,6 +2270,8 @@ func newServerHandler(
 		AuditChain:   auditChainPort(deps.chain),
 		AuditSinks:   sinks,
 		SignIn:       deps.signIn,
+
+		InstallationKind: cfg.installationKind,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -2790,6 +2812,8 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
+	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"):
+		return adapterServer
 	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
 		return "inventory"
 	case strings.HasPrefix(name, "/api/audit/"):
@@ -3092,6 +3116,12 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	})
 	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	// The capabilities document and the dev sign-in belong to the
+	// installation API, so they stay available in maintenance mode like the
+	// rest of it.
+	mountV1(mux, a.server, func(h http.Handler) http.Handler {
+		return withCORS(h, cfg.allowedOrigins)
 	})
 	// A path under the prefix that no handler serves answers 404 in the shape
 	// of the tool-neutral API. Without this row, the console files or the
