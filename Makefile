@@ -21,6 +21,8 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
 	python3 -I scripts/runner-deps-guard.py --selftest
 	python3 -I scripts/runner-deps-guard.py
+	python3 -I scripts/module-age-gate.py --selftest
+	python3 -I scripts/module-age-gate.py
 	golangci-lint run ./...
 
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
