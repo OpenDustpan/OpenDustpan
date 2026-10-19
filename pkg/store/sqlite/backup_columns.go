@@ -461,6 +461,8 @@ func sqliteControlTables() []sqliteBackupTable {
 			},
 		},
 	}
+
+	return slices.Concat(core, sqliteRunnerControlTables())
 }
 
 // sqliteEmptiedTables lists the column list of every table of
@@ -479,8 +481,6 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			columns: []string{"id", "key"},
 		},
 	}
-
-	return slices.Concat(core, sqliteRunnerControlTables())
 }
 
 // sqliteSessionBackupTables lists the column lists of the session and
