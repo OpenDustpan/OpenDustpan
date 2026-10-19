@@ -84,7 +84,7 @@ func TestValidateSteps(t *testing.T) {
 		},
 		{
 			"reserved variable",
-			func(s []job.Step) []job.Step { s[0].Env = map[string]string{"DUSTPAN_JOB": "a"}; return s },
+			func(s []job.Step) []job.Step { s[0].Env = map[string]string{"DUSTPAN_JOB_ID": "a"}; return s },
 			false,
 		},
 		{"reserved variable lower case", func(s []job.Step) []job.Step {

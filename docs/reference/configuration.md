@@ -180,6 +180,23 @@ key file in use, never the key. An operator who loses the key file loses
 every secret that the key encrypts, and nobody can recover them. A key file
 next to the data does not protect a backup of that data.
 
+## Variables of a step
+
+The launcher sets these variables for the process of each step of a job. The
+server does not read them, and no flag or file key sets them. A step cannot
+set a variable with the prefix `DUSTPAN_`: the launcher refuses it.
+
+| Environment | Value |
+| --- | --- |
+| `DUSTPAN_JOB_ID` | The ID of the job that the step belongs to. |
+| `DUSTPAN_PHASE` | The name of the phase of the job that the step belongs to. |
+| `DUSTPAN_STEP` | The name of the step. |
+| `DUSTPAN_UNIT` | The unit that the job runs on. |
+| `DUSTPAN_NAMESPACE` | The namespace of the unit. |
+| `DUSTPAN_COMMIT` | The commit of the source that the job runs. |
+| `DUSTPAN_SERVER_URL` | The URL of the server that the step calls. |
+| `DUSTPAN_SWEEP_REPORT` | Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes its report to. The launcher uploads the file when the command ends. |
+
 ## Client commands
 
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
