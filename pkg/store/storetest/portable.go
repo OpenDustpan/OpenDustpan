@@ -163,6 +163,7 @@ func testPortableFiles(t *testing.T, newStore PortableFactory) {
 	seedBackupStore(t, s)
 
 	sink, sum, files := exportPortable(t, s)
+	checkImportRowCounts(t, s, sum)
 	requireSeededGate(t, s, sum)
 
 	if len(files) != len(backup.Tables) {
