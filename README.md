@@ -19,6 +19,10 @@ tokens and storage.
 
 ## Quickstart
 
+The [quickstart guide](docs/guides/quickstart.md) shows the setup with SQLite on
+loopback and a compose stack with PostgreSQL and S3-compatible storage. This
+section shows the setup from source with SQLite.
+
 No release exists yet, so build the server from source. You need Go 1.27.2 or
 later, OpenSSL, and the Pulumi CLI or OpenTofu.
 
