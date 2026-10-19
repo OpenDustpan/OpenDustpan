@@ -333,10 +333,30 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, errors.Join(err, guard.release())
 	}
 
+	s := newStore(conn, resolved, guard)
+
+	for _, opt := range opts {
+		opt(s)
+	}
+	if err := s.migrate(ctx); err != nil {
+		return nil, errors.Join(err, conn.Close(), guard.release())
+	}
+
+	guardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	s.guardCancel = cancel
+	s.guardDone = make(chan struct{})
+
+	go s.guardLoop(guardCtx)
+
+	return s, nil
+}
+
+// newStore returns the store on conn, before the options and the migration.
+func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 	s := &Store{
 		conn:                conn,
 		queries:             db.New(conn),
-		path:                resolved,
+		path:                path,
 		mu:                  sync.RWMutex{},
 		stagingMu:           sync.Mutex{},
 		stagingPath:         "",
@@ -354,20 +374,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	}
 	s.gate = gatestore.New(gateRunner{s: s})
 
-	for _, opt := range opts {
-		opt(s)
-	}
-	if err := s.migrate(ctx); err != nil {
-		return nil, errors.Join(err, conn.Close(), guard.release())
-	}
-
-	guardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	s.guardCancel = cancel
-	s.guardDone = make(chan struct{})
-
-	go s.guardLoop(guardCtx)
-
-	return s, nil
+	return s
 }
 
 // maxSymlinkChain caps the links resolveDatabasePath follows at one path:
@@ -778,11 +785,12 @@ func (s *Store) RenameStack(
 			return removeErr
 		}
 
-		if gateErr := renameUnitGate(ctx, q, oldRef, newName); gateErr != nil {
+		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
+		from := unitGate{ns: oldRef.Namespace, tool: inventoryTool, name: stackUnitName(oldRef)}
+
+		if gateErr := moveUnitGate(ctx, q, from, stackUnitName(newRef)); gateErr != nil {
 			return gateErr
 		}
-
-		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
 
 		row, err := q.GetStack(ctx, db.GetStackParams{
 			Namespace: newRef.Namespace.String(),

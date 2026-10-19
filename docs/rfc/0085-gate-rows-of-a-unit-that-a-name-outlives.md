@@ -67,8 +67,8 @@ decision.
 
 ## Open questions
 
-- Does a restore of a unit that finds its name in use refuse, or does it
-  restore under a new name and move the rows with it?
+- A restore under a new name moves the rows, as a rename does. Does a
+  restore under the old name that a live unit now holds still answer 409?
 - Does a tombstone key need a retention limit of its own, or does the purge
   of the unit remove it?
 - Does the same problem apply to a collection that a delete frees? A delete

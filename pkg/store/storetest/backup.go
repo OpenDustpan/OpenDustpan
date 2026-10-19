@@ -309,8 +309,9 @@ func seedBackupGate(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			fence = acme.Fence()
 		}
 
-		if err := gs.Records().Put(ctx, seedGateRecord(ns), fence); err != nil {
-			t.Fatalf("put gate record of %q: %v", ns, err)
+		// A refusal record needs the window key that NoteRefusal sets.
+		if _, err := gs.Records().NoteRefusal(ctx, seedGateRecord(ns), gate.AccessRefusalWindow, fence); err != nil {
+			t.Fatalf("note gate refusal of %q: %v", ns, err)
 		}
 	}
 }
@@ -369,6 +370,35 @@ func requireSeededGate(t *testing.T, s BackupStore, sum backup.Summary) {
 		if len(records) != 1 || records[0].Action != "state.read" {
 			t.Fatalf("restored records of %q = %+v, want one record with the action state.read", ns, records)
 		}
+
+		requireRefusalFolded(t, s, gs, ns, records[0].ID)
+	}
+}
+
+// requireRefusalFolded checks that the restored refusal key of ns still folds a
+// second refusal into the record id.
+func requireRefusalFolded(t *testing.T, s BackupStore, gs gate.Store, ns namespace.Name, id gate.RecordID) {
+	t.Helper()
+
+	ctx := t.Context()
+	change := gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}
+
+	again, err := gs.Records().NoteRefusal(ctx, seedGateRecord(ns), gate.AccessRefusalWindow, fenceOf(t, s, ns))
+	if err != nil {
+		t.Fatalf("note a second refusal in %q: %v", ns, err)
+	}
+
+	if again != id {
+		t.Fatalf("second refusal in %q returned the record %s, want %s", ns, again, id)
+	}
+
+	folded, err := gs.Records().ListByChange(ctx, ns, change)
+	if err != nil {
+		t.Fatalf("list the folded records of %q: %v", ns, err)
+	}
+
+	if len(folded) != 1 || folded[0].Count != 2 {
+		t.Fatalf("records of %q after a second refusal = %+v, want one record with count 2", ns, folded)
 	}
 }
 
@@ -1412,4 +1442,21 @@ func checkReopenedBackups(
 	if gotFinished := mustGetBackup(t, reopened, finished.ID); gotFinished != finished {
 		t.Fatalf("finished backup after reopen = %+v, want %+v", gotFinished, finished)
 	}
+}
+
+// fenceOf returns the fence of the namespace ns in s, or the zero fence for the
+// installation scope.
+func fenceOf(t *testing.T, s BackupStore, ns namespace.Name) namespace.Fence {
+	t.Helper()
+
+	if ns == audit.ServerScope {
+		return namespace.Fence{Namespace: "", FailoverVersion: 0}
+	}
+
+	n, err := s.GetNamespace(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("get namespace %q: %v", ns, err)
+	}
+
+	return n.Fence()
 }

@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 var _ gate.Store = (*Store)(nil)
@@ -524,25 +525,29 @@ func checkGateJoin(ctx context.Context, q *db.Queries, m collection.Move) error 
 	return nil
 }
 
-// renameUnitGate moves the configuration of the unit oldRef to the scope of the
-// name newName, in the transaction of the rename. It returns
-// stack.ErrAlreadyExists when the scope of the new name holds configuration:
-// it is the configuration of a deleted unit that kept the name, and the
-// rename would give it to this unit.
-func renameUnitGate(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
-	ns := oldRef.Namespace
-	oldName := stackUnitName(oldRef)
-	newRef := stack.Ref{Namespace: ns, Project: oldRef.Project, Stack: newName}
-	next := stackUnitName(newRef)
+// unitGate names the unit of a tool in a namespace by the tool's own name for it.
+type unitGate struct {
+	ns   namespace.Name
+	tool string
+	name string
+}
 
-	oldScope, err := gate.UnitScope(ns, inventoryTool, oldName)
+// moveUnitGate moves the configuration of the unit from
+// to the scope of the name newName, in the transaction of a rename or a
+// restore. It returns the ErrAlreadyExists of the tool when the scope of the
+// new name holds configuration: it is the configuration of a deleted unit that
+// kept the name, and the move would give it to this unit.
+func moveUnitGate(ctx context.Context, q *db.Queries, from unitGate, next string) error {
+	ns, tool, oldName := from.ns, from.tool, from.name
+
+	oldScope, err := gate.UnitScope(ns, tool, oldName)
 	if err != nil {
-		return fmt.Errorf("scope of the stack: %w", err)
+		return fmt.Errorf("scope of the unit: %w", err)
 	}
 
-	newScope, err := gate.UnitScope(ns, inventoryTool, next)
+	newScope, err := gate.UnitScope(ns, tool, next)
 	if err != nil {
-		return fmt.Errorf("scope of the renamed stack: %w", err)
+		return fmt.Errorf("scope of the new name: %w", err)
 	}
 
 	nsID, err := q.GetNamespaceID(ctx, ns.String())
@@ -551,18 +556,18 @@ func renameUnitGate(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNam
 	}
 
 	taken, err := q.CountUnitGateObjects(ctx, db.CountUnitGateObjectsParams{
-		NamespaceID: nsID, Tool: inventoryTool, UnitName: next,
+		NamespaceID: nsID, Tool: tool, UnitName: next,
 	})
 	if err != nil {
 		return fmt.Errorf("count unit gate objects: %w", err)
 	}
 
 	if taken > 0 {
-		return fmt.Errorf("%w: the name %s holds the configuration of a deleted unit", stack.ErrAlreadyExists, next)
+		return heldNameError(tool, next)
 	}
 
 	held, err := q.CountUnitGateObjects(ctx, db.CountUnitGateObjectsParams{
-		NamespaceID: nsID, Tool: inventoryTool, UnitName: oldName,
+		NamespaceID: nsID, Tool: tool, UnitName: oldName,
 	})
 	if err != nil {
 		return fmt.Errorf("count unit gate objects: %w", err)
@@ -573,7 +578,7 @@ func renameUnitGate(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNam
 	}
 
 	err = q.CopyUnitGateObjects(ctx, db.CopyUnitGateObjectsParams{
-		NewScopeKey: newScope.Key(), NewUnitName: next, NamespaceID: nsID, Tool: inventoryTool, OldUnitName: oldName,
+		NewScopeKey: newScope.Key(), NewUnitName: next, NamespaceID: nsID, Tool: tool, OldUnitName: oldName,
 	})
 	if err != nil {
 		return fmt.Errorf("copy unit gate objects: %w", err)
@@ -586,12 +591,71 @@ func renameUnitGate(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNam
 		return fmt.Errorf("copy unit gate references: %w", err)
 	}
 
-	params := db.DeleteUnitGateObjectsParams{NamespaceID: nsID, Tool: inventoryTool, UnitName: oldName}
+	params := db.DeleteUnitGateObjectsParams{NamespaceID: nsID, Tool: tool, UnitName: oldName}
 	if err = q.DeleteUnitGateObjects(ctx, params); err != nil {
 		return fmt.Errorf("delete unit gate objects: %w", err)
 	}
 
 	return nil
+}
+
+// heldNameError is the refusal of a rename or a restore to a name that holds
+// the gates of a deleted unit. It keeps the words of the tool.
+func heldNameError(tool, name string) error {
+	if tool == workspaceInventoryTool {
+		return fmt.Errorf(
+			"%w: the name %s holds the gates of a deleted workspace; purge or restore the deleted workspace, then rename again",
+			workspace.ErrAlreadyExists,
+			name,
+		)
+	}
+
+	return fmt.Errorf(
+		"%w: the name %s holds the gates of a deleted stack; purge or restore the deleted stack, then rename again",
+		stack.ErrAlreadyExists, name,
+	)
+}
+
+// unitGateKeys returns the configuration objects that the unit u holds.
+func unitGateKeys(ctx context.Context, q *db.Queries, u unitGate) ([]gatestore.Removed, error) {
+	nsID, err := q.GetNamespaceID(ctx, u.ns.String())
+	if err != nil {
+		return nil, fmt.Errorf("select namespace ID: %w", err)
+	}
+
+	keys, err := q.ListUnitGateObjectKeys(ctx, db.ListUnitGateObjectKeysParams{
+		NamespaceID: nsID, Tool: u.tool, UnitName: u.name,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select unit gate objects: %w", err)
+	}
+
+	out := make([]gatestore.Removed, len(keys))
+	for i, k := range keys {
+		out[i] = gatestore.Removed{Kind: k.Kind, ID: k.ID, ScopeKey: k.ScopeKey}
+	}
+
+	return out, nil
+}
+
+// restoreUnitGate moves the configuration of the deleted unit u to the name
+// that a restore gives it, when the name differs. It returns the audit changes
+// that name the moved objects, within the room that the entry still has.
+func restoreUnitGate(ctx context.Context, q *db.Queries, u unitGate, name string, room int) ([]audit.Change, error) {
+	if name == u.name {
+		return nil, nil
+	}
+
+	moved, err := unitGateKeys(ctx, q, u)
+	if err != nil {
+		return nil, err
+	}
+
+	if moveErr := moveUnitGate(ctx, q, u, name); moveErr != nil {
+		return nil, moveErr
+	}
+
+	return gatestore.MovedChanges(moved, room), nil
 }
 
 // purgeUnitGate deletes the gates, access limits, rules and path sets that the
@@ -600,9 +664,9 @@ func renameUnitGate(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNam
 // inventory holds a live unit of the same tool and name, a team created it
 // after the delete freed the name: the rows are the rows of that unit and
 // stay. It returns the audit changes that name the removed objects.
-func purgeUnitGate(
-	ctx context.Context, q *db.Queries, ns namespace.Name, tool, name string,
-) ([]audit.Change, error) {
+func purgeUnitGate(ctx context.Context, q *db.Queries, u unitGate, room int) ([]audit.Change, error) {
+	ns, tool, name := u.ns, u.tool, u.name
+
 	if name == "" {
 		return nil, nil
 	}
@@ -638,13 +702,13 @@ func purgeUnitGate(
 		return nil, fmt.Errorf("delete unit gate objects: %w", err)
 	}
 
-	return gatestore.RemovedChanges(removed), nil
+	return gatestore.RemovedChanges(removed, room), nil
 }
 
 // purgeCollectionGate deletes the configuration that the collection ref holds,
 // when a delete removes the collection. It returns the audit changes that name
 // the removed objects.
-func purgeCollectionGate(ctx context.Context, q *db.Queries, ref collection.Ref) ([]audit.Change, error) {
+func purgeCollectionGate(ctx context.Context, q *db.Queries, ref collection.Ref, room int) ([]audit.Change, error) {
 	nsID, err := q.GetNamespaceID(ctx, ref.Namespace.String())
 	if err != nil {
 		return nil, fmt.Errorf("select namespace ID: %w", err)
@@ -669,7 +733,7 @@ func purgeCollectionGate(ctx context.Context, q *db.Queries, ref collection.Ref)
 		return nil, fmt.Errorf("delete collection gate objects: %w", err)
 	}
 
-	return gatestore.RemovedChanges(removed), nil
+	return gatestore.RemovedChanges(removed, room), nil
 }
 
 // noRow is the row that a read returns with false.

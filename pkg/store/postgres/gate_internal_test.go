@@ -18,6 +18,9 @@ func gateRecordRow(id string) gatestore.RecordRow {
 	}
 }
 
+// White-box: only a race between RecordExists and the INSERT reaches the unique
+// violation, and a black-box test cannot make that race happen every time.
+//
 // TestInsertGateRecordUsedID checks that a second insert of one record ID
 // returns gate.ErrConflict and not the error of the driver.
 func TestInsertGateRecordUsedID(t *testing.T) {

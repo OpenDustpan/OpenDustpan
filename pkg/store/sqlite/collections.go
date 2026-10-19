@@ -114,7 +114,7 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
-		removed, gateErr := purgeCollectionGate(ctx, q, ref)
+		removed, gateErr := purgeCollectionGate(ctx, q, ref, audit.MaxChanges-len(e.Changes))
 		if gateErr != nil {
 			return gateErr
 		}

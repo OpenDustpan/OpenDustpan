@@ -213,28 +213,41 @@ type Removed struct {
 
 // RemovedChanges returns the audit changes that name the removed objects: one
 // change for each object, keyed by its kind and ID, with the scope key as the
-// value. A list above the cap of an entry ends with one change that gives the
-// count of the objects that it leaves out.
-func RemovedChanges(removed []Removed) []audit.Change {
-	if len(removed) == 0 {
+// value. The room is the number of changes that the entry still accepts. A
+// list above the room ends with one change that gives the count of the
+// objects that it leaves out. It returns nil when the room is less than 1.
+func RemovedChanges(removed []Removed, room int) []audit.Change {
+	return objectChanges("removed", removed, room)
+}
+
+// MovedChanges returns the audit changes that name the objects that a restore
+// moved to a new unit name. It has the shape and the cap of RemovedChanges.
+func MovedChanges(moved []Removed, room int) []audit.Change {
+	return objectChanges("moved", moved, room)
+}
+
+// objectChanges builds the changes of RemovedChanges and MovedChanges with the
+// key prefix verb.
+func objectChanges(verb string, objects []Removed, room int) []audit.Change {
+	if room < 1 || len(objects) == 0 {
 		return nil
 	}
 
-	limit := audit.MaxChanges - 1
+	limit := room - 1
 
-	out := make([]audit.Change, 0, min(len(removed), audit.MaxChanges))
+	out := make([]audit.Change, 0, min(len(objects), room))
 
-	for i, r := range removed {
-		if i == limit && len(removed) > audit.MaxChanges {
+	for i, r := range objects {
+		if i == limit && len(objects) > room {
 			out = append(out, audit.Change{
-				Key: "removed:more", Old: nil, New: strconv.Itoa(len(removed) - limit), Layer: "", TakesEffect: "",
+				Key: verb + ":more", Old: nil, New: strconv.Itoa(len(objects) - limit), Layer: "", TakesEffect: "",
 			})
 
 			break
 		}
 
 		out = append(out, audit.Change{
-			Key: "removed:" + r.Kind + ":" + r.ID, Old: nil, New: r.ScopeKey, Layer: "", TakesEffect: "",
+			Key: verb + ":" + r.Kind + ":" + r.ID, Old: nil, New: r.ScopeKey, Layer: "", TakesEffect: "",
 		})
 	}
 

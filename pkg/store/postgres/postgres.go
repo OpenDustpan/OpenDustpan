@@ -411,11 +411,12 @@ func (s *Store) RenameStack(
 			return removeErr
 		}
 
-		if gateErr := renameUnitGate(ctx, q, oldRef, newName); gateErr != nil {
+		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
+		from := unitGate{ns: oldRef.Namespace, tool: inventoryTool, name: stackUnitName(oldRef)}
+
+		if gateErr := moveUnitGate(ctx, q, from, stackUnitName(newRef)); gateErr != nil {
 			return gateErr
 		}
-
-		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
 
 		row, err := q.GetStack(ctx, db.GetStackParams{
 			Namespace: newRef.Namespace.String(),
