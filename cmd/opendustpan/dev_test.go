@@ -536,7 +536,7 @@ func TestDevReadsNoVariableOfServe(t *testing.T) {
 	proc.env["DUSTPAN_ADMIN_TOKEN"] = testProductionToken
 	proc.env["DUSTPAN_ADMIN_TOKEN_FILE"] = "/nonexistent/tokens"
 	proc.env["DUSTPAN_KEY_ENCRYPTION_KEY"] = "AAAA"
-	proc.env["DUSTPAN_DATABASE"] = "postgres://user:pw@db/prod"
+	proc.env["DUSTPAN_DATABASE"] = "postgres://db.invalid/prod"
 	proc.env["DUSTPAN_LISTEN"] = "0.0.0.0:80"
 	proc.env["DUSTPAN_LOG_FORMAT"] = "not-a-format"
 	proc.env[cli.DevAdminTokenEnv] = testDevJobToken
