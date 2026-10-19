@@ -1,6 +1,6 @@
 # 240. A state download by a person is a reveal, and a principal has a kind
 
-Status: accepted · 2026-10-18. Supersedes in part ADR 41 decisions 9 and 13, ADR 60 decision 4 and ADR 226 decision 4. Extends ADR 41 decision 5
+Status: accepted · 2026-10-18. Supersedes in part ADR 41 decisions 9 and 13, ADR 60 decision 4, ADR 223 decision 4 and ADR 226 decision 4. Extends ADR 41 decision 5 and the field list of ADR 72 decision 6
 
 ## Context
 
@@ -101,7 +101,7 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
 
    This decision also supersedes ADR 226 decision 4 in part. The fact
    `principal.kind` takes the same record kinds: `person`, `service` and
-   `workload`. The fact `principal.credential` reads `Credential`. The
+   `workload`. The principal kind in the Cedar context of an access limit (ADR 223 decision 4) takes the same values. The fact `principal.credential` reads `Credential`. The
    value `agent` of ADR 226 is not a record kind. An agent acts as its
    user, so `principal.kind` is the kind of that user, and a gate tells an agent apart through `source.kind == "agent"`. No server built `change.planned/1.0`, so these values are part of version 1.0 and need no new major version.
 
@@ -120,7 +120,7 @@ follow what Google, AWS, PCI DSS, SOC 2 and ISO 27001 would do.
 5. **The entry records the kind.** An audit entry gets the field `principalKind`. The hash encoding writes it after the fence version, with `jobID` after it, in the fixed field list of ADR 72 decision 6. It writes `0:` when the field is not set. A reader can then see why an entry
    has its kind of access. An entry from a principal with no kind has no
    `principalKind`. Its kind of access follows decision 4. An entry made
-   with a job token also gets the optional field `jobID`, the job-ID claim
+   with a job token also gets the field `jobID`, the job-ID claim
    of the token (ADR 100 decision 20). No tag shipped an audit entry, so an entry from an earlier build does not keep its hash (ADR 72 decision 6). The digest of ADR 64 decision 8 covers the new field list.
 6. **Other kinds stay.** The reveal call of ADR 41 decision 4 and the two
    audit routes of ADR 23 keep the kind `reveal`. The Pulumi `decrypt`
@@ -168,6 +168,7 @@ replaces:
   `principal.kind == "agent"`." The fact `principal.kind` takes the record
   kinds `person`, `service` and `workload` (decision 3). An agent is a
   subject of gates through `source.kind == "agent"`.
+- **ADR 223, decision 4:** "the principal kind (`person`, `service` or `agent`)". The principal kind in the context of a limit takes the record kinds `person`, `service` and `workload` (decision 3).
 
 ## Consequences
 
@@ -196,7 +197,7 @@ replaces:
   use the bootstrap admin token, expect `reveal`. A new step with a
   service token proves `tool-operation`. Both land with their e2e step
   first (ADR 12).
-- The status line of ADR 226 names this ADR as superseding decision 4 in part. Its text does not change (ADR 1).
+- The status lines of ADR 223 and ADR 226 name this ADR as superseding decision 4 in part. Their text does not change (ADR 1).
 - The glossary entry "Kind of access" changes. "Principal kind" is a new
   term.
 - The audit log guide and the security model guide change in the same
