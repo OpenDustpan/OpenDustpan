@@ -101,4 +101,5 @@ On 2026-10-19 the project owner decided the open part in
 [RFC 87](0087-components-of-the-server-process.md), and
 [ADR 249](../adr/0249-components-of-the-server-process.md) records it. The
 word is "component", the first components are `api` and `worker`, and
-`opendustpan serve --components` selects them, with `all` as the default.
+a start flag selects them, with `all` as the default. The name of the
+flag is not decided.

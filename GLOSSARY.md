@@ -109,7 +109,7 @@ One server process of an installation. Each start makes a new instance ID, `ins-
 _Avoid_: Node, replica, host
 
 **Component**:
-A part of the server that a process runs: `api` or `worker` (ADR 249). One process runs one or more components, and `opendustpan serve --components` selects them. The default is `all`. A component is a setting of one process. A module switch is a setting of the installation.
+A part of the server that a process runs: `api` or `worker` (ADR 249). One process runs one or more components, and a start flag selects the components. All components run by default. A component is a setting of one process. A module switch is a setting of the installation.
 _Avoid_: Role (ADR 52 uses it for a set of actions), service, mode, duty
 
 **Installation kind**:

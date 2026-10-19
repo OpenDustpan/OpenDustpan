@@ -13,7 +13,9 @@ Status: accepted. The product manager wrote this RFC from the spike
 "(product manager)". On 2026-10-19 the project owner answered the open
 questions, as the project manager relayed.
 [ADR 249](../adr/0249-components-of-the-server-process.md) records the
-decision. No code exists for it yet.
+decision. No code exists for it yet. ADR 249 does not decide the flag name,
+the readiness routes, the report of a stuck worker or the records of the
+components. They stay open, and issue #948 decides them.
 
 This RFC takes over the open part of
 [RFC 7](0007-one-binary-many-roles.md): "the roles of the binary and
@@ -99,6 +101,10 @@ needs: the store and its migrations, the key-encryption key check,
 
 ### The flag
 
+ADR 249 decides that a start flag selects the components and that `all`
+is the default. The items below are proposals. They stay open, and
+issue #948 decides them.
+
 - `opendustpan serve --components api,worker`, and the environment
   variable `DUSTPAN_COMPONENTS`.
 - The default is `all`. `all` means every component of this binary. So a
@@ -126,7 +132,7 @@ needs: the store and its migrations, the key-encryption key check,
 - `api` is ready when the store and the blob store answer, and the audit
   chain gate admits requests (spike item M16).
 - `worker` is ready when the store answers and its claim loop ran in the
-  last 2 claim intervals. A worker that cannot claim is not ready. A
+  last 2 claim intervals. This item stays open (issue #948). A worker that cannot claim is not ready. A
   rollout then stops, and an alert on unready pods fires. A failed
   readiness probe does not restart a pod. Only the liveness probe does.
   Owner question 8.
@@ -178,7 +184,7 @@ the operation waits. So:
 ### The Helm chart
 
 ADR 246 has one Deployment. The proposal for the chart, after the cap
-goes:
+goes (issue #1057 decides it):
 
 - `components.split: false` by default: one Deployment, `all`.
 - `components.split: true`: one Deployment for each component, each with
@@ -209,14 +215,15 @@ The owner answered each question on 2026-10-19.
    (ADR 248). This RFC no longer has the sentence on the renewal of the
    home lease under "Components".
 8. **Liveness of `worker`.** No. `/health/live` does not check the claim
-   loop, and stays the same for each component. Readiness and the metric
-   of the age of the oldest unclaimed operation report a stuck worker.
+   loop, and stays the same for each component. How readiness and the
+   metric of the age of the oldest unclaimed operation report a stuck
+   worker stays open (issue #948).
 
 ## Outcome
 
 Accepted on 2026-10-19 by the project owner, as the project manager
 relayed: [ADR 249](../adr/0249-components-of-the-server-process.md). The
-word is "component". The first components are `api` and `worker`, and
-`opendustpan serve --components` selects them, with `all` as the default.
-The open questions above hold each answer. The Outcome of
+word is "component". The first components are `api` and `worker`, and a
+start flag selects them, with `all` as the default. The name of the flag
+is not decided (issue #948). The open questions above hold each answer. The Outcome of
 [RFC 7](0007-one-binary-many-roles.md) links ADR 249.
