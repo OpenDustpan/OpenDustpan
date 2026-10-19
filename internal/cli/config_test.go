@@ -335,3 +335,16 @@ func TestConfigExampleDecodes(t *testing.T) {
 		t.Errorf("ParseConfig(ConfigExample) = %v", got)
 	}
 }
+
+// TestParseConfigRefusesUnservedRetentionKeys proves a retention key stays
+// refused until serve registers the setting.
+func TestParseConfigRefusesUnservedRetentionKeys(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"plan-retention", "job-log-retention"} {
+		_, err := cli.ParseConfig([]byte(key + ": \"1h\"\n"))
+		if !errors.Is(err, cli.ErrConfigUnknown) {
+			t.Errorf("ParseConfig(%s) = %v, want ErrConfigUnknown", key, err)
+		}
+	}
+}

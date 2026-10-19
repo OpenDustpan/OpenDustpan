@@ -56,6 +56,9 @@ type Setting struct {
 	Kind      Kind
 	Sensitive bool
 	URL       bool
+	// StepInput marks a variable that the launcher sets for the process of a
+	// step. The server does not read it, so it has no flag and no file key.
+	StepInput bool
 	// NoPasswordInFile refuses a URL with a password in the configuration
 	// file and in the flag: a flag shows in a process list, so a secret
 	// comes from a variable or a *_FILE key only.
@@ -145,6 +148,15 @@ func (s *Setting) CheckURL(value string) error {
 // configuration file and in the flag and answers it.
 func (s *Setting) WithNoPasswordInFile() *Setting {
 	s.NoPasswordInFile = true
+
+	return s
+}
+
+// WithStepInput marks a variable that the launcher sets for the process of a
+// step, and answers it. Such a variable holds no credential. A test checks this:
+// the variable name and its description must not match the credential rules.
+func (s *Setting) WithStepInput() *Setting {
+	s.StepInput = true
 
 	return s
 }
