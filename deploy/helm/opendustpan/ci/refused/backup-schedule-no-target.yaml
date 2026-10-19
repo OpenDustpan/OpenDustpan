@@ -1,4 +1,5 @@
 # Refused: a backup schedule with the target none.
+# want: at '/backup/target/type': 'not' failed
 database:
   existingSecret:
     name: opendustpan-database

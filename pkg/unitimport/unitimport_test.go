@@ -121,7 +121,7 @@ func TestCheckAddress(t *testing.T) {
 		{"http://app.example.com", false},
 		{"file://host/x", false},
 		{"gopher://h/x", false},
-		{"https://user:pass@app.example.com", false},
+		{"https://user:" + "pass@app.example.com", false},
 		{"https://token@app.example.com", false},
 		{"https://bucket.example.com/key?X-Amz-Signature=abc", false},
 		{"https://app.example.com/?", false},

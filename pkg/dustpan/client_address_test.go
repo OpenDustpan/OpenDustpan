@@ -419,7 +419,7 @@ func TestCollectionAuditSourceIPBehindProxy(t *testing.T) {
 		dustpan.WithTrustedProxies(netip.MustParsePrefix("10.0.0.0/8")))
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-		"/api/inventory/namespaces/"+ns.Name.String()+"/collections", strings.NewReader(`{"name":"payments"}`))
+		"/api/dustpan/v1/namespaces/"+ns.Name.String()+"/collections", strings.NewReader(`{"name":"payments"}`))
 	req.RemoteAddr = "10.1.2.3:4444"
 	req.Header.Set("X-Forwarded-For", "203.0.113.9")
 	req.Header.Set("Authorization", "token "+adminToken)

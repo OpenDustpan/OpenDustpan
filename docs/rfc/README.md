@@ -132,3 +132,4 @@ both together.
 | [81](0081-open-questions-of-the-import-tool.md) | Open questions of the import tool and the move check | accepted (ADRs 241 to 244) |
 | [82](0082-a-namespace-in-the-blueprint-scope-key.md) | A namespace in the scope key of a blueprint version | discussing |
 | [84](0084-backstage-plugin-open-questions.md) | Open questions of the Backstage plugin | discussing |
+| [85](0085-gate-rows-of-a-unit-that-a-name-outlives.md) | Gate rows of a unit that its name outlives: key by unit ID, refuse the name, or move the rows to a tombstone key | draft |

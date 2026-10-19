@@ -1,0 +1,10 @@
+{{- if and .Values.console.enabled .Values.console.runtimeConfig }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "opendustpan.fullname" . }}-console
+  labels:
+    {{- include "opendustpan.labels" . | nindent 4 }}
+data:
+  config.json: {{ .Values.console.runtimeConfig | toPrettyJson | quote }}
+{{- end }}

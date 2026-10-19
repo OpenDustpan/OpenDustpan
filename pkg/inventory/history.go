@@ -68,6 +68,7 @@ func (c Change) Entry() Entry {
 		ResourceCount: c.ResourceCount,
 		Lock:          nil,
 		Collection:    "",
+		Labels:        nil,
 	}
 }
 

@@ -1,4 +1,5 @@
 # Refused: an AppArmor annotation.
+# want: at '/podAnnotations': 'allOf' failed
 database:
   existingSecret:
     name: opendustpan-database

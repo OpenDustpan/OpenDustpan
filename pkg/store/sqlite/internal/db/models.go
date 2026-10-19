@@ -165,6 +165,41 @@ type DurableStep struct {
 	DoneAtMs    int64
 }
 
+type GateObject struct {
+	NamespaceID string
+	ScopeKey    string
+	Kind        string
+	ID          string
+	Level       string
+	Tool        string
+	UnitName    string
+	Version     int64
+	Body        string
+	UpdatedAtMs int64
+}
+
+type GateRecord struct {
+	ID          string
+	NamespaceID string
+	Point       string
+	ChangeKind  string
+	ChangeID    string
+	AtMs        int64
+	LastAtMs    int64
+	Count       int64
+	RefusalKey  string
+	Body        string
+}
+
+type GateReference struct {
+	RefKind     string
+	RefID       string
+	NamespaceID string
+	ScopeKey    string
+	OwnerKind   string
+	OwnerID     string
+}
+
 type Grant struct {
 	ID          string
 	Subject     string
@@ -303,6 +338,13 @@ type InventoryDeleted struct {
 	Name         string
 	DeletedAtMs  int64
 	PurgeAfterMs int64
+}
+
+type InventoryLabel struct {
+	Namespace  string
+	UnitID     string
+	LabelKey   string
+	LabelValue string
 }
 
 type Namespace struct {

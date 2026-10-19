@@ -16,8 +16,11 @@ import (
 // check counts requests that do not carry the harness agent.
 const contextAgent = "opendustpan-e2e-context"
 
+// contextNamespace is the path of the e2e namespace in the tool-neutral API.
+const contextNamespace = "/api/dustpan/v1/namespaces/" + e2e.Namespace
+
 // contextBase is the context route of the e2e namespace.
-const contextBase = "/api/context/namespaces/" + e2e.Namespace
+const contextBase = contextNamespace + "/context"
 
 // contextCall is one context request of a scenario step.
 type contextCall struct {
@@ -109,7 +112,7 @@ func contextOwners(owners []string, from string) func(string) error {
 func contextScenario(t *testing.T, env *e2e.Env, tool, unitID string) {
 	t.Helper()
 
-	unit := contextBase + "/units/" + tool + "/" + unitID
+	unit := contextNamespace + "/units/" + unitID + "/context"
 	inherited := []string{"group:platform"}
 
 	calls := []contextCall{
@@ -149,14 +152,18 @@ func contextScenario(t *testing.T, env *e2e.Env, tool, unitID string) {
 		{
 			name:   "an unknown unit is not found",
 			method: http.MethodGet,
-			path:   contextBase + "/units/" + tool + "/absent",
+			path:   contextNamespace + "/units/absent/context",
 			body:   "",
 			want:   http.StatusNotFound,
 			check:  nil,
 		},
 		{
-			name: "an unknown namespace is not found", method: http.MethodGet, path: "/api/context/namespaces/absent",
-			body: "", want: http.StatusNotFound, check: nil,
+			name:   "an unknown namespace is not found",
+			method: http.MethodGet,
+			path:   "/api/dustpan/v1/namespaces/absent/context",
+			body:   "",
+			want:   http.StatusNotFound,
+			check:  nil,
 		},
 		{
 			name: "a body with an unknown field is refused", method: http.MethodPatch, path: unit,

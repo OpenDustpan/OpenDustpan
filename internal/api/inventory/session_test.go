@@ -92,7 +92,7 @@ func cookieInventory(t *testing.T, sessions *sessionauth.Checker) http.Handler {
 func TestSessionCookieSignsIn(t *testing.T) {
 	t.Parallel()
 
-	req, _ := cookieRequest(t, http.MethodGet, "/api/inventory/units?organization=acme")
+	req, _ := cookieRequest(t, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units")
 
 	if rec := serveCookie(cookieInventory(t, aliceChecker(t)), req); rec.Code != http.StatusOK {
 		t.Fatalf("unit list with the session cookie = %d %s, want 200", rec.Code, rec.Body.String())
@@ -124,7 +124,7 @@ func TestSessionCookieNeedsCSRF(t *testing.T) {
 func TestNoSessionCheckIgnoresTheCookie(t *testing.T) {
 	t.Parallel()
 
-	req, _ := cookieRequest(t, http.MethodGet, "/api/inventory/units?organization=acme")
+	req, _ := cookieRequest(t, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units")
 
 	if rec := serveCookie(cookieInventory(t, nil), req); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unit list with the cookie and no session check = %d, want 401", rec.Code)
@@ -140,7 +140,7 @@ func TestAuthorizationHeaderNeverFallsBackToTheCookie(t *testing.T) {
 	h := cookieInventory(t, aliceChecker(t))
 
 	for _, header := range []string{"token bad", "Bearer x", "token "} {
-		req, _ := cookieRequest(t, http.MethodGet, "/api/inventory/units?organization=acme")
+		req, _ := cookieRequest(t, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units")
 		req.Header.Set("Authorization", header)
 
 		if rec := serveCookie(h, req); rec.Code != http.StatusUnauthorized {
@@ -160,8 +160,17 @@ func TestSessionRestoreRecordsTheConsoleChannel(t *testing.T) {
 	seedEntries(nsStore, reader)
 
 	lifecycle := &memLifecycle{err: nil, calls: nil}
-	h := newBehaviorHandlerWith(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		behaviorWiring{sessions: aliceChecker(t), lifecycles: map[string]coreinventory.Lifecycle{"pulumi": lifecycle}})
+	h := newBehaviorHandlerWith(
+		t,
+		nsStore,
+		reader,
+		selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		behaviorWiring{
+			sessions:   aliceChecker(t),
+			lifecycles: map[string]coreinventory.Lifecycle{"pulumi": lifecycle},
+			publicURL:  "",
+		},
+	)
 
 	req, secret := cookieRequest(t, http.MethodPost, restoreTarget)
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
@@ -217,12 +226,12 @@ func TestSessionCollectionChangesRecordTheConsoleChannel(t *testing.T) {
 		method, target, body string
 		want                 int
 	}{
-		{http.MethodPost, "/api/inventory/namespaces/acme/collections", `{"name":"team"}`, http.StatusCreated},
+		{http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"team"}`, http.StatusCreated},
 		{
 			http.MethodPut, "/api/inventory/unit-collection?unit=" + f.unitText, `{"collection":"new"}`,
 			http.StatusOK,
 		},
-		{http.MethodDelete, "/api/inventory/namespaces/acme/collections/team", "", http.StatusNoContent},
+		{http.MethodDelete, "/api/dustpan/v1/namespaces/acme/collections/team", "", http.StatusNoContent},
 	}
 
 	for _, s := range steps {
