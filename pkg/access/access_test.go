@@ -126,7 +126,15 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 		tb.Fatalf("create principal %q: %v", subject, err)
 	}
 
-	return identity.Principal{Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{}}
+	return identity.Principal{
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                subject,
+		DisplayName:            "",
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+	}
 }
 
 // group stores the group "grp-<name>" with the members.
@@ -234,7 +242,15 @@ func (f *fixture) collection(obj identity.Object) {
 
 // admin returns the bootstrap admin caller, which holds every action.
 func admin() identity.Principal {
-	return identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{}}
+	return identity.Principal{
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+	}
 }
 
 func prn(subject string) access.Subject {
@@ -351,6 +367,7 @@ func TestUnknownAndDeletedPrincipals(t *testing.T) {
 	f := newFixture(t)
 	deleted := f.person(t, "deleted")
 	unknown := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "nobody",
 		DisplayName:    "",
 		Admin:          false,
@@ -389,6 +406,7 @@ func TestUnclassifiedActionIsDenied(t *testing.T) {
 	assertChecks(t, f.authz, site, []check{{identity.ServerObject(), identity.Action("server:future"), false}})
 
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
@@ -707,6 +725,7 @@ func TestGrantChecksSubjectAndNamespace(t *testing.T) {
 
 	f := newFixture(t)
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
@@ -912,6 +931,7 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 	f := newFixture(t)
 	account := f.person(t, "account")
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
@@ -1004,6 +1024,7 @@ func TestRevokeChecksTheObject(t *testing.T) {
 
 	f := newFixture(t)
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
@@ -1124,6 +1145,7 @@ func testEntry() audit.Entry {
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 		ObjectID:     "",
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

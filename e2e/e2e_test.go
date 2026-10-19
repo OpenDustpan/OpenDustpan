@@ -3536,6 +3536,7 @@ type auditListItem struct {
 	RequestID  string `json:"requestID"`
 	ObjectID   string `json:"objectID"`
 	Hash       string `json:"hash"`
+	Reason     string `json:"reason"`
 }
 
 // checkUnitObjectIDs fails the test unless each successful entry on a unit

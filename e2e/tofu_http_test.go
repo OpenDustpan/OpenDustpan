@@ -306,6 +306,38 @@ func runTofuHTTPForceUnlock(t *testing.T, env *e2e.Env, backendEnv []string) {
 	if err != nil || status != http.StatusConflict {
 		t.Fatalf("stale write after the force-unlock: status %d, want 409; body %q, err %v", status, body, err)
 	}
+
+	checkTofuHTTPForceUnlockAudit(t, env)
+}
+
+// checkTofuHTTPForceUnlockAudit proves that the force-unlock of the http
+// backend wrote one change entry with the action unit:write-forced and no
+// reason: the lock info of the http backend has no field for a reason.
+func checkTofuHTTPForceUnlockAudit(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	entries, err := fetchAuditEntries(t.Context(), env, e2e.Namespace)
+	if err != nil {
+		t.Fatalf("list %s audit entries: %v", e2e.Namespace, err)
+	}
+
+	object := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace
+
+	var forced []auditListItem
+
+	for i := range entries {
+		if entries[i].Action == "unit:write-forced" && entries[i].Object == object {
+			forced = append(forced, entries[i])
+		}
+	}
+
+	if len(forced) != 1 {
+		t.Fatalf("entries of unit:write-forced on %s = %+v, want exactly one", object, forced)
+	}
+
+	if e := forced[0]; e.Kind != "change" || e.Outcome != "success" || e.Reason != "" || e.ObjectID == "" {
+		t.Fatalf("force-unlock entry %+v, want a successful change with the ID of the unit and no reason", e)
+	}
 }
 
 // setSwitches sets the override switches at path to body, as principal A.

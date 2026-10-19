@@ -201,11 +201,14 @@ func (h *Handler) lockRoutes() []Route {
 		{
 			Method: http.MethodPost,
 			Path:   "/api/v2/workspaces/{id}/actions/force-unlock",
-			// A force-unlock needs unit:manage. It releases the lock
-			// whoever holds it. A force-unlock of an unlocked workspace
-			// answers 409.
+			// A force-unlock needs unit:write-forced, as an UNLOCK by a
+			// principal that does not hold the lock does on the http
+			// backend. It releases the lock whoever holds it. A force-unlock
+			// of an unlocked workspace answers 409, and so does a lock that
+			// differs from the lock-id and lock-holder of the body. The body
+			// is optional.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitManage},
+			Actions: []identity.Action{identity.ActionUnitWriteForced},
 			Resolve: h.resolveWorkspaceID,
 			Serve:   h.forceUnlockWorkspace,
 		},
@@ -585,7 +588,12 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		for _, action := range route.Actions {
 			if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
-				h.writeDenied(ctx, w, p, obj, fmt.Errorf("authorize %s: %w", action, err))
+				h.writeDenied(
+					ctx,
+					w,
+					refused{principal: p, object: obj, action: action},
+					fmt.Errorf("authorize %s: %w", action, err),
+				)
 
 				return
 			}
@@ -599,22 +607,24 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 // that the caller cannot read, so the two answers do not differ.
 const notFoundDetail = "not found"
 
-// writeDenied answers a refused action: the 404 of an absent object when p
-// cannot read obj either, else the error itself.
-func (h *Handler) writeDenied(
-	ctx context.Context,
-	w http.ResponseWriter,
-	p identity.Principal,
-	obj identity.Object,
-	err error,
-) {
+// refused names a request that the Authorizer refused: who asked, for which
+// action, on which object.
+type refused struct {
+	principal identity.Principal
+	object    identity.Object
+	action    identity.Action
+}
+
+// writeDenied answers a refused action: the 404 of an absent object when the
+// principal cannot read the object either, else 403 that names the action.
+func (h *Handler) writeDenied(ctx context.Context, w http.ResponseWriter, req refused, err error) {
 	if !errors.Is(err, identity.ErrDenied) {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	hide, hideErr := h.hidden(ctx, p, obj)
+	hide, hideErr := h.hidden(ctx, req.principal, req.object)
 	if hideErr != nil {
 		// The read check failed (a store error, not a refusal): answer
 		// that error, never a 404 that hides it.
@@ -629,7 +639,10 @@ func (h *Handler) writeDenied(
 		return
 	}
 
-	h.writeError(ctx, w, err)
+	h.writeForbidden(
+		ctx, w,
+		"forbidden: the action "+string(req.action)+" on "+req.object.String()+" was refused",
+	)
 }
 
 // hidden reports whether p cannot read obj: a unit without unit:read, or a

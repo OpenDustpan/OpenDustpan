@@ -200,6 +200,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "Tester",
 		Admin:          false,
@@ -278,6 +279,7 @@ func seedEntry(t *testing.T, store *memAuditStore, ns namespace.Name, subject st
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	})
 	if err != nil {
 		t.Fatalf("seed audit entry: %v", err)

@@ -153,6 +153,7 @@ func entries(fence namespace.Fence) []audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: fence.FailoverVersion,
+		Reason:       "",
 	}}
 }
 

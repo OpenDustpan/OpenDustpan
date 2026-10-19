@@ -23,7 +23,15 @@ func (f *fixture) principals(tb testing.TB) *principal.Service {
 	tb.Helper()
 
 	svc, err := principal.NewService(
-		principal.Config{Store: f.store, Guard: f.svc, Namespaces: nil, Tokens: f.svc, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      f.store,
+			Guard:      f.svc,
+			Namespaces: nil,
+			Tokens:     f.svc,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)

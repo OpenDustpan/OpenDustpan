@@ -12,8 +12,10 @@ import (
 // commandTable answers the command table of the binary: one row for each
 // command with its path, synopsis, settings and run function. Longer paths
 // come before their prefixes, so backup check matches before backup. Serve
-// is the only command that opens stores; every other command is a client of
-// the REST API (ADR 39 decision 1).
+// and host create-temp-admin open stores: serve runs the server, and host
+// create-temp-admin recovers a lost administrator through the database,
+// because host shell access already controls the key and the database.
+// Every other command is a client of the REST API.
 func commandTable() cli.Table {
 	return cli.Table{
 		cli.NamespaceCreateCommand(client.CreateNamespace),
@@ -29,6 +31,7 @@ func commandTable() cli.Table {
 		cli.HealthCommand(client.RunHealth),
 		cli.BackupCommand(client.BackupCommand),
 		cli.RestoreCommand(client.RestoreCommand),
+		cli.HostCreateTempAdminCommand(hostCreateTempAdmin),
 		cli.AuditChainStatusCommand(client.AuditChainStatus),
 		cli.AuditChainApproveCommand(client.AuditChainApprove),
 	}

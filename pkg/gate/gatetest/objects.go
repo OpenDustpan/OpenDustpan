@@ -206,7 +206,7 @@ func entry(ns namespace.Name) audit.Entry {
 		Action: "namespace:manage-gates", Object: ns.String(), Version: "", ValuePath: "", ValueCount: nil,
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0,
+		FenceVersion: 0, Reason: "",
 	}
 }
 

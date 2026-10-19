@@ -67,6 +67,7 @@ type AuditEntry struct {
 	Changes      pgtype.Text
 	ObjectID     string
 	FenceVersion int64
+	Reason       string
 }
 
 type AuditSinkCursor struct {
@@ -511,6 +512,16 @@ type StateVersion struct {
 	SensitiveMarks    []byte
 	FencedBy          string
 	UnlockedWrite     bool
+}
+
+type TempAdmin struct {
+	PrincipalID string
+	Subject     string
+	ExpiresAtMs int64
+	CreatedAtMs int64
+	CreatedBy   string
+	Reason      string
+	EndedAtMs   pgtype.Int8
 }
 
 type Update struct {

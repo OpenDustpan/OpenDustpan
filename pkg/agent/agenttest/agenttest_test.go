@@ -63,11 +63,13 @@ func serviceActor(subject string) agent.Actor {
 
 func principal(subject string) identity.Principal {
 	return identity.Principal{
-		Subject:        subject,
-		DisplayName:    subject,
-		Admin:          false,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		Subject:                subject,
+		DisplayName:            subject,
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
 	}
 }
 

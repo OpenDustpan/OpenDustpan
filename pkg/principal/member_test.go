@@ -83,6 +83,7 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 	var captured audit.Entry
 
 	svc, err := principal.NewService(principal.Config{
+		TempAdmins: nil,
 		Store: captureMemberStore{
 			Store:    nil,
 			captured: &captured,
@@ -99,7 +100,9 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 	}
 
 	caller := identity.Principal{
-		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
 	if _, err := svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1"); err != nil {
@@ -126,13 +129,23 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 	added := 0
 
 	svc, err := principal.NewService(principal.Config{
-		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store: memberStore{
+			Store: nil,
+			added: &added,
+		},
+		Guard:      nil,
+		Namespaces: nil,
+		Tokens:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
 
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
@@ -154,7 +167,9 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 	t.Parallel()
 
 	caller := identity.Principal{
-		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
 	for _, tc := range []struct {
@@ -172,7 +187,8 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 		var captured audit.Entry
 
 		svc, err := principal.NewService(principal.Config{
-			Store: captureMemberStore{Store: nil, captured: &captured, actsAs: tc.actsAs}, Guard: nil,
+			TempAdmins: nil,
+			Store:      captureMemberStore{Store: nil, captured: &captured, actsAs: tc.actsAs}, Guard: nil,
 			Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 		})
 		if err != nil {

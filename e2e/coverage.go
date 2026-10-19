@@ -463,10 +463,12 @@ func (coverageTofuHTTPWorkspaces) UnlockLock(
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
+//
 //nolint:revive // The port takes the lock ID beside the caller, the allowance and the audit record.
+//nolint:revive // The signature of the workspace port that the handler reads.
 func (coverageTofuHTTPWorkspaces) ForceUnlockLock(
 	_ context.Context, _ workspace.ID, _ workspace.Lock, _ string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	return workspace.Workspace{}, false, workspace.ErrNotFound
 }
@@ -532,11 +534,13 @@ func (coverageWorkspaces) Unlock(
 	return none, workspace.ErrNotFound
 }
 
-func (rcoverageWorkspaces coverageWorkspaces) ForceUnlock(
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (rcoverageWorkspaces coverageWorkspaces) ForceUnlockLock(
 	ctx context.Context,
 	id workspace.ID,
+	_ workspace.Lock,
 	by string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	w, err := rcoverageWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
@@ -962,6 +966,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Now:              nil,
 		Authenticator:    coverageAuthenticator{},
 		Authorizer:       coverageAuthorizer{},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -970,6 +975,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Restores:         nil,
 		Maintenance:      coverageMaintenance{},
 		Metrics:          coverageMetrics{},
+		TempAdmins:       nil,
 		Version:          "test",
 		Schema:           coverageSchema{},
 		Journal:          nil,
