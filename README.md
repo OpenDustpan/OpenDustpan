@@ -295,6 +295,7 @@ How-to guides:
   text and the other context of a namespace and of a unit.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
+- [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
 - [Run several instances](docs/guides/several-instances.md): the settings
   that each instance shares, for the target design.
 - [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect

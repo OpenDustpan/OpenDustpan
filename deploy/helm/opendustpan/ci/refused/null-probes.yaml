@@ -1,4 +1,5 @@
 # Refused: null removes probes.
+# want: at '': missing property 'probes'
 database:
   existingSecret:
     name: opendustpan-database

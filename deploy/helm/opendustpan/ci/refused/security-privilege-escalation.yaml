@@ -1,4 +1,5 @@
 # Refused: privilege escalation.
+# want: at '/containerSecurityContext/allowPrivilegeEscalation': value must be false
 database:
   existingSecret:
     name: opendustpan-database

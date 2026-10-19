@@ -1,0 +1,43 @@
+{{- if and (eq .Values.blobStore.type "fs") (not .Values.blobStore.fs.persistence.existingClaim) }}
+{{- with .Values.blobStore.fs.persistence }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "opendustpan.blobClaim" $ }}
+  labels:
+    {{- include "opendustpan.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .accessMode }}
+  {{- if .storageClassName }}
+  storageClassName: {{ .storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .size }}
+{{- end }}
+{{- end }}
+{{- if and (eq .Values.backup.target.type "dir") (not .Values.backup.target.dir.persistence.existingClaim) }}
+---
+{{- with .Values.backup.target.dir.persistence }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "opendustpan.backupClaim" $ }}
+  labels:
+    {{- include "opendustpan.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .accessMode }}
+  {{- if .storageClassName }}
+  storageClassName: {{ .storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .size }}
+{{- end }}
+{{- end }}
