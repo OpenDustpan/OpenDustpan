@@ -1,6 +1,6 @@
 # 223. Access limits: Cedar forbid policies for each scope
 
-Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 52 decision 9. Extends ADR 54 decision 5
+Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 52 decision 9. Extends ADR 54 decision 5. Decision 4 superseded in part by ADR 240
 
 ## Context
 
