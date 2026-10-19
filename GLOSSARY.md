@@ -149,11 +149,11 @@ The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutra
 _Avoid_: Feature list, handshake, capability (alone)
 
 **Forge**:
-A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection (RFC 89, proposed).
-_Avoid_: VCS provider, SCM, git host, VCS (alone)
+A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection (RFC 89, proposed). User-facing text says: Git host.
+_Avoid_: VCS provider, SCM, VCS (alone), "forge" in user-facing text (use Git host)
 
 **Forge connection**:
-The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).
+The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213). User-facing text says: Git host connection.
 _Avoid_: VCS integration, VCS provider, app (alone)
 
 **Review request**:
@@ -169,7 +169,7 @@ A small process that a team runs next to its version control system (RFC 89, pro
 _Avoid_: Proxy, relay, gateway, mirror
 
 **Forge event**:
-A signed request that a forge sends to the server: a push, a change of a review request, or a comment (RFC 89, proposed). The server checks its signature, and reads the object through the API of the forge before it changes a record. So an event is a hint, never a fact.
+A signed request that a forge sends to the server: a push, a change of a review request, or a comment (RFC 89, proposed). The server checks its signature, and reads the object through the API of the forge before it changes a record. So an event is a hint, never a fact. The server takes it at `/webhooks/{hook ID}`.
 _Avoid_: Webhook (that is the setting on the forge, or a sink of notifications), callback, hook (alone)
 
 **Comment command**:

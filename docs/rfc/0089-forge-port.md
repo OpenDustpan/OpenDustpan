@@ -81,7 +81,10 @@ consumer, and nothing tests that the adapters agree.
    `pkg/forge` describe the behavior, not this RFC.
 8. A comment command never approves, never makes an approval intent or an
    approve link, and never confirms a gate. The summary comment can link to
-   the console page of the job, where the plan is on screen. Each
+   the console page of the job, where the plan is on screen. This matches the
+   chat rule: an approve button appears in a chat message only when the
+   message shows the full plan, and otherwise the message links to the plan
+   page. Each
    command runs as the linked principal with its actions (owner decision of
    19 October 2026: an approval needs the plan on screen; ADR 146 decision
    8). Q8 proposes a command list.
@@ -443,10 +446,16 @@ essential that the port does not have.
 The port holds `ParseEvent`, because each forge signs its events in its
 own way. The HTTP route is in the internal API adapter, not in the port.
 
-- The route is `POST /forge-events/{hook ID}`. As ADR 210 decision 2 gives
+- The route is `POST /webhooks/{hook ID}`. As ADR 210 decision 2 gives
   for a path that an external system stores, it is outside
-  `/api/dustpan/v1` and has no API version. It is on the public list of
-  the route test. This adds a row to the table of ADR 210 decision 2.
+  `/api/dustpan/v1` and has no API version, so the full path is
+  `/webhooks/{hook ID}` with no prefix. ADR 216 decision 15 already lists
+  the webhook routes under `/webhooks/...` as routes outside the prefix. The
+  route test lists it as public. This adds a row to the table of ADR 210
+  decision 2. The path has no word "forge", because a person who does not
+  know the word may read the URL. The hook ID names its source, an app
+  registration today. Other inbound sources, for example chat, can use the
+  same route with their own hook IDs.
 - The server gives each connection a random hook ID when a person creates
   it. The hook ID is unique in the installation. A read of the connection
   answers it. A GitHub App has one webhook URL for all its installations,
@@ -491,28 +500,28 @@ own way. The HTTP route is in the internal API adapter, not in the port.
 
 ## The forge connection REST API
 
-All routes are under `/api/dustpan/v1/namespaces/{namespace}/forge-connections`
+All routes are under `/api/dustpan/v1/namespaces/{namespace}/git-host-connections`
 (ADR 210 decision 3). Each mutating route takes `Idempotency-Key` (ADR 210
 decision 6). Each write checks the namespace fence and writes an audit
 entry with no part of a credential (ADR 213 decision 7).
 
 | Method and path | Does | Action | Object |
 | --- | --- | --- | --- |
-| `GET .../forge-connections` | Lists the connections: ID, kind, auth kind, API address, parameters that are not secret, push flag, default flag, hook ID, and for each credential set its ID and creation time. Never a secret. | `namespace:read-forge-connections` | the namespace |
-| `GET .../forge-connections/{id}` | Reads one connection, as in the list. | `namespace:read-forge-connections` | the namespace |
-| `POST .../forge-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). Fails with 409 for an app ID that a connection of another namespace uses. | `namespace:manage-forge-connections` | the namespace |
-| `PATCH .../forge-connections/{id}` | Changes the API address, the parameters or the push flag. Never a credential. | `namespace:manage-forge-connections` | the namespace |
-| `DELETE .../forge-connections/{id}` | Deletes the connection and all its credential sets. Fails with 409 for the default connection (ADR 213 decision 8), and for a connection that a code location, a Catalog request home or a job that is not terminal names. | `namespace:manage-forge-connections` | the namespace |
-| `POST .../forge-connections/{id}/make-default` | Makes this connection the default. A custom method (ADR 210 decision 5). | `namespace:manage-forge-connections` | the namespace |
-| `POST .../forge-connections/{id}/credentials` | Adds a credential set. The server calls `Check` with it first, and refuses a set that fails. Answers the set ID, never the secret. | `namespace:manage-forge-connections` | the namespace |
-| `DELETE .../forge-connections/{id}/credentials/{set ID}` | Removes a credential set. Fails with 409 for the last set. | `namespace:manage-forge-connections` | the namespace |
-| `POST .../forge-connections/{id}/check` | Calls `Check` with each active set. Answers the account, the capabilities, and the missing capabilities for each consumer (`forge.Needs`). | `namespace:manage-forge-connections` | the namespace |
-| `POST` or `PATCH` of a code location or a Catalog request home that names a connection (proposed, Q6) | Names the connection. The call also needs its own action on the unit. | `namespace:use-forge-connection` | the connection (`namespace:<ns>/forge-connection:<id>`) |
-| `POST /forge-events/{hook ID}` | Webhook intake, above. | none (public list) | none |
+| `GET .../git-host-connections` | Lists the connections: ID, kind, auth kind, API address, parameters that are not secret, push flag, default flag, hook ID, and for each credential set its ID and creation time. Never a secret. | `namespace:read-git-host-connections` | the namespace |
+| `GET .../git-host-connections/{id}` | Reads one connection, as in the list. | `namespace:read-git-host-connections` | the namespace |
+| `POST .../git-host-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). Fails with 409 for an app ID that a connection of another namespace uses. | `namespace:manage-git-host-connections` | the namespace |
+| `PATCH .../git-host-connections/{id}` | Changes the API address, the parameters or the push flag. Never a credential. | `namespace:manage-git-host-connections` | the namespace |
+| `DELETE .../git-host-connections/{id}` | Deletes the connection and all its credential sets. Fails with 409 for the default connection (ADR 213 decision 8), and for a connection that a code location, a Catalog request home or a job that is not terminal names. | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections/{id}/make-default` | Makes this connection the default. A custom method (ADR 210 decision 5). | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections/{id}/credentials` | Adds a credential set. The server calls `Check` with it first, and refuses a set that fails. Answers the set ID, never the secret. | `namespace:manage-git-host-connections` | the namespace |
+| `DELETE .../git-host-connections/{id}/credentials/{set ID}` | Removes a credential set. Fails with 409 for the last set. | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections/{id}/check` | Calls `Check` with each active set. Answers the account, the capabilities, and the missing capabilities for each consumer (`forge.Needs`). | `namespace:manage-git-host-connections` | the namespace |
+| `POST` or `PATCH` of a code location or a Catalog request home that names a connection (proposed, Q6) | Names the connection. The call also needs its own action on the unit. | `namespace:use-git-host-connection` | the connection (`namespace:<ns>/git-host-connection:<id>`) |
+| `POST /webhooks/{hook ID}` | Webhook intake, above. | none (public list) | none |
 
 The built-in roles: `admin` gets both actions. `maintainer` gets
-`namespace:read-forge-connections` and, by default,
-`namespace:use-forge-connection` (proposed, Q6). `namespace:manage-forge-connections`
+`namespace:read-git-host-connections` and, by default,
+`namespace:use-git-host-connection` (proposed, Q6). `namespace:manage-git-host-connections`
 follows the pattern of `namespace:manage-runners` and
 `namespace:read-runners`. Who can name a connection in a code location is
 Q6.
@@ -615,8 +624,8 @@ request home?**
 
 - A. Each person who can change the unit (`unit:manage`), for each
   connection of the namespace.
-- B. A new action `namespace:use-forge-connection` on the object
-  `namespace:<ns>/forge-connection:<id>`, which is needed in addition to
+- B. A new action `namespace:use-git-host-connection` on the object
+  `namespace:<ns>/git-host-connection:<id>`, which is needed in addition to
   the action on the unit. The route table lists it. (proposed)
 - C. Each connection holds a list of repositories, and a code location can
   only name one of them.
@@ -625,7 +634,7 @@ Recommendation: B, with C as a later option. A connection can read every
 repository that its credential reaches, so to name it is to pass its
 access to a job. Benchmark: AWS asks for `iam:PassRole` to give a role to
 a service, in addition to the action on the service. The built-in
-`maintainer` role gets `namespace:use-forge-connection` by default.
+`maintainer` role gets `namespace:use-git-host-connection` by default.
 
 **Q8. Who can run a comment command?**
 
@@ -707,9 +716,41 @@ change that did land. A merge commit keeps the delivered commit. Benchmark:
 GitHub offers the three methods in the API (`merge_method`), and a repository
 can allow only some of them, so the call can be refused (`ErrRefused`).
 
+## User-facing words
+
+The code term is "forge". A person who reads the text does not need to know
+it, so user-facing text says "Git host" (owner decision of 19 October 2026).
+The Go packages, types and metric names keep "forge". These places change
+in this RFC:
+
+- the path `/api/dustpan/v1/namespaces/{namespace}/git-host-connections`
+  and its sub-paths;
+- the actions `namespace:read-git-host-connections`,
+  `namespace:manage-git-host-connections` and
+  `namespace:use-git-host-connection`, and the object kind
+  `git-host-connection`;
+- the text of the port errors, for example "object not found on the Git host", which
+  an API error can carry;
+- the console label "Git host connection" and the documentation page title
+  "Git host connections" (proposed, in the pull request that adds the
+  feature);
+- the path of the intake, which has no such word (`/webhooks/{hook ID}`).
+
+The wire value `forge` of the git credential mode of a runner pool stays,
+because the runner API shipped it.
+
+## Consequences
+
+- ADR 146 decisions 1 and 8 need an amendment for the chat rule: an approve
+  button in chat appears only when the chat message shows the full plan, and
+  otherwise the message links to the plan page. A follow-up ADR note records
+  it. This RFC does not edit ADR 146.
+- A comment command and a chat message follow the same approval rule, so
+  the two surfaces cannot differ.
+
 ## Hard to change later
 
-- **The path `POST /forge-events/{hook ID}`.** Each configured webhook of a
+- **The path `POST /webhooks/{hook ID}`.** Each configured webhook of a
   forge stores this address, so a change needs a change in the forge for each
   webhook. It follows the pattern of ADR 210 decision 2 for a path that an
   external system stores.

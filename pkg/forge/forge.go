@@ -34,38 +34,38 @@ var (
 	// request that the forge does not have, or that the credential of the
 	// connection cannot see. The forge APIs answer both
 	// cases the same, so the port does too.
-	ErrNotFound = errors.New("forge object not found")
+	ErrNotFound = errors.New("object not found on the Git host")
 	// ErrConflict reports a change whose base moved: a file of a commit
 	// that changed after the base commit, a branch that exists with
 	// another head, or a review request that merged.
-	ErrConflict = errors.New("forge object changed after the base")
+	ErrConflict = errors.New("object on the Git host changed after the base")
 	// ErrRefused reports a change that the forge refused for a rule of the
 	// forge: branch protection, a ruleset, a required check or review, or
 	// a permission that the credential does not have. A retry with the
 	// same request fails again.
-	ErrRefused = errors.New("forge refused the change")
+	ErrRefused = errors.New("change refused by the Git host")
 	// ErrAuth reports a credential that the forge does not accept: expired,
 	// revoked, or for another forge. The server then tries an older
 	// credential set of the connection, if one exists.
-	ErrAuth = errors.New("forge refused the credential")
+	ErrAuth = errors.New("credential refused by the Git host")
 	// ErrUnavailable reports a forge that did not answer, answered a server
 	// error, or limited the rate of the connection. A retry with backoff
 	// can pass. UnavailableError wraps it with the wait time that the forge
 	// gave.
-	ErrUnavailable = errors.New("forge is not available")
+	ErrUnavailable = errors.New("the Git host is not available")
 	// ErrTooLarge reports a file or a request above the limit that
 	// the caller gave or that the forge applies.
-	ErrTooLarge = errors.New("forge object is too large")
+	ErrTooLarge = errors.New("object on the Git host is too large")
 	// ErrUnsupported reports an operation that the forge, or the auth kind
 	// of the connection, cannot do. Capabilities does not list it.
-	ErrUnsupported = errors.New("forge does not support the operation")
+	ErrUnsupported = errors.New("the Git host does not support the operation")
 	// ErrSignature reports an event whose signature or token does not
 	// match the secret of the connection.
-	ErrSignature = errors.New("forge event signature does not match")
+	ErrSignature = errors.New("event signature from the Git host does not match")
 	// ErrInvalid reports a request that fails validation before the
 	// adapter calls the forge, or connection parameters that the adapter
 	// cannot use.
-	ErrInvalid = errors.New("invalid forge request")
+	ErrInvalid = errors.New("invalid Git host request")
 )
 
 // UnavailableError is an ErrUnavailable with the wait time that the forge
