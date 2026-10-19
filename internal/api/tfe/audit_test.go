@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -110,6 +111,13 @@ type auditFixture struct {
 func newAuditFixture(t *testing.T, err error) auditFixture {
 	t.Helper()
 
+	return newAuditFixtureFor(t, err, tokenAuthenticator{})
+}
+
+// newAuditFixtureFor is newAuditFixture with the authenticator authn.
+func newAuditFixtureFor(t *testing.T, err error, authn identity.Authenticator) auditFixture {
+	t.Helper()
+
 	var logs bytes.Buffer
 
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -119,7 +127,7 @@ func newAuditFixture(t *testing.T, err error) auditFixture {
 	entries := &memAuditStore{entries: nil, err: err, mu: sync.Mutex{}}
 
 	handler, handlerErr := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
+		Authenticator: authn,
 		Authorizer:    allowAll(),
 		AddressGate:   nil,
 		Logger:        logger,
@@ -193,12 +201,20 @@ func checkToolOperationEntry(t *testing.T, e audit.Entry, version, valuePath str
 func checkToolOperationWhat(t *testing.T, e audit.Entry, version, valuePath string) {
 	t.Helper()
 
+	checkReadWhat(t, e, version, valuePath, audit.KindToolOperation)
+}
+
+// checkReadWhat fails the test unless e records the action, the unit, the
+// state version and the value path of a state read, with the kind want.
+func checkReadWhat(t *testing.T, e audit.Entry, version, valuePath string, want audit.Kind) {
+	t.Helper()
+
 	if e.Action != string(identity.ActionUnitReadSecrets) {
 		t.Fatalf("action = %q, want unit:read-secrets", e.Action)
 	}
 
-	if e.Kind != audit.KindToolOperation {
-		t.Fatalf("kind = %q, want tool-operation", e.Kind)
+	if e.Kind != want {
+		t.Fatalf("kind = %q, want %q", e.Kind, want)
 	}
 
 	if e.Object != "opentofu:acme/web" {
@@ -249,9 +265,138 @@ func checkToolOperationMeta(t *testing.T, e audit.Entry) {
 	}
 }
 
-// TestDownloadWritesToolOperationEntry proves the download route streams the
-// state and writes one entry with the state version and an empty value path.
-func TestDownloadWritesToolOperationEntry(t *testing.T) {
+// principalAuthenticator signs in each test token as its own principal.
+type principalAuthenticator map[string]identity.Principal
+
+func (a principalAuthenticator) AuthenticateToken(_ context.Context, raw string) (identity.Principal, error) {
+	p, ok := a[raw]
+	if !ok {
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	return p, nil
+}
+
+// kindedPrincipal returns a test principal with a kind, a credential and a
+// job ID.
+func kindedPrincipal(kind identity.Kind, credential identity.Credential, jobID string) identity.Principal {
+	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Subject:        "tester",
+		DisplayName:    "Tester",
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+		Kind:           kind,
+		Credential:     credential,
+		JobID:          jobID,
+	}
+}
+
+// TestDownloadKindFollowsThePrincipal proves that a state download writes the
+// kind reveal for a person and the kind tool-operation for any other caller,
+// whatever channel the client declares, that the entry records the principal
+// kind and the job ID, and that the response says no-store.
+func TestDownloadKindFollowsThePrincipal(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		principal  identity.Principal
+		channel    string
+		wantKind   audit.Kind
+		wantChan   audit.Channel
+		wantPKind  string
+		wantJobID  string
+		wantStatus int
+	}{
+		{
+			"unknown kind counts as a person",
+			kindedPrincipal("", "", ""),
+			"api",
+			audit.KindReveal,
+			audit.ChannelAPI,
+			"",
+			"",
+			200,
+		},
+		{
+			"person with a session", kindedPrincipal(identity.KindPerson, identity.CredentialSession, ""),
+			"console", audit.KindReveal, audit.ChannelConsole, "person", "", 200,
+		},
+		{
+			"person with a personal token", kindedPrincipal(identity.KindPerson, identity.CredentialAccessToken, ""),
+			"api", audit.KindReveal, audit.ChannelAPI, "person", "", 200,
+		},
+		{
+			"person with no credential", kindedPrincipal(identity.KindPerson, "", ""),
+			"api", audit.KindReveal, audit.ChannelAPI, "person", "", 200,
+		},
+		{
+			"service token", kindedPrincipal(identity.KindService, identity.CredentialAccessToken, ""),
+			"api", audit.KindToolOperation, audit.ChannelAPI, "service", "", 200,
+		},
+		{
+			"service token that declares the console",
+			kindedPrincipal(identity.KindService, identity.CredentialAccessToken, ""),
+			"console",
+			audit.KindToolOperation,
+			audit.ChannelConsole,
+			"service",
+			"",
+			200,
+		},
+		{
+			"workload with a trust token", kindedPrincipal(identity.KindWorkload, identity.CredentialTrustToken, ""),
+			"api", audit.KindToolOperation, audit.ChannelAPI, "workload", "", 200,
+		},
+		{
+			"person with a job token", kindedPrincipal(identity.KindPerson, identity.CredentialJobToken, "job-7"),
+			"api", audit.KindToolOperation, audit.ChannelAPI, "person", "job-7", 200,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAuditFixtureFor(t, nil, principalAuthenticator{"test-token": tc.principal})
+
+			req := auditRequest(t, "/api/v2/state-versions/sv-test123/download")
+			req.Header.Set("Dustpan-Channel", tc.channel)
+
+			rec := httptest.NewRecorder()
+			f.handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("download answers %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+				t.Fatalf("Cache-Control = %q, want no-store", got)
+			}
+
+			f.entries.mu.Lock()
+			defer f.entries.mu.Unlock()
+
+			if len(f.entries.entries) != 1 {
+				t.Fatalf("entries = %d, want 1", len(f.entries.entries))
+			}
+
+			e := f.entries.entries[0]
+			checkReadWhat(t, e, "sv-test123", "", tc.wantKind)
+
+			if e.Channel != tc.wantChan || e.PrincipalKind != tc.wantPKind || e.JobID != tc.wantJobID {
+				t.Fatalf("channel, principal kind, job ID = %q, %q, %q; want %q, %q, %q",
+					e.Channel, e.PrincipalKind, e.JobID, tc.wantChan, tc.wantPKind, tc.wantJobID)
+			}
+		})
+	}
+}
+
+// TestDownloadStreamsTheState proves the download route streams the state
+// and writes one entry with the state version and an empty value path.
+func TestDownloadStreamsTheState(t *testing.T) {
 	t.Parallel()
 
 	f := newAuditFixture(t, nil)
@@ -274,7 +419,8 @@ func TestDownloadWritesToolOperationEntry(t *testing.T) {
 		t.Fatalf("entries = %d, want 1", len(f.entries.entries))
 	}
 
-	checkToolOperationEntry(t, f.entries.entries[0], "sv-test123", "")
+	checkReadWhat(t, f.entries.entries[0], "sv-test123", "", audit.KindReveal)
+	checkToolOperationMeta(t, f.entries.entries[0])
 }
 
 // TestDownloadFailureAnswers500WithoutState proves a failed audit append on

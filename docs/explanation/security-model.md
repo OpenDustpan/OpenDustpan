@@ -355,14 +355,22 @@ entry and how to read them.
     answers the plain value at one masked value path of one version. It
     needs `unit:read` and `unit:read-secrets`, and it writes its entry
     before it answers. The Pulumi CLI also reports a reveal through
-    `decrypt/log-decryption` and `decrypt/log-batch-decryption`.
+    `decrypt/log-decryption` and `decrypt/log-batch-decryption`. A state
+    download by a person also writes this kind.
   - `tool-operation`: a tool needed secrets for its own work. The Pulumi
-    `decrypt` and `batch-decrypt` routes, the OpenTofu state download and
-    the OpenTofu route for one sensitive output write this kind.
-- **The server cannot see who runs a CLI command.** A person who runs
-  `tofu state pull` makes a `tool-operation` entry. The server records a
-  reveal from the Pulumi CLI only when the CLI calls a `log-decryption`
-  route.
+    `decrypt` and `batch-decrypt` routes, the OpenTofu route for one
+    sensitive output, and a state download by a service, a workload or a job
+    write this kind.
+- **The principal decides who a state download is for.** The server cannot
+  see who runs a CLI command, but it knows the kind of the principal and the
+  credential. A download with a console session or an access token of a
+  principal of the kind `person` is a `reveal`. A principal with an unknown
+  kind, for example the bootstrap admin token, counts as a person, so the
+  server writes the stricter entry. A download with a service token, a token
+  from a trust rule or a job token is a `tool-operation`. The channel header
+  never decides. The server records a reveal from the Pulumi CLI only when
+  the CLI calls a `log-decryption` route. A state download answers
+  `Cache-Control: no-store`.
 - **Who can read the log.** `GET /api/audit/entries` lists the entries,
   `GET /api/audit/entries/{sequence}` reads one entry and
   `GET /api/audit/check` checks the chain. Each needs the action

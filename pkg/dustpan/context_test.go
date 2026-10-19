@@ -118,6 +118,9 @@ func newContextWorld(t *testing.T) contextWorld {
 		return identity.Principal{
 			Subject: subject, DisplayName: subject, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		}
 	}
 
@@ -125,6 +128,9 @@ func newContextWorld(t *testing.T) contextWorld {
 		ctxAdminToken: {
 			Subject: "operator", DisplayName: "operator", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		},
 		ctxOwnerToken:  person("owen"),
 		ctxWriterToken: person("wanda"),
@@ -485,7 +491,9 @@ func TestContextWorkspaceSurvivesRename(t *testing.T) {
 		Object: "acme/net", Version: "", ValuePath: "", ValueCount: nil, SourceIP: "", UserAgent: "",
 		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "", FenceVersion: 0,
-		Reason: "",
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 
 	if err = w.srv.Workspaces().Delete(t.Context(), workspace.Ref{Namespace: "acme", Name: oldName}, e); err != nil {

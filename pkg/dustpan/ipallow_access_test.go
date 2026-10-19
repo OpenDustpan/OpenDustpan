@@ -147,6 +147,9 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 			TokenExpiresAt:         time.Time{},
 			TemporaryAdministrator: false,
 			TemporaryExpiresAt:     time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		},
 		instAdminToken: {
 			Subject:                "instadmin",
@@ -156,6 +159,9 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 			TokenExpiresAt:         time.Time{},
 			TemporaryAdministrator: false,
 			TemporaryExpiresAt:     time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		},
 	}}
 

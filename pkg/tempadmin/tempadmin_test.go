@@ -187,29 +187,31 @@ func testService(store *fakeStore) *tempadmin.Service {
 // callerEntry is the audit entry of the host operator for a create.
 func callerEntry() audit.Entry {
 	return audit.Entry{
-		FenceVersion: 0,
-		At:           time.Time{},
-		Namespace:    "",
-		Subject:      "host",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "",
-		Object:       "",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "",
-		UserAgent:    "",
-		Channel:      audit.ChannelAPI,
-		Kind:         "",
-		Outcome:      "",
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		Reason:       "",
+		FenceVersion:  0,
+		At:            time.Time{},
+		Namespace:     "",
+		Subject:       "host",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "",
+		Object:        "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          "",
+		Outcome:       "",
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -246,6 +248,25 @@ func TestCreateSetsAFixedExpiry(t *testing.T) {
 
 	if e.Action != tempadmin.Action || e.Object != tempadmin.Ref("prn-alice") || e.Outcome != audit.OutcomeSuccess {
 		t.Fatalf("audit entry = %+v, want a success of %s on %s", e, tempadmin.Action, tempadmin.Ref("prn-alice"))
+	}
+
+	if e.Reason != testReason {
+		t.Fatalf("audit entry reason = %q, want %q", e.Reason, testReason)
+	}
+}
+
+// TestValidateReasonFitsAnAuditEntry proves that a reason of an audit entry
+// length is usable, and that a longer one is refused, because the audit entry
+// of the create holds the reason.
+func TestValidateReasonFitsAnAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	if err := tempadmin.ValidateReason(strings.Repeat("a", audit.MaxReasonLen)); err != nil {
+		t.Fatalf("reason at the limit: %v", err)
+	}
+
+	if err := tempadmin.ValidateReason(strings.Repeat("a", audit.MaxReasonLen+1)); err == nil {
+		t.Fatal("reason over the limit was accepted")
 	}
 }
 
@@ -502,6 +523,9 @@ func TestDecoratorSetsTheFlagAndWritesASignInEntry(t *testing.T) {
 		TokenExpiresAt:         time.Time{},
 		TemporaryAdministrator: false,
 		TemporaryExpiresAt:     time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	dec := signInDecorator(t, store, audits, caller)
@@ -548,6 +572,9 @@ func TestDecoratorWritesOneSignInEntryPerRequest(t *testing.T) {
 		TokenExpiresAt:         time.Time{},
 		TemporaryAdministrator: false,
 		TemporaryExpiresAt:     time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 
 	dec := signInDecorator(t, store, audits, caller)
@@ -626,6 +653,9 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 		TokenExpiresAt:         time.Time{},
 		TemporaryAdministrator: false,
 		TemporaryExpiresAt:     time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}).AuthenticateToken(t.Context(), "good")
 	if err != nil {
 		t.Fatalf("bootstrap sign-in: %v", err)
@@ -644,6 +674,9 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 		TokenExpiresAt:         time.Time{},
 		TemporaryAdministrator: false,
 		TemporaryExpiresAt:     time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}).AuthenticateToken(t.Context(), "good")
 	if err != nil {
 		t.Fatalf("ordinary sign-in: %v", err)
@@ -682,6 +715,9 @@ func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 			TokenExpiresAt:         time.Time{},
 			TemporaryAdministrator: false,
 			TemporaryExpiresAt:     time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		}},
 		Records:    store,
 		Principals: store,
@@ -807,6 +843,9 @@ func TestDecoratorReusedSubjectNotLockedOut(t *testing.T) {
 	caller := identity.Principal{
 		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "tok-new",
 		TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	got, err := signInDecorator(t, store, audits, caller).AuthenticateToken(t.Context(), "good")
@@ -1078,6 +1117,9 @@ func expiredUseLog(t *testing.T, fail error) string {
 		Next: fakeAuthn{principal: identity.Principal{
 			Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "tok-alice",
 			TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		}},
 		Records: store, Principals: store, Request: nil, Expirer: store, Audit: newFakeAudit(),
 		Now: func() time.Time { return rec.ExpiresAt }, Logger: testLogger(&logs),

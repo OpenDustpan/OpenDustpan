@@ -115,9 +115,10 @@ func (r TempAdmin) Validate() error {
 }
 
 // ValidateReason reports whether reason is a usable reason of a temporary
-// administrator: history.ValidateReason accepts it, and it holds no format
+// administrator: history.ValidateReason accepts it, it holds no format
 // character, such as a direction override, that could hide text in the
-// audit log.
+// audit log, and it is a valid reason of an audit entry, at most
+// audit.MaxReasonLen characters.
 func ValidateReason(reason string) error {
 	if err := history.ValidateReason(reason); err != nil {
 		return err
@@ -125,6 +126,12 @@ func ValidateReason(reason string) error {
 
 	if hasHiddenRune(reason) {
 		return fmt.Errorf("%w: the reason holds a format character", history.ErrInvalidReason)
+	}
+
+	// The audit entry of the create holds the reason, so the reason must
+	// also be a valid reason of an entry.
+	if err := audit.ValidateReason(reason); err != nil {
+		return fmt.Errorf("%w: %w", history.ErrInvalidReason, err)
 	}
 
 	return nil

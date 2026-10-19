@@ -3537,6 +3537,9 @@ type auditListItem struct {
 	ObjectID   string `json:"objectID"`
 	Hash       string `json:"hash"`
 	Reason     string `json:"reason"`
+	// PrincipalKind is the kind of the principal record that acted.
+	PrincipalKind string `json:"principalKind"`
+	JobID         string `json:"jobID"`
 }
 
 // checkUnitObjectIDs fails the test unless each successful entry on a unit
@@ -4250,13 +4253,14 @@ output "peer_secret" {
 `
 }
 
-// countDownloadEntries counts the tool-operation entries with the action
-// unit:read-secrets and an empty value path for unit: the state downloads.
+// countDownloadEntries counts the reveal entries with the action
+// unit:read-secrets and an empty value path for unit: the state downloads of
+// the bootstrap token, which has no principal record and counts as a person.
 func countDownloadEntries(entries []auditListItem, unit string) int {
 	count := 0
 
 	for i := range entries {
-		if e := &entries[i]; e.Kind == "tool-operation" && e.Action == "unit:read-secrets" &&
+		if e := &entries[i]; e.Kind == "reveal" && e.Action == "unit:read-secrets" &&
 			e.Object == unit && e.ValuePath == "" {
 			count++
 		}
@@ -4265,9 +4269,9 @@ func countDownloadEntries(entries []auditListItem, unit string) int {
 	return count
 }
 
-// tofuAuditScenario proves the audit entries of the kind tool-operation for
-// state that the CLI reads (ADR 41 decision 9): the apply commits a
-// sensitive output, the plan with a terraform_remote_state read of that
+// tofuAuditScenario proves the audit entries for state that the CLI reads:
+// downloads write the kind reveal and the read of one sensitive output writes
+// the kind tool-operation. The apply commits a sensitive output, the plan with a terraform_remote_state read of that
 // output leaves more download entries, and reading the sensitive output
 // leaves an output entry, with a valid chain. The output step is redacted,
 // so the secret value never reaches the log or the report. It runs last, so
@@ -4300,35 +4304,33 @@ func tofuAuditScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 	checkAuditChain(ctx, t, env, e2e.Namespace)
 }
 
-// remoteStateHits reports which tool-operation entries a plan with a
-// remote-state read left: a download entry and an output entry.
+// remoteStateHits reports which entries a plan with a remote-state read left:
+// a download entry of the kind reveal and an output entry of the kind
+// tool-operation.
 type remoteStateHits struct {
 	download bool
 	output   bool
 }
 
-// remoteStateEntries scans entries for the tool-operation entries of unit
-// with the action unit:read-secrets: a download entry carries the state
-// version and an empty value path, and an output entry carries the value
-// path of the sensitive output. It reports which of the two it found.
+// remoteStateEntries scans entries for the entries of unit with the action
+// unit:read-secrets: a download entry of the kind reveal carries the state
+// version and an empty value path, and an output entry of the kind
+// tool-operation carries the value path of the sensitive output. It reports
+// which of the two it found.
 func remoteStateEntries(entries []auditListItem, unit string) remoteStateHits {
 	var hits remoteStateHits
 
 	for i := range entries {
 		e := &entries[i]
-		if e.Kind != "tool-operation" || e.Action != "unit:read-secrets" || e.Object != unit {
+		if e.Action != "unit:read-secrets" || e.Object != unit || e.Version == "" {
 			continue
 		}
 
-		if e.Version == "" {
-			continue
-		}
-
-		if e.ValuePath == "" {
+		if e.Kind == "reveal" && e.ValuePath == "" {
 			hits.download = true
 		}
 
-		if e.ValuePath == "/outputs/secret" {
+		if e.Kind == "tool-operation" && e.ValuePath == "/outputs/secret" {
 			hits.output = true
 		}
 	}
@@ -4337,9 +4339,9 @@ func remoteStateEntries(entries []auditListItem, unit string) remoteStateHits {
 }
 
 // checkAuditPlanRemote proves the plan with the remote-state read left more
-// download entries of the kind tool-operation (ADR 41 decision 9): the CLI
-// reads remote state through the download route, which carries the sensitive
-// values. It also proves the read worked and the plan hid the secret value.
+// download entries of the kind reveal: the CLI reads remote state through the
+// download route, which carries the sensitive values, and the bootstrap token
+// counts as a person. It also proves the read worked and the plan hid the secret value.
 func checkAuditPlanRemote(ctx context.Context, env *e2e.Env, before int) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if !strings.Contains(r.Stdout, "peer_secret") {

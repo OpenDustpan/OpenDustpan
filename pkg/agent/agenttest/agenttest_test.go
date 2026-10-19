@@ -70,6 +70,9 @@ func principal(subject string) identity.Principal {
 		TokenExpiresAt:         time.Time{},
 		TemporaryAdministrator: false,
 		TemporaryExpiresAt:     time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 }
 

@@ -2709,7 +2709,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 const getAuditEntry = `-- name: GetAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence = ?
 `
@@ -2748,6 +2748,8 @@ func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (A
 		&i.ObjectID,
 		&i.FenceVersion,
 		&i.Reason,
+		&i.PrincipalKind,
+		&i.JobID,
 	)
 	return i, err
 }
@@ -4424,34 +4426,36 @@ const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
     at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-    fence_version, reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    fence_version, reason, principal_kind, job_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAuditEntryParams struct {
-	Namespace    string
-	Sequence     int64
-	Subject      string
-	IdpSubject   string
-	TokenID      string
-	Action       string
-	Object       string
-	Version      string
-	ValuePath    string
-	AtMs         int64
-	SourceIp     string
-	UserAgent    string
-	Channel      string
-	Kind         string
-	Outcome      string
-	RequestID    string
-	PrevHash     string
-	Hash         string
-	ValueCount   sql.NullInt64
-	Changes      sql.NullString
-	ObjectID     string
-	FenceVersion int64
-	Reason       string
+	Namespace     string
+	Sequence      int64
+	Subject       string
+	IdpSubject    string
+	TokenID       string
+	Action        string
+	Object        string
+	Version       string
+	ValuePath     string
+	AtMs          int64
+	SourceIp      string
+	UserAgent     string
+	Channel       string
+	Kind          string
+	Outcome       string
+	RequestID     string
+	PrevHash      string
+	Hash          string
+	ValueCount    sql.NullInt64
+	Changes       sql.NullString
+	ObjectID      string
+	FenceVersion  int64
+	Reason        string
+	PrincipalKind string
+	JobID         string
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -4479,6 +4483,8 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.ObjectID,
 		arg.FenceVersion,
 		arg.Reason,
+		arg.PrincipalKind,
+		arg.JobID,
 	)
 	return err
 }
@@ -4934,7 +4940,7 @@ func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace str
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -4970,6 +4976,8 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.ObjectID,
 		&i.FenceVersion,
 		&i.Reason,
+		&i.PrincipalKind,
+		&i.JobID,
 	)
 	return i, err
 }
@@ -5078,7 +5086,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -5128,6 +5136,8 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.ObjectID,
 			&i.FenceVersion,
 			&i.Reason,
+			&i.PrincipalKind,
+			&i.JobID,
 		); err != nil {
 			return nil, err
 		}
@@ -5145,7 +5155,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -5193,6 +5203,8 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.ObjectID,
 			&i.FenceVersion,
 			&i.Reason,
+			&i.PrincipalKind,
+			&i.JobID,
 		); err != nil {
 			return nil, err
 		}

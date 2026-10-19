@@ -208,6 +208,9 @@ func TestNoStoreWritesNothing(t *testing.T) {
 		identity.Principal{
 			Subject: "bo@example.com", TokenID: "tok-1", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		},
 		identity.ActionUnitWrite, identity.NamespaceObject("team"))
 	if !errors.Is(err, identity.ErrDenied) {
@@ -232,6 +235,9 @@ func checkRefusal(t *testing.T, tc refusalCase) {
 		identity.Principal{
 			Subject: tc.subject, TokenID: "tok-1", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		}, identity.ActionUnitWrite, tc.obj)
 
 	if !errors.Is(err, tc.wantErr) {

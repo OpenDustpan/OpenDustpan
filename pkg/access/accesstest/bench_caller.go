@@ -37,6 +37,9 @@ func BenchCallerGrants(b *testing.B, s BenchStore) {
 	caller := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: "me", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	seeded := 0

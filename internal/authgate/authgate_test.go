@@ -32,6 +32,9 @@ func (c *countingAuthenticator) AuthenticateToken(_ context.Context, token strin
 		Admin:          false,
 		TokenID:        "tok-1",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 

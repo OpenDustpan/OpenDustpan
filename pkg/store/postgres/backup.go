@@ -295,7 +295,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id", "fence_version", pgColReason,
+				"changes", "object_id", "fence_version", "principal_kind", "job_id", pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},

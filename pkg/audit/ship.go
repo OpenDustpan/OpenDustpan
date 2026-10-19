@@ -1096,7 +1096,7 @@ func (s *Shipper) shipBatch(
 // ToRecord maps an entry to a log record. The record carries the scope (the
 // namespace) and the sequence of the entry, so a receiver can remove
 // duplicates, and every field of the entry under its audit API name. It
-// carries valueCount, objectID, fenceVersion, reason and changes only when the entry has them,
+// carries valueCount, objectID, fenceVersion, principalKind, jobID, reason and changes only when the entry has them,
 // and prevHash and hash when the entry has them.
 func ToRecord(e Entry) logsink.Record {
 	attrs := []logsink.Attr{
@@ -1122,6 +1122,14 @@ func ToRecord(e Entry) logsink.Record {
 
 	if e.FenceVersion > 0 {
 		attrs = append(attrs, logsink.Int64("fenceVersion", e.FenceVersion))
+	}
+
+	if e.PrincipalKind != "" {
+		attrs = append(attrs, logsink.String("principalKind", e.PrincipalKind))
+	}
+
+	if e.JobID != "" {
+		attrs = append(attrs, logsink.String("jobID", e.JobID))
 	}
 
 	if e.Reason != "" {

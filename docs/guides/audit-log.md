@@ -18,21 +18,38 @@ The Pulumi CLI calls them when a person asks it to show secrets, for example
 
 The routes that answer a secret value to a tool write one entry each with the
 kind `tool-operation`, so a reader never confuses a tool that needed secrets
-with a person who asked to see one:
+with a person who asked to see one. The state download is the exception that
+the principal decides, as the next list says:
 
 - The Pulumi `decrypt` and `batch-decrypt` routes write one entry each with
   the action `unit:decrypt`, the count of values in `valueCount` and an empty
   `version` and value path.
 - The OpenTofu state download writes one entry with the action
   `unit:read-secrets`, the state version in `version` and an empty value
-  path.
+  path. The TFE-compatible API (`GET /api/v2/state-versions/{id}/download`)
+  and the http backend (`GET /tofu/state/{namespace}/{workspace}`) both write
+  it. The kind is `reveal` when a person acts, and `tool-operation` in all
+  other cases. A person acts through a console session or an access token of
+  a principal of the kind `person`. The bootstrap admin token has no
+  principal record, so its kind is unknown, and the server counts an unknown
+  kind as a person. A service token, a token from a trust rule and a job token
+  write `tool-operation`. The `Dustpan-Channel` header never decides the kind.
+  Both routes answer `Cache-Control: no-store`.
 - The OpenTofu route for one output writes one entry with the action
   `unit:read-secrets`, the state version in `version` and the value path
   `/outputs/<name>` when the output is sensitive. A non-sensitive output
   writes no entry.
 
-The server cannot see who runs a CLI command, so a person who runs
-`tofu state pull` makes a `tool-operation` entry.
+The server sees the kind of the principal, but not who runs a CLI command.
+A person who runs `tofu state pull` with a personal token makes a `reveal`
+entry. A pipeline that runs `tofu plan` with a service token makes a
+`tool-operation` entry. A person who uses a service token also makes a
+`tool-operation` entry, and the audit entry of the creation of that token
+names the person. Each `tofu plan` with a personal token writes one `reveal`
+entry for each state download, and a `terraform_remote_state` read of
+another workspace writes one more, so one plan can write more than one. To
+keep CI reads as `tool-operation`, run CI with a service token or a workload
+identity.
 A failed append on a route that answers a secret value answers 500 with no
 secret value, so a value without its entry never reaches the client.
 The two `log-decryption` routes answer no secret value, so they keep
@@ -75,6 +92,10 @@ An entry holds these fields:
   at most 500 Unicode code points. A reason that is too long, or that holds
   a control character, a format character or a line or paragraph
   separator, is refused. A force-unlock can carry one.
+- `principalKind`: the kind of the principal record that acted: `person`,
+  `service` or `workload`. It is omitted when the server cannot name the
+  kind, for example for the bootstrap admin token.
+- `jobID`: the job whose token acted, else omitted.
 - Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
   never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
@@ -90,15 +111,13 @@ An entry holds these fields:
   The encoding writes each field as its length in bytes (decimal), a
   colon and the bytes of the field, with nothing between the fields. For
   example, the subject `admin` is `5:admin` and an empty field is `0:`.
-  After `prevHash`, the encoding always writes five more fields, in this
+  After `prevHash`, the encoding always writes seven more fields, in this
   fixed order: the decimal value count, the stable ID of the unit, the
   canonical JSON of the changes (sorted by key) as the store holds it, the
-  decimal failover version of the namespace (0 in `@server`), and the
-  reason. The reason stays last. A later field, for example the principal
-  kind and the job ID of a planned change, goes between the failover version
-  and the reason: no release shipped an audit entry, so the order can change,
-  and an entry from an earlier build does not keep its hash. No field is
-  optional. An entry with no value count
+  decimal failover version of the namespace (0 in `@server`), the principal
+  kind, the job ID and the reason. The reason stays last. No release shipped
+  an audit entry, so the order can change, and an entry from an earlier build
+  does not keep its hash. No field is optional. An entry with no value count
   writes one `-` in place of the count, so an entry with no count (`-`) and an entry with the count 0
   (`1:0`) have different hashes. Because each field carries its length,
   two different entries never give the same encoding.

@@ -55,8 +55,10 @@ func caller() audit.Entry {
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0,
-		Reason:       "",
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -139,6 +141,9 @@ func admin() identity.Principal {
 		Admin:                  true,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 }
 
@@ -363,6 +368,9 @@ func TestAuthenticate(t *testing.T) {
 		Admin:                  false,
 		TokenID:                tok.ID,
 		TokenExpiresAt:         tok.ExpiresAt,
+		Kind:                   identity.KindService,
+		Credential:             identity.CredentialAccessToken,
+		JobID:                  "",
 	}
 	if got != want {
 		t.Fatalf("principal = %+v, want %+v", got, want)
@@ -386,6 +394,48 @@ func TestAuthenticate(t *testing.T) {
 		if _, err := f.svc.AuthenticateToken(ctx, raw); !errors.Is(err, identity.ErrUnauthenticated) {
 			t.Errorf("authenticate %q: err = %v, want ErrUnauthenticated", raw, err)
 		}
+	}
+}
+
+// TestAuthenticateFillsTheKindOfThePrincipal proves that a personal token
+// signs in a principal of the kind person and a service token one of the kind
+// service, each with the credential access-token and no job ID, so a state
+// download with a personal token is a reveal and one with a service token is
+// not (ADR 240).
+func TestAuthenticateFillsTheKindOfThePrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	cases := []struct {
+		name string
+		from principal.Principal
+		want identity.Kind
+	}{
+		{"personal token", f.person, identity.KindPerson},
+		{"service token", f.service, identity.KindService},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, secret := f.create(t, tc.from, "kind-"+tc.name)
+
+			got, err := f.svc.AuthenticateToken(t.Context(), secret.Reveal())
+			if err != nil {
+				t.Fatalf("authenticate: %v", err)
+			}
+
+			if got.Kind != tc.want || got.Credential != identity.CredentialAccessToken || got.JobID != "" {
+				t.Fatalf("kind, credential, job ID = %q, %q, %q; want %q, access-token, empty",
+					got.Kind, got.Credential, got.JobID, tc.want)
+			}
+
+			if got.ActsAsPerson() != (tc.want == identity.KindPerson) {
+				t.Fatalf("ActsAsPerson = %t for kind %q", got.ActsAsPerson(), got.Kind)
+			}
+		})
 	}
 }
 
@@ -415,6 +465,9 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 		Admin:                  true,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -459,6 +512,9 @@ func TestCheckActive(t *testing.T) {
 		Admin:                  true,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -768,6 +824,9 @@ func as(p principal.Principal) identity.Principal {
 		Admin:                  false,
 		TokenID:                "",
 		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
 	}
 }
 

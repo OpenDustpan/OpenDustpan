@@ -92,6 +92,9 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (iden
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 

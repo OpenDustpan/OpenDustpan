@@ -81,6 +81,9 @@ func adminPrincipal(subject string) identity.Principal {
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 }
 
@@ -93,6 +96,9 @@ func userPrincipal(subject string) identity.Principal {
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 }
 

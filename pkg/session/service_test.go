@@ -94,7 +94,9 @@ func signInEntry() audit.Entry {
 		Action: session.ActionSignIn, Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0, ObjectID: "", FenceVersion: 0,
-		Reason: "",
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
