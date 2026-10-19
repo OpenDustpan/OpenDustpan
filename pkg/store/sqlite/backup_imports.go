@@ -12,7 +12,7 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespaceID,
 				"id",
-				"kind",
+				backupColKind,
 				"address",
 				"selection",
 				"credential",
@@ -22,7 +22,7 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 				backupColState,
 				"reason",
 				"created_by",
-				"created_at_ms",
+				backupColCreatedAtMs,
 				"plan",
 				backupColEndedAtMs,
 			},

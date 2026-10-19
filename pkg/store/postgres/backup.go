@@ -100,6 +100,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
 	tables = append(tables, pgCopyImportTables()...)
+	tables = append(tables, pgCopyRunnerTables()...)
 
 	return tables
 }
@@ -333,7 +334,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 // compares each list with the live columns, so a migration that adds a column
 // fails until its author adds the column here.
 func pgControlTables() []pgCopyTable {
-	return []pgCopyTable{
+	core := []pgCopyTable{
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
@@ -377,6 +378,8 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 	}
+
+	return slices.Concat(core, pgRunnerControlTables())
 }
 
 // pgCopySessionTables holds the COPY columns of the session and sign-in

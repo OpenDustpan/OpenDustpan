@@ -461,6 +461,10 @@ var keepControlStatements = []string{
 	`DELETE FROM main.backups`,
 	`DELETE FROM main.restores`,
 	`DELETE FROM main.installation`,
+	`DELETE FROM main.runner_claims`,
+	`DELETE FROM main.runner_handoff_tokens`,
+	`DELETE FROM main.runner_sessions`,
+	`DELETE FROM main.runner_nonces`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
@@ -474,7 +478,25 @@ var keepControlStatements = []string{
 	`INSERT INTO main.restores (` + restoreColumns + `) ` +
 		`SELECT ` + restoreColumns + ` FROM live.restores`,
 	`INSERT INTO main.installation (id, state) SELECT id, state FROM live.installation`,
+	`INSERT INTO main.runner_claims (` + runnerClaimColumns + `) ` +
+		`SELECT ` + runnerClaimColumns + ` FROM live.runner_claims`,
+	`INSERT INTO main.runner_handoff_tokens (` + runnerHandoffColumns + `) ` +
+		`SELECT ` + runnerHandoffColumns + ` FROM live.runner_handoff_tokens`,
+	`INSERT INTO main.runner_sessions (` + runnerSessionColumns + `) ` +
+		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions`,
+	`INSERT INTO main.runner_nonces (` + runnerNonceColumns + `) ` +
+		`SELECT ` + runnerNonceColumns + ` FROM live.runner_nonces`,
 }
+
+// The columns of the control tables of the runner protocol, for the copy of
+// the control tables. A restore keeps the live handoff tokens and job
+// sessions, because they name the claims of the live durable operations.
+const (
+	runnerClaimColumns   = `operation_id, token, claimed_at_ms`
+	runnerHandoffColumns = `sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms`
+	runnerSessionColumns = `id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms`
+	runnerNonceColumns   = `subject, nonce, expires_at_ms`
+)
 
 // signInFailureColumns lists every column of sign_in_failures, for the copy
 // of the control tables.

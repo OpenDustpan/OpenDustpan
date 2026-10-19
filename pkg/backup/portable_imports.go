@@ -29,7 +29,7 @@ func portableImportRecords() []PortableTable {
 				{Name: "state", Kind: KindText},
 				{Name: "reason", Kind: KindText},
 				{Name: "created_by", Kind: KindText},
-				{Name: "created_at_ms", Kind: KindTime},
+				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: "plan", Kind: KindText},
 				{Name: "ended_at_ms", Kind: KindTime},
 			},
