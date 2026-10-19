@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -114,18 +115,7 @@ const (
 // 1 to MaxNameBytes bytes of lowercase letters, digits and '-', with a
 // letter first.
 func ValidName(s string) bool {
-	if s == "" || len(s) > MaxNameBytes || s[0] < 'a' || s[0] > 'z' {
-		return false
-	}
-
-	for i := range len(s) {
-		c := s[i]
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-			return false
-		}
-	}
-
-	return true
+	return ident.ValidSlug(s, MaxNameBytes)
 }
 
 // ValidInputName reports whether s is a valid name of an input: 1 to
