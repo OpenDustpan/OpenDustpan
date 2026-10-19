@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -512,37 +513,76 @@ func TestCORS(t *testing.T) {
 	f := newFixture(t)
 
 	for _, tc := range []struct {
-		name, origin, wantAllow string
+		name, method, origin, wantAllow string
 	}{
-		{"allowed origin", origin, origin},
-		{"other origin", "https://evil.example", ""},
+		{"preflight allowed origin", http.MethodOptions, origin, origin},
+		{"preflight other origin", http.MethodOptions, "https://evil.example", ""},
+		{"preflight no origin", http.MethodOptions, "", ""},
+		{"request allowed origin", http.MethodGet, origin, origin},
+		{"request other origin", http.MethodGet, "https://evil.example", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			url := f.server.URL + "/api/user"
 
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodOptions, url, http.NoBody)
+			req, err := http.NewRequestWithContext(t.Context(), tc.method, url, http.NoBody)
 			if err != nil {
 				t.Fatalf("new request: %v", err)
 			}
 
-			req.Header.Set("Origin", tc.origin)
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+
 			req.Header.Set("Access-Control-Request-Method", http.MethodGet)
 
 			resp, err := f.server.Client().Do(req)
 			if err != nil {
-				t.Fatalf("preflight: %v", err)
+				t.Fatalf("request: %v", err)
 			}
 
 			if closeErr := resp.Body.Close(); closeErr != nil {
 				t.Fatalf("close body: %v", closeErr)
 			}
 
-			if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tc.wantAllow {
-				t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, tc.wantAllow)
-			}
+			checkCORSHeaders(t, resp.Header, tc.method, tc.wantAllow)
 		})
+	}
+}
+
+func checkCORSHeaders(t *testing.T, h http.Header, method, wantAllow string) {
+	t.Helper()
+
+	if got := h.Get("Access-Control-Allow-Origin"); got != wantAllow {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, wantAllow)
+	}
+
+	if wantAllow == "" {
+		if h.Get("Access-Control-Allow-Credentials") != "" || h.Get("Access-Control-Allow-Headers") != "" {
+			t.Fatalf("CORS headers set without an allowed origin: %v", h)
+		}
+
+		return
+	}
+
+	if got := h.Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+
+	if !slices.Contains(h.Values("Vary"), "Origin") {
+		t.Fatalf("Vary = %v, want Origin", h.Values("Vary"))
+	}
+
+	if method != http.MethodOptions {
+		return
+	}
+
+	allowHeaders := h.Get("Access-Control-Allow-Headers")
+	for _, want := range []string{"Authorization", "Content-Type", "Dustpan-Channel", "X-Dustpan-CSRF"} {
+		if !strings.Contains(allowHeaders, want) {
+			t.Fatalf("Access-Control-Allow-Headers = %q, want %q", allowHeaders, want)
+		}
 	}
 }
 
