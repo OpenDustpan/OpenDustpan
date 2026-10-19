@@ -1,0 +1,215 @@
+{{- $tls := .Values.server.tls.existingSecret -}}
+{{- $s3Blob := eq .Values.blobStore.type "s3" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opendustpan.fullname" . }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "opendustpan.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "opendustpan.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "opendustpan.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if and .Values.console.enabled .Values.console.runtimeConfig }}
+        checksum/console-config: {{ include (print $.Template.BasePath "/configmap-console.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "opendustpan.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: {{ include "opendustpan.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - {{ printf "--log-level=%s" .Values.server.logLevel | quote }}
+            - {{ printf "--log-format=%s" .Values.server.logFormat | quote }}
+            {{- if .Values.console.enabled }}
+            - --console-dir=/console
+            {{- end }}
+            {{- if $s3Blob }}
+            - {{ printf "--blob-store=s3://%s" (list .Values.blobStore.s3.bucket .Values.blobStore.s3.prefix | compact | join "/") | quote }}
+            {{- else }}
+            - --blob-dir=/data/blobs
+            {{- end }}
+            {{- if eq .Values.backup.target.type "dir" }}
+            - --backup-target=dir:/backups
+            {{- else if eq .Values.backup.target.type "s3" }}
+            - {{ printf "--backup-target=s3://%s" (list .Values.backup.target.s3.bucket .Values.backup.target.s3.prefix | compact | join "/") | quote }}
+            {{- end }}
+            {{- if .Values.s3.endpoint }}
+            - {{ printf "--s3-endpoint=%s" .Values.s3.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.s3.region }}
+            - {{ printf "--s3-region=%s" .Values.s3.region | quote }}
+            {{- end }}
+            {{- if .Values.server.region }}
+            - {{ printf "--region=%s" .Values.server.region | quote }}
+            {{- end }}
+            {{- if .Values.server.publicURL }}
+            - {{ printf "--public-url=%s" .Values.server.publicURL | quote }}
+            {{- end }}
+            {{- if .Values.server.trustedProxies }}
+            - {{ printf "--trusted-proxies=%s" (join "," .Values.server.trustedProxies) | quote }}
+            - {{ printf "--trusted-proxy-header=%s" .Values.server.trustedProxyHeader | quote }}
+            {{- end }}
+          env:
+            - name: DUSTPAN_LISTEN
+              value: ":8080"
+            - name: DUSTPAN_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret.name | quote }}
+                  key: {{ .Values.database.existingSecret.key | quote }}
+            - name: DUSTPAN_KEY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.keyEncryptionKey.existingSecret.name | quote }}
+                  key: {{ .Values.keyEncryptionKey.existingSecret.key | quote }}
+            {{- with .Values.adminToken.existingSecret }}
+            {{- if .name }}
+            - name: DUSTPAN_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name | quote }}
+                  key: {{ .key | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.s3.credentials.existingSecret }}
+            {{- if .name }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name | quote }}
+                  key: {{ .accessKeyIDKey | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name | quote }}
+                  key: {{ .secretAccessKeyKey | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $tls }}
+            - name: DUSTPAN_TLS_CERT
+              value: /tls/tls.crt
+            - name: DUSTPAN_TLS_KEY
+              value: /tls/tls.key
+            {{- end }}
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: {{ include "opendustpan.scheme" . }}
+            {{- toYaml .Values.probes.startup | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: {{ include "opendustpan.scheme" . }}
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              scheme: {{ include "opendustpan.scheme" . }}
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if not $s3Blob }}
+            - name: blobs
+              mountPath: /data/blobs
+            {{- end }}
+            {{- if eq .Values.backup.target.type "dir" }}
+            - name: backups
+              mountPath: /backups
+            {{- end }}
+            {{- if and .Values.console.enabled .Values.console.runtimeConfig }}
+            - name: console-config
+              mountPath: /console/config.json
+              subPath: config.json
+              readOnly: true
+            {{- end }}
+            {{- if $tls }}
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if not $s3Blob }}
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: {{ include "opendustpan.blobClaim" . }}
+        {{- end }}
+        {{- if eq .Values.backup.target.type "dir" }}
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "opendustpan.backupClaim" . }}
+        {{- end }}
+        {{- if and .Values.console.enabled .Values.console.runtimeConfig }}
+        - name: console-config
+          configMap:
+            name: {{ include "opendustpan.fullname" . }}-console
+        {{- end }}
+        {{- if $tls }}
+        - name: tls
+          secret:
+            secretName: {{ $tls | quote }}
+            defaultMode: 0440
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

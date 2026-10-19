@@ -99,6 +99,7 @@ func newRole(id, name string, actions ...identity.Action) access.Role {
 
 func newNamespace(name namespace.Name) namespace.Namespace {
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       at(0),
 		Name:            name,
 		HomeRegion:      "",
@@ -120,28 +121,31 @@ func opsGroup() access.Subject {
 // @server, as a Service builds it.
 func entry() audit.Entry {
 	return audit.Entry{
-		At:           at(9),
-		Namespace:    audit.ServerScope,
-		Subject:      "admin",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "server:manage-access",
-		Object:       "grant:test",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "accesstest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            at(9),
+		Namespace:     audit.ServerScope,
+		Subject:       "admin",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "server:manage-access",
+		Object:        "grant:test",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "accesstest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -960,7 +964,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 			Pinned: false,
 		}
-		if err := ps.AddMember(ctx, m, entry()); err != nil {
+		if err := ps.AddMember(ctx, m, entry(), nil); err != nil {
 			t.Fatalf("add member: %v", err)
 		}
 	}

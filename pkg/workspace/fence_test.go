@@ -19,7 +19,7 @@ import (
 // resources and changes only the lineage and the serial.
 const stateDoc = `{"version":4,"lineage":"lin-old","serial":1,"resources":[{"type":"null_resource","name":"a"}]}`
 
-// smallDoc is a state document that fits the plain fixture, which caps state
+// smallDoc is a state document that fits the fixture, which caps state
 // at 64 bytes.
 const smallDoc = `{"lineage":"lin-old","serial":1,"resources":[]}`
 
@@ -62,7 +62,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -115,98 +115,6 @@ func assertBlobHidesState(t *testing.T, f sealFixture, cur workspace.StateVersio
 	}
 }
 
-// A force-unlock on a sealing service of a state that a server without a
-// sealer wrote writes a sealed fence: the blob and the outputs column hold no
-// plain state, and both read back plain through the service.
-func TestForceUnlockSealsAPlainStateOnASealingService(t *testing.T) {
-	t.Parallel()
-
-	const secret = "s3cr3t-fence-output"
-
-	doc := `{"version":4,"lineage":"lin-old","serial":1,` +
-		`"outputs":{"token":{"value":"` + secret + `","type":"string","sensitive":true}},` +
-		`"resources":[{"type":"null_resource","name":"a"}]}`
-
-	f := newSealFixture(t)
-	ctx := t.Context()
-
-	f.pushPlain(t, doc, 1)
-
-	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
-
-	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
-		t.Fatalf("force unlock: %v", err)
-	}
-
-	cur, err := f.sealed.Current(ctx, f.ws.ID)
-	if err != nil {
-		t.Fatalf("current: %v", err)
-	}
-
-	if !cur.Sealed || cur.FenceBy != "admin" || cur.Serial != 2 {
-		t.Fatalf("fence sealed=%t by %q serial %d, want a sealed admin fence at serial 2",
-			cur.Sealed, cur.FenceBy, cur.Serial)
-	}
-
-	assertBlobHidesState(t, f, cur)
-
-	stored, err := f.store.GetStateVersion(ctx, cur.ID)
-	if err != nil {
-		t.Fatalf("get fence row: %v", err)
-	}
-
-	if strings.Contains(string(stored.Outputs), secret) {
-		t.Fatal("the outputs column of the fence holds the plain output value")
-	}
-
-	if !strings.Contains(string(cur.Outputs), secret) {
-		t.Fatalf("outputs of the fence read %s, want the plain output value", cur.Outputs)
-	}
-
-	if got := readFenced(t, f.sealed, cur); string(got["lineage"]) != `"`+cur.Lineage+`"` {
-		t.Fatalf("fence lineage %s, want %s", got["lineage"], cur.Lineage)
-	}
-}
-
-// A force-unlock of a state that is not sealed writes a plain fence, with
-// the same posture as the state before it.
-func TestForceUnlockFencesPlainState(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t)
-	ctx := t.Context()
-
-	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
-
-	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
-		t.Fatalf("push v1: %v", err)
-	}
-
-	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
-		t.Fatalf("force unlock: %v", err)
-	}
-
-	cur, err := f.svc.Current(ctx, f.ws.ID)
-	if err != nil {
-		t.Fatalf("current: %v", err)
-	}
-
-	if cur.Sealed || cur.FenceBy != "admin" || cur.Serial != 2 || cur.Lineage == "lin-old" {
-		t.Fatalf("fence sealed=%t by %q serial %d lineage %q, want a plain admin fence at serial 2",
-			cur.Sealed, cur.FenceBy, cur.Serial, cur.Lineage)
-	}
-
-	doc := readFenced(t, f.svc, cur)
-
-	if string(doc["lineage"]) != `"`+cur.Lineage+`"` || string(doc["serial"]) != "2" {
-		t.Fatalf("fence lineage %s serial %s, want the stored lineage and serial 2", doc["lineage"], doc["serial"])
-	}
-}
-
 // A force-unlock of a workspace with no state only releases its lock: no
 // version is written.
 func TestForceUnlockWithoutStateOnlyReleases(t *testing.T) {
@@ -219,7 +127,7 @@ func TestForceUnlockWithoutStateOnlyReleases(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	released, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
+	released, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
 	if err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
@@ -230,35 +138,6 @@ func TestForceUnlockWithoutStateOnlyReleases(t *testing.T) {
 
 	if _, curErr := f.svc.Current(ctx, f.ws.ID); !errors.Is(curErr, workspace.ErrNoState) {
 		t.Fatalf("current after a force-unlock with no state: err = %v, want ErrNoState", curErr)
-	}
-}
-
-// A sealed state needs the sealer to write its fence. Without it the
-// force-unlock is refused and the lock stays.
-func TestForceUnlockSealedNeedsSealer(t *testing.T) {
-	t.Parallel()
-
-	f := newSealFixture(t)
-	ctx := t.Context()
-
-	f.pushSealed(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
-
-	_, _, err := f.plain.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
-	if !errors.Is(err, workspace.ErrSealerNotConfigured) {
-		t.Fatalf("force unlock without a sealer: err = %v, want ErrSealerNotConfigured", err)
-	}
-
-	held, err := f.plain.GetByID(ctx, f.ws.ID)
-	if err != nil {
-		t.Fatalf("get workspace: %v", err)
-	}
-
-	if !held.Lock.Locked() {
-		t.Fatal("the lock was released without a fence")
 	}
 }
 
@@ -294,7 +173,7 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 		}
 	}
 
-	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
+	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
 	if !errors.Is(err, workspace.ErrConcurrentModification) {
 		t.Fatalf("force unlock beside a finalize: err = %v, want ErrConcurrentModification", err)
 	}
@@ -378,7 +257,7 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 		States:             f.store,
 		Blobs:              failing,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -389,7 +268,8 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 		t.Fatalf("service: %v", err)
 	}
 
-	if _, _, err := failingSvc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); !errors.Is(err, errPutFailed) {
+	_, _, err = failingSvc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
+	if !errors.Is(err, errPutFailed) {
 		t.Fatalf("force unlock with a failed content write: err = %v, want the failed write", err)
 	}
 
@@ -421,7 +301,8 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 }
 
 // A force-unlock of a state the client encrypted is refused, and the lock
-// stays. The refusal names the command that releases the lock.
+// stays. The refusal names the way to release the lock: wait for the run, or
+// use the action and the switches of a forced write.
 func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 	t.Parallel()
 
@@ -438,13 +319,19 @@ func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 		t.Fatalf("push encrypted state: %v", err)
 	}
 
-	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
+	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
 	if !errors.Is(err, workspace.ErrClientEncrypted) {
 		t.Fatalf("force unlock of an encrypted state: err = %v, want ErrClientEncrypted", err)
 	}
 
-	if !strings.Contains(err.Error(), "Let the run that holds the lock finish; it releases the lock") {
-		t.Fatalf("refusal does not name the way out: %v", err)
+	for _, want := range []string{
+		"Let the run that holds the lock finish; it releases the lock",
+		"unit:write-forced",
+		"forced-write switches",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal does not name %q: %v", want, err)
+		}
 	}
 
 	held, getErr := f.svc.GetByID(ctx, f.ws.ID)
@@ -484,7 +371,7 @@ func TestForceUnlockFenceBlobSurvivesASweepBeforeTheCommit(t *testing.T) {
 		sweepUnnamedBlobs(t, f, inner)
 	}
 
-	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 

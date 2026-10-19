@@ -57,11 +57,15 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 	authz := grants.Authorizer()
 
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	grantInput := access.GrantInput{
 		Object:  identity.CollectionObject(ns.Name, "payments"),
@@ -74,13 +78,28 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 	}
 
 	alice := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice",
 		DisplayName:    "",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
-	bob := identity.Principal{Subject: "bob", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{}}
+	bob := identity.Principal{
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "bob",
+		DisplayName:            "",
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
+	}
 
 	tests := []struct {
 		name   string
@@ -129,6 +148,7 @@ func createCollectionNamespace(t *testing.T, st *sqlite.Store, at time.Time) nam
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: at, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}

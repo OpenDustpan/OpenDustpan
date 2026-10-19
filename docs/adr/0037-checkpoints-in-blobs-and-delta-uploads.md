@@ -1,6 +1,6 @@
 # 37. Pulumi checkpoints in blobs, and delta checkpoint uploads
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11 · decision 1 superseded in part by ADR 151
 
 ## Context
 

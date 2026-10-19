@@ -23,9 +23,12 @@ var _ principal.Guard = (*Service)(nil)
 
 // ID prefixes. An ID is opaque: never parse it.
 const (
-	grantIDPrefix = "grt-"
+	grantIDPrefix = GrantIDPrefix
 	roleIDPrefix  = "rol-"
 )
+
+// GrantIDPrefix starts the ID of every grant.
+const GrantIDPrefix = "grt-"
 
 // Limits of the text fields of a custom role, in bytes.
 const (
@@ -642,7 +645,18 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 
 	subjects, err := s.authz.subjectsOf(
 		ctx,
-		identity.Principal{Subject: p.Subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{}},
+		identity.Principal{
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Subject:                p.Subject,
+			DisplayName:            "",
+			Admin:                  false,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
+		},
 	)
 	if err != nil {
 		return err

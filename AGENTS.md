@@ -43,6 +43,8 @@ Consider a change done only when `make check` passes with zero findings:
   `goleak.VerifyTestMain`, which fails the package if a goroutine continues
   to run after the tests. Add this file to each new test package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
+- A feature that a user can see has its page in the user documentation in
+  the same pull request (ADR 214).
 
 Do not report work as finished if any of these fail. Say what fails instead.
 
@@ -61,15 +63,31 @@ pkg/                   the public SDK (ADR 35)
   identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
   blob/                port: object storage; blob/fs and blob/s3 adapters; blob/blobtest suite
   backup/              domain: backup ports (export, import, registry) and the table list
+  history/             domain: unit history, redaction, item keys of history items, tombstones, retention
+  dependency/          domain: dependency edges between units, dependents window, safe delete
+  job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
+  runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
+  launcher/            domain: the launcher contract (a static binary that runs the steps of one claim)
+  source/              domain: source snapshots, the source policy and checks of fetched code
+  agent/               domain: Dusty, the built-in agent: runs, turns, tools, the MCP endpoint
+  objectcontext/       domain: context on every object and the context read API
+  graph/               domain: the unit graph, blast radius and focus view
+  unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
+  unitimport/          domain: imports of units from a source, the import ledger and the move check
+  gate/                domain: gates, access limits, approval rules, facts and decision records
+  gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
+  api/objectcontext/   HTTP adapter for the tool-neutral context API (also used by the console)
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
+  api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, token/...  helpers shared across packages
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
+deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
 GLOSSARY.md            the project's domain language: one word per concept
@@ -100,7 +118,9 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 ## Backend rules (Go)
 
-- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`) never import
+- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
+  `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
+  `unmanaged`, `unitimport`, `gate`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.
@@ -113,9 +133,13 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   the same transaction. Never add a write path that skips the fence.
 - SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
   and generate them with sqlc. Dynamic queries are hand-written in the adapter.
-  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`. Never
-  edit an applied migration. TestFrozenMigrations in each store adapter holds
-  the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
+  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`.
+  Never edit a migration file that a tag shipped. An applied file that no tag
+  shipped stays frozen until the collapse before the next tag, which merges
+  all such files into one (ADR 73). Give the collapsed file a version number
+  above every file that it replaces, so that the migration check refuses a
+  database from an untagged build with `ErrSchemaDiverged`. TestFrozenMigrations in each store adapter
+  holds the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
@@ -124,17 +148,24 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   we can implement from. Any endpoint change must be checked against the real
   CLI with `make e2e`.
 
-## The APIs are contracts
+## The tool-compatible APIs are contracts
 
-Every tool's CLI depends on its API, and the console, which ships from another
-repository on its own schedule, depends on them too.
+The real CLIs depend on the tool-compatible APIs, and we cannot change the
+CLIs. Until 1.0, everything else can break (ADR 73).
 
-- Never remove or rename a field, endpoint or status code that a released
-  console or a supported CLI version uses. Add new fields. Deprecate old ones first.
+- The Pulumi Cloud-compatible API, the TFE-compatible API and the OpenTofu
+  HTTP backend must match what each supported version of the real CLI sends
+  and expects. Never break them. Check each change with `make e2e`.
 - Each API keeps the shapes its tool expects. The Pulumi Cloud-compatible API:
   camelCase JSON, errors `{"code": <status>, "message": "..."}`. The
   TFE-compatible API: JSON:API documents and errors.
-- An API change the console needs lands here first, released, then in the console.
+- Before 1.0, the console and the tool-neutral APIs can change and break.
+  Do not deprecate first. When a change breaks an API that the console uses,
+  merge the console change before the next server tag. Between the two
+  merges, `main` of either repository can be broken.
+- Do not write compatibility code, aliases or data conversions for a shape
+  that no tag shipped. A shape that a tag shipped keeps its upgrade path
+  (ADR 72).
 - Give every feature a REST API (ADR 17). The console, the CLI and all other
   clients use only that API. Do not add a feature that only the console, a CLI
   or a configuration file can use.
@@ -142,6 +173,34 @@ repository on its own schedule, depends on them too.
   each action. Make every change pass the policy check. A route without an
   action fails the route test. Put routes that need no sign-in on the explicit
   public list in that test.
+
+## Security code: defense in depth (ADR 250)
+
+Security code is code that handles, for example, authentication, authorization, tokens, secrets, cryptography, file paths, processes, network connections, untrusted formats, webhooks, backups or restore. This list is not complete. If you are not sure, treat the code as security code.
+
+Never use only one layer. Never use either/or. Each layer must stop the attack alone, without help from the other layers. "It is checked upstream" is never a reason to remove, skip or omit a check.
+
+The steps below are the minimum. They are not complete. The examples in each step are examples, not a complete list. For each input that comes from outside the process, do all of these steps:
+
+1. Check the input at the boundary. Use an allowlist. Reject an input that is not valid. Do not change it to make it valid.
+2. Encode or contain the value where you use it. Examples:
+   - SQL: placeholders only.
+   - Paths: `os.Root`, or `filepath.Rel` with a containment check after cleaning.
+   - Processes: `exec.Command` with an argument list. Never use a shell.
+   - HTML: `html/template`.
+   - Headers and logs: remove CR and LF.
+   - Network: check the resolved IP address when the connection opens.
+3. Limit the effect. Examples: the smallest permission, a size limit, a timeout, a sandbox for untrusted work.
+4. Check authorization at the point of use, for the object.
+5. Fail closed. On an error or an unknown value, deny. Write the denial to the audit log.
+
+Treat everything from outside the process as untrusted. Examples: HTTP requests, tool state files, webhooks, Git host data, runner output, configuration, environment variables, restored backups, and database rows from another version.
+
+Write one test for each step. The test sends hostile input directly to that step, as if every other step had failed. A step without its own test is missing.
+
+If a check looks redundant, keep it, and give it a comment. The comment says that the check is a defense-in-depth layer and names the other layers that it does not rely on. Example: `// Defense in depth: the handler validates the name too; this check stays so that a new caller cannot skip it.` Do not put an ADR number in the comment. Do not remove a check that has such a comment. If a check blocks your work, stop and report to the PM.
+
+A security change is not done without a test for each step and a comment on each redundant check.
 
 ## Voice (UI text, errors, docs)
 
@@ -177,6 +236,13 @@ skill (ADR 14):
 ## Working in this repo
 
 - Ask before adding a dependency. Prefer the standard library.
+- Never add telemetry code, also not code that is off by default (ADR 74).
+- AI-assisted changes follow `CONTRIBUTING.md` (ADR 76): disclose the tool,
+  sign off each commit, understand all of it, and pass `make check`. Until
+  the push ends on 2026-10-22, an agent signs off with its own commit author
+  identity (`git commit -s`).
+- An agent pastes the output of its checks into the description of each pull
+  request that it opens (ADR 76).
 - Keep changes small and reviewable, with one concern per change.
 - If you are unsure of the intent, ask rather than guess.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,

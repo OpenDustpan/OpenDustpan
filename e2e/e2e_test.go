@@ -38,6 +38,7 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 const (
@@ -251,8 +252,8 @@ func checkDeltaCheckpoints(t *testing.T, cli e2e.Install, store e2e.Store) {
 	off.Label += "-delta-off"
 	offEnv := e2e.NewEnvWithDeltaCutoff(ctx, t, off, store, 0)
 
-	onExport := deltaUp(ctx, t, onEnv)
-	offExport := deltaUp(ctx, t, offEnv)
+	onExport := pairedUp(ctx, t, onEnv)
+	offExport := pairedUp(ctx, t, offEnv)
 
 	onCanonical, offCanonical := canonicalExport(t, onExport), canonicalExport(t, offExport)
 	if onCanonical != offCanonical {
@@ -285,10 +286,10 @@ func checkDeltaCheckpoints(t *testing.T, cli e2e.Install, store e2e.Store) {
 	writeReport(t, e2e.NewRun(offEnv))
 }
 
-// deltaUp logs in, creates the stack and the other stack its program
+// pairedUp logs in, creates the stack and the other stack its program
 // references, runs up and returns the stack export. It carries no secrets,
-// so both delta runs hold the same state.
-func deltaUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
+// so both runs of a pair hold the same state.
+func pairedUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
 	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
@@ -302,13 +303,12 @@ func deltaUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	return env.Step(ctx, t, step("stack export", nil, "stack", "export")).Stdout
 }
 
-// providerIDPattern matches the random IDs the engine assigns to the
-// default provider on every up. Each delta run mints its own, so the
-// export comparison ignores them.
+// providerIDPattern matches the random ID the engine assigns to the
+// default provider on every up.
 var providerIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
 // canonicalExport returns the stack export with the volatile fields
-// removed: the two delta runs finish at different times on different
+// normalized: the paired runs finish at different times on different
 // servers, so the manifest time, the service URL and the resource
 // timestamps always differ, and each up mints a new default provider ID.
 // What must match is the state itself.
@@ -324,11 +324,17 @@ func canonicalExport(t *testing.T, raw string) string {
 		t.Fatalf("decode stack export: %v", err)
 	}
 
-	delete(doc.Deployment, "manifest")
+	if manifest, ok := doc.Deployment["manifest"].(map[string]any); ok {
+		delete(manifest, "time")
+	}
 
 	if providers, ok := doc.Deployment["secrets_providers"].(map[string]any); ok {
-		delete(providers, "state")
+		if state, ok := providers["state"].(map[string]any); ok {
+			delete(state, "url")
+		}
 	}
+
+	providerIDs := canonicalProviderIDs(t, doc.Deployment)
 
 	if resources, ok := doc.Deployment["resources"].([]any); ok {
 		for _, res := range resources {
@@ -344,7 +350,62 @@ func canonicalExport(t *testing.T, raw string) string {
 		t.Fatalf("encode stack export: %v", err)
 	}
 
-	return providerIDPattern.ReplaceAllString(string(canonical), "provider-id")
+	out := string(canonical)
+
+	for _, id := range providerIDs {
+		out = strings.ReplaceAll(out, id, "provider-id")
+	}
+
+	return out
+}
+
+// canonicalProviderIDs returns the IDs of the default provider resources in
+// the deployment. Each up mints a new one, so the export comparison replaces
+// only these IDs and keeps every other ID. It fails the test when the
+// deployment holds no default provider ID, so a missing provider cannot
+// pass silently.
+func canonicalProviderIDs(t *testing.T, deployment map[string]any) []string {
+	t.Helper()
+
+	resources, ok := deployment["resources"].([]any)
+	if !ok {
+		t.Fatal("canonical export holds no resources")
+	}
+
+	var ids []string
+
+	for _, res := range resources {
+		r, ok := res.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		typ, ok := r["type"].(string)
+		if !ok {
+			continue
+		}
+
+		if !strings.HasPrefix(typ, "pulumi:providers:") {
+			continue
+		}
+
+		id, ok := r["id"].(string)
+		if !ok {
+			continue
+		}
+
+		if !providerIDPattern.MatchString(id) {
+			continue
+		}
+
+		ids = append(ids, id)
+	}
+
+	if len(ids) == 0 {
+		t.Fatal("canonical export holds no default provider ID")
+	}
+
+	return ids
 }
 
 // clipCanonical shortens a canonical export for the failure report.
@@ -1062,6 +1123,7 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 	}
 
 	var doc struct {
+		ID              string `json:"id"`
 		Name            string `json:"name"`
 		HomeRegion      string `json:"homeRegion"`
 		FailoverVersion int64  `json:"failoverVersion"`
@@ -1073,6 +1135,10 @@ func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
 
 	if doc.Name != name || doc.FailoverVersion != 1 || doc.HomeRegion == "" {
 		t.Fatalf("namespace answers %+v, want %q at version 1 with a region", doc, name)
+	}
+
+	if _, parseErr := namespace.ParseID(doc.ID); parseErr != nil {
+		t.Fatalf("namespace %q answers ID %q: %v", name, doc.ID, parseErr)
 	}
 
 	status, body, err = env.ServerAPIStatus(
@@ -1133,6 +1199,9 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	beforeID := stackIDBeforeRename(t, env, org)
+
+	// The context routes: the stack reads the owners of its namespace.
+	contextScenario(t, env, "pulumi", beforeID)
 
 	env.Step(ctx, t, e2e.StepSpec{
 		Check:  checkRenameKeptID(ctx, env, org, renamePath, beforeID),
@@ -1258,7 +1327,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 	// The ended update releases the lock: the inventory entry holds none.
-	checkInventoryUnlocked(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
+	checkInventoryUnlockedByID(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
 
 	// A crashed CLI leaves its update running: hold the stack through the
 	// API as the orphaned update, save the up's checkpoint with the crash
@@ -1563,7 +1632,12 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 			"config", "set", "--secret", "--stack", qualified, "apiKey", maskedStateSecret,
 		),
 	)
+	beforeFirst := time.Now()
+
 	env.Step(ctx, t, step("up masked 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+
+	betweenUps := time.Now()
+
 	env.WritePulumiProject(t, maskedStateProgram(org, "hello-again"))
 	env.Step(ctx, t, step("up masked 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
 	env.Step(ctx, t, step(
@@ -1571,6 +1645,13 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		checkMaskedState(ctx, env, org, maskedStateSecret),
 		"stack", "--show-name", "--stack", qualified,
 	))
+	env.Step(ctx, t, step(
+		"masked state at a time",
+		checkMaskedStateAt(ctx, env, org, maskedStateSecret, stateAtTimes{before: beforeFirst, between: betweenUps}),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	checkStateAtRunning(ctx, t, env, org)
+	pulumiRenameNamesSteps(ctx, t, env, org, betweenUps)
 	env.Step(ctx, t, step(
 		"masked state resource search",
 		checkMaskedStateFilter(ctx, env, org, maskedStateSecret),
@@ -2856,7 +2937,12 @@ func stackIDOf(t *testing.T, env *e2e.Env, org, name string) string {
 func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, softDeleted)
 
+	// existedAt is a time when the stack still existed: the inventory at
+	// that time lists it, whatever happens to it later.
+	existedAt := new(time.Time)
+
 	steps := []e2e.StepSpec{
+		step("note the time before the delete", noteTime(existedAt), "stack", "ls", "--json", "--all"),
 		step("stack rm soft", nil, "stack", "rm", "--yes", "--stack", qualified),
 		step("stack ls hides the removed stack", checkNoTombstone(ctx, env, org), "stack", "ls", "--json", "--all"),
 		{
@@ -2888,7 +2974,7 @@ func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID str
 
 	// While the new stack holds the old name, the restore steps prove the
 	// 409, the restore under a new name and the purge.
-	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID)...)
+	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID, existedAt)...)
 
 	return append(steps,
 		step("stack history of new stack", func(r e2e.Result) error {
@@ -2913,7 +2999,7 @@ func tombstoneLists(org string) []string {
 		"/api/user/stacks",
 		"/api/user/stacks?organization=" + org,
 		"/api/user/stacks?organization=" + org + "&project=" + e2e.Project,
-		"/api/inventory/units?organization=" + org,
+		"/api/dustpan/v1/namespaces/" + org + "/units",
 	}
 }
 
@@ -3450,6 +3536,10 @@ type auditListItem struct {
 	RequestID  string `json:"requestID"`
 	ObjectID   string `json:"objectID"`
 	Hash       string `json:"hash"`
+	Reason     string `json:"reason"`
+	// PrincipalKind is the kind of the principal record that acted.
+	PrincipalKind string `json:"principalKind"`
+	JobID         string `json:"jobID"`
 }
 
 // checkUnitObjectIDs fails the test unless each successful entry on a unit
@@ -4064,6 +4154,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	inventorySchemeScenario(t, env)
 	// The collection routes move the e2e workspace between two collections (ADR 51).
 	collectionsScenario(t, env)
+	// The context routes: the workspace reads the owners of its namespace.
+	tofuContextScenario(t, env)
 
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
@@ -4161,13 +4253,14 @@ output "peer_secret" {
 `
 }
 
-// countDownloadEntries counts the tool-operation entries with the action
-// unit:read-secrets and an empty value path for unit: the state downloads.
+// countDownloadEntries counts the reveal entries with the action
+// unit:read-secrets and an empty value path for unit: the state downloads of
+// the bootstrap token, which has no principal record and counts as a person.
 func countDownloadEntries(entries []auditListItem, unit string) int {
 	count := 0
 
 	for i := range entries {
-		if e := &entries[i]; e.Kind == "tool-operation" && e.Action == "unit:read-secrets" &&
+		if e := &entries[i]; e.Kind == "reveal" && e.Action == "unit:read-secrets" &&
 			e.Object == unit && e.ValuePath == "" {
 			count++
 		}
@@ -4176,9 +4269,9 @@ func countDownloadEntries(entries []auditListItem, unit string) int {
 	return count
 }
 
-// tofuAuditScenario proves the audit entries of the kind tool-operation for
-// state that the CLI reads (ADR 41 decision 9): the apply commits a
-// sensitive output, the plan with a terraform_remote_state read of that
+// tofuAuditScenario proves the audit entries for state that the CLI reads:
+// downloads write the kind reveal and the read of one sensitive output writes
+// the kind tool-operation. The apply commits a sensitive output, the plan with a terraform_remote_state read of that
 // output leaves more download entries, and reading the sensitive output
 // leaves an output entry, with a valid chain. The output step is redacted,
 // so the secret value never reaches the log or the report. It runs last, so
@@ -4211,35 +4304,33 @@ func tofuAuditScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 	checkAuditChain(ctx, t, env, e2e.Namespace)
 }
 
-// remoteStateHits reports which tool-operation entries a plan with a
-// remote-state read left: a download entry and an output entry.
+// remoteStateHits reports which entries a plan with a remote-state read left:
+// a download entry of the kind reveal and an output entry of the kind
+// tool-operation.
 type remoteStateHits struct {
 	download bool
 	output   bool
 }
 
-// remoteStateEntries scans entries for the tool-operation entries of unit
-// with the action unit:read-secrets: a download entry carries the state
-// version and an empty value path, and an output entry carries the value
-// path of the sensitive output. It reports which of the two it found.
+// remoteStateEntries scans entries for the entries of unit with the action
+// unit:read-secrets: a download entry of the kind reveal carries the state
+// version and an empty value path, and an output entry of the kind
+// tool-operation carries the value path of the sensitive output. It reports
+// which of the two it found.
 func remoteStateEntries(entries []auditListItem, unit string) remoteStateHits {
 	var hits remoteStateHits
 
 	for i := range entries {
 		e := &entries[i]
-		if e.Kind != "tool-operation" || e.Action != "unit:read-secrets" || e.Object != unit {
+		if e.Action != "unit:read-secrets" || e.Object != unit || e.Version == "" {
 			continue
 		}
 
-		if e.Version == "" {
-			continue
-		}
-
-		if e.ValuePath == "" {
+		if e.Kind == "reveal" && e.ValuePath == "" {
 			hits.download = true
 		}
 
-		if e.ValuePath == "/outputs/secret" {
+		if e.Kind == "tool-operation" && e.ValuePath == "/outputs/secret" {
 			hits.output = true
 		}
 	}
@@ -4248,9 +4339,9 @@ func remoteStateEntries(entries []auditListItem, unit string) remoteStateHits {
 }
 
 // checkAuditPlanRemote proves the plan with the remote-state read left more
-// download entries of the kind tool-operation (ADR 41 decision 9): the CLI
-// reads remote state through the download route, which carries the sensitive
-// values. It also proves the read worked and the plan hid the secret value.
+// download entries of the kind reveal: the CLI reads remote state through the
+// download route, which carries the sensitive values, and the bootstrap token
+// counts as a person. It also proves the read worked and the plan hid the secret value.
 func checkAuditPlanRemote(ctx context.Context, env *e2e.Env, before int) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if !strings.Contains(r.Stdout, "peer_secret") {
@@ -4415,6 +4506,10 @@ const remoteProdName = e2e.RemotePrefix + e2e.RemoteProd
 func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 	var removedID string
 
+	// existedAt is a time when the workspace still existed: the inventory at
+	// that time lists it, whatever happens to it later.
+	existedAt := new(time.Time)
+
 	// While the new workspace holds the old name, the restore steps prove the
 	// 409, the restore under a new name and the purge.
 	return append([]e2e.StepSpec{
@@ -4422,7 +4517,13 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 			id, err := remoteWorkspaceID(ctx, env, remoteProdName)
 			removedID = id
 
-			return err
+			if err != nil {
+				return err
+			}
+
+			recordTime(existedAt)
+
+			return nil
 		}, "workspace", "select", e2e.RemoteDev, "-no-color"),
 		step("workspace delete prod", func(e2e.Result) error {
 			path := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/" + remoteProdName
@@ -4437,7 +4538,7 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 		}, "workspace", "list", "-no-color"),
 		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
 		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
-	}, tofuRestoreSteps(ctx, env, &removedID)...)
+	}, tofuRestoreSteps(ctx, env, &removedID, existedAt)...)
 }
 
 // workspaceIDData is the data member of a TFE-compatible workspace document,
@@ -4489,7 +4590,7 @@ func checkNoDeletedWorkspace(ctx context.Context, env *e2e.Env, r e2e.Result, re
 		path string
 	}{
 		{read: env.TFEStatusA, path: "/api/v2/organizations/" + e2e.Namespace + "/workspaces"},
-		{read: env.APIStatus, path: "/api/inventory/units?organization=" + e2e.Namespace},
+		{read: env.APIStatus, path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units"},
 	}
 
 	for _, rd := range reads {
@@ -5446,21 +5547,22 @@ func statePullLacksGreeting(r e2e.Result) error {
 	return nil
 }
 
-// inventoryLockDoc decodes the lock object of GET /api/inventory/units: the
-// holder, the take time in Unix seconds, and the operation.
+// inventoryLockDoc decodes the lock object of GET /api/dustpan/v1/namespaces/{namespace}/units: the
+// holder, the take time as an RFC 3339 time, and the operation.
 type inventoryLockDoc struct {
 	Holder    string `json:"holder"`
-	Since     int64  `json:"since"`
+	Since     string `json:"since"`
 	Operation string `json:"operation"`
 }
 
-// inventoryUnitDoc decodes one unit of GET /api/inventory/units.
+// inventoryUnitDoc decodes one unit of GET /api/dustpan/v1/namespaces/{namespace}/units.
 type inventoryUnitDoc struct {
 	Tool       string            `json:"tool"`
 	Reference  string            `json:"reference"`
+	UnitID     string            `json:"unitID"`
 	Namespace  string            `json:"namespace"`
 	Name       string            `json:"name"`
-	LastChange int64             `json:"lastChange"`
+	LastChange string            `json:"lastChange"`
 	Lock       *inventoryLockDoc `json:"lock"`
 }
 
@@ -5470,14 +5572,19 @@ func readInventoryUnits(ctx context.Context, t *testing.T, env *e2e.Env, ns stri
 	t.Helper()
 
 	got, err := env.StatusWithHeader(
-		ctx, "token "+env.TokenA(), http.MethodGet, "/api/inventory/units?organization="+ns, "",
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/"+ns+"/units", "",
 	)
 	if err != nil {
-		t.Fatalf("GET /api/inventory/units: %v", err)
+		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units: %v", err)
 	}
 
 	if got.Status != http.StatusOK {
-		t.Fatalf("GET /api/inventory/units answers %d, want %d (%s)", got.Status, http.StatusOK, got.Body)
+		t.Fatalf(
+			"GET /api/dustpan/v1/namespaces/{namespace}/units answers %d, want %d (%s)",
+			got.Status,
+			http.StatusOK,
+			got.Body,
+		)
 	}
 
 	var doc struct {
@@ -5512,6 +5619,67 @@ func namespaceOf(ref string) string {
 	return ns
 }
 
+// checkInventoryUnitByID proves GET /api/dustpan/v1/namespaces/-/units/{unit_id} answers
+// the list entry of ref, and answers 404 for an ID that no unit holds. It
+// fails the test otherwise.
+func checkInventoryUnitByID(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	listed := findInventoryUnit(readInventoryUnits(ctx, t, env, namespaceOf(ref)), ref)
+	if listed == nil || listed.UnitID == "" {
+		t.Fatalf("inventory holds no entry %q with a unit ID", ref)
+	}
+
+	unit := readInventoryUnitByID(ctx, t, env, listed.UnitID, http.StatusOK)
+	if unit.Reference != ref || unit.UnitID != listed.UnitID || unit.Namespace != namespaceOf(ref) ||
+		unit.Tool != listed.Tool || unit.Name != listed.Name || unit.LastChange == "" {
+		t.Fatalf("unit by ID = %+v, want the list entry %+v", unit, *listed)
+	}
+
+	readInventoryUnitByID(ctx, t, env, "no-such-unit", http.StatusNotFound)
+}
+
+// checkInventoryUnlockedByID proves the inventory entry of ref holds no lock
+// and that the unit reads by its ID.
+func checkInventoryUnlockedByID(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	checkInventoryUnlocked(ctx, t, env, ref)
+	checkInventoryUnitByID(ctx, t, env, ref)
+}
+
+// readInventoryUnitByID reads GET /api/dustpan/v1/namespaces/-/units/{unit_id} as
+// principal A, fails the test unless the status is want, and returns the
+// decoded unit for a 200.
+func readInventoryUnitByID(
+	ctx context.Context, t *testing.T, env *e2e.Env, unitID string, want int,
+) inventoryUnitDoc {
+	t.Helper()
+
+	got, err := env.StatusWithHeader(
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/-/units/"+unitID, "",
+	)
+	if err != nil {
+		t.Fatalf("GET /api/dustpan/v1/namespaces/-/units/%s: %v", unitID, err)
+	}
+
+	if got.Status != want {
+		t.Fatalf(
+			"GET /api/dustpan/v1/namespaces/-/units/%s answers %d, want %d (%s)",
+			unitID, got.Status, want, got.Body,
+		)
+	}
+
+	var unit inventoryUnitDoc
+	if want == http.StatusOK {
+		if err = json.Unmarshal([]byte(got.Body), &unit); err != nil {
+			t.Fatalf("decode unit %q: %v (%s)", unitID, err, got.Body)
+		}
+	}
+
+	return unit
+}
+
 // lockedUnit is one unit with the lock the test expects: its reference,
 // the holder and the operation.
 type lockedUnit struct {
@@ -5536,7 +5704,7 @@ func checkInventoryLock(ctx context.Context, t *testing.T, env *e2e.Env, want lo
 		t.Fatalf("inventory entry %q holds no lock", want.ref)
 	}
 
-	if unit.Lock.Holder != want.holder || unit.Lock.Operation != want.operation || unit.Lock.Since <= 0 {
+	if unit.Lock.Holder != want.holder || unit.Lock.Operation != want.operation || unit.Lock.Since == "" {
 		t.Fatalf(
 			"inventory lock of %q = %+v, want holder %q operation %q with a take time",
 			want.ref,
@@ -5607,7 +5775,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Scheme:    "",
 	})
 
-	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
+	checkInventoryUnlockedByID(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:     nil,
@@ -5944,10 +6112,12 @@ output "greeting" {
 // checks: the serial for order and the added holder, force and
 // restored-from attributes.
 type stateVersionListAttributes struct {
-	Serial       int64  `json:"serial"`
-	Holder       string `json:"holder"`
-	Force        bool   `json:"force"`
-	RestoredFrom string `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	Serial        int64  `json:"serial"`
+	Holder        string `json:"holder"`
+	Force         bool   `json:"force"`
+	RestoredFrom  string `json:"restored-from"`  //nolint:tagliatelle // The TFE wire name; it must not change.
+	FenceBy       string `json:"fence-by"`       //nolint:tagliatelle // The TFE wire name; it must not change.
+	UnlockedWrite bool   `json:"unlocked-write"` //nolint:tagliatelle // The TFE wire name; it must not change.
 }
 
 // stateVersionListItem holds one entry of a state version list document.
@@ -6018,7 +6188,7 @@ func checkStateVersionListThree(body string) error {
 			return fmt.Errorf("%w: entry holds no attributes: %s", errUnexpected, body)
 		}
 
-		for _, key := range []string{"holder", "force", "restored-from"} {
+		for _, key := range []string{"holder", "force", "restored-from", "fence-by", "unlocked-write"} {
 			if _, ok := attrs[key]; !ok {
 				return fmt.Errorf("%w: entry lacks attribute %q: %s", errUnexpected, key, body)
 			}
@@ -6034,17 +6204,48 @@ func checkStateVersionListThree(body string) error {
 		return fmt.Errorf("%w: list holds the same version twice: %s", errUnexpected, body)
 	}
 
-	if doc.Data[0].Attributes.Serial <= doc.Data[1].Attributes.Serial {
-		return fmt.Errorf(
-			"%w: list is not newest first: serials %d then %d",
-			errUnexpected,
-			doc.Data[0].Attributes.Serial,
-			doc.Data[1].Attributes.Serial,
-		)
+	if err := checkStateVersionListFences(doc, body); err != nil {
+		return err
 	}
 
 	if doc.Meta.Pagination.TotalCount != 3 {
 		return fmt.Errorf("%w: total count is %d, want 3: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
+	}
+
+	return nil
+}
+
+// checkStateVersionListFences checks the serial order of a list of three,
+// then that only the middle entry holds a fence-by (the maintenance fence) and
+// that no entry is an unlocked write.
+func checkStateVersionListFences(doc stateVersionListDoc, body string) error {
+	for i := range len(doc.Data) - 1 {
+		if doc.Data[i].Attributes.Serial <= doc.Data[i+1].Attributes.Serial {
+			return fmt.Errorf(
+				"%w: list is not newest first: serials %d then %d",
+				errUnexpected,
+				doc.Data[i].Attributes.Serial,
+				doc.Data[i+1].Attributes.Serial,
+			)
+		}
+	}
+
+	for i, item := range doc.Data {
+		wantFence := ""
+		if i == 1 {
+			wantFence = "maintenance"
+		}
+
+		if item.Attributes.FenceBy != wantFence {
+			return fmt.Errorf(
+				"%w: entry %d has fence-by %q, want %q: %s",
+				errUnexpected, i, item.Attributes.FenceBy, wantFence, body,
+			)
+		}
+
+		if item.Attributes.UnlockedWrite {
+			return fmt.Errorf("%w: entry %d has unlocked-write true, want false: %s", errUnexpected, i, body)
+		}
 	}
 
 	return nil
@@ -7157,6 +7358,8 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 	writeImportConfig(t, dir, maskedCloudConfig(env.Host(), "masked"))
 
 	env.StepIn(ctx, t, dir, step("masked init", nil, "init", "-input=false", "-no-color"))
+	beforeFirst := time.Now()
+
 	env.StepIn(ctx, t, dir, e2e.StepSpec{
 		Check:  nil,
 		Name:   "masked apply 1",
@@ -7166,6 +7369,9 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 		Fail:   false,
 		Redact: false,
 	})
+	betweenApplies := time.Now()
+	firstVersion := maskedCurrentVersion(ctx, t, env, "masked")
+
 	env.StepIn(ctx, t, dir, e2e.StepSpec{
 		Check:  nil,
 		Name:   "masked apply 2",
@@ -7182,6 +7388,9 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 	maskedOutputsCheck(ctx, t, env, "masked")
 	maskedSensitiveAttributesFinding(ctx, t, env, "masked", versionID)
 	maskedRevealCheck(ctx, t, env, versionID)
+	maskedStateAtChecks(ctx, t, env, stateAtVersions{
+		workspace: "masked", first: firstVersion, second: versionID, before: beforeFirst, between: betweenApplies,
+	})
 
 	tofuMaskedEncryptedScenario(ctx, t, env)
 }
@@ -8129,6 +8338,17 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 	} {
 		env.APIStepA(ctx, t, spec)
 	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:     checkOpaqueStateAt,
+		Name:      "masked encrypted state at a time",
+		Method:    http.MethodGet,
+		Path:      stateAtPathTofu(env.WorkspaceIDByName(ctx, t, "masked-encrypted"), time.Now()),
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
+		Scheme:    "",
+	})
 
 	wsID := env.WorkspaceIDByName(ctx, t, "masked-encrypted")
 
@@ -11029,10 +11249,13 @@ func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
 
 // TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary against
 // the running binary server: on the migrated database the verdict is
-// `up to date` with exit 0, and on the newer, old and fresh states reached by
-// editing schema_migrations while the server runs the verdicts of ADR 33 and
-// the exit codes match, with the command writing nothing to the server
-// database. It runs only with E2E_SERVER=binary, on every store under test.
+// `up to date` with exit 0, and on the newer, before-baseline and fresh states the
+// verdicts and the exit codes match, with the command writing nothing to the
+// server database. On SQLite the newer-schema case and the restore edits stop
+// the server before they open the file and start it again after. The old
+// and fresh cases edit the file while the server runs, because the check
+// needs a running server on a schema behind the binary. It runs only with
+// E2E_SERVER=binary, on every store under test.
 func TestUpgradeCheck(t *testing.T) {
 	t.Parallel()
 
@@ -11079,10 +11302,11 @@ const upgradeSchemaMinimum = "v0.2.0"
 
 // runUpgradeCheckOnStore runs the upgrade check cases on one store through
 // the running binary server: the migrated database is up to date, and the
-// newer, old and fresh states are reached by editing schema_migrations while
-// the server runs, each through `upgrade check --server` with the environment
-// token. The cases run in order on one server and restore its rows, so they
-// never run in parallel.
+// newer, before-baseline and fresh states are reached by editing schema_migrations, each
+// through `upgrade check --server` with the environment token. On SQLite each
+// edit stops the server before it opens the file and starts it again after.
+// The cases run in order on one server and restore its rows, so they never
+// run in parallel.
 func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
@@ -11096,7 +11320,7 @@ func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkUpgradeUpToDateServer(ctx, t, env, store)
 	checkUpgradeNewerServer(ctx, t, env, store, released)
-	checkUpgradeOldServer(ctx, t, env, store)
+	checkUpgradeBeforeBaselineServer(ctx, t, env, store)
 	checkUpgradeFreshServer(ctx, t, env, store)
 }
 
@@ -11110,9 +11334,9 @@ func runUpgradeCheckServer(ctx context.Context, t *testing.T, env *e2e.Env) e2e.
 	return env.RunBinary(ctx, t, "upgrade", "check", "--server", env.URL, "--ca-file", env.CABundle())
 }
 
-// serverMigrationRow is one schema_migrations row the test edits while the
-// server runs: the direct database access is the test setup, never the
-// command, which only calls the upgrade check route.
+// serverMigrationRow is one schema_migrations row the test edits: the direct
+// database access is the test setup, never the command, which only calls the
+// upgrade check route. On SQLite the server is stopped during the edit.
 type serverMigrationRow struct {
 	version int64
 	name    string
@@ -11152,8 +11376,9 @@ func sqliteServerPath(t *testing.T, env *e2e.Env) string {
 	return path
 }
 
-// openServerSQLite opens a direct handle on the SQLite file at path, so the
-// test can edit schema_migrations while the server runs.
+// openServerSQLite opens a direct handle on the SQLite file at path. The
+// caller stops the server before it opens the file, except in the old and
+// fresh cases, which edit the file while the server runs.
 func openServerSQLite(t *testing.T, path string) *sql.DB {
 	t.Helper()
 
@@ -11166,7 +11391,7 @@ func openServerSQLite(t *testing.T, path string) *sql.DB {
 }
 
 // readServerSQLiteRows returns every schema_migrations row ordered by
-// version.
+// version. The caller stops the server first.
 func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serverMigrationRow {
 	t.Helper()
 
@@ -11208,7 +11433,8 @@ func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serv
 	return out
 }
 
-// execServerSQLite runs one write on the SQLite file at path.
+// execServerSQLite runs one write on the SQLite file at path. The caller
+// stops the server first.
 func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args ...any) {
 	t.Helper()
 
@@ -11226,7 +11452,7 @@ func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args
 }
 
 // snapshotServerSQLite returns the schema_migrations rows with the table
-// names of the SQLite file at path.
+// names of the SQLite file at path. The caller stops the server first.
 func snapshotServerSQLite(ctx context.Context, t *testing.T, path string) serverSchemaSnapshot {
 	t.Helper()
 
@@ -11318,13 +11544,38 @@ func snapshotServerSQLiteVersions(ctx context.Context, t *testing.T, conn *sql.D
 	return versions
 }
 
+// stopServerForSQLiteFile stops the binary server of env when store is
+// SQLite, so the test can open the SQLite file. On other stores it does
+// nothing.
+func stopServerForSQLiteFile(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		env.StopServer(ctx, t)
+	}
+}
+
+// startServerForSQLiteFile starts the binary server of env again when store
+// is SQLite. On other stores it does nothing.
+func startServerForSQLiteFile(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		env.StartServer(ctx, t)
+	}
+}
+
 // snapshotServerDB returns the rows and tables of the server database of env
-// on store.
+// on store. On SQLite it stops the server before it opens the file and
+// starts it again after, so the file is never open while the server runs.
 func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) serverSchemaSnapshot {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		return snapshotServerSQLite(ctx, t, sqliteServerPath(t, env))
 	case e2e.StorePostgres:
 		got := snapshotPostgres(ctx, t, env.DatabaseURL(t))
@@ -11340,12 +11591,16 @@ func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e
 
 // insertServerFuture records one version above the newest in the server
 // database of env on store, so upgrade check sees a newer database. It
-// returns the future version.
+// returns the future version. On SQLite it stops the server before it opens
+// the file and starts it again after.
 func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, minimum string) int64 {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		path := sqliteServerPath(t, env)
 		rows := readServerSQLiteRows(ctx, t, path)
 
@@ -11399,12 +11654,16 @@ func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e
 }
 
 // deleteServerVersion removes one schema_migrations row from the server
-// database of env on store.
+// database of env on store. On SQLite it stops the server before it opens the
+// file and starts it again after.
 func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, version int64) {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		execServerSQLite(ctx, t, sqliteServerPath(t, env),
 			`DELETE FROM schema_migrations WHERE version = ?`, version)
 	case e2e.StorePostgres:
@@ -11429,7 +11688,8 @@ func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store 
 
 // trimServerVersions removes every schema_migrations row above keep from the
 // server database of env on store and returns the removed rows, so the caller
-// restores them after the check.
+// restores them after the check. On SQLite it stops the server before it
+// opens the file and starts it again after.
 func trimServerVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, keep int64,
 ) []serverMigrationRow {
@@ -11437,6 +11697,9 @@ func trimServerVersions(
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		return trimServerSQLiteVersions(ctx, t, env, keep)
 	case e2e.StorePostgres:
 		return trimServerPostgresVersions(ctx, t, env, keep)
@@ -11449,7 +11712,8 @@ func trimServerVersions(
 
 // trimServerSQLiteVersions removes every schema_migrations row above keep
 // from the SQLite file the server of env serves and returns the removed
-// rows.
+// rows. The caller stops the server first, except in the old and fresh
+// cases, which edit the file while the server runs.
 func trimServerSQLiteVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
 ) []serverMigrationRow {
@@ -11524,7 +11788,9 @@ func trimServerPostgresVersions(
 }
 
 // restoreServerVersions inserts rows back into the server database of env on
-// store.
+// store. On SQLite it stops the server before it opens the file and starts it
+// again after. With no rows it does nothing, so it leaves a running server
+// alone.
 func restoreServerVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, rows []serverMigrationRow,
 ) {
@@ -11532,6 +11798,13 @@ func restoreServerVersions(
 
 	switch store {
 	case e2e.StoreSQLite:
+		if len(rows) == 0 {
+			return
+		}
+
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		path := sqliteServerPath(t, env)
 
 		for _, row := range rows {
@@ -11634,35 +11907,103 @@ func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 	checkRestoredServerDB(ctx, t, env, store, pristine)
 }
 
-// checkUpgradeOldServer proves upgrade check with only versions 1 through
-// oldFixtureMaxVersion in the server database: it exits 0 with `upgrade
-// possible` and writes nothing. It restores the removed rows after the
-// check.
-func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// checkUpgradeBeforeBaselineServer proves upgrade check with only a version
+// from before the baseline in the server database: it exits 1 with `cannot
+// start`, names the baseline and writes nothing. It restores the removed rows
+// after the check.
+func checkUpgradeBeforeBaselineServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
 
+	if store == e2e.StoreSQLite {
+		checkUpgradeBeforeBaselineSQLite(ctx, t, env)
+
+		return
+	}
+
 	pristine := snapshotServerDB(ctx, t, env, store)
-	removed := trimServerVersions(ctx, t, env, store, oldFixtureMaxVersion)
+	removed := trimServerVersions(ctx, t, env, store, 0)
 
 	if len(removed) == 0 {
-		t.Fatalf("trim above %d removed nothing, want pending migrations", oldFixtureMaxVersion)
+		t.Fatal("trim above 0 removed nothing, want the baseline row")
 	}
+
+	restoreServerVersions(
+		ctx,
+		t,
+		env,
+		store,
+		[]serverMigrationRow{{version: beforeBaselineVersion, name: beforeBaselineName}},
+	)
 
 	before := snapshotServerDB(ctx, t, env, store)
 	res := runUpgradeCheckServer(ctx, t, env)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
 
 	if out := res.Stdout; !strings.Contains(
 		out,
-		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
+		"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
 	) {
-		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
+		t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
+	}
+
+	if !strings.Contains(res.Stderr, "older than baseline schema version") {
+		t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
 	}
 
 	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
 
+	deleteServerVersion(ctx, t, env, store, beforeBaselineVersion)
 	restoreServerVersions(ctx, t, env, store, removed)
 	checkRestoredServerDB(ctx, t, env, store, pristine)
+}
+
+// checkUpgradeBeforeBaselineSQLite is checkUpgradeBeforeBaselineServer on
+// SQLite. The edits run while the server runs, because the check needs a
+// running server on a schema behind the binary.
+func checkUpgradeBeforeBaselineSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	// The check needs a running server on a schema behind the binary, and a
+	// server start applies the missing migrations, so the edit keeps the
+	// server running.
+	path := sqliteServerPath(t, env)
+	pristine := snapshotServerSQLite(ctx, t, path)
+	removed := trimServerSQLiteVersions(ctx, t, env, 0)
+
+	if len(removed) == 0 {
+		t.Fatal("trim above 0 removed nothing, want the baseline row")
+	}
+
+	execServerSQLite(ctx, t, path,
+		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, beforeBaselineVersion, beforeBaselineName)
+
+	before := snapshotServerSQLite(ctx, t, path)
+	res := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
+
+	if out := res.Stdout; !strings.Contains(
+		out,
+		"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
+	) {
+		t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
+	}
+
+	if !strings.Contains(res.Stderr, "older than baseline schema version") {
+		t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
+	}
+
+	checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
+
+	execServerSQLite(ctx, t, path, `DELETE FROM schema_migrations WHERE version = ?`, beforeBaselineVersion)
+
+	for _, row := range removed {
+		execServerSQLite(ctx, t, path,
+			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+	}
+
+	if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
+		t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
+	}
 }
 
 // checkUpgradeFreshServer proves upgrade check with no version row in the
@@ -11670,6 +12011,40 @@ func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, stor
 // restores the removed rows after the check.
 func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		// The check needs a running server on a schema behind the binary, and a
+		// server start applies the missing migrations, so the edit keeps the
+		// server running.
+		path := sqliteServerPath(t, env)
+		pristine := snapshotServerSQLite(ctx, t, path)
+		removed := trimServerSQLiteVersions(ctx, t, env, 0)
+
+		if len(removed) == 0 {
+			t.Fatal("trim above 0 removed nothing, want every migration pending")
+		}
+
+		before := snapshotServerSQLite(ctx, t, path)
+		res := runUpgradeCheckServer(ctx, t, env)
+		checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+		if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
+			t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
+		}
+
+		checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
+
+		for _, row := range removed {
+			execServerSQLite(ctx, t, path,
+				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+		}
+
+		if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
+			t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
+		}
+
+		return
+	}
 
 	pristine := snapshotServerDB(ctx, t, env, store)
 	removed := trimServerVersions(ctx, t, env, store, 0)
@@ -11794,10 +12169,12 @@ func parseUpgradeVersions(t *testing.T, out string) (database, binary int64) {
 	return database, binary
 }
 
-// oldFixtureMaxVersion is the newest version in the fixed old-database
-// fixture. The fixture stays below the binary version, so the check reports
-// pending migrations. Bump it only with the fixture name and assertions.
-const oldFixtureMaxVersion = 8
+// beforeBaselineVersion and beforeBaselineName name a migration from before
+// the baseline, which the baseline replaced.
+const (
+	beforeBaselineVersion = 76
+	beforeBaselineName    = "0076_sign_in_providers.sql"
+)
 
 // postgresSnapshot holds the table list and schema_migrations rows of one
 // PostgreSQL schema, so the test proves upgrade check wrote nothing.
@@ -14224,10 +14601,10 @@ func checkMaintenanceShapes(ctx context.Context, t *testing.T, env *e2e.Env) {
 	})
 
 	got, err = env.StatusWithHeader(
-		ctx, "token "+env.TokenA(), http.MethodGet, "/api/inventory/units?organization="+e2e.Namespace, "",
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/"+e2e.Namespace+"/units", "",
 	)
 	if err != nil {
-		t.Fatalf("GET /api/inventory/units in maintenance: %v", err)
+		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units in maintenance: %v", err)
 	}
 
 	checkMaintenanceRefusal(t, got.Status, got.Header, got.Body, refusalExpect{
@@ -14399,4 +14776,16 @@ func tofuSealedStateScenario(t *testing.T, env *e2e.Env) {
 	if !ok || greeting.Value != cli.Outputs["greeting"].Value || greeting.Value == "" {
 		t.Fatalf("downloaded state lacks the pulled greeting: %s", download)
 	}
+}
+
+// tofuContextScenario runs the context scenario for the e2e workspace.
+func tofuContextScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	id, err := remoteWorkspaceID(t.Context(), env, e2e.Workspace)
+	if err != nil || id == "" {
+		t.Fatalf("read the ID of the workspace: %q, %v", id, err)
+	}
+
+	contextScenario(t, env, "opentofu", id)
 }

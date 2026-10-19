@@ -1,0 +1,203 @@
+{
+  "id": "gdr-abcdefghij0123456789",
+  "decisionPoint": "change.planned",
+  "change": {
+    "kind": "job",
+    "id": "job-42"
+  },
+  "namespace": "acme",
+  "at": "2026-10-19T12:00:00Z",
+  "subject": "alice",
+  "schema": "change.planned/1.0",
+  "pathSets": [
+    {
+      "scope": "namespace/acme",
+      "id": "network",
+      "version": 3
+    }
+  ],
+  "units": [
+    {
+      "unit": "pulumi:acme/web/prod",
+      "facts": {
+        "budget": {
+          "available": true,
+          "level": "warning",
+          "percentUsed": 82
+        },
+        "change": {
+          "inputKeys": [
+            "replicas"
+          ],
+          "secretKeys": [],
+          "truncatedKeys": [],
+          "paths": [
+            "modules/net/main.tf"
+          ]
+        },
+        "cost": {
+          "available": true,
+          "deltaMonthly": 15000,
+          "totalMonthly": 90000,
+          "currency": "USD"
+        },
+        "dependents": {
+          "available": true,
+          "count": 1,
+          "units": [
+            "opentofu:acme/net"
+          ]
+        },
+        "document": {
+          "truncated": []
+        },
+        "drift": {
+          "available": false,
+          "resources": 0,
+          "ageSeconds": 0
+        },
+        "externalChecks": {
+          "passed": [
+            "scan"
+          ],
+          "failed": [],
+          "pending": [],
+          "timedOut": [
+            "ticket"
+          ]
+        },
+        "operation": {
+          "kind": "apply"
+        },
+        "paths": {
+          "available": true,
+          "touches": {
+            "network": true
+          },
+          "only": {
+            "network": true
+          }
+        },
+        "plan": {
+          "available": true,
+          "add": 2,
+          "change": 1,
+          "replace": 0,
+          "destroy": 1,
+          "resourceTypes": [
+            "aws:s3/bucket:Bucket"
+          ]
+        },
+        "principal": {
+          "kind": "person",
+          "credential": "session"
+        },
+        "quota": {
+          "available": true,
+          "maxPercentUsed": 40,
+          "exceeded": []
+        },
+        "resourcePolicy": {
+          "available": true,
+          "mandatoryFailed": 0,
+          "advisoryFailed": 1,
+          "unreadable": 0
+        },
+        "schema": "change.planned/1.0",
+        "source": {
+          "kind": "forge",
+          "ref": "refs/heads/main",
+          "protected": true,
+          "commit": "9f2c",
+          "upstreamUnit": ""
+        },
+        "unit": {
+          "tool": "pulumi",
+          "collection": "prod",
+          "labels": [
+            "team=web"
+          ]
+        }
+      },
+      "digest": "5e1f",
+      "gates": [
+        {
+          "policy": "unit/acme/pulumi/web%2Fprod/cost-cap",
+          "version": 2,
+          "mode": "enforce",
+          "outcome": "approval:finance",
+          "matched": true,
+          "error": false,
+          "diagnostic": "",
+          "skipped": false,
+          "brokenBy": "",
+          "message": "cost rises by 15000 cents"
+        }
+      ],
+      "result": "awaiting-approval"
+    }
+  ],
+  "requirements": [
+    {
+      "name": "finance",
+      "version": 1,
+      "approvers": {
+        "groups": [
+          "finance"
+        ],
+        "users": [],
+        "unitOwners": false
+      },
+      "count": 2,
+      "authorMayApprove": false,
+      "freshAuthSeconds": 300,
+      "timeoutSeconds": 604800,
+      "signatures": [
+        {
+          "subject": "bob",
+          "at": "2026-10-19T12:00:00Z",
+          "carriedFrom": {
+            "revision": 1,
+            "digest": "77aa",
+            "at": "2026-10-19T11:00:00Z",
+            "scope": "namespace/acme"
+          }
+        }
+      ],
+      "evaluate": false
+    },
+    {
+      "name": "default/namespace/acme",
+      "version": 4,
+      "approvers": {
+        "groups": [],
+        "users": [
+          "carol"
+        ],
+        "unitOwners": true
+      },
+      "count": 1,
+      "authorMayApprove": false,
+      "freshAuthSeconds": null,
+      "timeoutSeconds": 3600,
+      "signatures": [],
+      "evaluate": false
+    }
+  ],
+  "warnings": [
+    "budget at 82 percent"
+  ],
+  "autoApply": false,
+  "controls": [
+    {
+      "kind": "freeze",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "breakGlass": "",
+  "result": "awaiting-approval",
+  "action": "",
+  "count": 1,
+  "lastAt": "2026-10-19T12:00:00Z"
+}

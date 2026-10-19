@@ -55,6 +55,11 @@ type Install struct {
 	binary string
 }
 
+// NoCLI returns the Install of a test that drives the API without a CLI.
+func NoCLI() Install {
+	return Install{Tool: "", Label: "", Version: "", ChecksumSource: "", Dir: "", binary: ""}
+}
+
 // Binary returns the path of the executable.
 func (i Install) Binary() string {
 	return i.binary

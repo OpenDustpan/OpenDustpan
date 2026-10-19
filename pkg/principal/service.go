@@ -38,11 +38,22 @@ type Config struct {
 	// audit entry of a membership add. Nil means the Service writes no
 	// such change.
 	Tokens Tokens
+	// TempAdmins tells the temporary administrators among the principals,
+	// so a sign-in through an identity provider cannot name one. Nil means
+	// the Service keeps no temporary administrator.
+	TempAdmins TempAdmins
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 	// NewID returns a new opaque ID with the prefix it takes. Nil means
 	// random IDs.
 	NewID func(prefix string) string
+}
+
+// TempAdmins tells the temporary administrators among the principals.
+type TempAdmins interface {
+	// IsTempAdmin reports whether a temporary administrator record, that
+	// works or that ended, names the principal id.
+	IsTempAdmin(ctx context.Context, id string) (bool, error)
 }
 
 // Service implements the principal and group use cases.
@@ -55,6 +66,7 @@ type Service struct {
 	store      Store
 	guard      Guard
 	namespaces Namespaces
+	tempAdmins TempAdmins
 	tokens     Tokens
 	now        func() time.Time
 	newID      func(prefix string) string
@@ -80,6 +92,7 @@ func NewService(cfg Config) (*Service, error) {
 		store:      cfg.Store,
 		guard:      cfg.Guard,
 		namespaces: cfg.Namespaces,
+		tempAdmins: cfg.TempAdmins,
 		tokens:     cfg.Tokens,
 		now:        now,
 		newID:      newID,
@@ -362,6 +375,14 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identit
 // change "tokenManagers", every holder of principal:manage-tokens on that
 // principal: each of them can act as the principal, with the grants of the
 // group too. The entry of a person or a workload names none.
+//
+// When the grants of the group let its members act as service principals,
+// the entry names them in the change "actsAs", one per line, as the access
+// review names them: "principal:<id>" for one service principal, the name
+// of a namespace for each service principal of that namespace, and
+// "@server" for every service principal. The store
+// reads them in the transaction of the write, so a grant or a revoke that
+// commits first is in the list.
 func (s *Service) AddMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) (Membership, error) {
@@ -411,7 +432,7 @@ func (s *Service) AddMember(
 		})
 	}
 
-	err := s.store.AddMember(ctx, m, entry)
+	err := s.store.AddMember(ctx, m, entry, actsAsChange(groupID))
 	if errors.Is(err, ErrAlreadyExists) {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w: the principal is a member of the group, "+
 			"or it left the group in this millisecond. If it is not a member, try again", principalID, groupID, err)
@@ -514,15 +535,15 @@ type SignInInput struct {
 //
 // It returns ErrNotFound when no principal has the subject and in.Create
 // is false, ErrDisabled for a disabled principal, ErrNotSignInTarget for a
-// principal that is not a person, a principal of a namespace or a
-// break-glass account, and ErrInvalid or ErrReservedSubject for a subject
-// that is not valid.
+// principal that is not a person, a principal of a namespace, a
+// break-glass account or a temporary administrator, and ErrInvalid or
+// ErrReservedSubject for a subject that is not valid.
 func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInInput) (Principal, bool, error) {
 	p, err := s.store.GetPrincipalBySubject(ctx, in.Subject)
 
 	switch {
 	case err == nil:
-		return p, false, signInTarget(p)
+		return p, false, s.signInTarget(ctx, p)
 	case !errors.Is(err, ErrNotFound):
 		return Principal{}, false, fmt.Errorf("get principal %q: %w", in.Subject, err)
 	case !in.Create:
@@ -587,12 +608,37 @@ func (s *Service) existingSignIn(ctx context.Context, subject string) (Principal
 		return Principal{}, false, fmt.Errorf("get principal %q: %w", subject, err)
 	}
 
-	return p, false, signInTarget(p)
+	return p, false, s.signInTarget(ctx, p)
 }
 
 // signInTarget returns why a sign-in through an identity provider cannot
-// name p, or nil.
-func signInTarget(p Principal) error {
+// name p, or nil. A temporary administrator signs in only with its host
+// token, never through an identity provider. A failed read of the records
+// refuses the sign-in.
+func (s *Service) signInTarget(ctx context.Context, p Principal) error {
+	if err := signInKind(p); err != nil {
+		return err
+	}
+
+	if s.tempAdmins == nil {
+		return nil
+	}
+
+	temp, err := s.tempAdmins.IsTempAdmin(ctx, p.ID)
+	if err != nil {
+		return fmt.Errorf("read temporary administrator of %s: %w", Ref(p.ID), err)
+	}
+
+	if temp {
+		return fmt.Errorf("%w: %s is a temporary administrator", ErrNotSignInTarget, Ref(p.ID))
+	}
+
+	return nil
+}
+
+// signInKind returns why a sign-in through an identity provider cannot
+// name p by its kind, its scope or its state, or nil.
+func signInKind(p Principal) error {
 	switch {
 	case p.Kind != KindPerson || p.Namespace != "" || p.BreakGlass:
 		return fmt.Errorf("%w: %s", ErrNotSignInTarget, Ref(p.ID))
@@ -613,4 +659,23 @@ func signInDisplayName(in SignInInput) string {
 	}
 
 	return in.Subject
+}
+
+// actsAsChange returns the audit of a membership add that the store runs in
+// the transaction of the write: when the grants of the group groupID let
+// its members act as service principals, the change "actsAs" names each,
+// one per line, so the entry records what the new member can now act as.
+func actsAsChange(groupID string) MemberAudit {
+	return func(ctx context.Context, r GroupReads) ([]audit.Change, error) {
+		ids, err := r.ActsAs(ctx, groupID)
+		if err != nil {
+			return nil, fmt.Errorf("read what the members of group %q act as: %w", groupID, err)
+		}
+
+		if len(ids) == 0 {
+			return nil, nil
+		}
+
+		return []audit.Change{{Key: "actsAs", Old: nil, New: strings.Join(ids, "\n"), Layer: "", TakesEffect: ""}}, nil
+	}
 }

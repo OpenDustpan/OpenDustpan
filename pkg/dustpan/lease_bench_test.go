@@ -204,14 +204,23 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 	ctx := b.Context()
 
 	principals, err := principal.NewService(
-		principal.Config{Store: s.principals, Guard: nil, Namespaces: nil, Tokens: nil, Now: now, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      s.principals,
+			Guard:      nil,
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        now,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		b.Fatalf("principal service: %v", err)
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: s.tokens, Principals: s.principals, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now,
+		TempAdmins: nil,
+		Store:      s.tokens, Principals: s.principals, Freshness: nil, Authorizer: nil, Logger: nil, Now: now,
 		NewID: nil,
 	})
 	if err != nil {
@@ -312,11 +321,15 @@ func leaseBenchHandler(b *testing.B, s leaseStores, blobs *fs.Store) http.Handle
 // benchAdmin is the bootstrap administrator that creates the benchmark token.
 func benchAdmin() identity.Principal {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "admin",
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 }
 
@@ -327,7 +340,10 @@ func benchCaller() audit.Entry {
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, SourceIP: "192.0.2.1", UserAgent: "bench", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "",
-		FenceVersion: 0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

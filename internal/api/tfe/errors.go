@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -37,6 +38,9 @@ var errMissingFilter = errors.New("state version list needs filter[organization]
 // jsonAPIError is one entry of a JSON:API error document.
 type jsonAPIError struct {
 	Status string `json:"status"`
+	// Code is the stable machine code of the error, for the errors that have
+	// one (see ErrorCodes). It is omitted for the others.
+	Code   string `json:"code,omitempty"`
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
 }
@@ -64,6 +68,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", class.status))
 		h.writeInternal(ctx, w)
+
+		return
+	}
+
+	if code := errorCode(err); code != "" {
+		h.writeClassError(ctx, w, class, code)
 
 		return
 	}
@@ -124,10 +134,18 @@ func (h *Handler) writeJSONAPIError(
 	status int,
 	title, detail string,
 ) {
-	w.Header().Set("Content-Type", jsonAPIMediaType)
-	w.WriteHeader(status)
+	h.writeClassError(ctx, w, errorClass{status: status, title: title, detail: detail}, "")
+}
 
-	doc := jsonAPIDocument{Errors: []jsonAPIError{{Status: strconv.Itoa(status), Title: title, Detail: detail}}}
+// writeClassError writes one JSON:API error document for a classified error,
+// with the machine code of the error. An empty code leaves the member out.
+func (h *Handler) writeClassError(ctx context.Context, w http.ResponseWriter, class errorClass, code string) {
+	w.Header().Set("Content-Type", jsonAPIMediaType)
+	w.WriteHeader(class.status)
+
+	doc := jsonAPIDocument{Errors: []jsonAPIError{{
+		Status: strconv.Itoa(class.status), Code: code, Title: class.title, Detail: class.detail,
+	}}}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
 		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
@@ -176,6 +194,40 @@ func classifyNamespace(err error) (errorClass, bool) {
 	}
 }
 
+// classifyConflict maps the errors of a request that conflicts with the state
+// of the workspace to 409: a lock, a pending state version, a client-encrypted
+// state, a concurrent change. ok is false for any other error.
+func classifyConflict(err error) (errorClass, bool) {
+	switch {
+	case errors.Is(err, workspace.ErrClientEncrypted),
+		errors.Is(err, workspace.ErrAlreadyExists),
+		errors.Is(err, workspace.ErrLocked),
+		errors.Is(err, workspace.ErrPendingState),
+		errors.Is(err, workspace.ErrNotLocked),
+		errors.Is(err, workspace.ErrLockMismatch),
+		errors.Is(err, workspace.ErrLockedByOther),
+		errors.Is(err, workspace.ErrConcurrentModification),
+		errors.Is(err, workspace.ErrTooManyPending):
+		return errorClass{status: http.StatusConflict, title: titleConflict, detail: err.Error()}, true
+	default:
+		return errorClass{status: 0, title: "", detail: ""}, false
+	}
+}
+
+// errorCode returns the machine code of err, or "" when the error has none.
+func errorCode(err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrNotLocked):
+		return codeNotLocked
+	case errors.Is(err, workspace.ErrLockMismatch):
+		return codeLockMismatch
+	case errors.Is(err, workspace.ErrClientEncrypted):
+		return codeClientEncrypted
+	default:
+		return ""
+	}
+}
+
 // classify maps domain errors to a status, title and detail safe to show
 // callers. Unknown errors map to 500 with a generic detail.
 func classify(err error) errorClass {
@@ -184,6 +236,10 @@ func classify(err error) errorClass {
 	}
 
 	if class, ok := classifyNamespace(err); ok {
+		return class
+	}
+
+	if class, ok := classifyConflict(err); ok {
 		return class
 	}
 
@@ -199,17 +255,8 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
 		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound),
-		errors.Is(err, workspace.ErrResourceNotFound):
+		errors.Is(err, workspace.ErrResourceNotFound), errors.Is(err, workspace.ErrNoStateAt):
 		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: err.Error()}
-	case errors.Is(err, workspace.ErrClientEncrypted),
-		errors.Is(err, workspace.ErrAlreadyExists),
-		errors.Is(err, workspace.ErrLocked),
-		errors.Is(err, workspace.ErrPendingState),
-		errors.Is(err, workspace.ErrNotLocked),
-		errors.Is(err, workspace.ErrLockedByOther),
-		errors.Is(err, workspace.ErrConcurrentModification),
-		errors.Is(err, workspace.ErrTooManyPending):
-		return errorClass{status: http.StatusConflict, title: titleConflict, detail: err.Error()}
 	case errors.Is(err, workspace.ErrBusy):
 		return errorClass{
 			status: http.StatusServiceUnavailable,
@@ -217,6 +264,8 @@ func classify(err error) errorClass {
 			detail: "server is busy: try again after the Retry-After time",
 		}
 	case errors.Is(err, errInvalidBody),
+		errors.Is(err, audit.ErrInvalidReason),
+		errors.Is(err, errRevealPathTooLong),
 		errors.Is(err, workspace.ErrInvalidName),
 		errors.Is(err, namespace.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject),

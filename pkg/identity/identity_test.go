@@ -70,6 +70,45 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionServerReadPrincipals,
 		identity.ActionServerManagePrincipals,
 		identity.ActionServerManageGroups,
+		identity.ActionUnitRunPlan,
+		identity.ActionUnitRunApply,
+		identity.ActionUnitRunDestroy,
+		identity.ActionUnitWriteBack,
+		identity.ActionUnitDefineSteps,
+		identity.ActionJobRead,
+		identity.ActionJobReadLogs,
+		identity.ActionJobReadPlans,
+		identity.ActionJobCancel,
+		identity.ActionJobApprove,
+		identity.ActionNamespaceManageFreezes,
+		identity.ActionNamespaceBreakFreeze,
+		identity.ActionNamespaceManageRunners,
+		identity.ActionRunnerClaim,
+		identity.ActionAgentUse,
+		identity.ActionAgentStartRun,
+		identity.ActionNamespaceManageAgentRuns,
+		identity.ActionNamespaceManageAgent,
+		identity.ActionServerManageAgent,
+		identity.ActionServerAcceptAgentSecretAccess,
+		identity.ActionCallerManageAgentOptIns,
+		identity.ActionUnitObserve,
+		identity.ActionNamespaceReadRunners,
+		identity.ActionRunnerJoin,
+		identity.ActionNamespaceReadUnmanaged,
+		identity.ActionNamespaceTriageUnmanaged,
+		identity.ActionNamespaceManageSweeps,
+		identity.ActionNamespaceStartSweep,
+		identity.ActionServerLinkNamespaces,
+		identity.ActionUnitSetContext,
+		identity.ActionCollectionSetContext,
+		identity.ActionNamespaceSetContext,
+		identity.ActionBlueprintRead,
+		identity.ActionBlueprintSetContext,
+		identity.ActionUnitRedact,
+		identity.ActionProfileRead,
+		identity.ActionProfileWrite,
+		identity.ActionProfileOpen,
+		identity.ActionProfileManage,
 	} {
 		lowered := strings.ToLower(string(a))
 		if strings.Contains(lowered, "stack") || strings.Contains(lowered, "pulumi") {
@@ -406,18 +445,26 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 	}
 
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "admin",
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	viewer := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "viewer",
 		DisplayName:    "viewer",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	objs := []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()}
@@ -647,18 +694,26 @@ func TestChain(t *testing.T) {
 	var none identity.Principal
 
 	alice := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice",
 		DisplayName:    "Alice",
 		Admin:          false,
 		TokenID:        "tok-1",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "admin",
 		Admin:          true,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	unauth := fixedAuthenticator{err: identity.ErrUnauthenticated, principal: none}
 	broken := fixedAuthenticator{err: errStoreDown, principal: none}
@@ -702,11 +757,15 @@ func TestSelfAllowed(t *testing.T) {
 
 	authz := identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: []identity.Action{identity.ActionTokenManageOwn}}
 	person := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "bob",
 		DisplayName:    "Bob",
 		Admin:          false,
 		TokenID:        "tok-1",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 	ns, err := identity.ParseObject("acme")
 	if err != nil {
@@ -759,7 +818,12 @@ func TestSelfAllowedListObjectsForwards(t *testing.T) {
 	})
 	authz := identity.SelfAllowed{Next: next, Actions: []identity.Action{identity.ActionTokenManageOwn}}
 	alice := identity.Principal{
-		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
@@ -791,4 +855,75 @@ func TestSelfAllowedSuite(t *testing.T) {
 
 		return identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: nil}
 	})
+}
+
+// TestActsAsPerson proves the reveal rule of a state download: a person acts
+// through a session or an access token, an unknown kind counts as a person,
+// and no job token, trust token, service or workload acts as a person.
+func TestActsAsPerson(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		kind       identity.Kind
+		credential identity.Credential
+		want       bool
+	}{
+		{"bootstrap token: unknown kind, no credential", "", "", true},
+		{"person with a session", identity.KindPerson, identity.CredentialSession, true},
+		{"person with an access token", identity.KindPerson, identity.CredentialAccessToken, true},
+		{"person with no credential", identity.KindPerson, "", true},
+		{"unknown kind with a session", "", identity.CredentialSession, true},
+		{"unknown kind with an access token", "", identity.CredentialAccessToken, true},
+		{"service with an access token", identity.KindService, identity.CredentialAccessToken, false},
+		{"service with no credential", identity.KindService, "", false},
+		{"workload with a trust token", identity.KindWorkload, identity.CredentialTrustToken, false},
+		{"person with a job token", identity.KindPerson, identity.CredentialJobToken, false},
+		{"unknown kind with a job token", "", identity.CredentialJobToken, false},
+		{"person with a trust token", identity.KindPerson, identity.CredentialTrustToken, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := identity.Principal{
+				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+				Subject:        "alice",
+				DisplayName:    "",
+				Admin:          false,
+				TokenID:        "",
+				TokenExpiresAt: time.Time{},
+				Kind:           tc.kind,
+				Credential:     tc.credential,
+				JobID:          "",
+			}
+
+			if got := p.ActsAsPerson(); got != tc.want {
+				t.Fatalf("ActsAsPerson = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStaticTokenHasNoKind proves that a bootstrap admin token has no record,
+// so its principal has no kind and no credential and counts as a person.
+func TestStaticTokenHasNoKind(t *testing.T) {
+	t.Parallel()
+
+	token := strings.Repeat("a", 32)
+
+	authn, err := identity.NewStaticToken("admin", token)
+	if err != nil {
+		t.Fatalf("static token: %v", err)
+	}
+
+	p, err := authn.AuthenticateToken(t.Context(), token)
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	if p.Kind != "" || p.Credential != "" || p.JobID != "" || !p.ActsAsPerson() {
+		t.Fatalf("principal = %+v, want no kind, no credential and a person", p)
+	}
 }

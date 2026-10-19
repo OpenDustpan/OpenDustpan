@@ -735,6 +735,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "local",
@@ -756,7 +757,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 		States:             store,
 		Blobs:              openFixtureBlobs(t),
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             newMemSealer(t, namespaces),
 		Logger:             nil,
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      1 << 20,

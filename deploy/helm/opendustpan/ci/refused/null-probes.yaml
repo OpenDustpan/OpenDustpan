@@ -1,0 +1,9 @@
+# Refused: null removes probes.
+# want: at '': missing property 'probes'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+probes: null

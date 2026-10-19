@@ -41,6 +41,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "local",
@@ -57,12 +58,13 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 		t.Fatalf("namespaces: %v", err)
 	}
 
+	secrets := newMemSealer(t, namespaces)
 	svc, err := workspace.NewService(workspace.Config{
 		Workspaces:         store,
 		States:             store,
 		Blobs:              rec,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      maxState,
@@ -83,7 +85,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: rec, now: &now, ws: ws}, rec
+	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: rec, now: &now, ws: ws}, rec
 }
 
 // checkLimitError proves err wraps ErrTooLarge and names the flag, the

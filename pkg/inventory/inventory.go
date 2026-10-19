@@ -44,6 +44,10 @@ type Entry struct {
 	// written. It is empty when the unit has none (ADR 51). A collection never
 	// changes the tool's own name of the unit.
 	Collection string
+	// Labels are the labels of the unit: a key and a value each. The map is
+	// never nil in an entry that a store reads, and a unit with no label has
+	// an empty map. A label never grants access.
+	Labels map[string]string
 }
 
 // Lock is who holds a unit and why. Holder is the subject of the principal
@@ -65,12 +69,20 @@ func (e Entry) Reference() string {
 // Reader is the persistence port for the inventory projection. ListUnits returns
 // the entries of one namespace, ordered by tool, then name. A namespace with
 // no units reads as an empty list, as does a namespace that does not exist.
-// It defines no sentinel error: implementations report storage failures
-// without a dedicated value.
+// GetUnit returns one live unit by its stable ID. Implementations report
+// storage failures without a dedicated value.
 type Reader interface {
 	// ListUnits returns the inventory entries of ns, ordered by tool, then name.
 	ListUnits(ctx context.Context, ns namespace.Name) ([]Entry, error)
+	// GetUnit returns the live unit with the stable ID unitID. The ID is
+	// unique in the installation, so the call names no namespace. It returns
+	// ErrUnitNotFound for an unknown ID and for a deleted unit.
+	GetUnit(ctx context.Context, unitID string) (Entry, error)
 }
+
+// ErrUnitNotFound reports that the inventory holds no live unit with the ID
+// that a call names.
+var ErrUnitNotFound = errors.New("unit not found")
 
 // DeletedRetention is the default time that the server keeps a deleted unit
 // before the final delete (ADR 47, decision 2). The setting

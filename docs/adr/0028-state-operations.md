@@ -1,6 +1,6 @@
 # 28. State history, restore and unlock
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11. Decision 3 superseded in part by ADR 151. Route paths of decisions 3 and 5 superseded in part by ADR 210. Decision 6 superseded in part by ADR 239: the OpenTofu force-release needs `unit:write-forced`
 
 ## Context
 

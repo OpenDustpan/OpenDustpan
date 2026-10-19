@@ -1,0 +1,15 @@
+# Refused: valueFrom that is not a secretKeyRef.
+# want: at '/server/extraEnv/0/valueFrom': missing property 'secretKeyRef'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+server:
+  extraEnv:
+    - name: SOME_SETTING
+      valueFrom:
+        configMapKeyRef:
+          name: x
+          key: y

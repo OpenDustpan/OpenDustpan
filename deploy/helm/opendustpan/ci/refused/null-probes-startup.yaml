@@ -1,0 +1,10 @@
+# Refused: null removes probes.startup.
+# want: at '/probes': missing property 'startup'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+probes:
+  startup: null

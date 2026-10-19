@@ -19,6 +19,10 @@ tokens and storage.
 
 ## Quickstart
 
+The [quickstart guide](docs/guides/quickstart.md) shows the setup with SQLite on
+loopback and a compose stack with PostgreSQL and S3-compatible storage. This
+section shows the setup from source with SQLite.
+
 No release exists yet, so build the server from source. You need Go 1.27.2 or
 later, OpenSSL, and the Pulumi CLI or OpenTofu.
 
@@ -291,8 +295,11 @@ How-to guides:
   namespace and the check of their chain.
 - [Deleted units](docs/guides/deleted-units.md): list, restore and purge
   the units that a delete keeps until its retention period ends.
+- [Set and read context](docs/guides/context.md): the owners, the on-call
+  text and the other context of a namespace and of a unit.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
+- [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
 - [Run several instances](docs/guides/several-instances.md): the settings
   that each instance shares, for the target design.
 - [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
@@ -302,6 +309,8 @@ Reference:
 
 - [Configuration](docs/reference/configuration.md): every flag and
   environment variable.
+- [Journaling](docs/reference/journaling.md): the setting, the recovery
+  steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
@@ -402,7 +411,8 @@ flag and environment variable of `opendustpan serve`.
 ## Development
 
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
-golangci-lint, NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
+golangci-lint, the module age check (no module version is younger than 14
+days), NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
 check, the docs lint and the tests with the race detector. goleak fails a test
 package that leaves a goroutine running. The `Makefile` lists the tool
 versions to install. NilAway and govulncheck need no install. Set
@@ -413,6 +423,14 @@ runs the S3 blob suite. It needs `DUSTPAN_TEST_S3_ENDPOINT`,
 server. It downloads them first, as `e2e/doc.go` describes. `E2E_BLOBS=s3`
 with the four S3 variables drives the runs with the live blobs on the
 S3-compatible server.
+
+`make checks-agent` syncs the current branch with `main`, then runs
+`make generate`, `make check`, `make e2e`, and a TruffleHog scan of the branch
+commits. It starts a PostgreSQL container when `DUSTPAN_TEST_POSTGRES_URL` is
+not set, and it deletes the container and the temporary files it made.
+`SYNC` selects how the branch takes in `main`: `merge` (default), `rebase`,
+or `none`. `SKIP` lists steps to skip, for example `SKIP="e2e trufflehog"`.
+`CLEAN_CACHE=1` also deletes the e2e CLI download cache.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), then `CLAUDE.md` (rules for
 agents and contributors) and `docs/adr/` (why things are the way they are).

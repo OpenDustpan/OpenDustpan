@@ -58,6 +58,7 @@ func mustCreateNamespace(t *testing.T, s NamespaceStore, ns namespace.Name) {
 	t.Helper()
 
 	err := s.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: time.Unix(0, 0), Name: ns, HomeRegion: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})
@@ -251,5 +252,10 @@ func testNamespacePrincipalNoGroup(t *testing.T, s NamespaceStore) {
 		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
 	}
-	wantErr(t, "membership of a principal of a namespace", s.AddMember(t.Context(), m, entry()), principal.ErrInvalid)
+	wantErr(
+		t,
+		"membership of a principal of a namespace",
+		s.AddMember(t.Context(), m, entry(), nil),
+		principal.ErrInvalid,
+	)
 }

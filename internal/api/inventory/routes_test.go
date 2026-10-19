@@ -49,6 +49,7 @@ func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) 
 
 func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       changeTime(),
 		Name:            "acme",
 		HomeRegion:      "test-region",
@@ -85,6 +86,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Deleted:       seededDeleted(),
+		History:       nil,
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: stubAuthenticator{},
@@ -92,6 +94,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		PublicURL:     "",
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -116,8 +119,9 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		Moves:         nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
-		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
+		Units:         &memReader{entries: enforcingUnitEntries(), err: nil},
 		Deleted:       seededDeleted(),
+		History:       nil,
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
@@ -125,12 +129,33 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		PublicURL:     "",
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
 	return handler
+}
+
+// enforcingUnitEntries holds the live unit that the by-ID route resolves in
+// the enforcement tests: the unit of seededUnitID in acme.
+func enforcingUnitEntries() map[namespace.Name][]coreinventory.Entry {
+	return map[namespace.Name][]coreinventory.Entry{
+		"acme": {{
+			LastChanged:   changeTime(),
+			Namespace:     "acme",
+			Tool:          "pulumi",
+			Name:          "web/prod",
+			UnitID:        seededUnitID,
+			DisplayName:   "web/prod",
+			Status:        "succeeded",
+			ResourceCount: nil,
+			Lock:          nil,
+			Collection:    "",
+			Labels:        nil,
+		}},
+	}
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -279,10 +304,18 @@ func probeRoute(t *testing.T, handler *apiinventory.Handler, route apiinventory.
 func routeRequest(t *testing.T, route apiinventory.Route, token string) *http.Request {
 	t.Helper()
 
-	path := strings.NewReplacer("{tool}", "pulumi", "{unitID}", seededUnitID).Replace(route.Path)
-	target := path + "?organization=acme"
+	path := strings.NewReplacer("{tool}", "pulumi", "{unitID}", seededUnitID, "{namespace}", "acme").Replace(route.Path)
+	target := path
+
+	if !strings.Contains(route.Path, "{namespace}") {
+		target += "?organization=acme"
+	}
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, target, http.NoBody)
+
+	if strings.Contains(route.Path, "{namespace}") {
+		req.SetPathValue("namespace", "acme")
+	}
 
 	if strings.Contains(route.Path, "{unitID}") {
 		req.SetPathValue("tool", "pulumi")
@@ -361,69 +394,22 @@ func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
 		deny[action] = true
 	}
 
+	for _, action := range route.NamespaceActions {
+		deny[action] = true
+	}
+
+	wantDenied := http.StatusForbidden
+	if route.DeniedAsNotFound {
+		wantDenied = http.StatusNotFound
+	}
+
 	denied := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("denied request answers %d, want %d", rec.Code, http.StatusForbidden)
-	}
-}
-
-// TestResolveListUnits proves the route resolves the namespace in the
-// organization value, and fails on a missing or invalid value.
-func TestResolveListUnits(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t)
-
-	var resolve apiinventory.ObjectResolver
-
-	for _, route := range handler.Routes() {
-		if route.Method+" "+route.Path == "GET /api/inventory/units" {
-			resolve = route.Resolve
-		}
-	}
-
-	if resolve == nil {
-		t.Fatal("GET /api/inventory/units declares no resolver")
-	}
-
-	resolveOK(t, resolve, "/api/inventory/units?organization=acme", "acme")
-
-	for _, target := range []string{"/api/inventory/units", "/api/inventory/units?organization="} {
-		resolveFails(t, resolve, target)
-	}
-
-	resolveFails(t, resolve, "/api/inventory/units?organization=../x")
-}
-
-// resolveOK proves resolve maps target to the namespace ns.
-func resolveOK(t *testing.T, resolve apiinventory.ObjectResolver, target, ns string) {
-	t.Helper()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
-	obj, err := resolve(rec, req)
-	if err != nil {
-		t.Fatalf("resolve %q: %v", target, err)
-	}
-
-	if obj.String() != ns || obj.IsUnit() {
-		t.Fatalf("object = %q (unit %v), want namespace %q", obj.String(), obj.IsUnit(), ns)
-	}
-}
-
-// resolveFails proves resolve rejects target with an error.
-func resolveFails(t *testing.T, resolve apiinventory.ObjectResolver, target string) {
-	t.Helper()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
-
-	if _, err := resolve(rec, req); err == nil {
-		t.Fatalf("resolve %q succeeded, want an error", target)
+	if rec.Code != wantDenied {
+		t.Fatalf("denied request answers %d, want %d", rec.Code, wantDenied)
 	}
 }
 
@@ -489,7 +475,7 @@ func (denyObjectAuthorizer) ListObjects(
 func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 	t.Parallel()
 
-	handler := newTestHandler(t)
+	handler := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
 
 	for _, route := range handler.Routes() {
 		if isCollectionRoute(route) {
@@ -565,13 +551,26 @@ func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
 		}
 	}
 
+	nsObject := identity.NamespaceObject("acme").String()
+
+	for _, action := range route.NamespaceActions {
+		if !containsCall(recorder.calls, recordedCall{action: action, object: nsObject}) {
+			t.Fatalf("route never asks %s on %q (calls %v)", action, nsObject, recorder.calls)
+		}
+	}
+
+	wantDenied := http.StatusForbidden
+	if route.DeniedAsNotFound {
+		wantDenied = http.StatusNotFound
+	}
+
 	denied := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, http.StatusForbidden)
+	if rec.Code != wantDenied {
+		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, wantDenied)
 	}
 }
 

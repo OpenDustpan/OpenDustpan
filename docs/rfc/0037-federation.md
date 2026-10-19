@@ -13,6 +13,10 @@ wider question. RFC 37 was not accepted, so an edit is allowed (ADR 15). This
 RFC replaces the separate multi-tenancy RFC that RFC 68 names. It decides
 nothing.
 
+On 2026-10-18 the owner decided parts of it. See "Outcome": the hosted
+service is multitenant with the namespace as the tenant (ADR 215), and
+routing between installations is an opt-in capability (RFC 79).
+
 ## Problem
 
 Where does a namespace live, and how does a request reach it?
@@ -400,4 +404,17 @@ a license, an edition or a hosted flag, and each exists in every build.
 
 ## Outcome
 
-None yet.
+Decided in part on 2026-10-18 (owner decisions):
+
+- [ADR 215](../adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md):
+  design point 7. OpenDustpan Cloud runs the namespaces of many customers
+  on one shared installation, with the namespace as the tenant and no layer
+  above it. It answers on one host, with the namespace in the path. Option
+  A (one installation for each customer) is not taken. ADR 215 decision 5
+  keeps a namespace name unique in the installation.
+- Routing, forwarding and replication between installations are allowed as
+  an opt-in capability. [RFC 79](0079-opt-in-federation-routing-and-geo-replication.md)
+  designs it from design points 1 to 6 of this RFC. An earlier draft of
+  ADR 221 that said "no routing across installations" is reversed.
+
+The other design points and open questions stay open, here and in RFC 79.

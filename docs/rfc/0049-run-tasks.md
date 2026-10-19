@@ -1,14 +1,15 @@
 ---
 rfc: 49
 title: Run tasks: external checks with callbacks
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 226
 ---
 
 # RFC 49. Run tasks: external checks with callbacks
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: accepted. ADR 226 decision 10 makes a run task an external check: a
+producer of facts that a gate reads.
 
 ## Problem
 
@@ -41,4 +42,8 @@ decides nothing. An ADR records a decision (ADR 15).
 
 ## Outcome
 
-None yet.
+Accepted on 2026-10-18 by ADR 226 decision 10. A run task is an external
+check. The server sends a signed request at a stage and waits for a signed
+callback, with a timeout. The answer is a fact (`externalChecks.passed`,
+`failed` or `timedOut`). A gate decides what a failure does, in `enforce`
+or `evaluate` mode. It is never a job step, as the owner directed.

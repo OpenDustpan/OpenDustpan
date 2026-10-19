@@ -169,7 +169,7 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 	stored, storeErr := s.storeContent(ctx, storeInput{
 		namespace: sw.workspace.Ref.Namespace,
 		workspace: sw.workspace.ID,
-		seal:      sv.Sealed,
+		version:   string(sv.ID),
 		key:       sw.key,
 		want:      sw.want,
 		content:   reader,
@@ -185,7 +185,7 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 		return StateVersion{}, s.refuseStream(ctx, sw, fmt.Errorf("write state %s: %w", sv.ID, metaErr))
 	}
 
-	outputs, err := s.streamedOutputs(ctx, sw.workspace, meta)
+	outputs, err := s.streamedOutputs(ctx, sw.workspace, string(sv.ID), meta)
 	if err != nil {
 		return StateVersion{}, s.refuseStream(ctx, sw, err)
 	}
@@ -298,7 +298,7 @@ func (s *Service) declarePlaceholder(
 		Size:            0,
 		Force:           false,
 		UnlockedWrite:   unlocked,
-		Sealed:          s.sealer != nil,
+		Sealed:          true,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
@@ -323,7 +323,7 @@ func (s *Service) declarePlaceholder(
 func (s *Service) admitDeclare(ctx context.Context, w Workspace) (func(), error) {
 	unlock := s.lockKey("begin/" + w.ID.String())
 
-	if _, sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
+	if sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
 		s.logger.WarnContext(
 			ctx,
 			"sweep expired state",
@@ -361,14 +361,17 @@ type streamedOutputs struct {
 
 // streamedOutputs returns the outputs to store and the plain outputs to return.
 // A state the client encrypted has no readable outputs, so it stores none. A
-// version of a sealing service stores the outputs sealed (ADR 41).
-func (s *Service) streamedOutputs(ctx context.Context, w Workspace, meta streamedMeta) (streamedOutputs, error) {
+// version stores the outputs sealed with the data key of the workspace
+// scope.
+func (s *Service) streamedOutputs(
+	ctx context.Context, w Workspace, versionID string, meta streamedMeta,
+) (streamedOutputs, error) {
 	if meta.ClientEncrypted {
 		return streamedOutputs{stored: nil, plain: nil}, nil
 	}
 
 	plain := meta.Outputs
-	if s.sealer == nil || len(plain) == 0 {
+	if len(plain) == 0 {
 		return streamedOutputs{stored: plain, plain: plain}, nil
 	}
 
@@ -378,7 +381,7 @@ func (s *Service) streamedOutputs(ctx context.Context, w Workspace, meta streame
 		return streamedOutputs{stored: nil, plain: nil}, chargeErr
 	}
 
-	sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), plain)
+	sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), versionID, plain)
 	if err != nil {
 		return streamedOutputs{stored: nil, plain: nil}, fmt.Errorf("seal outputs of %s: %w", w.Ref, err)
 	}

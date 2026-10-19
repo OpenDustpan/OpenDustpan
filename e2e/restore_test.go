@@ -13,7 +13,7 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// deletedUnitDoc is one entry of GET /api/inventory/deleted-units.
+// deletedUnitDoc is one entry of GET /api/dustpan/v1/namespaces/{namespace}/deleted-units.
 type deletedUnitDoc struct {
 	Tool       string `json:"tool"`
 	Reference  string `json:"reference"`
@@ -24,11 +24,11 @@ type deletedUnitDoc struct {
 	PurgeAfter string `json:"purgeAfter"`
 }
 
-// deletedUnitsDoc is the answer of GET /api/inventory/deleted-units.
+// deletedUnitsDoc is the answer of GET /api/dustpan/v1/namespaces/{namespace}/deleted-units.
 type deletedUnitsDoc struct {
-	NextCursor string           `json:"nextCursor"`
-	Units      []deletedUnitDoc `json:"units"`
-	Total      int              `json:"total"`
+	NextPageToken string           `json:"nextPageToken"`
+	Units         []deletedUnitDoc `json:"units"`
+	Total         int              `json:"total"`
 }
 
 // restoredUnitDoc is the answer of a restore: the live unit.
@@ -53,11 +53,10 @@ type unitTarget struct {
 // API.
 func listDeletedUnits(ctx context.Context, env *e2e.Env, u unitTarget, prefix string) (deletedUnitsDoc, error) {
 	q := url.Values{}
-	q.Set("organization", u.org)
 	q.Set("tool", u.tool)
 	q.Set("namePrefix", prefix)
 
-	path := "/api/inventory/deleted-units?" + q.Encode()
+	path := "/api/dustpan/v1/namespaces/" + url.PathEscape(u.org) + "/deleted-units?" + q.Encode()
 
 	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
 	if err != nil {
@@ -302,7 +301,7 @@ const restoredStack = "scratch-restored"
 // A restore under its old name answers 409, a restore under a new name brings
 // back the same stack ID, and a purge removes it for good: a restore after
 // the purge answers 404.
-func pulumiRestoreSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
+func pulumiRestoreSteps(ctx context.Context, env *e2e.Env, org, removedID string, existedAt *time.Time) []e2e.StepSpec {
 	oldName := e2e.Project + "/" + softDeleted
 	newName := e2e.Project + "/" + restoredStack
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, restoredStack)
@@ -345,6 +344,9 @@ func pulumiRestoreSteps(ctx context.Context, env *e2e.Env, org, removedID string
 			return checkDeletedAbsent(ctx, env, u, oldName)
 		}, "stack", "select", qualified),
 		step("stack rm restored", nil, "stack", "rm", "--yes", "--stack", qualified),
+		step("the inventory at a time names the deleted stack by both names", func(e2e.Result) error {
+			return checkUnitAtDeleted(ctx, env, u, *existedAt, unitAtNames{tool: "", atTime: oldName, current: newName})
+		}, "stack", "ls", "--json", "--all"),
 		step("purge the removed stack", func(e2e.Result) error {
 			if err := checkPurge(ctx, env, u, http.StatusNoContent); err != nil {
 				return err
@@ -355,6 +357,9 @@ func pulumiRestoreSteps(ctx context.Context, env *e2e.Env, org, removedID string
 			}
 
 			return checkRestore(ctx, env, u, restoreCase{newName: "", wantName: "", want: http.StatusNotFound})
+		}, "stack", "ls", "--json", "--all"),
+		step("the inventory at a time counts the purged stack and never names it", func(e2e.Result) error {
+			return checkUnitAtPurged(ctx, env, u, *existedAt)
 		}, "stack", "ls", "--json", "--all"),
 		step("retention sweep keeps the blob purge record of the stack", func(e2e.Result) error {
 			return checkSweepKeepsRecord(ctx, env)
@@ -369,7 +374,7 @@ const restoredWorkspace = "restored"
 // tofuRestoreSteps run after the workspace soft delete steps, while a new
 // workspace holds the name of the deleted workspace. They restore the deleted
 // workspace under a new name, which the CLI lists, then delete and purge it.
-func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string) []e2e.StepSpec {
+func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string, existedAt *time.Time) []e2e.StepSpec {
 	newName := e2e.RemotePrefix + restoredWorkspace
 	// target reads the ID when a step runs: an earlier step sets it.
 	target := func() unitTarget { return unitTarget{org: e2e.Namespace, tool: "opentofu", id: *removedID} }
@@ -405,6 +410,15 @@ func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string) []e2
 			return contains(restoredWorkspace)(r)
 		}, "workspace", "list", "-no-color"),
 		step("workspace delete restored", nil, "workspace", "delete", restoredWorkspace, "-no-color"),
+		step("the inventory at a time names the deleted workspace by both names", func(e2e.Result) error {
+			return checkUnitAtDeleted(
+				ctx,
+				env,
+				target(),
+				*existedAt,
+				unitAtNames{tool: "", atTime: remoteProdName, current: newName},
+			)
+		}, "workspace", "list", "-no-color"),
 		step("purge the deleted workspace", func(e2e.Result) error {
 			if err := checkPurge(ctx, env, target(), http.StatusNoContent); err != nil {
 				return err
@@ -415,6 +429,9 @@ func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string) []e2
 			}
 
 			return checkRestore(ctx, env, target(), restoreCase{newName: "", wantName: "", want: http.StatusNotFound})
+		}, "workspace", "list", "-no-color"),
+		step("the inventory at a time counts the purged workspace and never names it", func(e2e.Result) error {
+			return checkUnitAtPurged(ctx, env, target(), *existedAt)
 		}, "workspace", "list", "-no-color"),
 		step("retention sweep keeps the blob purge record of the workspace", func(e2e.Result) error {
 			return checkSweepKeepsRecord(ctx, env)

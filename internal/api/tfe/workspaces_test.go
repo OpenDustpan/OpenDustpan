@@ -165,7 +165,7 @@ func decodeWorkspaceDoc(t *testing.T, rec *httptest.ResponseRecorder, want int) 
 
 // TestWorkspaceRoutesDeclareActionsAndObjects proves each workspace route
 // declares its action and resolves its object: reads use unit:read, creation
-// and force-unlock use unit:manage, lock and unlock use unit:write, the list
+// uses unit:manage, force-unlock uses unit:write-forced, lock and unlock use unit:write, the list
 // uses namespace:read, and every unit route resolves to opentofu:acme/web.
 func TestWorkspaceRoutesDeclareActionsAndObjects(t *testing.T) {
 	t.Parallel()
@@ -239,7 +239,7 @@ func TestWorkspaceRoutesDeclareActionsAndObjects(t *testing.T) {
 			method:  http.MethodPost,
 			target:  "/api/v2/workspaces/ws-test123/actions/force-unlock",
 			body:    `{"data":{}}`,
-			actions: []identity.Action{identity.ActionUnitManage},
+			actions: []identity.Action{identity.ActionUnitWriteForced},
 			object:  "opentofu:acme/web",
 			isUnit:  true,
 		},
@@ -310,6 +310,7 @@ func checkWorkspaceRoute(t *testing.T, handler *tfe.Handler, tc workspaceRouteCa
 	req.SetPathValue("organization", "acme")
 	req.SetPathValue("workspace", "web")
 	req.SetPathValue("id", "ws-test123")
+	req.SetPathValue("workspace_id", "ws-test123")
 	req.SetPathValue("state_version_id", "sv-test123")
 	req.SetPathValue("output_id", "sv-test123.greeting")
 
@@ -715,8 +716,10 @@ func (p pagingWorkspaces) Unlock(
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
-func (p pagingWorkspaces) ForceUnlock(
-	_ context.Context, _ workspace.ID, _ string, _ namespace.Overrides, _ func() error,
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (p pagingWorkspaces) ForceUnlockLock(
+	_ context.Context, _ workspace.ID, _ workspace.Lock, _ string, _ namespace.Overrides, _ func() error,
+	_ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	return workspace.Workspace{}, false, workspace.ErrNotFound
 }
@@ -771,6 +774,12 @@ func (p pagingWorkspaces) ReadResource(
 	_ context.Context, _ workspace.StateVersionID, _ string,
 ) (workspace.StateDetail, error) {
 	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) ReadStateAt(
+	_ context.Context, _ workspace.ID, _ workspace.StateAtRequest,
+) (workspace.StateAtRead, error) {
+	return workspace.StateAtRead{}, workspace.ErrNoStateAt
 }
 
 func (p pagingWorkspaces) DiffStates(
@@ -1133,8 +1142,8 @@ func TestListWorkspacesSearchName(t *testing.T) {
 
 // TestWorkspacePermissionFlags proves each flag follows the Authorizer result
 // for the caller: without unit:write the lock and queue-run flags are false
-// while force-unlock stays true, and without unit:manage only force-unlock
-// is false.
+// while force-unlock stays true, and without unit:write-forced only
+// force-unlock is false. Without unit:manage, force-unlock stays true.
 func TestWorkspacePermissionFlags(t *testing.T) {
 	t.Parallel()
 
@@ -1167,6 +1176,23 @@ func TestWorkspacePermissionFlags(t *testing.T) {
 		handler := newWorkspaceHandler(
 			t,
 			selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitManage: true}},
+		)
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, workspaceRequest(t, http.MethodGet, "/api/v2/organizations/acme/workspaces/web", ""))
+
+		doc := decodeWorkspaceDoc(t, rec, http.StatusOK)
+		if perms := doc.Data.Attributes.Permissions; !perms.CanForceUnlock {
+			t.Fatalf("permissions = %+v, want force-unlock true: it follows unit:write-forced", perms)
+		}
+	})
+
+	t.Run("without write-forced", func(t *testing.T) {
+		t.Parallel()
+
+		handler := newWorkspaceHandler(
+			t,
+			selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitWriteForced: true}},
 		)
 
 		rec := httptest.NewRecorder()

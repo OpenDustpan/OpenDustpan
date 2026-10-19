@@ -1,5 +1,11 @@
 package cli
 
+import "opendustpan.org/opendustpan/pkg/history"
+
+// retentionDefault is the default of the retention settings: 400 days. A
+// test proves it equals history.DefaultRetention.
+const retentionDefault = "9600h"
+
 // defaultFalse is the default of the bool declarations: no opt-in without
 // an explicit flag or variable.
 const defaultFalse = "false"
@@ -22,6 +28,7 @@ func stringSetting(flag, env, def, help, reference string) *Setting {
 		Kind:      KindString,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -42,6 +49,7 @@ func boolSetting(flag, env, help, reference string) *Setting {
 		Kind:      KindBool,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -61,6 +69,7 @@ func intSetting(flag, env, def, help, reference string) *Setting {
 		Kind:      KindInt,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -81,6 +90,7 @@ func envSetting(env, doc string) *Setting {
 		Kind:      KindString,
 		Sensitive: false,
 		URL:       false,
+		StepInput: false,
 
 		NoPasswordInFile: false,
 	}
@@ -126,7 +136,10 @@ var Settings = []*Setting{
 	stringSetting(
 		"allowed-origins", "DUSTPAN_ALLOWED_ORIGINS", "",
 		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)",
-		referenceNone,
+		referenceNone+". A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an "+
+			"optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or "+
+			"fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
+			"`Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests.",
 	).WithFile("allowed-origins"),
 	stringSetting(
 		"tls-cert", "DUSTPAN_TLS_CERT", "",
@@ -271,6 +284,24 @@ var Settings = []*Setting{
 			"(DUSTPAN_DISABLE_PULUMI_JOURNALING=true)",
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	).WithFile("disable-pulumi-journaling"),
+	boolSetting(
+		"disable-host-recovery", "DUSTPAN_DISABLE_HOST_RECOVERY",
+		"turn the host command off, so it makes no temporary administrator (DUSTPAN_DISABLE_HOST_RECOVERY=true)",
+		"(none: the host command is on). Set `true` or `1` in the environment of the operator account to turn "+
+			"it off. `false`, `0` and an empty value keep it on. The host command refuses any other value",
+	),
+	stringSetting(
+		"recovery-mode", "DUSTPAN_RECOVERY_MODE", "bootstrap",
+		"break-glass recovery mode of the installation: bootstrap, signed-request or none (DUSTPAN_RECOVERY_MODE)",
+		"`bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: "+
+			"recovery with a request signed with an offline operator key. `none`: no break-glass, the operator "+
+			"restores from a backup, and the host command refuses to run",
+	),
+	stringSetting(
+		"reason", "", "",
+		"reason for the temporary administrator, at most 500 characters, stored in the audit entry of the create",
+		referenceNone,
+	),
 	stringSetting(
 		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "on",
 		"hash chain of the audit log: on or off. A change starts the server in maintenance mode "+
@@ -421,4 +452,34 @@ var Settings = []*Setting{
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
 		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
 	).WithSensitive(),
+
+	stringSetting(
+		history.PlanRetentionFlag, history.PlanRetentionEnv, retentionDefault,
+		"how long a stored plan stays ("+history.PlanRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration",
+	),
+	stringSetting(
+		history.JobLogRetentionFlag, history.JobLogRetentionEnv, retentionDefault,
+		"how long a version of a job log stays ("+history.JobLogRetentionEnv+")",
+		"`"+retentionDefault+"` (400 days). A Go duration",
+	),
+	stepInput("DUSTPAN_JOB_ID", "The ID of the job that the step belongs to."),
+	stepInput("DUSTPAN_PHASE", "The name of the phase of the job that the step belongs to."),
+	stepInput("DUSTPAN_STEP", "The name of the step."),
+	stepInput("DUSTPAN_UNIT", "The unit that the job runs on."),
+	stepInput("DUSTPAN_NAMESPACE", "The namespace of the unit."),
+	stepInput("DUSTPAN_COMMIT", "The commit of the source that the job runs."),
+	stepInput("DUSTPAN_SERVER_URL", "The URL of the server that the step calls."),
+	stepInput(
+		"DUSTPAN_SWEEP_REPORT",
+		"Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes "+
+			"its report to. The launcher uploads the file when the command ends.",
+	),
+}
+
+// stepInput declares a variable that the launcher sets for the process of a
+// step: the variable and its reference description. The server does not read
+// it, so it has no flag, and it holds no credential.
+func stepInput(env, doc string) *Setting {
+	return envSetting(env, doc).WithStepInput()
 }

@@ -46,6 +46,8 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
+	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
@@ -58,7 +60,6 @@ import (
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
-	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -66,15 +67,20 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -117,6 +123,10 @@ const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 30 * time.Second
+	// maxHeaderBytes caps the request headers that the server reads. net/http
+	// answers 431 past it, so a client cannot grow an audit entry past it
+	// through headers.
+	maxHeaderBytes = 65536
 )
 
 // backupStoppedText marks a backup that was running when the server stopped.
@@ -146,6 +156,8 @@ type settings struct {
 	// blobStore. Every other user reads blobStore.
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
+	profileStore         profile.Store
+	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
 	logger               *slog.Logger
@@ -202,6 +214,15 @@ type settings struct {
 	beforeServe func(ctx context.Context) error
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
+	// durableStore keeps the durable operations and the job schedules, or
+	// is nil without job schedules. See WithDurableStore.
+	durableStore DurableStore
+	// runners are the stores of the runner protocol, or nil without the
+	// protocol. See WithRunners.
+	runners RunnerStores
+	// jobClaimer claims the phases of runner jobs for the runners of the
+	// protocol, or is nil. See WithJobClaimer.
+	jobClaimer job.Claimer
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -259,7 +280,9 @@ func WithWorkspaceStore(s workspace.Store) Option {
 	return func(o *settings) { o.workspaceStore = s }
 }
 
-// WithStateStore sets the state version persistence port. Required.
+// WithStateStore sets the state version persistence port. Required. A store
+// without WorkspaceStateAt (workspace.StateAtReader) is valid at start, but a
+// state-at read fails at request time with workspace.ErrMissingDependency.
 func WithStateStore(s workspace.StateStore) Option {
 	return func(o *settings) { o.stateStore = s }
 }
@@ -277,6 +300,19 @@ func WithBlobStore(s blob.Store) Option {
 // object takes at most one eighth of maxBytes.
 func WithBlobCache(maxBytes int64) Option {
 	return func(o *settings) { o.blobCacheBytes = maxBytes }
+}
+
+// WithProfileStore sets the store of profiles. It is optional: without it the
+// server serves no profile route.
+func WithProfileStore(st profile.Store) Option {
+	return func(o *settings) { o.profileStore = st }
+}
+
+// WithIdempotencyStore sets the store of the replay records of the
+// Idempotency-Key header. It is optional: without it a request with the
+// header answers 400, and the server does not run the sweep of the records.
+func WithIdempotencyStore(st idempotency.Store) Option {
+	return func(o *settings) { o.idempotencyStore = st }
 }
 
 // WithInventoryReader sets the inventory projection reader. Required.
@@ -511,6 +547,7 @@ type Server struct {
 	// tokens runs the inactivity disable of access tokens and accounts on a
 	// schedule (ADR 53), or is nil when the store keeps no tokens.
 	tokens      *accesstoken.Service
+	tempAdmins  *tempadmin.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
 	// deleted runs the retention sweep of the deleted units on a schedule.
@@ -520,9 +557,20 @@ type Server struct {
 	// that schedule.
 	signInRequests   *session.Sessions
 	signInPruneEvery time.Duration
+	// idempotency deletes the expired replay records on a schedule, or is nil
+	// without a store of them. idempotencyEvery is the period of that
+	// schedule.
+	idempotency      idempotency.Store
+	idempotencyEvery time.Duration
 	// signInProviders binds each provider of the console sign-in to its
 	// issuer at the start, or is the zero value with no console sign-in.
 	signInProviders providerBinding
+	// durable keeps the job schedules, or is nil without them. inactivityEvery
+	// and deletedEvery are the periods of those schedules.
+	durable         DurableStore
+	durableOwner    string
+	inactivityEvery time.Duration
+	deletedEvery    time.Duration
 }
 
 // services holds the domain services that NewServer wires together.
@@ -541,10 +589,14 @@ type services struct {
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
-	// access keeps the roles and grants (ADR 52), or is nil when the store
-	// keeps none. NewServer sets it after newServices. The installation API
-	// and the escalation check of the token service share it.
+	// access keeps the roles and grants, or is nil when the store keeps
+	// none. NewServer sets it after newServices. The installation API and
+	// the token service share it.
 	access *access.Service
+	// tempAdmins keeps the temporary administrators, or is nil when the
+	// store keeps none. NewServer sets it after newServices. The expiry
+	// sweep and the banner flag share it.
+	tempAdmins *tempadmin.Service
 }
 
 // defaultSettings answers the settings of a server before its options.
@@ -564,6 +616,8 @@ func defaultSettings() *settings {
 		blobCacheBytes:          0,
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
+		profileStore:            nil,
+		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
 		logger:                  slog.New(slog.DiscardHandler),
@@ -597,6 +651,9 @@ func defaultSettings() *settings {
 		instanceID:              "",
 		auditShipper:            nil,
 		auditSigner:             nil,
+		durableStore:            nil,
+		runners:                 nil,
+		jobClaimer:              nil,
 	}
 }
 
@@ -647,6 +704,15 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, tokensErr
 	}
 
+	if tempErr := wireTempAdmins(cfg); tempErr != nil {
+		return nil, tempErr
+	}
+
+	svc.tempAdmins, err = newTempAdminService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return assemble(cfg, base, svc, backups)
 }
 
@@ -665,6 +731,68 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	}, cfg.ipAllowlists)
 
 	return nil
+}
+
+// wireTempAdmins marks the temporary administrators among the callers that
+// the configured authenticator resolves, with a sign-in entry for each use
+// and an expiry entry at the first use after the expiry. Without a store
+// that keeps the records, or without an audit store for the entries, the
+// authenticator stays as it is.
+func wireTempAdmins(cfg *settings) error {
+	store, ok := cfg.namespaceStore.(tempadmin.Store)
+	if !ok {
+		return nil
+	}
+
+	principals, ok := cfg.namespaceStore.(tempadmin.Principals)
+	if !ok {
+		return nil
+	}
+
+	entries := serverAuditOf(cfg.namespaceStore)
+	if entries == nil {
+		return nil
+	}
+
+	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
+		Next: cfg.authenticator, Records: store, Principals: principals, Request: requestOf,
+		Expirer: store, Audit: entries, Now: cfg.now, Logger: cfg.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("temporary administrator authenticator: %w", err)
+	}
+
+	cfg.authenticator = dec
+
+	return nil
+}
+
+// requestOf answers the client address and the request ID that the server
+// stored in ctx, for the audit entries of a temporary administrator.
+func requestOf(ctx context.Context) tempadmin.Request {
+	req := tempadmin.Request{SourceIP: "", RequestID: requestid.FromContext(ctx)}
+	if ip := clientip.FromContext(ctx); ip.IsValid() {
+		req.SourceIP = ip.String()
+	}
+
+	return req
+}
+
+// newTempAdminService builds the temporary administrator service, or nil
+// when the store keeps no records: the expiry sweep stays off and the
+// routes answer no flag.
+func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
+	store, ok := cfg.namespaceStore.(tempadmin.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No record store is a valid setup: expiry never runs.
+	}
+
+	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Reviews: nil, Now: cfg.now, Logger: cfg.logger})
+	if err != nil {
+		return nil, fmt.Errorf("temporary administrator service: %w", err)
+	}
+
+	return svc, nil
 }
 
 // allowlistGate wraps next in the IP allowlist gate when the feature is on.
@@ -767,20 +895,29 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		observed:         observed,
 		chain:            adapters.chain,
 		tokens:           svc.tokens,
+		tempAdmins:       svc.tempAdmins,
 		shipper:          shipper,
 		beforeServe:      cfg.beforeServe,
 		deleted:          deleted,
 		signInRequests:   adapters.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, adapters.signIn),
+		durable:          cfg.durableStore,
+		durableOwner:     durableOwner(cfg),
+		inactivityEvery:  sweepEvery,
+		deletedEvery:     deletedSweepEvery,
+		idempotency:      cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 	}, nil
 }
 
 // adapters holds the HTTP adapters that routes mounts.
 type adapters struct {
+	// neutralHandlers are the inventory, audit, context and runner
+	// handlers.
+	neutralHandlers
+
 	pulumi      http.Handler
-	inventory   http.Handler
-	audit       http.Handler
+	profiles    http.Handler
 	tfe         http.Handler
 	tofuHTTP    http.Handler
 	server      http.Handler
@@ -839,7 +976,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc, gate)
+	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -850,40 +987,42 @@ func newAdapters(
 	}
 
 	serverAPI, restores, err := newInstallationAPI(cfg, installationDeps{
-		services: svc,
-		backups:  backups,
-		maint:    maint,
-		observed: observed,
-		chain:    chain,
-		policies: sessionPolicies,
-		signIn:   signIn,
+		services: svc, backups: backups, maint: maint, observed: observed, chain: chain, policies: sessionPolicies,
+		signIn: signIn,
 	})
 	if err != nil {
 		return adapters{}, err
 	}
 
 	return adapters{
-		pulumi:      api,
-		inventory:   neutral.inventory,
-		audit:       neutral.audit,
-		tfe:         tfeAPI,
-		tofuHTTP:    tofuHTTPAPI,
-		server:      serverAPI,
-		ready:       newReadiness(cfg, observed),
-		maintenance: watcher,
-		restores:    restores,
-		chain:       chain,
-		signIn:      signIn,
+		neutralHandlers: neutral,
+		pulumi:          api,
+		profiles:        neutral.profiles,
+		tfe:             tfeAPI,
+		tofuHTTP:        tofuHTTPAPI,
+		server:          serverAPI,
+		ready:           newReadiness(cfg, observed),
+		maintenance:     watcher,
+		restores:        restores,
+		chain:           chain,
+		signIn:          signIn,
 	}, nil
 }
 
-// neutralHandlers are the tool-neutral inventory API and audit API.
+// neutralHandlers are the tool-neutral inventory API, audit API and context
+// API. context is nil when the store keeps no context.
 type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
+	context   http.Handler
+	// runners is the runner protocol and its management API, or nil.
+	runners http.Handler
+	// profiles is nil when no profile store is set.
+	profiles http.Handler
 }
 
-// newNeutralHandlers builds the tool-neutral inventory API and audit API.
+// newNeutralHandlers builds the tool-neutral inventory API, audit API and
+// context API.
 func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 	units, err := newInventoryHandler(svc, cfg)
 	if err != nil {
@@ -895,7 +1034,23 @@ func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
 		return neutralHandlers{}, err
 	}
 
-	return neutralHandlers{inventory: units, audit: entries}, nil
+	contexts, err := newContextHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	runners, err := newRunnerHandler(cfg, svc)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+	profiles, err := newProfileHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	return neutralHandlers{
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles,
+	}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -913,7 +1068,9 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics) http.Handler {
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
 // shares the workspace service with the TFE-compatible adapter; it does not
 // call that adapter.
-func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
+func newTofuHTTPHandler(
+	cfg *settings, svc services, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+) (*tofuhttp.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
@@ -927,6 +1084,9 @@ func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofu
 		Namespaces:    svc.namespaces,
 		Audit:         entries,
 		Gate:          gate,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1046,6 +1206,10 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	}
 
 	if err := checkTLSAndAllowlist(cfg); err != nil {
+		return baseurl.Resolver{}, err
+	}
+
+	if err := checkAllowedOrigins(cfg.allowedOrigins); err != nil {
 		return baseurl.Resolver{}, err
 	}
 
@@ -1205,6 +1369,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		secrets:     secrets,
 		workspaces:  workspaces,
 		tokens:      nil,
+		tempAdmins:  nil,
 		deleted:     nil,
 		access:      nil,
 		collections: nil,
@@ -1304,12 +1469,14 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	// The first run of the inactivity disable ends before the hook and
-	// before the server serves a request. A slow database delays the start
-	// by firstSweepLimit at most: the hourly runs try again.
-	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
-	s.sweepOnce(firstCtx)
-	stopFirst()
+	if s.durable == nil {
+		// The first run of the inactivity disable ends before the hook and
+		// before the server serves a request. A slow database delays the start
+		// by firstSweepLimit at most: the hourly runs try again.
+		firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+		s.sweepOnce(firstCtx)
+		stopFirst()
+	}
 
 	if s.beforeServe != nil {
 		if hookErr := s.beforeServe(ctx); hookErr != nil {
@@ -1322,6 +1489,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 		TLSConfig:         tlsCfg,
 	}
 
@@ -1336,9 +1504,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	var sweeps sync.WaitGroup
 
-	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
-	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
-	sweeps.Go(func() { s.pruneSignInRequests(sweepCtx) })
+	if err := s.startSweeps(sweepCtx, &sweeps); err != nil {
+		stopCheck()
+		waitCheck()
+		stopSweeps()
+
+		return errors.Join(err, closeListener(ln))
+	}
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1365,14 +1537,19 @@ const sweepEvery = time.Hour
 // server serves.
 const firstSweepLimit = time.Minute
 
-// sweepInactive runs the inactivity disable of ADR 53 once each
-// sweepEvery, until ctx is done. Run makes the first run before it serves.
+// sweepInactive runs the inactivity disable once each inactivityEvery,
+// until ctx is done. Run makes the first run before it serves.
 func (s *Server) sweepInactive(ctx context.Context) {
 	if s.tokens == nil {
 		return
 	}
 
-	ticker := time.NewTicker(sweepEvery)
+	every := s.inactivityEvery
+	if every <= 0 {
+		every = sweepEvery
+	}
+
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	for {
@@ -1385,16 +1562,25 @@ func (s *Server) sweepInactive(ctx context.Context) {
 	}
 }
 
-// sweepOnce runs the inactivity disable once and counts the result. A failed
-// run logs no error text, which may hold driver detail (ADR 32 decision 7),
-// and the next run tries again. A run that the server stops (ctx canceled)
-// is not a failure. A run past its time limit is. While a change of the
-// chain waits, it skips one run.
+// sweepOnce runs the inactivity disable once and the expiry of temporary
+// administrators once, and counts each result. A failed run logs no error
+// text, which may hold driver detail, and the next run tries again. A run
+// that the server stops (ctx canceled) is not a failure. A run past its
+// time limit is. While a change of the chain waits, the disable skips one
+// run.
 func (s *Server) sweepOnce(ctx context.Context) {
-	if s.tokens == nil {
-		return
+	if s.tokens != nil {
+		s.sweepTokensOnce(ctx)
 	}
 
+	if s.tempAdmins != nil {
+		s.sweepTempAdminsOnce(ctx)
+	}
+}
+
+// sweepTokensOnce runs the inactivity disable once and counts the result.
+// While a change of the chain waits, it skips one run.
+func (s *Server) sweepTokensOnce(ctx context.Context) {
 	if s.chainChangeWaits(ctx) {
 		return
 	}
@@ -1410,6 +1596,50 @@ func (s *Server) sweepOnce(ctx context.Context) {
 		s.observed.ObserveSweep(metrics.SweepSuccess)
 		s.logger.InfoContext(ctx, "inactivity disable",
 			slog.Int("tokens", len(res.Tokens)), slog.Int("principals", len(res.Principals)))
+	default:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+	}
+}
+
+// sweepTempAdminsOnce disables the temporary administrators whose fixed
+// time ended, each with its expiry entry, and counts the result.
+func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
+	done, err := s.tempAdmins.Sweep(ctx, audit.Entry{
+		FenceVersion:  0,
+		At:            time.Time{},
+		Namespace:     "",
+		Subject:       "",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "",
+		Object:        "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          "",
+		Outcome:       "",
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+	})
+
+	switch {
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
+		s.observed.ObserveSweep(metrics.SweepFailure)
+		s.logger.WarnContext(ctx, "temporary administrator expiry failed")
+	case err != nil:
+	case len(done) > 0:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+		s.logger.InfoContext(ctx, "temporary administrator expiry", slog.Int("principals", len(done)))
 	default:
 		s.observed.ObserveSweep(metrics.SweepSuccess)
 	}
@@ -1728,6 +1958,94 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// newContextHandler builds the tool-neutral context API on the namespace store
+// when that store also keeps context. A custom store without context gets no
+// context API: its routes are not served and the rest of the API works as
+// before.
+func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
+	store, ok := cfg.namespaceStore.(objectcontext.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No context API: the store keeps no context.
+	}
+
+	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
+	}
+
+	writer, err := objectcontext.NewWriter(objectcontext.WriterConfig{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context writer: %w", err)
+	}
+
+	handler, err := contextapi.NewHandler(contextapi.Config{
+		Namespaces:    svc.namespaces,
+		Units:         cfg.inventoryReader,
+		Deleted:       deleted,
+		Collections:   svc.collections,
+		Entries:       store,
+		Writer:        writer,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
+		Logger:        cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("context api: %w", err)
+	}
+
+	return handler, nil
+}
+
+// newProfileHandler builds the profile API, or returns nil when no profile
+// store is set.
+func newProfileHandler(svc services, cfg *settings) (http.Handler, error) {
+	if cfg.profileStore == nil {
+		return nil, nil //nolint:nilnil // No profile API: no profile store is set.
+	}
+
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
+	profiles, err := profile.NewService(profile.Config{
+		Store:      cfg.profileStore,
+		Namespaces: cfg.namespaceStore,
+		Sealer:     svc.secrets,
+		Audit:      entries,
+		Authorizer: cfg.authorizer,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("profile service: %w", err)
+	}
+
+	idem, err := idempotencyMiddleware(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	handler, err := profileapi.NewHandler(profileapi.Config{
+		Idempotency:   idem,
+		Profiles:      profiles,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
+		Logger:        cfg.logger,
+		Now:           cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("profile api: %w", err)
+	}
+
+	return handler, nil
+}
+
 // writeOnceFamilies are the blob key families that the cache keeps: a key in
 // them never holds other bytes, also after a delete. OpenTofu state versions
 // have such keys. Pulumi checkpoints and journal batches do not: a retry or a
@@ -1804,6 +2122,10 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
+	// A reader with no change log still serves the live list; only a request
+	// with the at value fails.
+	history := historyOf(cfg.inventoryReader)
+
 	stacks, workspaces := unitLifecycles(svc, cfg)
 
 	// The move check is the escalation check of the access service. A store
@@ -1822,6 +2144,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
+		History:    history,
 		Lifecycles: map[string]inventory.Lifecycle{
 			pulumiTool:   stacks,
 			opentofuTool: workspaces,
@@ -1832,6 +2155,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,
+		PublicURL:     strings.TrimSpace(cfg.publicURL),
 		Logger:        cfg.logger,
 		Now:           cfg.now,
 	})
@@ -1840,6 +2164,15 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// historyOf returns the change log reader of r, or nil when r keeps none.
+func historyOf(r inventory.Reader) inventory.HistoryReader { //nolint:ireturn // The optional port of the reader.
+	if history, ok := r.(inventory.HistoryReader); ok {
+		return history
+	}
+
+	return nil
 }
 
 // unitLifecycles returns the restore and purge of each tool. The
@@ -1934,6 +2267,8 @@ func newServerHandler(
 			deps.observed.IncAuditAppendFailure()
 		},
 		DeletedUnits: deps.services.deleted,
+		TempAdmins:   tempReaderOf(cfg.namespaceStore),
+		Now:          cfg.now,
 		AuditChain:   auditChainPort(deps.chain),
 		AuditSinks:   sinks,
 		SignIn:       deps.signIn,
@@ -1995,8 +2330,16 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 		tokens = grants
 	}
 
+	// Both SQL adapters keep the temporary administrators, so a sign-in
+	// through an identity provider cannot name one.
+	var temps principal.TempAdmins
+	if records, ok := cfg.namespaceStore.(principal.TempAdmins); ok {
+		temps = records
+	}
+
 	svc, err := principal.NewService(principal.Config{
-		Store: store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
+		TempAdmins: temps,
+		Store:      store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
@@ -2149,9 +2492,9 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	return svc, nil
 }
 
-// newIdentityServices builds the role and grant service (ADR 52) and the
-// access token service (ADR 53). The token service takes the role and
-// grant service as its escalation check. Either is nil when the store
+// newIdentityServices builds the role and grant service and the access
+// token service. The token service takes the authorizer of the role and
+// grant service for principal:manage-tokens. Either is nil when the store
 // keeps none.
 func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, error) {
 	grants, err := newAccessService(cfg)
@@ -2185,25 +2528,33 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
-	var (
-		check accesstoken.GrantCheck
-		authz identity.Authorizer
-	)
-
+	var authz identity.Authorizer
 	if grants != nil {
-		check = tokengrants.Check{Grants: grants, Principals: principals}
 		authz = grants.Authorizer()
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: check, Authorizer: authz,
-		Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Authorizer: authz,
+		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
 	}
 
 	return svc, nil
+}
+
+// tempReaderOf returns the temporary administrator reader of the namespace
+// store, or nil when the store keeps none. Both SQL adapters keep them.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
+func tempReaderOf(store namespace.Store) tempadmin.Reader {
+	records, ok := store.(tempadmin.Reader)
+	if !ok {
+		return nil
+	}
+
+	return records
 }
 
 // gatedAuthenticator returns the authenticator that every adapter and the
@@ -2219,9 +2570,16 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 		return cfg.authenticator, nil
 	}
 
+	// failures shares the failure budget of every instance on one database, or
+	// keeps the budget in the process when the store keeps no counter.
+	var failures authgate.FailureCounter
+	if counter, ok := cfg.namespaceStore.(authgate.FailureCounter); ok {
+		failures = counter
+	}
+
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
-		Failures: nil, Window: 0, CounterErrors: nil,
+		Failures: failures, Window: 0, CounterErrors: nil,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -2454,7 +2812,7 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
-	case strings.HasPrefix(name, "/api/inventory/"):
+	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
 		return "inventory"
 	case strings.HasPrefix(name, "/api/audit/"):
 		return adapterServer
@@ -2587,6 +2945,10 @@ func withRequestLog(
 
 		ctx = requestid.WithContext(ctx, id)
 		ctx = authgate.WithRequest(ctx, gateSource(resolved))
+		// The request log and the adapter resolve the token separately. The
+		// scope keeps one sign-in entry of a temporary administrator for
+		// the request.
+		ctx = tempadmin.WithSignInScope(ctx)
 
 		r = r.WithContext(ctx)
 
@@ -2665,12 +3027,62 @@ func appendClientIP(attrs []slog.Attr, addr netip.Addr) []slog.Attr {
 	return append(attrs, slog.String("client_ip", addr.String()))
 }
 
+// v1Prefix is the prefix of the tool-neutral REST API.
+const v1Prefix = "/api/dustpan/v1/"
+
+// patternLister is a handler that lists the ServeMux patterns it serves.
+type patternLister interface {
+	RegisteredPatterns() []string
+}
+
+// v1NotFound answers 404 for a path under v1Prefix that no handler serves, in
+// the error shape of the tool-neutral API.
+func v1NotFound(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+
+	body := []byte(`{"code":404,"message":"not found: no route at this path"}` + "\n")
+	if _, err := w.Write(body); err != nil {
+		// The client has gone; there is nothing to report.
+		return
+	}
+}
+
+// mountV1 registers each path of h under v1Prefix on mux, with wrap around
+// h. A path serves every method that h registers for it, and h answers the
+// methods it does not serve. A nil h or a handler that lists no patterns
+// registers nothing.
+func mountV1(mux *http.ServeMux, h http.Handler, wrap func(http.Handler) http.Handler) {
+	lister, ok := h.(patternLister)
+	if !ok {
+		return
+	}
+
+	wrapped := wrap(h)
+	seen := map[string]struct{}{}
+
+	for _, pattern := range lister.RegisteredPatterns() {
+		_, path, found := strings.Cut(pattern, " ")
+		if !found || !strings.HasPrefix(path, v1Prefix) {
+			continue
+		}
+
+		if _, dup := seen[path]; dup {
+			continue
+		}
+
+		seen[path] = struct{}{}
+
+		mux.Handle(path, wrapped)
+	}
+}
+
 func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Handler, error) {
 	mux := http.NewServeMux()
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
-	// /api/, so the inventory units route, the OpenTofu routes and the
-	// installation routes reach their own adapters while every other /api/
-	// route reaches Pulumi. In maintenance mode the tool adapters answer 503
+	// /api/, so the inventory restore, purge and move routes, the OpenTofu
+	// routes and the installation routes reach their own adapters while every
+	// other /api/ route reaches Pulumi. In maintenance mode the tool adapters answer 503
 	// with Retry-After; the installation API stays available, so the
 	// maintenance routes that end the restore keep serving.
 	mux.Handle(
@@ -2681,6 +3093,32 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	// like the installation API: an operator reads the log while the
 	// installation is down for a restore.
 	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
+	// The runner protocol is outside /api/. A runner sends no cookie and no
+	// Origin header, so it passes no CORS gate. The management API of the
+	// runners is more specific than /api/, so it reaches its own adapter.
+	if a.runners != nil {
+		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
+		mux.Handle(
+			"/api/runners/",
+			withCORS(withMaintenance(a.runners, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+		)
+	}
+	// The paths of the inventory and the context API under /api/dustpan/v1/
+	// reach their own handlers by exact path, so another area can take the
+	// rest of the prefix. The tool adapters are refused in maintenance mode.
+	mountV1(mux, a.inventory, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.context, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	// A path under the prefix that no handler serves answers 404 in the shape
+	// of the tool-neutral API. Without this row, the console files or the
+	// Pulumi adapter would answer for it.
+	mux.Handle(v1Prefix, withCORS(http.HandlerFunc(v1NotFound), cfg.allowedOrigins))
 	mux.Handle(
 		"/api/v2/",
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),

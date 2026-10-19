@@ -166,6 +166,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		signIn:            false,
 		signInRealTime:    false,
 		journalRefuser:    nil,
+		journalCap:        nil,
 	}
 
 	return newBinaryEnvWithBin(ctx, in, binPath)
@@ -244,6 +245,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	client := proxy.Client()
 	client.Timeout = commandTimeout
 	env := &Env{
+		dbURL:      "",
 		URL:        proxy.URL,
 		Recorder:   in.rec,
 		cli:        in.cli,

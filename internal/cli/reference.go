@@ -15,7 +15,9 @@ func Reference() string {
 	writeServeSettings(&out)
 	writeConfigFile(&out)
 	writeSecrets(&out)
+	writeStepInputs(&out)
 	writeClients(&out)
+	writeHost(&out)
 
 	return out.String()
 }
@@ -236,6 +238,27 @@ func writeSecrets(out *strings.Builder) {
 	out.WriteString("\n")
 }
 
+// writeStepInputs writes the section of the variables that the launcher sets
+// for the process of a step, from the declarations that carry the step mark.
+func writeStepInputs(out *strings.Builder) {
+	out.WriteString("## Variables of a step\n")
+	out.WriteString("\n")
+	out.WriteString("The launcher sets these variables for the process of each step of a job. The\n")
+	out.WriteString("server does not read them, and no flag or file key sets them. A step cannot\n")
+	out.WriteString("set a variable with the prefix `DUSTPAN_`: the launcher refuses it.\n")
+	out.WriteString("\n")
+	out.WriteString("| Environment | Value |\n")
+	out.WriteString("| --- | --- |\n")
+
+	for _, setting := range Settings {
+		if setting.StepInput {
+			out.WriteString("| `" + setting.Env + "` | " + setting.Doc + " |\n")
+		}
+	}
+
+	out.WriteString("\n")
+}
+
 // writeClients writes the client commands section with one flags row per
 // command spec, so the reference lists the same flags as the commands take.
 func writeClients(out *strings.Builder) {
@@ -303,4 +326,33 @@ func clientRows() []clientRow {
 	}
 
 	return rows
+}
+
+// writeHost writes the host command section from the settings of the host
+// row, so the reference lists the same settings as the command reads.
+func writeHost(out *strings.Builder) {
+	out.WriteString("\n")
+	out.WriteString("## Host command\n")
+	out.WriteString("\n")
+	out.WriteString("`opendustpan host create-temp-admin` opens the database itself, as `serve`\n")
+	out.WriteString("does, and makes a temporary administrator for one named person. It reads\n")
+	out.WriteString("these settings. The [host recovery guide](../guides/host-recovery.md) shows\n")
+	out.WriteString("the steps.\n")
+	out.WriteString("\n")
+	out.WriteString("| Flag | Environment | Default |\n")
+	out.WriteString("| --- | --- | --- |\n")
+
+	for _, s := range HostCreateTempAdminCommand(nil).Settings {
+		flag, env := referenceNone, referenceNone
+
+		if s.Kind != KindBool {
+			flag = "`--" + s.Flag + "`"
+		}
+
+		if s.Env != "" {
+			env = "`" + s.Env + "`"
+		}
+
+		out.WriteString("| " + flag + " | " + env + " | " + s.Reference + " |\n")
+	}
 }

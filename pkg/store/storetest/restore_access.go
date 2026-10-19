@@ -823,6 +823,7 @@ func checkKeepMismatchNamespace(t *testing.T, s RestoreStore) {
 	sink, sum, files := exportPortable(t, ports.stager)
 
 	fresh := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "freshns",
 		HomeRegion:      "eu-west",
@@ -995,6 +996,7 @@ func checkKeepMismatchPrincipal(t *testing.T, s RestoreStore) {
 	sink, sum, files := exportPortable(t, ports.stager)
 
 	fresh := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "freshprn",
 		HomeRegion:      "eu-west",
@@ -1135,7 +1137,7 @@ func createLiveOnlyPrincipal(t *testing.T, ports keepAccessPorts) {
 
 	memberEntry := ServerChange(at, "group:grp-ops#member:prn-live-only")
 
-	if err := ports.principals.AddMember(ctx, member, memberEntry); err != nil {
+	if err := ports.principals.AddMember(ctx, member, memberEntry, nil); err != nil {
 		t.Fatalf("add live-only member: %v", err)
 	}
 }

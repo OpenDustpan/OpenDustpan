@@ -4,3 +4,7 @@ updates:
     directory: /
     schedule:
       interval: daily
+    # Matches scripts/module-age-gate.py: a version must be 14 days old.
+    # Security updates ignore the cooldown.
+    cooldown:
+      default-days: 14

@@ -1,0 +1,9 @@
+# Refused: null removes console.
+# want: at '': missing property 'console'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+console: null

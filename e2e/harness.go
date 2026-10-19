@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -203,6 +204,10 @@ type Env struct {
 	// dbProxy fronts PostgreSQL for the server, so closing it stops the
 	// database for this environment only. It is nil on SQLite.
 	dbProxy *DBProxy
+	// dbURL is the --database value that reaches the database of the
+	// environment: the SQLite file, or PostgreSQL through the proxy. A
+	// step runs the host command against it.
+	dbURL string
 }
 
 // serverStore is every persistence port the server needs.
@@ -228,6 +233,9 @@ type serverBuild struct {
 	store   serverStore
 	blobs   blob.Store
 	dbProxy *DBProxy
+	// dbURL is the --database value that reaches the database of the build:
+	// the SQLite file, or PostgreSQL through the proxy.
+	dbURL string
 	// backupDir is the directory of the dir: backup target the server writes.
 	backupDir string
 }
@@ -262,6 +270,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		signIn:            false,
 		signInRealTime:    false,
 		journalRefuser:    nil,
+		journalCap:        nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -283,7 +292,8 @@ func startEnv(ctx context.Context, in envInput) *Env {
 }
 
 // NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
-// journaling turned off, so each update answers journalVersion 0.
+// journaling turned off through DUSTPAN_DISABLE_PULUMI_JOURNALING=true, so
+// each update answers journalVersion 0.
 func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
@@ -305,6 +315,30 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	return startEnv(ctx, in)
 }
 
+// journalTestInput returns the input of an env for cli and store with new
+// tokens, a new directory and journaling on, so the journal fault tests only
+// set their own fault.
+func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
+	tb.Helper()
+
+	return envInput{
+		deltaCutoff:       0,
+		disableJournaling: false,
+		ipAllowlists:      false,
+		signIn:            false,
+		signInRealTime:    false,
+		journalRefuser:    nil,
+		journalCap:        nil,
+		tb:                tb,
+		cli:               cli,
+		store:             store,
+		dir:               tb.TempDir(),
+		token:             newToken(tb),
+		tokenB:            newToken(tb),
+		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
+	}
+}
+
 // NewEnvWithJournalRefuser starts a server as NewEnv does, with the refuser
 // corrupting the first outputs-only journal batch on the way to the server,
 // so the server refuses it and records the refusal. The test reads how many
@@ -314,31 +348,25 @@ func NewEnvWithJournalRefuser(
 ) *Env {
 	tb.Helper()
 
-	dir := tb.TempDir()
-	token := newToken(tb)
-	tokenB := newToken(tb)
-	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{
-		deltaCutoff:       0,
-		disableJournaling: false,
-		ipAllowlists:      false,
-		signIn:            false,
-		signInRealTime:    false,
-		journalRefuser:    refuser,
-		tb:                tb,
-		cli:               cli,
-		store:             store,
-		dir:               dir,
-		token:             token,
-		tokenB:            tokenB,
-		rec:               rec,
-	}
+	in := journalTestInput(tb, cli, store)
+	in.journalRefuser = refuser
 
-	if UseBinaryServer() {
-		return newBinaryEnv(ctx, in)
-	}
+	return startEnv(ctx, in)
+}
 
-	return newInprocessEnv(ctx, in)
+// NewEnvWithJournalVersionCap starts a server as NewEnv does, with the cap
+// lowering the journal version that start-update answers, so the CLI journals
+// at an older version than the server supports. The test reads how many
+// answers the cap lowered.
+func NewEnvWithJournalVersionCap(
+	ctx context.Context, tb testing.TB, cli Install, store Store, versionCap *JournalVersionCap,
+) *Env {
+	tb.Helper()
+
+	in := journalTestInput(tb, cli, store)
+	in.journalCap = versionCap
+
+	return startEnv(ctx, in)
 }
 
 // NewEnvWithDeltaCutoff starts a server as NewEnv does, with the delta
@@ -358,6 +386,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		signIn:            false,
 		signInRealTime:    false,
 		journalRefuser:    nil,
+		journalCap:        nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -401,6 +430,8 @@ func startInprocessServer(
 		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
 	}
 
+	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
+	// in-process mode uses the equivalent server option.
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -411,7 +442,7 @@ func startInprocessServer(
 		signIn:            signIn,
 	})
 
-	handler = faultedHandler(build.handler, in.journalRefuser)
+	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
 
 	if in.cli.Tool == ToolTofu || in.signIn {
 		ts.StartTLS()
@@ -462,6 +493,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   nil,
 		certBundle:    "",
 		dbProxy:       build.dbProxy,
+		dbURL:         build.dbURL,
 		signIn:        signIn,
 		backupDir:     build.backupDir,
 	}
@@ -524,23 +556,29 @@ type serverTokens struct {
 // database proxy. The proxy is nil on SQLite. The store and its schema are
 // closed and removed when the test ends.
 // the environment needs the interface.
-// openServerStore opens the store under test. PostgreSQL goes through a
-// DBProxy, so a step can stop the database for this environment only; the
-// proxy is nil on SQLite.
+// openServerStore opens the store under test with the --database value
+// that reaches it: the SQLite file, or PostgreSQL through a DBProxy, so a
+// step can stop the database for this environment only. The proxy is nil
+// on SQLite.
 //
 //nolint:ireturn // SQLite and PostgreSQL stores share no concrete type.
-func openServerStore(ctx context.Context, tb testing.TB, store Store, dbPath string) (serverStore, *DBProxy) {
+func openServerStore(
+	ctx context.Context, tb testing.TB, store Store, dbPath string,
+) (serverStore, *DBProxy, string) {
 	tb.Helper()
 
 	switch store {
 	case StoreSQLite:
-		return openSQLiteStore(ctx, tb, dbPath), nil
+		return openSQLiteStore(ctx, tb, dbPath), nil, "sqlite:" + dbPath
 	case StorePostgres:
-		return openProxiedPostgresStore(ctx, tb, PostgresURL())
+		st, proxy := openProxiedPostgresStore(ctx, tb, PostgresURL())
+		target := proxy.URL()
+
+		return st, proxy, target
 	default:
 		tb.Fatalf("unknown store: %s", store)
 
-		return nil, nil
+		return nil, nil, ""
 	}
 }
 
@@ -561,6 +599,25 @@ type serverArgs struct {
 	signIn *signInSetup
 }
 
+// profileStoreOptions returns the option that gives the in-process server the
+// profile store of st.
+func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Option {
+	switch s := st.(type) {
+	case *sqlite.Store:
+		return []dustpan.Option{
+			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
+		}
+	case *postgres.Store:
+		return []dustpan.Option{
+			dustpan.WithProfileStore(s.Profiles()),
+			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
+		}
+	default:
+		return nil
+	}
+}
+
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
 // the feature on, so the in-process server checks the lists of every
 // namespace, including for the bootstrap admin token.
@@ -579,7 +636,7 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
-	st, dbProxy := openServerStore(ctx, tb, args.store, args.dbPath)
+	st, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
 
 	// The first namespace is created through POST /api/server/namespaces
 	// after the server starts (see newInprocessEnv and newBinaryEnv), so a
@@ -610,7 +667,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
-		[]dustpan.Option{
+		append(profileStoreOptions(st, wrapper), []dustpan.Option{
 			dustpan.WithRegion(region),
 			dustpan.WithNamespaceStore(st),
 			dustpan.WithStackStore(st),
@@ -627,7 +684,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 			dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
 			dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 			dustpan.WithDisablePulumiJournaling(args.disableJournaling),
-		},
+		}...),
 	), args.signIn.options()...)...)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
@@ -638,6 +695,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		store:     st,
 		blobs:     blobs,
 		dbProxy:   dbProxy,
+		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
 	}
 }
@@ -882,6 +940,7 @@ func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, r
 	tb.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      namespace.Region(region),
@@ -912,7 +971,7 @@ type InventoryUnit struct {
 	Name      string `json:"name"`
 }
 
-// inventoryUnitList is the document of GET /api/inventory/units.
+// inventoryUnitList is the document of GET /api/dustpan/v1/namespaces/{namespace}/units.
 type inventoryUnitList struct {
 	Units []InventoryUnit `json:"units"`
 }
@@ -920,7 +979,7 @@ type inventoryUnitList struct {
 // ListInventory returns the inventory units of ns through the inventory API
 // as principal A, so scenarios can prove a CLI step published its unit.
 func (e *Env) ListInventory(ctx context.Context, ns string) ([]InventoryUnit, error) {
-	path := "/api/inventory/units?organization=" + url.QueryEscape(ns)
+	path := "/api/dustpan/v1/namespaces/" + url.PathEscape(ns) + "/units"
 
 	status, body, err := e.APIStatus(ctx, http.MethodGet, path, "")
 	if err != nil {
@@ -1159,7 +1218,11 @@ func (e *Env) ServerAPIStatusFrom(
 // as OpenTofu sends it. It uses the test server's client, which trusts the
 // self-signed certificate OpenTofu gets through SSL_CERT_FILE.
 func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (int, string, error) {
-	return e.tfeStatusAs(ctx, token, tfeCall{method: method, path: path, body: body, userAgent: "", scheme: ""})
+	return e.tfeStatusAs(
+		ctx,
+		token,
+		tfeCall{method: method, path: path, body: body, userAgent: "", scheme: "", headers: nil},
+	)
 }
 
 // tfeCall is one TFE API request. An empty userAgent keeps the client default,
@@ -1172,6 +1235,8 @@ type tfeCall struct {
 	// scheme names the Authorization scheme: "token" for the console scheme, or
 	// empty for "Bearer" (the TFE-compatible and installation scheme).
 	scheme string
+	// headers are extra request headers, for example If-Match.
+	headers map[string]string
 }
 
 // TFEStatusA sends one TFE API request as principal A, the default principal
@@ -1335,51 +1400,14 @@ const authSchemeToken = "token"
 // check rejects the body. A failing step does not stop later steps.
 func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIStepSpec) {
 	t.Helper()
+	e.apiStepWith(ctx, t, token, spec, nil)
+}
 
-	t.Run(spec.Name, func(t *testing.T) {
-		e.Recorder.SetStep(spec.Name)
-
-		var failure string
-
-		var exitCode int
-
-		status, respBody, err := e.tfeStatusAs(ctx, token, tfeCall{
-			method:    spec.Method,
-			path:      spec.Path,
-			body:      spec.Body,
-			userAgent: spec.UserAgent,
-			scheme:    spec.Scheme,
-		})
-
-		switch {
-		case err != nil:
-			failure = err.Error()
-			exitCode = 1
-		case status != spec.Want:
-			failure = fmt.Sprintf("answers %d, want %d: %s", status, spec.Want, respBody)
-			exitCode = 1
-		case spec.Check != nil:
-			if checkErr := spec.Check(respBody); checkErr != nil {
-				failure = checkErr.Error()
-				exitCode = 1
-			}
-		default:
-		}
-
-		e.steps = append(e.steps, StepResult{
-			Name:     spec.Name,
-			Command:  spec.Method + " " + spec.Path,
-			Failure:  failure,
-			Stderr:   clip(respBody),
-			ExitCode: exitCode,
-			Passed:   failure == "",
-			Skipped:  false,
-		})
-
-		if failure != "" {
-			t.Errorf("%s %s: %s", spec.Method, spec.Path, failure)
-		}
-	})
+// APIStepWithHeaders is APIStepA with extra request headers, for example
+// If-Match.
+func (e *Env) APIStepWithHeaders(ctx context.Context, t *testing.T, spec APIStepSpec, headers map[string]string) {
+	t.Helper()
+	e.apiStepWith(ctx, t, e.token, spec, headers)
 }
 
 // APIStepA runs one TFE API request as principal A and records it as a step.
@@ -1930,6 +1958,19 @@ func (e *Env) StatusWithHeader(
 	}
 
 	return StatusResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(respBody)}, nil
+}
+
+// Home returns the home directory of the harness: the CLI configuration files
+// and the saved logins live there.
+func (e *Env) Home() string {
+	return e.home
+}
+
+// WriteFile writes content to name, creating its directory, and fails the
+// test on error.
+func (e *Env) WriteFile(tb testing.TB, name, content string) {
+	tb.Helper()
+	e.write(tb, name, content)
 }
 
 // stepInWith runs spec in dir through run and records it for the report.
@@ -2485,6 +2526,10 @@ func (e *Env) tfeStatusAs(ctx context.Context, token string, call tfeCall) (int,
 		req.Header.Set("User-Agent", userAgent)
 	}
 
+	for k, v := range call.headers {
+		req.Header.Set(k, v)
+	}
+
 	resp, err := e.client.Do(req)
 	if err != nil {
 		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
@@ -2509,4 +2554,56 @@ func clip(s string) string {
 	}
 
 	return s[:maxShown] + "…"
+}
+
+func (e *Env) apiStepWith(
+	ctx context.Context, t *testing.T, token string, spec APIStepSpec, headers map[string]string,
+) {
+	t.Helper()
+
+	t.Run(spec.Name, func(t *testing.T) {
+		e.Recorder.SetStep(spec.Name)
+
+		var failure string
+
+		var exitCode int
+
+		status, respBody, err := e.tfeStatusAs(ctx, token, tfeCall{
+			method:    spec.Method,
+			path:      spec.Path,
+			body:      spec.Body,
+			userAgent: spec.UserAgent,
+			scheme:    spec.Scheme,
+			headers:   headers,
+		})
+
+		switch {
+		case err != nil:
+			failure = err.Error()
+			exitCode = 1
+		case status != spec.Want:
+			failure = fmt.Sprintf("answers %d, want %d: %s", status, spec.Want, respBody)
+			exitCode = 1
+		case spec.Check != nil:
+			if checkErr := spec.Check(respBody); checkErr != nil {
+				failure = checkErr.Error()
+				exitCode = 1
+			}
+		default:
+		}
+
+		e.steps = append(e.steps, StepResult{
+			Name:     spec.Name,
+			Command:  spec.Method + " " + spec.Path,
+			Failure:  failure,
+			Stderr:   clip(respBody),
+			ExitCode: exitCode,
+			Passed:   failure == "",
+			Skipped:  false,
+		})
+
+		if failure != "" {
+			t.Errorf("%s %s: %s", spec.Method, spec.Path, failure)
+		}
+	})
 }

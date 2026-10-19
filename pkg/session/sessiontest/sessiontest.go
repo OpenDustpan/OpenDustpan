@@ -109,28 +109,31 @@ func at(minute int) time.Time {
 // @server for the session id of prn-1, as a service builds it.
 func entry(id string, when time.Time) audit.Entry {
 	return audit.Entry{
-		At:           when,
-		Namespace:    audit.ServerScope,
-		Subject:      "alice",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "server:sign-in",
-		Object:       session.FullRef("prn-1", id),
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "sessiontest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            when,
+		Namespace:     audit.ServerScope,
+		Subject:       "alice",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "server:sign-in",
+		Object:        session.FullRef("prn-1", id),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "sessiontest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -681,8 +684,11 @@ func mustSweep(t *testing.T, s Store) accesstoken.SweepResult {
 		return e
 	}
 
-	res, err := s.SweepInactive(t.Context(), accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: false, Accounts: true},
-		entryFn)
+	res, err := s.SweepInactive(
+		t.Context(),
+		accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: false, Accounts: true},
+		entryFn,
+	)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}

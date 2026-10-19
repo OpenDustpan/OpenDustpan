@@ -105,28 +105,31 @@ func walkAt(seq int64) time.Time {
 // walkEntry returns entry seq of acme without a hash.
 func walkEntry(seq int64) audit.Entry {
 	return audit.Entry{
-		At:           walkAt(seq),
-		Namespace:    "acme",
-		Subject:      "alice",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:read-secrets",
-		Object:       "opentofu:acme/prod",
-		ObjectID:     "",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "test",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindReveal,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "req",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     seq,
-		FenceVersion: 0,
+		At:            walkAt(seq),
+		Namespace:     "acme",
+		Subject:       "alice",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:read-secrets",
+		Object:        "opentofu:acme/prod",
+		ObjectID:      "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "test",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindReveal,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "req",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      seq,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -396,22 +399,16 @@ func TestChainWalkEmptyScope(t *testing.T) {
 
 // fakeChain is an in-memory audit.ChainStore over the scopes of one test.
 type fakeChain struct {
-	scopes   map[namespace.Name][]audit.Entry
-	rec      audit.ChainRecord
-	fail     error
-	renewed  int
-	renewAt  []time.Time
-	renewErr error
+	scopes map[namespace.Name][]audit.Entry
+	rec    audit.ChainRecord
+	fail   error
 }
 
 func newFakeChain() *fakeChain {
 	return &fakeChain{
-		scopes:   map[namespace.Name][]audit.Entry{},
-		rec:      recordOf(audit.ChainStateOn, 0),
-		fail:     nil,
-		renewed:  0,
-		renewAt:  nil,
-		renewErr: nil,
+		scopes: map[namespace.Name][]audit.Entry{},
+		rec:    recordOf(audit.ChainStateOn, 0),
+		fail:   nil,
 	}
 }
 
@@ -419,47 +416,6 @@ func (f *fakeChain) ChainRecord(context.Context) (audit.ChainRecord, error) { re
 
 func (f *fakeChain) SaveChainRecord(_ context.Context, rec audit.ChainRecord) error {
 	f.rec = rec
-
-	return nil
-}
-
-// ClaimChainMigration claims the waiting change in one check, so tests of
-// MigrateChain keep the same errors as the SQL stores.
-func (f *fakeChain) ClaimChainMigration(_ context.Context, now time.Time, lease time.Duration) error {
-	if !f.rec.Pending {
-		return audit.ErrNoChainChange
-	}
-
-	if !f.rec.MigratingAt.IsZero() && now.Sub(f.rec.MigratingAt) < lease {
-		return audit.ErrChainMigrating
-	}
-
-	f.rec.MigratingAt = now
-
-	return nil
-}
-
-// ReleaseChainMigration releases the claim of the fake.
-func (f *fakeChain) ReleaseChainMigration(context.Context) error {
-	f.rec.MigratingAt = time.Time{}
-
-	return nil
-}
-
-// RenewChainMigration moves the start of the held claim to now, so tests
-// of MigrateChain keep the same errors as the SQL stores.
-func (f *fakeChain) RenewChainMigration(_ context.Context, now time.Time) error {
-	if f.renewErr != nil {
-		return f.renewErr
-	}
-
-	if f.rec.MigratingAt.IsZero() {
-		return audit.ErrChainClaimLost
-	}
-
-	f.rec.MigratingAt = now
-	f.renewed++
-	f.renewAt = append(f.renewAt, now)
 
 	return nil
 }
@@ -585,28 +541,18 @@ func TestMigrateChain(t *testing.T) {
 
 	f.put(walkEntry(0))
 
-	f.rec.MigratingAt = walkAt(4)
 	off := audit.ChainChange{At: walkAt(5), By: "alice", To: audit.ChainStateOff}
-	if err := audit.MigrateChain(t.Context(), f, fences, off, func() time.Time { return walkAt(6) }); err != nil {
+	if err := audit.MigrateChain(t.Context(), f, fences, off); err != nil {
 		t.Fatalf("migrate off: %v", err)
-	}
-
-	if f.renewed != len(fences) {
-		t.Fatalf("renewals after off = %d, want %d", f.renewed, len(fences))
 	}
 
 	wantEndInAcmeOnly(t, f)
 
 	f.put(walkEntry(0))
 
-	f.rec.MigratingAt = walkAt(8)
 	on := audit.ChainChange{At: walkAt(9), By: "bob", To: audit.ChainStateOn}
-	if err := audit.MigrateChain(t.Context(), f, fences, on, func() time.Time { return walkAt(10) }); err != nil {
+	if err := audit.MigrateChain(t.Context(), f, fences, on); err != nil {
 		t.Fatalf("migrate on: %v", err)
-	}
-
-	if f.renewed != 2*len(fences) {
-		t.Fatalf("renewals after on = %d, want %d", f.renewed, 2*len(fences))
 	}
 
 	f.put(walkEntry(0))
@@ -617,6 +563,36 @@ func TestMigrateChain(t *testing.T) {
 
 	if got := f.walk("acme"); got != 0 {
 		t.Fatalf("acme after off and on: fails at %d", got)
+	}
+}
+
+// TestMigrateChainIsIdempotent proves that a retry after a complete
+// migration does nothing: the stored state is already at the change with no
+// wait, so the second run writes no entry and keeps the record.
+func TestMigrateChainIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeChain()
+	acme := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	fences := []namespace.Fence{acme, audit.ServerFence()}
+
+	f.put(walkEntry(0))
+
+	change := audit.ChainChange{At: walkAt(5), By: "alice", To: audit.ChainStateOff}
+	if err := audit.MigrateChain(t.Context(), f, fences, change); err != nil {
+		t.Fatalf("migrate off: %v", err)
+	}
+
+	before := len(f.scopes["acme"])
+	rec := f.rec
+
+	if err := audit.MigrateChain(t.Context(), f, fences, change); err != nil {
+		t.Fatalf("retry the migration: %v", err)
+	}
+
+	if len(f.scopes["acme"]) != before || f.rec != rec {
+		t.Fatalf("retry: acme %d entries, record %+v; want %d and %+v",
+			len(f.scopes["acme"]), f.rec, before, rec)
 	}
 }
 
@@ -638,118 +614,10 @@ func TestMigrateChainStopsAtAReadError(t *testing.T) {
 	f.fail = errFakeRead
 
 	change := audit.ChainChange{At: walkAt(1), By: "alice", To: audit.ChainStateOff}
-	err := audit.MigrateChain(t.Context(), f, []namespace.Fence{audit.ServerFence()}, change, nil)
+	err := audit.MigrateChain(t.Context(), f, []namespace.Fence{audit.ServerFence()}, change)
 
 	if err == nil || f.rec.State != audit.ChainStateOn {
 		t.Fatalf("migrate with a read error: err %v, record %+v, want an error and the old record", err, f.rec)
-	}
-}
-
-func TestMigrateChainStopsWhenRenewalFails(t *testing.T) {
-	t.Parallel()
-
-	f := newFakeChain()
-
-	first := walkEntry(0)
-	first.Namespace = "acme"
-
-	second := walkEntry(0)
-	second.Namespace = "other"
-
-	if _, err := f.add("acme", first, ""); err != nil {
-		t.Fatalf("add acme entry: %v", err)
-	}
-
-	if _, err := f.add("other", second, ""); err != nil {
-		t.Fatalf("add other entry: %v", err)
-	}
-
-	f.rec.MigratingAt = walkAt(1)
-	f.renewErr = audit.ErrChainClaimLost
-
-	fences := []namespace.Fence{
-		{Namespace: "acme", FailoverVersion: 1},
-		{Namespace: "other", FailoverVersion: 1},
-	}
-	change := audit.ChainChange{At: walkAt(2), By: "alice", To: audit.ChainStateOff}
-
-	err := audit.MigrateChain(t.Context(), f, fences, change, func() time.Time { return walkAt(3) })
-	if !errors.Is(err, audit.ErrChainClaimLost) {
-		t.Fatalf("migrate with a lost claim: got %v, want ErrChainClaimLost", err)
-	}
-
-	if len(f.scopes["acme"]) != 2 || len(f.scopes["other"]) != 1 {
-		t.Fatalf(
-			"scopes after a lost claim: acme %d, other %d, want 2 and 1",
-			len(f.scopes["acme"]),
-			len(f.scopes["other"]),
-		)
-	}
-
-	if f.rec.State != audit.ChainStateOn {
-		t.Fatalf("record after a lost claim = %+v, want the old state on", f.rec)
-	}
-}
-
-func TestMigrateChainRenewsShortLease(t *testing.T) {
-	t.Parallel()
-
-	f := newFakeChain()
-
-	first := walkEntry(0)
-	first.Namespace = "acme"
-
-	second := walkEntry(0)
-	second.Namespace = "other"
-
-	if _, err := f.add("acme", first, ""); err != nil {
-		t.Fatalf("add acme entry: %v", err)
-	}
-
-	if _, err := f.add("other", second, ""); err != nil {
-		t.Fatalf("add other entry: %v", err)
-	}
-
-	const lease = time.Minute
-
-	f.rec.Pending = true
-
-	start := walkAt(1)
-	if err := f.ClaimChainMigration(t.Context(), start, lease); err != nil {
-		t.Fatalf("claim the change: %v", err)
-	}
-
-	fences := []namespace.Fence{
-		{Namespace: "acme", FailoverVersion: 1},
-		{Namespace: "other", FailoverVersion: 1},
-	}
-	change := audit.ChainChange{At: walkAt(2), By: "alice", To: audit.ChainStateOff}
-
-	calls := 0
-	now := func() time.Time {
-		calls++
-
-		at := start.Add(2*time.Minute + time.Duration(calls)*time.Second)
-
-		// After the first renewal the claim moved past the short lease, so
-		// a second claim still reports a running migration. Without the
-		// renewal the first claim would have ended and the second would win.
-		if calls == 2 {
-			second := at.Add(30 * time.Second)
-			if err := f.ClaimChainMigration(t.Context(), second, lease); !errors.Is(err, audit.ErrChainMigrating) {
-				t.Errorf("second claim during the migration: got %v, want ErrChainMigrating", err)
-			}
-		}
-
-		return at
-	}
-
-	if err := audit.MigrateChain(t.Context(), f, fences, change, now); err != nil {
-		t.Fatalf("migrate with a short lease: %v", err)
-	}
-
-	if f.renewed != len(fences) {
-		t.Fatalf("renewals with a short lease = %d, want %d", f.renewed, len(fences))
 	}
 }
 

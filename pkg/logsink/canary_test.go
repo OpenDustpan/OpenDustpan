@@ -95,8 +95,7 @@ func benignRecord() logsink.Record {
 }
 
 // longRecord returns a record with an ordinary long message that sits above
-// the smallest syslog cap. Every long field is trimmable, so the syslog
-// sink trims it to fit and ships it instead of skipping it.
+// the smallest syslog cap. The syslog sink refuses it and never sends it.
 func longRecord() logsink.Record {
 	return logsink.Record{
 		Time:    time.Date(2026, time.October, 15, 12, 0, 1, 0, time.UTC),
@@ -109,10 +108,9 @@ func longRecord() logsink.Record {
 	}
 }
 
-// skipRecord returns a record that cannot fit under the smallest syslog cap
-// even with every trimmable field empty. The scope attribute is never
-// trimmed, so its long value overflows the cap and the sink skips the
-// record. It holds no canary: the skip reason must prove that.
+// skipRecord returns a record that cannot fit under the smallest syslog cap.
+// Its long scope value overflows the cap and the sink skips the record. It
+// holds no canary: the skip reason must prove that.
 func skipRecord() logsink.Record {
 	return logsink.Record{
 		Time:    time.Date(2026, time.October, 15, 12, 0, 2, 0, time.UTC),
@@ -233,7 +231,7 @@ func canaryFile(t *testing.T) {
 
 // canarySyslogUDP writes a benign record to a local UDP receiver, writes a
 // long benign record above the cap to a capped sink, and writes a record
-// that cannot fit at all. The first two ship, the last skips. The delivered
+// that cannot fit at all. The first ships, the last two skip. The delivered
 // messages, the skip reason and the skip error hold no canary. The syslog
 // configuration holds no password, token or secret: the only
 // secret-adjacent field is the TLS client configuration, which the UDP case
@@ -296,27 +294,28 @@ func canarySyslogUDP(t *testing.T) {
 		}
 	})
 
-	// A record above the cap ships trimmed, so the write returns nil. The
-	// trimmed record reaches the receiver marked truncated and holds only
-	// the ordinary long message.
-	if writeErr := capped.Write(t.Context(), []logsink.Record{longRecord()}); writeErr != nil {
-		t.Fatalf("write above the cap: %v", writeErr)
+	// A record above the cap is refused and never sent, so the write
+	// answers a skip error and the receiver keeps only the benign record.
+	// The sink never cuts a field and never sends a changed entry.
+	longErr := capped.Write(t.Context(), []logsink.Record{longRecord()})
+
+	longSkip, ok := errors.AsType[*logsink.SkipError](longErr)
+	if !ok || !errors.Is(longErr, logsink.ErrSkipped) {
+		t.Fatalf("write above the cap: got %v, want a skip error", longErr)
 	}
 
-	msgs = r.waitFor(t, 2)
-	requireNoCanary(t, "shipped trimmed syslog message", string(msgs[1]))
+	requireNoCanary(t, "syslog skip reason", longSkip.Reason)
+	requireNoCanary(t, "syslog skip error", canaryErrText(longErr))
 
-	if !bytes.Contains(msgs[1], []byte(`"truncated":true`)) {
-		t.Fatalf("shipped syslog message lacks the truncated mark: %q", msgs[1])
+	pauseCanary(t)
+
+	msgs = r.waitFor(t, 1)
+	if len(msgs) != 1 {
+		t.Fatalf("syslog messages = %d, want 1", len(msgs))
 	}
 
-	if !bytes.Contains(msgs[1], []byte("audit ")) {
-		t.Fatalf("shipped syslog message lacks the benign message: %q", msgs[1])
-	}
-
-	// The scope attribute is never trimmed, so this record cannot fit even
-	// with every trimmable field empty. The sink skips it with a fixed
-	// reason that echoes neither the record nor any target detail.
+	// A record that cannot fit is skipped with a fixed reason that echoes
+	// neither the record nor any target detail.
 	capErr = capped.Write(t.Context(), []logsink.Record{skipRecord()})
 
 	skip, ok := errors.AsType[*logsink.SkipError](capErr)
@@ -330,7 +329,7 @@ func canarySyslogUDP(t *testing.T) {
 
 // canarySyslogTCP writes a benign record to a local TCP receiver, writes a
 // long benign record above the cap to a capped sink, and writes a record
-// that cannot fit at all. The first two ship, the last skips. The delivered
+// that cannot fit at all. The first ships, the last two skip. The delivered
 // messages, the skip reason and the skip error hold no canary. The syslog
 // configuration holds no password, token or secret: the only
 // secret-adjacent field is the TLS client configuration, which the TCP case
@@ -393,28 +392,28 @@ func canarySyslogTCP(t *testing.T) {
 		}
 	})
 
-	// A record above the cap ships trimmed, so the write returns nil. The
-	// trimmed record reaches the receiver marked truncated and holds only
-	// the ordinary long message.
-	if writeErr := capped.Write(t.Context(), []logsink.Record{longRecord()}); writeErr != nil {
-		t.Fatalf("write above the cap: %v", writeErr)
+	// A record above the cap is refused and never sent, so the write
+	// answers a skip error and the receiver keeps only the benign record.
+	// The sink never cuts a field and never sends a changed entry.
+	longErr := capped.Write(t.Context(), []logsink.Record{longRecord()})
+
+	longSkip, ok := errors.AsType[*logsink.SkipError](longErr)
+	if !ok || !errors.Is(longErr, logsink.ErrSkipped) {
+		t.Fatalf("write above the cap: got %v, want a skip error", longErr)
 	}
 
-	msgs = r.waitFor(t, 2)
-	requireNoCanary(t, "shipped trimmed syslog message", string(msgs[1]))
+	requireNoCanary(t, "syslog skip reason", longSkip.Reason)
+	requireNoCanary(t, "syslog skip error", canaryErrText(longErr))
 
-	body := canaryBodyOf(t, msgs[1])
-	if !bytes.Contains(body, []byte(`"truncated":true`)) {
-		t.Fatalf("shipped syslog message lacks the truncated mark: %q", msgs[1])
+	pauseCanary(t)
+
+	msgs = r.waitFor(t, 1)
+	if len(msgs) != 1 {
+		t.Fatalf("syslog messages = %d, want 1", len(msgs))
 	}
 
-	if !bytes.Contains(body, []byte("audit ")) {
-		t.Fatalf("shipped syslog message lacks the benign message: %q", msgs[1])
-	}
-
-	// The scope attribute is never trimmed, so this record cannot fit even
-	// with every trimmable field empty. The sink skips it with a fixed
-	// reason that echoes neither the record nor any target detail.
+	// A record that cannot fit is skipped with a fixed reason that echoes
+	// neither the record nor any target detail.
 	capErr = capped.Write(t.Context(), []logsink.Record{skipRecord()})
 
 	skip, ok := errors.AsType[*logsink.SkipError](capErr)

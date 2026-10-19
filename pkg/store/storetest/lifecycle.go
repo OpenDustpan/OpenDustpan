@@ -9,9 +9,11 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -1089,4 +1091,102 @@ func sameBlobPurges(a, b []inventory.BlobPurge) bool {
 	}
 
 	return true
+}
+
+// setUnitContext sets the owners on the unit and on a resource of it, so the
+// store holds entries and owner rows for both.
+func setUnitContext(t *testing.T, cs objectcontext.Store, unit graph.Unit, fence namespace.Fence) []objectcontext.Ref {
+	t.Helper()
+
+	refs := []objectcontext.Ref{
+		objectcontext.UnitRef(unit), objectcontext.ResourceRef(unit, "aws_s3_bucket.logs"),
+	}
+
+	for _, ref := range refs {
+		e := lifecycleEntry(unit.Namespace, "unit:set-context")
+		patch := objectcontext.Patch{
+			Summary: nil, Runbook: nil, OnCall: nil, Owners: &[]string{"group:net"}, Links: nil,
+		}
+
+		if _, err := cs.SetAPI(t.Context(), ref, patch, "user:ada", fence, e); err != nil {
+			t.Fatalf("set context of %s: %v", ref.Key(), err)
+		}
+	}
+
+	return refs
+}
+
+// checkContextGone checks that cs holds no entry for refs and no entry that
+// names the owner group:net.
+func checkContextGone(t *testing.T, cs objectcontext.Store, ns namespace.Name, refs []objectcontext.Ref) {
+	t.Helper()
+
+	got, err := cs.Entries(t.Context(), refs)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("entries after the purge = %+v, %v, want none", got, err)
+	}
+
+	byOwner, _, err := cs.ByOwner(t.Context(), ns, "group:net", "", 10)
+	if err != nil || len(byOwner) != 0 {
+		t.Fatalf("entries of the owner after the purge = %+v, %v, want none", byOwner, err)
+	}
+}
+
+// testPurgeStackDropsItsContext sets the context of a stack and of a resource
+// of it, deletes the stack and checks that a soft delete keeps the context.
+// The purge then removes the entries and their owner rows. A store with no
+// context port has none to remove.
+func testPurgeStackDropsItsContext(t *testing.T, f fixture) {
+	t.Helper()
+
+	cs, ok := storeAs[objectcontext.Store](f.s)
+	if !ok {
+		return
+	}
+
+	st := mustGetFixtureStack(t, f)
+	unit := graph.Unit{Namespace: f.ref.Namespace, Tool: "pulumi", ID: st.ID.String()}
+	refs := setUnitContext(t, cs, unit, f.fence)
+
+	deleteFixtureStack(t, f)
+
+	if got, err := cs.Entries(t.Context(), refs); err != nil || len(got) != len(refs) {
+		t.Fatalf("entries after the soft delete = %+v, %v, want %d", got, err, len(refs))
+	}
+
+	purge := lifecycleEntry(f.ref.Namespace, "unit:purge")
+	if err := f.s.PurgeStack(t.Context(), st.ID, f.fence, time.Time{}, purge); err != nil {
+		t.Fatalf("purge stack: %v", err)
+	}
+
+	checkContextGone(t, cs, f.ref.Namespace, refs)
+}
+
+// testPurgeWorkspaceDropsItsContext is testPurgeStackDropsItsContext for a
+// workspace.
+func testPurgeWorkspaceDropsItsContext(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	cs, ok := storeAs[objectcontext.Store](s)
+	if !ok {
+		return
+	}
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	unit := graph.Unit{Namespace: ns.Name, Tool: "opentofu", ID: w.ID.String()}
+	refs := setUnitContext(t, cs, unit, ns.Fence())
+
+	deleteWorkspaceOf(t, s, ns, w)
+
+	if got, err := cs.Entries(t.Context(), refs); err != nil || len(got) != len(refs) {
+		t.Fatalf("entries after the soft delete = %+v, %v, want %d", got, err, len(refs))
+	}
+
+	purge := lifecycleEntry(ns.Name, "unit:purge")
+	if err := s.PurgeWorkspace(t.Context(), w.ID, ns.Fence(), time.Time{}, purge); err != nil {
+		t.Fatalf("purge workspace: %v", err)
+	}
+
+	checkContextGone(t, cs, ns.Name, refs)
 }

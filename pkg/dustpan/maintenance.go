@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
 // maintenanceRetryAfter answers how long a tool waits before it retries a
@@ -31,6 +32,9 @@ const (
 	shapeTFE
 	// shapeHTTPBackend renders plain text, as the OpenTofu http backend shows it.
 	shapeHTTPBackend
+	// shapeRunner renders {"code":"unavailable","message":"..."} as a runner
+	// expects, and so retries after the Retry-After time.
+	shapeRunner
 )
 
 // withMaintenance refuses tool calls with 503 while the installation is in
@@ -70,6 +74,8 @@ func writeRefusal(ctx context.Context, w http.ResponseWriter, shape errorShape, 
 		writeMaintenanceTFE(ctx, w, logger, message)
 	case shapeHTTPBackend:
 		writeMaintenanceHTTPBackend(w, message)
+	case shapeRunner:
+		writeMaintenanceRunner(ctx, w, logger, message)
 	default:
 		// Unreachable: every call site passes a valid shape. Refuse
 		// rather than serve, and log the programmer error.
@@ -109,7 +115,11 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 			writeRefusal(r.Context(), w, shape, logger, chainMismatchMessage)
 		case rec.Pending:
 			message := chainPendingMessage
-			if chain.migrating.Load() || chainClaimHolds(rec, chain.chainNow()) {
+			running, err := chain.migrationRunning(r.Context())
+			if err != nil {
+				logger.WarnContext(r.Context(), "audit chain gate could not list migrations",
+					slog.String("error", err.Error()))
+			} else if running {
 				message = chainMigratingMessage
 			}
 
@@ -133,7 +143,13 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		path == "/api/server/maintenance" || strings.HasPrefix(path, "/api/server/maintenance/"):
 		return shapePulumi, false
-	case strings.HasPrefix(path, "/api/inventory/"):
+	case strings.HasPrefix(path, "/runner/v1/"):
+		return shapeRunner, true
+	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, v1Prefix),
+		strings.HasPrefix(path, "/api/runners/"):
+		// The backup and restore routes must stay in the bypass cases above
+		// when they move under v1Prefix: an operator reads and restores a
+		// backup while the gate refuses the tool-neutral routes.
 		return shapeInventory, true
 	case strings.HasPrefix(path, "/api/v2/"), path == "/.well-known/terraform.json":
 		return shapeTFE, true
@@ -226,6 +242,27 @@ func writeMaintenanceTFE(ctx context.Context, w http.ResponseWriter, logger *slo
 		Title:  "maintenance",
 		Detail: message,
 	}}}
+
+	if err := json.NewEncoder(w).Encode(doc); err != nil {
+		logger.WarnContext(ctx, "write maintenance refusal failed", slog.String("error", err.Error()))
+	}
+}
+
+// maintenanceRunnerError is the error body of the runner protocol, as in the
+// runner adapter.
+type maintenanceRunnerError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// writeMaintenanceRunner answers 503 with Retry-After in the shape of the
+// runner protocol.
+func writeMaintenanceRunner(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", maintenanceRetryAfter)
+	w.WriteHeader(http.StatusServiceUnavailable)
+
+	doc := maintenanceRunnerError{Code: protocol.ErrorUnavailable, Message: message}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
 		logger.WarnContext(ctx, "write maintenance refusal failed", slog.String("error", err.Error()))

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -55,7 +56,12 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 			return workspace.ErrAlreadyExists
 		}
 
-		return publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs)
+		return publishWorkspaceInventory(
+			ctx,
+			q,
+			w.Ref,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+		)
 	})
 }
 
@@ -108,9 +114,12 @@ func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]worksp
 // ReleaseUnfenced implements workspace.Store. It saves a released unit like
 // SaveWorkspace, and refuses the save with ErrOverrideRefused unless the
 // forced-write switches of the namespace and of the unit are on, in the same
-// transaction (ADR 44, decisions 4 and 6).
-func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+// transaction. It appends the audit entry e in
+// that transaction.
+func (s *Store) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		wrow, err := lockWorkspace(ctx, q, w.ID.String())
 		if err != nil {
 			return err
@@ -120,6 +129,16 @@ func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fenc
 			return switchErr
 		}
 
+		return saveWorkspaceRow(ctx, q, w)
+	})
+}
+
+// SaveReleased implements workspace.Store. It saves a released unit like
+// SaveWorkspace and appends the audit entry e in the same transaction.
+func (s *Store) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		return saveWorkspaceRow(ctx, q, w)
 	})
 }
@@ -236,7 +255,14 @@ func moveWorkspaceInventoryToDeleted(
 		return fmt.Errorf("delete inventory entry: %w", err)
 	}
 
-	return nil
+	deleted := unitChange(
+		ref.Namespace,
+		inventoryToolOpenTofu,
+		ref.Name.String(),
+		unitWrite{unitID: workspaceID, atMs: d.Entry.At.UnixMilli(), kind: inventory.ChangeDeleted},
+	)
+
+	return appendInventoryChange(ctx, q, deleted)
 }
 
 // CreateStateVersion implements workspace.StateStore with a fenced insert. A
@@ -547,12 +573,15 @@ func (s *Store) FinalizeStateVersion(
 
 // FenceAndUnlock implements workspace.StateStore: it releases the lock of w,
 // finalizes the pending fence version sv and moves the workspace pointer to
-// it, in one fenced transaction. The inventory entry moves with the release.
+// it, in one fenced transaction. The inventory entry moves with the release,
+// and the audit entry e is appended in the same transaction.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (s *Store) FenceAndUnlock(
 	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	expect workspace.StateVersionID, fence namespace.Fence,
+	expect workspace.StateVersionID, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		return fenceAndUnlockInTx(ctx, q, w, codec.ToStateVersionRow(sv), expect)
 	})
 }
@@ -601,10 +630,24 @@ func fenceAndUnlockInTx(
 		return workspace.ErrConcurrentModification
 	}
 
+	row, err = stampAfterLatest(ctx, q, row)
+	if err != nil {
+		return err
+	}
+
 	if finalizeErr := finalizeFenceRow(ctx, q, row); finalizeErr != nil {
 		return finalizeErr
 	}
 
+	return publishFencedState(ctx, q, w, released.ID, row)
+}
+
+// publishFencedState makes the finalized row the current state of the workspace
+// w, writes its inventory entry and its lock, and appends the change log row.
+// The change log row comes last, after every other lock.
+func publishFencedState(
+	ctx context.Context, q *db.Queries, w workspace.Workspace, id string, row codec.StateVersionRow,
+) error {
 	setErr := q.SetWorkspaceCurrent(ctx, db.SetWorkspaceCurrentParams{
 		CurrentStateVersionID: row.ID,
 		UpdatedAtMs:           row.FinalizedAtMs,
@@ -614,15 +657,26 @@ func fenceAndUnlockInTx(
 		return fmt.Errorf("set current state: %w", setErr)
 	}
 
-	if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, released.ID, released.UpdatedAtMs); pubErr != nil {
+	if pubErr := upsertWorkspaceInventory(ctx, q, w.Ref, id, row.FinalizedAtMs); pubErr != nil {
 		return pubErr
 	}
 
-	return writeInventoryLock(ctx, q, inventoryLockKey{
+	lockErr := writeInventoryLock(ctx, q, inventoryLockKey{
 		namespace: w.Ref.Namespace.String(),
 		tool:      inventoryToolOpenTofu,
 		name:      w.Ref.Name.String(),
 	}, workspaceLock(w.Lock))
+	if lockErr != nil {
+		return lockErr
+	}
+
+	// The change log row comes last, after every other lock.
+	return appendWorkspaceChange(
+		ctx,
+		q,
+		w.Ref,
+		unitWrite{unitID: id, atMs: row.FinalizedAtMs, kind: inventory.ChangeChanged},
+	)
 }
 
 // finalizeFenceRow finalizes the pending fence version row in the caller's
@@ -731,6 +785,29 @@ func checkFinalizeForced(
 	return checkForcedSwitches(ctx, q, wrow)
 }
 
+// stampAfterLatest returns row with a finalize time after the latest finalize
+// time of its workspace: the requested time, or one millisecond after the
+// latest one when the requested time is not later. The caller runs it in the
+// finalize transaction, after the workspace row is locked, so the version
+// that becomes current always has the latest finalize time of its workspace,
+// also when two finalizes share a millisecond or a clock steps back.
+func stampAfterLatest(
+	ctx context.Context, q *db.Queries, row codec.StateVersionRow,
+) (codec.StateVersionRow, error) {
+	latest, err := q.LatestWorkspaceStateFinalize(ctx, row.WorkspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return row, nil
+	}
+
+	if err != nil {
+		return codec.StateVersionRow{}, fmt.Errorf("select latest finalize time: %w", err)
+	}
+
+	row.FinalizedAtMs = max(row.FinalizedAtMs, latest+1)
+
+	return row, nil
+}
+
 // writeFinalize marks the version finalized, moves the workspace pointer and
 // publishes the inventory entry. The write matches only the recorded attempt
 // key, so a superseded attempt reports ErrUploadDenied instead of
@@ -738,6 +815,11 @@ func checkFinalizeForced(
 func writeFinalize(
 	ctx context.Context, q *db.Queries, wrow db.Workspace, row codec.StateVersionRow,
 ) error {
+	row, err := stampAfterLatest(ctx, q, row)
+	if err != nil {
+		return err
+	}
+
 	n, err := q.FinalizeStateVersion(ctx, db.FinalizeStateVersionParams{
 		Serial:        row.Serial,
 		Lineage:       row.Lineage,
@@ -766,7 +848,12 @@ func writeFinalize(
 		return fmt.Errorf("set current state: %w", setErr)
 	}
 
-	return publishWorkspaceInventory(ctx, q, workspaceRef(wrow), wrow.ID, row.FinalizedAtMs)
+	return publishWorkspaceInventory(
+		ctx,
+		q,
+		workspaceRef(wrow),
+		unitWrite{unitID: wrow.ID, atMs: row.FinalizedAtMs, kind: inventory.ChangeChanged},
+	)
 }
 
 // lockWorkspace locks the workspace row for a finalize and returns it.
@@ -1101,7 +1188,7 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 	}
 
 	if n > 0 {
-		if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
+		if pubErr := upsertWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
 			return pubErr
 		}
 

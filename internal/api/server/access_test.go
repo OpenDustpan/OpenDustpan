@@ -13,7 +13,6 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
-	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -32,11 +31,15 @@ type subjectAuthenticator struct{}
 
 func (subjectAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        token,
 		DisplayName:    token,
 		Admin:          token == "admin",
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 
@@ -123,21 +126,31 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: grants, Namespaces: st, Tokens: grants, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      st,
+			Guard:      grants,
+			Namespaces: st,
+			Tokens:     grants,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: grants, Principals: st},
-		Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      st, Principals: st, Freshness: nil, Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    subjectAuthenticator{},
 		Authorizer:       authz,
 		Logger:           slog.New(slog.DiscardHandler),

@@ -1,6 +1,6 @@
 # 71. Token freshness default for console sessions from an SSO provider
 
-Status: accepted · 2026-10-16
+Status: accepted · 2026-10-16. Decisions 1 and 2 superseded by ADR 227
 
 ## Context
 

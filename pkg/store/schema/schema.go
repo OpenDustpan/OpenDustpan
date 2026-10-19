@@ -12,6 +12,7 @@
 package schema
 
 import (
+	"embed"
 	"errors"
 	"fmt"
 	"regexp"
@@ -31,6 +32,10 @@ var ErrBadMinimum = errors.New("minimum binary version must have the form vMAJOR
 // ErrSchemaDiverged reports a database that records migrations the binary
 // does not embed and lacks migrations the binary embeds.
 var ErrSchemaDiverged = errors.New("database schema and binary have diverged")
+
+// ErrMigrationsPending reports a database with migrations that the binary
+// embeds and has not applied, opened by a caller that applies none.
+var ErrMigrationsPending = errors.New("database schema has pending migrations")
 
 // MinimumError reports the minimum binary version of the database schema and
 // the version of the binary that is below it. The adapters return it.
@@ -307,6 +312,63 @@ func CheckMinimum(minimum, binaryVersion string) error {
 	return nil
 }
 
+// BaselineVersion is the version of the baseline migration. The baseline
+// replaced every migration before it, so a database that records a version
+// below it is from before the baseline, and no binary can upgrade it.
+const BaselineVersion int64 = 100
+
+// BaselineName is the file name of the baseline migration.
+const BaselineName = "0100_baseline.sql"
+
+// ErrSchemaBeforeBaseline reports a database that records a migration
+// version from before the baseline.
+var ErrSchemaBeforeBaseline = errors.New("database schema is older than the baseline schema of the binary")
+
+// BeforeBaselineError reports the schema version of a database from before
+// the baseline and the baseline version. The adapters return it.
+type BeforeBaselineError struct {
+	// DatabaseVersion is the newest version below the baseline that the
+	// database records.
+	DatabaseVersion int64
+	// BaselineVersion is the version of the baseline migration.
+	BaselineVersion int64
+}
+
+// Error describes the refusal and the one action: start on an empty
+// database.
+func (e *BeforeBaselineError) Error() string {
+	return fmt.Sprintf(
+		"database schema version %d is older than baseline schema version %d: "+
+			"no binary can upgrade this database. Start the server on an empty database",
+		e.DatabaseVersion,
+		e.BaselineVersion,
+	)
+}
+
+// Unwrap returns ErrSchemaBeforeBaseline, so errors.Is finds the sentinel.
+func (e *BeforeBaselineError) Unwrap() error {
+	return ErrSchemaBeforeBaseline
+}
+
+// CheckBaseline returns a *BeforeBaselineError when recorded holds a
+// version below BaselineVersion, and nil otherwise. An empty database
+// records nothing and passes.
+func CheckBaseline(recorded []int64) error {
+	var newest int64
+
+	for _, v := range recorded {
+		if v < BaselineVersion && v > newest {
+			newest = v
+		}
+	}
+
+	if newest == 0 {
+		return nil
+	}
+
+	return &BeforeBaselineError{DatabaseVersion: newest, BaselineVersion: BaselineVersion}
+}
+
 // DatabaseVersion returns the newest version the database records, or zero
 // when it records none.
 func DatabaseVersion(recorded []int64) int64 {
@@ -369,82 +431,58 @@ func ParseMigrationVersion(name string) (int64, error) {
 	return version, nil
 }
 
-// embeddedMigrationNames is the single ordered list of migration file names
-// every dialect embeds. Both store adapters embed the same names with their
-// own SQL, and the upgrade check client reads this list without importing a
-// store adapter (ADR 39 decision 4). Adapter tests pin that each embedded
-// directory holds exactly these names: add a migration to both dialects and
-// to this list together.
+// embeddedMigrations holds one file per shared migration, named exactly as
+// the migration file of each store dialect. Only the names matter here: each
+// dialect holds its own SQL under the same name.
 //
-//nolint:gochecknoglobals // The shared frozen migration list: Go has no constant slices, and both dialects use this one source.
-var embeddedMigrationNames = []string{
-	"0001_init.sql",
-	"0002_updates.sql",
-	"0003_stack_id.sql",
-	"0004_updates_stack_id.sql",
-	"0005_updates_drop_names.sql",
-	"0006_checkpoints_per_update.sql",
-	"0007_stack_tags.sql",
-	"0008_secret_keys.sql",
-	"0009_inventory.sql",
-	"0010_workspaces.sql",
-	"0011_restored_from.sql",
-	"0012_update_history_fields.sql",
-	"0013_backups.sql",
-	"0014_checkpoint_resource_count.sql",
-	"0015_maintenance.sql",
-	"0016_checkpoint_blobs.sql",
-	"0017_inventory_lock.sql",
-	"0018_restores.sql",
-	"0019_audit_entries.sql",
-	"0020_sealed_state.sql",
-	"0021_sensitive_marks.sql",
-	"0022_audit_value_count.sql",
-	"0023_update_journal_version.sql",
-	"0024_state_fence.sql",
-	"0025_update_journal.sql",
-	"0026_override_switches.sql",
-	"0027_update_journal_md5.sql",
-	"0028_principals_and_groups.sql",
-	"0029_audit_server_scope.sql",
-	"0031_soft_delete_stacks.sql",
-	"0032_soft_delete_workspaces.sql",
-	"0035_access_tokens.sql",
-	"0042_roles_and_grants.sql",
-	"0048_audit_changes.sql",
-	"0049_audit_sink_cursors.sql",
-	"0050_update_token_id.sql",
-	"0054_token_policy.sql",
-	"0056_audit_object_id_and_blob_purges.sql",
-	"0057_namespace_ip_allowlist.sql",
-	"0058_inventory_deleted_purge_after.sql",
-	"0059_collections.sql",
-	"0062_sessions.sql",
-	"0064_blob_purges_age_byte_order.sql",
-	"0065_session_policy.sql",
-	"0066_namespace_principals.sql",
-	"0067_audit_chain_state.sql",
-	"0068_update_journal_records_changed.sql",
-	"0069_audit_sink_leases.sql",
-	"0070_membership_source_state.sql",
-	"0071_break_glass_accounts.sql",
-	"0074_update_journal_refusals.sql",
-	"0075_sign_in_freshness.sql",
-	"0076_sign_in_providers.sql",
-	"0077_sign_in_provider_oauth.sql",
-	"0078_one_running_backup_and_restore.sql",
-	"0079_schema_minimum.sql",
-	"0080_durable_operations.sql",
-	"0081_durable_schedules.sql",
-}
+//go:embed migrations/*.sql
+var embeddedMigrations embed.FS
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary
-// embeds with the newest version. Both adapters and the upgrade check client
-// share it, so the verdict never depends on which dialect the server runs.
+// embeds with the newest version. The names come from the embedded
+// migrations directory of this package: a migration adds one file there, so
+// parallel changes add different files and never edit one shared list. Both
+// store adapters embed the same names with their own SQL, and the upgrade
+// check client reads this list without importing a store adapter, so the
+// verdict never depends on which dialect the server runs. Adapter tests pin
+// that each embedded directory holds exactly these names: add a migration
+// file to both dialects and to this directory together, with the hash file
+// of each dialect next to its SQL file.
 func EmbeddedMigrationNames() ([]string, int64) {
+	entries, err := embeddedMigrations.ReadDir("migrations")
+	if err != nil {
+		return []string{}, 0
+	}
+
+	names := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+
+	slices.SortFunc(names, func(a, b string) int {
+		versionA, errA := ParseMigrationVersion(a)
+		versionB, errB := ParseMigrationVersion(b)
+
+		if errA != nil || errB != nil {
+			return strings.Compare(a, b)
+		}
+
+		switch {
+		case versionA < versionB:
+			return -1
+		case versionA > versionB:
+			return 1
+		default:
+			return strings.Compare(a, b)
+		}
+	})
+
 	var newest int64
 
-	for _, name := range embeddedMigrationNames {
+	for _, name := range names {
 		version, err := ParseMigrationVersion(name)
 		if err != nil {
 			continue
@@ -455,7 +493,7 @@ func EmbeddedMigrationNames() ([]string, int64) {
 		}
 	}
 
-	return slices.Clone(embeddedMigrationNames), newest
+	return names, newest
 }
 
 // Inspection is the read-only schema state of one database. Inspect in each

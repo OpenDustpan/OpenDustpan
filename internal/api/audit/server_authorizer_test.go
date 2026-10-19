@@ -24,11 +24,15 @@ type realTokenAuthenticator struct{}
 
 func (realTokenAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        token,
 		DisplayName:    token,
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 

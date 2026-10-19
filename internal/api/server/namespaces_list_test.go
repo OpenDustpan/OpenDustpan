@@ -207,6 +207,10 @@ func checkListFirstPage(t *testing.T, f accessFixture) {
 	if len(first.Namespaces) != 2 || first.Namespaces[0].HomeRegion == "" || first.Namespaces[0].CreatedAt == "" {
 		t.Fatalf("first page = %+v, want two namespaces with region and time", first)
 	}
+
+	if first.Namespaces[0].ID == "" || first.Namespaces[0].ID == first.Namespaces[1].ID {
+		t.Fatalf("first page = %+v, want two namespaces with distinct IDs", first)
+	}
 }
 
 // TestNamespaceListPagesAll proves a caller with a grant on the
@@ -378,6 +382,8 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    authn,
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -489,6 +495,8 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    subjectAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),

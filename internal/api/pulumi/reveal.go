@@ -25,6 +25,10 @@ const (
 	// holds one value path, so 8 KiB leaves ample room while a large body
 	// cannot grow memory without bound.
 	revealBodyLimit = 8 << 10
+	// maxRevealPathLen caps the value path of one reveal request, in bytes.
+	// The audit entry keeps the path, so a longer path is refused instead
+	// of stored.
+	maxRevealPathLen = 1024
 	// noStoreValue is the Cache-Control of every reveal answer: a revealed
 	// value never lands in a cache.
 	noStoreValue = "no-store"
@@ -174,6 +178,10 @@ func serviceSecretsProviderName() string {
 // open. It carries no value, no key and no scope.
 var errRevealDecrypt = errors.New("cannot reveal the value")
 
+// errRevealPathTooLong reports a reveal value path over maxRevealPathLen
+// bytes. The audit entry keeps the path, so the call is refused.
+var errRevealPathTooLong = errors.New("reveal path over 1024 bytes")
+
 // errAuditFailed reports a failed audit append before a reveal answer. It
 // carries no value and no path detail beyond the status.
 var errAuditFailed = errors.New("audit entry failed")
@@ -233,6 +241,12 @@ func (h *Handler) revealPath(w http.ResponseWriter, r *http.Request) (string, bo
 		return "", false
 	}
 
+	if len(req.Path) > maxRevealPathLen {
+		h.writeError(ctx, w, errRevealPathTooLong)
+
+		return "", false
+	}
+
 	return req.Path, true
 }
 
@@ -288,28 +302,31 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 	}
 
 	entry := audit.Entry{
-		At:           time.Now().UTC(),
-		Namespace:    a.object.Namespace(),
-		Subject:      a.principal.Subject,
-		IDPSubject:   "",
-		TokenID:      a.principal.TokenID,
-		Action:       string(identity.ActionUnitReadSecrets),
-		Object:       a.object.String(),
-		Version:      a.version,
-		ValuePath:    a.path,
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     clientip.String(a.request),
-		UserAgent:    truncateUserAgent(a.request.UserAgent()),
-		Channel:      sessionauth.AuditChannel(a.request, channelHeader),
-		Kind:         audit.KindReveal,
-		Outcome:      a.outcome,
-		RequestID:    requestid.FromContext(ctx),
-		ObjectID:     a.object.UnitID(),
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            time.Now().UTC(),
+		Namespace:     a.object.Namespace(),
+		Subject:       a.principal.Subject,
+		IDPSubject:    "",
+		TokenID:       a.principal.TokenID,
+		Action:        string(identity.ActionUnitReadSecrets),
+		Object:        a.object.String(),
+		Version:       a.version,
+		ValuePath:     a.path,
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      clientip.String(a.request),
+		UserAgent:     truncateUserAgent(a.request.UserAgent()),
+		Channel:       sessionauth.AuditChannel(a.request, channelHeader),
+		Kind:          audit.KindReveal,
+		Outcome:       a.outcome,
+		RequestID:     requestid.FromContext(ctx),
+		ObjectID:      a.object.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: string(a.principal.Kind),
+		JobID:         a.principal.JobID,
 	}
 
 	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {

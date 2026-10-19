@@ -13,6 +13,8 @@ import (
 	"io"
 	"slices"
 	"strconv"
+
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // PortableOpener opens the file at path of a portable backup for reading. The
@@ -141,10 +143,31 @@ func portableRowValues(table PortableTable, obj map[string]json.RawMessage) ([]a
 			return nil, fmt.Errorf("table %q column %q: %w", table.Table, column.Name, err)
 		}
 
+		if table.Table == portTableNamespaces && column.Name == "id" {
+			if idErr := checkNamespaceID(value); idErr != nil {
+				return nil, idErr
+			}
+		}
+
 		values[i] = value
 	}
 
 	return values, nil
+}
+
+// checkNamespaceID refuses a namespace row whose id value is not a valid
+// namespace ID. It returns ErrCorrupt, wrapped with namespace.ErrInvalidID.
+func checkNamespaceID(value any) error {
+	id, isText := value.(string)
+	if !isText {
+		id = ""
+	}
+
+	if _, err := namespace.ParseID(id); err != nil {
+		return fmt.Errorf("namespace row has an invalid ID: %w: %w", err, ErrCorrupt)
+	}
+
+	return nil
 }
 
 // portableValueOf decodes one JSON value of a column of kind. A null is nil for

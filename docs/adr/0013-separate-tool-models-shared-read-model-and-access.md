@@ -1,6 +1,6 @@
 # 13. Separate tool models; shared access control and inventory
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10 · the rebuild of the inventory superseded in part by ADR 150 · extended by ADR 247 (labels and `consoleUrl` on the inventory entry)
 
 ## Context
 

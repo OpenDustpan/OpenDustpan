@@ -1,0 +1,10 @@
+# Refused: null removes networkPolicy.extraEgress.
+# want: at '/networkPolicy': missing property 'extraEgress'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+networkPolicy:
+  extraEgress: null

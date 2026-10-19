@@ -35,6 +35,34 @@ func TestParseState(t *testing.T) {
 	}
 }
 
+// stubSealer is a workspace.Sealer that seals nothing: it passes state and
+// outputs through, so the maintenance tests prove their own behavior.
+type stubSealer struct{}
+
+func (stubSealer) SealState(
+	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
+) (io.Reader, error) {
+	return r, nil
+}
+
+func (stubSealer) OpenState(
+	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
+) (io.Reader, error) {
+	return r, nil
+}
+
+func (stubSealer) SealOutputs(
+	_ context.Context, _ namespace.Name, _, _ string, plain []byte,
+) ([]byte, error) {
+	return plain, nil
+}
+
+func (stubSealer) OpenOutputs(
+	_ context.Context, _ namespace.Name, _, _ string, sealed []byte,
+) ([]byte, error) {
+	return sealed, nil
+}
+
 // fakeStateStore holds the installation state in memory. onSet runs on each
 // write, so race tests seed a start between the enter check and its write.
 // onSetIf runs before the conditional write checks its expectation, so a
@@ -95,6 +123,7 @@ func (fakeNamespaces) CreateNamespace(_ context.Context, _ namespace.Namespace) 
 
 func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            name,
 		HomeRegion:      testRegion,
@@ -273,6 +302,8 @@ func (fakeEvents) ListEvents(context.Context, stack.Ref, stack.UpdateID, int64, 
 // fakeWorkspaces holds workspaces by ID.
 type fakeWorkspaces struct {
 	workspaces map[workspace.ID]workspace.Workspace
+	// released holds the audit entry of each release of a lock.
+	released []audit.Entry
 }
 
 func (*fakeWorkspaces) CreateWorkspace(context.Context, workspace.Workspace, namespace.Fence) error {
@@ -362,6 +393,7 @@ func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, 
 
 func (fakeStates) FenceAndUnlock(
 	context.Context, workspace.Workspace, workspace.StateVersion, workspace.StateVersionID, namespace.Fence,
+	audit.Entry,
 ) error {
 	return nil
 }
@@ -470,7 +502,7 @@ func newFixtureWith(
 	f := &fixture{
 		state:        &fakeStateStore{state: maintenance.StateNormal, onSet: nil, onSetIf: nil},
 		updates:      &fakeUpdates{updates: map[stack.UpdateID]stack.Update{}},
-		workspaces:   &fakeWorkspaces{workspaces: map[workspace.ID]workspace.Workspace{}},
+		workspaces:   &fakeWorkspaces{workspaces: map[workspace.ID]workspace.Workspace{}, released: nil},
 		stacks:       &fakeStacks{stacks: nil},
 		namespaces:   namespaces,
 		stackSvc:     nil,
@@ -509,7 +541,7 @@ func newFixtureWith(
 		States:             states,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -657,7 +689,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -916,15 +948,20 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			Status:          workspace.StatusFinalized,
 			Content:         "tofu/ws-1/sv-1/a1",
 			Outputs:         nil,
-			MD5:             [16]byte{},
-			Serial:          1,
-			Size:            0,
-			Force:           false,
-			Sealed:          false,
-			RestoredFrom:    "",
-			SensitiveMarks:  nil,
-			FenceBy:         "",
-			UnlockedWrite:   false,
+			// The size and MD5 of the document encryptedBlobs serves,
+			// as a stored row names them.
+			MD5: [16]byte{
+				0x32, 0xdd, 0x0c, 0x61, 0x5e, 0xc2, 0x98, 0xbc,
+				0x44, 0x68, 0xd1, 0xbd, 0xb8, 0x10, 0xd6, 0xc0,
+			},
+			Serial:         1,
+			Size:           29,
+			Force:          false,
+			Sealed:         false,
+			RestoredFrom:   "",
+			SensitiveMarks: nil,
+			FenceBy:        "",
+			UnlockedWrite:  false,
 		},
 	}
 
@@ -964,6 +1001,22 @@ func TestEnterForceReleasesLockedWorkspace(t *testing.T) {
 
 	if w := f.workspaces.workspaces["ws-1"]; w.Lock.Holder != "" {
 		t.Fatalf("workspace lock holder = %q, want empty after force enter", w.Lock.Holder)
+	}
+
+	// The release is a force-unlock like any other: it writes one change entry
+	// that names the unit, the principal and the reason.
+	if len(f.workspaces.released) != 1 {
+		t.Fatalf("release entries = %+v, want one", f.workspaces.released)
+	}
+
+	got := f.workspaces.released[0]
+	if got.Kind != audit.KindChange || got.Subject != "maintenance" || got.Object != "opentofu:acme/network" ||
+		got.Action != "unit:write-forced" || got.Reason == "" {
+		t.Fatalf("release entry = %+v, want a change by maintenance on the unit with a reason", got)
+	}
+
+	if err := got.Validate(); err != nil {
+		t.Fatalf("release entry fails validation: %v", err)
 	}
 }
 
@@ -1443,6 +1496,17 @@ func (fakeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Ov
 }
 
 // ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
-func (f *fakeWorkspaces) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (f *fakeWorkspaces) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
+) error {
+	return f.SaveWorkspace(ctx, w, fence)
+}
+
+// SaveReleased saves like SaveWorkspace and keeps the audit entry of the release.
+func (f *fakeWorkspaces) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	f.released = append(f.released, e)
+
 	return f.SaveWorkspace(ctx, w, fence)
 }

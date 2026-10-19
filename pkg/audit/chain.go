@@ -75,13 +75,13 @@ const (
 // when it last changed and who changed it. Pending reports that a change of
 // the chain waits for a person to approve it, which keeps the installation
 // in maintenance mode. EnteredMaintenance reports whether the chain entered
-// maintenance mode itself. MigratingAt holds the start of the running
-// migration, zero when none runs. LogReplaced reports that the swap of a
-// restore replaced the log and the server has not compared it with the
-// state yet. A backup does not carry the record: a restore keeps the record
-// of the target installation. An installation without a record reads as
-// ChainStateOn, because the chain was on in every installation before it
-// had a setting.
+// maintenance mode itself. MigratingAt is unused and always zero: the
+// durable operation owns the migration. It stays in the row so older rows
+// still read. LogReplaced reports that the swap of a restore replaced the
+// log and the server has not compared it with the state yet. A backup does
+// not carry the record: a restore keeps the record of the target
+// installation. An installation without a record reads as ChainStateOn,
+// because the chain was on in every installation before it had a setting.
 type ChainRecord struct {
 	ChangedAt          time.Time
 	ChangedBy          string
@@ -113,10 +113,6 @@ const (
 // ErrInvalidChainSetting reports a chain setting other than on or off.
 var ErrInvalidChainSetting = errors.New("invalid audit chain setting: want on or off")
 
-// ChainMigrationLease bounds how long a migration that stops without a
-// release blocks a new approval.
-const ChainMigrationLease = 15 * time.Minute
-
 // Errors of the approval of a change of the chain.
 var (
 	// ErrNoChainChange reports an approval while no change of the chain
@@ -134,9 +130,10 @@ var (
 	// ErrChainNeedsPerson reports an approval of a change to off by a
 	// service principal. Only a person may approve turning the chain off.
 	ErrChainNeedsPerson = errors.New("a person must approve turning the audit chain off")
-	// ErrChainClaimLost reports a renewal while no claim holds. The
-	// migration stops when it loses its claim.
-	ErrChainClaimLost = errors.New("the audit chain migration lost its claim")
+	// ErrChainStateMissing reports a database without the row of the chain
+	// state. Every schema seeds the row, so a missing row means a corrupt
+	// database.
+	ErrChainStateMissing = errors.New("the audit chain state row is missing: the database is corrupt, restore a backup")
 	// ErrChainMigrationsStopped reports an approval while the server runs
 	// no migration loop.
 	ErrChainMigrationsStopped = errors.New(
@@ -160,24 +157,11 @@ func ParseChainSetting(raw string) (ChainSetting, error) {
 // ChainStore is the port of the chain state and of its migration. The SQL
 // stores implement it next to Store.
 type ChainStore interface {
-	// ChainRecord answers the record of the installation. Without a row it
-	// answers ChainStateOn with a zero time.
+	// ChainRecord answers the record of the installation. It returns
+	// ErrChainStateMissing when the database holds no row.
 	ChainRecord(ctx context.Context) (ChainRecord, error)
 	// SaveChainRecord stores rec as the record of the installation.
 	SaveChainRecord(ctx context.Context, rec ChainRecord) error
-	// ClaimChainMigration starts the migration of a waiting change in one
-	// conditional write: it stamps now as the start only when a change waits
-	// and no claim within lease holds. It returns ErrNoChainChange when no
-	// change waits, and ErrChainMigrating when a claim within the lease
-	// holds.
-	ClaimChainMigration(ctx context.Context, now time.Time, lease time.Duration) error
-	// ReleaseChainMigration releases the claim of a migration that stops
-	// without storing the new state.
-	ReleaseChainMigration(ctx context.Context) error
-	// RenewChainMigration moves the start of the held claim to now, so a
-	// long migration keeps its claim within the lease. It writes only when
-	// a claim holds, and returns ErrChainClaimLost when none holds.
-	RenewChainMigration(ctx context.Context, now time.Time) error
 	// StartChain appends e as the start entry of its scope, in one
 	// transaction with the read of the earlier entries and the check of
 	// fence: its changes get the digest and the count of those entries (see
@@ -209,9 +193,9 @@ func ServerFence() namespace.Fence {
 // ChainChange is one approved change of the chain: the state it moves to,
 // who approved it and when.
 type ChainChange struct {
-	At time.Time
-	By string
-	To ChainState
+	At time.Time  `json:"at"`
+	By string     `json:"by"`
+	To ChainState `json:"to"`
 }
 
 // MigrateChain runs the migration of an approved change in the scope of
@@ -219,25 +203,19 @@ type ChainChange struct {
 // stores the new record with the state off and no wait. To on, it first
 // stores the new record with the state on and a wait. Then it writes a
 // start entry in each scope. Then it stores the same record with no wait.
-// The early store to on keeps the claim of the approval, so a second
-// approval still sees the migration. The final store clears the claim.
-// After each scope it renews the claim with now, so a long migration keeps
-// a second approval out. A nil now reads time.Now. A renewal error stops
-// the migration. Appends in a scope hash only after its start entry, or at
-// once when the scope holds no entries. The digest of the start entry
-// covers an append before it. An append after an end entry but before the
-// stored state changes writes no hash, because the last entry is an end
-// entry. A scope without entries gets no entry: its first entry starts the
-// chain, or comes after the chain went off. A second start entry does no
-// harm, because its digest covers the first.
+// The early store to on keeps the wait, so a second approval still sees the
+// migration. The durable operation owns the run and its retry: a retry that
+// finds the stored state already at change with no wait does nothing, and
+// the marker writes skip scopes that already agree. Appends in a scope hash
+// only after its start entry, or at once when the scope holds no entries.
+// The digest of the start entry covers an append before it. An append after
+// an end entry but before the stored state changes writes no hash, because
+// the last entry is an end entry. A scope without entries gets no entry:
+// its first entry starts the chain, or comes after the chain went off. A
+// second start entry does no harm, because its digest covers the first.
 func MigrateChain(
-	ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange, now func() time.Time,
+	ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange,
 ) error {
-	clock := now
-	if clock == nil {
-		clock = time.Now
-	}
-
 	current, err := store.ChainRecord(ctx)
 	if err != nil {
 		return fmt.Errorf("read audit chain state: %w", err)
@@ -247,7 +225,7 @@ func MigrateChain(
 		early := ChainRecord{
 			ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: true,
 			EnteredMaintenance: current.EnteredMaintenance,
-			MigratingAt:        current.MigratingAt, LogReplaced: false,
+			MigratingAt:        time.Time{}, LogReplaced: false,
 		}
 		if err := store.SaveChainRecord(ctx, early); err != nil {
 			return fmt.Errorf("save audit chain state: %w", err)
@@ -257,10 +235,6 @@ func MigrateChain(
 	for _, fence := range fences {
 		if err := migrateScope(ctx, store, fence, change); err != nil {
 			return err
-		}
-
-		if err := store.RenewChainMigration(ctx, clock()); err != nil {
-			return fmt.Errorf("renew audit chain migration: %w", err)
 		}
 	}
 
@@ -371,28 +345,31 @@ func ChainSetEntry(caller Entry, change ChainChange) Entry {
 // person who approved it.
 func chainMarker(scope namespace.Name, action string, change ChainChange) Entry {
 	return Entry{
-		At:           change.At,
-		Namespace:    scope,
-		Subject:      change.By,
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       action,
-		Object:       scope.String(),
-		ObjectID:     "",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "",
-		UserAgent:    "",
-		Channel:      ChannelAPI,
-		Kind:         KindChange,
-		Outcome:      OutcomeSuccess,
-		RequestID:    "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            change.At,
+		Namespace:     scope,
+		Subject:       change.By,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        action,
+		Object:        scope.String(),
+		ObjectID:      "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       ChannelAPI,
+		Kind:          KindChange,
+		Outcome:       OutcomeSuccess,
+		RequestID:     "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		PrincipalKind: "",
+		JobID:         "",
+		Reason:        "",
 	}
 }
 

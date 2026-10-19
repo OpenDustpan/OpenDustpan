@@ -49,7 +49,15 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks}
 
 	svc, err := principal.NewService(
-		principal.Config{Store: openStore(t), Guard: guard, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      openStore(t),
+			Guard:      guard,
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -58,11 +66,15 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	ctx := t.Context()
 	e := testEntry()
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	p, err := svc.CreatePrincipal(

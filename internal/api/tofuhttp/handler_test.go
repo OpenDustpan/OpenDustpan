@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -45,6 +46,8 @@ type fakeUnits struct {
 	writeErr error
 	// lockErr, when set, is what LockWithID answers.
 	lockErr error
+	// forced holds the audit entry template of each force-unlock.
+	forced []audit.Entry
 }
 
 // newFakeUnits returns a service whose unit exists, unlocked, with both switches on.
@@ -68,6 +71,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 		createErr: nil,
 		writeErr:  nil,
 		lockErr:   nil,
+		forced:    nil,
 	}
 }
 
@@ -154,9 +158,12 @@ func (f *fakeUnits) UnlockLock(_ context.Context, _ workspace.ID, lockID, holder
 //nolint:revive // The port takes the lock ID beside the caller, the allowance and the audit record.
 func (f *fakeUnits) ForceUnlockLock(
 	_ context.Context, _ workspace.ID, expect workspace.Lock, _ string, _ namespace.Overrides, _ func() error,
+	entry audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	f.forced = append(f.forced, entry)
 
 	switch {
 	case !f.ws.Lock.Locked():
@@ -215,6 +222,7 @@ type fakeNamespaces struct{}
 // Get returns the namespace with both switches on.
 func (fakeNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Time{},
 		Name:            "acme",
 		HomeRegion:      "",
@@ -231,27 +239,39 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 	switch token {
 	case adminToken:
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "alice",
 			DisplayName:    "",
 			Admin:          true,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	case userToken:
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "bob",
 			DisplayName:    "",
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	default:
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "",
 			DisplayName:    "",
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, identity.ErrUnauthenticated
 	}
 }
@@ -286,13 +306,14 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 	t.Helper()
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
-		Authenticator: tokenAuth{},
-		Authorizer:    userAuthz{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Workspaces:    units,
-		Namespaces:    fakeNamespaces{},
-		Audit:         nil,
-		Gate:          nil,
+		Authenticator:  tokenAuth{},
+		Authorizer:     userAuthz{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     units,
+		Namespaces:     fakeNamespaces{},
+		Audit:          nil,
+		Gate:           nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -467,7 +488,8 @@ func TestCreateRaceReadsAgain(t *testing.T) {
 func TestForceUnlockNeedsItsAction(t *testing.T) {
 	t.Parallel()
 
-	h := newTestHandler(t, newFakeUnits(true))
+	units := newFakeUnits(true)
+	h := newTestHandler(t, units)
 
 	rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
 	if rec.Code != http.StatusOK {
@@ -498,6 +520,21 @@ func TestForceUnlockNeedsItsAction(t *testing.T) {
 	rec = do(h, "UNLOCK", unitPath, lockBody("lock-two", "bob"), bearer(adminToken))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("force-unlock of bob's lock by an admin: status %d, want 200", rec.Code)
+	}
+
+	// The backend passes the fields of the audit entry of the force-unlock. The
+	// lock info has no field for a reason, so the reason is empty.
+	units.mu.Lock()
+	defer units.mu.Unlock()
+
+	if len(units.forced) != 1 {
+		t.Fatalf("force-unlock entries = %+v, want one", units.forced)
+	}
+
+	got := units.forced[0]
+	if got.Action != "unit:write-forced" || got.Object != "opentofu:acme/net" || got.Kind != audit.KindChange ||
+		got.Reason != "" {
+		t.Fatalf("force-unlock entry = %+v, want the action, the unit, the kind change and no reason", got)
 	}
 }
 

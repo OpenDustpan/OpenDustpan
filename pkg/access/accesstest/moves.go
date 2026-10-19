@@ -132,7 +132,18 @@ func seedPrincipal(t *testing.T, s moveStore, id, subject string) identity.Princ
 		t.Fatalf("create principal %q: %v", subject, err)
 	}
 
-	return identity.Principal{Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{}}
+	return identity.Principal{
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                subject,
+		DisplayName:            "",
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
+	}
 }
 
 // testMoveEscalation runs the case of a move that gives the unit the grants of
@@ -201,11 +212,15 @@ func testRenamedCollectionGrants(t *testing.T, s access.Store) {
 	mustCreateGrant(t, s, newGrant("grt-alice-old", principalSubject("prn-alice"), "rol-coll-read", old))
 
 	alice := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice",
 		DisplayName:    "",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	for _, tc := range []struct {

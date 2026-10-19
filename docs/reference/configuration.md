@@ -15,7 +15,7 @@ the same list.
 | `--region` | `DUSTPAN_REGION` | `region` | `local` |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
 | `--console-dir` | `DUSTPAN_CONSOLE_DIR` | `console-dir` | (none) |
-| `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none) |
+| `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none). A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with `Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests. |
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
@@ -180,6 +180,23 @@ key file in use, never the key. An operator who loses the key file loses
 every secret that the key encrypts, and nobody can recover them. A key file
 next to the data does not protect a backup of that data.
 
+## Variables of a step
+
+The launcher sets these variables for the process of each step of a job. The
+server does not read them, and no flag or file key sets them. A step cannot
+set a variable with the prefix `DUSTPAN_`: the launcher refuses it.
+
+| Environment | Value |
+| --- | --- |
+| `DUSTPAN_JOB_ID` | The ID of the job that the step belongs to. |
+| `DUSTPAN_PHASE` | The name of the phase of the job that the step belongs to. |
+| `DUSTPAN_STEP` | The name of the step. |
+| `DUSTPAN_UNIT` | The unit that the job runs on. |
+| `DUSTPAN_NAMESPACE` | The namespace of the unit. |
+| `DUSTPAN_COMMIT` | The commit of the source that the job runs. |
+| `DUSTPAN_SERVER_URL` | The URL of the server that the step calls. |
+| `DUSTPAN_SWEEP_REPORT` | Set for the command of a cloud sweep only: the path of the JSON Lines file that the command writes its report to. The launcher uploads the file when the command ends. |
+
 ## Client commands
 
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
@@ -208,3 +225,17 @@ Each client command takes only the flags in its row:
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of
 the backup commands. The [audit log guide](../guides/audit-log.md) shows
 the audit chain commands.
+
+## Host command
+
+`opendustpan host create-temp-admin` opens the database itself, as `serve`
+does, and makes a temporary administrator for one named person. It reads
+these settings. The [host recovery guide](../guides/host-recovery.md) shows
+the steps.
+
+| Flag | Environment | Default |
+| --- | --- | --- |
+| `--database` | `DUSTPAN_DATABASE` | `sqlite:dustpan.db` (or `postgres://...`) |
+| `--reason` | (none) | (none) |
+| `--recovery-mode` | `DUSTPAN_RECOVERY_MODE` | `bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: recovery with a request signed with an offline operator key. `none`: no break-glass, the operator restores from a backup, and the host command refuses to run |
+| (none) | `DUSTPAN_DISABLE_HOST_RECOVERY` | (none: the host command is on). Set `true` or `1` in the environment of the operator account to turn it off. `false`, `0` and an empty value keep it on. The host command refuses any other value |

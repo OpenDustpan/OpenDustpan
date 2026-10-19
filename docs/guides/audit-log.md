@@ -18,21 +18,41 @@ The Pulumi CLI calls them when a person asks it to show secrets, for example
 
 The routes that answer a secret value to a tool write one entry each with the
 kind `tool-operation`, so a reader never confuses a tool that needed secrets
-with a person who asked to see one:
+with a person who asked to see one. The state download is the exception that
+the principal decides, as the next list says:
 
 - The Pulumi `decrypt` and `batch-decrypt` routes write one entry each with
   the action `unit:decrypt`, the count of values in `valueCount` and an empty
   `version` and value path.
 - The OpenTofu state download writes one entry with the action
   `unit:read-secrets`, the state version in `version` and an empty value
-  path.
+  path. The TFE-compatible API (`GET /api/v2/state-versions/{id}/download`)
+  and the http backend (`GET /tofu/state/{namespace}/{workspace}`) both write
+  it. The kind is `reveal` when a person acts, and `tool-operation` in all
+  other cases. A person acts through a console session or an access token of
+  a principal of the kind `person`. The bootstrap admin token has no
+  principal record, so its kind is unknown, and the server counts an unknown
+  kind as a person. A service token, a token from a trust rule and a job token
+  write `tool-operation`. The `Dustpan-Channel` header never decides the kind.
+  A principal with a kind that the server does not know cannot write an
+  entry, so the download is refused and answers 500 with no content. Both
+  routes need `unit:read` and `unit:read-secrets`, and answer
+  `Cache-Control: no-store`.
 - The OpenTofu route for one output writes one entry with the action
   `unit:read-secrets`, the state version in `version` and the value path
   `/outputs/<name>` when the output is sensitive. A non-sensitive output
   writes no entry.
 
-The server cannot see who runs a CLI command, so a person who runs
-`tofu state pull` makes a `tool-operation` entry.
+The server sees the kind of the principal, but not who runs a CLI command.
+A person who runs `tofu state pull` with a personal token makes a `reveal`
+entry. A pipeline that runs `tofu plan` with a service token makes a
+`tool-operation` entry. A person who uses a service token also makes a
+`tool-operation` entry, and the audit entry of the creation of that token
+names the person. Each `tofu plan` with a personal token writes one `reveal`
+entry for each state download, and a `terraform_remote_state` read of
+another workspace writes one more, so one plan can write more than one. To
+keep CI reads as `tool-operation`, run CI with a service token or a workload
+identity.
 A failed append on a route that answers a secret value answers 500 with no
 secret value, so a value without its entry never reaches the client.
 The two `log-decryption` routes answer no secret value, so they keep
@@ -42,8 +62,8 @@ A restore or a purge of a deleted unit (ADR 47) writes one entry with the
 kind `change` (ADR 60), the action `unit:restore` or `unit:purge`, and the
 stable ID of the unit in `objectID`. The store appends it in the same
 transaction as the change, so a failed append changes nothing.
-A purge of the scheduled retention sweep has the subject `@server`. A purge
-of a sweep that a person starts through the API has that person as the
+A purge of the scheduled retention expiry has the subject `@server`. A purge
+of an expiry run that a person starts through the API has that person as the
 subject.
 
 Each request for an access-review export (ADR 52, decision 13) writes one
@@ -71,6 +91,14 @@ An entry holds these fields:
   change holds `key`, `new`, and when they apply, `old`, `layer` and
   `takesEffect`. A `startup` or `config-file` entry holds its settings
   here.
+- `reason`: the text that a person gave for the action, else omitted. It has
+  at most 500 Unicode code points. A reason that is too long, or that holds
+  a control character, a format character or a line or paragraph
+  separator, is refused. A force-unlock can carry one.
+- `principalKind`: the kind of the principal record that acted: `person`,
+  `service` or `workload`. It is omitted when the server cannot name the
+  kind, for example for the bootstrap admin token.
+- `jobID`: the job whose token acted, else omitted.
 - Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
   never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
@@ -86,15 +114,42 @@ An entry holds these fields:
   The encoding writes each field as its length in bytes (decimal), a
   colon and the bytes of the field, with nothing between the fields. For
   example, the subject `admin` is `5:admin` and an empty field is `0:`.
-  After `prevHash`, the encoding always writes four more fields, in this
+  After `prevHash`, the encoding always writes seven more fields, in this
   fixed order: the decimal value count, the stable ID of the unit, the
-  canonical JSON of the changes (sorted by key) as the store holds it, and
-  the decimal failover version of the namespace (0 in `@server`). No field
-  is optional. An entry with no value count writes one `-` in place of the
-  count, so an entry with no count (`-`) and an entry with the count 0
+  canonical JSON of the changes (sorted by key) as the store holds it, the
+  decimal failover version of the namespace (0 in `@server`), the principal
+  kind, the job ID and the reason. The reason stays last. No release shipped
+  an audit entry, so the order can change, and an entry from an earlier build
+  does not keep its hash. No field is optional. An entry with no value count
+  writes one `-` in place of the count, so an entry with no count (`-`) and an entry with the count 0
   (`1:0`) have different hashes. Because each field carries its length,
   two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
+
+## Force-unlock entries
+
+Each force-unlock of an OpenTofu workspace writes one entry of the kind
+`change` with the action `unit:write-forced`. The TFE-compatible API and the
+http backend both write it. The server writes it in the transaction that
+releases the lock, so a release without its entry does not happen.
+
+- `subject`: the principal that forced the release.
+- `version`: the serial of the new state version that the release wrote.
+  It is empty when the release wrote no version: a workspace with no state,
+  or a state that the client encrypted.
+- `changes`: the released `lock-holder` and the time `locked-at` of the lock,
+  each in `old`.
+- `reason`: the reason that the caller gave, else omitted. Only the
+  TFE-compatible API can carry a reason. The lock info of the http backend
+  has no field for one.
+
+A force-unlock of a state that the client encrypted also writes an entry of
+the kind `override`, as a forced write does.
+
+Maintenance mode also writes this entry. When it starts, it releases each
+lock that it finds. Each release writes one `change` entry with the action
+`unit:write-forced`, the subject `maintenance` and the reason
+`maintenance mode started`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.
@@ -400,8 +455,8 @@ The chain shows a change or a deletion of an entry.
 Each entry holds the hash of its own fields and of the previous entry of
 its namespace, so a changed field breaks the hash of that entry and a
 deleted entry breaks the link of the next one.
-A sink copy with `"truncated": true` keeps `scope`, `sequence`, `prevHash` and `hash`, so a receiver can still follow the links and find gaps and duplicates.
-The receiver cannot recompute the `hash` of such a copy from the shipped fields.
+A sink copy is a whole entry: the sink never cuts a field and never sends a changed entry.
+Each copy keeps `scope`, `sequence`, `prevHash` and `hash`, so a receiver can follow the links and find gaps and duplicates.
 The full entry stays in the server audit log, and the chain check on the server covers it.
 A backup carries the `audit_entries` table, so a restore keeps the entries
 and a valid chain.
@@ -474,8 +529,8 @@ Each entry is one JSON object with `time`, `level` (`info`), `msg` (`audit entry
 `valueCount`, `objectID` and `changes` are present only when the entry has them.
 `changes` holds the canonical JSON that the hash covers: a list sorted by `key`.
 `prevHash` and `hash` hold the chain of the entry.
-`scope`, `sequence`, `prevHash` and `hash` are never trimmed. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
-A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
+The server never cuts a field: each copy is a whole entry with `scope`, `sequence`, `prevHash` and `hash`.
+A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
 The full entry stays in the server audit log, and the chain check on the server covers it.
 
 ```json
@@ -485,7 +540,7 @@ The full entry stays in the server audit log, and the chain check on the server 
 The server reads the new entries of each scope in order and writes them to the sink in one batch.
 It moves the cursor of the sink only after the sink accepted the batch.
 A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
-While its lease holds, one instance ships a sink. After a lease is lost or a round fails, a sink can receive an entry twice. Delivery is at least once.
+While its lease holds, one instance ships a sink. After the server loses the lease or a round fails, a sink can receive an entry twice. Delivery is at least once.
 Drop duplicates by `scope` and `sequence`.
 A batch in one scope that fails does not stop the other scopes.
 The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.
@@ -496,20 +551,21 @@ Each message has the facility `log audit` (13) and the severity `info`.
 Set another facility with `?facility=<0 to 23>`, for example `syslog+udp://logs.example:514?facility=16`.
 The message part is the JSON object above.
 STRUCTURED-DATA and MSGID are `-`.
-Over `tcp` and `tls` each message starts with its length in bytes (RFC 5425).
+Over `tcp` and `tls` each message starts with its length in bytes (octet-counting framing: RFC 6587 section 3.4.1 over TCP, RFC 5425 section 4.3 over TLS).
 UDP has no acknowledgment, so a message can get lost without an error.
 Use `tls` for an audit log.
 `?ca-file=<path>` names a PEM bundle to trust instead of the system store.
-`?max-size=<bytes>` sets the largest message, from 480 to 65507 bytes.
-The default is 8192.
-An entry above that size arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
-Trim never shortens `truncated`, `scope`, `sequence`, `time`, `action`, `kind`, `outcome`, `prevHash` and `hash`.
-`scope`, `sequence`, `prevHash` and `hash` stay whole. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
-A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
+`?max-size=<bytes>` sets the largest message: from 480 to 65507 bytes over UDP, and from 480 to 65536 bytes over TCP and TLS.
+The default is 8192 over UDP and 65536 (64 KiB) over TCP and TLS, which holds the largest entry the server writes.
+Raise the matching limit of the receiver to at least the same size, or the receiver drops the longer messages.
+With rsyslog set `$MaxMessageSize`. On a TCP input also set `MaxFrameSize`.
+The defaults of both may be below 64 KiB. Check the receiver's limit.
+With syslog-ng set `log-msg-size()`. Its default may be below 64 KiB. Check the receiver's limit.
+The sink never shortens a field and never sends a changed entry.
+The sink refuses an entry above that size and never sends it.
+The server counts it in `dustpan_audit_sink_skipped_total` and in `dustpan_audit_sink_failures_total{reason="size"}`, logs one error line with its scope and sequence, and goes on with the next entry.
+Read the refused entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
 The full entry stays in the server audit log, and the chain check on the server covers it.
-Read the full entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
-Only an entry that cannot fit even with every trimmable field empty is skipped.
-The server counts it in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
 
 ### Webhook
 
@@ -549,10 +605,24 @@ A rotation tool moves the file away and sends `SIGHUP` to the server.
 ### Alert on a sink that falls behind
 
 `dustpan_audit_sink_entries_total{sink="<name>"}` counts the entries that a sink accepted.
-`dustpan_audit_sink_failures_total{sink="<name>"}` counts the failed batches.
-`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size` even trimmed.
+`dustpan_audit_sink_failures_total{sink="<name>",reason="<reason>"}` counts the failed deliveries.
+The reason is `size` for an entry that the sink refused because it cannot hold it. An example is a syslog record that cannot fit below `max-size`.
+The reason is `unreachable` when the sink never reached its receiver.
+The reason is `write` for any other failed write.
+The reason is `read` for a failed entry, cursor or namespace read.
+The reason is `lease` for a failed sink lease take.
+A refused entry logs one error line per entry with the sink name, its scope and its sequence.
+Any other failure logs one error line per round.
+The line has the sink name, the reason, and the sequence of the first entry of the failed batch.
+A round that knows no sequence leaves it out.
+A round that never read a batch, for example a failed lease take or a failed entry, cursor or namespace read, carries no sequence.
 A failed batch loses no entry, but a count that keeps growing means the sink falls behind.
+A refused entry never arrives: alert when the `size` series grows.
+`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size`.
 A skipped entry is not in the sink: alert when that count is above zero.
+`dustpan_audit_sink_lag_seconds{sink="<name>"}` holds the age in seconds of the oldest entry the sink has not delivered yet, or 0 when the sink is up to date.
+`dustpan_audit_sink_lag_entries{sink="<name>"}` holds the count of entries the sink has not delivered yet, or 0 when the sink is up to date.
+Alert when either lag keeps growing: the sink falls behind.
 The metrics count 16 sinks at most. With more sinks, the server logs a warning at start.
 
 ### After a restore
@@ -572,6 +642,18 @@ groups:
           severity: warning
         annotations:
           summary: An OpenDustpan audit sink refuses entries
+      - alert: DustpanAuditSinkRefusedEntry
+        expr: increase(dustpan_audit_sink_failures_total{reason="size"}[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An OpenDustpan audit sink refused an entry it cannot hold
+      - alert: DustpanAuditSinkLagging
+        expr: dustpan_audit_sink_lag_entries > 50
+        labels:
+          severity: warning
+        annotations:
+          summary: An OpenDustpan audit sink falls behind
 ```
 
 OpenTelemetry logs are not a sink yet.

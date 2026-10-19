@@ -121,6 +121,7 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 	})
 
 	acme := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Unix(0, 0),
 		Name:            "acme",
 		HomeRegion:      region,
@@ -139,18 +140,28 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 
 	authn := tokenMapAuthenticator{tokens: map[string]identity.Principal{
 		nsAdminToken: {
-			Subject:        "nsadmin",
-			DisplayName:    "nsadmin",
-			Admin:          false,
-			TokenID:        "",
-			TokenExpiresAt: time.Time{},
+			Subject:                "nsadmin",
+			DisplayName:            "nsadmin",
+			Admin:                  false,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		},
 		instAdminToken: {
-			Subject:        "instadmin",
-			DisplayName:    "instadmin",
-			Admin:          false,
-			TokenID:        "",
-			TokenExpiresAt: time.Time{},
+			Subject:                "instadmin",
+			DisplayName:            "instadmin",
+			Admin:                  false,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		},
 	}}
 
@@ -294,5 +305,29 @@ func TestNamespaceListFollowsIPAllowlist(t *testing.T) {
 
 	if got := listNamespacesFrom(t, srv, nsAdminToken, "192.0.2.10:1234"); len(got) != 0 {
 		t.Fatalf("namespaces outside the list = %v, want none", got)
+	}
+}
+
+// storePrincipalOfKind stores a principal of one kind with no namespace.
+func storePrincipalOfKind(t *testing.T, st *sqlite.Store, subject string, kind principal.Kind) {
+	t.Helper()
+
+	p := principal.Principal{
+		CreatedAt:   time.Unix(0, 0),
+		UpdatedAt:   time.Unix(0, 0),
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: subject,
+		Kind:        kind,
+		Source:      principal.SourceLocal,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
+		DisabledAt: time.Time{},
+	}
+
+	createErr := st.CreatePrincipal(
+		t.Context(), p, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject),
+	)
+	if createErr != nil {
+		t.Fatalf("create principal %q: %v", subject, createErr)
 	}
 }

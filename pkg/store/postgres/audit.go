@@ -85,7 +85,14 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 // nothing. The transaction takes the advisory lock of the scope first, so
 // the appends form one sequence and no lock order can deadlock.
 func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Queries) error) error {
-	if err := validServerEntry(e); err != nil {
+	return s.inAuditedTxOf(ctx, &e, fn)
+}
+
+// inAuditedTxOf is inAuditedTx with an entry that fn may change before the
+// append, for example to add changes that only the transaction can read. It
+// checks the entry again after fn.
+func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db.Queries) error) error {
+	if err := validServerEntry(*e); err != nil {
 		return err
 	}
 
@@ -98,7 +105,11 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if err := validServerEntry(*e); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -113,6 +124,12 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 // of e that only the transaction knows, such as the object ID, before the
 // append. The transaction holds the
 // namespace row FOR UPDATE, as Append does, so the appends form one sequence.
+//
+// The checks run in this order: the entry, then its namespace against the
+// fence, then the fence in the transaction, then fn, then the append. An
+// invalid entry therefore answers audit.ErrInvalidEntry even when the fence is
+// stale, and an error of fn (for example an invalid object) never hides a
+// stale fence.
 func (s *Store) inFencedAuditedTx(
 	ctx context.Context, fence namespace.Fence, e *audit.Entry, fn func(q *db.Queries) error,
 ) error {
@@ -332,28 +349,31 @@ func insertPlacedEntry(
 	}
 
 	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
-		Namespace:    e.Namespace.String(),
-		Sequence:     e.Sequence,
-		Subject:      e.Subject,
-		IdpSubject:   e.IDPSubject,
-		TokenID:      e.TokenID,
-		Action:       e.Action,
-		Object:       e.Object,
-		Version:      e.Version,
-		ValuePath:    e.ValuePath,
-		AtMs:         e.AtMs(),
-		SourceIp:     e.SourceIP,
-		UserAgent:    e.UserAgent,
-		Channel:      string(e.Channel),
-		Kind:         string(e.Kind),
-		Outcome:      string(e.Outcome),
-		RequestID:    e.RequestID,
-		PrevHash:     e.PrevHash,
-		Hash:         e.Hash,
-		ValueCount:   toInt8(e.ValueCount),
-		Changes:      toChangesText(e.Changes),
-		ObjectID:     e.ObjectID,
-		FenceVersion: e.FenceVersion,
+		Namespace:     e.Namespace.String(),
+		Sequence:      e.Sequence,
+		Subject:       e.Subject,
+		IdpSubject:    e.IDPSubject,
+		TokenID:       e.TokenID,
+		Action:        e.Action,
+		Object:        e.Object,
+		Version:       e.Version,
+		ValuePath:     e.ValuePath,
+		AtMs:          e.AtMs(),
+		SourceIp:      e.SourceIP,
+		UserAgent:     e.UserAgent,
+		Channel:       string(e.Channel),
+		Kind:          string(e.Kind),
+		Outcome:       string(e.Outcome),
+		RequestID:     e.RequestID,
+		PrevHash:      e.PrevHash,
+		Hash:          e.Hash,
+		ValueCount:    toInt8(e.ValueCount),
+		Changes:       toChangesText(e.Changes),
+		ObjectID:      e.ObjectID,
+		FenceVersion:  e.FenceVersion,
+		PrincipalKind: e.PrincipalKind,
+		JobID:         e.JobID,
+		Reason:        e.Reason,
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -571,28 +591,31 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 	}
 
 	return audit.Entry{
-		At:           codec.FromMillis(row.AtMs),
-		Namespace:    ns,
-		Subject:      row.Subject,
-		IDPSubject:   row.IdpSubject,
-		TokenID:      row.TokenID,
-		Action:       row.Action,
-		Object:       row.Object,
-		Version:      row.Version,
-		ValuePath:    row.ValuePath,
-		Changes:      changes,
-		ValueCount:   fromInt8(row.ValueCount),
-		ObjectID:     row.ObjectID,
-		SourceIP:     row.SourceIp,
-		UserAgent:    row.UserAgent,
-		Channel:      audit.Channel(row.Channel),
-		Kind:         audit.Kind(row.Kind),
-		Outcome:      audit.Outcome(row.Outcome),
-		RequestID:    row.RequestID,
-		PrevHash:     row.PrevHash,
-		Hash:         row.Hash,
-		Sequence:     row.Sequence,
-		FenceVersion: row.FenceVersion,
+		At:            codec.FromMillis(row.AtMs),
+		Namespace:     ns,
+		Subject:       row.Subject,
+		IDPSubject:    row.IdpSubject,
+		TokenID:       row.TokenID,
+		Action:        row.Action,
+		Object:        row.Object,
+		Version:       row.Version,
+		ValuePath:     row.ValuePath,
+		Changes:       changes,
+		ValueCount:    fromInt8(row.ValueCount),
+		ObjectID:      row.ObjectID,
+		SourceIP:      row.SourceIp,
+		UserAgent:     row.UserAgent,
+		Channel:       audit.Channel(row.Channel),
+		Kind:          audit.Kind(row.Kind),
+		Outcome:       audit.Outcome(row.Outcome),
+		RequestID:     row.RequestID,
+		PrevHash:      row.PrevHash,
+		Hash:          row.Hash,
+		Sequence:      row.Sequence,
+		FenceVersion:  row.FenceVersion,
+		PrincipalKind: row.PrincipalKind,
+		JobID:         row.JobID,
+		Reason:        row.Reason,
 	}
 }
 

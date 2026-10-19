@@ -1,6 +1,6 @@
 # 41. The server reads state and masks secrets
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11 · decision 10 superseded in part by ADR 151. Decision 13 superseded in part by ADR 103. Decision 12 superseded in part by ADR 238. Decisions 9 and 13 superseded in part, and decision 5 extended, by ADR 240
 
 ## Context
 

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -53,7 +54,7 @@ type WorkspaceService interface {
 	// unfenced release.
 	ForceUnlockLock(
 		ctx context.Context, id workspace.ID, expect workspace.Lock, by string,
-		allow namespace.Overrides, record func() error,
+		allow namespace.Overrides, record func() error, entry audit.Entry,
 	) (workspace.Workspace, bool, error)
 	// Current returns the workspace's current state version, or
 	// workspace.ErrNoState.
@@ -78,6 +79,8 @@ type Config struct {
 	Audit audit.Store
 	// Gate bounds concurrent large bodies by bytes held at once.
 	Gate *bodygate.Gate
+	// OnAuditFailure runs when an audit append fails. Nil means no counter.
+	OnAuditFailure func()
 }
 
 // Handler serves the http backend under /tofu/state/.
@@ -89,15 +92,22 @@ type Handler struct {
 	// namespaces and audit serve the override allowance and its audit entries.
 	namespaces NamespaceService
 	audit      audit.Store
-	gate       *bodygate.Gate
-	mux        *http.ServeMux
-	routes     []Route
+	// guard checks the declared actions of the routes and writes the entry of
+	// each refusal.
+	guard  *refusal.Recorder
+	gate   *bodygate.Gate
+	mux    *http.ServeMux
+	routes []Route
+	// onAuditFailure counts a download whose audit entry was lost. It may be nil.
+	onAuditFailure func()
 }
 
 // call is the authorized request that a route handler serves.
 type call struct {
 	principal identity.Principal
 	ref       workspace.Ref
+	// request is the HTTP request, which the refusal audit entry reads.
+	request *http.Request
 }
 
 // Route declares one endpoint: its method and pattern, the actions that the
@@ -133,9 +143,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		ws:         cfg.Workspaces,
 		namespaces: cfg.Namespaces,
 		audit:      cfg.Audit,
-		gate:       cfg.Gate,
-		mux:        http.NewServeMux(),
-		routes:     nil,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
+			cfg.OnAuditFailure),
+		gate:   cfg.Gate,
+		mux:    http.NewServeMux(),
+		routes: nil,
+
+		onAuditFailure: cfg.OnAuditFailure,
 	}
 
 	if h.gate == nil {
@@ -207,14 +221,14 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 		}
 
 		for _, action := range route.Actions {
-			if authErr := h.authz.Authorize(ctx, p, action, obj); authErr != nil {
+			if authErr := h.guard.Authorize(ctx, r, p, action, obj); authErr != nil {
 				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, authErr))
 
 				return
 			}
 		}
 
-		route.Serve(w, r, call{principal: p, ref: ref})
+		route.Serve(w, r, call{principal: p, ref: ref, request: r})
 	}
 }
 

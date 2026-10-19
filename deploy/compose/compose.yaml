@@ -1,0 +1,126 @@
+# OpenDustpan with PostgreSQL and S3-compatible storage.
+#
+# Run ./init.sh once. It writes .env (the secrets) and tls/ (a test
+# certificate). Then run: docker compose up --detach --wait
+# The guide docs/guides/quickstart.md shows each step.
+#
+# Every image has a version and a digest. The digest decides which image
+# runs. Change a digest only in a commit, after you read the release notes.
+name: opendustpan
+
+services:
+  postgres:
+    # PostgreSQL license: the PostgreSQL License (permissive).
+    image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dustpan
+      POSTGRES_DB: dustpan
+      POSTGRES_PASSWORD: ${OPENDUSTPAN_POSTGRES_PASSWORD:?run ./init.sh to make .env}
+    volumes:
+      # The image declares its volume at /var/lib/postgresql.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=dustpan --dbname=dustpan"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  rustfs:
+    # RustFS license: Apache-2.0. It is permissive, so the license rules of
+    # make trivy accept it. MinIO and Garage use AGPL-3.0, which those
+    # rules refuse. The server needs conditional writes (If-None-Match), and
+    # RustFS supports them.
+    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${OPENDUSTPAN_S3_ACCESS_KEY:?run ./init.sh to make .env}
+      RUSTFS_SECRET_KEY: ${OPENDUSTPAN_S3_SECRET_KEY:?run ./init.sh to make .env}
+      # The stack does not publish the console port 9001, so the console
+      # has no use here.
+      RUSTFS_CONSOLE_ENABLE: "false"
+    volumes:
+      - rustfs-data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Makes the bucket once, then stops. The RustFS image has curl, so this
+  # service needs no second image.
+  bucket:
+    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+    restart: "no"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${OPENDUSTPAN_S3_ACCESS_KEY:?run ./init.sh to make .env}
+      S3_SECRET_KEY: ${OPENDUSTPAN_S3_SECRET_KEY:?run ./init.sh to make .env}
+    read_only: true
+    tmpfs: [/data]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        curl --fail --silent --show-error --noproxy '*' --output /dev/null
+        --aws-sigv4 aws:amz:us-east-1:s3
+        --user "$$S3_ACCESS_KEY:$$S3_SECRET_KEY"
+        --request PUT http://rustfs:9000/dustpan || exit 1
+
+  opendustpan:
+    # No release exists yet. Build the image with scripts/build-image-local.sh
+    # (it tags opendustpan:local), or set OPENDUSTPAN_IMAGE in .env to a
+    # release image, with its version and digest, when one exists.
+    image: ${OPENDUSTPAN_IMAGE:-opendustpan:local}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bucket:
+        condition: service_completed_successfully
+    environment:
+      DUSTPAN_DATABASE: postgres://dustpan:${OPENDUSTPAN_POSTGRES_PASSWORD:?run ./init.sh to make .env}@postgres:5432/dustpan
+      DUSTPAN_ADMIN_TOKEN: ${OPENDUSTPAN_ADMIN_TOKEN:?run ./init.sh to make .env}
+      DUSTPAN_KEY_ENCRYPTION_KEY: ${OPENDUSTPAN_KEY_ENCRYPTION_KEY:?run ./init.sh to make .env}
+      DUSTPAN_BLOB_STORE: s3://dustpan
+      # The traffic to RustFS stays inside the private compose network.
+      DUSTPAN_S3_ENDPOINT: http://rustfs:9000
+      AWS_ACCESS_KEY_ID: ${OPENDUSTPAN_S3_ACCESS_KEY:?run ./init.sh to make .env}
+      AWS_SECRET_ACCESS_KEY: ${OPENDUSTPAN_S3_SECRET_KEY:?run ./init.sh to make .env}
+      # A proxy in the host environment must not catch the internal traffic.
+      NO_PROXY: rustfs,postgres,localhost,127.0.0.1
+      DUSTPAN_LISTEN: ":8080"
+      DUSTPAN_TLS_CERT: /tls/cert.pem
+      DUSTPAN_TLS_KEY: /tls/key.pem
+    volumes:
+      - ./tls:/tls:ro
+    ports:
+      # Loopback only. OpenTofu needs HTTPS, so the server uses the test
+      # certificate of init.sh. Put a reverse proxy with a real certificate
+      # in front before you open the port to other hosts.
+      - "127.0.0.1:${OPENDUSTPAN_PORT:-8080}:8080"
+    read_only: true
+    tmpfs: [/tmp, /data]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command:
+      - serve
+      - --console-dir
+      - /console
+    healthcheck:
+      test: ["CMD", "/opendustpan", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+volumes:
+  postgres-data:
+  rustfs-data:

@@ -1,0 +1,9 @@
+# Refused: the service account token in the pod.
+# want: at '/automountServiceAccountToken': value must be false
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+automountServiceAccountToken: true

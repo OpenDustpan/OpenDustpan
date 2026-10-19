@@ -58,7 +58,7 @@ func largeStreamBytes(size int) []byte {
 }
 
 // streamSummary answers the export summary of one stream test: the SQLite
-// dialect with schema version 10, so the restore checks pass it.
+// dialect with the baseline schema version, so the restore checks pass it.
 func streamSummary(refs ...backup.BlobRef) backup.Summary {
 	return backup.Summary{
 		Dialect:       backup.DialectSQLite,
@@ -66,7 +66,7 @@ func streamSummary(refs ...backup.BlobRef) backup.Summary {
 		WrapperIDs:    []string{"kek-1"},
 		RowCounts:     map[string]int64{"namespaces": 1},
 		Blobs:         refs,
-		SchemaVersion: 10,
+		SchemaVersion: backup.BaselineSchemaVersion,
 	}
 }
 
@@ -133,7 +133,7 @@ func restoreStreamedBackup(
 			WrapperIDs:    nil,
 			RowCounts:     map[string]int64{},
 			Blobs:         nil,
-			SchemaVersion: 10,
+			SchemaVersion: backup.BaselineSchemaVersion,
 		},
 		key:          testWrappedKey(t),
 		keyErr:       nil,
@@ -148,18 +148,16 @@ func restoreStreamedBackup(
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
 	live := &restoreServiceLive{
-		checks:      liveChecks,
-		registry:    regs,
-		mu:          sync.Mutex{},
-		stageBlock:  nil,
-		applyGate:   nil,
-		stageCalls:  0,
-		applied:     0,
-		kept:        0,
-		bumped:      0,
-		keepingErr:  nil,
-		resurrect:   nil,
-		wipeBackups: nil,
+		checks:     liveChecks,
+		registry:   regs,
+		mu:         sync.Mutex{},
+		stageBlock: nil,
+		applyGate:  nil,
+		stageCalls: 0,
+		applied:    0,
+		kept:       0,
+		bumped:     0,
+		keepingErr: nil,
 	}
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},

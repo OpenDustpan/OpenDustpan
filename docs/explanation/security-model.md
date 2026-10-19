@@ -59,16 +59,18 @@ persons and services.
   a stored token can: today the bootstrap admin token (ADR 6), later a
   sign-in (ADR 55). A token that could make tokens would outlive its
   maximum lifetime and a revoke of the token that made it.
-- **A personal token for another person is a grant by proxy.** The caller
-  must hold every action that the grants of that person give, through its
-  groups too. Otherwise the server answers 403. So an administrator can
-  never act as a person who holds more.
+- **Each person makes only its own personal tokens.** A token acts as its
+  principal, so a personal token for another person would be a grant by
+  proxy. No principal makes or rotates a personal token of another person,
+  an administrator included. A person makes and rotates its own tokens after
+  a sign-in, through `/api/server/caller/tokens`. A holder of
+  `server:manage-tokens` can revoke the personal token of any person.
 - **A service token needs `principal:manage-tokens` on its service
   principal.** A holder can make, rotate and revoke the tokens of that
   principal. So it can act as the principal, with every grant that the
   principal has now or gets later. A token acts with the grants of its
   principal at the time of each request. The design wants this: the grant of
-  `principal:manage-tokens` is the decision, and no escalation check runs.
+  `principal:manage-tokens` is the decision.
 - **An account administrator can act as any service principal.** The
   built-in roles `account-administrator` and `site-administrator` hold
   `principal:manage-tokens` on the installation, which holds every
@@ -87,7 +89,12 @@ persons and services.
   `tokenManagers`, with one line per service principal in the form
   `<principal ID>: <holder>, <holder>`. The audit entry of each membership
   add of a service principal names the same holders in the change
-  `tokenManagers`.
+  `tokenManagers`. The audit entry of each membership add to a group that
+  lets its members act as service principals names, in the change
+  `actsAs`, what the new member can act as, one per line, as the access
+  review names it: `principal:<id>` for one service principal, the name of
+  a namespace for the service principals of that namespace, and `@server`
+  for every service principal.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
   until they expire. After such a revoke, rotate or revoke the tokens of
@@ -147,6 +154,25 @@ The server encrypts each new OpenTofu state version before it stores it:
 - **The server also encrypts the outputs document in the database.**
 - **A download answers the same bytes that the CLI sent.** The MD5 and the
   size of a state version stay those of the plain bytes.
+
+### Force-unlock
+
+A force-unlock releases the lock of a workspace whoever holds it. It can make
+a running job fail, so it needs the action `unit:write-forced` on the
+workspace, on the TFE-compatible API and on the OpenTofu http backend. Only
+the built-in role `admin` has this action. A person with the role
+`maintainer` gets 403, and the message names the action. An administrator
+can give the action to an on-call group with a custom role.
+
+A force-unlock of a state that the client encrypted writes no fence version,
+because the server cannot set the lineage of such a state. It needs the
+action and the forced-write switch of the namespace and of the workspace. With a
+switch off, the release answers 409, and the message names the action and the
+switches.
+
+Each force-unlock writes one audit entry of the kind `change`. It holds the
+released lock holder, the lock time, the new state version and the reason,
+if the caller gave one.
 
 ## The key-encryption key
 
@@ -329,14 +355,22 @@ entry and how to read them.
     answers the plain value at one masked value path of one version. It
     needs `unit:read` and `unit:read-secrets`, and it writes its entry
     before it answers. The Pulumi CLI also reports a reveal through
-    `decrypt/log-decryption` and `decrypt/log-batch-decryption`.
+    `decrypt/log-decryption` and `decrypt/log-batch-decryption`. A state
+    download by a person also writes this kind.
   - `tool-operation`: a tool needed secrets for its own work. The Pulumi
-    `decrypt` and `batch-decrypt` routes, the OpenTofu state download and
-    the OpenTofu route for one sensitive output write this kind.
-- **The server cannot see who runs a CLI command.** A person who runs
-  `tofu state pull` makes a `tool-operation` entry. The server records a
-  reveal from the Pulumi CLI only when the CLI calls a `log-decryption`
-  route.
+    `decrypt` and `batch-decrypt` routes, the OpenTofu route for one
+    sensitive output, and a state download by a service, a workload or a job
+    write this kind.
+- **The principal decides who a state download is for.** The server cannot
+  see who runs a CLI command, but it knows the kind of the principal and the
+  credential. A download with a console session or an access token of a
+  principal of the kind `person` is a `reveal`. A principal with an unknown
+  kind, for example the bootstrap admin token, counts as a person, so the
+  server writes the stricter entry. A download with a service token, a token
+  from a trust rule or a job token is a `tool-operation`. The channel header
+  never decides. The server records a reveal from the Pulumi CLI only when
+  the CLI calls a `log-decryption` route. A state download answers
+  `Cache-Control: no-store`.
 - **Who can read the log.** `GET /api/audit/entries` lists the entries,
   `GET /api/audit/entries/{sequence}` reads one entry and
   `GET /api/audit/check` checks the chain. Each needs the action

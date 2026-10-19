@@ -62,6 +62,11 @@ const (
 	deltaCutoffFlag = "--checkpoint-delta-cutoff"
 	// disableJournalingFlag names the flag that turns Pulumi journaling off.
 	disableJournalingFlag = "--disable-pulumi-journaling"
+	// disableJournalingEnv names the variable that turns Pulumi journaling
+	// off on the server. The off backend sets it to true, so the run proves
+	// the variable. It never inherits from the test process, so an on
+	// backend stays on.
+	disableJournalingEnv = "DUSTPAN_DISABLE_PULUMI_JOURNALING"
 	// namespaceSubcommand names the namespace subcommand of the server binary.
 	namespaceSubcommand = "namespace"
 	// createSubcommand names the create verb of the namespace subcommand.
@@ -105,6 +110,10 @@ type envInput struct {
 	// the server, so the server refuses it and records the refusal. Nil
 	// passes every batch through untouched.
 	journalRefuser *JournalRefuser
+	// journalCap lowers the journal version that start-update answers, so a
+	// test can drive version 1 with a CLI that offers version 2. Nil answers
+	// the negotiated version.
+	journalCap *JournalVersionCap
 }
 
 // backendConfig groups the settings of one backend process.
@@ -122,8 +131,9 @@ type backendConfig struct {
 	// always passes it explicitly, so an inherited
 	// DUSTPAN_CHECKPOINT_DELTA_CUTOFF never changes a test backend.
 	deltaCutoff int
-	// disableJournaling passes --disable-pulumi-journaling when set, so an
-	// inherited DUSTPAN_DISABLE_PULUMI_JOURNALING never changes a test backend.
+	// disableJournaling passes --disable-pulumi-journaling with
+	// DUSTPAN_DISABLE_PULUMI_JOURNALING=true when set, so an inherited
+	// variable never changes a test backend.
 	disableJournaling bool
 	// ipAllowlists passes --ip-allowlists with
 	// --ip-allowlists-include-bootstrap when set, so the binary server checks
@@ -386,6 +396,7 @@ func backendEnv(tokens string) []string {
 			strings.HasPrefix(kv, "DUSTPAN_DATABASE=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY_FILE=") ||
+			strings.HasPrefix(kv, disableJournalingEnv+"=") ||
 			strings.HasPrefix(kv, "AWS_ACCESS_KEY_ID=") ||
 			strings.HasPrefix(kv, "AWS_SECRET_ACCESS_KEY=") {
 			continue
@@ -404,6 +415,19 @@ func backendEnv(tokens string) []string {
 // the database from the variable, because it refuses a password in the flag.
 func backendServeEnv(tokens, dbURL string) []string {
 	return append(backendEnv(tokens), "DUSTPAN_DATABASE="+dbURL)
+}
+
+// journalingServeEnv returns the journaling environment of a `serve` child
+// process: DUSTPAN_DISABLE_PULUMI_JOURNALING=true when cfg turns journaling
+// off, else nothing. The off backend proves the variable, next to the flag
+// that serveArgs passes. The variable never inherits from the test process,
+// so an on backend stays on.
+func journalingServeEnv(cfg backendConfig) []string {
+	if !cfg.disableJournaling {
+		return nil
+	}
+
+	return []string{disableJournalingEnv + "=true"}
 }
 
 // s3CredentialEnv maps the S3 test credentials into the child environment.
@@ -522,6 +546,7 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), cfg.signIn.env()...)
+	cmd.Env = append(cmd.Env, journalingServeEnv(cfg)...)
 
 	var out lockedBuffer
 
@@ -560,16 +585,17 @@ func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) (
 	return handle, handle.url
 }
 
-// DatabaseURL returns the --database value of the binary environment, so a
-// test does not rebuild it for RunBinary. It needs E2E_SERVER=binary.
+// DatabaseURL returns the --database value of the environment, so a test
+// runs a command against the same database the server serves without
+// rebuilding it.
 func (e *Env) DatabaseURL(tb testing.TB) string {
 	tb.Helper()
 
-	if e.binPath == "" {
-		tb.Fatalf("DatabaseURL needs E2E_SERVER=binary")
+	if e.dbURL == "" {
+		tb.Fatalf("DatabaseURL needs a database")
 	}
 
-	return e.backendCfg.dbURL
+	return e.dbURL
 }
 
 // BackupTarget returns the --backup-target value of the binary environment
@@ -710,8 +736,8 @@ func (e *Env) BackupTargetDir(tb testing.TB) string {
 
 // RunBinary runs `opendustpan <args>` as a child process with the environment
 // tokens. It reuses the binary that serverBinary built and the environment
-// that backendEnv builds. Callers pass the flags the subcommand needs. It
-// needs E2E_SERVER=binary.
+// that backendEnv builds. Callers pass the flags the subcommand needs. In
+// the in-process mode it builds the server binary first.
 func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) BinaryResult {
 	tb.Helper()
 
@@ -721,15 +747,17 @@ func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) Bina
 // RunBinaryWithEnv runs `opendustpan <args>` as RunBinary does, with extra
 // NAME=value pairs added to the child environment. An entry replaces the
 // backend entry of the same name, so a test overrides the key-encryption key
-// for a wrong-key restore without changing the server. It needs
-// E2E_SERVER=binary.
+// for a wrong-key restore without changing the server. In the in-process
+// mode it builds the server binary first, so a step runs the real command
+// against the database of the environment. It needs E2E_SERVER=binary for
+// commands that talk to the server process itself.
 func (e *Env) RunBinaryWithEnv(
 	ctx context.Context, tb testing.TB, extra []string, args ...string,
 ) BinaryResult {
 	tb.Helper()
 
 	if e.binPath == "" {
-		tb.Fatalf("RunBinary needs E2E_SERVER=binary")
+		e.binPath = serverBinary(ctx, tb, tb.TempDir())
 	}
 
 	return e.runBinaryAt(ctx, tb, e.binPath, extra, args...)
@@ -924,7 +952,7 @@ func startRecordingProxy(
 ) *httptest.Server {
 	tb.Helper()
 
-	p := reserveRecordingProxy(tb, rec, refuser)
+	p := reserveRecordingProxy(tb, rec, refuser, nil)
 
 	return p.start(tb, backendURL)
 }
@@ -960,7 +988,9 @@ func (p *recordingProxy) start(tb testing.TB, backendURL string) *httptest.Serve
 
 // reserveRecordingProxy binds the listener of a recording proxy and
 // returns it, not started.
-func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser) *recordingProxy {
+func reserveRecordingProxy(
+	tb testing.TB, rec *Recorder, refuser *JournalRefuser, versionCap *JournalVersionCap,
+) *recordingProxy {
 	tb.Helper()
 
 	target := &url.URL{}
@@ -980,7 +1010,7 @@ func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser
 		Transport: transport,
 	}
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(faultedHandler(proxy, refuser)))
+	ts := httptest.NewUnstartedServer(rec.Middleware(cappedHandler(faultedHandler(proxy, refuser), versionCap)))
 	tb.Cleanup(ts.Close)
 
 	return &recordingProxy{server: ts, target: target}
@@ -1093,7 +1123,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	setup := newBlobSetup(ctx, tb, in.dir)
 	cfg := binaryBackendConfig(in, bin, dbURL, setup, writeBackendCert(tb, in.dir))
 
-	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser)
+	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser, in.journalCap)
 	signIn := binarySignInSetup(tb, in, reserved, &cfg)
 
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
@@ -1131,6 +1161,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   handle.logs,
 		certBundle:    "",
 		dbProxy:       dbProxy,
+		dbURL:         cfg.dbURL,
 		signIn:        signIn,
 	}
 

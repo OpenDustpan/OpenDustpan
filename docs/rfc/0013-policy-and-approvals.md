@@ -1,15 +1,15 @@
 ---
 rfc: 13
 title: Policy and approvals
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 222
 ---
 
 # RFC 13. Policy and approvals
 
-Status: draft. The names, the scope and the split into three kinds of policy
-are proposals. Which policy engines OpenDustpan supports, and how, is to be
-decided.
+Status: accepted. ADRs 222 to 230 record the model that answers it. RFC 77 held the points that stayed open, and the owner decided
+each of them on 2026-10-18. The text below is the proposal as it was.
 
 ## Problem
 
@@ -227,4 +227,38 @@ worked into the proposal above.
 
 ## Outcome
 
-None yet.
+Not accepted as a whole. On 2026-10-18:
+
+- The sentence "One edit has one place for approval: OpenDustpan or the
+  forge, never both" is superseded. ADR 103 and ADR 110 decide that the
+  approvals of OpenDustpan add to the approvals of the forge.
+- ADR 212 decision 3 (owner decision): an approval of a `destroy` phase
+  always needs a fresh MFA step, and a namespace switch makes every approval
+  need it. An approval through the API stays possible.
+- ADR 213 decision 4: the policy input of `job.start` holds the old and the
+  new value of each edit key that is not secret, and a flag for a secret
+  key, as the project manager decided under the owner's decision rule.
+
+On 2026-10-18 the owner accepted one model for access, gates, approval
+rules and facts (ADRs 222 to 230). The open questions above go as follows:
+
+- Engines: Cedar, linked as `cedar-go` and as an external service behind one
+  engine port (ADR 224 decision 9). Access limits are Cedar `forbid`
+  policies (ADR 223). Resource policy still runs where the tool runs, and its
+  reports are facts (ADR 226 decision 7).
+- Semgrep: a source check is a producer of facts, as an external check (ADR
+  226 decision 10). It is not a fourth kind of policy.
+- The edit input schema: the fact schema of each decision point, with a
+  version (ADR 226 decision 2).
+- Per namespace or per label: gates have the scopes installation, namespace,
+  collection and unit, and a condition can read the unit labels (ADR 224
+  decision 1).
+- Break-glass for an edit policy: RFC 77, point 4.
+- "Approve first" for apply: approval defaults on a namespace, a collection
+  or a unit, off by default (ADR 225 decision 4).
+- The forge bypass list and the Pulumi policy pack endpoints: not answered
+  here. A later RFC opens each when the work needs it.
+- The gaps from the competitor review: enforcement levels are the modes and
+  outcomes of ADR 224, exemptions are `unless` (ADR 224 decision 6), the
+  stages are the five decision points (ADR 224 decision 2), and a change
+  with no plan change ends with no approval (ADR 213 decision 3).

@@ -244,8 +244,28 @@ server also refuses a request with the cookie from another site. An
 `Origin` header must name the public URL or an origin of
 `--allowed-origins`.
 
+A console on another origin sends a preflight request. For an origin in
+`--allowed-origins`, the server allows the headers `Authorization`,
+`Content-Type`, `Dustpan-Channel`, `Idempotency-Key`, `If-Match` and
+`X-Dustpan-CSRF`, and the methods GET, POST, PUT, PATCH and DELETE, with
+credentials. It caches the answer for 600 seconds. On an answer to a request,
+the server sets `Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed`,
+so that the console can read the wait time of a 503 answer, the `ETag` of a profile and
+the mark of a replayed answer. A request from another origin gets no CORS headers.
+
+The server answers CORS on `/api/` (including the TFE-compatible API at
+`/api/v2/` and the context API at `/api/context/`), and not on
+`/tofu/state/`.
+
+Each value of `--allowed-origins` has the form `scheme://host[:port]`. The
+scheme is `http` or `https`. The host is in lower case and uses ASCII only
+(write an internationalized host in punycode). The value has no default port
+(`:443` for `https`, `:80` for `http`), no path, query or fragment, and no
+trailing slash. The server refuses to start with the value `null`, the value
+`*`, or any other value that does not have this form.
+
 The APIs of the console take the session cookie: the installation API
-(`/api/server/`), the inventory API (`/api/inventory/`), the audit API
+(`/api/server/`), the tool-neutral API (`/api/dustpan/v1/`), the audit API
 (`/api/audit/`) and the API that works with the Pulumi CLI. Each API
 applies the same CSRF and origin checks. The TFE-compatible API does not
 take the cookie: it answers 401 to a request with the cookie and no token.

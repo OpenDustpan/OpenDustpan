@@ -271,6 +271,16 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			isUnit:  true,
 		},
 		{
+			name:    "masked state at a time",
+			pattern: "GET /api/v2/workspaces/{workspace_id}/state-at/{at}",
+			method:  http.MethodGet,
+			target:  "/api/v2/workspaces/ws-test123/state-at/1500",
+			body:    "",
+			actions: []identity.Action{identity.ActionUnitRead},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
+		{
 			name:    "one masked resource",
 			pattern: "GET /api/v2/state-versions/{state_version_id}/resources/{address}",
 			method:  http.MethodGet,
@@ -671,7 +681,9 @@ func TestStateVersionListDeclaresActionAndObject(t *testing.T) {
 type stateListTestAttributes struct {
 	Holder       string `json:"holder"`
 	Force        bool   `json:"force"`
-	RestoredFrom string `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	RestoredFrom string `json:"restored-from"`  //nolint:tagliatelle // The TFE wire name; it must not change.
+	FenceBy      string `json:"fence-by"`       //nolint:tagliatelle // The TFE wire name; it must not change.
+	Unlocked     bool   `json:"unlocked-write"` //nolint:tagliatelle // The TFE wire name; it must not change.
 }
 
 // stateListTestResource decodes one listed state version in tests.
@@ -755,13 +767,13 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 	versions := make([]workspace.StateVersion, 0, 3)
 
 	for i, tc := range []struct {
-		id, holder, restored string
-		force                bool
-		serial               int64
+		id, holder, restored, fenceBy string
+		force, unlockedWrite          bool
+		serial                        int64
 	}{
-		{id: "sv-3", holder: "tester", restored: "sv-1", force: true, serial: 5},
-		{id: "sv-2", holder: "tester", restored: "", force: true, serial: 4},
-		{id: "sv-1", holder: "tester", restored: "", force: false, serial: 3},
+		{id: "sv-3", holder: "", restored: "", fenceBy: "", force: false, unlockedWrite: true, serial: 5},
+		{id: "sv-2", holder: "", restored: "", fenceBy: "alice", force: false, unlockedWrite: false, serial: 4},
+		{id: "sv-1", holder: "tester", restored: "sv-0", fenceBy: "", force: true, unlockedWrite: false, serial: 3},
 	} {
 		created := at.Add(time.Duration(i) * time.Minute)
 		versions = append(versions, workspace.StateVersion{
@@ -784,8 +796,8 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			Sealed:          false,
 			RestoredFrom:    workspace.StateVersionID(tc.restored),
 			SensitiveMarks:  nil,
-			FenceBy:         "",
-			UnlockedWrite:   false,
+			FenceBy:         tc.fenceBy,
+			UnlockedWrite:   tc.unlockedWrite,
 		})
 	}
 
@@ -920,8 +932,8 @@ func TestListStateVersionsPaging(t *testing.T) {
 	})
 }
 
-// TestListStateVersionsAddedAttributes proves the list carries holder, force
-// and restored-from on every entry.
+// TestListStateVersionsAddedAttributes proves the list carries holder, force,
+// restored-from, fence-by and unlocked-write on every entry.
 func TestListStateVersionsAddedAttributes(t *testing.T) {
 	t.Parallel()
 
@@ -933,9 +945,9 @@ func TestListStateVersionsAddedAttributes(t *testing.T) {
 	doc := decodeStateList(t, rec)
 
 	want := map[string]stateListTestAttributes{
-		"sv-3": {Holder: "tester", Force: true, RestoredFrom: "sv-1"},
-		"sv-2": {Holder: "tester", Force: true, RestoredFrom: ""},
-		"sv-1": {Holder: "tester", Force: false, RestoredFrom: ""},
+		"sv-3": {Holder: "", Force: false, RestoredFrom: "", FenceBy: "", Unlocked: true},
+		"sv-2": {Holder: "", Force: false, RestoredFrom: "", FenceBy: "alice", Unlocked: false},
+		"sv-1": {Holder: "tester", Force: true, RestoredFrom: "sv-0", FenceBy: "", Unlocked: false},
 	}
 
 	if len(doc.Data) != len(want) {

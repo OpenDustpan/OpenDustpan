@@ -79,11 +79,15 @@ func Bench(b *testing.B, s BenchStore) {
 	}
 
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "user-00000",
 		DisplayName:    "",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	b.Run("check", func(b *testing.B) {
@@ -205,7 +209,7 @@ func seedBenchPrincipals(b *testing.B, s BenchStore) {
 				State:       principal.MembershipStateActive,
 				Pinned:      false,
 			}
-			if err := s.AddMember(ctx, m, entry()); err != nil {
+			if err := s.AddMember(ctx, m, entry(), nil); err != nil {
 				b.Fatalf("seed member: %v", err)
 			}
 		}

@@ -1,0 +1,10 @@
+# Refused: privilege escalation.
+# want: at '/containerSecurityContext/allowPrivilegeEscalation': value must be false
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+containerSecurityContext:
+  allowPrivilegeEscalation: true

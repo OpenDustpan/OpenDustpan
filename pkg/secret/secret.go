@@ -336,7 +336,21 @@ func (s *Service) Decrypt(ctx context.Context, scope Scope, ciphertexts [][]byte
 
 // dataKey returns the scope's data key as an AEAD, creating it if create is
 // set and none exists yet.
+// dataKey returns the AEAD of the data key of scope, for the value paths.
 func (s *Service) dataKey(ctx context.Context, scope Scope, create bool) (cipher.AEAD, error) {
+	key, err := s.unwrapDataKey(ctx, scope, create)
+	if err != nil {
+		return nil, err
+	}
+
+	defer clear(key)
+
+	return newAEAD(key)
+}
+
+// unwrapDataKey returns the raw data key of scope, creating it on first use
+// when create is set. The caller clears the key.
+func (s *Service) unwrapDataKey(ctx context.Context, scope Scope, create bool) ([]byte, error) {
 	stored, err := s.keys.GetKey(ctx, scope)
 
 	switch {
@@ -369,9 +383,7 @@ func (s *Service) dataKey(ctx context.Context, scope Scope, create bool) (cipher
 		return nil, fmt.Errorf("unwrap key for %s: %w", scope, err)
 	}
 
-	defer clear(key)
-
-	return newAEAD(key)
+	return key, nil
 }
 
 func (s *Service) createKey(ctx context.Context, scope Scope) (WrappedKey, error) {

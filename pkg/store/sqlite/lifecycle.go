@@ -58,7 +58,7 @@ func (s *Store) RestoreStack(
 			e.Object,
 		)
 
-		return restoreStackRow(ctx, q, ref, id, e)
+		return restoreStackRow(ctx, q, ref, deletedStack{id: id, name: stack.Name(row.DeletedName.String)}, &e)
 	})
 	if err != nil {
 		return stack.Ref{}, err
@@ -67,10 +67,26 @@ func (s *Store) RestoreStack(
 	return ref, nil
 }
 
+// deletedStack names the deleted stack that a restore brings back: its ID and
+// its name before the delete.
+type deletedStack struct {
+	id   stack.ID
+	name stack.Name
+}
+
+// deletedWorkspace names the deleted workspace that a restore brings back: its
+// ID and its name before the delete.
+type deletedWorkspace struct {
+	id   workspace.ID
+	name workspace.Name
+}
+
 // restoreStackRow renames the deleted stack id to ref and moves its
 // inventory entry back. It returns ErrAlreadyExists if a live stack holds the
 // name of ref.
-func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack.ID, e audit.Entry) error {
+func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, deleted deletedStack, e *audit.Entry) error {
+	id := deleted.id
+
 	_, liveErr := q.GetStackID(ctx, db.GetStackIDParams{
 		Namespace: ref.Namespace.String(), Project: ref.Project.String(), Name: ref.Stack.String(),
 	})
@@ -81,6 +97,19 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack
 	case !errors.Is(liveErr, sql.ErrNoRows):
 		return fmt.Errorf("select stack: %w", liveErr)
 	}
+
+	from := unitGate{
+		ns:   ref.Namespace,
+		tool: inventoryTool,
+		name: stackUnitName(stack.Ref{Namespace: ref.Namespace, Project: ref.Project, Stack: deleted.name}),
+	}
+
+	moved, err := restoreUnitGate(ctx, q, from, stackUnitName(ref), audit.MaxChanges-len(e.Changes))
+	if err != nil {
+		return err
+	}
+
+	e.Changes = append(e.Changes, moved...)
 
 	n, err := q.RestoreStack(ctx, db.RestoreStackParams{
 		Name: ref.Stack.String(), UpdatedAtMs: e.At.UnixMilli(), Namespace: ref.Namespace.String(), ID: id.String(),
@@ -108,7 +137,12 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishStackInventory(ctx, q, ref, id.String(), e.At.UnixMilli())
+	return publishStackInventory(
+		ctx,
+		q,
+		ref,
+		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
+	)
 }
 
 // PurgeStack implements stack.Store. In one fenced transaction with the
@@ -164,6 +198,7 @@ func purgeStackRows(ctx context.Context, q *db.Queries, ns namespace.Name, id st
 		{del: q.DeleteJournalOfStack, name: "journal"},
 		{del: q.DeleteUpdatesOfStack, name: "updates"},
 		{del: q.DeleteStackTags, name: "tags"},
+		{del: q.DeleteInventoryLabels, name: "labels"},
 		{del: q.DeleteSecretKeysOfStack, name: "data key"},
 	}
 
@@ -187,7 +222,7 @@ func purgeStackRows(ctx context.Context, q *db.Queries, ns namespace.Name, id st
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return nil
+	return purgeUnitContext(ctx, q, ns, id.String())
 }
 
 // RestoreWorkspace implements workspace.Store. In one fenced transaction
@@ -223,7 +258,7 @@ func (s *Store) RestoreWorkspace(
 		e.ObjectID = id.String()
 		e.Object = restoredReference(workspaceInventoryTool, fence.Namespace, name.String(), e.Object)
 
-		return restoreWorkspaceRow(ctx, q, ref, id, e)
+		return restoreWorkspaceRow(ctx, q, ref, deletedWorkspace{id: id, name: workspace.Name(deletedName.String)}, &e)
 	})
 	if err != nil {
 		return workspace.Ref{}, err
@@ -236,8 +271,10 @@ func (s *Store) RestoreWorkspace(
 // inventory entry back. It returns ErrAlreadyExists if a live workspace holds
 // the name of ref.
 func restoreWorkspaceRow(
-	ctx context.Context, q *db.Queries, ref workspace.Ref, id workspace.ID, e audit.Entry,
+	ctx context.Context, q *db.Queries, ref workspace.Ref, deleted deletedWorkspace, e *audit.Entry,
 ) error {
+	id := deleted.id
+
 	_, liveErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{Namespace: ref.Namespace.String(), Name: ref.Name.String()})
 
 	switch {
@@ -246,6 +283,15 @@ func restoreWorkspaceRow(
 	case !errors.Is(liveErr, sql.ErrNoRows):
 		return fmt.Errorf("select workspace: %w", liveErr)
 	}
+
+	from := unitGate{ns: ref.Namespace, tool: workspaceInventoryTool, name: deleted.name.String()}
+
+	moved, err := restoreUnitGate(ctx, q, from, ref.Name.String(), audit.MaxChanges-len(e.Changes))
+	if err != nil {
+		return err
+	}
+
+	e.Changes = append(e.Changes, moved...)
 
 	n, err := q.RestoreWorkspace(ctx, db.RestoreWorkspaceParams{
 		Name: ref.Name.String(), UpdatedAtMs: e.At.UnixMilli(), Namespace: ref.Namespace.String(), ID: id.String(),
@@ -273,11 +319,16 @@ func restoreWorkspaceRow(
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishWorkspaceInventory(ctx, q, ref, id.String(), e.At.UnixMilli())
+	return publishWorkspaceInventory(
+		ctx,
+		q,
+		ref,
+		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
+	)
 }
 
 // PurgeWorkspace implements workspace.Store. In one fenced transaction with
-// the audit entry e, it removes the deleted workspace id with its state
+// the audit entry e, it removes the deleted workspace id with its blame, its state
 // versions, its data key and its deleted inventory entry (ADR 47).
 func (s *Store) PurgeWorkspace(
 	ctx context.Context,
@@ -326,6 +377,11 @@ func purgeWorkspaceRows(
 		return workspace.ErrNotFound
 	}
 
+	err = deleteWorkspaceBlame(ctx, q, id)
+	if err != nil {
+		return err
+	}
+
 	if err = q.DeleteStateVersionsOfWorkspace(ctx, id.String()); err != nil {
 		return fmt.Errorf("delete state versions of workspace: %w", err)
 	}
@@ -346,6 +402,24 @@ func purgeWorkspaceRows(
 	delParams := db.DeleteDeletedInventoryParams{Tool: workspaceInventoryTool, UnitID: id.String()}
 	if _, err = q.DeleteDeletedInventory(ctx, delParams); err != nil {
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
+	}
+
+	return purgeUnitContext(ctx, q, ns, id.String())
+}
+
+// deleteWorkspaceBlame deletes the resource change rows, the blame items and
+// the blame cursor of the workspace id.
+func deleteWorkspaceBlame(ctx context.Context, q *db.Queries, id workspace.ID) error {
+	if err := q.DeleteWorkspaceResourceChanges(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete resource changes of workspace: %w", err)
+	}
+
+	if err := q.DeleteWorkspaceBlameItems(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete blame items of workspace: %w", err)
+	}
+
+	if err := q.DeleteWorkspaceBlameCursor(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete blame cursor of workspace: %w", err)
 	}
 
 	return nil
@@ -416,9 +490,27 @@ func (s *Store) purgeUnit(
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		e.ObjectID = u.id
 
+		// The purge row names the unit as the delete left it. The read
+		// comes first, because rows deletes the deleted inventory entry.
+		deleted, nameErr := q.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
+			Namespace: fence.Namespace.String(), Tool: u.tool, UnitID: u.id,
+		})
+		if nameErr != nil && !errors.Is(nameErr, sql.ErrNoRows) {
+			return fmt.Errorf("select deleted inventory entry: %w", nameErr)
+		}
+
 		if err := rows(q); err != nil {
 			return err
 		}
+
+		removed, gateErr := purgeUnitGate(
+			ctx, q, unitGate{ns: fence.Namespace, tool: u.tool, name: deleted.Name}, audit.MaxChanges-len(e.Changes),
+		)
+		if gateErr != nil {
+			return gateErr
+		}
+
+		e.Changes = append(e.Changes, removed...)
 
 		if err := q.DeleteCollectionMembersOfUnit(ctx, u.id); err != nil {
 			return fmt.Errorf("delete collection membership: %w", err)
@@ -431,7 +523,18 @@ func (s *Store) purgeUnit(
 			return fmt.Errorf("record blob purge: %w", err)
 		}
 
-		return revokeUnitGrants(ctx, q, u.id, e)
+		if revokeErr := revokeUnitGrants(ctx, q, u.id, e); revokeErr != nil {
+			return revokeErr
+		}
+
+		purged := unitChange(
+			fence.Namespace,
+			u.tool,
+			deleted.Name,
+			unitWrite{unitID: u.id, atMs: codec.Millis(e.At), kind: inventory.ChangePurged},
+		)
+
+		return appendInventoryChange(ctx, q, purged)
 	})
 }
 
@@ -499,4 +602,19 @@ func restoredReference(tool string, ns namespace.Name, name, fallback string) st
 	}
 
 	return obj.String()
+}
+
+// purgeUnitContext deletes the context entries of the unit and of its
+// resources. The owner rows go with them by cascade.
+func purgeUnitContext(ctx context.Context, q *db.Queries, ns namespace.Name, unitID string) error {
+	nsID, err := q.GetNamespaceID(ctx, ns.String())
+	if err != nil {
+		return fmt.Errorf("select namespace ID: %w", err)
+	}
+
+	if err = q.DeleteUnitContext(ctx, db.DeleteUnitContextParams{NamespaceID: nsID, ObjectID: unitID}); err != nil {
+		return fmt.Errorf("delete unit context: %w", err)
+	}
+
+	return nil
 }

@@ -220,7 +220,10 @@ Lead decisions under owner delegation, 2026-10-13:
   the owner: `viewer`, `auditor`, `secret-viewer`, `writer`, `maintainer` and
   `admin`. `docs/research/m4-built-in-roles.md` gives the facts behind it.
   `pkg/access/roles.go` holds the actions of each role. A planner role waits
-  for a route that separates a plan from an apply.
+  for a route that separates a plan from an apply. On 2026-10-19 the owner
+  decided that `writer` and `maintainer` also hold `unit:read-secrets`: a
+  role that can apply can read every secret value of the state. Benchmark:
+  HCP Terraform workspace Write includes read and write of state versions.
 - Grant history. A revoke ends a grant and keeps its row, and the delete of
   a custom role ends the role. A delete of a principal or a group revokes
   its grants in the same transaction. Each grant and role change writes its
@@ -327,5 +330,10 @@ Lead decisions under owner delegation, 2026-10-13:
   query, the grants on the chain of the object in one query, and the custom
   roles of those grants in one query. A request reads the groups and the
   roles once. No cache lives across requests.
+
+Project manager decision on 2026-10-18, under the owner's decision rule:
+[ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
+decision 1 adds the built-in `planner` role: the actions of `viewer`, with
+`unit:run-plan` and `job:read-plans`, and the caveat for a workstation.
 
 The other questions in "Open questions" have no outcome yet.

@@ -97,28 +97,31 @@ func at(minute int) time.Time {
 // @server, as a Service builds it.
 func entry() audit.Entry {
 	return audit.Entry{
-		At:           at(9),
-		Namespace:    audit.ServerScope,
-		Subject:      "admin",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "server:manage-principals",
-		Object:       "principal:prn-test",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "principaltest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            at(9),
+		Namespace:     audit.ServerScope,
+		Subject:       "admin",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "server:manage-principals",
+		Object:        "principal:prn-test",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "principaltest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -184,7 +187,7 @@ func mustAddMember(t *testing.T, s principal.Store, groupID, principalID string)
 		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: principalID,
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
 	}
-	if err := s.AddMember(t.Context(), m, entry()); err != nil {
+	if err := s.AddMember(t.Context(), m, entry(), nil); err != nil {
 		t.Fatalf("add %q to %q: %v", principalID, groupID, err)
 	}
 }
@@ -721,6 +724,7 @@ func testDuplicateMember(t *testing.T, s principal.Store) {
 			Pinned: false,
 		},
 		entry(),
+		nil,
 	)
 	wantErr(t, "add a member twice", err, principal.ErrAlreadyExists)
 }
@@ -739,6 +743,7 @@ func testMemberMissing(t *testing.T, s principal.Store) {
 			Pinned: false,
 		},
 		entry(),
+		nil,
 	)
 	wantErr(t, "add to a missing group", err, principal.ErrNotFound)
 
@@ -750,6 +755,7 @@ func testMemberMissing(t *testing.T, s principal.Store) {
 			Pinned: false,
 		},
 		entry(),
+		nil,
 	)
 	wantErr(t, "add a missing principal", err, principal.ErrNotFound)
 }
@@ -834,6 +840,7 @@ func testDeletedPrincipalHistory(t *testing.T, s principal.Store) {
 			Pinned: false,
 		},
 		entry(),
+		nil,
 	)
 	wantErr(t, "add a deleted principal", err, principal.ErrNotFound)
 
@@ -865,7 +872,7 @@ func testRejoin(t *testing.T, s principal.Store) {
 		AddedAt: at(4), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
 	}
-	if err = s.AddMember(t.Context(), m, entry()); err != nil {
+	if err = s.AddMember(t.Context(), m, entry(), nil); err != nil {
 		t.Fatalf("join again: %v", err)
 	}
 
@@ -1038,6 +1045,7 @@ func testRefusedEntryChangesNothing(t *testing.T, s principal.Store) {
 					Pinned: false,
 				},
 				refused(),
+				nil,
 			)
 		}, "add member"},
 	}
@@ -1207,7 +1215,7 @@ func testDirectoryGroup(t *testing.T, s principal.Store) {
 	err = s.AddMember(ctx, principal.Membership{
 		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
-	}, entry())
+	}, entry(), nil)
 	wantErr(t, "add to a directory group", err, principal.ErrManagedByDirectory)
 
 	if err == nil || !strings.Contains(err.Error(), "ldap") {
@@ -1263,7 +1271,7 @@ func seedSourceStateMembers(t *testing.T, s principal.Store) {
 		State: principal.MembershipStateActive, Pinned: false,
 	}
 
-	if err := s.AddMember(ctx, scim, entry()); err != nil {
+	if err := s.AddMember(ctx, scim, entry(), nil); err != nil {
 		t.Fatalf("add a membership from scim: %v", err)
 	}
 
@@ -1273,7 +1281,7 @@ func seedSourceStateMembers(t *testing.T, s principal.Store) {
 		State: principal.MembershipStateSuspended, Pinned: true,
 	}
 
-	if err := s.AddMember(ctx, claimed, entry()); err != nil {
+	if err := s.AddMember(ctx, claimed, entry(), nil); err != nil {
 		t.Fatalf("add a suspended membership from a claim: %v", err)
 	}
 }
@@ -1342,7 +1350,7 @@ func testLocalMembershipDefaults(t *testing.T, s principal.Store) {
 		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
 	}
-	if err := s.AddMember(ctx, m, entry()); err != nil {
+	if err := s.AddMember(ctx, m, entry(), nil); err != nil {
 		t.Fatalf("add a local membership: %v", err)
 	}
 
@@ -1355,7 +1363,7 @@ func testLocalMembershipDefaults(t *testing.T, s principal.Store) {
 		AddedAt: at(2), SuspendedAt: time.Time{}, GroupID: "grp-2", PrincipalID: "prn-2",
 		Source: "", SourceID: "", State: "", Pinned: false,
 	}
-	if addErr := s.AddMember(ctx, empty, entry()); addErr != nil {
+	if addErr := s.AddMember(ctx, empty, entry(), nil); addErr != nil {
 		t.Fatalf("add a membership with no source or state: %v", addErr)
 	}
 
@@ -1484,7 +1492,7 @@ func testInvalidMembership(t *testing.T, s principal.Store) {
 	}
 
 	for i := range cases {
-		err := s.AddMember(ctx, cases[i].m, entry())
+		err := s.AddMember(ctx, cases[i].m, entry(), nil)
 		wantErr(t, cases[i].name, err, principal.ErrInvalid)
 	}
 

@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -85,11 +86,15 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (iden
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "Tester",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 
@@ -383,11 +388,13 @@ func (stubWorkspaces) Unlock(_ context.Context, id workspace.ID, _ string) (work
 	return ws, nil
 }
 
-func (rstubWorkspaces stubWorkspaces) ForceUnlock(
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (rstubWorkspaces stubWorkspaces) ForceUnlockLock(
 	ctx context.Context,
 	id workspace.ID,
+	_ workspace.Lock,
 	by string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	w, err := rstubWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
@@ -675,6 +682,60 @@ func (stubWorkspaces) ReadResource(
 	return workspace.ReadStateResource(raw, marks, address)
 }
 
+// stubStateAtFirst is the finalize time of the first stub state version in
+// Unix milliseconds. The stub holds sv-test123 from this time, sv-second123
+// from 2000 ms and sv-encrypted123 from 3000 ms.
+const stubStateAtFirst = 1000
+
+func (stubWorkspaces) ReadStateAt(
+	ctx context.Context, _ workspace.ID, req workspace.StateAtRequest,
+) (workspace.StateAtRead, error) {
+	return stubReadStateAt(ctx, req)
+}
+
+// stubReadStateAt answers the state at a time from the stub state versions.
+func stubReadStateAt(ctx context.Context, req workspace.StateAtRequest) (workspace.StateAtRead, error) {
+	stub := stubWorkspaces{}
+	id, finalized := workspace.StateVersionID("sv-test123"), int64(stubStateAtFirst)
+
+	switch ms := req.At.UnixMilli(); {
+	case ms < stubStateAtFirst:
+		return workspace.StateAtRead{}, fmt.Errorf(
+			"%w: the first state version of acme/web is at 1970-01-01T00:00:01Z (%d ms)",
+			workspace.ErrNoStateAt, stubStateAtFirst,
+		)
+	case ms >= 3000:
+		id, finalized = "sv-encrypted123", 3000
+	case ms >= 2000:
+		id, finalized = "sv-second123", 2000
+	default:
+		// The first state version answers.
+	}
+
+	sv, err := stub.ReadState(ctx, id)
+	if err != nil {
+		return workspace.StateAtRead{}, err
+	}
+
+	out := workspace.StateAtRead{
+		Page:    workspace.StatePage{Resources: nil, NextCursor: "", Incomplete: false},
+		Version: sv,
+		State:   workspace.StateAt{FinalizedAt: time.UnixMilli(finalized).UTC(), By: "alice", StateVersion: id},
+		Names:   inventory.Names{AtTime: "", Current: ""},
+		Opaque:  false,
+	}
+
+	out.Page, err = stub.ReadResources(ctx, id, req.Cursor, req.Size, req.Filter)
+	if errors.Is(err, workspace.ErrClientEncrypted) {
+		out.Page = workspace.StatePage{Resources: nil, NextCursor: "", Incomplete: false}
+		out.Opaque = true
+
+		return out, nil
+	}
+
+	return out, err
+}
+
 func (stubWorkspaces) DiffStates(
 	_ context.Context, to, from workspace.StateVersionID, cursor string, size int,
 ) (workspace.StateDiff, error) {
@@ -898,6 +959,7 @@ func (stubNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (
 	}
 
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Time{},
 		Name:            name,
 		HomeRegion:      "test-region",
@@ -1247,6 +1309,8 @@ func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 		"{organization}", "acme",
 		"{workspace}", "web",
 		"{id}", "ws-test123",
+		"{workspace_id}", "ws-test123",
+		"{at}", "1500",
 		"{state_version_id}", "sv-test123",
 		"{output_id}", "sv-test123.greeting",
 		"{address}", "terraform_data.smoke",
@@ -1654,11 +1718,13 @@ func (errorWorkspaces) Unlock(
 	return workspace.Workspace{}, errTestInternal
 }
 
-func (rerrorWorkspaces errorWorkspaces) ForceUnlock(
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (rerrorWorkspaces errorWorkspaces) ForceUnlockLock(
 	ctx context.Context,
 	id workspace.ID,
+	_ workspace.Lock,
 	by string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	w, err := rerrorWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
@@ -1715,6 +1781,12 @@ func (errorWorkspaces) ReadResource(
 	_ context.Context, _ workspace.StateVersionID, _ string,
 ) (workspace.StateDetail, error) {
 	return workspace.StateDetail{}, errTestInternal
+}
+
+func (errorWorkspaces) ReadStateAt(
+	_ context.Context, _ workspace.ID, _ workspace.StateAtRequest,
+) (workspace.StateAtRead, error) {
+	return workspace.StateAtRead{}, errTestInternal
 }
 
 func (errorWorkspaces) DiffStates(
@@ -1953,6 +2025,8 @@ func resolveExpected(t *testing.T, route tfe.Route) string {
 	req.SetPathValue("organization", "acme")
 	req.SetPathValue("workspace", "web")
 	req.SetPathValue("id", "ws-test123")
+	req.SetPathValue("workspace_id", "ws-test123")
+	req.SetPathValue("at", "1500")
 	req.SetPathValue("state_version_id", "sv-test123")
 	req.SetPathValue("output_id", "sv-test123.greeting")
 

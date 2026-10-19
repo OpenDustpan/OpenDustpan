@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -198,7 +199,9 @@ var migrations embed.FS
 type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
-	path    string
+	// gate serves the ports of gate.Store over this store.
+	gate *gatestore.Store
+	path string
 	// mu guards conn and queries across the online restore swap: readers
 	// hold it shared, and the swap holds it exclusive while it renames the
 	// database file. Lock order with stagingMu is stagingMu before mu.
@@ -231,6 +234,12 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// noMigrate makes Open apply no migration and refuse a database with
+	// a pending one.
+	noMigrate bool
+	// processGuard holds the lock on the guard file next to the database,
+	// so a second store cannot open the same file. Close releases it.
+	processGuard *processGuard
 
 	// stepTxBound is the longest time that a step transaction of a durable
 	// operation stays open before it rolls back.
@@ -241,6 +250,10 @@ var (
 	_ namespace.Store = (*Store)(nil)
 	_ stack.Store     = (*Store)(nil)
 )
+
+// ErrInUse reports that another store holds the database file open. One
+// SQLite file serves one server process only.
+var ErrInUse = errors.New("another process holds the SQLite database file")
 
 // Option tunes Open. Options keep backward compatibility: callers that pass
 // none get the defaults.
@@ -265,7 +278,20 @@ func WithBinaryVersion(version string) Option {
 	return func(s *Store) { s.binaryVersion = version }
 }
 
+// WithoutMigrate makes Open check the schema and apply no migration. Open
+// then refuses a database with a pending migration with
+// schema.ErrMigrationsPending. A command that only writes rows uses it, so
+// the server stays the one process that changes the schema.
+func WithoutMigrate() Option {
+	return func(s *Store) { s.noMigrate = true }
+}
+
 // Open opens (creating if needed) the database file at path and migrates it.
+// It locks the file first: a second Open of the same file, in this process
+// or in another one, fails with ErrInUse until Close of the first store. The
+// guard resolves symbolic links before it names the guard file, so the same
+// file opened through another spelling shares the one guard. A hard link to
+// the database file is not detected.
 //
 // Open leaves running backup rows alone: crash recovery inspects them before
 // the server marks them failed with FailRunningBackups at start, and offline
@@ -276,32 +302,44 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	conn, err := openDatabase(ctx, abs)
+	resolved, err := resolveDatabasePath(abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
+
+	var probe Store
+	for _, opt := range opts {
+		opt(&probe)
+	}
+
+	if probe.noMigrate {
+		if _, statErr := os.Stat(resolved); statErr != nil {
+			return nil, fmt.Errorf("open database file %s: %w", resolved, statErr)
+		}
+	}
+
+	guard, err := acquireGuard(resolved)
 	if err != nil {
 		return nil, err
 	}
 
-	s := &Store{
-		conn:                conn,
-		queries:             db.New(conn),
-		path:                abs,
-		mu:                  sync.RWMutex{},
-		stagingMu:           sync.Mutex{},
-		stagingPath:         "",
-		guardCancel:         nil,
-		guardDone:           nil,
-		logger:              slog.New(slog.DiscardHandler),
-		lastTruncateSuccess: time.Now(),
-		busyWarned:          false,
-		keepAccessHook:      nil,
-		binaryVersion:       "",
-		stepTxBound:         DefaultStepTransactionBound,
+	var extra url.Values
+	if probe.noMigrate {
+		extra = url.Values{"mode": {"rw"}}
 	}
+
+	conn, err := openDatabase(ctx, resolved, extra)
+	if err != nil {
+		return nil, errors.Join(err, guard.release())
+	}
+
+	s := newStore(conn, resolved, guard)
+
 	for _, opt := range opts {
 		opt(s)
 	}
 	if err := s.migrate(ctx); err != nil {
-		return nil, errors.Join(err, conn.Close())
+		return nil, errors.Join(err, conn.Close(), guard.release())
 	}
 
 	guardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -313,9 +351,114 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	return s, nil
 }
 
-// openDatabase opens the database file at abs with the store pragmas.
-func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
+// newStore returns the store on conn, before the options and the migration.
+func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
+	s := &Store{
+		conn:                conn,
+		queries:             db.New(conn),
+		path:                path,
+		mu:                  sync.RWMutex{},
+		stagingMu:           sync.Mutex{},
+		stagingPath:         "",
+		guardCancel:         nil,
+		guardDone:           nil,
+		logger:              slog.New(slog.DiscardHandler),
+		lastTruncateSuccess: time.Now(),
+		busyWarned:          false,
+		keepAccessHook:      nil,
+		binaryVersion:       "",
+		noMigrate:           false,
+		processGuard:        guard,
+		stepTxBound:         DefaultStepTransactionBound,
+		gate:                nil,
+	}
+	s.gate = gatestore.New(gateRunner{s: s})
+
+	return s
+}
+
+// maxSymlinkChain caps the links resolveDatabasePath follows at one path:
+// a chain with more links fails with an error.
+const maxSymlinkChain = 40
+
+// errTooManyLinks reports a symbolic link chain with more links than
+// maxSymlinkChain allows.
+var errTooManyLinks = errors.New("too many links")
+
+// resolveDatabasePath returns the canonical path of the database file at abs,
+// with symbolic links resolved, so two spellings of one file share one guard
+// file. When the file exists, it returns EvalSymlinks of abs. When the file
+// does not exist, it follows the chain of links at abs with Lstat and
+// Readlink, resolving each relative target against the directory of its link,
+// up to 40 links, then resolves the directory of the final target and joins
+// the base name of the final target, so a database created through a dangling
+// link still maps to the same guard. A plain missing file with no link
+// resolves its directory and joins the base name. It returns an error when
+// the chain holds more than 40 links. It never names the database file itself
+// for the guard: closing our descriptor would release the POSIX locks SQLite
+// holds on that file.
+func resolveDatabasePath(abs string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+
+	final, err := followLinkChain(abs)
+	if err != nil {
+		return "", err
+	}
+
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(final)); err == nil {
+		return filepath.Join(dir, filepath.Base(final)), nil
+	}
+
+	return final, nil
+}
+
+// followLinkChain walks the chain of symbolic links at abs and returns the
+// final target. A relative target resolves against the directory of its link.
+// A path that is no link, or that does not exist, ends the chain. A chain
+// with more than maxSymlinkChain links returns errTooManyLinks.
+func followLinkChain(abs string) (string, error) {
+	current := abs
+
+	for followed := 0; ; followed++ {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("stat database path %s: %w", current, err)
+			}
+
+			return current, nil
+		}
+
+		if info.Mode()&os.ModeSymlink == 0 {
+			return current, nil
+		}
+
+		if followed >= maxSymlinkChain {
+			return "", fmt.Errorf("%w at %s", errTooManyLinks, abs)
+		}
+
+		target, err := os.Readlink(current)
+		if err != nil {
+			return "", fmt.Errorf("read database link %s: %w", current, err)
+		}
+
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(current), target)
+		}
+
+		current = target
+	}
+}
+
+// openDatabase opens the database file at abs with the store pragmas and
+// the extra URL parameters. The parameter mode=rw opens a file that exists
+// and creates none.
+func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, error) {
 	query := url.Values{}
+	maps.Copy(query, extra)
+
 	query.Set("_txlock", "immediate")
 	query.Add("_pragma", "busy_timeout(10000)")
 	query.Add("_pragma", "journal_mode(wal)")
@@ -340,7 +483,9 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 
 // Close closes the database. It stops the write-ahead log guard and waits
 // for it first, so no checkpoint runs on a closed handle. It removes a
-// staged restore file first, so no scratch file survives the handle.
+// staged restore file first, so no scratch file survives the handle. It
+// releases the lock on the database file last, so another store can open
+// the file only after this one closed it.
 func (s *Store) Close() error {
 	if s.guardCancel != nil {
 		s.guardCancel()
@@ -361,10 +506,10 @@ func (s *Store) Close() error {
 	}
 
 	if err := s.conn.Close(); err != nil {
-		return fmt.Errorf("close sqlite database: %w", err)
+		return errors.Join(fmt.Errorf("close sqlite database: %w", err), s.processGuard.release())
 	}
 
-	return nil
+	return s.processGuard.release()
 }
 
 // Ping implements namespace.Store. It maps any driver failure to
@@ -385,23 +530,7 @@ func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := codec.ToNamespaceRow(ns)
-
-	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
-		Name:            row.Name,
-		HomeRegion:      row.HomeRegion,
-		FailoverVersion: row.FailoverVersion,
-		CreatedAtMs:     row.CreatedAtMs,
-	})
-	if err != nil {
-		return fmt.Errorf("insert namespace: %w", err)
-	}
-
-	if n == 0 {
-		return namespace.ErrAlreadyExists
-	}
-
-	return nil
+	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
 }
 
 // GetNamespace implements namespace.Store.
@@ -496,7 +625,12 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			return err
 		}
 
-		return publishStackInventory(ctx, q, st.Ref, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			st.Ref,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+		)
 	})
 }
 
@@ -573,7 +707,12 @@ func (s *Store) UpdateStackTags(
 			return err
 		}
 
-		return publishStackInventory(ctx, q, ref, id, codec.Millis(updatedAt))
+		return publishStackInventory(
+			ctx,
+			q,
+			ref,
+			unitWrite{unitID: id, atMs: codec.Millis(updatedAt), kind: inventory.ChangeChanged},
+		)
 	})
 }
 
@@ -647,6 +786,11 @@ func (s *Store) RenameStack(
 		}
 
 		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
+		from := unitGate{ns: oldRef.Namespace, tool: inventoryTool, name: stackUnitName(oldRef)}
+
+		if gateErr := moveUnitGate(ctx, q, from, stackUnitName(newRef)); gateErr != nil {
+			return gateErr
+		}
 
 		row, err := q.GetStack(ctx, db.GetStackParams{
 			Namespace: newRef.Namespace.String(),
@@ -657,7 +801,12 @@ func (s *Store) RenameStack(
 			return fmt.Errorf("read renamed stack: %w", err)
 		}
 
-		return publishStackInventory(ctx, q, newRef, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			newRef,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeRenamed},
+		)
 	})
 }
 
@@ -1049,8 +1198,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		name    TEXT    NOT NULL
 	) STRICT`
 
-	if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
-		return fmt.Errorf("create schema_migrations: %w", execErr)
+	if !s.noMigrate {
+		if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
+			return fmt.Errorf("create schema_migrations: %w", execErr)
+		}
 	}
 
 	recorded, recordedErr := s.recordedMigrations(ctx)
@@ -1058,9 +1209,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		return recordedErr
 	}
 
+	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
+		return fmt.Errorf("check schema versions: %w", baselineErr)
+	}
+
 	plan, checkErr := migrate.Check(recorded, all, s.binaryVersion)
+
 	if checkErr != nil {
 		return fmt.Errorf("check schema: %w", checkErr)
+	}
+
+	if s.noMigrate && len(plan.Pending) > 0 {
+		return fmt.Errorf("%w: %d", schema.ErrMigrationsPending, len(plan.Pending))
 	}
 
 	for _, m := range plan.Pending {
@@ -1144,6 +1304,18 @@ func (s *Store) recordedMigrations(ctx context.Context) ([]schema.AppliedMigrati
 	}
 
 	return out, nil
+}
+
+// recordedVersions returns the versions of the recorded migrations,
+// ordered as recorded, for the baseline check.
+func recordedVersions(recorded []schema.AppliedMigration) []int64 {
+	versions := make([]int64, 0, len(recorded))
+
+	for _, r := range recorded {
+		versions = append(versions, r.Version)
+	}
+
+	return versions
 }
 
 func (s *Store) apply(ctx context.Context, m migrate.Migration) error {

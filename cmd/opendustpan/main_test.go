@@ -246,6 +246,7 @@ func seedWrappedKey(t *testing.T, st keySeedStore, key []byte) {
 	t.Helper()
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      "local",

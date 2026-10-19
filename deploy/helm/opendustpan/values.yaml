@@ -1,0 +1,326 @@
+# Values of the OpenDustpan chart.
+#
+# The chart always runs `opendustpan serve`, the production server command.
+# No value selects `opendustpan dev`.
+#
+# The chart never does these things:
+# - It never makes a key-encryption key, a token or a password.
+# - It never puts a secret in a ConfigMap or in a value of this file. Each
+#   secret comes from a Secret that exists before the install.
+# - It never runs a container as root.
+# - It never uses the image tag `latest`.
+# - It never runs a database. Give it an external PostgreSQL database.
+#
+# values.schema.json checks this file. An unknown key fails the install.
+
+image:
+  # The image of the server. The image holds the console files in /console.
+  repository: ghcr.io/opendustpan/opendustpan
+  # Empty means the appVersion of the chart. The schema refuses `latest`.
+  tag: ""
+  # A digest, for example sha256:<64 hex digits>. When it is set, the pod
+  # uses <repository>@<digest> and ignores tag. Set it for production.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Names of Secrets of type kubernetes.io/dockerconfigjson for the image pull.
+imagePullSecrets: []
+
+# The number of server instances. The schema accepts 1 only in this release,
+# because the server work for several instances is not complete.
+replicas: 1
+
+# The external PostgreSQL database. The chart runs no database.
+database:
+  existingSecret:
+    # Required. The name of a Secret in the namespace of the release.
+    name: ""
+    # The key in the Secret that holds the database URL, for example
+    # postgres://opendustpan@db.example:5432/opendustpan?sslmode=verify-full
+    # The URL holds the password, so it never goes in a value of this file.
+    key: database-url
+
+# The key-encryption key. The server stops at start without one. Make it
+# once with `opendustpan key generate --out <file>`, put it in a Secret, and
+# keep a copy outside the cluster. A lost key loses every secret. The pod
+# gets the key in DUSTPAN_KEY_ENCRYPTION_KEY from a secretKeyRef, because a
+# Secret volume gives the file a group mode that `serve` refuses.
+keyEncryptionKey:
+  existingSecret:
+    # Required. The name of a Secret in the namespace of the release.
+    name: ""
+    # The key in the Secret that holds the base64 key.
+    key: key-encryption-key
+
+# Optional bootstrap admin tokens, comma-separated, from a Secret. The pod
+# gets them in DUSTPAN_ADMIN_TOKEN. Empty name means no bootstrap admin
+# token.
+adminToken:
+  existingSecret:
+    name: ""
+    key: admin-token
+
+# The connection to S3-compatible storage. The blob store and an s3 backup
+# target use the same endpoint, region and credentials.
+s3:
+  # Empty means AWS.
+  endpoint: ""
+  # Empty means us-east-1.
+  region: ""
+  credentials:
+    # Empty name means the default credential chain of the server, for
+    # example a role that serviceAccount.annotations gives to the pod.
+    existingSecret:
+      name: ""
+      accessKeyIDKey: AWS_ACCESS_KEY_ID
+      secretAccessKeyKey: AWS_SECRET_ACCESS_KEY
+
+# Where the server keeps state content.
+blobStore:
+  # `fs` keeps it on a PersistentVolumeClaim that one pod mounts.
+  # `s3` keeps it in a bucket.
+  type: fs
+  fs:
+    persistence:
+      # The name of a PersistentVolumeClaim that exists. Empty means the
+      # chart makes a claim.
+      existingClaim: ""
+      # Empty means the default storage class of the cluster.
+      storageClassName: ""
+      size: 10Gi
+      accessMode: ReadWriteOnce
+  s3:
+    # Required when type is `s3`.
+    bucket: ""
+    prefix: ""
+
+# Backups of the whole installation.
+backup:
+  target:
+    # `none`: no backup target. `opendustpan doctor` warns about it.
+    # `dir`: a PersistentVolumeClaim that one pod mounts.
+    # `s3`: a bucket, with the connection in s3 above.
+    type: none
+    dir:
+      persistence:
+        existingClaim: ""
+        storageClassName: ""
+        size: 20Gi
+        accessMode: ReadWriteOnce
+    s3:
+      # Required when type is `s3`. Use a bucket that is not the bucket of
+      # the blob store.
+      bucket: ""
+      prefix: ""
+  # A CronJob that runs the client command `opendustpan backup` against the
+  # Service of the release. It needs a backup target that is not `none`.
+  schedule:
+    enabled: false
+    # Cron syntax, in the time zone of timeZone.
+    cron: "17 2 * * *"
+    timeZone: Etc/UTC
+    # Required when enabled. A Secret with an access token that may start a
+    # backup. Do not use a bootstrap admin token for it.
+    tokenSecret:
+      name: ""
+      key: token
+    # Optional. A Secret with the PEM bundle of the certificate authority
+    # that signed the certificate of the server, for built-in TLS with a
+    # private authority. The CronJob mounts it and passes --ca-file. The
+    # certificate must cover <fullname>.<namespace>.svc. Empty name means the
+    # system trust store of the image.
+    caSecret:
+      name: ""
+      key: ca.crt
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    # The time in seconds after which Kubernetes stops a backup Job that is
+    # still running. The default is 6 hours.
+    activeDeadlineSeconds: 21600
+    # The resources of the CronJob container. The client command is small.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+# The web console. The image holds its files in /console.
+console:
+  enabled: true
+  # The runtime configuration of the console, served as /config.json. The
+  # browser reads this file, so it holds no secret. Empty means the file of
+  # the console release.
+  runtimeConfig: {}
+
+# Settings of `opendustpan serve`.
+server:
+  # The external base URL, for example https://dustpan.example. Set it when
+  # an ingress or a load balancer is in front of the server. Console sign-in
+  # needs it.
+  publicURL: ""
+  # The addresses (CIDRs) of the proxies that may set the client address
+  # header, for example the pod CIDR of the ingress controller.
+  trustedProxies: []
+  trustedProxyHeader: x-forwarded-for
+  # Empty means the server default.
+  region: ""
+  logLevel: info
+  logFormat: json
+  # Built-in TLS. The name of a Secret of type kubernetes.io/tls. Empty means
+  # plain HTTP inside the cluster, with TLS at the ingress. OpenTofu needs
+  # TLS at the client edge.
+  tls:
+    existingSecret: ""
+  # More environment variables for settings that this file does not name.
+  # The schema refuses the variables that the chart sets, `DUSTPAN_DEV`, the
+  # `PG` variables, `GODEBUG`, and the AWS endpoint and region variables. It
+  # also refuses a plain `value` for a name that holds a secret: use
+  # valueFrom with a secretKeyRef for those. valueFrom holds only a
+  # secretKeyRef.
+  extraEnv: []
+
+service:
+  type: ClusterIP
+  # 0 means 80 with plain HTTP and 443 with built-in TLS.
+  port: 0
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  #  - host: dustpan.example
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  tls: []
+  #  - secretName: dustpan-example-tls
+  #    hosts:
+  #      - dustpan.example
+
+# The probes. Liveness and startup use GET /health/live, readiness uses
+# GET /health/ready. The server runs its start-up steps, the schema
+# migrations included, before it listens, so the startup probe gives it
+# periodSeconds * failureThreshold seconds (10 minutes by default).
+probes:
+  startup:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 60
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+# The pod security context. The schema refuses root and a root group.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+# The container security context. The schema holds each value fixed. The
+# root filesystem is read-only, and the chart mounts an emptyDir on /tmp.
+containerSecurityContext:
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+serviceAccount:
+  create: true
+  # Empty means the full name of the release.
+  name: ""
+  # For example the role annotation of a cloud provider for S3 or KMS.
+  annotations: {}
+
+# The server does not call the Kubernetes API, so the pod gets no token. The
+# schema holds this value at false.
+automountServiceAccountToken: false
+
+networkPolicy:
+  enabled: true
+  # Sources that may reach the server port. Empty means every source.
+  # Each item is a NetworkPolicyPeer with at least one key, for example a
+  # namespaceSelector for the namespace of the ingress controller, or for
+  # the namespace of Prometheus. When the list is not empty, the chart adds
+  # a rule for the pods of the backup CronJob.
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: monitoring
+  ingressFrom: []
+  # false allows DNS, TCP 5432 and TCP 443 to any address, and the rules in
+  # extraEgress. The server reaches the database, S3 and sign-in providers
+  # at addresses that the chart does not know, so the chart limits the ports.
+  # true allows all egress.
+  allowAllEgress: false
+  # The DNS server that the egress rule for port 53 allows.
+  dns:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+  # More egress rules, for other ports. Each item is a NetworkPolicyEgressRule.
+  # For example a webhook on port 8443, or the metadata server:
+  #  - to:
+  #      - ipBlock:
+  #          cidr: 169.254.169.254/32
+  #    ports:
+  #      - protocol: TCP
+  #        port: 80
+  extraEgress: []
+
+metrics:
+  # A ServiceMonitor of the Prometheus Operator for GET /api/server/metrics.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    # Required when enabled. A Secret with an access token that may read
+    # the metrics.
+    tokenSecret:
+      name: ""
+      key: token
+    # The TLS settings of the scrape, for built-in TLS with a private
+    # authority. The certificate must cover <fullname>.<namespace>.svc, or
+    # serverName must name a host that it covers. Empty caSecret name and
+    # empty serverName mean the defaults of Prometheus.
+    tlsConfig:
+      caSecret:
+        name: ""
+        key: ca.crt
+      serverName: ""
+
+# The schema refuses the AppArmor and seccomp annotations here.
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+terminationGracePeriodSeconds: 30

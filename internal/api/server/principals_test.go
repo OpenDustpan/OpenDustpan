@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // principalDoc, groupDoc and memberDoc decode the wire forms in tests.
@@ -66,7 +67,7 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{TempAdmins: nil, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -91,6 +92,8 @@ func newAuditedPrincipalHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -689,7 +692,15 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 	_, st := newTestPrincipalStore(t)
 
 	svc, err := principal.NewService(
-		principal.Config{Store: failingStore{st}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      failingStore{st},
+			Guard:      nil,
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -872,4 +883,180 @@ func TestPrincipalCountsAndSource(t *testing.T) {
 	mustCall(t, h, apiCall{
 		http.MethodDelete, "/api/server/groups/grp-ldap/members/" + alice.ID, "", http.StatusConflict,
 	}, nil)
+}
+
+var errTempAdminList = errors.New("temp admin list: disk I/O error")
+
+// failingTempAdmins is a temporary administrator reader whose list fails.
+type failingTempAdmins struct {
+	err error
+}
+
+func (f failingTempAdmins) GetTempAdminBySubject(
+	_ context.Context, _ string,
+) (tempadmin.TempAdmin, error) {
+	return tempadmin.TempAdmin{}, f.err
+}
+
+func (f failingTempAdmins) ListTempAdmins(_ context.Context) ([]tempadmin.TempAdmin, error) {
+	return nil, f.err
+}
+
+// TestPrincipalListFailsWhenTempAdminReadFails proves that a failed read of
+// the temporary administrator records answers 500 with the usual error body
+// and no driver text.
+func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestPrincipals(t)
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Backups:          nil,
+		Restores:         nil,
+		Version:          "",
+		Journal:          nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		Now:              nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		TempAdmins:       failingTempAdmins{err: errTempAdminList},
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Schema:           stubSchema{migrations: nil},
+		Principals:       svc,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	status, body := call(
+		t,
+		handler,
+		apiCall{http.MethodGet, "/api/server/principals", "", http.StatusInternalServerError},
+	)
+	if status != http.StatusInternalServerError || strings.Contains(body, "disk") {
+		t.Fatalf("list with a failed read = %d %s, want 500 with no driver text", status, body)
+	}
+
+	var doc struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Code != http.StatusInternalServerError ||
+		doc.Message == "" {
+		t.Fatalf("error body = %q, want a JSON error with code 500", body)
+	}
+}
+
+// fixedTempAdmins is a temporary administrator reader that lists the
+// records that its pointer holds at the time of the read.
+type fixedTempAdmins struct {
+	records *[]tempadmin.TempAdmin
+}
+
+func (f fixedTempAdmins) GetTempAdminBySubject(
+	_ context.Context, subject string,
+) (tempadmin.TempAdmin, error) {
+	for i := range *f.records {
+		if (*f.records)[i].Subject == subject {
+			return (*f.records)[i], nil
+		}
+	}
+
+	return tempadmin.TempAdmin{}, tempadmin.ErrNotFound
+}
+
+func (f fixedTempAdmins) ListTempAdmins(_ context.Context) ([]tempadmin.TempAdmin, error) {
+	return *f.records, nil
+}
+
+// TestTempAdminFlagFollowsThePrincipalID proves that the banner flag
+// follows the principal ID of the record, not its subject: a record of an
+// old principal with the subject of a new person does not mark the new
+// person.
+func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
+	t.Parallel()
+
+	records := []tempadmin.TempAdmin{}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Backups:          nil,
+		Restores:         nil,
+		Version:          "",
+		Journal:          nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		Now:              nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		TempAdmins:       fixedTempAdmins{records: &records},
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Schema:           stubSchema{migrations: nil},
+		Principals:       newTestPrincipals(t),
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var alice principalDoc
+
+	mustCall(t, handler, apiCall{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","displayName":"Alice","kind":"person"}`, http.StatusCreated,
+	}, &alice)
+
+	record := func(principalID string) tempadmin.TempAdmin {
+		created := time.Now().UTC().Truncate(time.Millisecond)
+
+		return tempadmin.TempAdmin{
+			CreatedAt: created, ExpiresAt: created.Add(time.Hour), EndedAt: time.Time{},
+			PrincipalID: principalID, Subject: "alice@example.com", CreatedBy: "operator", Reason: "lost access",
+		}
+	}
+
+	for _, c := range []struct {
+		principalID string
+		want        bool
+	}{
+		{principalID: "prn-old", want: false},
+		{principalID: alice.ID, want: true},
+	} {
+		records = []tempadmin.TempAdmin{record(c.principalID)}
+
+		var got struct {
+			TemporaryAdministrator bool `json:"temporaryAdministrator"`
+		}
+
+		mustCall(t, handler, apiCall{http.MethodGet, "/api/server/principals/" + alice.ID, "", http.StatusOK}, &got)
+
+		if got.TemporaryAdministrator != c.want {
+			t.Fatalf("record of %s: temporaryAdministrator = %v, want %v",
+				c.principalID, got.TemporaryAdministrator, c.want)
+		}
+	}
 }

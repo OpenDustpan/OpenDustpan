@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"strings"
@@ -40,6 +41,8 @@ const (
 
 // Store persists workspaces. Writes carry the namespace fence and fail with
 // namespace.ErrFenced if it is stale.
+//
+//nolint:interfacebloat // One adapter contract for one table set: every workspace write shares its rows and its fence.
 type Store interface {
 	// CreateWorkspace persists a new w. It returns ErrAlreadyExists,
 	// namespace.ErrNotFound if the namespace does not exist, or
@@ -61,7 +64,15 @@ type Store interface {
 	// ErrOverrideRefused unless the forced-write switches of the namespace and of
 	// the unit are on, in the same transaction. It is the unfenced release of a
 	// client-encrypted state under the forced-write override (ADR 44, decision 4).
-	ReleaseUnfenced(ctx context.Context, w Workspace, fence namespace.Fence) error
+	// It appends the audit entry e in the same transaction; if the append fails,
+	// nothing changes. It returns audit.ErrInvalidEntry if e fails validation or
+	// names another namespace.
+	ReleaseUnfenced(ctx context.Context, w Workspace, fence namespace.Fence, e audit.Entry) error
+	// SaveReleased saves a released unit like SaveWorkspace and appends the
+	// audit entry e in the same transaction; if the append fails, nothing
+	// changes. It returns audit.ErrInvalidEntry if e fails validation or names
+	// another namespace.
+	SaveReleased(ctx context.Context, w Workspace, fence namespace.Fence, e audit.Entry) error
 	// DeleteWorkspace soft-deletes the workspace called ref at the time e.At,
 	// in one fenced transaction (ADR 47), and appends the audit entry e to the
 	// chain of the namespace in the same transaction. If the append fails,
@@ -122,8 +133,13 @@ type StateStore interface {
 	// GetStateVersion returns the state version, or ErrStateVersionNotFound.
 	GetStateVersion(ctx context.Context, id StateVersionID) (StateVersion, error)
 	// FinalizeStateVersion saves the finalized sv (with its Content key),
-	// stamps the workspace's UpdatedAt with sv.FinalizedAt, and makes sv the
-	// workspace's current state, checking in the same transaction that:
+	// stamps the version's finalize time and the workspace's UpdatedAt, and
+	// makes sv the workspace's current state. The stamped time is
+	// sv.FinalizedAt, or one millisecond after the latest finalize time of
+	// the workspace when sv.FinalizedAt is not later than it, so the current
+	// state always has the latest finalize time. The sv of the caller keeps
+	// the requested time; read the stored version for the stamped time. It
+	// checks in the same transaction that:
 	//   - the stored version is still pending, else ErrUploadDenied;
 	//   - the stored version still names sv.Content as its latest attempt,
 	//     else ErrUploadDenied: a superseded attempt never finalizes over a
@@ -147,7 +163,8 @@ type StateStore interface {
 	// it names the content, the new lineage, its serial and FenceBy. The
 	// caller stores sv as a pending version with CreateStateVersion before it
 	// writes the content, so a sweep finds the key; FenceAndUnlock finalizes
-	// that row. The stored version must still be pending and name sv.Content,
+	// that row, with the finalize time that FinalizeStateVersion stamps. The
+	// stored version must still be pending and name sv.Content,
 	// else ErrUploadDenied. The stored workspace must be locked and hold
 	// revision w.Revision-1, else
 	// ErrNotLocked or ErrConcurrentModification. The current version must be
@@ -155,9 +172,12 @@ type StateStore interface {
 	// ErrConcurrentModification, and sv.Serial must be one more than its serial,
 	// else ErrStaleSerial. It returns ErrNotFound if the workspace does not
 	// exist, namespace.ErrNotFound if the namespace does not exist, or
-	// namespace.ErrFenced if fence is stale. An error writes nothing.
+	// namespace.ErrFenced if fence is stale. It appends the audit entry e in the
+	// same transaction, and returns audit.ErrInvalidEntry if e fails validation
+	// or names another namespace. An error writes nothing.
 	FenceAndUnlock(
 		ctx context.Context, w Workspace, sv StateVersion, expect StateVersionID, fence namespace.Fence,
+		e audit.Entry,
 	) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
@@ -232,8 +252,7 @@ type Config struct {
 	Blobs      blob.Store
 	Namespaces *namespace.Service
 	// Sealer seals state blobs and outputs documents with the data key of
-	// the workspace scope. Nil keeps state as before: plain blobs and
-	// outputs for rows without the sealed flag.
+	// the workspace scope. It is required: every stored version is sealed.
 	Sealer Sealer
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger
@@ -267,10 +286,27 @@ type Service struct {
 	maxState   int64
 	maxPending int
 	retention  time.Duration
+	stateAt    StateAtReader
+	names      inventory.HistoryReader
 	stripes    [lockStripes]sync.Mutex
 }
 
-// NewService returns a Service. Every port and Namespaces are required.
+// attachOptionalReaders sets the optional reads of the state store. A store
+// that also finds the state at a time enables ReadStateAt. A store that also
+// keeps the inventory change log lets ReadStateAt name the workspace at the
+// time.
+func attachOptionalReaders(s *Service, states StateStore) {
+	if reader, ok := states.(StateAtReader); ok {
+		s.stateAt = reader
+	}
+
+	if reader, ok := states.(inventory.HistoryReader); ok {
+		s.names = reader
+	}
+}
+
+// NewService returns a Service. Every port, Namespaces and the Sealer are
+// required.
 func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Workspaces == nil:
@@ -281,6 +317,8 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Sealer == nil:
+		return nil, fmt.Errorf("%w: workspace service", ErrMissingSealer)
 	}
 
 	s := &Service{
@@ -294,8 +332,12 @@ func NewService(cfg Config) (*Service, error) {
 		maxState:   cfg.MaxStateBytes,
 		maxPending: cfg.MaxPendingVersions,
 		retention:  cfg.Retention,
+		stateAt:    nil,
+		names:      nil,
 		stripes:    [lockStripes]sync.Mutex{},
 	}
+
+	attachOptionalReaders(s, cfg.States)
 
 	if s.now == nil {
 		s.now = time.Now
@@ -347,10 +389,14 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 
 // Delete soft-deletes the workspace called ref (ADR 47): the workspace leaves
 // every lookup by name or ID and every list, and its name is free at once,
-// but its state versions and data key stay until the final delete. It
-// returns ErrLocked while the workspace is locked, ErrPendingState while it
-// has a pending state version, and ErrNotFound if no live
-// workspace has ref. The write is fenced on the namespace's failover version
+// but its state versions and data key stay until the final delete. It first
+// sweeps the expired pending versions of the workspace with their attempted
+// content, as a declare does, so only a pending version that has not expired
+// blocks the delete. The sweep runs before the lock check, the pending check
+// and the not-found check, so a refused delete still removes expired pending
+// rows. It returns ErrLocked while the workspace is locked, ErrPendingState
+// while it has a pending state version, and ErrNotFound if no live workspace
+// has ref. The write is fenced on the namespace's failover version
 // and only allowed in its home region. The delete and the audit entry e,
 // stamped with the time of the delete, commit together or not at all (ADR 60,
 // fail closed).
@@ -358,6 +404,17 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 	fence, err := s.fence(ctx, ref.Namespace)
 	if err != nil {
 		return err
+	}
+
+	if w, getErr := s.Get(ctx, ref); getErr == nil {
+		if sweepErr := s.sweepExpiredRows(ctx, w); sweepErr != nil {
+			s.logger.WarnContext(
+				ctx,
+				"sweep expired state",
+				slog.String("workspace", w.ID.String()),
+				slog.String("error", sweepErr.Error()),
+			)
+		}
 	}
 
 	e.At = s.clock()
@@ -572,10 +629,17 @@ func checkLockID(w Workspace, expect Lock) error {
 // refused with ErrClientEncrypted and the lock stays held. record runs before
 // an unfenced release and writes its audit entry; a failure stops the release
 // (ADR 41 decision 5). A nil record writes nothing.
+//
+// Each release appends one audit entry of the kind change, in the transaction
+// of the release (see ForceUnlockLock).
+//
+//nolint:revive // ForceUnlockLock takes these arguments and the expected lock; the entry joins them.
 func (s *Service) ForceUnlock(
-	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error,
+	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error, entry audit.Entry,
 ) (Workspace, bool, error) {
-	return s.ForceUnlockLock(ctx, id, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}, by, allow, record)
+	return s.ForceUnlockLock(
+		ctx, id, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}, by, allow, record, entry,
+	)
 }
 
 // ForceUnlockLock is ForceUnlock for the lock expect names. An empty expect.ID
@@ -584,10 +648,25 @@ func (s *Service) ForceUnlock(
 // fence and in the revision the release saves, so a lock taken after the caller
 // read the unit is not released.
 //
-//nolint:revive // The expected lock is one argument beyond the port's other parameters, named at the call.
+// entry holds what the caller knows of the request: the action, the object,
+// the token ID, the source address, the user agent, the channel, the request
+// ID and the reason. A reason that audit.ValidateReason refuses fails the call
+// with audit.ErrInvalidReason before anything changes. The service sets the
+// rest: the time, the namespace, the subject by, the kind change, the unit ID,
+// the new state version when the release writes one, and the lock that the
+// release ends (its holder and its time) in the changes. The store appends the
+// entry in the transaction of the release, so a release without its entry
+// does not happen.
+//
+//nolint:revive // The expected lock and the entry are arguments beyond the port's other parameters, named at the call.
 func (s *Service) ForceUnlockLock(
 	ctx context.Context, id ID, expect Lock, by string, allow namespace.Overrides, record func() error,
+	entry audit.Entry,
 ) (Workspace, bool, error) {
+	if err := audit.ValidateReason(entry.Reason); err != nil {
+		return Workspace{}, false, fmt.Errorf("force-unlock %s: %w", id, err)
+	}
+
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
 		return Workspace{}, false, err
@@ -606,20 +685,14 @@ func (s *Service) ForceUnlockLock(
 	switch {
 	case errors.Is(err, ErrNoState):
 		// A unit without state is a plain release: no override is used.
-		released, changeErr := s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-			if lockErr := checkLockID(w, expect); lockErr != nil {
-				return Workspace{}, lockErr
-			}
+		released, saveErr := s.releaseWithoutState(ctx, w, expect, by, entry)
 
-			return w.forceUnlock(now)
-		})
-
-		return released, false, changeErr
+		return released, false, saveErr
 	case err != nil:
 		return Workspace{}, false, fmt.Errorf("current state of %s: %w", w.Ref, err)
 	}
 
-	released, err := s.releaseWithFence(ctx, w, cur, by)
+	released, err := s.releaseWithFence(ctx, w, cur, by, forceUnlockEntry(entry, w, by, s.clock()))
 	if errors.Is(err, ErrClientEncrypted) && allow.Forced {
 		if record != nil {
 			if recordErr := record(); recordErr != nil {
@@ -627,12 +700,39 @@ func (s *Service) ForceUnlockLock(
 			}
 		}
 
-		unfenced, changeErr := s.releaseUnfenced(ctx, w)
+		unfenced, changeErr := s.releaseUnfenced(ctx, w, forceUnlockEntry(entry, w, by, s.clock()))
 
 		return unfenced, true, changeErr
 	}
 
 	return released, false, err
+}
+
+// forceUnlockEntry returns the audit entry of a force-unlock of w by the
+// principal by, from the entry template that the caller gave. The changes
+// hold the lock that the release ends. The version stays empty until
+// releaseWithFence sets it: a release that writes no state version has none.
+func forceUnlockEntry(template audit.Entry, w Workspace, by string, at time.Time) audit.Entry {
+	e := template
+	e.At = at
+	e.Namespace = w.Ref.Namespace
+	e.Subject = by
+	e.Version = ""
+	e.ObjectID = w.ID.String()
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Changes = []audit.Change{
+		releasedLockChange("lock-holder", w.Lock.Holder),
+		releasedLockChange("locked-at", w.Lock.LockedAt.UTC().Format(time.RFC3339)),
+	}
+
+	return e
+}
+
+// releasedLockChange returns the change of one field of a lock that a
+// force-unlock ends: the value before, and no value after.
+func releasedLockChange(key, old string) audit.Change {
+	return audit.Change{Key: key, Old: &old, New: "", Layer: "", TakesEffect: ""}
 }
 
 // SetOverrides replaces the override switch of the unit.
@@ -1064,7 +1164,7 @@ func (s *Service) ReadState(ctx context.Context, id StateVersionID) (StateVersio
 }
 
 // Open returns the content of a finalized state version. The caller closes it.
-// A sealed version opens its sealed blob, so the caller reads the same bytes
+// The version opens its sealed blob, so the caller reads the same bytes
 // the CLI sent. A decryption failure reports the version ID only, never a
 // key, a scope or content.
 func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, error) {
@@ -1072,17 +1172,9 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, sv.ID, sv.Status)
 	}
 
-	if sv.Sealed && s.sealer == nil {
-		return nil, fmt.Errorf("open state %s: %w", sv.ID, ErrSealerNotConfigured)
-	}
-
 	r, err := s.blobs.Get(ctx, sv.Content)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
-	}
-
-	if !sv.Sealed {
-		return r, nil
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -1090,19 +1182,19 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, errors.Join(err, r.Close())
 	}
 
-	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), r)
 	if err != nil {
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: opened, closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
 }
 
 // OpenStateBlob returns the plain content of the sealed blob under key, for
 // the backup copy check. The key names one state version attempt as
-// "tofu/<workspace id>/<state version id>/<attempt>". An unsealed version
-// reads as before. A failure reports the version ID only, never a key, a
-// scope or content. The caller closes the result.
+// "tofu/<workspace id>/<state version id>/<attempt>". A failure reports the
+// version ID only, never a key, a scope or content. The caller closes the
+// result.
 func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	parts := blobKeyParts(key)
 	if len(parts) != 4 || parts[0] != "tofu" {
@@ -1121,17 +1213,9 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
 	}
 
-	if sv.Sealed && s.sealer == nil {
-		return nil, fmt.Errorf("open state %s: %w", sv.ID, ErrSealerNotConfigured)
-	}
-
 	r, err := s.blobs.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
-	}
-
-	if !sv.Sealed {
-		return r, nil
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -1139,12 +1223,12 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, errors.Join(err, r.Close())
 	}
 
-	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), r)
 	if err != nil {
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: opened, closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
 }
 
 // History returns the finalized state versions of the workspace, newest
@@ -1340,6 +1424,41 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
+}
+
+// releaseWithoutState releases the lock of a unit that has no state, and
+// appends the audit entry of the release in the same transaction. The check of
+// the expected lock runs again against the revision that the release saves.
+func (s *Service) releaseWithoutState(
+	ctx context.Context, w Workspace, expect Lock, by string, entry audit.Entry,
+) (Workspace, error) {
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	current, err := s.GetByID(ctx, w.ID)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	if lockErr := checkLockID(current, expect); lockErr != nil {
+		return Workspace{}, lockErr
+	}
+
+	now := s.clock()
+
+	released, err := current.forceUnlock(now)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
+	}
+
+	err = s.workspaces.SaveReleased(ctx, released, fence, forceUnlockEntry(entry, current, by, now))
+	if err != nil {
+		return Workspace{}, fmt.Errorf("save workspace %s: %w", w.ID, err)
+	}
+
+	return released, nil
 }
 
 // answerDuplicateRestore answers the version that a concurrent restore of from
@@ -1642,9 +1761,8 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, err
 	}
 
-	// createPending returns plain outputs for rendering; the stored row
-	// holds the sealed document. Finalize the stored row, so the commit
-	// keeps the sealed bytes.
+	// The stored row holds no outputs; finalize it, so the commit keeps
+	// what the row holds.
 	stored, err := s.states.GetStateVersion(ctx, pending.Version.ID)
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("restore %s from %s: %w", w.ID, src.ID, err)
@@ -1675,7 +1793,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, noteErr
 	}
 
-	size, err := s.copyBlob(ctx, w, key, src, stored.Sealed)
+	size, err := s.copyBlob(ctx, w, key, src, string(stored.ID))
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -1718,23 +1836,17 @@ func (s *Service) refusedRestore(
 }
 
 // openRestoreOutputs opens the stored outputs of src, so the new version
-// seals the plain document again, never the ciphertext. Rows without the
-// sealed flag pass through unchanged. Sealed outputs on a service without a
-// sealer fail with ErrSealerNotConfigured: ciphertext never reads as
-// outputs. A failure reports the version ID only, never a key, a scope or
-// content.
+// seals the plain document again, never the ciphertext. A version without
+// outputs keeps none. A failure reports the version ID only, never a key,
+// a scope or content.
 func (s *Service) openRestoreOutputs(
 	ctx context.Context, w Workspace, src StateVersion,
 ) ([]byte, error) {
-	if !src.Sealed || len(src.Outputs) == 0 {
-		return src.Outputs, nil
+	if len(src.Outputs) == 0 {
+		return nil, nil
 	}
 
-	if s.sealer == nil {
-		return nil, fmt.Errorf("restore %s: %w", src.ID, ErrSealerNotConfigured)
-	}
-
-	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), src.Outputs)
+	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(src.ID), src.Outputs)
 	if err != nil {
 		return nil, sanitizeOpenError(src.ID, fmt.Errorf("restore %s: %w", src.ID, err))
 	}
@@ -1743,38 +1855,31 @@ func (s *Service) openRestoreOutputs(
 }
 
 // copyBlob copies the content of src under key, checking size and MD5 as it
-// streams. A sealed source opens before the check, so the check runs on the
-// plain bytes; the copy seals again when sealed holds, so a restore of an
-// old unsealed version still lands sealed. On any mismatch the object is
-// deleted.
+// streams. The source opens before the check, so the check runs on the
+// plain bytes, and the copy seals again, bound to the new state version. On
+// any mismatch the object is deleted.
 func (s *Service) copyBlob(
-	ctx context.Context, w Workspace, key blob.Key, src StateVersion, sealed bool,
+	ctx context.Context, w Workspace, key blob.Key, src StateVersion, version string,
 ) (int64, error) {
-	if src.Sealed && s.sealer == nil {
-		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, ErrSealerNotConfigured)
-	}
-
 	r, err := s.blobs.Get(ctx, src.Content)
 	if err != nil {
 		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, err)
 	}
 
-	if src.Sealed {
-		opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
-		if oerr != nil {
-			return 0, errors.Join(
-				sanitizeOpenError(src.ID, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, oerr)),
-				r.Close(),
-			)
-		}
-
-		r = &closeReader{reader: opened, closer: r, id: src.ID}
+	opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(src.ID), r)
+	if oerr != nil {
+		return 0, errors.Join(
+			sanitizeOpenError(src.ID, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, oerr)),
+			r.Close(),
+		)
 	}
+
+	r = &closeReader{reader: opened, closer: r, id: src.ID}
 
 	size, storeErr := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
-		seal:      sealed,
+		version:   version,
 		key:       key,
 		want:      src.MD5,
 		content:   r,
@@ -1798,14 +1903,14 @@ func (s *Service) copyBlob(
 // confirmRetry answers a retried upload of a finalized version: the same
 // content succeeds without being stored again, other content is denied.
 func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion, error) {
-	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
+	digest := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
 
-	n, err := io.Copy(hash, io.LimitReader(content, s.maxState+1))
+	n, err := io.Copy(digest, io.LimitReader(content, s.maxState+1))
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("read retried upload of %s: %w", sv.ID, err)
 	}
 
-	if n != sv.Size || [md5.Size]byte(hash.Sum(nil)) != sv.MD5 {
+	if n != sv.Size || [md5.Size]byte(digest.Sum(nil)) != sv.MD5 {
 		return StateVersion{}, fmt.Errorf(
 			"%w: state version %s is finalized with other content",
 			ErrUploadDenied,
@@ -1818,43 +1923,23 @@ func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion
 
 // sweepExpired deletes the expired pending versions of w with their
 // attempted content, then deletes the blobs under the workspace prefix
-// that no version references, and returns the swept version IDs. A version
-// expires with its upload capability; the sweep keeps it for
-// SweepGracePeriod past expiry, so an upload that started before expiry
-// still finishes. A version that never recorded an attempt sweeps its row
-// with no blob to delete. A blob whose row delete already committed, or
-// whose superseded delete never ran, stays unreferenced: the second pass
-// collects it once it is older than the grace period, so a cleanup failure
-// or a crash between the row delete and the blob delete never leaves an
-// orphan for ever. A cleanup failure fails the sweep, so the caller
-// decides: BeginState treats the sweep as best effort and declares anyway,
-// leaving the rows for the next sweep.
-func (s *Service) sweepExpired(ctx context.Context, w Workspace) ([]StateVersionID, error) {
-	fence, err := s.fence(ctx, w.Ref.Namespace)
+// that no version references. A version expires with its upload capability;
+// the sweep keeps it for SweepGracePeriod past expiry, so an upload that
+// started before expiry still finishes. A version that never recorded an
+// attempt sweeps its row with no blob to delete. A blob whose row delete
+// already committed, or whose superseded delete never ran, stays
+// unreferenced: the second pass collects it once it is older than the grace
+// period, so a cleanup failure or a crash between the row delete and the
+// blob delete never leaves an orphan for ever. A cleanup failure fails the
+// sweep, so the caller decides: BeginState treats the sweep as best effort
+// and declares anyway, leaving the rows for the next sweep.
+func (s *Service) sweepExpired(ctx context.Context, w Workspace) error {
+	expired, err := s.expirePending(ctx, w)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
-	if err != nil {
-		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
-	}
-
-	ids := make([]StateVersionID, 0, len(expired))
-
-	var cleanupErr error
-
-	for i := range expired {
-		ids = append(ids, expired[i].ID)
-
-		if expired[i].Content == "" {
-			continue
-		}
-
-		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
-		}
-	}
+	cleanupErr := s.deleteExpiredBlobs(ctx, expired)
 
 	// A blob delete above may have failed, or the process may have crashed
 	// between an earlier row delete and its blob delete: the unreferenced
@@ -1864,10 +1949,73 @@ func (s *Service) sweepExpired(ctx context.Context, w Workspace) ([]StateVersion
 	}
 
 	if cleanupErr != nil {
-		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
+		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
 	}
 
-	return ids, nil
+	return nil
+}
+
+// sweepExpiredRows deletes the expired pending versions of w with their
+// attempted content, without the unreferenced-blob pass. The workspace
+// delete uses it, so the delete never removes a blob that no version
+// references: those blobs stay for the retention sweep, which runs under
+// the audit chain gate.
+func (s *Service) sweepExpiredRows(ctx context.Context, w Workspace) error {
+	expired, err := s.expirePending(ctx, w)
+	if err != nil {
+		return err
+	}
+
+	if cleanupErr := s.deleteExpiredBlobs(ctx, expired); cleanupErr != nil {
+		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
+	}
+
+	return nil
+}
+
+// expirePending deletes the expired pending versions of w and returns them
+// with their attempted content keys, so the caller deletes the blobs. A
+// version that is already gone counts as done, with no error, so two sweeps
+// that overlap on one row do not fail.
+func (s *Service) expirePending(ctx context.Context, w Workspace) ([]StateVersion, error) {
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
+	if errors.Is(err, ErrStateVersionNotFound) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
+	}
+
+	return expired, nil
+}
+
+// deleteExpiredBlobs deletes the attempted content of the expired versions.
+// A blob that is already gone counts as done, with no error, so two sweeps
+// that overlap on one blob do not fail.
+func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion) error {
+	var cleanupErr error
+
+	for i := range expired {
+		if expired[i].Content == "" {
+			continue
+		}
+
+		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
+			if errors.Is(blobErr, blob.ErrNotFound) {
+				continue
+			}
+
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
+		}
+	}
+
+	return cleanupErr
 }
 
 // sweepUnreferenced deletes the blobs under the workspace prefix that no
@@ -2029,44 +2177,27 @@ func (s *Service) createPending(
 
 	// The client's JSON rendering of the outputs is never stored: the outputs of a
 	// version come from its body (ADR 49, decision 8).
-	var outputs []byte
-
-	// New rows land sealed when the service seals: the outputs document is
-	// sealed with the data key of the workspace scope. The stored row keeps
-	// the sealed document; the returned version carries the plain outputs,
-	// so the caller renders the create response without opening sealed
-	// bytes.
-	sealed := s.sealer != nil
-	stored := outputs
-
-	if sealed && len(outputs) > 0 {
-		sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), outputs)
-		if err != nil {
-			return PendingState{}, fmt.Errorf("seal outputs of %s: %w", w.Ref, err)
-		}
-
-		stored = sealedOutputs
-	}
+	svID := StateVersionID(ident.NewID("sv-"))
 
 	sv := StateVersion{
 		CreatedAt:       now,
 		FinalizedAt:     time.Time{},
 		UploadExpiresAt: now.Add(UploadWindow),
 		Upload:          tok.Digest(),
-		ID:              StateVersionID(ident.NewID("sv-")),
+		ID:              svID,
 		Workspace:       w.ID,
 		Holder:          w.Lock.Holder,
 		LockID:          w.Lock.ID,
 		Lineage:         in.Lineage,
 		Status:          StatusPending,
 		Content:         "",
-		Outputs:         stored,
+		Outputs:         nil,
 		MD5:             sum,
 		Serial:          in.Serial,
 		Size:            0,
 		Force:           in.Force,
 		UnlockedWrite:   unlocked,
-		Sealed:          sealed,
+		Sealed:          true,
 		RestoredFrom:    restoredFrom,
 		SensitiveMarks:  nil,
 		FenceBy:         "",
@@ -2076,21 +2207,20 @@ func (s *Service) createPending(
 		return PendingState{}, fmt.Errorf("create state version for %s: %w", w.Ref, err)
 	}
 
-	sv.Outputs = outputs
-
 	return PendingState{Upload: tok, Version: sv}, nil
 }
 
 // storeInput carries one content write: the workspace scope, the blob key,
-// the declared MD5 of the plain bytes, the content, and whether the content
-// seals as it streams into the blob store.
+// the declared MD5 of the plain bytes, and the content, which seals as it
+// streams into the blob store.
 type storeInput struct {
 	namespace namespace.Name
 	workspace ID
-	seal      bool
-	key       blob.Key
-	want      [md5.Size]byte
-	content   io.Reader
+	// version is the state version ID that binds a sealed write.
+	version string
+	key     blob.Key
+	want    [md5.Size]byte
+	content io.Reader
 	// unchecked skips the MD5 comparison: a streamed write with no declared MD5
 	// records the MD5 that the bytes produce.
 	unchecked bool
@@ -2104,11 +2234,9 @@ type storedContent struct {
 }
 
 // store writes content under key, checking size and MD5 as it streams. The
-// MD5 and the size stay those of the plain bytes. When seal holds, the
-// content seals as it streams into the blob with the data key of the
-// workspace scope, so the blob store never holds plain state. A sealed write
-// without a sealer fails closed instead of storing plain bytes under a
-// sealed flag. On any mismatch the object is deleted.
+// MD5 and the size stay those of the plain bytes. The content seals as it
+// streams into the blob with the data key of the workspace scope, so the
+// blob store never holds plain state. On any mismatch the object is deleted.
 func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 	stored, err := s.storeContent(ctx, in)
 
@@ -2118,28 +2246,22 @@ func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 // storeContent is store, and it also reports the MD5 of the plain bytes. With
 // unchecked set, it checks only the size.
 func (s *Service) storeContent(ctx context.Context, in storeInput) (storedContent, error) {
-	if in.seal && s.sealer == nil {
-		return storedContent{}, fmt.Errorf("store sealed state of %s: %w", in.workspace, ErrSealerNotConfigured)
-	}
-
-	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
+	digest := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
 	counted := &countingReader{r: io.LimitReader(in.content, s.maxState+1), n: 0}
-	checked := io.TeeReader(counted, hash)
+	checked := io.TeeReader(counted, digest)
 
-	if in.seal {
-		sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), checked)
-		if err != nil {
-			return storedContent{}, err
-		}
-
-		checked = sealedReader
+	sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), in.version, checked)
+	if err != nil {
+		return storedContent{}, err
 	}
+
+	checked = sealedReader
 
 	if err := s.blobs.Put(ctx, in.key, checked); err != nil {
 		return storedContent{}, fmt.Errorf("store content: %w", err)
 	}
 
-	sum := [md5.Size]byte(hash.Sum(nil))
+	sum := [md5.Size]byte(digest.Sum(nil))
 
 	var problem error
 
@@ -2156,17 +2278,11 @@ func (s *Service) storeContent(ctx context.Context, in storeInput) (storedConten
 }
 
 // openOutputs opens the sealed outputs of sv in place, so callers read plain
-// outputs. Rows without the sealed flag read as before. Sealed outputs on a
-// service without a sealer fail with ErrSealerNotConfigured: ciphertext
-// never reads as outputs. A failure reports the version ID only, never a
-// key, a scope or content.
+// outputs. A version without outputs keeps none. A failure reports the
+// version ID only, never a key, a scope or content.
 func (s *Service) openOutputs(ctx context.Context, sv *StateVersion) error {
-	if !sv.Sealed || len(sv.Outputs) == 0 {
+	if len(sv.Outputs) == 0 {
 		return nil
-	}
-
-	if s.sealer == nil {
-		return fmt.Errorf("open outputs of %s: %w", sv.ID, ErrSealerNotConfigured)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -2174,7 +2290,7 @@ func (s *Service) openOutputs(ctx context.Context, sv *StateVersion) error {
 		return err
 	}
 
-	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), sv.Outputs)
+	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), sv.Outputs)
 	if err != nil {
 		return sanitizeOpenError(sv.ID, err)
 	}
@@ -2211,6 +2327,36 @@ func (r *closeReader) Read(p []byte) (int, error) {
 	n, err := r.reader.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) && errors.Is(err, secret.ErrDecrypt) {
 		return n, fmt.Errorf("open state %s: %w", r.id, ErrSealedContent)
+	}
+
+	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
+}
+
+// verifiedReader checks the plain bytes of a state version against the size
+// and MD5 of its row as they stream. A mismatch at the end of the stream
+// fails the read with ErrStoredContentMismatch, so the caller never accepts
+// bytes that differ from the row.
+type verifiedReader struct {
+	r    io.Reader
+	hash hash.Hash
+	sv   StateVersion
+	n    int64
+}
+
+// newVerifiedReader wraps r, the plain bytes of sv.
+func newVerifiedReader(r io.Reader, sv StateVersion) *verifiedReader {
+	//nolint:gosec // Required by the TFE protocol; integrity only.
+	return &verifiedReader{r: r, hash: md5.New(), sv: sv, n: 0}
+}
+
+// Read returns the next plain bytes and checks them at the end of the stream.
+func (v *verifiedReader) Read(p []byte) (int, error) {
+	n, err := v.r.Read(p)
+	v.n += int64(n)
+	_, _ = v.hash.Write(p[:n])
+
+	if errors.Is(err, io.EOF) && (v.n != v.sv.Size || [md5.Size]byte(v.hash.Sum(nil)) != v.sv.MD5) {
+		return n, fmt.Errorf("open state %s: %w", v.sv.ID, ErrStoredContentMismatch)
 	}
 
 	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
@@ -2262,8 +2408,9 @@ func (s *Service) clock() time.Time {
 	return s.now().UTC()
 }
 
-// releaseUnfenced releases the lock of the unit without writing a version.
-func (s *Service) releaseUnfenced(ctx context.Context, w Workspace) (Workspace, error) {
+// releaseUnfenced releases the lock of the unit without writing a version, and
+// appends the audit entry of the release in the same transaction.
+func (s *Service) releaseUnfenced(ctx context.Context, w Workspace, entry audit.Entry) (Workspace, error) {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
@@ -2274,7 +2421,7 @@ func (s *Service) releaseUnfenced(ctx context.Context, w Workspace) (Workspace, 
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
 
-	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence); err != nil {
+	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence, entry); err != nil {
 		return Workspace{}, fmt.Errorf("release %s: %w", w.ID, err)
 	}
 
@@ -2325,7 +2472,7 @@ func (s *Service) storeUploadBody(
 	size, storeErr := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
-		seal:      sv.Sealed,
+		version:   string(sv.ID),
 		key:       key,
 		want:      sv.MD5,
 		content:   reader,
@@ -2347,7 +2494,7 @@ func (s *Service) storeUploadBody(
 		return uploadedBody{}, errors.Join(metaErr, deleteOnCleanup(ctx, s.blobs, key))
 	}
 
-	outputs, err := s.streamedOutputs(ctx, w, meta)
+	outputs, err := s.streamedOutputs(ctx, w, string(sv.ID), meta)
 	if err != nil {
 		return uploadedBody{}, errors.Join(err, deleteOnCleanup(ctx, s.blobs, key))
 	}

@@ -152,6 +152,9 @@ func sessionCallerEntry() audit.Entry {
 		Changes:  []audit.Change{{Key: "sessionId", Old: nil, New: "ses-1", Layer: "", TakesEffect: ""}},
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

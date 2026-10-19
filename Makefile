@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -19,6 +19,10 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
 	sqlc diff
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
+	python3 -I scripts/runner-deps-guard.py --selftest
+	python3 -I scripts/runner-deps-guard.py
+	python3 -I scripts/module-age-gate.py --selftest
+	python3 -I scripts/module-age-gate.py
 	golangci-lint run ./...
 
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
@@ -44,8 +48,8 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 
 # The vulnerability database and the misconfiguration checks come from
-# mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is a
-# line in .trivyignore with its reason.
+# mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
+# entry in .trivyignore.yaml, scoped by path, with its reason in statement.
 #
 # The license scan writes a JSON report, and scripts/trivy-license-gate.py checks
 # it. The gate fails on an unknown, restricted (HIGH, for example GPL) or
@@ -61,8 +65,8 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 TRIVY_CANARY_MODULE := github.com/xen0n/gosmopolitan@v1.3.0
 TRIVY_LICENSE_FLAGS := --scanners license --disable-telemetry --skip-version-check --no-progress
 
-trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile), secrets in the tree, and dependency licenses.
-	trivy fs --scanners vuln,misconfig,secret --exit-code 1 \
+trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile, Helm chart output), secrets in the tree, and dependency licenses.
+	trivy fs --scanners vuln,misconfig,secret --exit-code 1 --ignorefile .trivyignore.yaml \
 		--disable-telemetry --skip-version-check --no-progress .
 	go mod download
 	go mod download $(TRIVY_CANARY_MODULE)
@@ -111,6 +115,9 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
 
+chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubeconform). Needs helm and kubeconform; not part of check.
+	./scripts/chart-lint.sh
+
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
 	go test -race ./...
 
@@ -134,6 +141,9 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
 
+checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
+	./scripts/checks-agent.sh
+
 # With TOXIPROXY_URL set, the target uses that Toxiproxy server (CI runs it
 # as a service container) and downloads no binary.
 faults: ## Run Toxiproxy network fault tests against a self-started server (downloads toxiproxy-server unless TOXIPROXY_URL is set; test-only, never ships). Not part of check.
@@ -141,7 +151,7 @@ faults: ## Run Toxiproxy network fault tests against a self-started server (down
 	go test -tags faults -race -count=1 -timeout 20m ./e2e/faults/...
 
 e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recording build (ADR 43, work item 9). Not part of check.
-	E2E_PULUMI_VERSIONS=3.268.0 go test -tags "e2e journalrecording" -race -count=1 -run 'TestPulumiJournalingOn|TestPulumiJournalRefusalCancel' -timeout 60m ./e2e/...
+	E2E_PULUMI_VERSIONS=3.268.0 go test -tags "e2e journalrecording" -race -count=1 -run 'TestPulumiJournalingOn|TestPulumiJournalRefusalCancel|TestPulumiJournalingOnVersion|TestPulumiJournalStateMigration' -timeout 60m ./e2e/...
 
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case without a v* tag, previous-tag case with one). Not part of check.
 	E2E_SERVER=binary go test -tags "e2e upgrade" -race -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
@@ -160,6 +170,11 @@ DEMO_PORT ?= 8080
 
 soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one server binary for SOAK_DURATION (default 30m; SOAK_DURATION=60s for a smoke check), with SOAK_PULUMI and SOAK_TOFU workers each (default 4) writing CSV and Markdown reports to SOAK_REPORT_DIR (SQLite default; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check; see docs/guides/soak.md.
 	SOAK_DURATION=$(SOAK_DURATION) SOAK_PULUMI=$(SOAK_PULUMI) SOAK_TOFU=$(SOAK_TOFU) SOAK_REPORT_DIR=$(SOAK_REPORT_DIR) E2E_SERVER=binary go test -tags "e2e soak" -race -count=1 -v -timeout 60m ./e2e/ -run TestSoak
+
+BASELINE_REF ?= origin/main
+
+regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
+	./scripts/regenerate-baseline.sh $(BASELINE_REF)
 
 generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate
@@ -183,3 +198,6 @@ demo: build ## Run the server with the web console and demo data on 127.0.0.1:80
 
 image-smoke: ## Build the container image and run the local smoke test (needs docker; not part of check).
 	./scripts/smoke-image.sh
+
+compose-smoke: ## Start the stack of deploy/compose and drive the real Pulumi CLI and OpenTofu against it (needs docker with compose and openssl; not part of check).
+	E2E_COMPOSE=1 go test -tags e2e -race -count=1 -timeout 30m -run '^TestComposeQuickstart$$' ./e2e/...

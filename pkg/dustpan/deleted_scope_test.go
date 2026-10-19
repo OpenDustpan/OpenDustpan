@@ -63,6 +63,7 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 
 	for _, name := range []namespace.Name{"acme", "other"} {
 		ns := namespace.Namespace{
+			ID:              namespace.NewID(),
 			CreatedAt:       time.Unix(0, 0),
 			Name:            name,
 			HomeRegion:      region,
@@ -92,13 +93,32 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 
 	authn := tokenMapAuthenticator{tokens: map[string]identity.Principal{
 		deletedAdminToken: {
-			Subject: "operator", DisplayName: "operator", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Subject:                "operator",
+			DisplayName:            "operator",
+			Admin:                  true,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		},
 		deletedViewerToken: {
-			Subject: "nina", DisplayName: "nina", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Subject:                "nina", DisplayName: "nina", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		},
 		deletedReaderToken: {
-			Subject: "rita", DisplayName: "rita", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Subject:                "rita", DisplayName: "rita", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		},
 	}}
 
@@ -197,7 +217,7 @@ func listDeleted(t *testing.T, srv *dustpan.Server, token, ns string) (int, dele
 	var page deletedPageWire
 
 	code, body := serveDeletedScope(t, srv, deletedScopeCall{
-		method: http.MethodGet, target: "/api/inventory/deleted-units?organization=" + ns, token: token, body: "",
+		method: http.MethodGet, target: "/api/dustpan/v1/namespaces/" + ns + "/deleted-units", token: token, body: "",
 	})
 	if code != http.StatusOK {
 		return code, page, body

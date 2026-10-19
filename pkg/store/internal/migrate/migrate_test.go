@@ -318,10 +318,75 @@ func TestCheckRefusesPendingMinimumAboveBinary(t *testing.T) {
 	}
 }
 
+func TestCheckRefusesStoredMinimumWithPendingMigrations(t *testing.T) {
+	t.Parallel()
+
+	fsys := fstest.MapFS{
+		"m/0001_init.sql":  mapFile("CREATE TABLE a (x INTEGER);\n"),
+		"m/0002_extra.sql": mapFile("ALTER TABLE a ADD COLUMN y INTEGER;\n"),
+	}
+
+	embedded, err := migrate.Load(fsys, "m")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	recorded := applied(map[int64]string{1: "v0.3.0"}, 1)
+
+	_, err = migrate.Check(recorded, embedded, "v0.2.0")
+	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		t.Fatalf("Check below the stored minimum with a pending migration = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	plan, err := migrate.Check(recorded, embedded, "v0.3.0")
+	if err != nil {
+		t.Fatalf("Check at the stored minimum: %v", err)
+	}
+
+	if len(plan.Pending) != 1 || plan.Pending[0].Version != 2 {
+		t.Fatalf("pending = %+v, want the version 2 migration", plan.Pending)
+	}
+}
+
 func TestCheckRefusesBadBinaryVersion(t *testing.T) {
 	t.Parallel()
 
 	if _, err := migrate.Check(nil, migrations(1), "release"); !errors.Is(err, schema.ErrBadBinaryVersion) {
 		t.Fatalf("Check with a bad binary version = %v, want ErrBadBinaryVersion", err)
+	}
+}
+
+func TestCollapseVersion(t *testing.T) {
+	t.Parallel()
+
+	b := schema.BaselineVersion
+
+	cases := []struct {
+		name     string
+		versions []int64
+		want     int64
+	}{
+		{name: "no files", versions: nil, want: b},
+		{name: "files below the baseline", versions: []int64{1, b / 2, b - 1}, want: b},
+		{name: "files from the baseline on", versions: []int64{b, b + 3, b + 4}, want: b + 5},
+		{name: "mixed", versions: []int64{7, b - 1, b, b + 4}, want: b + 5},
+		{name: "unordered", versions: []int64{b + 4, 3, b}, want: b + 5},
+		{name: "one file at the baseline", versions: []int64{b}, want: b + 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := migrate.CollapseVersion(tc.versions); got != tc.want {
+				t.Fatalf("CollapseVersion(%v) = %d, want %d", tc.versions, got, tc.want)
+			}
+
+			for _, v := range tc.versions {
+				if migrate.CollapseVersion(tc.versions) <= v {
+					t.Fatalf("CollapseVersion(%v) is not above %d", tc.versions, v)
+				}
+			}
+		})
 	}
 }

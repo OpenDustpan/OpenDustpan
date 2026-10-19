@@ -176,10 +176,10 @@ func TestMaintenanceGateInventory(t *testing.T) {
 	enterMaintenanceMode(t, f)
 
 	status, header, body := f.doRaw(
-		t, http.MethodGet, "/api/inventory/units?organization=acme", "token "+adminToken,
+		t, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units", "token "+adminToken,
 	)
 	if status != http.StatusServiceUnavailable {
-		t.Fatalf("GET /api/inventory/units in maintenance answers %d, want %d (%s)",
+		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units in maintenance answers %d, want %d (%s)",
 			status, http.StatusServiceUnavailable, body)
 	}
 
@@ -195,11 +195,11 @@ func TestMaintenanceGateInventory(t *testing.T) {
 	}
 
 	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatalf("decode 503 of GET /api/inventory/units: %v (%s)", err, body)
+		t.Fatalf("decode 503 of GET /api/dustpan/v1/namespaces/{namespace}/units: %v (%s)", err, body)
 	}
 
 	if doc.Code != http.StatusServiceUnavailable || !strings.Contains(doc.Message, "maintenance") {
-		t.Fatalf("GET /api/inventory/units error = %+v, want code 503 naming maintenance", doc)
+		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units error = %+v, want code 503 naming maintenance", doc)
 	}
 
 	leaveMaintenanceMode(t, f)
@@ -218,7 +218,7 @@ func TestMaintenanceGateAnswersBeforeAuth(t *testing.T) {
 	}{
 		{name: "Pulumi", path: "/api/user", mediaType: "application/json"},
 		{name: "TFE", path: "/api/v2/ping", mediaType: "application/vnd.api+json"},
-		{name: "inventory", path: "/api/inventory/units?organization=acme", mediaType: "application/json"},
+		{name: "inventory", path: "/api/dustpan/v1/namespaces/acme/units", mediaType: "application/json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

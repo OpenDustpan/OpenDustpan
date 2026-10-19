@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -45,11 +46,13 @@ func (conflictWorkspaces) Unlock(
 	return workspace.Workspace{}, workspace.ErrLockedByOther
 }
 
-func (rconflictWorkspaces conflictWorkspaces) ForceUnlock(
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (rconflictWorkspaces conflictWorkspaces) ForceUnlockLock(
 	ctx context.Context,
 	id workspace.ID,
+	_ workspace.Lock,
 	by string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	err := rconflictWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
@@ -199,19 +202,27 @@ func (concurrentAuthenticator) AuthenticateToken(
 	switch raw {
 	case "test-token-a":
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "alice",
 			DisplayName:    "Alice",
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	case "test-token-b":
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "bob",
 			DisplayName:    "Bob",
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	default:
 		return identity.Principal{}, identity.ErrUnauthenticated

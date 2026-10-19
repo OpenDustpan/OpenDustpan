@@ -11,6 +11,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -168,25 +169,37 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 			return nil
 		}
 
-		err = q.SetStackVersion(ctx, db.SetStackVersionParams{
-			Version:     u.Version,
-			UpdatedAtMs: codec.Millis(u.EndedAt),
-			Namespace:   u.Ref.Namespace.String(),
-			Project:     u.Ref.Project.String(),
-			Name:        u.Ref.Stack.String(),
-		})
-		if err != nil {
-			return fmt.Errorf("set stack version: %w", err)
-		}
-
-		if err := publishStackInventory(ctx, q, u.Ref, stackID, codec.Millis(u.EndedAt)); err != nil {
-			return err
-		}
-
-		// The ended update releases the stack lock: clear it in the same
-		// transaction.
-		return writeInventoryLock(ctx, q, stackInventoryKey(u), nil)
+		return endMutatingUpdate(ctx, q, u, stackID)
 	})
+}
+
+// endMutatingUpdate moves the stack version and the inventory entry of the
+// stack stackID to the end of the mutating update u, releases the stack lock,
+// and appends the change log row. The change log row comes last, after every
+// other lock.
+func endMutatingUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID string) error {
+	err := q.SetStackVersion(ctx, db.SetStackVersionParams{
+		Version:     u.Version,
+		UpdatedAtMs: codec.Millis(u.EndedAt),
+		Namespace:   u.Ref.Namespace.String(),
+		Project:     u.Ref.Project.String(),
+		Name:        u.Ref.Stack.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("set stack version: %w", err)
+	}
+
+	endedMs := codec.Millis(u.EndedAt)
+
+	if upsertErr := upsertStackInventory(ctx, q, u.Ref, stackID, endedMs); upsertErr != nil {
+		return upsertErr
+	}
+
+	if lockErr := writeInventoryLock(ctx, q, stackInventoryKey(u), nil); lockErr != nil {
+		return lockErr
+	}
+
+	return appendStackChange(ctx, q, u.Ref, unitWrite{unitID: stackID, atMs: endedMs, kind: inventory.ChangeChanged})
 }
 
 // ActiveUpdate implements stack.UpdateStore.
@@ -315,7 +328,7 @@ func writeCheckpoint(
 		Invalid:       row.Invalid,
 		FeaturesJson:  string(row.Features),
 		SavedAtMs:     row.SavedAtMs,
-		BlobKey:       sql.NullString{String: row.BlobKey, Valid: true},
+		BlobKey:       row.BlobKey,
 		Size:          sql.NullInt64{Int64: row.Size, Valid: true},
 		BlobSize:      sql.NullInt64{Int64: row.BlobSize, Valid: true},
 		BlobMd5:       row.BlobMD5,
@@ -351,7 +364,7 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
 }
 
 // CheckpointByVersion implements stack.CheckpointStore.
@@ -382,7 +395,7 @@ func (s *Store) CheckpointByVersion(
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
 }
 
 // CheckpointByUpdate implements stack.CheckpointStore.
@@ -438,9 +451,9 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	out := make([]blob.Key, 0, len(rows))
 
 	for _, row := range rows {
-		key, err := blob.ParseKey(row.String)
+		key, err := blob.ParseKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row.String, err)
+			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row, err)
 		}
 
 		out = append(out, key)
@@ -766,7 +779,7 @@ func fromListUpdateRow(row db.ListUpdatesRow) codec.UpdateRow {
 	}
 }
 
-func fromCheckpointRow(row db.GetCheckpointByUpdateRow) codec.CheckpointRow {
+func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 	return codec.CheckpointRow{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
@@ -777,7 +790,7 @@ func fromCheckpointRow(row db.GetCheckpointByUpdateRow) codec.CheckpointRow {
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		BlobKey:       row.BlobKey.String,
+		BlobKey:       row.BlobKey,
 		Size:          row.Size.Int64,
 		BlobSize:      row.BlobSize.Int64,
 		BlobMD5:       row.BlobMd5,

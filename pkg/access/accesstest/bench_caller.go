@@ -35,7 +35,11 @@ func BenchCallerGrants(b *testing.B, s BenchStore) {
 
 	svc := seedBenchCaller(b, s)
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: "me", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	seeded := 0
@@ -106,7 +110,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 			Pinned: false,
 		}
-		if err := s.AddMember(ctx, m, entry()); err != nil {
+		if err := s.AddMember(ctx, m, entry(), nil); err != nil {
 			b.Fatalf("seed member: %v", err)
 		}
 

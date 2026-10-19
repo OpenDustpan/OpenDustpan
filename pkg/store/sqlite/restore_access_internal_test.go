@@ -63,6 +63,7 @@ func openSeededKeepStore(t *testing.T) *Store {
 	})
 
 	seed := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now().UTC(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",
@@ -155,6 +156,7 @@ func TestKeepAccessHoldsWriteLockAcrossSwap(t *testing.T) {
 
 	go func() {
 		rival := namespace.Namespace{
+			ID:              namespace.NewID(),
 			CreatedAt:       time.Now().UTC(),
 			Name:            "rival",
 			HomeRegion:      "eu-west",

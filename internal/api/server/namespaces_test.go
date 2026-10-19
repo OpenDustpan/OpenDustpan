@@ -17,6 +17,7 @@ import (
 
 // namespaceDoc decodes a created namespace in tests.
 type namespaceDoc struct {
+	ID              string `json:"id"`
 	Name            string `json:"name"`
 	HomeRegion      string `json:"homeRegion"`
 	FailoverVersion int64  `json:"failoverVersion"`
@@ -30,6 +31,8 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       authz,
 		Logger:           slog.New(slog.DiscardHandler),
@@ -183,6 +186,10 @@ func TestNamespaceCreateOnEmpty(t *testing.T) {
 
 	if doc.Name != "acme" || doc.HomeRegion != "test" || doc.FailoverVersion != 1 || doc.CreatedAt == "" {
 		t.Fatalf("namespace answers %+v, want acme in test at version 1 with a time", doc)
+	}
+
+	if _, err := namespace.ParseID(doc.ID); err != nil {
+		t.Fatalf("namespace answers ID %q: %v", doc.ID, err)
 	}
 }
 

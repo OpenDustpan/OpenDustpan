@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -125,6 +126,8 @@ type backupSeed struct {
 	pending    workspace.StateVersion
 	backedUp   backup.Record
 	audit      []audit.Entry
+	imports    *seededImports
+	profiles   *seededProfiles
 }
 
 // seedBackupStore fills s through the real ports: namespaces, stacks with
@@ -135,7 +138,8 @@ type backupSeed struct {
 // restore with a creator and a restore source, the checkpoint manages one
 // resource, and the pending state version is a restore of the finalized one,
 // so the round trip proves the columns that later migrations added survive
-// an export and an import.
+// an export and an import. A store that keeps imports gets three imports
+// (see seedBackupImports).
 func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	t.Helper()
 
@@ -144,6 +148,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	prod := mustGetStack(t, s, f.ref)
 
 	other := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "other",
 		HomeRegion:      "us-east",
@@ -248,6 +253,10 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupAccess(t, s)
 	seedBackupPurge(t, s, acme)
 	seedBackupSignIn(t, s)
+	imports := seedBackupImports(t, s, acme)
+	seedBlameRows(t, s, blameSeed{ns: acme, w: net, first: current.ID.String(), second: pending.ID.String()})
+	profiles := seedBackupProfiles(t, s, acme)
+	seedBackupGate(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -266,6 +275,138 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		pending:    pending,
 		backedUp:   backedUp,
 		audit:      entries,
+		imports:    imports,
+		profiles:   profiles,
+	}
+}
+
+// seedBackupGate writes one gate that reads a path set, so the store holds a
+// reference row, one decision record of the installation and one decision
+// record of the namespace acme, when s keeps the policy model. A store with no
+// gate port skips it: the fake of this package's own tests is one.
+func seedBackupGate(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	gs, ok := s.(gate.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+	scope := gate.NamespaceScope(acme.Name)
+	e := gateEntry(acme.Name, "namespace:manage-gates")
+
+	set := gate.PathSet{Scope: scope, ID: "network", Version: 0, Globs: []string{"modules/net/**"}}
+	if _, err := gs.PathSets().Put(ctx, set, 0, acme.Fence(), e); err != nil {
+		t.Fatalf("put path set: %v", err)
+	}
+
+	g := gate.Gate{
+		Scope: scope, ID: "cost-cap", Version: 0, DecisionPoint: gate.PointChangePlanned, Condition: "", Unless: "",
+		Outcome: gate.OutcomeDeny, Message: "no", Mode: gate.ModeEnforce, OnError: gate.OnErrorFail, Final: false,
+		CheckedWith: gate.CheckedWith{Engine: "", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0}},
+		State:       "", Reads: []gate.ID{"network"},
+	}
+	if _, err := gs.Gates().Put(ctx, g, 0, acme.Fence(), e); err != nil {
+		t.Fatalf("put gate: %v", err)
+	}
+
+	for _, ns := range []namespace.Name{audit.ServerScope, acme.Name} {
+		fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+		if ns == acme.Name {
+			fence = acme.Fence()
+		}
+
+		// A refusal record needs the window key that NoteRefusal sets.
+		if _, err := gs.Records().NoteRefusal(ctx, seedGateRecord(ns), gate.AccessRefusalWindow, fence); err != nil {
+			t.Fatalf("note gate refusal of %q: %v", ns, err)
+		}
+	}
+}
+
+// seedGateRecord returns a refusal record of an access limit in ns.
+func seedGateRecord(ns namespace.Name) gate.Record {
+	return gate.Record{
+		ID: gate.NewRecordID(), Point: "", Change: gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}, Namespace: ns,
+		At: now(), Subject: "agent-1", Schema: gate.SchemaVersion{Subject: "", Major: 0, Minor: 0},
+		PathSets: nil, Units: nil, Requirements: nil, Warnings: nil, AutoApply: false, Controls: nil, BreakGlass: "",
+		Result: gate.ResultDeny, Action: "state.read", Count: 1, LastAt: now(),
+	}
+}
+
+// requireSeededGate checks that s holds what seedBackupGate wrote: the gate
+// and the path set that it reads, and the two records. It also checks that
+// the row counts of the summary hold the reference row. A store with no gate
+// port skips it.
+func requireSeededGate(t *testing.T, s BackupStore, sum backup.Summary) {
+	t.Helper()
+
+	gs, ok := s.(gate.Store)
+	if !ok {
+		return
+	}
+
+	for _, table := range []string{"gate_objects", "gate_references"} {
+		if sum.RowCounts[table] < 1 {
+			t.Fatalf("summary rows of %s = %d, want at least 1", table, sum.RowCounts[table])
+		}
+	}
+
+	if sum.RowCounts["gate_records"] != 2 {
+		t.Fatalf("summary rows of gate_records = %d, want 2", sum.RowCounts["gate_records"])
+	}
+
+	ctx := t.Context()
+	scope := gate.NamespaceScope("acme")
+
+	if _, err := gs.Gates().Get(ctx, scope, "cost-cap"); err != nil {
+		t.Fatalf("get the restored gate: %v", err)
+	}
+
+	if _, err := gs.PathSets().Get(ctx, scope, "network"); err != nil {
+		t.Fatalf("get the restored path set: %v", err)
+	}
+
+	change := gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}
+
+	for _, ns := range []namespace.Name{audit.ServerScope, "acme"} {
+		records, err := gs.Records().ListByChange(ctx, ns, change)
+		if err != nil {
+			t.Fatalf("list the restored records of %q: %v", ns, err)
+		}
+
+		if len(records) != 1 || records[0].Action != "state.read" {
+			t.Fatalf("restored records of %q = %+v, want one record with the action state.read", ns, records)
+		}
+
+		requireRefusalFolded(t, s, gs, ns, records[0].ID)
+	}
+}
+
+// requireRefusalFolded checks that the restored refusal key of ns still folds a
+// second refusal into the record id.
+func requireRefusalFolded(t *testing.T, s BackupStore, gs gate.Store, ns namespace.Name, id gate.RecordID) {
+	t.Helper()
+
+	ctx := t.Context()
+	change := gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}
+
+	again, err := gs.Records().NoteRefusal(ctx, seedGateRecord(ns), gate.AccessRefusalWindow, fenceOf(t, s, ns))
+	if err != nil {
+		t.Fatalf("note a second refusal in %q: %v", ns, err)
+	}
+
+	if again != id {
+		t.Fatalf("second refusal in %q returned the record %s, want %s", ns, again, id)
+	}
+
+	folded, err := gs.Records().ListByChange(ctx, ns, change)
+	if err != nil {
+		t.Fatalf("list the folded records of %q: %v", ns, err)
+	}
+
+	if len(folded) != 1 || folded[0].Count != 2 {
+		t.Fatalf("records of %q after a second refusal = %+v, want one record with count 2", ns, folded)
 	}
 }
 
@@ -332,7 +473,7 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 			Pinned: false,
 		}
-		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id)); err != nil {
+		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id), nil); err != nil {
 			t.Fatalf("add member %q: %v", id, err)
 		}
 	}
@@ -342,7 +483,7 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		PrincipalID: "prn-suspended", Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
 		State: principal.MembershipStateSuspended, Pinned: true,
 	}
-	addErr := ps.AddMember(ctx, suspended, ServerChange(suspended.AddedAt, "group:grp-ops#member:prn-suspended"))
+	addErr := ps.AddMember(ctx, suspended, ServerChange(suspended.AddedAt, "group:grp-ops#member:prn-suspended"), nil)
 	if addErr != nil {
 		t.Fatalf("add suspended member: %v", addErr)
 	}
@@ -549,28 +690,31 @@ func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Toke
 // an installation store takes.
 func ServerChange(at time.Time, object string) audit.Entry {
 	return audit.Entry{
-		At:           at,
-		Namespace:    audit.ServerScope,
-		Subject:      "admin",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "server:manage-principals",
-		Object:       object,
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "storetest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            at,
+		Namespace:     audit.ServerScope,
+		Subject:       "admin",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "server:manage-principals",
+		Object:        object,
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "storetest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -708,28 +852,31 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 		}
 
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
-			At:           now(),
-			Namespace:    acme.Name,
-			Subject:      "admin",
-			IDPSubject:   "",
-			TokenID:      "",
-			Action:       "unit:decrypt",
-			Object:       "pulumi:" + acme.Name.String() + "/web/prod",
-			Version:      "",
-			ValuePath:    "",
-			ValueCount:   count,
-			Changes:      changes,
-			SourceIP:     "192.0.2.1",
-			UserAgent:    "test",
-			Channel:      audit.ChannelAPI,
-			Kind:         kind,
-			Outcome:      audit.OutcomeSuccess,
-			RequestID:    fmt.Sprintf("req-%d", i),
-			ObjectID:     "",
-			PrevHash:     "",
-			Hash:         "",
-			Sequence:     0,
-			FenceVersion: 0,
+			At:            now(),
+			Namespace:     acme.Name,
+			Subject:       "admin",
+			IDPSubject:    "",
+			TokenID:       "",
+			Action:        "unit:decrypt",
+			Object:        "pulumi:" + acme.Name.String() + "/web/prod",
+			Version:       "",
+			ValuePath:     "",
+			ValueCount:    count,
+			Changes:       changes,
+			SourceIP:      "192.0.2.1",
+			UserAgent:     "test",
+			Channel:       audit.ChannelAPI,
+			Kind:          kind,
+			Outcome:       audit.OutcomeSuccess,
+			RequestID:     fmt.Sprintf("req-%d", i),
+			ObjectID:      "",
+			PrevHash:      "",
+			Hash:          "",
+			Sequence:      0,
+			FenceVersion:  0,
+			Reason:        "",
+			PrincipalKind: "",
+			JobID:         "",
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)
@@ -740,9 +887,23 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 
 	// A store that ships entries to log sinks also keeps a cursor row, so
 	// the round trip carries the cursor table too (ADR 60 decision 13).
+	// The cursor write carries the live claim of the sink.
 	if feed, ok := s.(audit.Feed); ok {
-		if err := feed.AdvanceSinkCursor(t.Context(), acme.Fence(), "siem", out[len(out)-1].Sequence); err != nil {
-			t.Fatalf("advance audit sink cursor: %v", err)
+		leaser, ok := s.(audit.SinkLeaser)
+		if !ok {
+			t.Fatal("store keeps audit sink cursors but no sink leases")
+		}
+
+		claim, err := leaser.AcquireSinkLease(t.Context(), "siem", "backup-seed", time.Hour)
+		if err != nil {
+			t.Fatalf("acquire audit sink lease: %v", err)
+		}
+
+		last := out[len(out)-1].Sequence
+
+		advErr := feed.AdvanceSinkCursor(t.Context(), acme.Fence(), claim, "siem", last)
+		if advErr != nil {
+			t.Fatalf("advance audit sink cursor: %v", advErr)
 		}
 	}
 
@@ -1025,13 +1186,14 @@ func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 	}
 
 	want := append(backup.TablesCopy(), backup.ControlTables...)
+	want = append(want, backup.EmptiedTables...)
 	slices.Sort(want)
 
 	got := slices.Clone(schema)
 	slices.Sort(got)
 
 	if !slices.Equal(got, want) {
-		t.Fatalf("schema tables = %q, want backup.Tables and backup.ControlTables %q", got, want)
+		t.Fatalf("schema tables = %q, want backup.Tables, backup.ControlTables and backup.EmptiedTables %q", got, want)
 	}
 }
 
@@ -1293,4 +1455,21 @@ func checkReopenedBackups(
 	if gotFinished := mustGetBackup(t, reopened, finished.ID); gotFinished != finished {
 		t.Fatalf("finished backup after reopen = %+v, want %+v", gotFinished, finished)
 	}
+}
+
+// fenceOf returns the fence of the namespace ns in s, or the zero fence for the
+// installation scope.
+func fenceOf(t *testing.T, s BackupStore, ns namespace.Name) namespace.Fence {
+	t.Helper()
+
+	if ns == audit.ServerScope {
+		return namespace.Fence{Namespace: "", FailoverVersion: 0}
+	}
+
+	n, err := s.GetNamespace(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("get namespace %q: %v", ns, err)
+	}
+
+	return n.Fence()
 }

@@ -54,6 +54,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 	ctx := t.Context()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.UnixMilli(1_700_000_000_000).UTC(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",
@@ -89,7 +90,10 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 			SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 			Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 			Changes: nil, ObjectID: "",
-			FenceVersion: 0,
+			FenceVersion:  0,
+			Reason:        "",
+			PrincipalKind: "",
+			JobID:         "",
 		}
 	}
 

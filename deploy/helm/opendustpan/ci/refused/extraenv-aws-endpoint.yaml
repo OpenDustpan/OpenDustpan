@@ -1,0 +1,12 @@
+# Refused: an AWS endpoint variable.
+# want: at '/server/extraEnv/0/name': 'allOf' failed
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+server:
+  extraEnv:
+    - name: AWS_ENDPOINT_URL_S3
+      value: https://s3.other.example

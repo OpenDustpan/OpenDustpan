@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"encoding/hex"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -35,16 +37,21 @@ type WorkspaceStore interface {
 // WorkspaceFactory returns a fresh, empty store for one subtest.
 type WorkspaceFactory func(t *testing.T) WorkspaceStore
 
+// workspaceCase is one case of the workspace suite.
+type workspaceCase struct {
+	test func(t *testing.T, s WorkspaceStore)
+	name string
+}
+
 // RunWorkspace executes the conformance suite of the workspace ports
 // (workspace.Store, workspace.StateStore) against stores produced by newStore.
 func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 	t.Helper()
 
-	cases := []struct {
-		test func(t *testing.T, s WorkspaceStore)
-		name string
-	}{
+	cases := []workspaceCase{
 		{name: "create and read by name and by ID", test: testWorkspaceRoundTrip},
+		{name: "the change log follows the writes of a workspace", test: testWorkspaceChangeLog},
+		{name: "a refused write of a workspace appends no change log row", test: testWorkspaceChangeLogFence},
 		{name: "duplicate workspace name is ErrAlreadyExists", test: testDuplicateWorkspace},
 		{name: "create in a missing namespace is namespace.ErrNotFound", test: testWorkspaceMissingNamespace},
 		{name: "missing workspace is ErrNotFound", test: testMissingWorkspace},
@@ -208,6 +215,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "a purge removes a deleted workspace for good", test: testPurgeWorkspace},
 		{name: "a sweep purge checks the retention of a workspace", test: testSweepPurgeChecksTheRetentionWorkspace},
 		{name: "a purge ends the grants on the workspace", test: testPurgeWorkspaceRevokesItsGrants},
+		{name: "a purge removes the context of the workspace", test: testPurgeWorkspaceDropsItsContext},
 		{name: "an audit entry on a workspace gets its stable ID", test: testAppendFillsWorkspaceID},
 		{name: "a workspace restore and purge race: one wins", test: testRestoreRacesPurgeWorkspace},
 		{
@@ -316,7 +324,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range slices.Concat(cases, releaseAuditCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -328,6 +336,7 @@ func newWorkspaceNamespace(t *testing.T, s WorkspaceStore, name string) namespac
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
@@ -454,7 +463,7 @@ func newPendingVersion(
 		Serial:          in.serial,
 		Size:            0,
 		Force:           in.force,
-		Sealed:          false,
+		Sealed:          true,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
@@ -664,6 +673,7 @@ func testWorkspaceMissingNamespace(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ghost := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "ghost",
 		HomeRegion:      "eu-west",
@@ -2875,9 +2885,8 @@ func assertReferencedContentKeys(t *testing.T, s WorkspaceStore, id workspace.ID
 	}
 }
 
-// testSealedFlagRoundTrip proves the sealed flag of ADR 41 decision 10 is
-// stored and read back: a sealed version reads sealed by get, current and
-// list, and an unsealed version reads unsealed.
+// testSealedFlagRoundTrip proves the sealed flag is stored and read back:
+// a sealed version reads sealed by get, current and list.
 func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
@@ -2886,7 +2895,6 @@ func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 	locked := lockTestWorkspace(t, s, ns, w, "alice")
 
 	sealed := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1))
-	sealed.Sealed = true
 	createPendingVersion(t, s, ns, sealed)
 
 	got, err := s.GetStateVersion(t.Context(), sealed.ID)
@@ -2896,18 +2904,6 @@ func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 
 	if !got.Sealed {
 		t.Fatal("sealed state version reads unsealed, want sealed")
-	}
-
-	plain := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2))
-	createPendingVersion(t, s, ns, plain)
-
-	gotPlain, err := s.GetStateVersion(t.Context(), plain.ID)
-	if err != nil {
-		t.Fatalf("get unsealed state version: %v", err)
-	}
-
-	if gotPlain.Sealed {
-		t.Fatal("unsealed state version reads sealed, want unsealed")
 	}
 
 	finalized := finalizedVersion(sealed, now().Add(2*time.Hour), "v1")
@@ -3253,7 +3249,7 @@ func newFenceVersion(t *testing.T, w workspace.Workspace, serial int64, at time.
 		Serial:          serial,
 		Size:            int64(len(content)),
 		Force:           false,
-		Sealed:          false,
+		Sealed:          true,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "admin",
@@ -3314,6 +3310,7 @@ func testFenceAndUnlock(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("fence and unlock: %v", err)
@@ -3392,6 +3389,7 @@ func testFenceNotLocked(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, w.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if !errors.Is(err, workspace.ErrNotLocked) {
 		t.Fatalf("fence an unlocked workspace: err = %v, want ErrNotLocked", err)
@@ -3421,7 +3419,14 @@ func testFenceStaleRevision(t *testing.T, s WorkspaceStore) {
 	fence := newFenceVersion(t, locked, 2, now().Add(2*time.Hour))
 	stageFence(t, s, ns, fence)
 
-	err := s.FenceAndUnlock(t.Context(), released, fence, currentVersionID(t, s, locked.ID), ns.Fence())
+	err := s.FenceAndUnlock(
+		t.Context(),
+		released,
+		fence,
+		currentVersionID(t, s, locked.ID),
+		ns.Fence(),
+		releaseEntry(ns.Name),
+	)
 	if !errors.Is(err, workspace.ErrConcurrentModification) {
 		t.Fatalf("fence with a stale revision: err = %v, want ErrConcurrentModification", err)
 	}
@@ -3455,6 +3460,7 @@ func testFenceFencedWrite(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		stale,
+		releaseEntry(stale.Namespace),
 	)
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("fence with a stale fence: err = %v, want ErrFenced", err)
@@ -3495,7 +3501,7 @@ func testFenceAndUnlockNeedsStagedVersion(t *testing.T, s WorkspaceStore) {
 	refused := []workspace.StateVersion{unstaged, other}
 
 	for i := range refused {
-		err := s.FenceAndUnlock(t.Context(), released, refused[i], v1.ID, ns.Fence())
+		err := s.FenceAndUnlock(t.Context(), released, refused[i], v1.ID, ns.Fence(), releaseEntry(ns.Name))
 		if !errors.Is(err, workspace.ErrUploadDenied) {
 			t.Fatalf("fence of %s naming %s: err = %v, want ErrUploadDenied", refused[i].ID, refused[i].Content, err)
 		}
@@ -3530,7 +3536,7 @@ func testFenceAndUnlockRefusesFinalizedVersion(t *testing.T, s WorkspaceStore) {
 	again.FinalizedAt = now().Add(2 * time.Hour)
 	again.FenceBy = "admin"
 
-	err := s.FenceAndUnlock(t.Context(), released, again, v1.ID, ns.Fence())
+	err := s.FenceAndUnlock(t.Context(), released, again, v1.ID, ns.Fence(), releaseEntry(ns.Name))
 	if !errors.Is(err, workspace.ErrUploadDenied) {
 		t.Fatalf("fence naming the finalized version %s: err = %v, want ErrUploadDenied", v1.ID, err)
 	}
@@ -3601,6 +3607,7 @@ func testFenceSealedRoundTrip(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("fence and unlock of a sealed version: %v", err)
@@ -3628,7 +3635,14 @@ func testFenceSerialMustFollow(t *testing.T, s WorkspaceStore) {
 		fence := newFenceVersion(t, locked, serial, now().Add(2*time.Hour))
 		stageFence(t, s, ns, fence)
 
-		err := s.FenceAndUnlock(t.Context(), released, fence, currentVersionID(t, s, locked.ID), ns.Fence())
+		err := s.FenceAndUnlock(
+			t.Context(),
+			released,
+			fence,
+			currentVersionID(t, s, locked.ID),
+			ns.Fence(),
+			releaseEntry(ns.Name),
+		)
 		if !errors.Is(err, workspace.ErrStaleSerial) {
 			t.Fatalf("fence at serial %d: err = %v, want ErrStaleSerial", serial, err)
 		}
@@ -3649,6 +3663,7 @@ func testFenceSerialMustFollow(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("fence at serial 2: %v", err)
@@ -3684,7 +3699,7 @@ func testFenceStaleCurrent(t *testing.T, s WorkspaceStore) {
 	fence := newFenceVersion(t, locked, 3, now().Add(3*time.Hour))
 	stageFence(t, s, ns, fence)
 
-	err := s.FenceAndUnlock(t.Context(), released, fence, v1.ID, ns.Fence())
+	err := s.FenceAndUnlock(t.Context(), released, fence, v1.ID, ns.Fence(), releaseEntry(ns.Name))
 	if !errors.Is(err, workspace.ErrConcurrentModification) {
 		t.Fatalf("fence after a finalize: err = %v, want ErrConcurrentModification", err)
 	}
@@ -3979,6 +3994,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	})
 
 	services := make([]*workspace.Service, n)
+	sealer := testSealer(t, nsSvc)
 
 	for i := range services {
 		svc, err := workspace.NewService(workspace.Config{
@@ -3986,7 +4002,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 			States:             s,
 			Blobs:              blobs,
 			Namespaces:         nsSvc,
-			Sealer:             nil,
+			Sealer:             sealer,
 			Logger:             nil,
 			Now:                now,
 			MaxStateBytes:      0,
@@ -4001,6 +4017,91 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	}
 
 	return services
+}
+
+// testSealer returns a sealer with a fixed key-encryption key, so the
+// workspace services of the conformance suite seal state.
+func testSealer(t *testing.T, namespaces *namespace.Service) *secret.Service {
+	t.Helper()
+
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
+
+	secrets, err := secret.NewService(secret.Config{
+		Keys:          newTestKeys(),
+		Wrapper:       wrapper,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("secrets: %v", err)
+	}
+
+	return secrets
+}
+
+// testKeys is a secret.KeyStore in memory for the conformance suite.
+type testKeys struct {
+	mu   sync.Mutex
+	keys map[string]secret.WrappedKey
+}
+
+// newTestKeys returns an empty key store.
+func newTestKeys() *testKeys {
+	return &testKeys{mu: sync.Mutex{}, keys: map[string]secret.WrappedKey{}}
+}
+
+// CreateKey implements secret.KeyStore, keeping the first key of a scope.
+func (m *testKeys) CreateKey(
+	_ context.Context, k secret.WrappedKey, _ namespace.Fence,
+) (secret.WrappedKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.keys[k.Scope.String()]; ok {
+		return existing, nil
+	}
+
+	m.keys[k.Scope.String()] = k
+
+	return k, nil
+}
+
+// GetKey implements secret.KeyStore.
+func (m *testKeys) GetKey(_ context.Context, scope secret.Scope) (secret.WrappedKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k, ok := m.keys[scope.String()]
+	if !ok {
+		return secret.WrappedKey{}, secret.ErrKeyNotFound
+	}
+
+	return k, nil
+}
+
+// ListWrapperIDs implements secret.KeyStore.
+func (m *testKeys) ListWrapperIDs(_ context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := map[string]bool{}
+
+	for _, k := range m.keys {
+		seen[k.WrapperID] = true
+	}
+
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+
+	slices.Sort(out)
+
+	return out, nil
 }
 
 // testRestoreAcrossServicesWritesOnce proves that concurrent restores of one
@@ -4113,6 +4214,7 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		"admin",
 		namespace.Overrides{Forced: true, Unlocked: false},
 		nil,
+		releaseEntry(ns.Name),
 	)
 	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("force-unlock naming another holder: err = %v, want ErrLockMismatch", err)
@@ -4130,6 +4232,7 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		"admin",
 		namespace.Overrides{Forced: true, Unlocked: false},
 		nil,
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("force-unlock of the lock as seen: %v", err)
@@ -4148,6 +4251,7 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		"admin",
 		namespace.Overrides{Forced: true, Unlocked: false},
 		nil,
+		releaseEntry(ns.Name),
 	)
 	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)

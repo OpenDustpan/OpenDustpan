@@ -56,6 +56,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "seal stream round trips across chunk borders", test: testSealStreamRoundTrip},
 		{name: "seal stream binds the scope", test: testSealStreamBindsScope},
 		{name: "tampered sealed streams fail without a leak", test: testSealStreamTamper},
+		{name: "sealed state binds its state version", test: testSealStateBindsVersion},
+		{name: "truncated sealed streams fail", test: testSealStreamTruncated},
 	}
 
 	for _, tc := range cases {
@@ -74,28 +76,31 @@ func now() time.Time {
 // deleteEntry returns the audit entry of a stack delete in ns at the time at.
 func deleteEntry(ns namespace.Name, at time.Time) audit.Entry {
 	return audit.Entry{
-		At:           at,
-		Namespace:    ns,
-		Subject:      "alice@example.com",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:manage",
-		Object:       "pulumi:" + ns.String() + "/web/deleted",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "secrettest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            at,
+		Namespace:     ns,
+		Subject:       "alice@example.com",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:manage",
+		Object:        "pulumi:" + ns.String() + "/web/deleted",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "secrettest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -103,6 +108,7 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",

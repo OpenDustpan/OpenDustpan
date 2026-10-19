@@ -80,6 +80,7 @@ func newIPAllowlistBenchServer(b *testing.B, on bool) (*dustpan.Server, *sqlite.
 	nsName := namespace.Name("acme")
 
 	created := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC),
 		Name:            nsName,
 		HomeRegion:      region,
@@ -97,28 +98,31 @@ func newIPAllowlistBenchServer(b *testing.B, on bool) (*dustpan.Server, *sqlite.
 	}
 
 	entry := audit.Entry{
-		At:           time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC),
-		Namespace:    nsName,
-		Subject:      "alice@example.com",
-		IDPSubject:   "",
-		ObjectID:     "",
-		TokenID:      "",
-		Action:       "namespace:set-ip-allowlist",
-		Object:       nsName.String(),
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "storetest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC),
+		Namespace:     nsName,
+		Subject:       "alice@example.com",
+		IDPSubject:    "",
+		ObjectID:      "",
+		TokenID:       "",
+		Action:        "namespace:set-ip-allowlist",
+		Object:        nsName.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "storetest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 
 	fence := namespace.Fence{Namespace: nsName, FailoverVersion: 1}
@@ -216,11 +220,15 @@ func BenchmarkIPAllowlistAuthorize1000Stacks(b *testing.B) {
 	gate := ipallow.Gate{Next: benchAllowAll{}, Rules: st, Enabled: true, IncludeBootstrap: true}
 
 	principal := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice@example.com",
 		DisplayName:    "alice@example.com",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}
 
 	objs := make([]identity.Object, 0, 1000)

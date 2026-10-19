@@ -57,6 +57,7 @@ func (Verifier) VerifyBatch(
 			return err
 		}
 
+		check.trackRemoval(entry)
 		check.trackRebuild(entry)
 
 		return nil
@@ -69,10 +70,12 @@ func (Verifier) VerifyBatch(
 }
 
 // batchCheck holds the verifier state for one batch: the completed operations
-// that references can name, whether a stored batch of the update changed the
-// replay records, and whether an earlier entry of this batch did.
+// that references can name, the operations an entry of this batch removed, whether
+// a stored batch of the update changed the replay records, and whether an earlier
+// entry of this batch did.
 type batchCheck struct {
 	held    map[int64]bool
+	removed map[int64]bool
 	stored  bool
 	changed bool
 }
@@ -85,7 +88,7 @@ func newBatchCheck(known []int64, stored bool) *batchCheck {
 		held[op] = true
 	}
 
-	return &batchCheck{held: held, stored: stored, changed: false}
+	return &batchCheck{held: held, removed: make(map[int64]bool), stored: stored, changed: false}
 }
 
 // writeOrder refuses a write entry after an entry that changes the records, in
@@ -114,7 +117,9 @@ func (c *batchCheck) trackCompletion(entry JournalEntry) {
 	}
 }
 
-// references refuses a reference to an operation that is not held.
+// references refuses a reference to an operation that is not held, and a
+// new-state patch for an operation that is not held or that an earlier entry
+// of the batch removed. The replay refuses both with ErrMissingReference.
 func (c *batchCheck) references(entry JournalEntry) error {
 	for _, ref := range references(entry) {
 		if !c.held[ref] {
@@ -122,7 +127,27 @@ func (c *batchCheck) references(entry JournalEntry) error {
 		}
 	}
 
+	for _, patch := range entry.NewStatePatches {
+		if !c.held[patch.OperationID] || c.removed[patch.OperationID] {
+			return fmt.Errorf(
+				"entry %s: operation %d: %w",
+				entryLabel(entry),
+				patch.OperationID,
+				ErrMissingReference,
+			)
+		}
+	}
+
 	return nil
+}
+
+// trackRemoval records the operation that an entry removes from the new
+// resources, so a later new-state patch of the batch cannot name it. The other
+// references still name it, as the replay still resolves them.
+func (c *batchCheck) trackRemoval(entry JournalEntry) {
+	if entry.RemoveNew != nil {
+		c.removed[*entry.RemoveNew] = true
+	}
 }
 
 // trackRebuild drops the held operations after a rebuilt base state entry, as
@@ -142,28 +167,25 @@ func completed(entry JournalEntry) bool {
 }
 
 // changesRecords reports whether an entry of kind changes the records of the
-// replay. A write entry must not come after one of them.
+// replay. A write entry must not come after one of them. A state migration
+// replaces the base and the new resources, so it changes them.
 func changesRecords(kind JournalEntryKind) bool {
 	switch kind {
 	case JournalEntryKindBegin, JournalEntryKindSuccess, JournalEntryKindFailure,
-		JournalEntryKindRefreshSuccess, JournalEntryKindOutputs, JournalEntryKindRebuiltBaseState:
+		JournalEntryKindRefreshSuccess, JournalEntryKindOutputs, JournalEntryKindRebuiltBaseState,
+		JournalEntryKindStateMigration:
 		return true
 	case JournalEntryKindSecretsManager, JournalEntryKindWrite, JournalEntryKindSnippets,
-		JournalEntryKindExtensionParameterize, JournalEntryKindStateMigration:
+		JournalEntryKindExtensionParameterize:
 		return false
 	}
 
 	return false
 }
 
-// replayable refuses a kind that the replayer does not apply yet, and a write
-// entry without a snapshot. Kind 10 waits for version 2 (item 12). Kinds 5 and 7
-// are replayed (issue #430).
+// replayable refuses a write entry without a snapshot. Every other known kind
+// has a replay, including the state migration (see migration.go).
 func replayable(entry JournalEntry) error {
-	if entry.Kind == JournalEntryKindStateMigration {
-		return fmt.Errorf("entry %s: kind %d: %w", entryLabel(entry), entry.Kind, ErrUnsupportedKind)
-	}
-
 	if entry.Kind == JournalEntryKindWrite && len(entry.NewSnapshot) == 0 {
 		return fmt.Errorf("entry %s: kind %d: %w", entryLabel(entry), entry.Kind, ErrNoSnapshot)
 	}

@@ -576,7 +576,7 @@ func ctxAwareService(t *testing.T, f fixture) *workspace.Service {
 		States:             ctxStates{StateStore: f.store},
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -627,6 +627,7 @@ func TestForceUnlockRefusesAnotherHolderOfTheSameLockID(t *testing.T) {
 		"admin",
 		admin,
 		nil,
+		forceEntry(),
 	)
 	if err != nil {
 		t.Fatalf("force-unlock of bob's lock as seen: %v", err)
@@ -643,6 +644,7 @@ func TestForceUnlockRefusesAnotherHolderOfTheSameLockID(t *testing.T) {
 		"admin",
 		admin,
 		nil,
+		forceEntry(),
 	)
 	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)

@@ -531,7 +531,7 @@ func testPortablePurgeRemovesChildren(t *testing.T, newStore PortableFactory) {
 
 	after, sum, _ := exportPortable(t, s)
 
-	for _, table := range append(keptChildTables(), "stacks", "inventory_deleted") {
+	for _, table := range append(keptChildTables(), "stacks", "inventory_deleted", "inventory_labels") {
 		path := backup.PortablePath(table)
 
 		for _, row := range readPortableLines(t, path, after.files[path].Bytes()) {
@@ -669,6 +669,7 @@ func seedPurgedWorkspace(t *testing.T, s PortableStore, acme namespace.Namespace
 	}
 
 	unlockTestWorkspace(t, s, acme, w.Ref)
+	seedBlameRows(t, s, blameSeed{ns: acme, w: w, first: current.ID.String(), second: "sv-doomed-opaque"})
 
 	scope, err := secret.NewScope(acme.Name, w.ID.String())
 	if err != nil {
@@ -714,7 +715,10 @@ func testPortablePurgeRemovesWorkspaceRows(t *testing.T, newStore PortableFactor
 
 	after, sum, _ := exportPortable(t, s)
 
-	for _, table := range []string{"workspaces", "state_versions", "secret_keys", "inventory", "inventory_deleted"} {
+	for _, table := range []string{
+		"workspaces", "state_versions", "secret_keys", "inventory", "inventory_deleted",
+		"workspace_blame_cursors", "workspace_blame_items", "workspace_resource_changes",
+	} {
 		path := backup.PortablePath(table)
 
 		for _, row := range readPortableLines(t, path, after.files[path].Bytes()) {
@@ -726,5 +730,9 @@ func testPortablePurgeRemovesWorkspaceRows(t *testing.T, newStore PortableFactor
 
 	if sum.RowCounts["state_versions"] == 0 || sum.RowCounts["secret_keys"] == 0 {
 		t.Fatal("export lost the state versions or the data keys of the other units")
+	}
+
+	if _, ok := s.(workspace.BlameStore); ok {
+		checkBlameRowCounts(t, s, sum)
 	}
 }

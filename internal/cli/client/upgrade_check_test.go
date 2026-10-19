@@ -3,6 +3,7 @@ package client_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,14 @@ func serveUpgradeCheck(t *testing.T, journaled int64) *httptest.Server {
 
 	embedded, binary := schema.EmbeddedMigrationNames()
 
+	return serveApplied(t, journaled, binary, embedded)
+}
+
+// serveApplied answers one upgrade check document with the given journaled
+// count, schema version and applied migration names.
+func serveApplied(t *testing.T, journaled, version int64, applied []string) *httptest.Server {
+	t.Helper()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/server/upgrade-check" {
 			http.NotFound(w, r)
@@ -30,8 +39,8 @@ func serveUpgradeCheck(t *testing.T, journaled int64) *httptest.Server {
 
 		err := json.NewEncoder(w).Encode(map[string]any{
 			"version":                 "test",
-			"schemaVersion":           binary,
-			"appliedMigrations":       embedded,
+			"schemaVersion":           version,
+			"appliedMigrations":       applied,
 			"keyEncryptionKey":        true,
 			"runningJournaledUpdates": journaled,
 		})
@@ -96,5 +105,30 @@ func TestUpgradeCheckReportsTwoJournaledUpdates(t *testing.T) {
 		"Let running journaled updates finish or cancel them before a downgrade.",
 	) {
 		t.Fatalf("report with 2 journaled updates lacks downgrade advice:\n%s", out)
+	}
+}
+
+// TestUpgradeCheckRefusesSchemaBeforeBaseline proves that a server whose
+// database records a migration from before the baseline gets the verdict
+// cannot start and the named refusal, not the newer-schema refusal. The
+// test sets the admin token, so it cannot run in parallel with other tests.
+func TestUpgradeCheckRefusesSchemaBeforeBaseline(t *testing.T) {
+	srv := serveApplied(t, 0, 76, []string{"0075_sign_in_freshness.sql", "0076_sign_in_providers.sql"})
+
+	t.Setenv("DUSTPAN_ADMIN_TOKEN", "test-token")
+
+	var stdout, stderr bytes.Buffer
+
+	err := client.UpgradeCheck(t.Context(), []string{"--server", srv.URL}, &stdout, &stderr, "test-binary")
+	if !errors.Is(err, schema.ErrSchemaBeforeBaseline) {
+		t.Fatalf("upgrade check: err = %v, want ErrSchemaBeforeBaseline", err)
+	}
+
+	if errors.Is(err, schema.ErrSchemaDiverged) {
+		t.Fatalf("upgrade check: err = %v, want no diverged-schema refusal", err)
+	}
+
+	if out := stdout.String(); !strings.Contains(out, "verdict: "+client.VerdictCannotStart) {
+		t.Fatalf("report lacks the verdict %q:\n%s", client.VerdictCannotStart, out)
 	}
 }

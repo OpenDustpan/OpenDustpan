@@ -1,6 +1,6 @@
 # 25. OpenTofu through the TFE-compatible API
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11. Extended by ADR 213 decision 10. Decision 6 superseded in part by ADR 239: a force-unlock needs `unit:write-forced`
 
 ## Context
 

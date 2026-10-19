@@ -93,11 +93,15 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "Tester",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 
@@ -262,6 +266,8 @@ func newServiceBackedHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:            nil,
+		TempAdmins:     nil,
 		Authenticator:  authn,
 		Authorizer:     authz,
 		Logger:         slog.New(slog.DiscardHandler),
@@ -325,12 +331,6 @@ const (
 	testOwnTokenID           = "tok-routes0000000000003"
 	testRoleID               = "rol-routes0000000000001"
 )
-
-// allowGrants passes every escalation check, so the routes that create or
-// rotate a token for another principal answer their success status.
-type allowGrants struct{}
-
-func (allowGrants) RequireHeld(context.Context, identity.Principal, string) error { return nil }
 
 // allowAll allows every action, so the token service passes its own check
 // of principal:manage-tokens and the route alone decides.
@@ -408,8 +408,14 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Authorizer: allowAll{}, Logger: nil, Now: nil,
-		NewID: nil,
+		TempAdmins: nil,
+		Store:      st,
+		Principals: st,
+		Freshness:  nil,
+		Authorizer: allowAll{},
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -604,14 +610,15 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
 	}
 	joined := storetest.ServerChange(at, "group:"+testGroupID+"#member:"+testPrincipalID)
-	if err := st.AddMember(ctx, member, joined); err != nil {
+	if err := st.AddMember(ctx, member, joined, nil); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
 
 	seedNamespacePrincipal(t, st, at)
 
 	svc, err := principal.NewService(principal.Config{
-		Store: st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -1368,6 +1375,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -1507,6 +1516,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
 		Authorizer:       stubAuthorizer{},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -1540,6 +1551,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
 		Authorizer:       stubAuthorizer{},
 		Logger:           slog.New(slog.DiscardHandler),

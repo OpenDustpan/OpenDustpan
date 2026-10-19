@@ -36,19 +36,27 @@ func (a *revocableTokens) AuthenticateToken(_ context.Context, token string) (id
 		}
 
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "tester",
 			DisplayName:    "Tester",
 			Admin:          false,
 			TokenID:        "tok-1",
 			TokenExpiresAt: time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC),
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	case "boot-token":
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "admin",
 			DisplayName:    "Admin",
 			Admin:          true,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	default:
 		return identity.Principal{}, identity.ErrUnauthenticated

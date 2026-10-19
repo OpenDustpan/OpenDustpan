@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -96,6 +98,20 @@ const (
 // HTTP adapter truncates longer values before it appends.
 const MaxUserAgentLen = 512
 
+// The values of Entry.PrincipalKind. They equal the kinds of a principal
+// record.
+const (
+	PrincipalKindPerson   = "person"
+	PrincipalKindService  = "service"
+	PrincipalKindWorkload = "workload"
+)
+
+// MaxJobIDLen caps the job ID of an entry, in bytes.
+const MaxJobIDLen = 128
+
+// MaxReasonLen caps the reason of an entry, in Unicode code points.
+const MaxReasonLen = 500
+
 // DefaultPageSize is the page size of a list that names none.
 const DefaultPageSize = 50
 
@@ -116,7 +132,39 @@ var (
 	ErrNotFound = errors.New("audit namespace not found")
 	// ErrEntryNotFound reports that a scope holds no entry at a sequence.
 	ErrEntryNotFound = errors.New("audit entry not found")
+	// ErrInvalidReason reports a reason that is longer than MaxReasonLen code
+	// points, that is not valid UTF-8, or that holds a control character, a
+	// format character or a line or paragraph separator.
+	ErrInvalidReason = errors.New("invalid reason")
 )
+
+// ValidateReason reports whether reason can be the reason of an entry. An
+// empty reason is valid. It returns ErrInvalidReason for a reason with more
+// than MaxReasonLen Unicode code points, for bytes that are not valid UTF-8,
+// and for a control or format character or a line or paragraph separator,
+// which includes a line break and the bidirectional overrides.
+func ValidateReason(reason string) error {
+	if !utf8.ValidString(reason) {
+		return fmt.Errorf("%w: not valid UTF-8", ErrInvalidReason)
+	}
+
+	if utf8.RuneCountInString(reason) > MaxReasonLen {
+		return fmt.Errorf("%w: longer than %d characters", ErrInvalidReason, MaxReasonLen)
+	}
+
+	if strings.ContainsFunc(reason, isHiddenRune) {
+		return fmt.Errorf("%w: holds a control character", ErrInvalidReason)
+	}
+
+	return nil
+}
+
+// isHiddenRune reports whether r is a control character (Cc), a format
+// character (Cf, for example U+202E), a line separator (Zl, U+2028) or a
+// paragraph separator (Zp, U+2029).
+func isHiddenRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+}
 
 // Entry is one append-only record of an action in a namespace. Namespace and
 // Sequence order the entries of one namespace: the first entry of a
@@ -144,30 +192,39 @@ var (
 // FenceVersion is the failover version of the namespace when the store
 // appended the entry, and 0 in ServerScope. The store sets it in the
 // transaction of the append, and the hash covers it, so a verifier can see
-// where a forced failover forked the chain of a namespace.
+// where a forced failover forked the chain of a namespace. Reason is the
+// free text that a person gave for the action, for example for a force-unlock,
+// at most MaxReasonLen Unicode code points with no control characters; it
+// stays empty when the action had none. PrincipalKind is the kind of the
+// principal record that acted: "person", "service" or "workload", and empty
+// when the server cannot name the kind. JobID is the job whose token acted,
+// and empty for every other credential.
 type Entry struct {
-	At           time.Time
-	Namespace    namespace.Name
-	Subject      string
-	IDPSubject   string
-	TokenID      string
-	Action       string
-	Object       string
-	Version      string
-	ValuePath    string
-	ValueCount   *int64
-	Changes      []Change
-	SourceIP     string
-	UserAgent    string
-	Channel      Channel
-	Kind         Kind
-	Outcome      Outcome
-	RequestID    string
-	ObjectID     string
-	PrevHash     string
-	Hash         string
-	Sequence     int64
-	FenceVersion int64
+	At            time.Time
+	Namespace     namespace.Name
+	Subject       string
+	IDPSubject    string
+	TokenID       string
+	Action        string
+	Object        string
+	Version       string
+	ValuePath     string
+	ValueCount    *int64
+	Changes       []Change
+	SourceIP      string
+	UserAgent     string
+	Channel       Channel
+	Kind          Kind
+	Outcome       Outcome
+	RequestID     string
+	ObjectID      string
+	PrevHash      string
+	Hash          string
+	Sequence      int64
+	FenceVersion  int64
+	PrincipalKind string
+	JobID         string
+	Reason        string
 }
 
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
@@ -213,8 +270,27 @@ func (e Entry) validateWhat() error {
 	case len(e.UserAgent) > MaxUserAgentLen:
 		return fmt.Errorf("%w: user agent longer than %d bytes", ErrInvalidEntry, MaxUserAgentLen)
 	default:
-		return nil
+		if err := ValidateReason(e.Reason); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidEntry, err)
+		}
+
+		return e.validatePrincipal()
 	}
+}
+
+// validatePrincipal checks the principal kind and the job ID of the entry.
+func (e Entry) validatePrincipal() error {
+	switch e.PrincipalKind {
+	case "", PrincipalKindPerson, PrincipalKindService, PrincipalKindWorkload:
+	default:
+		return fmt.Errorf("%w: unknown principal kind %q", ErrInvalidEntry, e.PrincipalKind)
+	}
+
+	if len(e.JobID) > MaxJobIDLen {
+		return fmt.Errorf("%w: job ID longer than %d bytes", ErrInvalidEntry, MaxJobIDLen)
+	}
+
+	return nil
 }
 
 // validateHow checks the channel, kind, outcome and changes of the entry.
@@ -273,7 +349,9 @@ const hashNoCount = '-'
 // token ID, action, object, version, value path, time (Unix milliseconds),
 // source IP, user agent, channel, kind, outcome, request ID, previous hash,
 // value count, object ID, changes (the canonical JSON of EncodeChanges, empty
-// when e has no changes) and fence version. Numeric fields use decimal text.
+// when e has no changes), fence version, principal kind, job ID and reason.
+// Numeric fields use decimal text. The reason stays last. No tag shipped an
+// audit entry, so an entry from an earlier build does not keep its hash.
 // A value count that is not set writes one "-" in place of the field, so no
 // count and the count 0 ("1:0") differ. No field is optional: a field that e
 // does not set writes "0:". The length prefix makes the encoding injective:
@@ -331,6 +409,9 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 	write(e.ObjectID)
 	write(changesText)
 	write(strconv.FormatInt(e.FenceVersion, 10))
+	write(e.PrincipalKind)
+	write(e.JobID)
+	write(e.Reason)
 
 	sum := sha256.Sum256([]byte(sb.String()))
 

@@ -1,0 +1,12 @@
+# Refused: DUSTPAN_DEV.
+# want: at '/server/extraEnv/0/name': 'allOf' failed
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+server:
+  extraEnv:
+    - name: DUSTPAN_DEV
+      value: "true"

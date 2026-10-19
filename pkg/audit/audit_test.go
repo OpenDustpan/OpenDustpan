@@ -3,6 +3,7 @@ package audit_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,28 +20,31 @@ func testEntry() audit.Entry {
 	}
 
 	return audit.Entry{
-		At:           time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
-		Namespace:    ns,
-		Subject:      "admin",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:decrypt",
-		Object:       "pulumi:acme/web/prod",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "pulumi-cli/3.200.0",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindReveal,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "req-1",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     1,
-		FenceVersion: 0,
+		At:            time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
+		Namespace:     ns,
+		Subject:       "admin",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:decrypt",
+		Object:        "pulumi:acme/web/prod",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "pulumi-cli/3.200.0",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindReveal,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "req-1",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      1,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -106,13 +110,25 @@ func TestComputeHashIsStableAndCoversTheFields(t *testing.T) {
 	}
 }
 
+// hashTail holds the fields that follow the previous hash in the hash
+// encoding, as text.
+type hashTail struct {
+	valueCount   string
+	objectID     string
+	changes      string
+	fenceVersion string
+	principal    string
+	jobID        string
+	reason       string
+}
+
 // encodedHash answers the hex SHA-256 of the documented encoding of
 // testEntry with the given previous hash, value count, object ID, changes
-// text and fence version: each field as its byte length, a colon and its
+// text, fence version and reason: each field as its byte length, a colon and its
 // bytes. A count of "-" writes the marker of a count that is not set. The
 // test writes the encoding out, so it does not use the code under test to
 // compute the expected hash.
-func encodedHash(prevHash, valueCount, objectID, changes, fenceVersion string) string {
+func encodedHash(prevHash string, tail hashTail) string {
 	fields := []string{
 		"acme", "1", "admin", "", "", "unit:decrypt", "pulumi:acme/web/prod", "", "",
 		"1791806400000", "192.0.2.1", "pulumi-cli/3.200.0", "api", "reveal", "success", "req-1",
@@ -131,15 +147,18 @@ func encodedHash(prevHash, valueCount, objectID, changes, fenceVersion string) s
 		frame(field)
 	}
 
-	if valueCount == "-" {
+	if tail.valueCount == "-" {
 		sb.WriteByte('-')
 	} else {
-		frame(valueCount)
+		frame(tail.valueCount)
 	}
 
-	frame(objectID)
-	frame(changes)
-	frame(fenceVersion)
+	frame(tail.objectID)
+	frame(tail.changes)
+	frame(tail.fenceVersion)
+	frame(tail.principal)
+	frame(tail.jobID)
+	frame(tail.reason)
 
 	sum := sha256.Sum256([]byte(sb.String()))
 
@@ -165,19 +184,42 @@ func TestComputeHashEncodesEveryField(t *testing.T) {
 		id    string
 		chg   string
 		fence string
+		kind  string
+		job   string
+		why   string
 	}{
-		{"no field set", func(*audit.Entry) {}, "", "-", "", "", "0"},
-		{"previous hash", func(*audit.Entry) {}, "prev", "-", "", "", "0"},
-		{"value count 0", func(e *audit.Entry) { e.ValueCount = &zero }, "", "0", "", "", "0"},
-		{"value count 2", func(e *audit.Entry) { e.ValueCount = &two }, "", "2", "", "", "0"},
-		{"object ID", func(e *audit.Entry) { e.ObjectID = "stk-1" }, "", "-", "stk-1", "", "0"},
-		{"fence version", func(e *audit.Entry) { e.FenceVersion = 2 }, "", "-", "", "", "2"},
-		{"every field", func(e *audit.Entry) {
-			e.ValueCount = &two
-			e.ObjectID = "stk-1"
-			e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
-			e.FenceVersion = 3
-		}, "prev", "2", "stk-1", `[{"key":"region","new":"eu-west","layer":"file"}]`, "3"},
+		{"no field set", func(*audit.Entry) {}, "", "-", "", "", "0", "", "", ""},
+		{"previous hash", func(*audit.Entry) {}, "prev", "-", "", "", "0", "", "", ""},
+		{"value count 0", func(e *audit.Entry) { e.ValueCount = &zero }, "", "0", "", "", "0", "", "", ""},
+		{"value count 2", func(e *audit.Entry) { e.ValueCount = &two }, "", "2", "", "", "0", "", "", ""},
+		{"object ID", func(e *audit.Entry) { e.ObjectID = "stk-1" }, "", "-", "stk-1", "", "0", "", "", ""},
+		{"fence version", func(e *audit.Entry) { e.FenceVersion = 2 }, "", "-", "", "", "2", "", "", ""},
+		{
+			"principal kind",
+			func(e *audit.Entry) { e.PrincipalKind = audit.PrincipalKindPerson },
+			"",
+			"-",
+			"",
+			"",
+			"0",
+			"person",
+			"",
+			"",
+		},
+		{"job ID", func(e *audit.Entry) { e.JobID = "job-7" }, "", "-", "", "", "0", "", "job-7", ""},
+		{
+			"every field", func(e *audit.Entry) {
+				e.ValueCount = &two
+				e.ObjectID = "stk-1"
+				e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
+				e.FenceVersion = 3
+				e.PrincipalKind = audit.PrincipalKindService
+				e.JobID = "job-7"
+				e.Reason = "lock released after the run crashed"
+			}, "prev", "2", "stk-1", `[{"key":"region","new":"eu-west","layer":"file"}]`, "3", "service", "job-7",
+			"lock released after the run crashed",
+		},
+		{"reason", func(e *audit.Entry) { e.Reason = "run crashed" }, "", "-", "", "", "0", "", "", "run crashed"},
 	}
 
 	for _, tc := range cases {
@@ -187,7 +229,7 @@ func TestComputeHashEncodesEveryField(t *testing.T) {
 			e := testEntry()
 			tc.edit(&e)
 
-			want := encodedHash(tc.prev, tc.count, tc.id, tc.chg, tc.fence)
+			want := encodedHash(tc.prev, hashTail{tc.count, tc.id, tc.chg, tc.fence, tc.kind, tc.job, tc.why})
 			if got := audit.ComputeHash(e, tc.prev); got != want {
 				t.Fatalf("hash = %s, want %s", got, want)
 			}
@@ -201,7 +243,7 @@ func TestComputeHashEncodesEveryField(t *testing.T) {
 func TestComputeHashGoldenVector(t *testing.T) {
 	t.Parallel()
 
-	const want = "823dbad2fc04d01605baad7c996d536821e0ddfb729a262aeb0e2f44e3c9ff1d"
+	const want = "0b3f939fc0affde21025d9b2d0c9bcb1904d2b17a7eacdb164790d8d17148c4c"
 
 	count := int64(4)
 	e := testEntry()
@@ -215,6 +257,9 @@ func TestComputeHashGoldenVector(t *testing.T) {
 	e.ObjectID = "stk-1"
 	e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
 	e.FenceVersion = 5
+	e.PrincipalKind = audit.PrincipalKindPerson
+	e.JobID = "job-7"
+	e.Reason = "lock released after the run crashed"
 
 	if got := audit.ComputeHash(e, "prev-hash-6"); got != want {
 		t.Fatalf("hash = %s, want %s", got, want)
@@ -267,6 +312,9 @@ var hashSlots = []struct {
 	{hashSlot{func(_ *audit.Entry, prev, _ *string, v string) { *prev = v }, "previous hash"}, false},
 	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.ObjectID = v }, "object ID"}, true},
 	{hashSlot{func(_ *audit.Entry, _, changes *string, v string) { *changes = v }, "changes"}, false},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.PrincipalKind = v }, "principal kind"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.JobID = v }, "job ID"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Reason = v }, "reason"}, false},
 }
 
 // slotHash answers the stored hash of testEntry with the two slots set to
@@ -347,5 +395,89 @@ func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 
 	if got := (audit.Page{Number: 2, Size: audit.MaxPageSize + 1}).Normalized(); got.Size != audit.MaxPageSize {
 		t.Fatalf("oversize page = %+v, want capped at %d", got, audit.MaxPageSize)
+	}
+}
+
+// TestValidateReason proves the limits of a reason: at most 500 Unicode code
+// points, valid UTF-8 and no control character, format character or
+// line or paragraph separator.
+func TestValidateReason(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		reason  string
+		invalid bool
+	}{
+		{"empty", "", false},
+		{"text", "the run crashed", false},
+		{"500 code points", strings.Repeat("a", audit.MaxReasonLen), false},
+		{"500 code points of 3 bytes", strings.Repeat("€", audit.MaxReasonLen), false},
+		{"501 code points", strings.Repeat("a", audit.MaxReasonLen+1), true},
+		{"line break", "first\nsecond", true},
+		{"tab", "first\tsecond", true},
+		{"null byte", "first\x00second", true},
+		{"delete character", "first\x7fsecond", true},
+		{"C1 control character", "first\u0085second", true},
+		{"right-to-left override", "first\u202esecond", true},
+		{"line separator", "first\u2028second", true},
+		{"paragraph separator", "first\u2029second", true},
+		{"zero width joiner", "first\u200dsecond", true},
+		{"invalid UTF-8", "first\xffsecond", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := audit.ValidateReason(tc.reason)
+			if tc.invalid != errors.Is(err, audit.ErrInvalidReason) {
+				t.Fatalf("ValidateReason error = %v, want invalid = %t", err, tc.invalid)
+			}
+
+			e := testEntry()
+			e.Reason = tc.reason
+
+			if tc.invalid != errors.Is(e.Validate(), audit.ErrInvalidEntry) {
+				t.Fatalf("Entry.Validate error = %v, want invalid = %t", e.Validate(), tc.invalid)
+			}
+		})
+	}
+}
+
+// TestValidateChecksThePrincipalFields proves that an entry accepts the three
+// kinds of a principal record and no kind, and refuses any other kind and a
+// job ID that is too long.
+func TestValidateChecksThePrincipalFields(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		kind    string
+		jobID   string
+		invalid bool
+	}{
+		{"no kind", "", "", false},
+		{"person", audit.PrincipalKindPerson, "", false},
+		{"service", audit.PrincipalKindService, "", false},
+		{"workload with a job", audit.PrincipalKindWorkload, "job-7", false},
+		{"unknown kind", "agent", "", true},
+		{"job ID at the limit", "", strings.Repeat("j", audit.MaxJobIDLen), false},
+		{"job ID over the limit", "", strings.Repeat("j", audit.MaxJobIDLen+1), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := testEntry()
+			e.PrincipalKind = tc.kind
+			e.JobID = tc.jobID
+
+			err := e.Validate()
+			if tc.invalid != errors.Is(err, audit.ErrInvalidEntry) {
+				t.Fatalf("validate error = %v, want invalid = %t", err, tc.invalid)
+			}
+		})
 	}
 }

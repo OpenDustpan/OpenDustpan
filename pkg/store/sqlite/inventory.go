@@ -22,7 +22,7 @@ var (
 )
 
 // inventoryTool names the Pulumi CLI in inventory entries.
-const inventoryTool = "pulumi"
+const inventoryTool = stack.InventoryTool
 
 // stackUnitName returns the tool's own name for a stack: project/stack.
 func stackUnitName(ref stack.Ref) string {
@@ -30,11 +30,48 @@ func stackUnitName(ref stack.Ref) string {
 }
 
 // publishStackInventory writes the Pulumi entry for ref with the given unit
-// ID and change time. Status and resource count stay unknown: the Pulumi CLI
-// reports no status vocabulary and the server never reads deployments. The
-// lock columns stay untouched: only UpdateInventoryLock changes them, in the
-// same transaction as the update start or end that they describe.
-func publishStackInventory(
+// ID and change time, writes the labels of the unit from the tags of the
+// stack, and appends the change log row of the kind kind. Status
+// and resource count stay unknown: the Pulumi CLI reports no status
+// vocabulary and the server never reads deployments. The lock columns stay
+// untouched: only UpdateInventoryLock changes them, in the same transaction
+// as the update start or end that they describe. The caller runs it as the
+// last write of its transaction.
+func publishStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref, w unitWrite) error {
+	if err := upsertStackInventory(ctx, q, ref, w.unitID, w.atMs); err != nil {
+		return err
+	}
+
+	if err := publishStackLabels(ctx, q, w.unitID); err != nil {
+		return err
+	}
+
+	return appendStackChange(ctx, q, ref, w)
+}
+
+// publishStackLabels replaces the labels of the unit with the tags of the
+// stack that has the same ID. The Pulumi CLI sends stack tags as labels.
+func publishStackLabels(ctx context.Context, q *db.Queries, unitID string) error {
+	if err := q.DeleteInventoryLabels(ctx, unitID); err != nil {
+		return fmt.Errorf("delete inventory labels: %w", err)
+	}
+
+	if err := q.CopyStackTagsToInventoryLabels(ctx, unitID); err != nil {
+		return fmt.Errorf("write inventory labels: %w", err)
+	}
+
+	return nil
+}
+
+// appendStackChange appends the change log row of the stack ref.
+func appendStackChange(ctx context.Context, q *db.Queries, ref stack.Ref, w unitWrite) error {
+	return appendInventoryChange(ctx, q, unitChange(ref.Namespace, inventoryTool, stackUnitName(ref), w))
+}
+
+// upsertStackInventory writes the Pulumi entry for ref and appends no change
+// log row. A caller that writes the lock after the entry uses it, so that the
+// change log row is the last write of its transaction.
+func upsertStackInventory(
 	ctx context.Context, q *db.Queries, ref stack.Ref, unitID string, lastChangedMs int64,
 ) error {
 	name := stackUnitName(ref)
@@ -117,8 +154,18 @@ func stackLock(u stack.Update) *inventory.Lock {
 	return &inventory.Lock{Since: u.StartedAt, Holder: u.CreatedBy, Operation: string(u.Kind)}
 }
 
-// removeStackInventory removes the Pulumi entry for ref.
+// removeStackInventory removes the Pulumi entry for ref and the labels of its
+// unit.
 func removeStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref) error {
+	labelsErr := q.DeleteInventoryLabelsByName(ctx, db.DeleteInventoryLabelsByNameParams{
+		Namespace: ref.Namespace.String(),
+		Tool:      inventoryTool,
+		Name:      stackUnitName(ref),
+	})
+	if labelsErr != nil {
+		return fmt.Errorf("delete inventory labels: %w", labelsErr)
+	}
+
 	err := q.DeleteInventory(ctx, db.DeleteInventoryParams{
 		Namespace: ref.Namespace.String(),
 		Tool:      inventoryTool,
@@ -149,7 +196,18 @@ func moveStackInventoryToDeleted(
 		return fmt.Errorf("insert deleted inventory entry: %w", err)
 	}
 
-	return removeStackInventory(ctx, q, ref)
+	if removeErr := removeStackInventory(ctx, q, ref); removeErr != nil {
+		return removeErr
+	}
+
+	deleted := unitChange(
+		ref.Namespace,
+		inventoryTool,
+		stackUnitName(ref),
+		unitWrite{unitID: stackID, atMs: d.Entry.At.UnixMilli(), kind: inventory.ChangeDeleted},
+	)
+
+	return appendInventoryChange(ctx, q, deleted)
 }
 
 // ListDeletedUnits implements inventory.DeletedReader: the deleted units of
@@ -366,9 +424,73 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 		return nil, fmt.Errorf("select inventory: %w", err)
 	}
 
+	labels, err := s.inventoryLabels(ctx, ns)
+	if err != nil {
+		return nil, err
+	}
+
 	out := make([]inventory.Entry, 0, len(rows))
+
 	for i := range rows {
-		out = append(out, inventoryEntry(rows[i]))
+		entry := inventoryEntry(rows[i])
+		entry.Labels = labels[entry.UnitID]
+
+		if entry.Labels == nil {
+			entry.Labels = map[string]string{}
+		}
+
+		out = append(out, entry)
+	}
+
+	return out, nil
+}
+
+// GetUnit implements inventory.Reader: the live unit with the stable ID
+// unitID, or inventory.ErrUnitNotFound. A deleted unit is not a live unit.
+func (s *Store) GetUnit(ctx context.Context, unitID string) (inventory.Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row, err := s.queries.GetInventoryEntryByUnitID(ctx, unitID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return inventory.Entry{}, inventory.ErrUnitNotFound
+	}
+
+	if err != nil {
+		return inventory.Entry{}, fmt.Errorf("select inventory unit: %w", err)
+	}
+
+	labelRows, err := s.queries.ListInventoryUnitLabels(ctx, unitID)
+	if err != nil {
+		return inventory.Entry{}, fmt.Errorf("select inventory unit labels: %w", err)
+	}
+
+	entry := inventoryEntry(db.ListInventoryRow(row))
+	entry.Labels = make(map[string]string, len(labelRows))
+
+	for _, l := range labelRows {
+		entry.Labels[l.LabelKey] = l.LabelValue
+	}
+
+	return entry, nil
+}
+
+// inventoryLabels reads the labels of every live unit of ns from the
+// projection, keyed by unit ID.
+func (s *Store) inventoryLabels(ctx context.Context, ns namespace.Name) (map[string]map[string]string, error) {
+	rows, err := s.queries.ListInventoryLabels(ctx, ns.String())
+	if err != nil {
+		return nil, fmt.Errorf("select inventory labels: %w", err)
+	}
+
+	out := map[string]map[string]string{}
+
+	for _, row := range rows {
+		if out[row.UnitID] == nil {
+			out[row.UnitID] = map[string]string{}
+		}
+
+		out[row.UnitID][row.LabelKey] = row.LabelValue
 	}
 
 	return out, nil
@@ -401,6 +523,7 @@ func inventoryEntry(row db.ListInventoryRow) inventory.Entry {
 		ResourceCount: count,
 		Lock:          inventoryLock(row),
 		Collection:    row.Collection,
+		Labels:        nil,
 	}
 }
 

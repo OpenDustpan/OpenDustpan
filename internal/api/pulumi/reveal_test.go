@@ -714,3 +714,53 @@ func TestRevealBodyOverLimitAnswers413(t *testing.T) {
 		t.Fatalf("entries = %d, want none for an oversized body", len(entries.entries))
 	}
 }
+
+// TestRevealPathOverLimitAnswers400 proves a value path one byte over 1024
+// answers 400 with the documented message, no value and no audit entry,
+// while a path of exactly 1024 bytes passes the limit and answers 404 as an
+// unknown path.
+func TestRevealPathOverLimitAnswers400(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := newRevealFixture(
+		t,
+		allowAll(),
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	seedRevealVersion(t, f, "service")
+
+	status, header, body := reveal(t, f, revealBody(t, strings.Repeat("x", 1025)))
+
+	if status != http.StatusBadRequest {
+		t.Fatalf("over-long path answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+
+	if !strings.Contains(body, "reveal path over 1024 bytes") {
+		t.Fatalf("400 body misses the limit message: %s", body)
+	}
+
+	if strings.Contains(body, revealSecretValue) {
+		t.Fatalf("400 body holds the secret value: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	entries.mu.Lock()
+	overEntries := len(entries.entries)
+	entries.mu.Unlock()
+
+	if overEntries != 0 {
+		t.Fatalf("entries = %d, want none for a refused path", overEntries)
+	}
+
+	status, _, body = reveal(t, f, revealBody(t, strings.Repeat("x", 1024)))
+
+	if status != http.StatusNotFound {
+		t.Fatalf("path at the limit answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+}

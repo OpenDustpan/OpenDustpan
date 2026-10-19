@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"slices"
 	"strings"
+	"unicode"
+
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 )
 
 // consoleHandler serves a built single-page app from dir, for GET and HEAD
@@ -55,6 +59,8 @@ func consoleHandler(dir string) (http.Handler, error) {
 // Requests from other origins get no CORS headers, so browsers block them.
 func withCORS(next http.Handler, allowed []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+
 		origin := r.Header.Get("Origin")
 		if origin == "" || !slices.Contains(allowed, origin) {
 			next.ServeHTTP(w, r)
@@ -65,17 +71,59 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", origin)
 		h.Set("Access-Control-Allow-Credentials", "true")
-		h.Add("Vary", "Origin")
 
 		if r.Method == http.MethodOptions {
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Dustpan-CSRF")
+			h.Set(
+				"Access-Control-Allow-Headers",
+				"Authorization, Content-Type, Dustpan-Channel, "+idempotent.Header+", If-Match, X-Dustpan-CSRF",
+			)
 			h.Set("Access-Control-Max-Age", "600")
 			w.WriteHeader(http.StatusNoContent)
 
 			return
 		}
 
+		h.Set("Access-Control-Expose-Headers", "Retry-After, ETag, "+idempotent.ReplayedHeader)
+
 		next.ServeHTTP(w, r)
 	})
+}
+
+// checkAllowedOrigins refuses an origin that is not http(s)://host[:port]
+// with no path, query or fragment. It refuses "null" and "*" too: the
+// server compares each origin to the Origin header as an exact string.
+func checkAllowedOrigins(origins []string) error {
+	for _, o := range origins {
+		if !validAllowedOrigin(o) {
+			return fmt.Errorf(
+				"%w: WithAllowedOrigins: origin %q must be http:// or https:// with a host and an optional port, "+
+					"in lower case with an ASCII (punycode) host and no default port, "+
+					"and no path, query or fragment, for example https://console.example.com",
+				ErrInvalidOption, o,
+			)
+		}
+	}
+
+	return nil
+}
+
+// validAllowedOrigin reports whether o can equal the Origin header of a
+// browser: scheme://host[:port] in lower case, ASCII only, with no default
+// port.
+func validAllowedOrigin(o string) bool {
+	const (
+		schemeHTTP  = "http"
+		schemeHTTPS = "https"
+	)
+
+	u, err := url.Parse(o)
+	if err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) || u.Hostname() == "" ||
+		o != u.Scheme+"://"+u.Host || o != strings.ToLower(o) ||
+		strings.ContainsFunc(o, func(r rune) bool { return r > unicode.MaxASCII }) ||
+		strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+
+	return (u.Scheme != schemeHTTPS || u.Port() != "443") && (u.Scheme != schemeHTTP || u.Port() != "80")
 }

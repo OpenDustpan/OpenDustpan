@@ -201,11 +201,14 @@ func (h *Handler) lockRoutes() []Route {
 		{
 			Method: http.MethodPost,
 			Path:   "/api/v2/workspaces/{id}/actions/force-unlock",
-			// A force-unlock needs unit:manage. It releases the lock
-			// whoever holds it. A force-unlock of an unlocked workspace
-			// answers 409.
+			// A force-unlock needs unit:write-forced, as an UNLOCK by a
+			// principal that does not hold the lock does on the http
+			// backend. It releases the lock whoever holds it. A force-unlock
+			// of an unlocked workspace answers 409, and so does a lock that
+			// differs from the lock-id and lock-holder of the body. The body
+			// is optional.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitManage},
+			Actions: []identity.Action{identity.ActionUnitWriteForced},
 			Resolve: h.resolveWorkspaceID,
 			Serve:   h.forceUnlockWorkspace,
 		},
@@ -310,6 +313,7 @@ func (h *Handler) stateRoutes() []Route {
 			Resolve: h.resolveStateVersionID,
 			Serve:   h.getStateResource,
 		},
+		h.stateAtRoute(),
 		h.revealRoute(),
 	}
 
@@ -481,6 +485,34 @@ func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (id
 	return unitObject(ws.Ref)
 }
 
+// stateAtRoute returns the route of the masked state of a workspace at a
+// time. It needs unit:read on the unit of the workspace, the same as the
+// masked resource list. The resolver maps the ID to the unit. A time before
+// the first finalized state version answers 404 and names the time of the
+// first one; a state the client encrypted answers opaque.
+func (h *Handler) stateAtRoute() Route {
+	return Route{
+		Method:  http.MethodGet,
+		Path:    "/api/v2/workspaces/{workspace_id}/state-at/{at}",
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionUnitRead},
+		Resolve: h.resolveStateAtWorkspace,
+		Serve:   h.readStateAt,
+	}
+}
+
+// resolveStateAtWorkspace returns the unit for the workspace ID in the
+// workspace_id path value. An unknown ID fails with absence, which the
+// wrapper answers as 403 for a caller without rights and 404 otherwise.
+func (h *Handler) resolveStateAtWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("workspace_id")))
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	return unitObject(ws.Ref)
+}
+
 // resolveStateVersionWorkspace returns the unit for the workspace ID in the
 // path value, without reading the body: the state version create body holds
 // the base64 outputs document and is far larger than the shared resolver
@@ -555,8 +587,13 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		}
 
 		for _, action := range route.Actions {
-			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
-				h.writeDenied(ctx, w, p, obj, fmt.Errorf("authorize %s: %w", action, err))
+			if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
+				h.writeDenied(
+					ctx,
+					w,
+					refused{principal: p, object: obj, action: action},
+					fmt.Errorf("authorize %s: %w", action, err),
+				)
 
 				return
 			}
@@ -570,22 +607,24 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 // that the caller cannot read, so the two answers do not differ.
 const notFoundDetail = "not found"
 
-// writeDenied answers a refused action: the 404 of an absent object when p
-// cannot read obj either, else the error itself.
-func (h *Handler) writeDenied(
-	ctx context.Context,
-	w http.ResponseWriter,
-	p identity.Principal,
-	obj identity.Object,
-	err error,
-) {
+// refused names a request that the Authorizer refused: who asked, for which
+// action, on which object.
+type refused struct {
+	principal identity.Principal
+	object    identity.Object
+	action    identity.Action
+}
+
+// writeDenied answers a refused action: the 404 of an absent object when the
+// principal cannot read the object either, else 403 that names the action.
+func (h *Handler) writeDenied(ctx context.Context, w http.ResponseWriter, req refused, err error) {
 	if !errors.Is(err, identity.ErrDenied) {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	hide, hideErr := h.hidden(ctx, p, obj)
+	hide, hideErr := h.hidden(ctx, req.principal, req.object)
 	if hideErr != nil {
 		// The read check failed (a store error, not a refusal): answer
 		// that error, never a 404 that hides it.
@@ -600,7 +639,10 @@ func (h *Handler) writeDenied(
 		return
 	}
 
-	h.writeError(ctx, w, err)
+	h.writeForbidden(
+		ctx, w,
+		"forbidden: the action "+string(req.action)+" on "+req.object.String()+" was refused",
+	)
 }
 
 // hidden reports whether p cannot read obj: a unit without unit:read, or a

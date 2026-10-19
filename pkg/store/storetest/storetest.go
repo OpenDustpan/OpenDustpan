@@ -53,6 +53,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "duplicate namespace is ErrAlreadyExists", test: testDuplicateNamespace},
 		{name: "missing namespace is ErrNotFound", test: testMissingNamespace},
 		{name: "list namespaces orders by name", test: testListNamespaces},
+		{name: "namespace ID is kept", test: testNamespaceByID},
+		{name: "namespace with an invalid ID is ErrInvalidID", test: testInvalidNamespaceID},
+		{name: "a taken namespace ID or name is ErrAlreadyExists", test: testNamespaceIDTaken},
 		{name: "ping answers on an open store and fails after close", test: testPing},
 		{name: "stack round trip", test: testStackRoundTrip},
 		{name: "duplicate stack is ErrAlreadyExists", test: testDuplicateStack},
@@ -82,7 +85,22 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "rename with a stale fence is ErrFenced", test: testRenameStaleFence},
 		{name: "rename keeps tags", test: testRenameKeepsTags},
 		{name: "inventory lists the created stack", test: testInventoryAfterCreate},
+		{name: "inventory lists the labels of a stack", test: testInventoryLabels},
+		{name: "inventory labels appear after a create", test: testInventoryLabelsAfterCreate},
+		{name: "inventory labels follow a tag update", test: testInventoryLabelsFollowTagUpdate},
+		{name: "inventory labels follow a rename", test: testInventoryLabelsFollowRename},
+		{
+			name: "inventory labels leave with a delete and return with a restore",
+			test: testInventoryLabelsDeleteRestore,
+		},
+		{name: "inventory labels go with a purge", test: testInventoryLabelsPurge},
+		{name: "inventory lists a tag outside the label grammar", test: testInventoryLabelsOutsideGrammar},
 		{name: "inventory follows a rename", test: testInventoryAfterRename},
+		{name: "get unit returns a live unit by its ID", test: testGetUnitFound},
+		{name: "get unit reads an empty label map", test: testGetUnitNoLabels},
+		{name: "get unit of an unknown ID is ErrUnitNotFound", test: testGetUnitUnknown},
+		{name: "get unit of a deleted unit is ErrUnitNotFound", test: testGetUnitDeleted},
+		{name: "get unit follows a rename", test: testGetUnitFollowsRename},
 		{name: "inventory drops a deleted stack", test: testInventoryAfterDelete},
 		{name: "inventory follows a tag change", test: testInventoryAfterTagChange},
 		{name: "inventory orders by tool then name", test: testInventoryOrders},
@@ -112,6 +130,7 @@ func newNamespace(t *testing.T, s namespace.Store, name string) namespace.Namesp
 
 	ns := namespace.Namespace{
 		CreatedAt:       now(),
+		ID:              namespace.NewID(),
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
@@ -141,28 +160,31 @@ func purgeAt() time.Time {
 // transaction.
 func deleteEntry(ns namespace.Name) audit.Entry {
 	return audit.Entry{
-		At:           deletedAt(),
-		Namespace:    ns,
-		Subject:      "alice@example.com",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:manage",
-		Object:       "pulumi:" + ns.String() + "/web/deleted",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "storetest",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            deletedAt(),
+		Namespace:     ns,
+		Subject:       "alice@example.com",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:manage",
+		Object:        "pulumi:" + ns.String() + "/web/deleted",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "storetest",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -1118,6 +1140,48 @@ func testInventoryAfterCreate(t *testing.T, s Store) {
 	}
 
 	assertInventoryEntry(t, entries[0], st, st.UpdatedAt)
+}
+
+// testInventoryLabels checks that the entry of a stack holds its tags as
+// labels, follows a tag change and a rename, and that a stack with no tag
+// reads an empty map that is not nil.
+func testInventoryLabels(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	tagged := newStack(ns.Name, "web", "prod")
+	plain := newStack(ns.Name, "web", "dev")
+	plain.Tags = nil
+
+	for _, st := range []*stack.Stack{&tagged, &plain} {
+		if err := s.CreateStack(t.Context(), *st, ns.Fence()); err != nil {
+			t.Fatalf("create stack: %v", err)
+		}
+	}
+
+	want := map[string]string{"team": "payments", "app": "web"}
+	if err := s.UpdateStackTags(t.Context(), tagged.Ref, want, now().Add(time.Minute), ns.Fence()); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	if err := s.RenameStack(t.Context(), tagged.Ref, "live", ns.Fence()); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	got := map[string]map[string]string{}
+
+	entries := listInventory(t, s, ns.Name)
+	for i := range entries {
+		if entries[i].Labels == nil {
+			t.Fatalf("labels of %q = nil, want a map", entries[i].Name)
+		}
+
+		got[entries[i].Name] = entries[i].Labels
+	}
+
+	if len(got) != 2 || !maps.Equal(got["web/live"], want) || len(got["web/dev"]) != 0 {
+		t.Fatalf("labels = %v, want web/live %v and web/dev empty", got, want)
+	}
 }
 
 // testInventoryAfterRename renames a stack and checks one entry stays, under

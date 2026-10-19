@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -21,21 +23,16 @@ import (
 const fenceLineagePrefix = "lin-"
 
 // releaseWithFence releases the lock of w, which holds the lock, and makes a new
-// fence version of the current state the current state (ADR 44, decision 1).
-// The fence has a new lineage and the serial one more than the current serial.
-// It keeps the outputs and the kept marks of cur. A service with a sealer seals
-// the content and the outputs through the data key of the scope, also when cur
-// is plain, so a fence never writes new plain state. The store checks the lock,
+// fence version of the current state the current state. The fence has a new
+// lineage and the serial one more than the current serial. It keeps the
+// outputs and the kept marks of cur. The fence seals its content and its
+// outputs with the data key of the scope. The store checks the lock,
 // the revision and the serial in the transaction that writes the fence.
 func (s *Service) releaseWithFence(
-	ctx context.Context, w Workspace, cur StateVersion, by string,
+	ctx context.Context, w Workspace, cur StateVersion, by string, entry audit.Entry,
 ) (Workspace, error) {
 	if by == "" {
 		return Workspace{}, fmt.Errorf("force-unlock %s: %w: no principal", w.Ref, ErrInvalidState)
-	}
-
-	if cur.Sealed && s.sealer == nil {
-		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, ErrSealerNotConfigured)
 	}
 
 	fence, err := s.fence(ctx, w.Ref.Namespace)
@@ -60,7 +57,7 @@ func (s *Service) releaseWithFence(
 	size, err := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
-		seal:      sv.Sealed,
+		version:   string(sv.ID),
 		key:       sv.Content,
 		want:      sv.MD5,
 		content:   bytes.NewReader(content),
@@ -79,7 +76,9 @@ func (s *Service) releaseWithFence(
 	released.UpdatedAt = sv.FinalizedAt
 	released.Revision++
 
-	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, cur.ID, fence); fenceErr != nil {
+	entry.Version = strconv.FormatInt(sv.Serial, 10)
+
+	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, cur.ID, fence, entry); fenceErr != nil {
 		return Workspace{}, s.fenceRefused(ctx, w, sv, fence, fenceErr)
 	}
 
@@ -88,10 +87,9 @@ func (s *Service) releaseWithFence(
 
 // buildFence returns the pending fence version of w that follows cur, and the
 // plain content it holds. The version has a new lineage and the next serial,
-// keeps the outputs and the kept marks of cur, and names by. Its content key
-// is set, and its MD5 is that of the plain content. It is sealed when the
-// service seals; the outputs of a plain cur are sealed for it. It has no
-// upload capability, so no client uploads into it.
+// keeps the sealed outputs and the kept marks of cur, and names by. Its
+// content key is set, and its MD5 is that of the plain content. It is sealed.
+// It has no upload capability, so no client uploads into it.
 func (s *Service) buildFence(
 	ctx context.Context, w Workspace, cur StateVersion, by string,
 ) (StateVersion, []byte, error) {
@@ -103,13 +101,6 @@ func (s *Service) buildFence(
 	lineage := ident.NewID(fenceLineagePrefix)
 
 	content, err := fenceContent(plain, lineage, cur.Serial+1)
-	if err != nil {
-		return StateVersion{}, nil, err
-	}
-
-	sealed := s.sealer != nil
-
-	outputs, err := s.fenceOutputs(ctx, w, cur)
 	if err != nil {
 		return StateVersion{}, nil, err
 	}
@@ -128,12 +119,12 @@ func (s *Service) buildFence(
 		Lineage:         lineage,
 		Status:          StatusPending,
 		Content:         "",
-		Outputs:         outputs,
+		Outputs:         nil,
 		MD5:             md5.Sum(content), //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 		Serial:          cur.Serial + 1,
 		Size:            0,
 		Force:           false,
-		Sealed:          sealed,
+		Sealed:          true,
 		RestoredFrom:    "",
 		SensitiveMarks:  cur.SensitiveMarks,
 		FenceBy:         by,
@@ -147,26 +138,41 @@ func (s *Service) buildFence(
 
 	sv.Content = key
 
+	// The outputs of cur are sealed under the ID of cur, so the fence keeps
+	// them sealed again under its own ID.
+	outputs, err := s.resealOutputs(ctx, w, cur, sv.ID)
+	if err != nil {
+		return StateVersion{}, nil, err
+	}
+
+	sv.Outputs = outputs
+
 	return sv, content, nil
 }
 
-// fenceOutputs returns the stored outputs document of the fence that follows
-// cur: the outputs of cur as they are, or sealed with the data key of the
-// workspace scope when the service seals and cur is plain.
-func (s *Service) fenceOutputs(ctx context.Context, w Workspace, cur StateVersion) ([]byte, error) {
-	if s.sealer == nil || cur.Sealed || len(cur.Outputs) == 0 {
-		return cur.Outputs, nil
+// resealOutputs opens the sealed outputs of cur and seals them again under the
+// state version ID id. It returns nil when cur keeps no outputs.
+func (s *Service) resealOutputs(
+	ctx context.Context, w Workspace, cur StateVersion, id StateVersionID,
+) ([]byte, error) {
+	if len(cur.Outputs) == 0 {
+		return nil, nil
 	}
 
-	out, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), cur.Outputs)
+	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(cur.ID), cur.Outputs)
 	if err != nil {
-		return nil, fmt.Errorf("seal outputs of %s: %w", w.Ref, err)
+		return nil, sanitizeOpenError(cur.ID, err)
 	}
 
-	return out, nil
+	sealed, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(id), plain)
+	if err != nil {
+		return nil, fmt.Errorf("seal outputs of %s: %w", id, err)
+	}
+
+	return sealed, nil
 }
 
-// openCurrentPlain returns the plain content of the current version. A sealed
+// openCurrentPlain returns the plain content of the current version. The
 // version opens through the sealer, so the fence never reads ciphertext.
 func (s *Service) openCurrentPlain(ctx context.Context, cur StateVersion) ([]byte, error) {
 	plain, _, err := s.openStateBytes(ctx, cur.ID)
@@ -190,7 +196,8 @@ func fenceContent(plain []byte, lineage string, serial int64) ([]byte, error) {
 	if encrypted {
 		return nil, fmt.Errorf(
 			"%w: The state is encrypted by the client, so the server cannot fence it. "+
-				"Let the run that holds the lock finish; it releases the lock",
+				"Let the run that holds the lock finish; it releases the lock. "+
+				"Or force-unlock with the unit:write-forced action and both forced-write switches on",
 			ErrClientEncrypted,
 		)
 	}

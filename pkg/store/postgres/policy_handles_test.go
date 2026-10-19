@@ -40,7 +40,15 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 	reader := tokenService(t, second, clock)
 
 	principals, err := principal.NewService(
-		principal.Config{Store: first, Guard: nil, Namespaces: nil, Tokens: nil, Now: clock, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      first,
+			Guard:      nil,
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        clock,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -53,7 +61,12 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 	}
 
 	admin := identity.Principal{
-		Subject: "admin", DisplayName: "admin", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin", DisplayName: "admin", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	secrets := make([]accesstoken.Secret, 0, 2)
@@ -117,7 +130,8 @@ func tokenService(t *testing.T, s *postgres.Store, now func() time.Time) *access
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: s, Principals: s, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now, NewID: nil,
+		TempAdmins: nil,
+		Store:      s, Principals: s, Freshness: nil, Authorizer: nil, Logger: nil, Now: now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -134,6 +148,9 @@ func policyCaller() audit.Entry {
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }

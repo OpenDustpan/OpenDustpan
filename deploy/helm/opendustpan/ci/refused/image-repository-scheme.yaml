@@ -1,0 +1,10 @@
+# Refused: a repository with a scheme.
+# want: at '/image/repository': 'https://ghcr.io/opendustpan/opendustpan' does not match pattern '^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+image:
+  repository: https://ghcr.io/opendustpan/opendustpan

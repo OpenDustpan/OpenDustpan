@@ -142,6 +142,11 @@ The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade
 the server instead.
 
+The command also refuses a backup with a schema version below 100, the
+baseline schema version. The baseline migration replaced every migration
+before it, so no binary can restore such a backup. The error names the
+baseline.
+
 Before the server changes anything, it checks the manifest, the
 key-encryption key, each table file against its descriptor, and each blob
 against its size and MD5. It loads the table files into a staging area. The
@@ -173,8 +178,8 @@ The command takes only `--server` and `--ca-file`. Against a local server with n
 ```text
 binary version: dev
 server version: dev
-database schema version: 19
-binary schema version: 19
+database schema version: 100
+binary schema version: 100
 schema minimum binary version: none
 pending migrations: none
 running journaled updates: 0
@@ -187,6 +192,8 @@ The command prints the binary version, the schema version of the database and th
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
 
+`serve` refuses a database that records a schema version below 100, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
+
 ### Minimum binary version
 
 The schema records the oldest binary version that can use it: the minimum binary version. A migration that deletes or narrows a table or a column raises the minimum. A schema from before the minimum column records no minimum. A binary starts on a schema when its version is at or above the minimum, also when the schema is newer than the binary. It then applies no migration. A binary below the minimum does not start. The error names the binary version and the minimum, and it changes nothing in the database.
@@ -198,6 +205,23 @@ A recorded minimum is always `vMAJOR.MINOR.PATCH`. Older binaries refuse a minim
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails only when the new schema raised the minimum above its version. Then start the other new nodes.
 
 The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. When the older binary is below the minimum binary version of the schema, it refuses to start. The error names the binary version and the minimum.
+
+## Release checklist
+
+Before a tag goes out, copy the migration set of the tag into the test
+data. The schema upgrade test then covers upgrades from that tag without
+git. Run for the tag, for example `v0.1.0`:
+
+```sh
+./scripts/copy-tag-migrations.sh v0.1.0
+```
+
+The script copies `pkg/store/sqlite/migrations/*.sql` and
+`pkg/store/postgres/migrations/*.sql` of the tag, with their `.sql.sha256`
+hash files, into `testdata/tag-migrations/<tag>/` of each store adapter. The
+frozen test checks each copy against its hash file, so no hash is recorded by
+hand. Commit the copies in the same change. Then run the schema upgrade tests
+and `make upgrade-test`.
 
 ## Known limit
 

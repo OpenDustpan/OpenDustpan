@@ -26,11 +26,16 @@ type memberTokens struct {
 func (m memberTokens) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
 	if m.member != "" && subtle.ConstantTimeCompare([]byte(token), []byte(m.member)) == 1 {
 		return identity.Principal{
-			Subject:        MemberSubject,
-			DisplayName:    MemberSubject,
-			Admin:          false,
-			TokenID:        "",
-			TokenExpiresAt: time.Time{},
+			Subject:                MemberSubject,
+			DisplayName:            MemberSubject,
+			Admin:                  false,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		}, nil
 	}
 

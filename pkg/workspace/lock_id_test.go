@@ -31,7 +31,7 @@ func TestLockWithIDKeepsTheCallerID(t *testing.T) {
 		t.Fatalf("second lock with id: %v, want ErrLocked", err)
 	}
 
-	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 }

@@ -18,8 +18,8 @@ var _ access.Units = (*Store)(nil)
 
 // Tools whose units this store keeps, as the unit references name them.
 const (
-	pulumiTool   = "pulumi"
-	opentofuTool = "opentofu"
+	pulumiTool   = inventoryTool
+	opentofuTool = inventoryToolOpenTofu
 )
 
 // Prefixes of the stable unit IDs of each tool (ADR 19).

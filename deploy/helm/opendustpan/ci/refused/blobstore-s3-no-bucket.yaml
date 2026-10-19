@@ -1,0 +1,10 @@
+# Refused: the s3 blob store with no bucket.
+# want: at '/blobStore/s3/bucket': minLength: got 0, want 3
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+blobStore:
+  type: s3

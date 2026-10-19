@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -44,6 +46,8 @@ const migrationLockID int64 = 0x6f64706e
 type Store struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
+	// gate serves the ports of gate.Store over this store.
+	gate *gatestore.Store
 	// stagingMu guards stagingSchema: one staged restore at a time.
 	stagingMu     sync.Mutex
 	stagingSchema string
@@ -56,6 +60,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// noMigrate makes Open apply no migration and refuse a database with
+	// a pending one.
+	noMigrate bool
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -69,14 +76,50 @@ func WithBinaryVersion(version string) Option {
 	return func(s *Store) { s.binaryVersion = version }
 }
 
+// WithoutMigrate makes Open check the schema and apply no migration. Open
+// then refuses a database with a pending migration with
+// schema.ErrMigrationsPending. A command that only writes rows uses it, so
+// the server stays the one process that changes the schema.
+func WithoutMigrate() Option {
+	return func(s *Store) { s.noMigrate = true }
+}
+
 var (
 	_ namespace.Store = (*Store)(nil)
 	_ stack.Store     = (*Store)(nil)
 )
 
+// liveSchemaName returns the live schema of a search_path setting: the first
+// schema, or public when the setting is empty. The control schema appends
+// _control to it, so each live schema keeps its own control tables.
+func liveSchemaName(searchPath string) string {
+	for part := range strings.SplitSeq(searchPath, ",") {
+		if name := strings.Trim(strings.TrimSpace(part), `"`); name != "" {
+			return name
+		}
+	}
+
+	return "public"
+}
+
 // Open connects to the database at url and migrates it.
 func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres pool: %w", err)
+	}
+
+	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
+	ctl := live + "_control"
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
+			return fmt.Errorf("set postgres search path: %w", execErr)
+		}
+
+		return nil
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
 	}
@@ -89,8 +132,10 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		binaryVersion: "",
+		binaryVersion: "", gate: nil, noMigrate: false,
 	}
+	s.gate = gatestore.New(gateRunner{s: s})
+
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -140,23 +185,7 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
-	row := codec.ToNamespaceRow(ns)
-
-	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
-		Name:            row.Name,
-		HomeRegion:      row.HomeRegion,
-		FailoverVersion: row.FailoverVersion,
-		CreatedAtMs:     row.CreatedAtMs,
-	})
-	if err != nil {
-		return fmt.Errorf("insert namespace: %w", err)
-	}
-
-	if n == 0 {
-		return namespace.ErrAlreadyExists
-	}
-
-	return nil
+	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
 }
 
 // GetNamespace implements namespace.Store.
@@ -231,7 +260,12 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			return err
 		}
 
-		return publishStackInventory(ctx, q, st.Ref, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			st.Ref,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
+		)
 	})
 }
 
@@ -302,7 +336,12 @@ func (s *Store) UpdateStackTags(
 			return err
 		}
 
-		return publishStackInventory(ctx, q, ref, id, codec.Millis(updatedAt))
+		return publishStackInventory(
+			ctx,
+			q,
+			ref,
+			unitWrite{unitID: id, atMs: codec.Millis(updatedAt), kind: inventory.ChangeChanged},
+		)
 	})
 }
 
@@ -373,6 +412,11 @@ func (s *Store) RenameStack(
 		}
 
 		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
+		from := unitGate{ns: oldRef.Namespace, tool: inventoryTool, name: stackUnitName(oldRef)}
+
+		if gateErr := moveUnitGate(ctx, q, from, stackUnitName(newRef)); gateErr != nil {
+			return gateErr
+		}
 
 		row, err := q.GetStack(ctx, db.GetStackParams{
 			Namespace: newRef.Namespace.String(),
@@ -383,7 +427,12 @@ func (s *Store) RenameStack(
 			return fmt.Errorf("read renamed stack: %w", err)
 		}
 
-		return publishStackInventory(ctx, q, newRef, row.ID, row.UpdatedAtMs)
+		return publishStackInventory(
+			ctx,
+			q,
+			newRef,
+			unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeRenamed},
+		)
 	})
 }
 
@@ -757,7 +806,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		return migrateTx(ctx, tx, all, s.binaryVersion)
+		return migrateTx(ctx, tx, all, migrateRules{binaryVersion: s.binaryVersion, noMigrate: s.noMigrate})
 	})
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -766,10 +815,18 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrateRules holds what migrateTx checks the schema against: the version
+// of the binary, and whether the caller applies no migration.
+type migrateRules struct {
+	binaryVersion string
+	noMigrate     bool
+}
+
 // migrateTx checks the schema and applies pending migrations while holding
 // the advisory lock. A binary below the minimum binary version of the schema
-// gets a *schema.MinimumError and applies nothing.
-func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVersion string) error {
+// gets a *schema.MinimumError and applies nothing. With noMigrate, a pending
+// migration gives schema.ErrMigrationsPending and applies nothing.
+func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules migrateRules) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockID); err != nil {
 		return fmt.Errorf("take migration lock: %w", err)
 	}
@@ -788,9 +845,17 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVe
 		return err
 	}
 
-	plan, err := migrate.Check(recorded, all, binaryVersion)
+	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
+		return fmt.Errorf("check schema versions: %w", baselineErr)
+	}
+
+	plan, err := migrate.Check(recorded, all, rules.binaryVersion)
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
+	}
+
+	if rules.noMigrate && len(plan.Pending) > 0 {
+		return fmt.Errorf("%w: %d", schema.ErrMigrationsPending, len(plan.Pending))
 	}
 
 	for _, m := range plan.Pending {
@@ -833,6 +898,18 @@ func recordedMigrations(ctx context.Context, tx pgx.Tx) ([]schema.AppliedMigrati
 	}
 
 	return out, nil
+}
+
+// recordedVersions returns the versions of the recorded migrations,
+// ordered as recorded, for the baseline check.
+func recordedVersions(recorded []schema.AppliedMigration) []int64 {
+	versions := make([]int64, 0, len(recorded))
+
+	for _, r := range recorded {
+		versions = append(versions, r.Version)
+	}
+
+	return versions
 }
 
 func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {

@@ -137,32 +137,45 @@ type auditEntry struct {
 	// was appended, which the hash covers. It is omitted when it is 0, as in
 	// @server.
 	FenceVersion int64 `json:"fenceVersion,omitempty"`
+	// Reason is the text that a person gave for the action, for example for
+	// a force-unlock. It is omitted for an entry without one.
+	Reason string `json:"reason,omitempty"`
+	// PrincipalKind is the kind of the principal record that acted:
+	// "person", "service" or "workload". It is omitted when the server
+	// cannot name the kind.
+	PrincipalKind string `json:"principalKind,omitempty"`
+	// JobID is the job whose token acted. It is omitted for every other
+	// credential.
+	JobID string `json:"jobID,omitempty"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
 func toAuditEntry(e audit.Entry) auditEntry {
 	return auditEntry{
-		AtMs:         e.AtMs(),
-		Sequence:     e.Sequence,
-		Subject:      e.Subject,
-		IDPSubject:   e.IDPSubject,
-		TokenID:      e.TokenID,
-		Action:       e.Action,
-		Object:       e.Object,
-		Version:      e.Version,
-		ValuePath:    e.ValuePath,
-		ValueCount:   e.ValueCount,
-		Changes:      toAuditChanges(e.Changes),
-		SourceIP:     e.SourceIP,
-		UserAgent:    e.UserAgent,
-		Channel:      string(e.Channel),
-		Kind:         string(e.Kind),
-		Outcome:      string(e.Outcome),
-		RequestID:    e.RequestID,
-		ObjectID:     e.ObjectID,
-		PrevHash:     e.PrevHash,
-		Hash:         e.Hash,
-		FenceVersion: e.FenceVersion,
+		AtMs:          e.AtMs(),
+		Sequence:      e.Sequence,
+		Subject:       e.Subject,
+		IDPSubject:    e.IDPSubject,
+		TokenID:       e.TokenID,
+		Action:        e.Action,
+		Object:        e.Object,
+		Version:       e.Version,
+		ValuePath:     e.ValuePath,
+		ValueCount:    e.ValueCount,
+		Changes:       toAuditChanges(e.Changes),
+		SourceIP:      e.SourceIP,
+		UserAgent:     e.UserAgent,
+		Channel:       string(e.Channel),
+		Kind:          string(e.Kind),
+		Outcome:       string(e.Outcome),
+		RequestID:     e.RequestID,
+		ObjectID:      e.ObjectID,
+		PrevHash:      e.PrevHash,
+		Hash:          e.Hash,
+		FenceVersion:  e.FenceVersion,
+		Reason:        e.Reason,
+		PrincipalKind: e.PrincipalKind,
+		JobID:         e.JobID,
 	}
 }
 

@@ -151,11 +151,15 @@ func TestDeletedReadScope(t *testing.T) {
 			t.Parallel()
 
 			p := identity.Principal{
+				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 				Subject:        tc.subject,
 				DisplayName:    "",
 				Admin:          false,
 				TokenID:        "",
 				TokenExpiresAt: time.Time{},
+				Kind:           "",
+				Credential:     "",
+				JobID:          "",
 			}
 
 			all, ids, err := scope.ReadableUnits(t.Context(), p, tc.ns)
@@ -179,11 +183,15 @@ func TestDeletedReadScopeFailsClosed(t *testing.T) {
 
 	for _, admin := range []bool{true, false} {
 		p := identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "someone",
 			DisplayName:    "",
 			Admin:          admin,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}
 
 		all, ids, err := scope.ReadableUnits(t.Context(), p, "acme")

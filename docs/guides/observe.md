@@ -79,6 +79,11 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_go_gc_cycles_total` | (none) |
 | `dustpan_readiness_failures_total` | (none) |
 | `dustpan_audit_append_failures_total` | (none) |
+| `dustpan_audit_sink_entries_total` | `sink` |
+| `dustpan_audit_sink_failures_total` | `sink`, `reason` |
+| `dustpan_audit_sink_skipped_total` | `sink` |
+| `dustpan_audit_sink_lag_seconds` | `sink` |
+| `dustpan_audit_sink_lag_entries` | `sink` |
 | `dustpan_config_reloads_total` | `result` |
 | `dustpan_config_last_reload_success` | (none) |
 | `dustpan_inactivity_sweeps_total` | `result` |
@@ -96,6 +101,43 @@ The duration family also writes `_bucket`, `_sum` and `_count` series.
 append failed.
 Alert when it is above zero. The audit guide shows the rule.
 This is the alert for failed logging (PCI DSS 10.7).
+`dustpan_audit_sink_failures_total` counts the failed deliveries of an audit
+sink, with the labels `sink` (the sink name) and `reason` (`size` for an
+entry the sink refused because it cannot hold it, `unreachable` when the
+sink never reached its receiver, `write` for any other failed write, `read`
+for a failed entry, cursor or namespace read, and `lease` for a failed sink
+lease take).
+A refused entry logs one error line per entry with the sink name, its scope
+and its sequence.
+Any other failure logs one error line per round with the sink name, the
+reason, and the sequence of the first entry of the failed batch when the
+round knows it.
+A round that never read a batch, for example a failed lease take or a failed
+entry, cursor or namespace read, carries no sequence.
+This is the alert for failures of logging (PCI DSS 10.7): the audit log in
+the database keeps every entry, and the sink is its live copy.
+`dustpan_audit_sink_lag_entries` holds the count of entries a sink has not
+delivered yet, or 0 when the sink is up to date.
+Alert when it keeps growing: the sink falls behind.
+The audit guide shows the rules.
+
+```yaml
+groups:
+  - name: dustpan
+    rules:
+      - alert: DustpanAuditSinkRefusedEntry
+        expr: increase(dustpan_audit_sink_failures_total{reason="size"}[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An OpenDustpan audit sink refused an entry it cannot hold
+      - alert: DustpanAuditSinkLagging
+        expr: dustpan_audit_sink_lag_entries > 50
+        labels:
+          severity: warning
+        annotations:
+          summary: An OpenDustpan audit sink falls behind
+```
 `dustpan_signin_failure_counter_errors_total` counts the failed calls of
 the failure budget that all instances share, with the label `operation`
 (`add` or `prune`).
@@ -110,12 +152,12 @@ names the key and the rule.
 The `result` label is `success` or `failure`.
 Alert when the `failure` series grows: a failed run disables nothing.
 `dustpan_deleted_unit_sweep_total` counts the outcomes of the retention
-sweep. The `result` label is `purged`, `skipped`, `finished` or
-`failed`. `finished` counts the blob purge records that the sweep finished.
+expiry. The `result` label is `purged`, `skipped`, `finished` or
+`failed`. `finished` counts the blob purge records that the run finished.
 `failed` counts the failed purges, blob deletes and record finishes, and the
-sweeps that could not read the store.
+runs that could not read the store.
 Alert when the `failed` series grows: a failed purge keeps the unit until the
-next sweep. The log line of each failure names the unit and the error kind.
+next run. The log line of each failure names the unit and the error kind.
 
 ## Request log
 
@@ -153,10 +195,16 @@ opendustpan serve --log-sink stderr --log-sink 'syslog+tls://logs.example:6514'
 
 Name `stderr` too when you want to keep the stderr lines.
 A syslog target uses the facility `local0` (16) unless you set `?facility=<0 to 23>`.
-`?max-size=<bytes>` caps a message, from 480 to 65507 bytes, default 8192.
-A line above the cap arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
-A truncated audit record keeps its `hash`, but the receiver cannot recompute it from the shipped fields. The audit log guide states the full guarantee.
-Only a line that cannot fit even with every trimmable field empty is skipped and counted.
+`?max-size=<bytes>` caps a message: from 480 to 65507 bytes over UDP, and from 480 to 65536 bytes over TCP and TLS.
+The default is 8192 over UDP and 65536 over TCP and TLS.
+Raise the matching limit of the receiver to at least the same size.
+With rsyslog set `$MaxMessageSize`. On a TCP input also set `MaxFrameSize`.
+The defaults of both may be below 64 KiB. Check the receiver's limit.
+With syslog-ng set `log-msg-size()`. Its default may be below 64 KiB. Check the receiver's limit.
+The sink never shortens a field and never sends a changed entry.
+The sink refuses a line above the cap and never sends it.
+A refused line is skipped and counted in `dustpan_log_sink_dropped_total`.
+The audit log guide states the full guarantee for audit entries.
 A webhook target signs each request with the key in `DUSTPAN_LOG_WEBHOOK_SECRET`, or in a file that `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` names.
 The audit log guide describes the record format, the syslog format and the webhook signature.
 Object storage is a target of the audit log only.

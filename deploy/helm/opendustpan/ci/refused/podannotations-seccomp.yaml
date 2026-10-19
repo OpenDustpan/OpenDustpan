@@ -1,0 +1,10 @@
+# Refused: a seccomp annotation.
+# want: at '/podAnnotations': 'allOf' failed
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+podAnnotations:
+  seccomp.security.alpha.kubernetes.io/pod: unconfined

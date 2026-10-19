@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +95,11 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "check finds a changed kind", test: testCheckChangedColumn("kind", "change")},
 		{name: "check finds a changed outcome", test: testCheckChangedColumn("outcome", "failure")},
 		{name: "check finds a changed request ID", test: testCheckChangedColumn("request_id", "req-x")},
+		{name: "check finds a changed reason", test: testCheckChangedColumn("reason", "reason-x")},
+		{name: "an empty and a set reason round-trip with a valid chain", test: testReasonRoundTrip},
+		{name: "a reason with a control character is refused", test: testReasonRefused},
+		{name: "a principal kind and a job ID round-trip with a valid chain", test: testPrincipalRoundTrip},
+		{name: "an unknown principal kind is refused", test: testPrincipalKindRefused},
 	}
 
 	for _, tc := range cases {
@@ -115,6 +121,7 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",
@@ -133,28 +140,31 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 // request ID.
 func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.Entry {
 	return audit.Entry{
-		At:           at,
-		Namespace:    ns,
-		Subject:      subject,
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:decrypt",
-		Object:       "pulumi:" + ns.String() + "/web/prod",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "pulumi-cli/3.200.0",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindReveal,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    requestID,
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
+		At:            at,
+		Namespace:     ns,
+		Subject:       subject,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:decrypt",
+		Object:        "pulumi:" + ns.String() + "/web/prod",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "pulumi-cli/3.200.0",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindReveal,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     requestID,
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -396,6 +406,7 @@ func testIsolation(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 
 	other := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "other",
 		HomeRegion:      "eu-west",
@@ -915,6 +926,134 @@ func testObjectIDRoundTrip(t *testing.T, ts TestStore) {
 
 	if !check.Valid || check.Checked != 2 {
 		t.Fatalf("check = %+v, want 2 valid entries", check)
+	}
+}
+
+// testReasonRoundTrip appends an entry without a reason and one with a reason
+// of 500 code points: both list back as written, and the chain stays valid,
+// so the hash covers the reason field of each entry.
+func testReasonRoundTrip(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
+
+	withReason := newEntry(ns.Name, "admin", "req-2", now())
+	withReason.Kind = audit.KindChange
+	withReason.Reason = strings.Repeat("é", audit.MaxReasonLen)
+
+	if stored := appendEntry(t, s, ns.Fence(), withReason); stored.Reason != withReason.Reason {
+		t.Fatalf("stored reason has %d bytes, want %d", len(stored.Reason), len(withReason.Reason))
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if len(listing.Entries) != 2 || listing.Entries[0].Reason != withReason.Reason || listing.Entries[1].Reason != "" {
+		t.Fatalf("listing = %+v, want the set reason newest and an empty reason oldest", listing.Entries)
+	}
+
+	checkValidChain(t, []audit.Entry{listing.Entries[1], listing.Entries[0]})
+
+	check, err := s.Check(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 2 {
+		t.Fatalf("check = %+v, want 2 valid entries", check)
+	}
+}
+
+// testPrincipalRoundTrip appends an entry without a principal kind, one with
+// a kind and one with a kind and a job ID: each lists back as written, and
+// the chain stays valid, so the hash covers both fields.
+func testPrincipalRoundTrip(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
+
+	person := newEntry(ns.Name, "alice", "req-2", now())
+	person.PrincipalKind = audit.PrincipalKindPerson
+	appendEntry(t, s, ns.Fence(), person)
+
+	job := newEntry(ns.Name, "ci", "req-3", now())
+	job.PrincipalKind = audit.PrincipalKindService
+	job.JobID = "job-7"
+	appendEntry(t, s, ns.Fence(), job)
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if len(listing.Entries) != 3 {
+		t.Fatalf("listing has %d entries, want 3", len(listing.Entries))
+	}
+
+	got := listing.Entries
+	if got[2].PrincipalKind != "" || got[2].JobID != "" ||
+		got[1].PrincipalKind != audit.PrincipalKindPerson || got[1].JobID != "" ||
+		got[0].PrincipalKind != audit.PrincipalKindService || got[0].JobID != "job-7" {
+		t.Fatalf("listing = %+v, want the kind and the job ID as written", got)
+	}
+
+	check, err := s.Check(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 3 {
+		t.Fatalf("check = %+v, want 3 valid entries", check)
+	}
+}
+
+// testPrincipalKindRefused proves that an append refuses an unknown principal
+// kind, and that the refusal writes nothing.
+func testPrincipalKindRefused(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	e := newEntry(ns.Name, "admin", "req-1", now())
+	e.PrincipalKind = "agent"
+
+	if _, err := s.Append(t.Context(), ns.Fence(), e); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("append with an unknown principal kind: error = %v, want ErrInvalidEntry", err)
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil || listing.Total != 0 {
+		t.Fatalf("list after a refused append = %+v, %v; want no entry", listing, err)
+	}
+}
+
+// testReasonRefused proves that an append refuses a reason with a control
+// character, and that the refusal writes nothing.
+func testReasonRefused(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	e := newEntry(ns.Name, "admin", "req-1", now())
+	e.Reason = "first\nsecond"
+
+	if _, err := s.Append(t.Context(), ns.Fence(), e); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("append with a line break in the reason: error = %v, want ErrInvalidEntry", err)
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil || listing.Total != 0 {
+		t.Fatalf("list after a refused append = %+v, %v; want no entry", listing, err)
 	}
 }
 

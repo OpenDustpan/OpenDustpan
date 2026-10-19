@@ -12,13 +12,19 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/history"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/launcher"
 )
 
 // envPattern finds environment names in Go string literals: a DUSTPAN_
-// setting the code reads, prints or sets.
-var envPattern = regexp.MustCompile(`DUSTPAN_[A-Z0-9_]+`)
+// setting the code reads, prints or sets. The word boundary keeps a name
+// that only ends in DUSTPAN_ (the OPENDUSTPAN_ variables of the compose
+// stack, which are not server settings) from counting as one.
+var envPattern = regexp.MustCompile(`\bDUSTPAN_[A-Z0-9_]+`)
 
 // TestEveryEnvVarHasADeclaration scans the Go sources for DUSTPAN_ names
 // and proves each one has a setting declaration, so no setting is read
@@ -136,7 +142,7 @@ func TestSensitiveSettingsAreMarked(t *testing.T) {
 	t.Parallel()
 
 	for _, s := range cli.Settings {
-		if s.Kind != cli.KindString {
+		if s.StepInput || s.Kind != cli.KindString {
 			continue
 		}
 
@@ -151,6 +157,103 @@ func TestSensitiveSettingsAreMarked(t *testing.T) {
 
 		if holdsSecret && !s.Sensitive {
 			t.Errorf("setting %s holds a secret or a credential and has no sensitive mark", s.Name())
+		}
+	}
+}
+
+// TestStepInputsAreNotSettings proves a variable that the launcher sets for a
+// step has no flag, no file key and no secret mark: the server does not read
+// it, and it holds no credential. The sensitive-mark test skips these
+// declarations, so this test keeps the skip narrow.
+func TestStepInputsAreNotSettings(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range cli.Settings {
+		if !s.StepInput {
+			continue
+		}
+
+		if s.Flag != "" || s.File != "" || s.Sensitive {
+			t.Errorf("step variable %s has a flag, a file key or a sensitive mark", s.Name())
+		}
+
+		if job.IsCredentialEnv(s.Env) || secretWords.MatchString(s.Env+" "+s.Doc) {
+			t.Errorf(
+				"step variable %s matches a credential rule: a step never gets a credential through a variable",
+				s.Name(),
+			)
+		}
+	}
+}
+
+// TestStepInputsMatchTheLauncher proves the step declarations and the
+// variables that the launcher sets are the same set.
+func TestStepInputsMatchTheLauncher(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		launcher.EnvJob, launcher.EnvPhase, launcher.EnvStep, launcher.EnvUnit,
+		launcher.EnvNamespace, launcher.EnvCommit, launcher.EnvServer, launcher.EnvSweepReport,
+	}
+
+	var got []string
+
+	for _, s := range cli.Settings {
+		if s.StepInput {
+			got = append(got, s.Env)
+		}
+	}
+
+	slices.Sort(got)
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("step variables = %v, want %v", got, want)
+	}
+}
+
+// TestFileKeysAreServed proves each declaration with a file key is a serve
+// setting, or is the admin token file. A declaration that serve does not
+// register must not open a file key: the file would hold a value that no
+// code reads.
+func TestFileKeysAreServed(t *testing.T) {
+	t.Parallel()
+
+	served := map[string]bool{}
+	for _, s := range cli.ServeSettings() {
+		served[s.Name()] = true
+	}
+
+	for _, s := range cli.Settings {
+		if s.File != "" && !served[s.Name()] && s.Env != "DUSTPAN_ADMIN_TOKEN_FILE" {
+			t.Errorf("setting %s has a file key and serve does not register it", s.Name())
+		}
+	}
+}
+
+// TestRetentionDeclarationsMatchHistory proves the retention default equals
+// the history default.
+func TestRetentionDeclarationsMatchHistory(t *testing.T) {
+	t.Parallel()
+
+	for _, flag := range []string{history.PlanRetentionFlag, history.JobLogRetentionFlag} {
+		var found bool
+
+		for _, s := range cli.Settings {
+			if s.Flag != flag {
+				continue
+			}
+
+			found = true
+
+			d, err := time.ParseDuration(s.Default)
+			if err != nil || d != history.DefaultRetention {
+				t.Errorf("setting %s default = %q, want %s", flag, s.Default, history.DefaultRetention)
+			}
+		}
+
+		if !found {
+			t.Errorf("no declaration for %s", flag)
 		}
 	}
 }

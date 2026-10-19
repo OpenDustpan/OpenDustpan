@@ -29,6 +29,8 @@ func TestParse(t *testing.T) {
 		{name: "wrong scheme", raw: "ftp://host", want: "", wantErr: baseurl.ErrInvalid},
 		{name: "no host", raw: "https://", want: "", wantErr: baseurl.ErrInvalid},
 		{name: "query is refused", raw: "https://host?x=1", want: "", wantErr: baseurl.ErrInvalid},
+		{name: "fragment is refused", raw: "https://host/prefix#top", want: "", wantErr: baseurl.ErrInvalid},
+		{name: "empty fragment is refused", raw: "https://host/#", want: "", wantErr: baseurl.ErrInvalid},
 		{name: "unparsable", raw: "https://ho%st", want: "", wantErr: baseurl.ErrInvalid},
 	}
 

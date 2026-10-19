@@ -1,6 +1,6 @@
 # 20. The Pulumi update cycle
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10. The stored event bodies superseded in part by ADR 151. Extended by ADR 213 decision 10
 
 ## Context
 

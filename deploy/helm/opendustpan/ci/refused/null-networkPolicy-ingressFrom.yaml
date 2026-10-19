@@ -1,0 +1,10 @@
+# Refused: null removes networkPolicy.ingressFrom.
+# want: at '/networkPolicy': missing property 'ingressFrom'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+networkPolicy:
+  ingressFrom: null

@@ -1223,6 +1223,24 @@ func (s *fakeBackupStore) GetDeletedUnit(
 	return inventory.DeletedEntry{}, inventory.ErrNotFound
 }
 
+// GetUnit implements inventory.Reader.
+func (s *fakeBackupStore) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return inventory.Entry{}, errFakeClosed
+	}
+
+	for key := range s.data.entries {
+		if e := s.data.entries[key]; e.UnitID == unitID {
+			return e, nil
+		}
+	}
+
+	return inventory.Entry{}, inventory.ErrUnitNotFound
+}
+
 // ListUnits implements inventory.Reader, ordered by tool then name.
 func (s *fakeBackupStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	s.mu.RLock()
@@ -1508,9 +1526,11 @@ func (s *fakeBackupStore) GetStateVersion(
 
 // FinalizeStateVersion implements workspace.StateStore with the lock,
 // lineage and serial checks.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (s *fakeBackupStore) FenceAndUnlock(
 	_ context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	_ workspace.StateVersionID, fence namespace.Fence,
+	_ workspace.StateVersionID, fence namespace.Fence, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2288,6 +2308,7 @@ func (s *fakeBackupStore) SchemaTables(_ context.Context) ([]string, error) {
 	}
 
 	out := append(backup.TablesCopy(), backup.ControlTables...)
+	out = append(out, backup.EmptiedTables...)
 
 	if s.extraSchemaTable != "" {
 		out = append(out, s.extraSchemaTable)
@@ -2640,7 +2661,16 @@ func (*fakeBackupStore) SetOverrides(context.Context, namespace.Name, namespace.
 }
 
 // ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
-func (s *fakeBackupStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (s *fakeBackupStore) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
+) error {
+	return s.SaveWorkspace(ctx, w, fence)
+}
+
+// SaveReleased is not used by this fake: it saves like SaveWorkspace.
+func (s *fakeBackupStore) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
+) error {
 	return s.SaveWorkspace(ctx, w, fence)
 }
 
@@ -2726,6 +2756,7 @@ func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed tim
 		Status:        "",
 		ResourceCount: nil,
 		Lock:          nil,
+		Labels:        nil,
 	}
 }
 
@@ -2744,6 +2775,7 @@ func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, cha
 		Status:        "",
 		ResourceCount: nil,
 		Lock:          nil,
+		Labels:        nil,
 	}
 }
 

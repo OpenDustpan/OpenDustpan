@@ -98,6 +98,8 @@ type Inner interface {
 	stack.EventStore
 	stack.JournalStore
 	stack.BuiltCheckpointStore
+	stack.StateAtReader
+	workspace.StateAtReader
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
@@ -389,6 +391,26 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	return s.inner.ReferencedCheckpointKeys(ctx, ref)
 }
 
+// StateAt returns the update that held the state of the stack at a time,
+// unless a fault fires first.
+func (s *Store) StateAt(ctx context.Context, id stack.ID, at time.Time) (stack.StateAt, error) {
+	if err := s.before(ctx, "StateAt"); err != nil {
+		return stack.StateAt{}, err
+	}
+
+	return s.inner.StateAt(ctx, id, at)
+}
+
+// WorkspaceStateAt returns the state version that was current in a workspace
+// at a time, unless a fault fires first.
+func (s *Store) WorkspaceStateAt(ctx context.Context, id workspace.ID, at time.Time) (workspace.StateAt, error) {
+	if err := s.before(ctx, "WorkspaceStateAt"); err != nil {
+		return workspace.StateAt{}, err
+	}
+
+	return s.inner.WorkspaceStateAt(ctx, id, at)
+}
+
 // AppendEvents stores the batch's events, unless a fault fires first.
 func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence namespace.Fence) error {
 	if err := s.before(ctx, "AppendEvents"); err != nil {
@@ -542,12 +564,25 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 }
 
 // ReleaseUnfenced saves a released unit under the forced-write override, unless a fault fires first.
-func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (s *Store) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
 	if err := s.before(ctx, "ReleaseUnfenced"); err != nil {
 		return err
 	}
 
-	return s.inner.ReleaseUnfenced(ctx, w, fence)
+	return s.inner.ReleaseUnfenced(ctx, w, fence, e)
+}
+
+// SaveReleased saves a released unit with its audit entry, unless a fault fires first.
+func (s *Store) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	if err := s.before(ctx, "SaveReleased"); err != nil {
+		return err
+	}
+
+	return s.inner.SaveReleased(ctx, w, fence, e)
 }
 
 // DeleteWorkspace soft-deletes the workspace called ref, unless a fault
@@ -652,15 +687,17 @@ func (s *Store) FinalizeStateVersion(
 
 // FenceAndUnlock releases the lock and makes the fence version current,
 // unless a fault fires first.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (s *Store) FenceAndUnlock(
 	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	expect workspace.StateVersionID, fence namespace.Fence,
+	expect workspace.StateVersionID, fence namespace.Fence, e audit.Entry,
 ) error {
 	if err := s.before(ctx, "FenceAndUnlock"); err != nil {
 		return err
 	}
 
-	return s.inner.FenceAndUnlock(ctx, w, sv, expect, fence)
+	return s.inner.FenceAndUnlock(ctx, w, sv, expect, fence, e)
 }
 
 // CurrentStateVersion returns the workspace's current state, unless a fault
@@ -750,6 +787,15 @@ func (s *Store) DeleteExpiredPendingStateVersions(
 	}
 
 	return s.inner.DeleteExpiredPendingStateVersions(ctx, id, expiredBefore, fence)
+}
+
+// GetUnit returns the live unit unitID, unless a fault fires first.
+func (s *Store) GetUnit(ctx context.Context, unitID string) (inventory.Entry, error) {
+	if err := s.before(ctx, "GetUnit"); err != nil {
+		return inventory.Entry{}, err
+	}
+
+	return s.inner.GetUnit(ctx, unitID)
 }
 
 // ListUnits returns the inventory entries of ns, unless a fault fires first.
@@ -879,13 +925,13 @@ func (s *Store) before(ctx context.Context, method string) error {
 
 // defaultErr returns the failure of method where the port documents one:
 // maintenance.ErrUnavailable for the maintenance methods, a plain error for
-// ListUnits, which defines no sentinel, and namespace.ErrUnavailable
+// ListUnits and GetUnit, which define no failure sentinel, and namespace.ErrUnavailable
 // otherwise.
 func defaultErr(method string) error {
 	switch method {
 	case "GetState", "SetState", "SetStateIf":
 		return maintenance.ErrUnavailable
-	case "ListUnits":
+	case "ListUnits", "GetUnit":
 		return errInjected
 	default:
 		return namespace.ErrUnavailable

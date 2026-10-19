@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -37,6 +39,7 @@ func newMemFeed(counts map[namespace.Name]int) *memFeed {
 		}
 
 		f.nss = append(f.nss, namespace.Namespace{
+			ID:              namespace.NewID(),
 			CreatedAt:       time.Unix(0, 0),
 			Name:            name,
 			HomeRegion:      "eu-west",
@@ -82,7 +85,13 @@ func (f *memFeed) SinkCursor(_ context.Context, sink string, ns namespace.Name) 
 	return f.cursors[sink+"/"+ns.String()], nil
 }
 
-func (f *memFeed) AdvanceSinkCursor(_ context.Context, fence namespace.Fence, sink string, seq int64) error {
+func (f *memFeed) AdvanceSinkCursor(
+	_ context.Context,
+	fence namespace.Fence,
+	_ durable.Claim,
+	sink string,
+	seq int64,
+) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -92,6 +101,21 @@ func (f *memFeed) AdvanceSinkCursor(_ context.Context, fence namespace.Fence, si
 	}
 
 	return nil
+}
+
+// LastEntry answers the entry with the highest sequence of ns, and false
+// when ns holds none. It meets the last-entry port of the shipper, so the
+// shipper can count the delivery lag in entries.
+func (f *memFeed) LastEntry(_ context.Context, ns namespace.Name) (audit.Entry, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	all := f.entries[ns]
+	if len(all) == 0 {
+		return audit.Entry{}, false, nil //nolint:exhaustruct_v5 // No entry to return.
+	}
+
+	return all[len(all)-1], true, nil
 }
 
 // acmeCursor answers the cursor of sink in the namespace acme.
@@ -172,28 +196,31 @@ func (s *memSink) batchSizes() []int {
 // entryAt returns a stored entry of ns with sequence seq and a hash.
 func entryAt(ns namespace.Name, seq int64) audit.Entry {
 	return audit.Entry{
-		At:           time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second),
-		Namespace:    ns,
-		Subject:      "alice",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:read-secrets",
-		Object:       "opentofu:" + ns.String() + "/prod",
-		Version:      "sv-1",
-		ValuePath:    "",
-		ValueCount:   nil,
-		ObjectID:     "",
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "OpenTofu/1.11",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindToolOperation,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "req-" + strconv.FormatInt(seq, 10),
-		PrevHash:     "prev",
-		Hash:         "hash-" + strconv.FormatInt(seq, 10),
-		Sequence:     seq,
-		FenceVersion: 0,
+		At:            time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second),
+		Namespace:     ns,
+		Subject:       "alice",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:read-secrets",
+		Object:        "opentofu:" + ns.String() + "/prod",
+		Version:       "sv-1",
+		ValuePath:     "",
+		ValueCount:    nil,
+		ObjectID:      "",
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "OpenTofu/1.11",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindToolOperation,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "req-" + strconv.FormatInt(seq, 10),
+		PrevHash:      "prev",
+		Hash:          "hash-" + strconv.FormatInt(seq, 10),
+		Sequence:      seq,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 
@@ -208,6 +235,7 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 		OnFailure:     nil,
 		OnSkipped:     nil,
 		OnLag:         nil,
+		OnLagEntries:  nil,
 		Now:           nil,
 		Sinks:         sinks,
 		InstanceID:    "",
@@ -309,7 +337,7 @@ func (s skipSink) Write(ctx context.Context, records []logsink.Record) error {
 		return err
 	}
 
-	return &logsink.SkipError{Reason: "too large", Skipped: 1}
+	return &logsink.SkipError{Reason: "too large", Skipped: 1, Indexes: []int{0}}
 }
 
 func (s skipSink) Close() error { return nil }
@@ -330,6 +358,7 @@ func TestASkippedEntryIsCountedAndTheCursorMoves(t *testing.T) {
 		OnFailure:     nil,
 		OnSkipped:     func(_ string, n int) { skipped += n },
 		OnLag:         nil,
+		OnLagEntries:  nil,
 		Now:           nil,
 		Sinks:         []audit.ShipSink{shipSink("siem", sink)},
 		InstanceID:    "",
@@ -385,15 +414,16 @@ func TestAFailedRoundLogsAClassNotTheDriverText(t *testing.T) {
 		Namespaces: base,
 		Logger:     slog.New(slog.NewJSONHandler(&logs, nil)),
 		OnShipped:  nil,
-		OnFailure: func(string) {
+		OnFailure: func(string, string) {
 			select {
 			case failed <- struct{}{}:
 			default:
 			}
 		},
-		OnSkipped: nil,
-		OnLag:     nil,
-		Now:       nil,
+		OnSkipped:    nil,
+		OnLag:        nil,
+		OnLagEntries: nil,
+		Now:          nil,
 		Sinks: []audit.ShipSink{
 			{
 				Sink:     &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
@@ -558,6 +588,7 @@ func TestNewShipperRejectsBadSinks(t *testing.T) {
 				OnFailure:     nil,
 				OnSkipped:     nil,
 				OnLag:         nil,
+				OnLagEntries:  nil,
 				Now:           nil,
 				Sinks:         tc.sinks,
 				InstanceID:    "",
@@ -685,51 +716,77 @@ func hasAttr(r logsink.Record, key string, value any) bool {
 	return false
 }
 
-// memLeaser is an in-memory audit.SinkLeaser. It holds one lease per sink
-// with its holder and expiry.
+// memLease is the live claim of one sink in a memLeaser.
+type memLease struct {
+	operation durable.ID
+	owner     string
+	token     int64
+	expires   time.Time
+}
+
+// memLeaser is an in-memory audit.SinkLeaser with the claim rule: one live
+// claim per sink with its holder, a token that grows on each new claim and
+// an expiry. A renew by the holder keeps the token.
 type memLeaser struct {
-	mu      sync.Mutex
-	holders map[string]string
-	expires map[string]time.Time
+	mu     sync.Mutex
+	leases map[string]memLease
 }
 
 func newMemLeaser() *memLeaser {
-	return &memLeaser{mu: sync.Mutex{}, holders: map[string]string{}, expires: map[string]time.Time{}}
+	return &memLeaser{mu: sync.Mutex{}, leases: map[string]memLease{}}
 }
 
-func (l *memLeaser) AcquireSinkLease(_ context.Context, sink, holder string, ttl time.Duration) (bool, error) {
+func (l *memLeaser) AcquireSinkLease(
+	_ context.Context,
+	sink, holder string,
+	ttl time.Duration,
+) (durable.Claim, error) {
 	if sink == "" || holder == "" || ttl <= 0 {
-		return false, fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
+		return durable.Claim{}, fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
 	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := time.Now()
-	if h, ok := l.holders[sink]; ok && h != holder && now.Before(l.expires[sink]) {
-		return false, nil
+	operation := durable.ID("op-sink-" + sink)
+
+	if old, ok := l.leases[sink]; ok && old.owner != holder && now.Before(old.expires) {
+		return durable.Claim{}, durable.ErrNoWork
 	}
 
-	l.holders[sink] = holder
-	l.expires[sink] = now.Add(ttl)
+	token := int64(1)
+	if old, ok := l.leases[sink]; ok {
+		token = old.token
+		if old.owner != holder || !now.Before(old.expires) {
+			token = old.token + 1
+		}
+	}
 
-	return true, nil
+	l.leases[sink] = memLease{operation: operation, owner: holder, token: token, expires: now.Add(ttl)}
+
+	return durable.Claim{Operation: operation, Owner: holder, Token: token, ExpiresAt: now.Add(ttl)}, nil
 }
 
-func (l *memLeaser) ReleaseSinkLease(_ context.Context, sink, holder string) error {
-	if sink == "" || holder == "" {
-		return fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
-	}
-
+func (l *memLeaser) ReleaseSinkLease(_ context.Context, claim durable.Claim) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.holders[sink] == holder {
-		delete(l.holders, sink)
-		delete(l.expires, sink)
+	for sink, old := range l.leases {
+		if old.operation != claim.Operation {
+			continue
+		}
+
+		if old.token != claim.Token || time.Now().After(old.expires) {
+			return durable.ErrClaimLost
+		}
+
+		delete(l.leases, sink)
+
+		return nil
 	}
 
-	return nil
+	return durable.ErrClaimLost
 }
 
 func newLeasedShipper(t *testing.T, feed *memFeed, leases *memLeaser, holder string, sink logsink.Sink) *audit.Shipper {
@@ -743,6 +800,7 @@ func newLeasedShipper(t *testing.T, feed *memFeed, leases *memLeaser, holder str
 		OnFailure:     nil,
 		OnSkipped:     nil,
 		OnLag:         nil,
+		OnLagEntries:  nil,
 		Now:           nil,
 		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: 0}},
 		InstanceID:    holder,
@@ -770,6 +828,7 @@ func newLeasedShipperFull(t *testing.T, cfg leasedShipperConfig) *audit.Shipper 
 		OnFailure:     cfg.onFailure,
 		OnSkipped:     nil,
 		OnLag:         nil,
+		OnLagEntries:  nil,
 		Now:           nil,
 		Sinks:         []audit.ShipSink{{Sink: cfg.sink, Name: "siem", Kind: "test", Interval: cfg.interval}},
 		InstanceID:    cfg.holder,
@@ -794,7 +853,7 @@ type leasedShipperConfig struct {
 	renew     time.Duration
 	interval  time.Duration
 	logger    *slog.Logger
-	onFailure func(string)
+	onFailure func(string, string)
 }
 
 // failureCounter counts OnFailure calls across goroutines.
@@ -803,7 +862,7 @@ type failureCounter struct {
 	n  int
 }
 
-func (c *failureCounter) hook(string) {
+func (c *failureCounter) hook(string, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1057,7 +1116,11 @@ type loseOnceLeaser struct {
 	calls int
 }
 
-func (l *loseOnceLeaser) AcquireSinkLease(ctx context.Context, sink, holder string, ttl time.Duration) (bool, error) {
+func (l *loseOnceLeaser) AcquireSinkLease(
+	ctx context.Context,
+	sink, holder string,
+	ttl time.Duration,
+) (durable.Claim, error) {
 	l.mu.Lock()
 	l.calls++
 	n := l.calls
@@ -1067,11 +1130,11 @@ func (l *loseOnceLeaser) AcquireSinkLease(ctx context.Context, sink, holder stri
 		return l.inner.AcquireSinkLease(ctx, sink, holder, ttl)
 	}
 
-	return false, nil
+	return durable.Claim{}, durable.ErrNoWork
 }
 
-func (l *loseOnceLeaser) ReleaseSinkLease(ctx context.Context, sink, holder string) error {
-	return l.inner.ReleaseSinkLease(ctx, sink, holder)
+func (l *loseOnceLeaser) ReleaseSinkLease(ctx context.Context, claim durable.Claim) error {
+	return l.inner.ReleaseSinkLease(ctx, claim)
 }
 
 // acquires answers how many lease takes the leaser saw.
@@ -1198,6 +1261,7 @@ func TestALostRenewStopsTheRound(t *testing.T) {
 		OnFailure:     nil,
 		OnSkipped:     nil,
 		OnLag:         nil,
+		OnLagEntries:  nil,
 		Now:           nil,
 		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: 0}},
 		InstanceID:    "ins-holder-a",
@@ -1240,6 +1304,7 @@ func TestShipperReleasesItsLeaseOnShutdown(t *testing.T) {
 		OnFailure:     nil,
 		OnSkipped:     nil,
 		OnLag:         nil,
+		OnLagEntries:  nil,
 		Now:           nil,
 		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: time.Millisecond}},
 		InstanceID:    "ins-holder-a",
@@ -1275,13 +1340,13 @@ func TestShipperReleasesItsLeaseOnShutdown(t *testing.T) {
 	cancel()
 	<-done
 
-	held, err := leases.AcquireSinkLease(t.Context(), "siem", "ins-holder-b", 30*time.Second)
+	claim, err := leases.AcquireSinkLease(t.Context(), "siem", "ins-holder-b", 30*time.Second)
 	if err != nil {
 		t.Fatalf("acquire after shutdown: %v", err)
 	}
 
-	if !held {
-		t.Fatal("lease after shutdown: got false, want true")
+	if claim.Token == 0 || claim.Owner != "ins-holder-b" {
+		t.Fatalf("lease after shutdown: got %+v, want the claim of ins-holder-b", claim)
 	}
 }
 
@@ -1306,6 +1371,7 @@ func TestALostRenewBetweenScopesStopsTheRound(t *testing.T) {
 		OnFailure:     nil,
 		OnSkipped:     nil,
 		OnLag:         nil,
+		OnLagEntries:  nil,
 		Now:           nil,
 		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: 0}},
 		InstanceID:    "ins-holder-a",
@@ -1370,11 +1436,11 @@ func (l *blockingReleaseLeaser) AcquireSinkLease(
 	ctx context.Context,
 	sink, holder string,
 	ttl time.Duration,
-) (bool, error) {
+) (durable.Claim, error) {
 	return l.inner.AcquireSinkLease(ctx, sink, holder, ttl)
 }
 
-func (l *blockingReleaseLeaser) ReleaseSinkLease(ctx context.Context, _, _ string) error {
+func (l *blockingReleaseLeaser) ReleaseSinkLease(ctx context.Context, _ durable.Claim) error {
 	l.mu.Lock()
 	if dl, ok := ctx.Deadline(); ok {
 		l.remaining, l.seen = time.Until(dl), true
@@ -1852,6 +1918,7 @@ func TestNewShipperRejectsRenewIntervalNotShorterThanLeaseTTL(t *testing.T) {
 				OnFailure:     nil,
 				OnSkipped:     nil,
 				OnLag:         nil,
+				OnLagEntries:  nil,
 				Now:           nil,
 				Sinks:         []audit.ShipSink{shipSink("siem", sink)},
 				InstanceID:    "ins-test",
@@ -1866,6 +1933,249 @@ func TestNewShipperRejectsRenewIntervalNotShorterThanLeaseTTL(t *testing.T) {
 				}
 			} else if !errors.Is(err, audit.ErrInvalidLeaseTiming) {
 				t.Fatalf("new shipper: got %v, want ErrInvalidLeaseTiming", err)
+			}
+		})
+	}
+}
+
+// sizeSink refuses the records whose JSON line holds more than limit bytes,
+// with the positions of the refused records. It delivers the rest, so a
+// refused entry never blocks the entries after it.
+type sizeSink struct {
+	limit   int
+	batches [][]logsink.Record
+	mu      sync.Mutex
+}
+
+func (s *sizeSink) Write(_ context.Context, records []logsink.Record) error {
+	var (
+		kept    []logsink.Record
+		indexes []int
+	)
+
+	for i, r := range records {
+		line, err := logsink.MarshalJSON(r)
+		if err != nil {
+			return err
+		}
+
+		if len(line) > s.limit {
+			indexes = append(indexes, i)
+
+			continue
+		}
+
+		kept = append(kept, r)
+	}
+
+	s.mu.Lock()
+	s.batches = append(s.batches, kept)
+	s.mu.Unlock()
+
+	if len(indexes) > 0 {
+		return &logsink.SkipError{
+			Reason:  fmt.Sprintf("record above %d bytes", s.limit),
+			Skipped: len(indexes),
+			Indexes: indexes,
+		}
+	}
+
+	return nil
+}
+
+func (s *sizeSink) Close() error { return nil }
+
+// sequences answers the scope and sequence of every accepted record.
+func (s *sizeSink) sequences() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var out []string
+
+	for _, b := range s.batches {
+		for _, r := range b {
+			out = append(out, fmt.Sprint(r.Attrs[0].Value)+"/"+fmt.Sprint(r.Attrs[1].Value))
+		}
+	}
+
+	return out
+}
+
+// failure records one call of the failure hook: the sink name and the reason.
+type failure struct {
+	sink   string
+	reason string
+}
+
+// failureHook collects the calls of the failure hook across goroutines.
+type failureHook struct {
+	mu  sync.Mutex
+	got []failure
+}
+
+func (h *failureHook) hook(sink, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.got = append(h.got, failure{sink: sink, reason: reason})
+}
+
+func (h *failureHook) reasons() []failure {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return append([]failure(nil), h.got...)
+}
+
+// TestARefusedEntryCountsAFailureWithItsSequenceAndTheNextEntryIsDelivered
+// proves that an entry over the sink limit is not sent: the failure hook
+// runs once with the size reason, one error log line holds the scope and
+// sequence of the refused entry, the cursor moves past the batch, and the
+// next entry is delivered unchanged.
+func TestARefusedEntryCountsAFailureWithItsSequenceAndTheNextEntryIsDelivered(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 3})
+
+	feed.mu.Lock()
+	first := feed.entries["acme"]
+	if len(first) == 0 {
+		feed.mu.Unlock()
+		t.Fatal("feed holds no entry in acme")
+	}
+
+	first[0].UserAgent = strings.Repeat("u", 300)
+	feed.mu.Unlock()
+
+	sink := &sizeSink{limit: 600, batches: nil, mu: sync.Mutex{}}
+
+	var logs lockedBuffer
+
+	failures := &failureHook{mu: sync.Mutex{}, got: nil}
+
+	var shipped, skipped int
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:          feed,
+		Namespaces:    feed,
+		Logger:        slog.New(slog.NewJSONHandler(&logs, nil)),
+		OnShipped:     func(_ string, n int) { shipped += n },
+		OnFailure:     failures.hook,
+		OnSkipped:     func(_ string, n int) { skipped += n },
+		OnLag:         nil,
+		OnLagEntries:  nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{shipSink("siem", sink)},
+		InstanceID:    "",
+		Leases:        nil,
+		LeaseTTL:      0,
+		RenewInterval: 0,
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	if err := s.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("ship once: %v", err)
+	}
+
+	if got := sink.sequences(); fmt.Sprint(got) != "[acme/2 acme/3]" {
+		t.Fatalf("shipped %v, want [acme/2 acme/3]", got)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 3 {
+		t.Fatalf("cursor after a refusal: got %d, want 3", got)
+	}
+
+	if shipped != 2 || skipped != 1 {
+		t.Fatalf("counts: shipped %d, skipped %d, want 2 and 1", shipped, skipped)
+	}
+
+	if got := failures.reasons(); fmt.Sprint(got) != "[{siem size}]" {
+		t.Fatalf("failures: got %v, want [{siem size}]", got)
+	}
+
+	out := logs.String()
+	for _, want := range []string{
+		`"level":"ERROR"`,
+		`"msg":"audit sink refused entry that it cannot hold"`,
+		`"scope":"acme"`,
+		`"sequence":1`,
+		`"sink":"siem"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log lacks %s:\n%s", want, out)
+		}
+	}
+}
+
+// dialFailSink fails every write with a dial error, as a sink whose receiver
+// is down does on its first write.
+type dialFailSink struct{}
+
+func (dialFailSink) Write(context.Context, []logsink.Record) error {
+	//nolint:exhaustruct_v5 // The test needs only the dial operation.
+	return &net.OpError{
+		Op:  "dial",
+		Net: "tcp",
+		Err: errSinkDown,
+	}
+}
+
+func (dialFailSink) Close() error { return nil }
+
+// TestFailureReasons proves that each failed delivery counts with its
+// reason: size for a refused entry, unreachable for a failed dial, and write
+// for a failed batch write.
+func TestFailureReasons(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		sink   logsink.Sink
+		reason string
+	}{
+		{name: "failed write", sink: &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: true}, reason: "write"},
+		{name: "failed dial", sink: dialFailSink{}, reason: "unreachable"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			feed := newMemFeed(map[namespace.Name]int{"acme": 1})
+			failures := &failureHook{mu: sync.Mutex{}, got: nil}
+
+			s, err := audit.NewShipper(audit.ShipperConfig{
+				Feed:          feed,
+				Namespaces:    feed,
+				Logger:        nil,
+				OnShipped:     nil,
+				OnFailure:     failures.hook,
+				OnSkipped:     nil,
+				OnLag:         nil,
+				OnLagEntries:  nil,
+				Now:           nil,
+				Sinks:         []audit.ShipSink{shipSink("siem", tc.sink)},
+				InstanceID:    "",
+				Leases:        nil,
+				LeaseTTL:      0,
+				RenewInterval: 0,
+			})
+			if err != nil {
+				t.Fatalf("new shipper: %v", err)
+			}
+
+			if err := s.ShipOnce(t.Context()); err == nil {
+				t.Fatal("ship once to a failing sink: got nil, want an error")
+			}
+
+			if got := failures.reasons(); fmt.Sprint(got) != fmt.Sprint([]failure{{sink: "siem", reason: tc.reason}}) {
+				t.Fatalf("failures: got %v, want [{siem %s}]", got, tc.reason)
+			}
+
+			if got := feed.acmeCursor("siem"); got != 0 {
+				t.Fatalf("cursor after a failed write: got %d, want 0", got)
 			}
 		})
 	}
