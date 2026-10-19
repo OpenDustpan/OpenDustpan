@@ -199,6 +199,7 @@ func (concurrentAuthenticator) AuthenticateToken(
 	switch raw {
 	case "test-token-a":
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "alice",
 			DisplayName:    "Alice",
 			Admin:          false,
@@ -207,6 +208,7 @@ func (concurrentAuthenticator) AuthenticateToken(
 		}, nil
 	case "test-token-b":
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "bob",
 			DisplayName:    "Bob",
 			Admin:          false,

@@ -155,6 +155,8 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:           nil,
+		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
@@ -209,6 +211,8 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:    nil,
+		Now:           nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
@@ -257,6 +261,8 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -330,6 +336,8 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:           nil,
+		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
@@ -386,6 +394,8 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 	t.Helper()
 
 	cfg := apiserver.Config{
+		TempAdmins:    nil,
+		Now:           nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),

@@ -93,13 +93,23 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 
 	authn := tokenMapAuthenticator{tokens: map[string]identity.Principal{
 		deletedAdminToken: {
-			Subject: "operator", DisplayName: "operator", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Subject:                "operator",
+			DisplayName:            "operator",
+			Admin:                  true,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
 		},
 		deletedViewerToken: {
-			Subject: "nina", DisplayName: "nina", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Subject:                "nina", DisplayName: "nina", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		},
 		deletedReaderToken: {
-			Subject: "rita", DisplayName: "rita", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
+			Subject:                "rita", DisplayName: "rita", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		},
 	}}
 

@@ -456,6 +456,16 @@ type StateVersion struct {
 	UnlockedWrite     bool
 }
 
+type TempAdmin struct {
+	PrincipalID string
+	Subject     string
+	ExpiresAtMs int64
+	CreatedAtMs int64
+	CreatedBy   string
+	Reason      string
+	EndedAtMs   pgtype.Int8
+}
+
 type Update struct {
 	ID                    string
 	Kind                  string

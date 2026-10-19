@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -290,6 +291,14 @@ type userResponse struct {
 	GithubLogin   string                `json:"githubLogin"`
 	Name          string                `json:"name"`
 	Organizations []organizationSummary `json:"organizations"`
+	// TemporaryAdministrator is true for a temporary administrator that
+	// still works, so the console shows a banner for it. The Pulumi CLI
+	// ignores it.
+	TemporaryAdministrator bool `json:"temporaryAdministrator"`
+	// ExpiresAt is the fixed end of a working temporary administrator in
+	// UTC in RFC 3339 with nanoseconds, for the banner. It stays empty for
+	// every other caller. The Pulumi CLI ignores it.
+	ExpiresAt *string `json:"expiresAt"`
 }
 
 // currentUser answers GET /api/user. Organizations are the namespaces the
@@ -305,10 +314,24 @@ func (h *Handler) currentUser(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	h.writeJSON(r.Context(), w, http.StatusOK, userResponse{
-		GithubLogin:   p.Subject,
-		Name:          p.DisplayName,
-		Organizations: namespaces,
+		GithubLogin:            p.Subject,
+		Name:                   p.DisplayName,
+		Organizations:          namespaces,
+		TemporaryAdministrator: p.TemporaryAdministrator,
+		ExpiresAt:              tempAdminExpiry(p),
 	})
+}
+
+// tempAdminExpiry answers the fixed end of a working temporary
+// administrator for the wire, or nil for every other caller.
+func tempAdminExpiry(p identity.Principal) *string {
+	if !p.TemporaryAdministrator || p.TemporaryExpiresAt.IsZero() {
+		return nil
+	}
+
+	at := p.TemporaryExpiresAt.UTC().Format(time.RFC3339Nano)
+
+	return &at
 }
 
 // defaultOrganizationResponse is the server opinion the CLI reads for the

@@ -21,6 +21,7 @@ func sweepChainServer(
 	t.Helper()
 
 	return &Server{
+		tempAdmins:       nil,
 		handler:          nil,
 		logger:           slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		listenAddr:       "",
@@ -194,7 +195,8 @@ func TestSweepOnceSkipsWhileChainChangeWaits(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Authorizer: nil, Logger: nil, Now: nil,
+		TempAdmins: nil,
+		Store:      st, Principals: st, Freshness: nil, Authorizer: nil, Logger: nil, Now: nil,
 		NewID: nil,
 	})
 	if err != nil {
