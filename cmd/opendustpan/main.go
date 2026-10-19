@@ -1174,6 +1174,7 @@ func (f *serveFlags) serverOptions(
 	}, append(signIn, checkpoints...)...)
 
 	opts = append(opts, durableStoreOption(st)...)
+	opts = append(opts, profileStoreOption(st)...)
 
 	return opts, nil
 }
@@ -1186,6 +1187,19 @@ func durableStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
+	default:
+		return nil
+	}
+}
+
+// profileStoreOption returns the profile store option for st, or nil when st
+// keeps no profiles.
+func profileStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
 	default:
 		return nil
 	}

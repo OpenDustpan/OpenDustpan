@@ -16,6 +16,7 @@ import (
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
+	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
@@ -31,6 +32,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
+	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -73,6 +75,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	inventory := coverageInventoryRoutes(tb, namespaces)
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
+	profileRoutes := coverageProfileRoutes(tb)
 	server := coverageServerRoutes(tb)
 
 	out := make(
@@ -91,6 +94,8 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		)+len(
 			contextRoutes,
 		)+len(
+			profileRoutes,
+		)+len(
 			server,
 		)+probeRouteCount,
 	)
@@ -100,6 +105,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	out = append(out, inventory...)
 	out = append(out, auditRoutes...)
 	out = append(out, contextRoutes...)
+	out = append(out, profileRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -698,6 +704,45 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 	})
 	if err != nil {
 		tb.Fatalf("context handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageProfileRoutes returns the routes of the profile API. The stores
+// are empty shells: they exist only to build a Handler for its route table.
+func coverageProfileRoutes(tb testing.TB) []RouteRef {
+	tb.Helper()
+
+	svc, err := profile.NewService(profile.Config{
+		Store:      struct{ profile.Store }{nil},
+		Namespaces: coverageNamespaceStore{},
+		Sealer:     struct{ profile.Sealer }{nil},
+		Audit:      struct{ audit.Store }{nil},
+		Authorizer: coverageAuthorizer{},
+		Now:        nil,
+	})
+	if err != nil {
+		tb.Fatalf("profile service: %v", err)
+	}
+
+	handler, err := profileapi.NewHandler(profileapi.Config{
+		Profiles:      svc,
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
+		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
+	})
+	if err != nil {
+		tb.Fatalf("profile handler: %v", err)
 	}
 
 	routes := handler.Routes()

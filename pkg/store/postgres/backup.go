@@ -100,6 +100,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
 	tables = append(tables, pgCopyImportTables()...)
+	tables = append(tables, pgCopyProfileTables()...)
 
 	return tables
 }

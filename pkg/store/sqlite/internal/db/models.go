@@ -419,6 +419,28 @@ type PrincipalGroup struct {
 	DeletedAtMs sql.NullInt64
 }
 
+type Profile struct {
+	NamespaceID string
+	ID          string
+	Name        string
+	Latest      int64
+	CreatedBy   string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	DeletedAtMs int64
+}
+
+type ProfileRevision struct {
+	NamespaceID    string
+	ProfileID      string
+	Number         int64
+	Document       string
+	DocumentSha256 string
+	Author         string
+	CreatedAtMs    int64
+	Reason         string
+}
+
 type Restore struct {
 	ID          string
 	State       string
