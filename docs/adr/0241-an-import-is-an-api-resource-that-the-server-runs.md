@@ -157,15 +157,20 @@ Facts:
    code `import.source-address-refused` and names the allowlist setting.
 
    - **The address holds no credential.** The address is an absolute URL
-     with a host. It has no userinfo, no query and no fragment. Else the
-     dry run fails with `import.address-invalid`
-     (`unitimport.CheckAddress`). The source of a move check (ADR 244
-     decision 2) follows the same rule.
+     with a host. Its scheme is `https`, or `s3` for the `s3` kind. It has
+     no userinfo, no query and no fragment. Else the dry run fails with
+     `import.address-invalid` (`unitimport.CheckAddress`). The source of a
+     move check (ADR 244 decision 2) follows the same rule.
    - **The address matches the login block.** A login block that an import
-     uses declares the host of its source. The import refuses an address
-     with another host with `import.source-address-mismatch`. So a
-     principal with `import:run` cannot send the credential of a profile to
-     a host that they pick.
+     uses names the host of its source in the new block key `sourceHost`
+     (ADR 201 decision 7). A change of `sourceHost` is a routing change (ADR
+     201 decision 7, ADR 202 decision 2) and needs `profile:open` as well as
+     `profile:write`. A login block with no `sourceHost` cannot serve an
+     import (`import.source-address-mismatch`). For the `s3` kind,
+     `sourceHost` is the S3 endpoint host. The import refuses an address
+     with another host with `import.source-address-mismatch`. So a principal
+     with `import:run` cannot send the credential of a profile to a host
+     that they pick.
    - **Each request, also a URL that the source answers.** A URL in an
      answer of the source (for example a download URL of a state version
      on another host, or the link to the next page) is a new request. It
@@ -185,10 +190,11 @@ Facts:
      egress allowlist covers the whole installation. So on an installation
      with more than one tenant (ADR 215, ADR 220), an entry that one
      feature or one tenant needs is also a source address that each import
-     can reach. On such an installation, an import refuses each CIDR entry
-     of the allowlist, unless the operator turns on CIDR entries for
-     imports with `--import-allow-cidr-entries`. A refused address fails
-     with `import.source-address-refused`.
+     can reach. On such an installation, an import refuses each allowlist
+     entry (a host name, a `*.` suffix or a CIDR range), and so reaches
+     public addresses only, unless the operator turns on allowlist entries
+     for imports with `--import-allow-allowlist-entries`. A refused address
+     fails with `import.source-address-refused`.
 
      Benchmark: GitLab has a setting that refuses requests to the local
      network from webhooks and integrations, and an administrator can
@@ -225,19 +231,20 @@ Facts:
    with the failed ones listed, not as one failure.
 8. **A dry run comes first (product manager).** A create of an import is
    the dry run. The server reads the source and writes the plan of the
-   import: each unit with its target name, its count of versions, its
-   bytes, its secrets provider, and the three classes of ADR 242
-   decision 1, and each finding of the move check that the server can
-   give before the move (ADR 244 decision 6). The plan also gives the
-   capabilities of the source (ADR 243 decision 3) and each request that a
-   person cannot see in the source. The dry run sends only read requests
-   to the source, and one sample decrypt for each unit under the service
-   secrets provider (ADR 242 decision 8). A sample decrypt is a POST that
-   changes nothing in the source. A source that refuses it fails that unit
-   in the plan with `import.source-decrypt-refused`, before the run. The
-   dry run writes nothing to a unit. The import is then `planned`. A `run` starts the move. A `run` on an import whose plan is
-   older than 24 hours answers 409 with the error code `import.plan-stale`.
-   A new dry run on the same import refreshes the plan.
+   import: each unit with its target name, its count of versions, its bytes,
+   its encryption, and the three classes of ADR 242 decision 1, and each
+   finding of the move check that the server can give before the move (ADR
+   244 decision 6). The plan also gives the capabilities of the source (ADR
+   243 decision 3) and each request that a person cannot see in the source.
+   The dry run sends only read requests to the source, and one sample
+   decrypt for each unit under the service secrets provider (ADR 242
+   decision 8). A sample decrypt is a POST that changes nothing in the
+   source. A source that refuses it fails that unit in the plan with
+   `import.source-decrypt-refused`, before the run. The dry run writes
+   nothing to a unit. The import is then `planned`. A `run` starts the move.
+   A `run` on an import whose plan is older than 24 hours answers 409 with
+   the error code `import.plan-stale`. A new dry run on the same import
+   refreshes the plan.
 
    Benchmark: `terraform plan` and `pulumi preview` before a change.
    `tfmigrate plan` before `tfmigrate apply`. AWS Database Migration
@@ -345,9 +352,13 @@ Facts:
     only copies, and the import did not change the source, so the purge
     loses no data.
     So a new import into the same names does not fail with
-    `import.target-exists`. The cancel frees the quota reservation
-    (decision 24). It never changes the source. A `cancel` after a release
-    answers 409 with the error code `import.released`.
+    `import.target-exists`. The cancel sets the import to `canceled` and
+    deletes its manual locks in one fenced transaction. A durable operation
+    then purges the units. A `Tool.Write` in flight then fails with
+    `ErrHoldRemoved`, and the step ends with no transition of a canceled
+    unit. The cancel frees the quota reservations (decision 24). It never
+    changes the source. A `cancel` after a release answers 409 with the
+    error code `import.released`.
 
     Benchmark: a stopped task of AWS Database Migration Service changes
     nothing in the source, and a new task can load into empty tables
@@ -457,10 +468,10 @@ These decisions close RFC 81 questions 1, 2 and 7.
     kind, the source host, the count of versions, the bytes and the target
     unit. The `import` object is a new minor version of the fact schema of
     `state.write` (ADR 226 decision 2). A `deny` makes that import unit
-    `skipped` with `import.denied`. A requirement holds the unit in
-    `planned` until a person meets it. The 24-hour rule of
-    `import.plan-stale` (decision 8) does not apply while a unit waits on a
-    requirement. A `resume` while `holding` that moves new versions
+    `skipped` with `import.denied`. An approval outcome refuses the unit as
+    at every `state.write` (ADR 224 decision 16): the import unit is
+    `skipped` with `import.denied`, and the message names the gate and the
+    decision record. A `resume` while `holding` that moves new versions
     evaluates the gates again for each unit that gets new versions. This
     extends the table of ADR 224 decision 16.
 
@@ -472,8 +483,9 @@ These decisions close RFC 81 questions 1, 2 and 7.
     (ADR 115). The `run` reserves them before the first write, and fails
     with the quota error of ADR 115 when a quota is short. A `resume` while
     `holding` reserves again for the new versions. The upload source
-    reserves at each upload, because its dry run has no bytes yet. A
-    `cancel` frees the reservation, and a `release` settles it.
+    reserves at each upload, because its dry run has no bytes yet. The
+    import keeps the IDs of its reservations as a list. A `cancel` frees
+    each, and a `release` settles each.
 
     Benchmark: the GitLab project import refuses an export file above the
     maximum import size before the import starts. `tfmigrate plan` shows the
@@ -518,6 +530,7 @@ This ADR also extends:
 - **ADR 224, decision 16:** the table gets the `operation.kind` value
   `unit-import` (decision 23).
 - **ADR 145, decision 5:** the catalog gets the types of decision 19.
+- **ADR 201, decision 7:** the block key `sourceHost`.
 
 ## Consequences
 
@@ -541,5 +554,8 @@ This ADR also extends:
   credential. A profile with the issuer of the namespace avoids this.
 - `notify.Types` gets the types of decision 19, so the reference page of
   the catalog changes with them (ADR 145 decision 5).
-- The fact schema of `state.write` gets a new minor version with the
-  `import` object (decision 23).
+- `pkg/gate` gets `GroupImport` in `GroupsOf(PointStateWrite)` with
+  `available` (false for every other operation kind, ADR 226 decision 3),
+  the field `Facts.Import` (`available`, `sourceKind`, `sourceHost`,
+  `versions`, `bytes`, `importID`), `OperationUnitImport`, and a Producer
+  with its conformance case. The schema becomes `state.write/1.1`.

@@ -1,6 +1,6 @@
 # 201. The profile document, imports and expressions
 
-Status: accepted · 2026-10-18 · part of ADR 200. Decisions 4, 8 and 11 superseded in part by ADRs 224 and 228. Decision 5 superseded in part by ADR 226
+Status: accepted · 2026-10-18 · part of ADR 200. Decisions 4, 8 and 11 superseded in part by ADRs 224 and 228. Decision 5 superseded in part by ADR 226. Decision 7 extended by ADR 241
 
 ## Context
 

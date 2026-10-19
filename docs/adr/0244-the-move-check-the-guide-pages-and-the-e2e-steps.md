@@ -228,7 +228,9 @@ Facts:
 14. **The e2e steps (ADR 12).** The e2e suite gets these steps, on Linux,
     for each Pulumi CLI and OpenTofu version of its matrix, on SQLite and on
     PostgreSQL. A second OpenDustpan server S is the source, and server D is
-    the target, as in ADR 29:
+    the target, as in ADR 29. Server S serves TLS with a test CA in the
+    trust store of server D, because an import accepts only `https` and `s3`
+    addresses:
     1. **TFE-compatible API.** Real `tofu apply` writes three state versions
        to S. An import into D keeps the serial, the lineage, the MD5 and the
        time of each one. Real `tofu plan -json -lock=false` against D sends
@@ -274,7 +276,9 @@ Facts:
     tested Pulumi Cloud, HCP Terraform, Terraform Enterprise or Amazon S3.
     It says that a source that redirects a download to another host can
     fail (ADR 243 decision 11), and that an installation behind an outbound
-    proxy imports through the upload source (ADR 241 decision 6).
+    proxy imports through the upload source (ADR 241 decision 6). The
+    default NetworkPolicy of the Helm chart (ADR 246 decision 23) allows TCP
+    443 only. A source on another port needs an `extraEgress` rule.
 
 ### Source users and teams
 

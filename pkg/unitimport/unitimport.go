@@ -169,6 +169,8 @@ func CheckAddress(raw string) error {
 	switch {
 	case u.Scheme == "" || u.Host == "" || u.Opaque != "":
 		return fmt.Errorf("%w: the address needs a scheme and a host", ErrAddressInvalid)
+	case u.Scheme != "https" && u.Scheme != "s3":
+		return fmt.Errorf("%w: the scheme must be https", ErrAddressInvalid)
 	case u.User != nil:
 		return fmt.Errorf("%w: the address holds userinfo", ErrAddressInvalid)
 	case u.RawQuery != "" || u.ForceQuery:
@@ -424,8 +426,9 @@ const (
 
 // Plan is the import plan that a dry run writes. Requests lists each
 // request to the source that a person cannot see in the source, for
-// example the sample decrypt of each unit or a lock. Reservation is the ID
-// of the quota reservation, empty until a run reserves.
+// example the sample decrypt of each unit or a lock. Reservations are the
+// IDs of the quota reservations of the import; a cancel frees each, a
+// release settles each. The list is empty until a run reserves.
 type Plan struct {
 	At           time.Time
 	Units        int
@@ -434,7 +437,7 @@ type Plan struct {
 	Capabilities []Capability
 	Findings     []Finding
 	Requests     []string
-	Reservation  string
+	Reservations []string
 }
 
 // Import is one import of a namespace. EndedAt is the time of its release
@@ -458,21 +461,24 @@ type Import struct {
 }
 
 // ImportUnit is one unit that an import moves. Versions, Bytes,
-// SecretsProvider and Findings come from the plan. Committed counts the
+// Encryption and Findings come from the plan. Committed counts the
 // ledger rows. A failed unit with committed versions is partial.
 type ImportUnit struct {
-	ID              string
-	ImportID        string
-	Source          SourceUnit
-	TargetName      string
-	Target          history.Unit
-	State           UnitState
-	ErrorCode       string
-	Versions        int
-	Committed       int
-	Bytes           int64
-	SecretsProvider string
-	Findings        []Finding
+	ID         string
+	ImportID   string
+	Source     SourceUnit
+	TargetName string
+	Target     history.Unit
+	State      UnitState
+	ErrorCode  string
+	Versions   int
+	Committed  int
+	Bytes      int64
+	// Encryption is how the tool protects the secrets of the unit, as the
+	// Tool port names it: for example the Pulumi secrets provider, or
+	// "client" for client-encrypted OpenTofu state.
+	Encryption string
+	Findings   []Finding
 }
 
 // Filter selects imports of a namespace.

@@ -121,7 +121,10 @@ Facts:
      that does not answer), the cancel of a context, a body above the size
      limit, and a canary credential that must not reach an error text or a
      log line. When the adapter implements `Decrypter` or `Locker`, the
-     suite checks them too.
+     suite checks them too. It also checks that a URL in an answer of the
+     source that names another origin gets no credential, and that a version
+     that stops sending bytes fails with `ErrSourceUnreachable` at the
+     idle-read timeout of decision 11.
    - **The tool suite** checks `Create` with the source metadata, the
      target of the import unit and the inventory publish with the import ID
      in its transaction, and a second `Create` after a crash that answers
@@ -135,10 +138,6 @@ Facts:
      for `Store` and `UnitStore`. It checks `SetPlan`, `SetCounts`, and
      `Purge`: after a purge, `Get` returns `ErrPurged`, and the ledger rows
      and the import ID of each history item stay.
-   - **The source suite** also checks that a URL in an answer of the source
-     that names another origin gets no credential, and that a version that
-     stops sending bytes fails with `ErrSourceUnreachable` at the idle-read
-     timeout of decision 11.
 
    The suites land before the first adapter. The port fields and methods
    that `pkg/unitimport` has now get their tests in the suites before an
@@ -173,10 +172,13 @@ Facts:
       of an organization, the update list and each checkpoint version. It
       works with Pulumi Cloud and OpenDustpan as sources. Its capability
       is `Decrypter`.
-   3. `s3`: an S3-compatible bucket. It reads OpenTofu state keys with
-      their object versions, and the layout of a Pulumi DIY backend (ADR
-      242 decisions 6 and 13). It signs with the Signature Version 4 code
-      of `pkg/blob/s3`, which moves to a shared internal package.
+   3. `s3`: an S3-compatible bucket. The address is `s3://<bucket>/<prefix>`
+      with the endpoint in the option `endpoint` (an https URL, checked by
+      CheckAddress and by the `sourceHost` of the login block), or
+      `https://<endpoint>/<bucket>/<prefix>`. It reads OpenTofu state keys
+      with their object versions, and the layout of a Pulumi DIY backend
+      (ADR 242 decisions 6 and 13). It signs with the Signature Version 4
+      code of `pkg/blob/s3`, which moves to a shared internal package.
    4. `opentofu-http`: the OpenTofu `http` backend, the current state only.
 
    The TFE-compatible adapter comes first, because ADR 29 already has its

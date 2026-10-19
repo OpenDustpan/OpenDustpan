@@ -28,9 +28,9 @@ write hundreds of versions.
 
 - **A. `state.write` once for each import unit,** before its first write,
   with the facts of the import (the source kind, the count of versions, the
-  bytes, the target unit). A `deny` skips that unit. A requirement holds the
-  unit in `planned` until it is met. The fact schema of `state.write` gets
-  an optional `import` object (ADR 226).
+  bytes, the target unit). A `deny` skips that unit. An approval outcome
+  refuses the unit as at every `state.write`. The fact schema of
+  `state.write` gets an optional `import` object (ADR 226).
 - **B. `state.write` for each version.** The same rule as a CLI write. It
   evaluates the gates hundreds of times for one decision, and an approval
   for each version makes no sense.
@@ -162,10 +162,9 @@ for each decision in the ADR.
 
 1. **A.** `state.write` once for each import unit, with the
    `operation.kind` value `unit-import`. A `resume` while `holding` that
-   moves new versions evaluates the gates again. The plan-stale rule does
-   not apply while a unit waits on a requirement. The `import` fact object
-   is a new minor version of the fact schema of `state.write` (ADR 241
-   decision 23).
+   moves new versions evaluates the gates again. An approval outcome refuses
+   the unit (ADR 241 decision 23). The `import` fact object is a new minor
+   version of the fact schema of `state.write` (ADR 241 decision 23).
 2. **A.** The dry run reports, and the run reserves. A `resume` while
    `holding` reserves again, the upload source reserves at each upload, a
    cancel frees and a release settles (ADR 241 decision 24).
