@@ -302,6 +302,8 @@ func (fakeEvents) ListEvents(context.Context, stack.Ref, stack.UpdateID, int64, 
 // fakeWorkspaces holds workspaces by ID.
 type fakeWorkspaces struct {
 	workspaces map[workspace.ID]workspace.Workspace
+	// released holds the audit entry of each release of a lock.
+	released []audit.Entry
 }
 
 func (*fakeWorkspaces) CreateWorkspace(context.Context, workspace.Workspace, namespace.Fence) error {
@@ -391,6 +393,7 @@ func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, 
 
 func (fakeStates) FenceAndUnlock(
 	context.Context, workspace.Workspace, workspace.StateVersion, workspace.StateVersionID, namespace.Fence,
+	audit.Entry,
 ) error {
 	return nil
 }
@@ -499,7 +502,7 @@ func newFixtureWith(
 	f := &fixture{
 		state:        &fakeStateStore{state: maintenance.StateNormal, onSet: nil, onSetIf: nil},
 		updates:      &fakeUpdates{updates: map[stack.UpdateID]stack.Update{}},
-		workspaces:   &fakeWorkspaces{workspaces: map[workspace.ID]workspace.Workspace{}},
+		workspaces:   &fakeWorkspaces{workspaces: map[workspace.ID]workspace.Workspace{}, released: nil},
 		stacks:       &fakeStacks{stacks: nil},
 		namespaces:   namespaces,
 		stackSvc:     nil,
@@ -999,6 +1002,22 @@ func TestEnterForceReleasesLockedWorkspace(t *testing.T) {
 	if w := f.workspaces.workspaces["ws-1"]; w.Lock.Holder != "" {
 		t.Fatalf("workspace lock holder = %q, want empty after force enter", w.Lock.Holder)
 	}
+
+	// The release is a force-unlock like any other: it writes one change entry
+	// that names the unit, the principal and the reason.
+	if len(f.workspaces.released) != 1 {
+		t.Fatalf("release entries = %+v, want one", f.workspaces.released)
+	}
+
+	got := f.workspaces.released[0]
+	if got.Kind != audit.KindChange || got.Subject != "maintenance" || got.Object != "opentofu:acme/network" ||
+		got.Action != "unit:write-forced" || got.Reason == "" {
+		t.Fatalf("release entry = %+v, want a change by maintenance on the unit with a reason", got)
+	}
+
+	if err := got.Validate(); err != nil {
+		t.Fatalf("release entry fails validation: %v", err)
+	}
 }
 
 // errTestUnavailable reports a failed state read or write in tests.
@@ -1477,6 +1496,17 @@ func (fakeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Ov
 }
 
 // ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
-func (f *fakeWorkspaces) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (f *fakeWorkspaces) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
+) error {
+	return f.SaveWorkspace(ctx, w, fence)
+}
+
+// SaveReleased saves like SaveWorkspace and keeps the audit entry of the release.
+func (f *fakeWorkspaces) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	f.released = append(f.released, e)
+
 	return f.SaveWorkspace(ctx, w, fence)
 }

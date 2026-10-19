@@ -422,6 +422,7 @@ func auditEntry(
 		Changes:      nil,
 		ObjectID:     "",
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

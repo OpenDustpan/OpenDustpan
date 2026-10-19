@@ -887,6 +887,7 @@ func subjectRevokeEntry(e audit.Entry, g access.Grant, endedBy string) audit.Ent
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

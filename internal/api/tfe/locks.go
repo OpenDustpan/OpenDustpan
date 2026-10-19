@@ -1,6 +1,7 @@
 package tfe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -155,17 +160,114 @@ func (h *Handler) unlockWorkspace(
 	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
 }
 
+// forceUnlockAttributes holds the attributes of a force-unlock body. Every
+// attribute is optional.
+type forceUnlockAttributes struct {
+	Reason     string `json:"reason"`
+	LockID     string `json:"lock-id"`     //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockHolder string `json:"lock-holder"` //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// forceUnlockData holds the data object of a force-unlock body.
+type forceUnlockData struct {
+	Attributes forceUnlockAttributes `json:"attributes"`
+}
+
+// forceUnlockBody is the body of a force-unlock request. `tofu force-unlock`
+// sends none. Every field other than data.attributes is ignored.
+type forceUnlockBody struct {
+	Data forceUnlockData `json:"data"`
+}
+
+// parseForceUnlock reads the attributes of a force-unlock body. An empty body
+// is valid. A body that is not valid JSON, a lock holder without a lock ID,
+// and a reason that audit.ValidateReason refuses fail the request, so a
+// check that the caller asked for never passes by silence.
+func parseForceUnlock(body []byte) (forceUnlockAttributes, error) {
+	var none forceUnlockAttributes
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return none, nil
+	}
+
+	var req forceUnlockBody
+	if err := json.Unmarshal(body, &req); err != nil {
+		return none, errInvalidBody
+	}
+
+	attrs := req.Data.Attributes
+	if attrs.LockHolder != "" && attrs.LockID == "" {
+		return none, fmt.Errorf("%w: lock-holder needs lock-id", errInvalidBody)
+	}
+
+	if err := audit.ValidateReason(attrs.Reason); err != nil {
+		return none, err
+	}
+
+	return attrs, nil
+}
+
+// forceUnlockEntry returns the audit entry of a force-unlock from the request
+// fields. The workspace service sets the rest: the time, the namespace, the
+// subject, the unit ID, the changes and the new state version.
+func forceUnlockEntry(r *http.Request, p identity.Principal, obj identity.Object, reason string) audit.Entry {
+	return audit.Entry{
+		At:           time.Now().UTC(),
+		Namespace:    obj.Namespace(),
+		Subject:      p.Subject,
+		IDPSubject:   "",
+		TokenID:      p.TokenID,
+		Action:       string(identity.ActionUnitWriteForced),
+		Object:       obj.String(),
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     clientip.String(r),
+		UserAgent:    truncateUserAgent(r.UserAgent()),
+		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    requestid.FromContext(r.Context()),
+		ObjectID:     obj.UnitID(),
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
+		Reason:       reason,
+	}
+}
+
 // forceUnlockWorkspace serves POST
 // /api/v2/workspaces/{id}/actions/force-unlock. It releases the lock whoever
-// holds it. A force-unlock of an unlocked workspace answers 409. A success
-// writes one info log line with the action, the unit, the principal and the
-// released holder, and never with the request path or query (ADR 28 decision
-// 10, ADR 32 decision 7). The handler owns the logger through its Config.
+// holds it. The body is optional: `tofu force-unlock` sends none. A body can
+// hold data.attributes.reason, which the audit entry of the release keeps,
+// and data.attributes.lock-id and lock-holder, which name the lock that the
+// caller saw. A lock that differs answers 409 and changes nothing. A
+// force-unlock of an unlocked workspace answers 409. A success writes one
+// audit entry of the kind change in the transaction of the release, and one
+// info log line with the action, the unit, the principal and the released
+// holder, and never with the request path or query. The handler owns the
+// logger through its Config.
 func (h *Handler) forceUnlockWorkspace(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 	id := workspace.ID(r.PathValue("id"))
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		h.writeError(ctx, w, errInvalidBody)
+
+		return
+	}
+
+	attrs, err := parseForceUnlock(body)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
 
 	holder := h.lockHolder(ctx, id)
 
@@ -182,7 +284,11 @@ func (h *Handler) forceUnlockWorkspace(
 		return h.appendOverrideAudit(r, p, obj, identity.ActionUnitWriteForced, "")
 	}
 
-	unlocked, _, err := h.workspaces.ForceUnlock(ctx, id, p.Subject, allow, record)
+	expect := workspace.Lock{LockedAt: time.Time{}, ID: attrs.LockID, Holder: attrs.LockHolder, Reason: ""}
+
+	unlocked, _, err := h.workspaces.ForceUnlockLock(
+		ctx, id, expect, p.Subject, allow, record, forceUnlockEntry(r, p, obj, attrs.Reason),
+	)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

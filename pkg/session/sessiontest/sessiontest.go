@@ -131,6 +131,7 @@ func entry(id string, when time.Time) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

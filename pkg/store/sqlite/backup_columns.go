@@ -347,6 +347,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"changes",
 				"object_id",
 				"fence_version",
+				"reason",
 			},
 		},
 	}

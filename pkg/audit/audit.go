@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -96,6 +98,9 @@ const (
 // HTTP adapter truncates longer values before it appends.
 const MaxUserAgentLen = 512
 
+// MaxReasonLen caps the reason of an entry, in Unicode code points.
+const MaxReasonLen = 500
+
 // DefaultPageSize is the page size of a list that names none.
 const DefaultPageSize = 50
 
@@ -116,7 +121,30 @@ var (
 	ErrNotFound = errors.New("audit namespace not found")
 	// ErrEntryNotFound reports that a scope holds no entry at a sequence.
 	ErrEntryNotFound = errors.New("audit entry not found")
+	// ErrInvalidReason reports a reason that is longer than MaxReasonLen code
+	// points, that is not valid UTF-8, or that holds a control character.
+	ErrInvalidReason = errors.New("invalid reason")
 )
+
+// ValidateReason reports whether reason can be the reason of an entry. An
+// empty reason is valid. It returns ErrInvalidReason for a reason with more
+// than MaxReasonLen Unicode code points, for bytes that are not valid UTF-8,
+// and for a control character, which includes a line break.
+func ValidateReason(reason string) error {
+	if !utf8.ValidString(reason) {
+		return fmt.Errorf("%w: not valid UTF-8", ErrInvalidReason)
+	}
+
+	if utf8.RuneCountInString(reason) > MaxReasonLen {
+		return fmt.Errorf("%w: longer than %d characters", ErrInvalidReason, MaxReasonLen)
+	}
+
+	if strings.ContainsFunc(reason, unicode.IsControl) {
+		return fmt.Errorf("%w: holds a control character", ErrInvalidReason)
+	}
+
+	return nil
+}
 
 // Entry is one append-only record of an action in a namespace. Namespace and
 // Sequence order the entries of one namespace: the first entry of a
@@ -144,7 +172,10 @@ var (
 // FenceVersion is the failover version of the namespace when the store
 // appended the entry, and 0 in ServerScope. The store sets it in the
 // transaction of the append, and the hash covers it, so a verifier can see
-// where a forced failover forked the chain of a namespace.
+// where a forced failover forked the chain of a namespace. Reason is the
+// free text that a person gave for the action, for example for a force-unlock,
+// at most MaxReasonLen Unicode code points with no control characters; it
+// stays empty when the action had none.
 type Entry struct {
 	At           time.Time
 	Namespace    namespace.Name
@@ -168,6 +199,7 @@ type Entry struct {
 	Hash         string
 	Sequence     int64
 	FenceVersion int64
+	Reason       string
 }
 
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
@@ -213,6 +245,10 @@ func (e Entry) validateWhat() error {
 	case len(e.UserAgent) > MaxUserAgentLen:
 		return fmt.Errorf("%w: user agent longer than %d bytes", ErrInvalidEntry, MaxUserAgentLen)
 	default:
+		if err := ValidateReason(e.Reason); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidEntry, err)
+		}
+
 		return nil
 	}
 }
@@ -273,7 +309,7 @@ const hashNoCount = '-'
 // token ID, action, object, version, value path, time (Unix milliseconds),
 // source IP, user agent, channel, kind, outcome, request ID, previous hash,
 // value count, object ID, changes (the canonical JSON of EncodeChanges, empty
-// when e has no changes) and fence version. Numeric fields use decimal text.
+// when e has no changes), fence version and reason. Numeric fields use decimal text.
 // A value count that is not set writes one "-" in place of the field, so no
 // count and the count 0 ("1:0") differ. No field is optional: a field that e
 // does not set writes "0:". The length prefix makes the encoding injective:
@@ -331,6 +367,7 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 	write(e.ObjectID)
 	write(changesText)
 	write(strconv.FormatInt(e.FenceVersion, 10))
+	write(e.Reason)
 
 	sum := sha256.Sum256([]byte(sb.String()))
 

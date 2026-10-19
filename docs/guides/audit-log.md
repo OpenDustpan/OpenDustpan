@@ -71,6 +71,9 @@ An entry holds these fields:
   change holds `key`, `new`, and when they apply, `old`, `layer` and
   `takesEffect`. A `startup` or `config-file` entry holds its settings
   here.
+- `reason`: the text that a person gave for the action, else omitted. It has
+  at most 500 Unicode code points and no control character. A force-unlock
+  can carry one.
 - Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
   never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
@@ -86,15 +89,35 @@ An entry holds these fields:
   The encoding writes each field as its length in bytes (decimal), a
   colon and the bytes of the field, with nothing between the fields. For
   example, the subject `admin` is `5:admin` and an empty field is `0:`.
-  After `prevHash`, the encoding always writes four more fields, in this
+  After `prevHash`, the encoding always writes five more fields, in this
   fixed order: the decimal value count, the stable ID of the unit, the
-  canonical JSON of the changes (sorted by key) as the store holds it, and
-  the decimal failover version of the namespace (0 in `@server`). No field
-  is optional. An entry with no value count writes one `-` in place of the
+  canonical JSON of the changes (sorted by key) as the store holds it, the
+  decimal failover version of the namespace (0 in `@server`), and the
+  reason. No field is optional. An entry with no value count writes one `-` in place of the
   count, so an entry with no count (`-`) and an entry with the count 0
   (`1:0`) have different hashes. Because each field carries its length,
   two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
+
+## Force-unlock entries
+
+Each force-unlock of an OpenTofu workspace writes one entry of the kind
+`change` with the action `unit:write-forced`. The TFE-compatible API and the
+http backend both write it. The server writes it in the transaction that
+releases the lock, so a release without its entry does not happen.
+
+- `subject`: the principal that forced the release.
+- `version`: the serial of the new state version that the release wrote.
+  It is empty when the release wrote no version: a workspace with no state,
+  or a state that the client encrypted.
+- `changes`: the released `lock-holder` and the time `locked-at` of the lock,
+  each in `old`.
+- `reason`: the reason that the caller gave, else omitted. Only the
+  TFE-compatible API can carry a reason. The lock info of the http backend
+  has no field for one.
+
+A force-unlock of a state that the client encrypted also writes an entry of
+the kind `override`, as a forced write does.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.

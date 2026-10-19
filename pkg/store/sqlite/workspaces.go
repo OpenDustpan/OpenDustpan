@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -122,12 +123,15 @@ func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]worksp
 // ReleaseUnfenced implements workspace.Store. It saves a released unit like
 // SaveWorkspace, and refuses the save with ErrOverrideRefused unless the
 // forced-write switches of the namespace and of the unit are on, in the same
-// transaction (ADR 44, decisions 4 and 6).
-func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+// transaction. It appends the audit entry e in
+// that transaction.
+func (s *Store) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		wrow, err := q.GetWorkspaceByID(ctx, w.ID.String())
 		if errors.Is(err, sql.ErrNoRows) {
 			return workspace.ErrNotFound
@@ -141,6 +145,19 @@ func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fenc
 			return switchErr
 		}
 
+		return saveWorkspaceRow(ctx, q, w)
+	})
+}
+
+// SaveReleased implements workspace.Store. It saves a released unit like
+// SaveWorkspace and appends the audit entry e in the same transaction.
+func (s *Store) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		return saveWorkspaceRow(ctx, q, w)
 	})
 }
@@ -606,14 +623,16 @@ func (s *Store) FinalizeStateVersion(
 // FenceAndUnlock implements workspace.StateStore: it releases the lock of w,
 // finalizes the pending fence version sv and moves the workspace pointer to
 // it, in one fenced transaction. The inventory entry moves with the release.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (s *Store) FenceAndUnlock(
 	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	expect workspace.StateVersionID, fence namespace.Fence,
+	expect workspace.StateVersionID, fence namespace.Fence, e audit.Entry,
 ) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		return fenceAndUnlockInTx(ctx, q, w, codec.ToStateVersionRow(sv), expect)
 	})
 }

@@ -20,7 +20,7 @@ behavior differs from TFE. It is checked against the route table in
 | GET | /api/v2/organizations/{organization}/workspaces | Token, `namespace:read` | Lists the workspaces of one namespace the caller may `unit:read`. Supports the search query. `page[size]` caps at 100. |
 | POST | /api/v2/workspaces/{id}/actions/lock | Token, `unit:write` | Locks one workspace for the caller. Locked workspaces answer 409. |
 | POST | /api/v2/workspaces/{id}/actions/unlock | Token, `unit:write` | Releases the caller lock. Another holder answers 409. |
-| POST | /api/v2/workspaces/{id}/actions/force-unlock | Token, `unit:manage` | Releases the lock whoever holds it. Unlocked workspaces answer 409. A client-encrypted state keeps its lock unless the forced-write override is allowed (`unit:write-forced`, both switches on). |
+| POST | /api/v2/workspaces/{id}/actions/force-unlock | Token, `unit:write-forced` | Releases the lock whoever holds it. The body is optional, and `tofu force-unlock` sends none. A body can hold `data.attributes.reason` (1 to 500 Unicode code points, with no control character), `data.attributes.lock-id` and `data.attributes.lock-holder`. The reason goes to the audit entry of the release. When the body names a lock ID, and the lock of the workspace has another ID or another holder, the answer is 409 and nothing changes. A `lock-holder` without a `lock-id` answers 422, and so does a reason that is too long. Unlocked workspaces answer 409. A client-encrypted state keeps its lock (409) unless both forced-write switches are on. |
 | GET | /api/v2/workspaces/{id}/override-switches | Token, `unit:read` | Reads the unit switches `allow-forced-writes` and `allow-unlocked-writes`. Both are off by default. An override needs the namespace switch and the unit switch. |
 | PUT | /api/v2/workspaces/{id}/override-switches | Token, `unit:set-overrides` | Sets the unit switches from a JSON body with the same two booleans. An empty or malformed body answers 400 and changes no switch. |
 | GET | /api/v2/workspaces/{id}/current-state-version | Token, `unit:read` | Reads the current state version. Workspaces without state answer 404. |
@@ -70,6 +70,18 @@ The server keeps remote state and locks for local execution only.
 - A force upload skips the lineage check and the serial check.
 - A force upload never skips the lock check.
 - Errors are JSON:API documents with `status`, `title`, and `detail`.
+  Some errors also hold the JSON:API member `code`, a stable machine code.
+  Today these codes exist: `workspace.not-locked` (a force-unlock of a workspace
+  that is not locked), `workspace.lock-mismatch` (the `lock-id` or the
+  `lock-holder` of a force-unlock differs from the lock of the workspace) and
+  `workspace.client-encrypted` (the server cannot do the action because the
+  client encrypted the state). All three answer 409.
+- A 403 for a missing action names the action in its `detail`.
+- The workspace document holds `attributes.lock-id`, the ID of the current
+  lock, or an empty string when the workspace is not locked.
+- The attribute `permissions.can-force-unlock` is true when the caller has
+  `unit:write-forced` on the workspace. It does not read the forced-write
+  switches.
 - The media type is `application/vnd.api+json`.
 - The masked resource routes answer the structure of a state version with
   each secret value as a marker holding its value path: outputs with

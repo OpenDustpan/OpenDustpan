@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +95,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "check finds a changed kind", test: testCheckChangedColumn("kind", "change")},
 		{name: "check finds a changed outcome", test: testCheckChangedColumn("outcome", "failure")},
 		{name: "check finds a changed request ID", test: testCheckChangedColumn("request_id", "req-x")},
+		{name: "check finds a changed reason", test: testCheckChangedColumn("reason", "reason-x")},
+		{name: "an empty and a set reason round-trip with a valid chain", test: testReasonRoundTrip},
+		{name: "a reason with a control character is refused", test: testReasonRefused},
 	}
 
 	for _, tc := range cases {
@@ -156,6 +160,7 @@ func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
@@ -917,6 +922,67 @@ func testObjectIDRoundTrip(t *testing.T, ts TestStore) {
 
 	if !check.Valid || check.Checked != 2 {
 		t.Fatalf("check = %+v, want 2 valid entries", check)
+	}
+}
+
+// testReasonRoundTrip appends an entry without a reason and one with a reason
+// of 500 code points: both list back as written, and the chain stays valid,
+// so the hash covers the reason field of each entry.
+func testReasonRoundTrip(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
+
+	withReason := newEntry(ns.Name, "admin", "req-2", now())
+	withReason.Kind = audit.KindChange
+	withReason.Reason = strings.Repeat("é", audit.MaxReasonLen)
+
+	if stored := appendEntry(t, s, ns.Fence(), withReason); stored.Reason != withReason.Reason {
+		t.Fatalf("stored reason has %d bytes, want %d", len(stored.Reason), len(withReason.Reason))
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if len(listing.Entries) != 2 || listing.Entries[0].Reason != withReason.Reason || listing.Entries[1].Reason != "" {
+		t.Fatalf("listing = %+v, want the set reason newest and an empty reason oldest", listing.Entries)
+	}
+
+	checkValidChain(t, []audit.Entry{listing.Entries[1], listing.Entries[0]})
+
+	check, err := s.Check(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 2 {
+		t.Fatalf("check = %+v, want 2 valid entries", check)
+	}
+}
+
+// testReasonRefused proves that an append refuses a reason with a control
+// character, and that the refusal writes nothing.
+func testReasonRefused(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	e := newEntry(ns.Name, "admin", "req-1", now())
+	e.Reason = "first\nsecond"
+
+	if _, err := s.Append(t.Context(), ns.Fence(), e); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("append with a line break in the reason: error = %v, want ErrInvalidEntry", err)
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil || listing.Total != 0 {
+		t.Fatalf("list after a refused append = %+v, %v; want no entry", listing, err)
 	}
 }
 

@@ -62,7 +62,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestForceUnlockWithoutStateOnlyReleases(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	released, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
+	released, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
 	if err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 		}
 	}
 
-	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
+	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
 	if !errors.Is(err, workspace.ErrConcurrentModification) {
 		t.Fatalf("force unlock beside a finalize: err = %v, want ErrConcurrentModification", err)
 	}
@@ -268,7 +268,8 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 		t.Fatalf("service: %v", err)
 	}
 
-	if _, _, err := failingSvc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); !errors.Is(err, errPutFailed) {
+	_, _, err = failingSvc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
+	if !errors.Is(err, errPutFailed) {
 		t.Fatalf("force unlock with a failed content write: err = %v, want the failed write", err)
 	}
 
@@ -300,7 +301,8 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 }
 
 // A force-unlock of a state the client encrypted is refused, and the lock
-// stays. The refusal names the command that releases the lock.
+// stays. The refusal names the way to release the lock: wait for the run, or
+// use the action and the switches of a forced write.
 func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 	t.Parallel()
 
@@ -317,13 +319,19 @@ func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 		t.Fatalf("push encrypted state: %v", err)
 	}
 
-	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
+	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry())
 	if !errors.Is(err, workspace.ErrClientEncrypted) {
 		t.Fatalf("force unlock of an encrypted state: err = %v, want ErrClientEncrypted", err)
 	}
 
-	if !strings.Contains(err.Error(), "Let the run that holds the lock finish; it releases the lock") {
-		t.Fatalf("refusal does not name the way out: %v", err)
+	for _, want := range []string{
+		"Let the run that holds the lock finish; it releases the lock",
+		"unit:write-forced",
+		"forced-write switches",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal does not name %q: %v", want, err)
+		}
 	}
 
 	held, getErr := f.svc.GetByID(ctx, f.ws.ID)
@@ -363,7 +371,7 @@ func TestForceUnlockFenceBlobSurvivesASweepBeforeTheCommit(t *testing.T) {
 		sweepUnnamedBlobs(t, f, inner)
 	}
 
-	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 

@@ -453,6 +453,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

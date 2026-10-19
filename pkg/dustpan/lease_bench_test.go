@@ -328,6 +328,7 @@ func benchCaller() audit.Entry {
 		ValueCount: nil, SourceIP: "192.0.2.1", UserAgent: "bench", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "",
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

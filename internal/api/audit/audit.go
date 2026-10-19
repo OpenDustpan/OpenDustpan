@@ -137,6 +137,9 @@ type auditEntry struct {
 	// was appended, which the hash covers. It is omitted when it is 0, as in
 	// @server.
 	FenceVersion int64 `json:"fenceVersion,omitempty"`
+	// Reason is the text that a person gave for the action, for example for
+	// a force-unlock. It is omitted for an entry without one.
+	Reason string `json:"reason,omitempty"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
@@ -163,6 +166,7 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		PrevHash:     e.PrevHash,
 		Hash:         e.Hash,
 		FenceVersion: e.FenceVersion,
+		Reason:       e.Reason,
 	}
 }
 

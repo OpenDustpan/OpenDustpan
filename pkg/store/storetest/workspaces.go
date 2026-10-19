@@ -37,15 +37,18 @@ type WorkspaceStore interface {
 // WorkspaceFactory returns a fresh, empty store for one subtest.
 type WorkspaceFactory func(t *testing.T) WorkspaceStore
 
+// workspaceCase is one case of the workspace suite.
+type workspaceCase struct {
+	test func(t *testing.T, s WorkspaceStore)
+	name string
+}
+
 // RunWorkspace executes the conformance suite of the workspace ports
 // (workspace.Store, workspace.StateStore) against stores produced by newStore.
 func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 	t.Helper()
 
-	cases := []struct {
-		test func(t *testing.T, s WorkspaceStore)
-		name string
-	}{
+	cases := []workspaceCase{
 		{name: "create and read by name and by ID", test: testWorkspaceRoundTrip},
 		{name: "the change log follows the writes of a workspace", test: testWorkspaceChangeLog},
 		{name: "a refused write of a workspace appends no change log row", test: testWorkspaceChangeLogFence},
@@ -321,7 +324,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range slices.Concat(cases, releaseAuditCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -3307,6 +3310,7 @@ func testFenceAndUnlock(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("fence and unlock: %v", err)
@@ -3385,6 +3389,7 @@ func testFenceNotLocked(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, w.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if !errors.Is(err, workspace.ErrNotLocked) {
 		t.Fatalf("fence an unlocked workspace: err = %v, want ErrNotLocked", err)
@@ -3414,7 +3419,14 @@ func testFenceStaleRevision(t *testing.T, s WorkspaceStore) {
 	fence := newFenceVersion(t, locked, 2, now().Add(2*time.Hour))
 	stageFence(t, s, ns, fence)
 
-	err := s.FenceAndUnlock(t.Context(), released, fence, currentVersionID(t, s, locked.ID), ns.Fence())
+	err := s.FenceAndUnlock(
+		t.Context(),
+		released,
+		fence,
+		currentVersionID(t, s, locked.ID),
+		ns.Fence(),
+		releaseEntry(ns.Name),
+	)
 	if !errors.Is(err, workspace.ErrConcurrentModification) {
 		t.Fatalf("fence with a stale revision: err = %v, want ErrConcurrentModification", err)
 	}
@@ -3448,6 +3460,7 @@ func testFenceFencedWrite(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		stale,
+		releaseEntry(stale.Namespace),
 	)
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("fence with a stale fence: err = %v, want ErrFenced", err)
@@ -3488,7 +3501,7 @@ func testFenceAndUnlockNeedsStagedVersion(t *testing.T, s WorkspaceStore) {
 	refused := []workspace.StateVersion{unstaged, other}
 
 	for i := range refused {
-		err := s.FenceAndUnlock(t.Context(), released, refused[i], v1.ID, ns.Fence())
+		err := s.FenceAndUnlock(t.Context(), released, refused[i], v1.ID, ns.Fence(), releaseEntry(ns.Name))
 		if !errors.Is(err, workspace.ErrUploadDenied) {
 			t.Fatalf("fence of %s naming %s: err = %v, want ErrUploadDenied", refused[i].ID, refused[i].Content, err)
 		}
@@ -3523,7 +3536,7 @@ func testFenceAndUnlockRefusesFinalizedVersion(t *testing.T, s WorkspaceStore) {
 	again.FinalizedAt = now().Add(2 * time.Hour)
 	again.FenceBy = "admin"
 
-	err := s.FenceAndUnlock(t.Context(), released, again, v1.ID, ns.Fence())
+	err := s.FenceAndUnlock(t.Context(), released, again, v1.ID, ns.Fence(), releaseEntry(ns.Name))
 	if !errors.Is(err, workspace.ErrUploadDenied) {
 		t.Fatalf("fence naming the finalized version %s: err = %v, want ErrUploadDenied", v1.ID, err)
 	}
@@ -3594,6 +3607,7 @@ func testFenceSealedRoundTrip(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("fence and unlock of a sealed version: %v", err)
@@ -3621,7 +3635,14 @@ func testFenceSerialMustFollow(t *testing.T, s WorkspaceStore) {
 		fence := newFenceVersion(t, locked, serial, now().Add(2*time.Hour))
 		stageFence(t, s, ns, fence)
 
-		err := s.FenceAndUnlock(t.Context(), released, fence, currentVersionID(t, s, locked.ID), ns.Fence())
+		err := s.FenceAndUnlock(
+			t.Context(),
+			released,
+			fence,
+			currentVersionID(t, s, locked.ID),
+			ns.Fence(),
+			releaseEntry(ns.Name),
+		)
 		if !errors.Is(err, workspace.ErrStaleSerial) {
 			t.Fatalf("fence at serial %d: err = %v, want ErrStaleSerial", serial, err)
 		}
@@ -3642,6 +3663,7 @@ func testFenceSerialMustFollow(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("fence at serial 2: %v", err)
@@ -3677,7 +3699,7 @@ func testFenceStaleCurrent(t *testing.T, s WorkspaceStore) {
 	fence := newFenceVersion(t, locked, 3, now().Add(3*time.Hour))
 	stageFence(t, s, ns, fence)
 
-	err := s.FenceAndUnlock(t.Context(), released, fence, v1.ID, ns.Fence())
+	err := s.FenceAndUnlock(t.Context(), released, fence, v1.ID, ns.Fence(), releaseEntry(ns.Name))
 	if !errors.Is(err, workspace.ErrConcurrentModification) {
 		t.Fatalf("fence after a finalize: err = %v, want ErrConcurrentModification", err)
 	}
@@ -4192,6 +4214,7 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		"admin",
 		namespace.Overrides{Forced: true, Unlocked: false},
 		nil,
+		releaseEntry(ns.Name),
 	)
 	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("force-unlock naming another holder: err = %v, want ErrLockMismatch", err)
@@ -4209,6 +4232,7 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		"admin",
 		namespace.Overrides{Forced: true, Unlocked: false},
 		nil,
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("force-unlock of the lock as seen: %v", err)
@@ -4227,6 +4251,7 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		"admin",
 		namespace.Overrides{Forced: true, Unlocked: false},
 		nil,
+		releaseEntry(ns.Name),
 	)
 	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)
