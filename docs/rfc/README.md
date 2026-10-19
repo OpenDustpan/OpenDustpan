@@ -99,7 +99,7 @@ both together.
 | [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
 | [49](0049-run-tasks.md) | Run tasks: external checks with callbacks | accepted (ADR 226) |
 | [50](0050-policy-authoring.md) | Policy authoring, testing and compliance packs | draft; decision records, simulate and starter packs accepted (ADR 229) |
-| [51](0051-change-management-integrations.md) | Change management and portal integrations | draft |
+| [51](0051-change-management-integrations.md) | Change management and portal integrations | draft; Backstage plugin accepted (ADR 247) |
 | [52](0052-console-core.md) | Console core views and navigation | draft; the console reads the capabilities document (ADR 211) |
 | [53](0053-terraform-cli.md) | Terraform CLI support | draft |
 | [54](0054-sources-beyond-git.md) | Sources other than git | draft |
@@ -131,3 +131,4 @@ both together.
 | [80](0080-console-sessions-on-the-tfe-compatible-api.md) | Console sessions on the TFE-compatible API, and fresh authentication for force-unlock and the state download | draft |
 | [81](0081-open-questions-of-the-import-tool.md) | Open questions of the import tool and the move check | accepted (ADRs 241 to 244) |
 | [82](0082-a-namespace-in-the-blueprint-scope-key.md) | A namespace in the scope key of a blueprint version | discussing |
+| [84](0084-backstage-plugin-open-questions.md) | Open questions of the Backstage plugin | discussing |
