@@ -132,3 +132,4 @@ both together.
 | [81](0081-open-questions-of-the-import-tool.md) | Open questions of the import tool and the move check | accepted (ADRs 241 to 244) |
 | [82](0082-a-namespace-in-the-blueprint-scope-key.md) | A namespace in the scope key of a blueprint version | discussing |
 | [84](0084-backstage-plugin-open-questions.md) | Open questions of the Backstage plugin | discussing |
+| [86](0086-change-tickets-in-external-change-systems.md) | Change tickets in external change systems, and what the core needs for them | discussing |
