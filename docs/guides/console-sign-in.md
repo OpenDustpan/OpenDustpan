@@ -245,7 +245,7 @@ server also refuses a request with the cookie from another site. An
 `--allowed-origins`.
 
 The APIs of the console take the session cookie: the installation API
-(`/api/server/`), the inventory API (`/api/inventory/`), the audit API
+(`/api/server/`), the tool-neutral API (`/api/dustpan/v1/`), the audit API
 (`/api/audit/`) and the API that works with the Pulumi CLI. Each API
 applies the same CSRF and origin checks. The TFE-compatible API does not
 take the cookie: it answers 401 to a request with the cookie and no token.

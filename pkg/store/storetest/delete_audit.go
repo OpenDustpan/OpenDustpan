@@ -531,7 +531,7 @@ func testPortablePurgeRemovesChildren(t *testing.T, newStore PortableFactory) {
 
 	after, sum, _ := exportPortable(t, s)
 
-	for _, table := range append(keptChildTables(), "stacks", "inventory_deleted") {
+	for _, table := range append(keptChildTables(), "stacks", "inventory_deleted", "inventory_labels") {
 		path := backup.PortablePath(table)
 
 		for _, row := range readPortableLines(t, path, after.files[path].Bytes()) {

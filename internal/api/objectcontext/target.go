@@ -56,51 +56,72 @@ func (h *Handler) findNamespace(r *http.Request) (namespace.Namespace, error) {
 	return ns, nil
 }
 
-// resolveUnit finds the unit of the path in the namespace of the path, live
-// or soft-deleted. A unit of another namespace, an unknown unit and a purged
-// unit answer errNotFound alike.
-func (h *Handler) resolveUnit(r *http.Request) (target, error) {
+// resolveUnitByID finds the unit with the unit ID of the path in the
+// namespace of the path, live or soft-deleted. The unit ID is unique in the
+// installation, so the path holds no tool. A unit of another namespace, an
+// unknown unit and a purged unit answer errNotFound alike.
+func (h *Handler) resolveUnitByID(r *http.Request) (target, error) {
 	ns, err := h.findNamespace(r)
 	if err != nil {
 		return target{}, err
 	}
 
-	ctx := r.Context()
-	tool, unitID := r.PathValue("tool"), r.PathValue("unit_id")
-	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: tool, ID: unitID})
+	unitID := r.PathValue("unit_id")
 
-	if ref.Validate() != nil {
-		return target{}, errNotFound
-	}
-
-	live, err := h.units.ListUnits(ctx, ns.Name)
+	live, err := h.units.ListUnits(r.Context(), ns.Name)
 	if err != nil {
 		return target{}, fmt.Errorf("list units: %w", err)
 	}
 
 	for i := range live {
-		if live[i].Tool != tool || live[i].UnitID != unitID {
-			continue
+		if live[i].UnitID == unitID {
+			return h.liveTarget(ns, live[i])
 		}
-
-		obj, objErr := unitObject(tool, ns.Name, live[i].Name, unitID)
-		if objErr != nil {
-			return target{}, objErr
-		}
-
-		return target{ns: ns, obj: obj, ref: ref, unit: &live[i], deleted: nil}, nil
 	}
 
-	gone, err := h.deleted.GetDeletedUnit(ctx, ns.Name, tool, unitID)
-	if errors.Is(err, coreinventory.ErrNotFound) {
+	return h.deletedTargetByID(r, ns, unitID)
+}
+
+// liveTarget returns the target of the live unit e.
+func (h *Handler) liveTarget(ns namespace.Namespace, e coreinventory.Entry) (target, error) {
+	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: e.Tool, ID: e.UnitID})
+	if ref.Validate() != nil {
 		return target{}, errNotFound
 	}
 
+	obj, err := unitObject(e.Tool, ns.Name, e.Name, e.UnitID)
 	if err != nil {
-		return target{}, fmt.Errorf("get deleted unit: %w", err)
+		return target{}, err
 	}
 
-	obj, err := unitObject(tool, ns.Name, gone.Name, unitID)
+	return target{ns: ns, obj: obj, ref: ref, unit: &e, deleted: nil}, nil
+}
+
+// deletedTargetByID returns the target of the soft-deleted unit unitID, or
+// errNotFound.
+func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, unitID string) (target, error) {
+	all, err := h.deleted.ListDeletedUnits(r.Context(), ns.Name)
+	if err != nil {
+		return target{}, fmt.Errorf("list deleted units: %w", err)
+	}
+
+	for i := range all {
+		if all[i].UnitID == unitID {
+			return h.goneTarget(ns, all[i])
+		}
+	}
+
+	return target{}, errNotFound
+}
+
+// goneTarget returns the target of the soft-deleted unit gone.
+func (h *Handler) goneTarget(ns namespace.Namespace, gone coreinventory.DeletedEntry) (target, error) {
+	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: gone.Tool, ID: gone.UnitID})
+	if ref.Validate() != nil {
+		return target{}, errNotFound
+	}
+
+	obj, err := unitObject(gone.Tool, ns.Name, gone.Name, gone.UnitID)
 	if err != nil {
 		return target{}, err
 	}
