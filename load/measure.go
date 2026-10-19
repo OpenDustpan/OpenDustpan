@@ -24,7 +24,8 @@ const (
 	deltaPath       = "/checkpointdelta"
 	completePath    = "/complete"
 	importPath      = "/import"
-	inventoryPath   = "/api/inventory/units?organization="
+	inventoryPath   = "/api/dustpan/v1/namespaces/"
+	inventoryUnits  = "/units"
 	tfeWorkspaces   = "/api/v2/organizations/"
 	tfeWorkspaceMid = "/workspaces"
 	tfeByID         = "/api/v2/workspaces/"
@@ -727,7 +728,7 @@ func (t *target) measureInventory(ctx context.Context) (time.Duration, inventory
 
 	resp, err := t.do(ctx, request{
 		method:    http.MethodGet,
-		url:       t.firstURL(inventoryPath + t.ns),
+		url:       t.firstURL(inventoryPath + t.ns + inventoryUnits),
 		auth:      pulumiScheme + t.token,
 		mediaType: "",
 		body:      nil,

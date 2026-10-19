@@ -49,6 +49,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		PublicURL:     "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
@@ -96,19 +97,19 @@ type collectionRouteCase struct {
 // collectionRouteCases maps the method and path of each collection route to its
 // request body and its allowed status. A route missing here fails the test.
 var collectionRouteCases = map[string]collectionRouteCase{ //nolint:gochecknoglobals // A read-only table of expected answers.
-	http.MethodGet + " /api/inventory/namespaces/{namespace}/collections": {
+	http.MethodGet + " /api/dustpan/v1/namespaces/{namespace}/collections": {
 		body:   "",
 		status: http.StatusOK,
 	},
-	http.MethodPost + " /api/inventory/namespaces/{namespace}/collections": {
+	http.MethodPost + " /api/dustpan/v1/namespaces/{namespace}/collections": {
 		body:   `{"name":"platform"}`,
 		status: http.StatusCreated,
 	},
-	http.MethodGet + " /api/inventory/namespaces/{namespace}/collections/{collection}": {
+	http.MethodGet + " /api/dustpan/v1/namespaces/{namespace}/collections/{collection}": {
 		body:   "",
 		status: http.StatusOK,
 	},
-	http.MethodDelete + " /api/inventory/namespaces/{namespace}/collections/{collection}": {
+	http.MethodDelete + " /api/dustpan/v1/namespaces/{namespace}/collections/{collection}": {
 		body:   "",
 		status: http.StatusNoContent,
 	},

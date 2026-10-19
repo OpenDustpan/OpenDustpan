@@ -19,7 +19,7 @@ import (
 const collectionAgent = "opendustpan-e2e-collections"
 
 // collectionsBase is the collection list of the e2e namespace.
-const collectionsBase = "/api/inventory/namespaces/" + e2e.Namespace + "/collections"
+const collectionsBase = "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/collections"
 
 // collectionUnitPath returns the unit move route for the e2e workspace of
 // OpenTofu. The unit reference names the tool, the namespace and the workspace.
@@ -150,7 +150,7 @@ func collectionsScenario(t *testing.T, env *e2e.Env) {
 		},
 		{
 			name: "the inventory shows the new collection", method: http.MethodGet,
-			path: "/api/inventory/units?organization=" + e2e.Namespace, body: "", want: http.StatusOK,
+			path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units", body: "", want: http.StatusOK,
 			check: collectionHolds(`"collection":"platform"`),
 		},
 	}
