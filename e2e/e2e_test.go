@@ -6186,7 +6186,7 @@ func checkStateVersionListThree(body string) error {
 			return fmt.Errorf("%w: entry holds no attributes: %s", errUnexpected, body)
 		}
 
-		for _, key := range []string{"holder", "force", "restored-from"} {
+		for _, key := range []string{"holder", "force", "restored-from", "fence-by", "unlocked-write"} {
 			if _, ok := attrs[key]; !ok {
 				return fmt.Errorf("%w: entry lacks attribute %q: %s", errUnexpected, key, body)
 			}
