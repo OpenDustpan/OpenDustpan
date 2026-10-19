@@ -1,4 +1,4 @@
-package webhook //nolint:testpackage // The exporter must reach the unexported constructor.
+package webhook
 
 import (
 	"context"

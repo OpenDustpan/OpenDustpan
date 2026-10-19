@@ -108,7 +108,7 @@ func (s *Sender) request(ctx context.Context, m notify.Message, body []byte) (*h
 	if err != nil {
 		// A url.Error repeats the URL, which can hold a token. Say only
 		// that the address does not parse.
-		return nil, fmt.Errorf("%w: %w: the address does not parse", notify.ErrPermanent, egress.ErrRefused)
+		return nil, fmt.Errorf("%w: the address does not parse", egress.ErrRefused)
 	}
 
 	req.Header.Set("Content-Type", contentType)

@@ -12,7 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/notifytest"
-	"opendustpan.org/opendustpan/pkg/notifysend/webhook"
+	"opendustpan.org/opendustpan/pkg/notify/webhook"
 )
 
 // canary is a secret value that no error text may repeat.
@@ -168,7 +168,8 @@ func TestSenderConformance(t *testing.T) {
 					t.Errorf("unknown behavior %d", b)
 				}
 			},
-			Received: func() int { return len(r.requests()) },
+			Received:     func() int { return len(r.requests()) },
+			NoRetryAfter: false,
 		}
 	})
 }

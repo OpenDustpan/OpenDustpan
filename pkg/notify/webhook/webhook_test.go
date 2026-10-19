@@ -13,7 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/pkg/notifysend/webhook"
+	"opendustpan.org/opendustpan/pkg/notify/webhook"
 )
 
 func TestDeliveryVerifies(t *testing.T) {

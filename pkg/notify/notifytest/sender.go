@@ -45,6 +45,9 @@ type SenderHarness struct {
 	Behave func(Behavior)
 	// Received returns how many attempts reached the receiver.
 	Received func() int
+	// NoRetryAfter is set when the protocol has no wait hint, for example
+	// SMTP. The suite then skips the case of a request to wait.
+	NoRetryAfter bool
 }
 
 // SenderFactory returns a fresh harness for one case.
@@ -137,6 +140,11 @@ func testSenderTemporary(t *testing.T, h SenderHarness) {
 
 func testSenderRetryAfter(t *testing.T, h SenderHarness) {
 	t.Helper()
+
+	if h.NoRetryAfter {
+		t.Skip("the protocol has no wait hint")
+	}
+
 	h.Behave(ReceiverAsksToWait)
 
 	err := h.Sender.Send(t.Context(), h.Message)
@@ -184,7 +192,12 @@ func testSenderNoLeak(t *testing.T, h SenderHarness) {
 
 	secrets = append(secrets, h.Message.To)
 
-	for _, b := range []Behavior{ReceiverRefusesForGood, ReceiverFailsForNow, ReceiverAsksToWait} {
+	behaviors := []Behavior{ReceiverRefusesForGood, ReceiverFailsForNow}
+	if !h.NoRetryAfter {
+		behaviors = append(behaviors, ReceiverAsksToWait)
+	}
+
+	for _, b := range behaviors {
 		h.Behave(b)
 
 		err := h.Sender.Send(t.Context(), h.Message)
