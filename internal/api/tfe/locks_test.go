@@ -208,6 +208,9 @@ func (concurrentAuthenticator) AuthenticateToken(
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	case "test-token-b":
 		return identity.Principal{
@@ -217,6 +220,9 @@ func (concurrentAuthenticator) AuthenticateToken(
 			Admin:          false,
 			TokenID:        "",
 			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     "",
+			JobID:          "",
 		}, nil
 	default:
 		return identity.Principal{}, identity.ErrUnauthenticated

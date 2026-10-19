@@ -103,6 +103,9 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 		TemporaryAdministrator: false,
 		TemporaryExpiresAt:     time.Time{},
 		Subject:                "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	if _, err := svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1"); err != nil {
@@ -147,6 +150,9 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 	caller := identity.Principal{
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	_, err = svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1")
@@ -170,6 +176,9 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 		TemporaryAdministrator: false,
 		TemporaryExpiresAt:     time.Time{},
 		Subject:                "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}
 
 	for _, tc := range []struct {

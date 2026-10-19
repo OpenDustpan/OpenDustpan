@@ -597,16 +597,18 @@ func (s *Service) cancelOne(ctx context.Context, u activeUnit) (string, bool, er
 		UserAgent:  "",
 		// ChannelAPI: the request that enters maintenance mode is an API request,
 		// and no channel names the installation as the actor.
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
-		Reason:       maintenanceReason,
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        maintenanceReason,
+		PrincipalKind: "",
+		JobID:         "",
 	}
 
 	if _, _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject, none, nil, entry); err != nil {

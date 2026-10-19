@@ -98,6 +98,8 @@ type Handler struct {
 	gate   *bodygate.Gate
 	mux    *http.ServeMux
 	routes []Route
+	// onAuditFailure counts a download whose audit entry was lost. It may be nil.
+	onAuditFailure func()
 }
 
 // call is the authorized request that a route handler serves.
@@ -146,6 +148,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:   cfg.Gate,
 		mux:    http.NewServeMux(),
 		routes: nil,
+
+		onAuditFailure: cfg.OnAuditFailure,
 	}
 
 	if h.gate == nil {
