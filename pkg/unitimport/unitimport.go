@@ -45,6 +45,9 @@ var (
 	// ErrTransition reports a change of state that the transition table
 	// does not allow.
 	ErrTransition = errors.New("import state change is not allowed")
+	// ErrLedgerExists reports a second ledger row for one import, one unit
+	// and one source version.
+	ErrLedgerExists = errors.New("ledger row already exists")
 	// ErrTargetExists reports a target name that a unit of the namespace
 	// already holds, deleted units included, and that the hold of the same
 	// import does not cover.
@@ -357,7 +360,8 @@ type Facts struct {
 // ErrSourceChanged when the ledger holds the version with another digest,
 // ErrHoldRemoved when the import hold no longer covers the unit, and
 // ErrTargetDeleted for a deleted unit. Both wrap namespace.ErrFenced for a
-// stale fence. LatestFacts wraps history.ErrItemNotFound for a unit with no
+// stale fence. Write wraps ErrLedgerExists for a version that the ledger
+// already holds with the same digest. LatestFacts wraps history.ErrItemNotFound for a unit with no
 // state.
 type Tool interface {
 	// Tool returns the tool name of the units, as in history.Unit.
@@ -571,10 +575,15 @@ type Store interface {
 // write, and checks the fence and appends the entry in the same
 // transaction. Units and Unit wrap ErrNotFound and ErrPurged. Ledger wraps
 // ErrNotFound for an import that never existed, and it still answers the
-// rows of a purged import. PutUnits wraps ErrInvalid for a bad unit and
+// rows of a purged import. Ledger returns an empty list for a unit ID that
+// the import does not hold. A second ledger row for one import, one unit and
+// one version wraps ErrLedgerExists. A unit of an import that ended
+// (StateReleased or StateCanceled) takes no change except a move to
+// UnitCanceled: TransitionUnit and SetCounts wrap ErrTransition. PutUnits wraps ErrInvalid for a bad unit and
 // ErrTransition for an import that is not in StatePlanning or StatePlanned.
 // TransitionUnit wraps ErrTransition for a change that the transition table
-// does not allow, or when the unit is not in the state from.
+// does not allow, when the unit is not in the state from, or when the unit
+// failed with CodeSourceHistoryChanged and the move is to UnitRunning.
 type UnitStore interface {
 	// PutUnits replaces the import units of a planned import.
 	PutUnits(ctx context.Context, fence namespace.Fence, id string, units []ImportUnit, e audit.Entry) error

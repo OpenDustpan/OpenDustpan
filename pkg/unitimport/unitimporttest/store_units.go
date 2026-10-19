@@ -168,7 +168,7 @@ func testUnitTransitions(t *testing.T, h Harness) {
 		{unitimport.UnitPlanned, unitimport.UnitRunning, ""},
 		{unitimport.UnitRunning, unitimport.UnitPaused, "import.hold-removed"},
 		{unitimport.UnitPaused, unitimport.UnitRunning, ""},
-		{unitimport.UnitRunning, unitimport.UnitFailed, "import.source-history-changed"},
+		{unitimport.UnitRunning, unitimport.UnitFailed, "import.source-unreachable"},
 		{unitimport.UnitFailed, unitimport.UnitRunning, ""},
 		{unitimport.UnitRunning, unitimport.UnitImported, ""},
 		{unitimport.UnitImported, unitimport.UnitRunning, ""},
@@ -199,6 +199,95 @@ func testUnitTransitions(t *testing.T, h Harness) {
 	m := unitimport.UnitMove{From: unitimport.UnitPlanned, To: unitimport.UnitRunning, Code: ""}
 	err := h.Units.TransitionUnit(t.Context(), fence, unitKey("missing"), m, entry("acme", "import:run"))
 	mustIs(t, "unknown unit", err, unitimport.ErrNotFound)
+}
+
+func testUnitChangedHistory(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	putUnits(t, h, fence, newUnit("u-1"))
+
+	move := func(from, to unitimport.UnitState, code string) error {
+		m := unitimport.UnitMove{From: from, To: to, Code: code}
+
+		return h.Units.TransitionUnit(t.Context(), fence, unitKey("u-1"), m, entry("acme", "import:run"))
+	}
+
+	if err := move(unitimport.UnitPlanned, unitimport.UnitRunning, ""); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if err := move(unitimport.UnitRunning, unitimport.UnitFailed, unitimport.CodeSourceHistoryChanged); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+
+	mustIs(t, "resume after a changed source history",
+		move(unitimport.UnitFailed, unitimport.UnitRunning, ""), unitimport.ErrTransition)
+
+	got := mustUnit(t, h, "u-1")
+	if got.State != unitimport.UnitFailed || got.ErrorCode != unitimport.CodeSourceHistoryChanged {
+		t.Fatalf("unit = %s %q, want failed with its code", got.State, got.ErrorCode)
+	}
+
+	if err := move(unitimport.UnitFailed, unitimport.UnitCanceled, ""); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+}
+
+func testEndedImport(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	putUnits(t, h, fence, newUnit("u-1"), newUnit("u-2"))
+	walk(t, h, fence, "imp-1", unitimport.StatePlanning, unitimport.StatePlanned, unitimport.StateCanceled)
+
+	e := entry("acme", "import:run")
+	counts := unitimport.Counts{Versions: 5, Committed: 2}
+
+	mustIs(
+		t,
+		"counts of an ended import",
+		h.Units.SetCounts(t.Context(), fence, unitKey("u-1"), counts, e),
+		unitimport.ErrTransition,
+	)
+
+	target := history.Unit{Namespace: "acme", Tool: "opentofu", ID: "ws-u-1"}
+	mustIs(
+		t,
+		"target of an ended import",
+		h.SetTarget(t.Context(), "acme", unitKey("u-1"), target),
+		unitimport.ErrTransition,
+	)
+
+	run := unitimport.UnitMove{From: unitimport.UnitPlanned, To: unitimport.UnitRunning, Code: ""}
+	mustIs(
+		t,
+		"start a unit of an ended import",
+		h.Units.TransitionUnit(t.Context(), fence, unitKey("u-1"), run, e),
+		unitimport.ErrTransition,
+	)
+
+	skip := unitimport.UnitMove{From: unitimport.UnitPlanned, To: unitimport.UnitSkipped, Code: "import.target-exists"}
+	mustIs(
+		t,
+		"skip a unit of an ended import",
+		h.Units.TransitionUnit(t.Context(), fence, unitKey("u-1"), skip, e),
+		unitimport.ErrTransition,
+	)
+
+	cancel := unitimport.UnitMove{From: unitimport.UnitPlanned, To: unitimport.UnitCanceled, Code: ""}
+	if err := h.Units.TransitionUnit(t.Context(), fence, unitKey("u-1"), cancel, e); err != nil {
+		t.Fatalf("cancel a unit of an ended import: %v", err)
+	}
+
+	got := mustUnit(t, h, "u-1")
+	if got.State != unitimport.UnitCanceled || got.Versions != 3 || got.Committed != 0 || got.Target.ID != "" {
+		t.Fatalf("unit = %+v, want canceled with the old counts and no target", got)
+	}
+
+	if other := mustUnit(t, h, "u-2"); other.State != unitimport.UnitPlanned {
+		t.Fatalf("other unit = %s, want planned", other.State)
+	}
 }
 
 func testCounts(t *testing.T, h Harness) {
@@ -252,9 +341,9 @@ func testLedger(t *testing.T, h Harness) {
 	putUnits(t, h, fence, newUnit("u-1"), newUnit("u-2"))
 
 	// Seeded out of order: the ledger answers oldest first.
-	h.SeedLedger(t, "acme", ledgerRow("u-1", "v2", at().Add(2*time.Second)))
-	h.SeedLedger(t, "acme", ledgerRow("u-1", "v1", at().Add(time.Second)))
-	h.SeedLedger(t, "acme", ledgerRow("u-2", "w1", at()))
+	seedLedger(t, h, ledgerRow("u-1", "v2", at().Add(2*time.Second)))
+	seedLedger(t, h, ledgerRow("u-1", "v1", at().Add(time.Second)))
+	seedLedger(t, h, ledgerRow("u-2", "w1", at()))
 
 	rows, err = h.Units.Ledger(ctx, "acme", "imp-1", "u-1")
 	if err != nil || len(rows) != 2 || rows[0].Version != "v1" || rows[1].Version != "v2" {
@@ -266,6 +355,8 @@ func testLedger(t *testing.T, h Harness) {
 	if !same {
 		t.Errorf("ledger row = %+v, want %+v", rows[0], want)
 	}
+
+	checkLedgerRepeats(t, h)
 
 	if other, otherErr := h.Units.Ledger(ctx, "other", "imp-1", "u-1"); otherErr == nil && len(other) != 0 {
 		t.Errorf("ledger in another namespace = %+v, want none", other)
@@ -279,7 +370,9 @@ func testTarget(t *testing.T, h Harness) {
 	putUnits(t, h, fence, newUnit("u-1"))
 
 	target := history.Unit{Namespace: "acme", Tool: "opentofu", ID: "ws-u-1"}
-	h.SetTarget(t, "acme", unitKey("u-1"), target)
+	if err := h.SetTarget(t.Context(), "acme", unitKey("u-1"), target); err != nil {
+		t.Fatalf("set target: %v", err)
+	}
 
 	if got := mustUnit(t, h, "u-1"); got.Target != target {
 		t.Fatalf("target of unit = %+v, want %+v", got.Target, target)
@@ -304,4 +397,38 @@ func sameRow(got, want unitimport.LedgerRow) bool {
 	return got.ImportID == want.ImportID && got.ImportUnitID == want.ImportUnitID && got.Version == want.Version &&
 		got.SourceSHA256 == want.SourceSHA256 && got.StoredSHA256 == want.StoredSHA256 && got.Item == want.Item &&
 		got.CommittedAt.Equal(want.CommittedAt)
+}
+
+// checkLedgerRepeats checks the key of a ledger row, the answer for an unknown
+// unit and the order of rows with one commit time. It runs after testLedger
+// seeded v1 and v2 of u-1 and w1 of u-2.
+func checkLedgerRepeats(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	mustIs(t, "a second ledger row of one version",
+		h.SeedLedger(ctx, "acme", ledgerRow("u-1", "v1", at().Add(time.Hour))), unitimport.ErrLedgerExists)
+
+	// The version is the key of a row, so a row of another unit or version is not a repeat.
+	if err := h.SeedLedger(ctx, "acme", ledgerRow("u-2", "v1", at())); err != nil {
+		t.Fatalf("seed the same version of another unit: %v", err)
+	}
+
+	rows, err := h.Units.Ledger(ctx, "acme", "imp-1", "u-1")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("ledger after the refused row = %+v, %v, want 2 rows", rows, err)
+	}
+
+	unknown, err := h.Units.Ledger(ctx, "acme", "imp-1", "u-unknown")
+	if err != nil || len(unknown) != 0 {
+		t.Fatalf("ledger of an unknown unit = %+v, %v, want an empty list", unknown, err)
+	}
+
+	// Rows of one commit time sort by version.
+	seedLedger(t, h, ledgerRow("u-1", "v0", at().Add(2*time.Second)))
+
+	rows, err = h.Units.Ledger(ctx, "acme", "imp-1", "u-1")
+	if err != nil || len(rows) != 3 || rows[1].Version != "v0" || rows[2].Version != "v2" {
+		t.Fatalf("ledger with a tie = %+v, %v, want v1, v0, v2", rows, err)
+	}
 }

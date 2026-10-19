@@ -4,6 +4,7 @@
 package unitimporttest
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -22,14 +23,15 @@ import (
 // the transactions of its own writes, so the suite cannot reach them
 // through the two ports. SeedLedger stores one ledger row in the namespace
 // ns, and SetTarget records the target of an import unit, as a Tool does.
+// Both return the error of the store.
 // Audited returns the audit entries of the namespace ns that have the
 // action prefix "import:", oldest first.
 type Harness struct {
 	Store      unitimport.Store
 	Units      unitimport.UnitStore
 	Namespace  func(t *testing.T, name string) namespace.Fence
-	SeedLedger func(t *testing.T, ns namespace.Name, row unitimport.LedgerRow)
-	SetTarget  func(t *testing.T, ns namespace.Name, key unitimport.UnitKey, target history.Unit)
+	SeedLedger func(ctx context.Context, ns namespace.Name, row unitimport.LedgerRow) error
+	SetTarget  func(ctx context.Context, ns namespace.Name, key unitimport.UnitKey, target history.Unit) error
 	Audited    func(t *testing.T, ns namespace.Name) []audit.Entry
 }
 
@@ -72,6 +74,7 @@ func entryAt(ns namespace.Name, action string, when time.Time) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
@@ -251,5 +254,14 @@ func mustIs(t *testing.T, what string, err, want error) {
 
 	if !errors.Is(err, want) {
 		t.Fatalf("%s: error = %v, want %v", what, err, want)
+	}
+}
+
+// seedLedger stores a ledger row and stops the test on an error.
+func seedLedger(t *testing.T, h Harness, row unitimport.LedgerRow) {
+	t.Helper()
+
+	if err := h.SeedLedger(t.Context(), "acme", row); err != nil {
+		t.Fatalf("seed ledger row: %v", err)
 	}
 }

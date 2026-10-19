@@ -210,13 +210,13 @@ func checkUnchanged(t *testing.T, s *upload.Source, store *blobfs.Store, want in
 	}
 }
 
-func TestPutReplacesACrashedUpload(t *testing.T) {
+func TestPutIgnoresACrashedUpload(t *testing.T) {
 	t.Parallel()
 
 	s, store := newSource(t)
 	put(t, s, unit(), 1, []byte("one"))
 
-	// A body with no facts file is a crash between the two writes.
+	// A body that no facts file names is a crash between the two writes.
 	objs, err := store.List(t.Context(), prefix)
 	if err != nil || len(objs) == 0 {
 		t.Fatalf("list = %v, %v, want the files of the first version", objs, err)
@@ -224,7 +224,7 @@ func TestPutReplacesACrashedUpload(t *testing.T) {
 
 	first := objs[0].Key.String()
 
-	orphan, err := blob.ParseKey(first[:strings.LastIndex(first, "/")] + "/0000000002.bin")
+	orphan, err := blob.ParseKey(first[:strings.LastIndex(first, "/")] + "/0000000002.crashed.bin")
 	if err != nil {
 		t.Fatalf("parse key: %v", err)
 	}
@@ -235,14 +235,120 @@ func TestPutReplacesACrashedUpload(t *testing.T) {
 
 	v := put(t, s, unit(), 2, []byte("two"))
 
-	r, err := s.Open(t.Context(), unitimport.Credential{}, unit(), v.ID)
+	if got := readBody(t, s, v.ID); got != "two" {
+		t.Errorf("body = %q, want two", got)
+	}
+
+	if _, err = store.Get(t.Context(), orphan); err != nil {
+		t.Errorf("get orphan: %v, want it untouched", err)
+	}
+}
+
+// readBody returns the body of the version id of unit().
+func readBody(t *testing.T, s *upload.Source, id unitimport.VersionID) string {
+	t.Helper()
+
+	r, err := s.Open(t.Context(), unitimport.Credential{}, unit(), id)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 
 	b, readErr := io.ReadAll(r)
-	if closeErr := r.Close(); readErr != nil || closeErr != nil || string(b) != "two" {
-		t.Errorf("body = %q, read error %v, close error %v, want two", b, readErr, closeErr)
+	if closeErr := r.Close(); readErr != nil || closeErr != nil {
+		t.Fatalf("read error %v, close error %v", readErr, closeErr)
+	}
+
+	return string(b)
+}
+
+// stalledReader gives one byte, then waits for release, then ends.
+type stalledReader struct {
+	started chan struct{}
+	release chan struct{}
+	given   bool
+}
+
+func (r *stalledReader) Read(p []byte) (int, error) {
+	if !r.given {
+		r.given = true
+		p[0] = 'a'
+
+		close(r.started)
+
+		return 1, nil
+	}
+
+	<-r.release
+
+	return 0, io.EOF
+}
+
+func TestTwoPutsOfOneSequence(t *testing.T) {
+	t.Parallel()
+
+	s, store := newSource(t)
+	slow := &stalledReader{started: make(chan struct{}), release: make(chan struct{}), given: false}
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := s.Put(t.Context(), unit(), 1, claims(1), slow)
+		done <- err
+	}()
+
+	<-slow.started
+
+	// The second upload commits while the first still streams its body.
+	winner := put(t, s, unit(), 1, []byte("winner"))
+
+	close(slow.release)
+
+	if err := <-done; !errors.Is(err, unitimport.ErrSourceInvalid) ||
+		!strings.Contains(err.Error(), "sequence 1 is stored") {
+		t.Fatalf("slow put error = %v, want ErrSourceInvalid with sequence 1 is stored", err)
+	}
+
+	if got := readBody(t, s, winner.ID); got != "winner" {
+		t.Errorf("committed body = %q, want winner", got)
+	}
+
+	checkUnchanged(t, s, store, 1)
+}
+
+func TestPutKeepsTheFactsWithinTheLimit(t *testing.T) {
+	t.Parallel()
+
+	// Each < is one byte in the file, and six bytes in the escaped form.
+	angle := []byte(`"` + strings.Repeat("<", upload.MaxMetadataBytes-2) + `"`)
+
+	s, store := newSource(t)
+
+	v := upload.Version{At: clock(), Actor: "", Metadata: angle}
+	if _, err := s.Put(t.Context(), unit(), 1, v, strings.NewReader("{}")); err != nil {
+		t.Fatalf("put metadata of the largest size: %v", err)
+	}
+
+	got, err := s.Versions(t.Context(), unitimport.Credential{}, unit(), "", 10)
+	if err != nil || len(got) != 1 || !bytes.Equal(got[0].Metadata, angle) {
+		t.Fatalf("versions after a put with < in the metadata = %d, %v, want the metadata back", len(got), err)
+	}
+
+	long := unitimport.SourceUnit{Tool: "pulumi", Name: strings.Repeat("n", unitimport.MaxTextBytes+1)}
+
+	_, err = s.Put(t.Context(), long, 1, claims(1), strings.NewReader("{}"))
+	if !errors.Is(err, unitimport.ErrSourceInvalid) {
+		t.Fatalf("put with a long name: error = %v, want ErrSourceInvalid", err)
+	}
+
+	long = unitimport.SourceUnit{Tool: strings.Repeat("t", unitimport.MaxTextBytes+1), Name: "web"}
+
+	_, err = s.Put(t.Context(), long, 1, claims(1), strings.NewReader("{}"))
+	if !errors.Is(err, unitimport.ErrSourceInvalid) {
+		t.Fatalf("put with a long tool: error = %v, want ErrSourceInvalid", err)
+	}
+
+	objs, err := store.List(t.Context(), prefix)
+	if err != nil || len(objs) != 3 {
+		t.Errorf("objects = %d, %v, want the 3 files of the one version", len(objs), err)
 	}
 }
 

@@ -125,6 +125,7 @@ type backupSeed struct {
 	pending    workspace.StateVersion
 	backedUp   backup.Record
 	audit      []audit.Entry
+	imports    *seededImports
 }
 
 // seedBackupStore fills s through the real ports: namespaces, stacks with
@@ -135,7 +136,8 @@ type backupSeed struct {
 // restore with a creator and a restore source, the checkpoint manages one
 // resource, and the pending state version is a restore of the finalized one,
 // so the round trip proves the columns that later migrations added survive
-// an export and an import.
+// an export and an import. A store that keeps imports gets three imports
+// (see seedBackupImports).
 func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	t.Helper()
 
@@ -249,6 +251,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupAccess(t, s)
 	seedBackupPurge(t, s, acme)
 	seedBackupSignIn(t, s)
+	imports := seedBackupImports(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -267,6 +270,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		pending:    pending,
 		backedUp:   backedUp,
 		audit:      entries,
+		imports:    imports,
 	}
 }
 

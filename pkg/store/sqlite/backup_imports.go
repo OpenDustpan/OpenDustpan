@@ -24,7 +24,7 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 				"created_by",
 				"created_at_ms",
 				"plan",
-				"ended_at_ms",
+				backupColEndedAtMs,
 			},
 		},
 		{

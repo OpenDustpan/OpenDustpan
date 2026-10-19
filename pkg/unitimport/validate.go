@@ -51,6 +51,16 @@ func (w CredentialWay) Valid() bool {
 	return false
 }
 
+// Validate checks the tool and the name of a source unit with the text rules
+// of the import records. It wraps ErrInvalid.
+func (u SourceUnit) Validate() error {
+	if err := text("source tool", u.Tool, true); err != nil {
+		return err
+	}
+
+	return text("source name", u.Name, true)
+}
+
 // ValidateNew checks an import before its first store. It wraps ErrInvalid
 // or ErrAddressInvalid. The upload source has no address and needs no
 // credential. Each other source needs an address that CheckAddress accepts
@@ -103,7 +113,7 @@ func (i Import) ValidateNew() error {
 
 func (i Import) validateSource() error {
 	if i.Kind == SourceUpload {
-		if i.Address != "" || i.Credential != CredentialNone {
+		if i.Address != "" || i.Credential != CredentialNone || i.ProfilePath != "" {
 			return fmt.Errorf("%w: an upload import has no address and no credential", ErrInvalid)
 		}
 
@@ -112,6 +122,10 @@ func (i Import) validateSource() error {
 
 	if i.Credential == CredentialNone {
 		return fmt.Errorf("%w: a %s import needs a credential", ErrInvalid, i.Kind)
+	}
+
+	if i.Credential != CredentialProfile && i.ProfilePath != "" {
+		return fmt.Errorf("%w: only a profile import names a profile path", ErrInvalid)
 	}
 
 	if (i.Credential == CredentialProfile) != (i.Profile != "") {
@@ -130,8 +144,6 @@ func (u ImportUnit) ValidateNew(id string) error {
 		needed  bool
 	}{
 		{"import unit ID", u.ID, true},
-		{"source tool", u.Source.Tool, true},
-		{"source name", u.Source.Name, true},
 		{"target name", u.TargetName, true},
 		{"error code", u.ErrorCode, false},
 		{"encryption", u.Encryption, false},
@@ -139,6 +151,10 @@ func (u ImportUnit) ValidateNew(id string) error {
 		if err := text(f.name, f.v, f.needed); err != nil {
 			return err
 		}
+	}
+
+	if err := u.Source.Validate(); err != nil {
+		return err
 	}
 
 	switch {

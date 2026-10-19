@@ -244,13 +244,13 @@ func (m *memStore) Unit(_ context.Context, ns namespace.Name, id, unitID string)
 func (m *memStore) TransitionUnit(
 	_ context.Context, fence namespace.Fence, key unitimport.UnitKey, mv unitimport.UnitMove, e audit.Entry,
 ) error {
-	return m.changeUnit(fence, key, e, func(u *unitimport.ImportUnit) error {
-		if u.State != mv.From {
-			return fmt.Errorf("%w: unit is %q, not %q", unitimport.ErrTransition, u.State, mv.From)
+	return m.changeUnit(fence, key, e, func(imp unitimport.Import, u *unitimport.ImportUnit) error {
+		if imp.State.Ended() && mv.To != unitimport.UnitCanceled {
+			return fmt.Errorf("%w: import is %q", unitimport.ErrTransition, imp.State)
 		}
 
-		if err := unitimport.NextUnitState(mv.From, mv.To); err != nil {
-			return fmt.Errorf("next unit state: %w", err)
+		if err := unitimport.CheckUnitMove(u.State, u.ErrorCode, mv); err != nil {
+			return fmt.Errorf("unit move: %w", err)
 		}
 
 		u.State, u.ErrorCode = mv.To, mv.Code
@@ -262,7 +262,11 @@ func (m *memStore) TransitionUnit(
 func (m *memStore) SetCounts(
 	_ context.Context, fence namespace.Fence, key unitimport.UnitKey, c unitimport.Counts, e audit.Entry,
 ) error {
-	return m.changeUnit(fence, key, e, func(u *unitimport.ImportUnit) error {
+	return m.changeUnit(fence, key, e, func(imp unitimport.Import, u *unitimport.ImportUnit) error {
+		if imp.State.Ended() {
+			return fmt.Errorf("%w: import is %q", unitimport.ErrTransition, imp.State)
+		}
+
 		if err := unitimport.ValidateCounts(c); err != nil {
 			return fmt.Errorf("counts: %w", err)
 		}
@@ -290,7 +294,13 @@ func (m *memStore) Ledger(_ context.Context, ns namespace.Name, id, unitID strin
 		}
 	}
 
-	slices.SortStableFunc(rows, func(a, b unitimport.LedgerRow) int { return a.CommittedAt.Compare(b.CommittedAt) })
+	slices.SortStableFunc(rows, func(a, b unitimport.LedgerRow) int {
+		if c := a.CommittedAt.Compare(b.CommittedAt); c != 0 {
+			return c
+		}
+
+		return strings.Compare(string(a.Version), string(b.Version))
+	})
 
 	return rows, nil
 }
@@ -343,22 +353,71 @@ func (m *memStore) find(ns namespace.Name, id string) (unitimport.Import, error)
 
 // changeUnit applies fn to the import unit under the write checks.
 func (m *memStore) changeUnit(
-	fence namespace.Fence, k unitimport.UnitKey, e audit.Entry, fn func(u *unitimport.ImportUnit) error,
+	fence namespace.Fence,
+	k unitimport.UnitKey,
+	e audit.Entry,
+	fn func(imp unitimport.Import, u *unitimport.ImportUnit) error,
 ) error {
 	return m.write(fence, e, func() error {
-		if _, err := m.find(fence.Namespace, k.ImportID); err != nil {
+		imp, err := m.find(fence.Namespace, k.ImportID)
+		if err != nil {
 			return err
 		}
 
 		units := m.units[key(fence.Namespace, k.ImportID)]
 		for i := range units {
 			if units[i].ID == k.UnitID {
-				return fn(&units[i])
+				return fn(imp, &units[i])
 			}
 		}
 
 		return unitimport.ErrNotFound
 	})
+}
+
+// seedLedger stores a ledger row as a Tool does, and refuses a second row of one version.
+func (m *memStore) seedLedger(_ context.Context, ns namespace.Name, row unitimport.LedgerRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	held := m.ledger[key(ns, row.ImportID)]
+	for i := range held {
+		if held[i].ImportUnitID == row.ImportUnitID && held[i].Version == row.Version {
+			return unitimport.ErrLedgerExists
+		}
+	}
+
+	m.ledger[key(ns, row.ImportID)] = append(held, row)
+
+	return nil
+}
+
+// setTarget records the target of an import unit as a Tool does.
+func (m *memStore) setTarget(
+	_ context.Context, ns namespace.Name, k unitimport.UnitKey, target history.Unit,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	imp, err := m.find(ns, k.ImportID)
+	if err != nil {
+		return err
+	}
+
+	if imp.State.Ended() {
+		return fmt.Errorf("%w: import is %q", unitimport.ErrTransition, imp.State)
+	}
+
+	units := m.units[key(ns, k.ImportID)]
+	for i := range units {
+		if units[i].ID == k.UnitID {
+			units[i].Target = target
+
+			return nil
+		}
+	}
+
+	return unitimport.ErrNotFound
 }
 
 func memHarness(m *memStore) unitimporttest.Harness {
@@ -375,27 +434,8 @@ func memHarness(m *memStore) unitimporttest.Harness {
 
 			return namespace.Fence{Namespace: namespace.Name(name), FailoverVersion: 1}
 		},
-		SeedLedger: func(t *testing.T, ns namespace.Name, row unitimport.LedgerRow) {
-			t.Helper()
-
-			m.mu.Lock()
-			defer m.mu.Unlock()
-
-			m.ledger[key(ns, row.ImportID)] = append(m.ledger[key(ns, row.ImportID)], row)
-		},
-		SetTarget: func(t *testing.T, ns namespace.Name, k unitimport.UnitKey, target history.Unit) {
-			t.Helper()
-
-			m.mu.Lock()
-			defer m.mu.Unlock()
-
-			units := m.units[key(ns, k.ImportID)]
-			for i := range units {
-				if units[i].ID == k.UnitID {
-					units[i].Target = target
-				}
-			}
-		},
+		SeedLedger: m.seedLedger,
+		SetTarget:  m.setTarget,
 		Audited: func(t *testing.T, ns namespace.Name) []audit.Entry {
 			t.Helper()
 

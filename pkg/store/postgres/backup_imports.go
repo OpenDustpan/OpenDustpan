@@ -24,7 +24,7 @@ func pgCopyImportTables() []pgCopyTable {
 				"created_by",
 				"created_at_ms",
 				"plan",
-				"ended_at_ms",
+				pgColEndedAtMs,
 			},
 			orderBy: []string{pgColNamespaceID, "id"},
 		},

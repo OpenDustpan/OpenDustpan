@@ -265,18 +265,19 @@ func (i *Imports) Unit(ctx context.Context, ns namespace.Name, id, unitID string
 func (i *Imports) TransitionUnit(
 	ctx context.Context, fence namespace.Fence, key unitimport.UnitKey, m unitimport.UnitMove, e audit.Entry,
 ) error {
-	return i.writeImport(ctx, fence, key.ImportID, e, func(q *db.Queries, nsID string, _ db.Import) error {
+	return i.writeImport(ctx, fence, key.ImportID, e, func(q *db.Queries, nsID string, imp db.Import) error {
+		if unitimport.State(imp.State).Ended() && m.To != unitimport.UnitCanceled {
+			return fmt.Errorf("%w: import is %q, and only a move to canceled changes a unit",
+				unitimport.ErrTransition, imp.State)
+		}
+
 		row, err := findImportUnit(ctx, q, nsID, key)
 		if err != nil {
 			return err
 		}
 
-		if unitimport.UnitState(row.State) != m.From {
-			return fmt.Errorf("%w: unit is %q, not %q", unitimport.ErrTransition, row.State, m.From)
-		}
-
-		if err = unitimport.NextUnitState(m.From, m.To); err != nil {
-			return fmt.Errorf("next unit state: %w", err)
+		if err = unitimport.CheckUnitMove(unitimport.UnitState(row.State), row.ErrorCode, m); err != nil {
+			return fmt.Errorf("unit move: %w", err)
 		}
 
 		n, err := q.SetImportUnitState(ctx, db.SetImportUnitStateParams{
@@ -299,7 +300,15 @@ func (i *Imports) TransitionUnit(
 func (i *Imports) SetCounts(
 	ctx context.Context, fence namespace.Fence, key unitimport.UnitKey, c unitimport.Counts, e audit.Entry,
 ) error {
-	return i.writeImport(ctx, fence, key.ImportID, e, func(q *db.Queries, nsID string, _ db.Import) error {
+	return i.writeImport(ctx, fence, key.ImportID, e, func(q *db.Queries, nsID string, imp db.Import) error {
+		if unitimport.State(imp.State).Ended() {
+			return fmt.Errorf(
+				"%w: import is %q, and an ended import takes no counts",
+				unitimport.ErrTransition,
+				imp.State,
+			)
+		}
+
 		if err := unitimport.ValidateCounts(c); err != nil {
 			return fmt.Errorf("counts: %w", err)
 		}
@@ -415,6 +424,10 @@ func insertImport(
 	}
 
 	if err = q.InsertImport(ctx, db.InsertImportParams(row)); err != nil {
+		if isUniqueViolation(err) {
+			return unitimport.Import{}, fmt.Errorf("%w: import %q exists", unitimport.ErrInvalid, imp.ID)
+		}
+
 		return unitimport.Import{}, fmt.Errorf("insert import: %w", err)
 	}
 
@@ -489,6 +502,10 @@ func putLedgerRow(ctx context.Context, q *db.Queries, ns namespace.Name, r uniti
 	}
 
 	if err = q.InsertImportLedger(ctx, db.InsertImportLedgerParams(codec.LedgerToRow(nsID, r))); err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: version %q of unit %q", unitimport.ErrLedgerExists, r.Version, r.ImportUnitID)
+		}
+
 		return fmt.Errorf("insert import ledger row: %w", err)
 	}
 
@@ -497,7 +514,8 @@ func putLedgerRow(ctx context.Context, q *db.Queries, ns namespace.Name, r uniti
 
 // setImportUnitTarget records the target unit of an import unit in the
 // transaction of q. The Tool adapters call it in the transaction that creates
-// the target. It wraps unitimport.ErrNotFound for an unknown import unit.
+// the target. It wraps unitimport.ErrNotFound for an unknown import unit and
+// unitimport.ErrTransition for an import that ended.
 func setImportUnitTarget(
 	ctx context.Context, q *db.Queries, key unitimport.UnitKey, target history.Unit,
 ) error {
@@ -508,6 +526,15 @@ func setImportUnitTarget(
 	nsID, err := importNamespaceID(ctx, q, target.Namespace)
 	if err != nil {
 		return err
+	}
+
+	imp, err := findImport(ctx, q, nsID, key.ImportID)
+	if err != nil {
+		return err
+	}
+
+	if unitimport.State(imp.State).Ended() {
+		return fmt.Errorf("%w: import is %q, and an ended import takes no target", unitimport.ErrTransition, imp.State)
 	}
 
 	n, err := q.SetImportUnitTarget(ctx, db.SetImportUnitTargetParams{

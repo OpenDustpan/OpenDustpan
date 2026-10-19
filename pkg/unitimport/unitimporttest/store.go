@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ func RunStore(t *testing.T, newHarness Factory) {
 		{"create and get an import", testCreateGet},
 		{"create refuses a bad import", testCreateInvalid},
 		{"create refuses a repeated ID", testCreateRepeated},
+		{"a create race stores one import", testCreateRace},
 		{"an unknown import", testNotFound},
 		{"two namespaces hold two sets of imports", testNamespaceIsolation},
 		{"list by state", testList},
@@ -36,6 +38,8 @@ func RunStore(t *testing.T, newHarness Factory) {
 		{"put refuses bad units", testPutUnitsInvalid},
 		{"put refuses an import that moves", testPutUnitsState},
 		{"the transitions of an import unit", testUnitTransitions},
+		{"a unit with a changed source history does not resume", testUnitChangedHistory},
+		{"an ended import takes no change of its units", testEndedImport},
 		{"counts of an import unit", testCounts},
 		{"the ledger of an import unit", testLedger},
 		{"the target of an import unit", testTarget},
@@ -103,8 +107,14 @@ func testCreateInvalid(t *testing.T, h Harness) {
 			func(i *unitimport.Import) { i.Address = "ftp://host/x" },
 			unitimport.ErrAddressInvalid,
 		},
+		{"profile path with another way", func(i *unitimport.Import) {
+			i.Credential, i.Profile = unitimport.CredentialEphemeral, ""
+		}, unitimport.ErrInvalid},
+		{"upload with a profile path", func(i *unitimport.Import) {
+			i.Kind, i.Address, i.Credential, i.Profile = unitimport.SourceUpload, "", unitimport.CredentialNone, ""
+		}, unitimport.ErrInvalid},
 		{"upload with an address", func(i *unitimport.Import) {
-			i.Kind, i.Credential, i.Profile = unitimport.SourceUpload, unitimport.CredentialNone, ""
+			i.Kind, i.Credential, i.Profile, i.ProfilePath = unitimport.SourceUpload, unitimport.CredentialNone, "", ""
 		}, unitimport.ErrInvalid},
 	}
 
@@ -144,6 +154,49 @@ func testCreateRepeated(t *testing.T, h Harness) {
 		t.Errorf("audit entries after a refused create = %d, want 1", got)
 	}
 }
+
+func testCreateRace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	results := make(chan error, raceCreates)
+
+	var wg sync.WaitGroup
+
+	for range raceCreates {
+		wg.Go(func() {
+			_, err := h.Store.Create(t.Context(), fence, newImport("acme", "imp-race"), entry("acme", "import:run"))
+			results <- err
+		})
+	}
+
+	wg.Wait()
+	close(results)
+
+	created := 0
+
+	for err := range results {
+		switch {
+		case err == nil:
+			created++
+		case !errors.Is(err, unitimport.ErrInvalid):
+			t.Errorf("create in a race: error = %v, want nil or ErrInvalid", err)
+		default:
+		}
+	}
+
+	if created != 1 {
+		t.Errorf("creates that succeeded = %d, want 1", created)
+	}
+
+	list, err := h.Store.List(t.Context(), "acme", unitimport.Filter{States: nil})
+	if err != nil || len(list) != 1 {
+		t.Errorf("list after the race = %d imports, %v, want 1", len(list), err)
+	}
+}
+
+// raceCreates is the count of concurrent creates of one import ID.
+const raceCreates = 8
 
 func testNotFound(t *testing.T, h Harness) {
 	t.Helper()
@@ -264,7 +317,8 @@ func testTransitions(t *testing.T, h Harness) {
 
 	// The path of a normal import, with a second dry run, a pause and a resume.
 	walk(t, h, fence, "imp-1",
-		unitimport.StatePlanning, unitimport.StatePlanned, unitimport.StatePlanning, unitimport.StatePlanned,
+		unitimport.StatePlanning, unitimport.StatePaused, unitimport.StatePlanning,
+		unitimport.StatePlanned, unitimport.StatePlanning, unitimport.StatePlanned,
 		unitimport.StateRunning, unitimport.StatePaused, unitimport.StateRunning, unitimport.StateHolding,
 		unitimport.StateRunning, unitimport.StateHolding, unitimport.StateReleased)
 
@@ -412,7 +466,7 @@ func testPurge(t *testing.T, h Harness) {
 	e := entry("acme", "import:run")
 
 	putUnits(t, h, fence, newUnit("u-1"))
-	h.SeedLedger(t, "acme", ledgerRow("u-1", "v1", at()))
+	seedLedger(t, h, ledgerRow("u-1", "v1", at()))
 
 	mustIs(t, "purge of an import that did not end", h.Store.Purge(ctx, fence, "imp-1", e), unitimport.ErrTransition)
 

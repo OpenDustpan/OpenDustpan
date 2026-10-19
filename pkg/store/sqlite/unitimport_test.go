@@ -1,6 +1,7 @@
 package sqlite_test
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/unitimport"
 	"opendustpan.org/opendustpan/pkg/unitimport/unitimporttest"
 )
@@ -25,19 +27,9 @@ func importHarness(s *sqlite.Store) unitimporttest.Harness {
 
 			return contextNamespace(t, s, name)
 		},
-		SeedLedger: func(t *testing.T, ns namespace.Name, row unitimport.LedgerRow) {
-			t.Helper()
-
-			if err := imports.SeedLedgerRow(t.Context(), ns, row); err != nil {
-				t.Fatalf("seed ledger row: %v", err)
-			}
-		},
-		SetTarget: func(t *testing.T, _ namespace.Name, key unitimport.UnitKey, target history.Unit) {
-			t.Helper()
-
-			if err := imports.SeedTarget(t.Context(), key, target); err != nil {
-				t.Fatalf("seed target: %v", err)
-			}
+		SeedLedger: imports.SeedLedgerRow,
+		SetTarget: func(ctx context.Context, _ namespace.Name, key unitimport.UnitKey, target history.Unit) error {
+			return imports.SeedTarget(ctx, key, target)
 		},
 		Audited: func(t *testing.T, ns namespace.Name) []audit.Entry {
 			t.Helper()
@@ -84,4 +76,18 @@ func TestImportsConformance(t *testing.T) {
 
 		return importHarness(open(t))
 	})
+}
+
+// ImportPorts implements storetest.ImportSeeder.
+func (s *backupStore) ImportPorts() storetest.ImportPorts {
+	imports := s.Imports()
+
+	return storetest.ImportPorts{
+		Store:      imports,
+		Units:      imports,
+		SeedLedger: imports.SeedLedgerRow,
+		SetTarget: func(ctx context.Context, _ namespace.Name, key unitimport.UnitKey, target history.Unit) error {
+			return imports.SeedTarget(ctx, key, target)
+		},
+	}
 }
