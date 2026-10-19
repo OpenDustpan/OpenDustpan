@@ -1,6 +1,6 @@
 # 42. A portable backup format
 
-Status: accepted · 2026-10-12
+Status: accepted · 2026-10-12 · the deferred restore into another region amended by ADR 248
 
 ## Context
 
