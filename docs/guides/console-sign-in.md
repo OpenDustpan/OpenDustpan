@@ -246,11 +246,12 @@ server also refuses a request with the cookie from another site. An
 
 A console on another origin sends a preflight request. For an origin in
 `--allowed-origins`, the server allows the headers `Authorization`,
-`Content-Type`, `Dustpan-Channel` and `X-Dustpan-CSRF`, and the methods GET,
-POST, PUT, PATCH and DELETE, with credentials. It caches the answer for 600
-seconds. On an answer to a request, the server sets `Access-Control-Expose-Headers: Retry-After, ETag`,
-so that the console can read the wait time of a 503 answer and the `ETag` of a profile. A request from
-another origin gets no CORS headers.
+`Content-Type`, `Dustpan-Channel`, `Idempotency-Key`, `If-Match` and
+`X-Dustpan-CSRF`, and the methods GET, POST, PUT, PATCH and DELETE, with
+credentials. It caches the answer for 600 seconds. On an answer to a request,
+the server sets `Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed`,
+so that the console can read the wait time of a 503 answer, the `ETag` of a profile and
+the mark of a replayed answer. A request from another origin gets no CORS headers.
 
 The server answers CORS on `/api/` (including the TFE-compatible API at
 `/api/v2/` and the context API at `/api/context/`), and not on
