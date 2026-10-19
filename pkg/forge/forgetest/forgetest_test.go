@@ -2,7 +2,9 @@ package forgetest_test
 
 import (
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forge/forgetest"
 )
 
@@ -33,6 +35,13 @@ func TestRunSkipsCasesWithNoBody(t *testing.T) {
 		t.Helper()
 		t.Fatal("a case with no body asked for a harness")
 
-		return forgetest.Harness{Forge: nil, Repo: "", Fixture: nil}
+		return forgetest.Harness{
+			Opener:     nil,
+			Connection: forge.Connection{ID: "", Kind: "", Auth: "", BaseURL: "", Params: nil, Push: false},
+			Credential: forge.Credential{SetID: "", Secret: nil, EventSecret: nil, CreatedAt: time.Time{}},
+			Forge:      nil,
+			Repo:       "",
+			Fixture:    nil,
+		}
 	})
 }

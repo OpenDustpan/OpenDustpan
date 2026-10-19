@@ -1,9 +1,8 @@
 // Package forge holds the Forge port: the one way in which the server uses
 // a forge. A forge is a git hosting service with an API, for example GitHub
 // or GitLab. Through the port, the server reads files and diffs at a
-// commit, commits file changes, opens and merges review requests, posts
-// statuses and comments, gets a short-lived read-only token for one
-// repository, and checks the events that a forge sends.
+// commit, commits file changes, opens and closes review requests, gets a
+// token for the git protocol, and checks the events that a forge sends.
 //
 // The port is tool-neutral and forge-neutral. No type, method or error in
 // it exists only because one forge or one infrastructure-as-code tool needs
@@ -52,7 +51,8 @@ var (
 	ErrAuth = errors.New("forge refused the credential")
 	// ErrUnavailable reports a forge that did not answer, answered a server
 	// error, or limited the rate of the connection. A retry with backoff
-	// can pass.
+	// can pass. UnavailableError wraps it with the wait time that the forge
+	// gave.
 	ErrUnavailable = errors.New("forge is not available")
 	// ErrTooLarge reports a file, a diff or a request above the limit that
 	// the caller gave or that the forge applies.
@@ -69,17 +69,54 @@ var (
 	ErrInvalid = errors.New("invalid forge request")
 )
 
+// UnavailableError is an ErrUnavailable with the wait time that the forge
+// gave, for example in the header Retry-After of a rate limit. An adapter
+// returns it through Unavailable. RetryAfter reads it.
+type UnavailableError struct {
+	// After is the time to wait before a retry. Zero means the forge gave
+	// no time.
+	After time.Duration
+	// Reason says what the forge did, with no part of a secret.
+	Reason string
+}
+
+// Error returns the text of ErrUnavailable and the reason.
+func (e *UnavailableError) Error() string {
+	if e.Reason == "" {
+		return ErrUnavailable.Error()
+	}
+
+	return ErrUnavailable.Error() + ": " + e.Reason
+}
+
+// Unwrap returns ErrUnavailable, so that errors.Is finds it.
+func (e *UnavailableError) Unwrap() error {
+	return ErrUnavailable
+}
+
+// Unavailable returns an UnavailableError.
+func Unavailable(after time.Duration, reason string) error {
+	return &UnavailableError{After: after, Reason: reason}
+}
+
+// RetryAfter returns the wait time that the forge gave in err, and whether
+// err holds an UnavailableError with a time above zero.
+func RetryAfter(err error) (time.Duration, bool) {
+	var u *UnavailableError
+	if errors.As(err, &u) && u.After > 0 {
+		return u.After, true
+	}
+
+	return 0, false
+}
+
 // Kind names the adapter of a forge connection.
 type Kind string
 
-// The kinds of forge connections. A bridge is a small process that a team
-// runs next to a forge that the server cannot reach, or next to a version
-// control system with no forge API. It speaks one protocol to the server
-// and implements the operations of the port on the far side.
+// The kinds of forge connections.
 const (
 	KindGitHub Kind = "github"
 	KindGitLab Kind = "gitlab"
-	KindBridge Kind = "bridge"
 )
 
 // AuthKind names how a connection authenticates to its forge.
@@ -116,14 +153,19 @@ type Connection struct {
 }
 
 // Credential is one credential set of a connection, unsealed for one
-// Open. Secret holds the private key of an app or the token. The adapter
-// never logs it and never returns it in an error.
+// Open. Secret holds the private key of an app or the token. EventSecret
+// holds the secret that the forge uses to sign the events that it sends for
+// the connection. The server seals both in the same set. Two sets are
+// active during a rotation, and an event is valid when it matches the
+// EventSecret of either set. The adapter never logs a secret and never
+// returns a part of one in an error or in an event.
 type Credential struct {
 	// SetID names the credential set, so that a log line can name the set
 	// that failed without a part of the secret.
-	SetID     string
-	Secret    []byte
-	CreatedAt time.Time
+	SetID       string
+	Secret      []byte
+	EventSecret []byte
+	CreatedAt   time.Time
 }
 
 // Opener makes a Forge for one connection and one credential set. Each
@@ -154,7 +196,6 @@ type Forge interface {
 	Files
 	Commits
 	Reviews
-	Feedback
 	Tokens
 	Events
 }
@@ -196,13 +237,13 @@ type Commits interface {
 }
 
 // Reviews manages review requests: a pull request of GitHub or a merge
-// request of GitLab. Write-back and review request feedback use it.
+// request of GitLab. Write-back uses it.
 type Reviews interface {
 	// OpenReview opens a review request from req.Branch into req.Target.
-	// When an open review request for req.Branch exists, it returns that
-	// one and opens no second one. It returns ErrNotFound for a missing
-	// branch, and ErrRefused when the forge does not allow the review
-	// request.
+	// When an open review request for the same req.Branch and the same
+	// req.Target exists, it returns that one and opens no second one. It
+	// returns ErrNotFound for a missing branch, and ErrRefused when the
+	// forge does not allow the review request.
 	OpenReview(ctx context.Context, repo string, req ReviewRequest) (Review, error)
 	// ReadReview returns the review request id with its state, its head
 	// commit and, for a merge, the merge time and the merge commit. It
@@ -212,47 +253,25 @@ type Reviews interface {
 	// request that is closed already returns nil. It returns ErrConflict
 	// for a review request that merged.
 	CloseReview(ctx context.Context, repo, id string) error
-	// MergeReview merges the review request id when its head is the
-	// commit head, and returns it. It returns ErrConflict when the head
-	// moved or the review request cannot merge cleanly, and ErrRefused
-	// when a rule of the forge stops the merge.
-	MergeReview(ctx context.Context, repo, id, head string) (Review, error)
 }
 
-// Feedback posts results to a commit or a review request, and reads the
-// comments that a person writes there. Review request feedback and
-// comment commands use it.
-type Feedback interface {
-	// SetStatus sets the status s.Name on commit to s. A second call with
-	// the same name replaces the status. It returns ErrNotFound for a
-	// missing repository or commit.
-	SetStatus(ctx context.Context, repo, commit string, s Status) error
-	// PutComment writes body as the comment that key names on the review
-	// request reviewID. The first call creates the comment. A later call
-	// with the same key edits the same comment in place. It returns
-	// ErrNotFound for a missing review request.
-	PutComment(ctx context.Context, repo, reviewID, key, body string) (Comment, error)
-	// ReadComment returns the comment id on the review request reviewID,
-	// as the forge holds it now. The server reads a comment again before
-	// it acts on a comment command, because an event is a hint only. It
-	// returns ErrNotFound for a missing or deleted comment.
-	ReadComment(ctx context.Context, repo, reviewID, id string) (Comment, error)
-}
-
-// Tokens gives a short-lived token for the git protocol. The source fetch
-// of the server and the git credential helper of a runner step use it.
+// Tokens gives a token for the git protocol. The source fetch of the server
+// and the git credential helper of a runner step use it.
 type Tokens interface {
-	// RepoToken returns a token that can only read repo, and that expires
-	// in at most one hour. It returns ErrUnsupported when the auth kind
-	// cannot limit a token to one repository and to read access. The
-	// server never gives a broader token in its place.
+	// RepoToken returns a token for the git protocol over HTTPS for repo.
+	// An app connection answers a token that reads only repo and expires in
+	// at most one hour, with Scoped set. A token connection answers its own
+	// token with Scoped not set. It returns ErrUnsupported when the auth
+	// kind has no token for the git protocol. A token with Scoped not set
+	// stays in the server: a caller that gives a token to a runner refuses
+	// it.
 	RepoToken(ctx context.Context, repo string) (Token, error)
 }
 
 // Events checks an event that the forge sent to the server.
 type Events interface {
-	// ParseEvent checks the signature or the token of r with the event
-	// secret of the connection, and returns the event. It returns
+	// ParseEvent checks the signature or the token of r with the
+	// EventSecret of the credential, and returns the event. It returns
 	// ErrSignature for a request that does not match, ErrInvalid for a
 	// body that it cannot parse, and ErrUnsupported for a kind of event
 	// that the port does not name. It makes no call to the forge. An
@@ -353,7 +372,7 @@ func validateChanges(changes []FileChange) error {
 	total := 0
 
 	for _, c := range changes {
-		if err := ValidatePath(c.Path); err != nil {
+		if err := validatePath(c.Path); err != nil {
 			return err
 		}
 
@@ -376,9 +395,9 @@ func validateChanges(changes []FileChange) error {
 	return nil
 }
 
-// ValidatePath checks a file path in a repository: relative, clean, with
+// validatePath checks a file path in a repository: relative, clean, with
 // no ".." part and no NUL byte.
-func ValidatePath(p string) error {
+func validatePath(p string) error {
 	switch {
 	case p == "", p == ".":
 		return fmt.Errorf("%w: the file path is empty", ErrInvalid)
@@ -462,41 +481,15 @@ type Review struct {
 	MergeCommit string
 }
 
-// StatusState is the state of a commit status.
-type StatusState string
-
-// The status states.
-const (
-	StatusPending StatusState = "pending"
-	StatusSuccess StatusState = "success"
-	StatusFailure StatusState = "failure"
-	StatusError   StatusState = "error"
-)
-
-// Status is a status of a commit. Name is unique on the commit, for
-// example "opendustpan/plan: acme/network". URL links to the console.
-type Status struct {
-	Name        string
-	State       StatusState
-	Description string
-	URL         string
-}
-
-// Comment is a comment on a review request.
-type Comment struct {
-	ID        string
-	ReviewID  string
-	Author    Account
-	Body      string
-	UpdatedAt time.Time
-}
-
-// Token is a short-lived token for the git protocol over HTTPS. Username
-// is the user name that the forge expects with the token.
+// Token is a token for the git protocol over HTTPS. Username is the user
+// name that the forge expects with the token. Scoped is true when the token
+// reads only the repository that RepoToken got, and expires in at most one
+// hour. ExpiresAt is zero when the token does not expire.
 type Token struct {
 	Username  string
 	Value     []byte
 	ExpiresAt time.Time
+	Scoped    bool
 }
 
 // EventRequest is an event as the HTTP adapter received it: the header and
@@ -526,17 +519,20 @@ const (
 // Event is a forge event. DeliveryID is the ID that the forge gives to the
 // delivery, and stays the same across retries of the forge. Ref, Before
 // and After are set for EventPush. ReviewID is set for EventReview and
-// EventComment. CommentID is set for EventComment.
+// EventComment. CommentID is set for EventComment. InstallationID is set
+// when the forge sends the events of many installations of one app to one
+// address, for example a GitHub App. The server maps it to the connection.
 type Event struct {
-	DeliveryID string
-	Kind       EventKind
-	Repo       string
-	Ref        string
-	Before     string
-	After      string
-	ReviewID   string
-	CommentID  string
-	Sender     Account
+	DeliveryID     string
+	Kind           EventKind
+	Repo           string
+	Ref            string
+	Before         string
+	After          string
+	ReviewID       string
+	CommentID      string
+	InstallationID string
+	Sender         Account
 }
 
 // Capability is one group of operations of the port.
@@ -552,13 +548,11 @@ const (
 	CapCommit Capability = "commit"
 	// CapReview covers OpenReview, ReadReview and CloseReview.
 	CapReview Capability = "review"
-	// CapMerge covers MergeReview.
-	CapMerge Capability = "merge"
-	// CapStatus covers SetStatus.
-	CapStatus Capability = "status"
-	// CapComment covers PutComment and ReadComment.
-	CapComment Capability = "comment"
-	// CapRepoToken covers RepoToken.
+	// CapGitAccess covers RepoToken: a token for the git protocol,
+	// with Scoped set or not.
+	CapGitAccess Capability = "git-access"
+	// CapRepoToken covers RepoToken when it answers a token with Scoped
+	// set: one repository, read only, one hour at most.
 	CapRepoToken Capability = "repo-token"
 	// CapEvents covers ParseEvent.
 	CapEvents Capability = "events"
@@ -591,20 +585,23 @@ type Consumer string
 
 // The consumers.
 const (
-	// ConsumerWriteBack commits a change and, by default, opens a review
-	// request. It watches the review request until the merge or the close.
+	// ConsumerWriteBack commits a change to a branch that is not a review
+	// request.
 	ConsumerWriteBack Consumer = "write-back"
-	// ConsumerSource gets the code of a runner job and gives a read-only
-	// token to the git credential helper of a step.
-	ConsumerSource Consumer = "source"
-	// ConsumerFeedback posts the result of a plan on a review request,
-	// and can merge it after an apply.
-	ConsumerFeedback Consumer = "feedback"
+	// ConsumerWriteBackReview commits a change and opens a review request.
+	// It watches the review request until the merge or the close.
+	ConsumerWriteBackReview Consumer = "write-back-review"
+	// ConsumerFetch gets the code of a job with a git fetch in the server.
+	ConsumerFetch Consumer = "fetch"
+	// ConsumerRunnerGit gives a read-only token to the git credential helper
+	// of a runner step.
+	ConsumerRunnerGit Consumer = "runner-git"
+	// ConsumerCatalog reads the request files of the Catalog.
+	ConsumerCatalog Consumer = "catalog"
+	// ConsumerCauseDiff reads the cause diff of a change order.
+	ConsumerCauseDiff Consumer = "cause-diff"
 	// ConsumerTriggers starts a job on a push, a tag or a review request.
 	ConsumerTriggers Consumer = "triggers"
-	// ConsumerCommands runs a command that a person writes in a comment of
-	// a review request.
-	ConsumerCommands Consumer = "commands"
 )
 
 // Needs returns the capabilities that consumer needs from a connection. It
@@ -612,15 +609,19 @@ const (
 func Needs(consumer Consumer) Capabilities {
 	switch consumer {
 	case ConsumerWriteBack:
+		return Capabilities{CapFiles, CapCompare, CapCommit}
+	case ConsumerWriteBackReview:
 		return Capabilities{CapFiles, CapCompare, CapCommit, CapReview}
-	case ConsumerSource:
+	case ConsumerFetch:
+		return Capabilities{CapGitAccess}
+	case ConsumerRunnerGit:
 		return Capabilities{CapRepoToken}
-	case ConsumerFeedback:
-		return Capabilities{CapStatus, CapComment}
+	case ConsumerCatalog:
+		return Capabilities{CapFiles}
+	case ConsumerCauseDiff:
+		return Capabilities{CapCompare}
 	case ConsumerTriggers:
 		return Capabilities{CapEvents, CapFiles, CapCompare}
-	case ConsumerCommands:
-		return Capabilities{CapEvents, CapComment, CapReview}
 	}
 
 	return nil

@@ -2,9 +2,11 @@ package forge_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/forge"
 )
@@ -87,7 +89,7 @@ func TestValidateCommit(t *testing.T) {
 	}
 }
 
-func TestValidatePath(t *testing.T) {
+func TestValidateCommitPaths(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -108,45 +110,100 @@ func TestValidatePath(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		err := forge.ValidatePath(c.path)
+		r := validCommit()
+		r.Changes = []forge.FileChange{{Path: c.path, Content: []byte("x"), Delete: false}}
+
+		err := forge.ValidateCommit(r)
 		if c.ok && err != nil {
-			t.Errorf("ValidatePath(%q) = %v, want nil", c.path, err)
+			t.Errorf("ValidateCommit with the path %q = %v, want nil", c.path, err)
 		}
 
 		if !c.ok && !errors.Is(err, forge.ErrInvalid) {
-			t.Errorf("ValidatePath(%q) = %v, want ErrInvalid", c.path, err)
+			t.Errorf("ValidateCommit with the path %q = %v, want ErrInvalid", c.path, err)
 		}
 	}
 }
 
-func TestNeedsAndMissing(t *testing.T) {
+// TestNeeds holds the table of consumers of the design document, row by row.
+func TestNeeds(t *testing.T) {
 	t.Parallel()
-
-	readOnly := forge.Capabilities{forge.CapFiles, forge.CapCompare, forge.CapRepoToken, forge.CapEvents}
 
 	cases := []struct {
 		consumer forge.Consumer
-		missing  forge.Capabilities
+		need     forge.Capabilities
 	}{
-		{forge.ConsumerWriteBack, forge.Capabilities{forge.CapCommit, forge.CapReview}},
-		{forge.ConsumerSource, nil},
-		{forge.ConsumerFeedback, forge.Capabilities{forge.CapStatus, forge.CapComment}},
-		{forge.ConsumerTriggers, nil},
-		{forge.ConsumerCommands, forge.Capabilities{forge.CapComment, forge.CapReview}},
+		{forge.ConsumerWriteBack, forge.Capabilities{forge.CapFiles, forge.CapCompare, forge.CapCommit}},
+		{
+			forge.ConsumerWriteBackReview,
+			forge.Capabilities{forge.CapFiles, forge.CapCompare, forge.CapCommit, forge.CapReview},
+		},
+		{forge.ConsumerFetch, forge.Capabilities{forge.CapGitAccess}},
+		{forge.ConsumerRunnerGit, forge.Capabilities{forge.CapRepoToken}},
+		{forge.ConsumerCatalog, forge.Capabilities{forge.CapFiles}},
+		{forge.ConsumerCauseDiff, forge.Capabilities{forge.CapCompare}},
+		{forge.ConsumerTriggers, forge.Capabilities{forge.CapEvents, forge.CapFiles, forge.CapCompare}},
 	}
 
 	for _, c := range cases {
-		need := forge.Needs(c.consumer)
-		if len(need) == 0 {
-			t.Errorf("Needs(%q) is empty", c.consumer)
-		}
-
-		if got := readOnly.Missing(need); !slices.Equal(got, c.missing) {
-			t.Errorf("Missing(Needs(%q)) = %v, want %v", c.consumer, got, c.missing)
+		if got := forge.Needs(c.consumer); !slices.Equal(got, c.need) {
+			t.Errorf("Needs(%q) = %v, want %v", c.consumer, got, c.need)
 		}
 	}
 
 	if got := forge.Needs("unknown"); got != nil {
 		t.Errorf("Needs(unknown) = %v, want nil", got)
+	}
+}
+
+func TestMissing(t *testing.T) {
+	t.Parallel()
+
+	tokenConnection := forge.Capabilities{
+		forge.CapFiles, forge.CapCompare, forge.CapCommit, forge.CapGitAccess, forge.CapEvents,
+	}
+
+	cases := []struct {
+		consumer forge.Consumer
+		missing  forge.Capabilities
+	}{
+		{forge.ConsumerWriteBack, nil},
+		{forge.ConsumerWriteBackReview, forge.Capabilities{forge.CapReview}},
+		{forge.ConsumerFetch, nil},
+		{forge.ConsumerRunnerGit, forge.Capabilities{forge.CapRepoToken}},
+		{forge.ConsumerCatalog, nil},
+		{forge.ConsumerCauseDiff, nil},
+		{forge.ConsumerTriggers, nil},
+	}
+
+	for _, c := range cases {
+		if got := tokenConnection.Missing(forge.Needs(c.consumer)); !slices.Equal(got, c.missing) {
+			t.Errorf("Missing(Needs(%q)) = %v, want %v", c.consumer, got, c.missing)
+		}
+	}
+}
+
+func TestUnavailable(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("list files: %w", forge.Unavailable(30*time.Second, "rate limit"))
+	if !errors.Is(err, forge.ErrUnavailable) {
+		t.Fatalf("errors.Is(%v, ErrUnavailable) = false", err)
+	}
+
+	after, ok := forge.RetryAfter(err)
+	if !ok || after != 30*time.Second {
+		t.Errorf("RetryAfter = %v, %v, want 30s, true", after, ok)
+	}
+
+	if _, ok := forge.RetryAfter(forge.ErrUnavailable); ok {
+		t.Error("RetryAfter of the bare sentinel reports a time")
+	}
+
+	if _, ok := forge.RetryAfter(forge.Unavailable(0, "")); ok {
+		t.Error("RetryAfter of an error with no time reports a time")
+	}
+
+	if got := forge.Unavailable(0, "").Error(); got != forge.ErrUnavailable.Error() {
+		t.Errorf("Error() = %q, want the sentinel text", got)
 	}
 }
