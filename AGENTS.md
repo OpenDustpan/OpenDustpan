@@ -172,6 +172,34 @@ CLIs. Until 1.0, everything else can break (ADR 73).
   action fails the route test. Put routes that need no sign-in on the explicit
   public list in that test.
 
+## Security code: defense in depth (ADR 250)
+
+Security code is code that handles, for example, authentication, authorization, tokens, secrets, cryptography, file paths, processes, network connections, untrusted formats, webhooks, backups or restore. This list is not complete. If you are not sure, treat the code as security code.
+
+Never use only one layer. Never use either/or. Each layer must stop the attack alone, without help from the other layers. "It is checked upstream" is never a reason to remove, skip or omit a check.
+
+The steps below are the minimum. They are not complete. The examples in each step are examples, not a complete list. For each input that comes from outside the process, do all of these steps:
+
+1. Check the input at the boundary. Use an allowlist. Reject an input that is not valid. Do not change it to make it valid.
+2. Encode or contain the value where you use it. Examples:
+   - SQL: placeholders only.
+   - Paths: `os.Root`, or `filepath.Rel` with a containment check after cleaning.
+   - Processes: `exec.Command` with an argument list. Never use a shell.
+   - HTML: `html/template`.
+   - Headers and logs: remove CR and LF.
+   - Network: check the resolved IP address when the connection opens.
+3. Limit the effect. Examples: the smallest permission, a size limit, a timeout, a sandbox for untrusted work.
+4. Check authorization at the point of use, for the object.
+5. Fail closed. On an error or an unknown value, deny. Write the denial to the audit log.
+
+Treat everything from outside the process as untrusted. Examples: HTTP requests, tool state files, webhooks, Git host data, runner output, configuration, environment variables, restored backups, and database rows from another version.
+
+Write one test for each step. The test sends hostile input directly to that step, as if every other step had failed. A step without its own test is missing.
+
+If a check looks redundant, keep it, and give it a comment. The comment says that the check is a defense-in-depth layer and names the other layers that it does not rely on. Example: `// Defense in depth: the handler validates the name too; this check stays so that a new caller cannot skip it.` Do not put an ADR number in the comment. Do not remove a check that has such a comment. If a check blocks your work, stop and report to the PM.
+
+A security change is not done without a test for each step and a comment on each redundant check.
+
 ## Voice (UI text, errors, docs)
 
 Exact, short, calm. Sentence case. Name the thing and the number. Errors say
