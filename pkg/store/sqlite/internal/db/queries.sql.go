@@ -701,6 +701,25 @@ func (q *Queries) CountGroupsOfPrincipal(ctx context.Context, arg CountGroupsOfP
 	return count, err
 }
 
+const countImportLedger = `-- name: CountImportLedger :one
+SELECT COUNT(*) FROM import_ledger
+WHERE namespace_id = ?1 AND import_id = ?2
+`
+
+type CountImportLedgerParams struct {
+	NamespaceID string
+	ImportID    string
+}
+
+// The number of committed versions of an import. An import that has one
+// cannot plan again.
+func (q *Queries) CountImportLedger(ctx context.Context, arg CountImportLedgerParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countImportLedger, arg.NamespaceID, arg.ImportID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
 SELECT COUNT(*)
 FROM collection_members AS m
@@ -807,6 +826,24 @@ SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(?1)) = ?1
 // and no case folding. Deleted principals count too.
 func (q *Queries) CountPrincipalsWithSubjectPrefix(ctx context.Context, prefix interface{}) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPrincipalsWithSubjectPrefix, prefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPurgedImport = `-- name: CountPurgedImport :one
+SELECT COUNT(*)
+FROM imports_purged
+WHERE namespace_id = ?1 AND id = ?2
+`
+
+type CountPurgedImportParams struct {
+	NamespaceID string
+	ID          string
+}
+
+func (q *Queries) CountPurgedImport(ctx context.Context, arg CountPurgedImportParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPurgedImport, arg.NamespaceID, arg.ID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1947,6 +1984,36 @@ func (q *Queries) DeleteGroup(ctx context.Context, arg DeleteGroupParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const deleteImport = `-- name: DeleteImport :exec
+DELETE FROM imports
+WHERE namespace_id = ?1 AND id = ?2
+`
+
+type DeleteImportParams struct {
+	NamespaceID string
+	ID          string
+}
+
+func (q *Queries) DeleteImport(ctx context.Context, arg DeleteImportParams) error {
+	_, err := q.db.ExecContext(ctx, deleteImport, arg.NamespaceID, arg.ID)
+	return err
+}
+
+const deleteImportUnits = `-- name: DeleteImportUnits :exec
+DELETE FROM import_units
+WHERE namespace_id = ?1 AND import_id = ?2
+`
+
+type DeleteImportUnitsParams struct {
+	NamespaceID string
+	ImportID    string
+}
+
+func (q *Queries) DeleteImportUnits(ctx context.Context, arg DeleteImportUnitsParams) error {
+	_, err := q.db.ExecContext(ctx, deleteImportUnits, arg.NamespaceID, arg.ImportID)
+	return err
 }
 
 const deleteInventory = `-- name: DeleteInventory :exec
@@ -3527,6 +3594,78 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 	return i, err
 }
 
+const getImport = `-- name: GetImport :one
+SELECT namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
+       state, reason, created_by, created_at_ms, plan, ended_at_ms
+FROM imports
+WHERE namespace_id = ?1 AND id = ?2
+`
+
+type GetImportParams struct {
+	NamespaceID string
+	ID          string
+}
+
+func (q *Queries) GetImport(ctx context.Context, arg GetImportParams) (Import, error) {
+	row := q.db.QueryRowContext(ctx, getImport, arg.NamespaceID, arg.ID)
+	var i Import
+	err := row.Scan(
+		&i.NamespaceID,
+		&i.ID,
+		&i.Kind,
+		&i.Address,
+		&i.Selection,
+		&i.Credential,
+		&i.Profile,
+		&i.ProfilePath,
+		&i.Options,
+		&i.State,
+		&i.Reason,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+		&i.Plan,
+		&i.EndedAtMs,
+	)
+	return i, err
+}
+
+const getImportUnit = `-- name: GetImportUnit :one
+SELECT namespace_id, import_id, id, position, source_tool, source_name, target_name, target_tool,
+       target_unit_id, state, error_code, versions, committed, bytes, encryption, findings
+FROM import_units
+WHERE namespace_id = ?1 AND import_id = ?2 AND id = ?3
+`
+
+type GetImportUnitParams struct {
+	NamespaceID string
+	ImportID    string
+	ID          string
+}
+
+func (q *Queries) GetImportUnit(ctx context.Context, arg GetImportUnitParams) (ImportUnit, error) {
+	row := q.db.QueryRowContext(ctx, getImportUnit, arg.NamespaceID, arg.ImportID, arg.ID)
+	var i ImportUnit
+	err := row.Scan(
+		&i.NamespaceID,
+		&i.ImportID,
+		&i.ID,
+		&i.Position,
+		&i.SourceTool,
+		&i.SourceName,
+		&i.TargetName,
+		&i.TargetTool,
+		&i.TargetUnitID,
+		&i.State,
+		&i.ErrorCode,
+		&i.Versions,
+		&i.Committed,
+		&i.Bytes,
+		&i.Encryption,
+		&i.Findings,
+	)
+	return i, err
+}
+
 const getInstallationSecretKey = `-- name: GetInstallationSecretKey :one
 SELECT scope_id, wrapper_id, ciphertext, created_at_ms
 FROM installation_secret_keys
@@ -5053,6 +5192,155 @@ func (q *Queries) InsertGateReference(ctx context.Context, arg InsertGateReferen
 	return err
 }
 
+const insertImport = `-- name: InsertImport :exec
+INSERT INTO imports (
+    namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
+    state, reason, created_by, created_at_ms, plan, ended_at_ms
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8, ?9,
+    ?10, ?11, ?12, ?13, ?14,
+    ?15
+)
+`
+
+type InsertImportParams struct {
+	NamespaceID string
+	ID          string
+	Kind        string
+	Address     string
+	Selection   string
+	Credential  string
+	Profile     string
+	ProfilePath string
+	Options     string
+	State       string
+	Reason      string
+	CreatedBy   string
+	CreatedAtMs int64
+	Plan        string
+	EndedAtMs   int64
+}
+
+// A new import in the namespace with the stable ID namespace_id.
+func (q *Queries) InsertImport(ctx context.Context, arg InsertImportParams) error {
+	_, err := q.db.ExecContext(ctx, insertImport,
+		arg.NamespaceID,
+		arg.ID,
+		arg.Kind,
+		arg.Address,
+		arg.Selection,
+		arg.Credential,
+		arg.Profile,
+		arg.ProfilePath,
+		arg.Options,
+		arg.State,
+		arg.Reason,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+		arg.Plan,
+		arg.EndedAtMs,
+	)
+	return err
+}
+
+const insertImportLedger = `-- name: InsertImportLedger :exec
+INSERT INTO import_ledger (
+    namespace_id, import_id, import_unit_id, version, source_sha256, stored_sha256, item_tool,
+    item_unit_id, item_kind, item_id, committed_at_ms
+) VALUES (
+    ?1, ?2, ?3, ?4,
+    ?5, ?6, ?7, ?8,
+    ?9, ?10, ?11
+)
+`
+
+type InsertImportLedgerParams struct {
+	NamespaceID   string
+	ImportID      string
+	ImportUnitID  string
+	Version       string
+	SourceSha256  string
+	StoredSha256  string
+	ItemTool      string
+	ItemUnitID    string
+	ItemKind      string
+	ItemID        string
+	CommittedAtMs int64
+}
+
+// One committed source version. The Tool adapters call it in the transaction
+// of the history item.
+func (q *Queries) InsertImportLedger(ctx context.Context, arg InsertImportLedgerParams) error {
+	_, err := q.db.ExecContext(ctx, insertImportLedger,
+		arg.NamespaceID,
+		arg.ImportID,
+		arg.ImportUnitID,
+		arg.Version,
+		arg.SourceSha256,
+		arg.StoredSha256,
+		arg.ItemTool,
+		arg.ItemUnitID,
+		arg.ItemKind,
+		arg.ItemID,
+		arg.CommittedAtMs,
+	)
+	return err
+}
+
+const insertImportUnit = `-- name: InsertImportUnit :exec
+INSERT INTO import_units (
+    namespace_id, import_id, id, position, source_tool, source_name, target_name, target_tool,
+    target_unit_id, state, error_code, versions, committed, bytes, encryption, findings
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8, ?9,
+    ?10, ?11, ?12, ?13, ?14,
+    ?15, ?16
+)
+`
+
+type InsertImportUnitParams struct {
+	NamespaceID  string
+	ImportID     string
+	ID           string
+	Position     int64
+	SourceTool   string
+	SourceName   string
+	TargetName   string
+	TargetTool   string
+	TargetUnitID string
+	State        string
+	ErrorCode    string
+	Versions     int64
+	Committed    int64
+	Bytes        int64
+	Encryption   string
+	Findings     string
+}
+
+func (q *Queries) InsertImportUnit(ctx context.Context, arg InsertImportUnitParams) error {
+	_, err := q.db.ExecContext(ctx, insertImportUnit,
+		arg.NamespaceID,
+		arg.ImportID,
+		arg.ID,
+		arg.Position,
+		arg.SourceTool,
+		arg.SourceName,
+		arg.TargetName,
+		arg.TargetTool,
+		arg.TargetUnitID,
+		arg.State,
+		arg.ErrorCode,
+		arg.Versions,
+		arg.Committed,
+		arg.Bytes,
+		arg.Encryption,
+		arg.Findings,
+	)
+	return err
+}
+
 const insertInventoryChange = `-- name: InsertInventoryChange :exec
 INSERT INTO inventory_changes (
     namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
@@ -5219,6 +5507,22 @@ func (q *Queries) InsertObjectOwner(ctx context.Context, arg InsertObjectOwnerPa
 		arg.ResourceKey,
 		arg.Source,
 	)
+	return err
+}
+
+const insertPurgedImport = `-- name: InsertPurgedImport :exec
+INSERT INTO imports_purged (namespace_id, id, purged_at_ms)
+VALUES (?1, ?2, ?3)
+`
+
+type InsertPurgedImportParams struct {
+	NamespaceID string
+	ID          string
+	PurgedAtMs  int64
+}
+
+func (q *Queries) InsertPurgedImport(ctx context.Context, arg InsertPurgedImportParams) error {
+	_, err := q.db.ExecContext(ctx, insertPurgedImport, arg.NamespaceID, arg.ID, arg.PurgedAtMs)
 	return err
 }
 
@@ -6634,6 +6938,159 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImportLedger = `-- name: ListImportLedger :many
+SELECT namespace_id, import_id, import_unit_id, version, source_sha256, stored_sha256, item_tool,
+       item_unit_id, item_kind, item_id, committed_at_ms
+FROM import_ledger
+WHERE namespace_id = ?1 AND import_id = ?2
+  AND import_unit_id = ?3
+ORDER BY committed_at_ms, version
+`
+
+type ListImportLedgerParams struct {
+	NamespaceID  string
+	ImportID     string
+	ImportUnitID string
+}
+
+// The ledger rows of an import unit, oldest first.
+func (q *Queries) ListImportLedger(ctx context.Context, arg ListImportLedgerParams) ([]ImportLedger, error) {
+	rows, err := q.db.QueryContext(ctx, listImportLedger, arg.NamespaceID, arg.ImportID, arg.ImportUnitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ImportLedger
+	for rows.Next() {
+		var i ImportLedger
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ImportID,
+			&i.ImportUnitID,
+			&i.Version,
+			&i.SourceSha256,
+			&i.StoredSha256,
+			&i.ItemTool,
+			&i.ItemUnitID,
+			&i.ItemKind,
+			&i.ItemID,
+			&i.CommittedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImportUnits = `-- name: ListImportUnits :many
+SELECT namespace_id, import_id, id, position, source_tool, source_name, target_name, target_tool,
+       target_unit_id, state, error_code, versions, committed, bytes, encryption, findings
+FROM import_units
+WHERE namespace_id = ?1 AND import_id = ?2
+ORDER BY position
+`
+
+type ListImportUnitsParams struct {
+	NamespaceID string
+	ImportID    string
+}
+
+// The units of an import in the order of the plan.
+func (q *Queries) ListImportUnits(ctx context.Context, arg ListImportUnitsParams) ([]ImportUnit, error) {
+	rows, err := q.db.QueryContext(ctx, listImportUnits, arg.NamespaceID, arg.ImportID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ImportUnit
+	for rows.Next() {
+		var i ImportUnit
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ImportID,
+			&i.ID,
+			&i.Position,
+			&i.SourceTool,
+			&i.SourceName,
+			&i.TargetName,
+			&i.TargetTool,
+			&i.TargetUnitID,
+			&i.State,
+			&i.ErrorCode,
+			&i.Versions,
+			&i.Committed,
+			&i.Bytes,
+			&i.Encryption,
+			&i.Findings,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listImports = `-- name: ListImports :many
+SELECT namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
+       state, reason, created_by, created_at_ms, plan, ended_at_ms
+FROM imports
+WHERE namespace_id = ?1
+ORDER BY created_at_ms, id
+`
+
+// The imports of a namespace, oldest first.
+func (q *Queries) ListImports(ctx context.Context, namespaceID string) ([]Import, error) {
+	rows, err := q.db.QueryContext(ctx, listImports, namespaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Import
+	for rows.Next() {
+		var i Import
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ID,
+			&i.Kind,
+			&i.Address,
+			&i.Selection,
+			&i.Credential,
+			&i.Profile,
+			&i.ProfilePath,
+			&i.Options,
+			&i.State,
+			&i.Reason,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
+			&i.Plan,
+			&i.EndedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -9248,6 +9705,146 @@ type SetDurableScheduleIntervalParams struct {
 func (q *Queries) SetDurableScheduleInterval(ctx context.Context, arg SetDurableScheduleIntervalParams) error {
 	_, err := q.db.ExecContext(ctx, setDurableScheduleInterval, arg.IntervalMs, arg.NowMs, arg.Name)
 	return err
+}
+
+const setImportPlan = `-- name: SetImportPlan :exec
+UPDATE imports
+SET plan = ?1
+WHERE namespace_id = ?2 AND id = ?3
+`
+
+type SetImportPlanParams struct {
+	Plan        string
+	NamespaceID string
+	ID          string
+}
+
+func (q *Queries) SetImportPlan(ctx context.Context, arg SetImportPlanParams) error {
+	_, err := q.db.ExecContext(ctx, setImportPlan, arg.Plan, arg.NamespaceID, arg.ID)
+	return err
+}
+
+const setImportState = `-- name: SetImportState :execrows
+UPDATE imports
+SET state = ?1, reason = ?2, ended_at_ms = ?3
+WHERE namespace_id = ?4 AND id = ?5 AND state = ?6
+`
+
+type SetImportStateParams struct {
+	State       string
+	Reason      string
+	EndedAtMs   int64
+	NamespaceID string
+	ID          string
+	FromState   string
+}
+
+// Moves an import out of the state from_state. It changes no row when the
+// import is in another state.
+func (q *Queries) SetImportState(ctx context.Context, arg SetImportStateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setImportState,
+		arg.State,
+		arg.Reason,
+		arg.EndedAtMs,
+		arg.NamespaceID,
+		arg.ID,
+		arg.FromState,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setImportUnitCounts = `-- name: SetImportUnitCounts :execrows
+UPDATE import_units
+SET versions = ?1, committed = ?2
+WHERE namespace_id = ?3 AND import_id = ?4 AND id = ?5
+`
+
+type SetImportUnitCountsParams struct {
+	Versions    int64
+	Committed   int64
+	NamespaceID string
+	ImportID    string
+	ID          string
+}
+
+func (q *Queries) SetImportUnitCounts(ctx context.Context, arg SetImportUnitCountsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setImportUnitCounts,
+		arg.Versions,
+		arg.Committed,
+		arg.NamespaceID,
+		arg.ImportID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setImportUnitState = `-- name: SetImportUnitState :execrows
+UPDATE import_units
+SET state = ?1, error_code = ?2
+WHERE namespace_id = ?3 AND import_id = ?4 AND id = ?5
+  AND state = ?6
+`
+
+type SetImportUnitStateParams struct {
+	State       string
+	ErrorCode   string
+	NamespaceID string
+	ImportID    string
+	ID          string
+	FromState   string
+}
+
+// Moves an import unit out of the state from_state. It changes no row when
+// the unit is in another state or does not exist.
+func (q *Queries) SetImportUnitState(ctx context.Context, arg SetImportUnitStateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setImportUnitState,
+		arg.State,
+		arg.ErrorCode,
+		arg.NamespaceID,
+		arg.ImportID,
+		arg.ID,
+		arg.FromState,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setImportUnitTarget = `-- name: SetImportUnitTarget :execrows
+UPDATE import_units
+SET target_tool = ?1, target_unit_id = ?2
+WHERE namespace_id = ?3 AND import_id = ?4 AND id = ?5
+`
+
+type SetImportUnitTargetParams struct {
+	TargetTool   string
+	TargetUnitID string
+	NamespaceID  string
+	ImportID     string
+	ID           string
+}
+
+// Records the target unit of an import unit. The Tool adapters call it in the
+// transaction that creates the target.
+func (q *Queries) SetImportUnitTarget(ctx context.Context, arg SetImportUnitTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setImportUnitTarget,
+		arg.TargetTool,
+		arg.TargetUnitID,
+		arg.NamespaceID,
+		arg.ImportID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setInstallationState = `-- name: SetInstallationState :execrows

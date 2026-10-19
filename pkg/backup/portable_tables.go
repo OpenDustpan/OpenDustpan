@@ -1,5 +1,7 @@
 package backup
 
+import "slices"
+
 // Column names that more than one table holds. goconst keeps each one a
 // constant.
 const (
@@ -52,7 +54,7 @@ const (
 //
 //nolint:funlen,maintidx // A constant table of columns; its length is the schema.
 func portableSpec() []PortableTable {
-	return []PortableTable{
+	core := []PortableTable{
 		{
 			Table:   portTableNamespaces,
 			OrderBy: []string{portColName},
@@ -688,4 +690,6 @@ func portableSpec() []PortableTable {
 			},
 		},
 	}
+
+	return slices.Concat(core, portableImportTables())
 }

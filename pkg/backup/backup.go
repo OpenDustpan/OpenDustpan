@@ -116,6 +116,10 @@ var Tables = []string{
 	"audit_sink_leases",
 	TableAccessTokenPolicy,
 	TableSessionPolicy,
+	"imports",
+	"imports_purged",
+	"import_units",
+	"import_ledger",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

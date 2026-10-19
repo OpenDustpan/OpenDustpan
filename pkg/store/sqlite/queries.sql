@@ -1563,7 +1563,6 @@ ON CONFLICT (unit_id) DO UPDATE SET
     collection_key = excluded.collection_key,
     assigned_at_ms = excluded.assigned_at_ms;
 
-
 -- name: LastAccessByPrincipals :many
 -- The latest use of each given principal: the last use of its access
 -- tokens and of its console sessions, and its last sign-in. One row for
@@ -2236,6 +2235,133 @@ WHERE o.namespace_id = sqlc.arg(namespace_id) AND o.owner = sqlc.arg(owner)
   AND (o.object_kind, o.object_id, o.resource_key, o.source) > (sqlc.arg(after_kind), sqlc.arg(after_id), sqlc.arg(after_key), sqlc.arg(after_source))
 ORDER BY o.object_kind, o.object_id, o.resource_key, o.source
 LIMIT sqlc.arg(page_limit);
+
+-- name: InsertImport :exec
+-- A new import in the namespace with the stable ID namespace_id.
+INSERT INTO imports (
+    namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
+    state, reason, created_by, created_at_ms, plan, ended_at_ms
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(kind), sqlc.arg(address), sqlc.arg(selection),
+    sqlc.arg(credential), sqlc.arg(profile), sqlc.arg(profile_path), sqlc.arg(options),
+    sqlc.arg(state), sqlc.arg(reason), sqlc.arg(created_by), sqlc.arg(created_at_ms), sqlc.arg(plan),
+    sqlc.arg(ended_at_ms)
+);
+
+-- name: GetImport :one
+SELECT namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
+       state, reason, created_by, created_at_ms, plan, ended_at_ms
+FROM imports
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id);
+
+-- name: ListImports :many
+-- The imports of a namespace, oldest first.
+SELECT namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
+       state, reason, created_by, created_at_ms, plan, ended_at_ms
+FROM imports
+WHERE namespace_id = sqlc.arg(namespace_id)
+ORDER BY created_at_ms, id;
+
+-- name: CountPurgedImport :one
+SELECT COUNT(*)
+FROM imports_purged
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id);
+
+-- name: SetImportState :execrows
+-- Moves an import out of the state from_state. It changes no row when the
+-- import is in another state.
+UPDATE imports
+SET state = sqlc.arg(state), reason = sqlc.arg(reason), ended_at_ms = sqlc.arg(ended_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND state = sqlc.arg(from_state);
+
+-- name: SetImportPlan :exec
+UPDATE imports
+SET plan = sqlc.arg(plan)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id);
+
+-- name: DeleteImport :exec
+DELETE FROM imports
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id);
+
+-- name: InsertPurgedImport :exec
+INSERT INTO imports_purged (namespace_id, id, purged_at_ms)
+VALUES (sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(purged_at_ms));
+
+-- name: DeleteImportUnits :exec
+DELETE FROM import_units
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
+
+-- name: InsertImportUnit :exec
+INSERT INTO import_units (
+    namespace_id, import_id, id, position, source_tool, source_name, target_name, target_tool,
+    target_unit_id, state, error_code, versions, committed, bytes, encryption, findings
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(import_id), sqlc.arg(id), sqlc.arg(position), sqlc.arg(source_tool),
+    sqlc.arg(source_name), sqlc.arg(target_name), sqlc.arg(target_tool), sqlc.arg(target_unit_id),
+    sqlc.arg(state), sqlc.arg(error_code), sqlc.arg(versions), sqlc.arg(committed), sqlc.arg(bytes),
+    sqlc.arg(encryption), sqlc.arg(findings)
+);
+
+-- name: ListImportUnits :many
+-- The units of an import in the order of the plan.
+SELECT namespace_id, import_id, id, position, source_tool, source_name, target_name, target_tool,
+       target_unit_id, state, error_code, versions, committed, bytes, encryption, findings
+FROM import_units
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id)
+ORDER BY position;
+
+-- name: GetImportUnit :one
+SELECT namespace_id, import_id, id, position, source_tool, source_name, target_name, target_tool,
+       target_unit_id, state, error_code, versions, committed, bytes, encryption, findings
+FROM import_units
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id) AND id = sqlc.arg(id);
+
+-- name: SetImportUnitState :execrows
+-- Moves an import unit out of the state from_state. It changes no row when
+-- the unit is in another state or does not exist.
+UPDATE import_units
+SET state = sqlc.arg(state), error_code = sqlc.arg(error_code)
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id) AND id = sqlc.arg(id)
+  AND state = sqlc.arg(from_state);
+
+-- name: SetImportUnitCounts :execrows
+UPDATE import_units
+SET versions = sqlc.arg(versions), committed = sqlc.arg(committed)
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id) AND id = sqlc.arg(id);
+
+-- name: SetImportUnitTarget :execrows
+-- Records the target unit of an import unit. The Tool adapters call it in the
+-- transaction that creates the target.
+UPDATE import_units
+SET target_tool = sqlc.arg(target_tool), target_unit_id = sqlc.arg(target_unit_id)
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id) AND id = sqlc.arg(id);
+
+-- name: InsertImportLedger :exec
+-- One committed source version. The Tool adapters call it in the transaction
+-- of the history item.
+INSERT INTO import_ledger (
+    namespace_id, import_id, import_unit_id, version, source_sha256, stored_sha256, item_tool,
+    item_unit_id, item_kind, item_id, committed_at_ms
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(import_id), sqlc.arg(import_unit_id), sqlc.arg(version),
+    sqlc.arg(source_sha256), sqlc.arg(stored_sha256), sqlc.arg(item_tool), sqlc.arg(item_unit_id),
+    sqlc.arg(item_kind), sqlc.arg(item_id), sqlc.arg(committed_at_ms)
+);
+
+-- name: CountImportLedger :one
+-- The number of committed versions of an import. An import that has one
+-- cannot plan again.
+SELECT COUNT(*) FROM import_ledger
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
+
+-- name: ListImportLedger :many
+-- The ledger rows of an import unit, oldest first.
+SELECT namespace_id, import_id, import_unit_id, version, source_sha256, stored_sha256, item_tool,
+       item_unit_id, item_kind, item_id, committed_at_ms
+FROM import_ledger
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id)
+  AND import_unit_id = sqlc.arg(import_unit_id)
+ORDER BY committed_at_ms, version;
 
 -- name: GetGateObject :one
 -- One configuration object of a scope.
