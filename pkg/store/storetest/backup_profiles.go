@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -57,7 +58,7 @@ func seedBackupProfiles(t *testing.T, s BackupStore, acme namespace.Namespace) *
 
 		first := backupRevision(id, 1, name)
 
-		_, err := store.Create(ctx, p, first, acme.Fence(), lifecycleEntry(acme.Name, "profile:write"))
+		_, err := store.Create(ctx, p, first, acme.Fence(), []audit.Entry{lifecycleEntry(acme.Name, "profile:write")})
 		if err != nil {
 			t.Fatalf("create profile %s: %v", name, err)
 		}
@@ -70,13 +71,13 @@ func seedBackupProfiles(t *testing.T, s BackupStore, acme namespace.Namespace) *
 
 	second := backupRevision(keptID, 2, "again")
 
-	_, err := store.Save(ctx, at, second, acme.Fence(), lifecycleEntry(acme.Name, "profile:write"))
+	_, err := store.Save(ctx, at, second, acme.Fence(), []audit.Entry{lifecycleEntry(acme.Name, "profile:write")})
 	if err != nil {
 		t.Fatalf("save profile %s: %v", seeded.kept, err)
 	}
 
 	gone := profile.Anchor{Namespace: acme.Name, ID: seeded.id[seeded.gone], Latest: 0}
-	err = store.Delete(ctx, gone, acme.Fence(), lifecycleEntry(acme.Name, "profile:manage"))
+	err = store.Delete(ctx, gone, acme.Fence(), []audit.Entry{lifecycleEntry(acme.Name, "profile:manage")})
 	if err != nil {
 		t.Fatalf("delete profile %s: %v", seeded.gone, err)
 	}
@@ -128,7 +129,7 @@ func checkRestoredProfiles(t *testing.T, dst RestoreStore, acme namespace.Namesp
 	}
 
 	for number := 1; number <= 2; number++ {
-		r, revErr := store.Revision(ctx, acme.Name, kept.ID, number)
+		r, revErr := store.Revision(ctx, acme.Name, kept.ID, profile.At{Number: number})
 		if revErr != nil || string(r.Document) != profileDocument || r.Number != number {
 			t.Fatalf("restored revision %d = %+v, %v, want the document as written", number, r, revErr)
 		}

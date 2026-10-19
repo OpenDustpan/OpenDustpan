@@ -82,7 +82,7 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 			return
 		}
 
-		h.Set("Access-Control-Expose-Headers", "Retry-After")
+		h.Set("Access-Control-Expose-Headers", "Retry-After, ETag")
 
 		next.ServeHTTP(w, r)
 	})

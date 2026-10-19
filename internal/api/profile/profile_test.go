@@ -49,6 +49,10 @@ func grantsOf(subject string) []identity.Action {
 		return []identity.Action{read, write}
 	case "reader":
 		return []identity.Action{read}
+	case "writeonly":
+		return []identity.Action{write}
+	case "manageonly":
+		return []identity.Action{manage}
 	default:
 		return nil
 	}
@@ -63,7 +67,7 @@ func (testAuthn) AuthenticateToken(_ context.Context, token string) (identity.Pr
 
 	return identity.Principal{
 		Subject: token, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
-		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
 	}, nil
 }
 
@@ -248,11 +252,6 @@ type entryWire struct {
 	Value  any    `json:"value"`
 }
 
-// entriesWire is the entry list of an answer.
-type entriesWire struct {
-	Entries []entryWire `json:"entries"`
-}
-
 // pageWire is one page of a list.
 type pageWire struct {
 	Profiles []profileWire `json:"profiles"`
@@ -296,14 +295,16 @@ func TestCreateAndReadBackMasked(t *testing.T) {
 	// A name of two segments is one escaped segment, and a plain slash is not found.
 	escaped := base + "/" + url.PathEscape("payments/aws-prod")
 
-	got := f.do(t, get("reader", escaped+"/entries"))
-	wantCode(t, "list entries", got, http.StatusOK)
+	got := f.do(t, get("reader", escaped+"/revisions/1"))
+	wantCode(t, "read revision 1", got, http.StatusOK)
 
 	if strings.Contains(got.body, "hunter2") || got.header.Get("ETag") != created.ETag {
 		t.Errorf("masked read leaks or has no ETag %q: %s", got.header.Get("ETag"), got.body)
 	}
 
-	var entries entriesWire
+	var entries struct {
+		Entries []entryWire `json:"entries"`
+	}
 	if err := json.Unmarshal([]byte(got.body), &entries); err != nil {
 		t.Fatalf("decode entries: %v", err)
 	}
@@ -341,7 +342,7 @@ func TestRevealNeedsOpenAndIsAudited(t *testing.T) {
 
 	f := newFixture(t)
 	created := f.create(t, "aws-prod", secretDoc)
-	target := base + "/" + created.ID + "/entries/db.password?showSecrets=true"
+	target := base + "/" + created.ID + "/revisions/1?showSecrets=true"
 
 	wantCode(t, "reveal without profile:open", f.do(t, get("reader", target)), http.StatusForbidden)
 
@@ -351,17 +352,35 @@ func TestRevealNeedsOpenAndIsAudited(t *testing.T) {
 		t.Fatalf("reveal: %d %v %s", got.code, got.header, got.body)
 	}
 
+	count := f.countReveals(t)
+	if count.granted != 1 || count.denied != 1 {
+		t.Errorf("reveal audit entries = %d granted, %d denied, want 1 and 1", count.granted, count.denied)
+	}
+}
+
+// revealCount is the number of granted and denied reveal entries.
+type revealCount struct{ granted, denied int }
+
+// countReveals counts the granted and the denied reveal entries of the audit
+// log, and fails the test for an entry that holds the secret.
+func (f fixture) countReveals(t *testing.T) revealCount {
+	t.Helper()
+
 	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 50})
 	if err != nil {
 		t.Fatalf("audit list: %v", err)
 	}
 
-	reveals := 0
+	reveals, denied := 0, 0
 
 	for i := range listing.Entries {
 		e := &listing.Entries[i]
-		if e.Kind == audit.KindReveal && e.Action == "profile:open" && e.ValuePath == "db.password" {
+		if e.Kind == audit.KindReveal && e.Action == "profile:open" && e.Outcome == audit.OutcomeSuccess {
 			reveals++
+		}
+
+		if e.Kind == audit.KindReveal && e.Outcome == audit.OutcomeDenied && e.Subject == "reader" {
+			denied++
 		}
 
 		if strings.Contains(fmt.Sprintf("%+v", *e), "hunter2") {
@@ -369,9 +388,7 @@ func TestRevealNeedsOpenAndIsAudited(t *testing.T) {
 		}
 	}
 
-	if reveals != 1 {
-		t.Errorf("reveal audit entries = %d, want 1", reveals)
-	}
+	return revealCount{granted: reveals, denied: denied}
 }
 
 func TestSaveNeedsIfMatch(t *testing.T) {
@@ -394,6 +411,7 @@ func TestSaveNeedsIfMatch(t *testing.T) {
 	wantCode(t, "no If-Match", save(""), http.StatusPreconditionRequired)
 	wantCode(t, "tag of another profile", save(`"prf-other.1"`), http.StatusPreconditionFailed)
 	wantCode(t, "stale tag", save(`"`+created.ID+`.7"`), http.StatusPreconditionFailed)
+	wantCode(t, "weak tag", save("W/"+created.ETag), http.StatusPreconditionFailed)
 
 	got := save(created.ETag)
 	if got.code != http.StatusCreated || got.header.Get("ETag") != `"`+created.ID+`.2"` {
@@ -407,45 +425,6 @@ func TestSaveNeedsIfMatch(t *testing.T) {
 		strings.Contains(got.body, "document") {
 		t.Errorf("revision list: %d %s", got.code, got.body)
 	}
-}
-
-func TestEntryEdits(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t)
-	created := f.create(t, "aws-prod", secretDoc)
-	entries := base + "/" + created.ID + "/entries/"
-
-	put := func(path, body, tag string) response {
-		return f.do(t, send("writer", http.MethodPut, entries+path, body).withHeader("If-Match", tag))
-	}
-
-	got := put("tags.team", `{"value":"payments","description":"owner"}`, created.ETag)
-	wantCode(t, "put entry", got, http.StatusOK)
-
-	got = put("db.password", `{"secret":"n3w","neverStore":true}`, got.header.Get("ETag"))
-	wantCode(t, "put secret", got, http.StatusOK)
-
-	tag := got.header.Get("ETag")
-	wantCode(t, "value and secret together", put("x", `{"value":1,"secret":"y"}`, tag), http.StatusBadRequest)
-
-	got = f.do(t, get("reader", entries+"db.password"))
-	if got.code != http.StatusOK || !strings.Contains(got.body, `"neverStore":true`) ||
-		strings.Contains(got.body, "n3w") {
-		t.Errorf("read entry: %d %s", got.code, got.body)
-	}
-
-	del := func(path string) response {
-		return f.do(t, send("writer", http.MethodDelete, entries+path, "").withHeader("If-Match", tag))
-	}
-
-	got = del("region")
-	wantCode(t, "delete entry", got, http.StatusOK)
-
-	tag = got.header.Get("ETag")
-
-	wantCode(t, "deleted entry", f.do(t, get("reader", entries+"region")), http.StatusNotFound)
-	wantCode(t, "second delete", del("region"), http.StatusNotFound)
 }
 
 func TestRoutingChangeNeedsOpen(t *testing.T) {
@@ -465,12 +444,80 @@ func TestRoutingChangeNeedsOpen(t *testing.T) {
 	}
 
 	created := f.create(t, "routed", doc)
-	edit := send("writer", http.MethodPut, base+"/"+created.ID+"/entries/host", `{"value":"https://evil"}`).
+	moved := jsonString(
+		t,
+		map[string]string{"document": strings.Replace(doc, "host: https://a", "host: https://evil", 1)},
+	)
+	edit := send("writer", http.MethodPost, base+"/"+created.ID+"/revisions", moved).
 		withHeader("If-Match", created.ETag)
 
 	got = f.do(t, edit)
 	if got.code != http.StatusForbidden || !strings.Contains(got.body, "values.host") {
 		t.Errorf("change of a value that a block reads: %d %s", got.code, got.body)
+	}
+}
+
+func TestWriteAndDeleteNeedNoRead(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	created := f.create(t, "aws-prod", minimalDoc)
+	target := base + "/" + created.ID
+	body := jsonString(t, map[string]string{"document": secretDoc})
+
+	got := f.do(t, send("writeonly", http.MethodPost, target+"/revisions", body).withHeader("If-Match", created.ETag))
+	wantCode(t, "save with profile:write only", got, http.StatusCreated)
+
+	wantCode(t, "read with profile:write only", f.do(t, get("writeonly", target)), http.StatusForbidden)
+	wantCode(t, "delete with profile:write only", f.do(t, send("writeonly", http.MethodDelete, target, "")),
+		http.StatusForbidden)
+	wantCode(t, "delete with profile:manage only", f.do(t, send("manageonly", http.MethodDelete, target, "")),
+		http.StatusNoContent)
+}
+
+// TestEscapedSlashNames proves that the name of a profile with a folder is
+// one escaped path segment on every route that names a profile, and that a
+// plain slash is a path that does not exist.
+func TestEscapedSlashNames(t *testing.T) {
+	t.Parallel()
+
+	body := jsonString(t, map[string]string{"document": secretDoc})
+
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		token   string
+		body    string
+		ifMatch bool
+		want    int
+	}{
+		{"get profile", http.MethodGet, "", "reader", "", false, http.StatusOK},
+		{"list revisions", http.MethodGet, "/revisions", "reader", "", false, http.StatusOK},
+		{"get revision 1", http.MethodGet, "/revisions/1", "reader", "", false, http.StatusOK},
+		{"save revision", http.MethodPost, "/revisions", "writer", body, true, http.StatusCreated},
+		{"delete", http.MethodDelete, "", "admin", "", false, http.StatusNoContent},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			created := f.create(t, "payments/aws-prod", minimalDoc)
+
+			build := func(target string) request {
+				r := send(tc.token, tc.method, target+tc.path, tc.body)
+				if tc.ifMatch {
+					r = r.withHeader("If-Match", created.ETag)
+				}
+
+				return r
+			}
+
+			wantCode(t, "plain slash", f.do(t, build(base+"/payments/aws-prod")), http.StatusNotFound)
+			wantCode(t, "escaped slash", f.do(t, build(base+"/"+url.PathEscape("payments/aws-prod"))), tc.want)
+		})
 	}
 }
 
@@ -575,7 +622,7 @@ func TestAuthentication(t *testing.T) {
 // routeTarget fills the path values of a route.
 func routeTarget(route apiprofile.Route) string {
 	return strings.NewReplacer(
-		"{namespace}", "acme", "{profile}", "prf-aaaaaaaaaaaaaaaaaaaa", "{revision}", "1", "{entry}", "region",
+		"{namespace}", "acme", "{profile}", "prf-aaaaaaaaaaaaaaaaaaaa", "{revision}", "1",
 	).Replace(route.Path)
 }
 

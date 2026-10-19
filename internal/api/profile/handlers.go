@@ -111,16 +111,16 @@ func toEntries(entries []profile.Entry, secrets map[string]string) []entryValue 
 	return out
 }
 
-func actorOf(r *http.Request, p identity.Principal) profile.Actor {
+func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 	by := audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
 		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
-		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 	}
 
-	return profile.Actor{Principal: p, By: by}
+	return &profile.Actor{Principal: p, By: by}
 }
 
 func truncateUserAgent(s string) string {
@@ -353,14 +353,19 @@ var (
 
 // ifMatch reads the If-Match header against the profile got. It returns the
 // revision number in the tag, and false when the header is missing. A tag
-// for another profile answers errPrecondition.
+// for another profile, and a weak tag, answer errPrecondition: If-Match
+// compares tags in the strong way.
 func ifMatch(r *http.Request, got profile.Profile) (int, bool, error) {
 	raw := strings.TrimSpace(r.Header.Get("If-Match"))
 	if raw == "" {
 		return 0, false, nil
 	}
 
-	raw = strings.Trim(strings.TrimPrefix(raw, "W/"), `"`)
+	if strings.HasPrefix(raw, "W/") {
+		return 0, true, errPrecondition
+	}
+
+	raw = strings.Trim(raw, `"`)
 
 	id, num, found := strings.Cut(raw, ".")
 	n, convErr := strconv.Atoi(num)
@@ -398,7 +403,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 	a := actorOf(r, p)
 
-	got, err := h.profiles.Get(ctx, a, target)
+	got, err := h.profiles.Locate(ctx, a, target, identity.ActionProfileManage)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -497,7 +502,7 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request, p identity.Princi
 	}
 
 	h.write(w, r, p, obj, writeOp{
-		do: func(a profile.Actor, t profile.Target, base int) (profile.Profile, profile.Revision, error) {
+		do: func(a *profile.Actor, t profile.Target, base int) (profile.Profile, profile.Revision, error) {
 			in := profile.Change{Base: base, Document: []byte(body.Document), Reason: body.Reason}
 
 			return h.profiles.Save(ctx, a, t, in)
@@ -509,7 +514,7 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request, p identity.Princi
 // writeOp is one write of a profile that carries If-Match: the call and the
 // status of its answer.
 type writeOp struct {
-	do     func(a profile.Actor, t profile.Target, base int) (profile.Profile, profile.Revision, error)
+	do     func(a *profile.Actor, t profile.Target, base int) (profile.Profile, profile.Revision, error)
 	status int
 }
 
@@ -526,7 +531,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, p identity.Princ
 
 	a := actorOf(r, p)
 
-	got, err := h.profiles.Get(ctx, a, target)
+	got, err := h.profiles.Locate(ctx, a, target, identity.ActionProfileWrite)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -559,15 +564,9 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, p identity.Princ
 	h.writeProfile(ctx, w, op.status, updated, &rev)
 }
 
-// readSelector names the revision and the entry that a read asks for.
-type readSelector struct {
-	revision string
-	entry    string
-}
-
-// readOptions reads the revision and showSecrets query values.
-func readOptions(r *http.Request, sel readSelector) (profile.ReadOptions, error) {
-	opts := profile.ReadOptions{Revision: 0, Entry: sel.entry, Reveal: false}
+// readOptions reads the revision path value and the showSecrets query value.
+func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) {
+	opts := profile.ReadOptions{Revision: 0, Reveal: false}
 
 	if raw := r.URL.Query().Get("showSecrets"); raw != "" {
 		b, err := strconv.ParseBool(raw)
@@ -578,8 +577,8 @@ func readOptions(r *http.Request, sel readSelector) (profile.ReadOptions, error)
 		opts.Reveal = b
 	}
 
-	if sel.revision != "" && sel.revision != "latest" {
-		n, err := strconv.Atoi(sel.revision)
+	if revision != "" && revision != "latest" {
+		n, err := strconv.Atoi(revision)
 		if err != nil || n < 1 {
 			return opts, badRequest("request.invalid-path", "revision must be a number of 1 or more, or latest")
 		}
@@ -593,7 +592,7 @@ func readOptions(r *http.Request, sel readSelector) (profile.ReadOptions, error)
 // readView reads one revision for a route and sets the headers of the
 // answer. A reveal is never cached.
 func (h *Handler) readView(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, sel readSelector,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, revision string,
 ) *profile.View {
 	ctx := r.Context()
 
@@ -604,7 +603,7 @@ func (h *Handler) readView(
 		return nil
 	}
 
-	opts, err := readOptions(r, sel)
+	opts, err := readOptions(r, revision)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -629,7 +628,7 @@ func (h *Handler) readView(
 
 // readRevision serves GET /profiles/{profile}/revisions/{revision}.
 func (h *Handler) readRevision(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-	view := h.readView(w, r, p, obj, readSelector{revision: r.PathValue("revision"), entry: ""})
+	view := h.readView(w, r, p, obj, r.PathValue("revision"))
 	if view == nil {
 		return
 	}
@@ -640,106 +639,4 @@ func (h *Handler) readRevision(w http.ResponseWriter, r *http.Request, p identit
 	rev.Entries = toEntries(view.Entries, view.Secrets)
 
 	h.writeJSON(r.Context(), w, http.StatusOK, rev)
-}
-
-// listEntries serves GET /profiles/{profile}/entries.
-func (h *Handler) listEntries(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-	view := h.readView(w, r, p, obj, readSelector{revision: r.URL.Query().Get("revision"), entry: ""})
-	if view == nil {
-		return
-	}
-
-	h.writeJSON(r.Context(), w, http.StatusOK, struct {
-		Revision int          `json:"revision"`
-		Entries  []entryValue `json:"entries"`
-	}{Revision: view.Revision.Number, Entries: toEntries(view.Entries, view.Secrets)})
-}
-
-// readEntry serves GET /profiles/{profile}/entries/{entry}.
-func (h *Handler) readEntry(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-	sel := readSelector{revision: r.URL.Query().Get("revision"), entry: r.PathValue("entry")}
-
-	view := h.readView(w, r, p, obj, sel)
-	if view == nil {
-		return
-	}
-
-	h.writeJSON(r.Context(), w, http.StatusOK, toEntries(view.Entries, view.Secrets)[0])
-}
-
-type entryBody struct {
-	Value       json.RawMessage `json:"value"`
-	Secret      *string         `json:"secret"`
-	Final       bool            `json:"final"`
-	NeverStore  bool            `json:"neverStore"`
-	Description string          `json:"description"`
-	Reason      string          `json:"reason"`
-}
-
-// input turns the body into the content of an entry. It needs exactly one of
-// value and secret.
-func (b entryBody) input() (profile.EntryInput, error) {
-	in := profile.EntryInput{
-		Value: nil, Secret: b.Secret, Final: b.Final, NeverStore: b.NeverStore, Description: b.Description,
-	}
-
-	hasValue := len(b.Value) > 0
-	if hasValue == (b.Secret != nil) {
-		return in, badRequest("request.body-invalid", "send exactly one of value and secret")
-	}
-
-	if hasValue {
-		if err := json.Unmarshal(b.Value, &in.Value); err != nil {
-			return in, badRequest("request.body-invalid", "value is not valid JSON")
-		}
-	}
-
-	return in, nil
-}
-
-// putEntry serves PUT /profiles/{profile}/entries/{entry}.
-func (h *Handler) putEntry(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-	ctx := r.Context()
-
-	var body entryBody
-	if err := readBody(w, r, &body); err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	in, err := body.input()
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	path := r.PathValue("entry")
-
-	h.write(w, r, p, obj, writeOp{
-		do: func(a profile.Actor, t profile.Target, base int) (profile.Profile, profile.Revision, error) {
-			return h.profiles.SaveEntry(
-				ctx,
-				a,
-				t,
-				profile.EntryChange{Base: base, Path: path, Input: in, Reason: body.Reason},
-			)
-		},
-		status: http.StatusOK,
-	})
-}
-
-// deleteEntry serves DELETE /profiles/{profile}/entries/{entry}.
-func (h *Handler) deleteEntry(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-	ctx := r.Context()
-	path := r.PathValue("entry")
-	reason := r.URL.Query().Get("reason")
-
-	h.write(w, r, p, obj, writeOp{
-		do: func(a profile.Actor, t profile.Target, base int) (profile.Profile, profile.Revision, error) {
-			return h.profiles.DeleteEntry(ctx, a, t, profile.EntryRemoval{Base: base, Path: path, Reason: reason})
-		},
-		status: http.StatusOK,
-	})
 }

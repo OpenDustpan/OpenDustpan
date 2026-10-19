@@ -83,11 +83,13 @@ func newFixture(t *testing.T) fixture {
 	svc, err := profile.NewService(profile.Config{
 		Store: m, Namespaces: memNamespaces{m: m}, Sealer: scopedSealer{}, Audit: memAudit{m: m},
 		Authorizer: grants{
-			"admin":   {read, write, open, manage},
-			"writer":  {read, write},
-			"reader":  {read},
-			"nobody":  nil,
-			"manager": {read, manage},
+			"admin":      {read, write, open, manage},
+			"writer":     {read, write},
+			"reader":     {read},
+			"nobody":     nil,
+			"manager":    {read, manage},
+			"writeonly":  {write},
+			"manageonly": {manage},
 		},
 		Now: nil,
 	})
@@ -98,11 +100,11 @@ func newFixture(t *testing.T) fixture {
 	return fixture{svc: svc, m: m, ns: "acme"}
 }
 
-func actor(subject string) profile.Actor {
-	return profile.Actor{
+func actor(subject string) *profile.Actor {
+	return &profile.Actor{
 		Principal: identity.Principal{
 			Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: epochTime(),
-			TemporaryAdministrator: false, TemporaryExpiresAt: epochTime(),
+			TemporaryAdministrator: false, TemporaryExpiresAt: epochTime(), Kind: "", Credential: "", JobID: "",
 		},
 		By: auditTemplate(),
 	}
@@ -114,7 +116,7 @@ func auditTemplate() audit.Entry {
 		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
 		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
-		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 	}
 }
 
@@ -140,16 +142,8 @@ func (f fixture) create(t *testing.T) profile.Profile {
 	return p
 }
 
-func readOf(number int, entry string, reveal bool) profile.ReadOptions {
-	return profile.ReadOptions{Revision: number, Entry: entry, Reveal: reveal}
-}
-
-func plainEntry(v any) profile.EntryInput {
-	return profile.EntryInput{Value: v, Secret: nil, Final: false, NeverStore: false, Description: ""}
-}
-
-func entryChange(base int, path string, in profile.EntryInput, reason string) profile.EntryChange {
-	return profile.EntryChange{Base: base, Path: path, Input: in, Reason: reason}
+func readOf(reveal bool) profile.ReadOptions {
+	return profile.ReadOptions{Revision: 0, Reveal: reveal}
 }
 
 func TestCreateSealsSecrets(t *testing.T) {
@@ -166,7 +160,7 @@ func TestCreateSealsSecrets(t *testing.T) {
 		t.Errorf("stored document = %s", r.Document)
 	}
 
-	stored, err := f.m.Revision(t.Context(), f.ns, p.ID, 1)
+	stored, err := f.m.Revision(t.Context(), f.ns, p.ID, profile.At{Number: 1})
 	if err != nil {
 		t.Fatalf("Revision: %v", err)
 	}
@@ -198,7 +192,7 @@ func TestReadMasksAndRevealNeedsOpen(t *testing.T) {
 	p := f.create(t)
 	target := f.target(profile.RefByID(p.ID))
 
-	v, err := f.svc.Read(t.Context(), actor("reader"), target, readOf(0, "", false))
+	v, err := f.svc.Read(t.Context(), actor("reader"), target, readOf(false))
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -221,14 +215,16 @@ func TestRevealNeedsOpenAndIsAudited(t *testing.T) {
 	p := f.create(t)
 	target := f.target(profile.RefByID(p.ID))
 
-	_, err := f.svc.Read(t.Context(), actor("reader"), target, readOf(0, "", true))
+	_, err := f.svc.Read(t.Context(), actor("reader"), target, readOf(true))
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("reveal without profile:open: error = %v, want ErrDenied", err)
 	}
 
+	checkDeniedReveal(t, f.m.entries[f.ns])
+
 	before := len(f.m.entries[f.ns])
 
-	v, err := f.svc.Read(t.Context(), actor("admin"), target, readOf(0, "", true))
+	v, err := f.svc.Read(t.Context(), actor("admin"), target, readOf(true))
 	if err != nil || v.Secrets["db.password"] != "hunter2" {
 		t.Fatalf("reveal = %+v, %v", v.Secrets, err)
 	}
@@ -244,21 +240,38 @@ func TestRevealNeedsOpenAndIsAudited(t *testing.T) {
 	}
 }
 
-func TestRevealOfOneEntry(t *testing.T) {
+// checkDeniedReveal fails the test unless the last entry is the audit entry
+// of a reveal that profile:open refused.
+func checkDeniedReveal(t *testing.T, all []audit.Entry) {
+	t.Helper()
+
+	if len(all) == 0 {
+		t.Fatal("no audit entry for the denied reveal")
+	}
+
+	last := all[len(all)-1]
+	if last.Kind != audit.KindReveal || last.Outcome != audit.OutcomeDenied || last.Subject != "reader" ||
+		last.Action != "profile:open" {
+		t.Fatalf("audit entry of the denied reveal = %+v", last)
+	}
+}
+
+func TestRevealFailsClosedWhenAuditFails(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 	p := f.create(t)
 	target := f.target(profile.RefByID(p.ID))
 
-	one, err := f.svc.Read(t.Context(), actor("admin"), target, readOf(0, "db.password", true))
-	if err != nil || len(one.Entries) != 1 || one.Secrets["db.password"] != "hunter2" || len(one.Secrets) != 1 {
-		t.Errorf("Read of one entry = %+v, %v", one, err)
+	f.m.failAppend = true
+
+	v, err := f.svc.Read(t.Context(), actor("admin"), target, readOf(true))
+	if !errors.Is(err, errAppend) {
+		t.Fatalf("reveal with a failing audit store: error = %v, want errAppend", err)
 	}
 
-	_, err = f.svc.Read(t.Context(), actor("admin"), target, readOf(0, "nope", true))
-	if !errors.Is(err, profile.ErrNotFound) {
-		t.Errorf("Read of a missing path: error = %v, want ErrNotFound", err)
+	if len(v.Secrets) != 0 {
+		t.Errorf("secrets left with a failed audit entry: %v", v.Secrets)
 	}
 }
 
@@ -271,38 +284,65 @@ func TestAuthorization(t *testing.T) {
 	tests := []struct {
 		name string
 		who  string
-		call func(f fixture, a profile.Actor, target profile.Target) error
+		call func(f fixture, a *profile.Actor, target profile.Target) error
 		want bool
 	}{
-		{"get needs read", "nobody", func(f fixture, a profile.Actor, target profile.Target) error {
+		{"get needs read", "nobody", func(f fixture, a *profile.Actor, target profile.Target) error {
 			_, err := f.svc.Get(t.Context(), a, target)
 
 			return err
 		}, false},
-		{"get with read", "reader", func(f fixture, a profile.Actor, target profile.Target) error {
+		{"get with read", "reader", func(f fixture, a *profile.Actor, target profile.Target) error {
 			_, err := f.svc.Get(t.Context(), a, target)
 
 			return err
 		}, true},
-		{"list needs read", "nobody", func(f fixture, a profile.Actor, _ profile.Target) error {
+		{"list needs read", "nobody", func(f fixture, a *profile.Actor, _ profile.Target) error {
 			_, err := f.svc.List(t.Context(), a, list)
 
 			return err
 		}, false},
-		{"create needs write", "reader", func(f fixture, a profile.Actor, _ profile.Target) error {
+		{"create needs write", "reader", func(f fixture, a *profile.Actor, _ profile.Target) error {
 			_, _, err := f.svc.Create(t.Context(), a, f.ns, newProfileInput("x", "schemaVersion: 1\n", ""))
 
 			return err
 		}, false},
-		{"save needs write", "reader", func(f fixture, a profile.Actor, target profile.Target) error {
+		{"save needs write", "reader", func(f fixture, a *profile.Actor, target profile.Target) error {
 			_, _, err := f.svc.Save(t.Context(), a, target, profile.Change{Base: 1, Document: minimal, Reason: ""})
 
 			return err
 		}, false},
-		{"delete needs manage", "writer", func(f fixture, a profile.Actor, target profile.Target) error {
+		{"save with write only", "writeonly", func(f fixture, a *profile.Actor, target profile.Target) error {
+			p, err := f.svc.Locate(t.Context(), a, target, write)
+			if err != nil {
+				return err
+			}
+
+			_, _, err = f.svc.Save(
+				t.Context(),
+				a,
+				target,
+				profile.Change{Base: p.Latest, Document: minimal, Reason: ""},
+			)
+
+			return err
+		}, true},
+		{"locate for write needs write", "reader", func(f fixture, a *profile.Actor, target profile.Target) error {
+			_, err := f.svc.Locate(t.Context(), a, target, write)
+
+			return err
+		}, false},
+		{"delete with manage only", "manageonly", func(f fixture, a *profile.Actor, target profile.Target) error {
+			if _, err := f.svc.Locate(t.Context(), a, target, manage); err != nil {
+				return err
+			}
+
+			return f.svc.Delete(t.Context(), a, target, profile.Removal{IfLatest: 0, Reason: ""})
+		}, true},
+		{"delete needs manage", "writer", func(f fixture, a *profile.Actor, target profile.Target) error {
 			return f.svc.Delete(t.Context(), a, target, profile.Removal{IfLatest: 0, Reason: ""})
 		}, false},
-		{"delete with manage", "manager", func(f fixture, a profile.Actor, target profile.Target) error {
+		{"delete with manage", "manager", func(f fixture, a *profile.Actor, target profile.Target) error {
 			return f.svc.Delete(t.Context(), a, target, profile.Removal{IfLatest: 0, Reason: ""})
 		}, true},
 	}
@@ -349,17 +389,22 @@ func TestRoutingChangeNeedsOpen(t *testing.T) {
 		t.Fatalf("save of a plain change without open: %v", err)
 	}
 
-	_, _, err = f.svc.SaveEntry(t.Context(), actor("writer"), target,
-		entryChange(2, "host", plainEntry("https://evil"), ""))
+	moved := strings.Replace(string(plain.Document), "host: https://a", "host: https://evil", 1)
+	_, _, err = f.svc.Save(
+		t.Context(),
+		actor("writer"),
+		target,
+		profile.Change{Base: 2, Document: []byte(moved), Reason: ""},
+	)
 	if !errors.Is(err, identity.ErrDenied) || !strings.Contains(err.Error(), "values.host") {
 		t.Fatalf("change of a value that a block reads, without open: error = %v", err)
 	}
 
-	_, _, err = f.svc.SaveEntry(
+	_, _, err = f.svc.Save(
 		t.Context(),
 		actor("admin"),
 		target,
-		entryChange(2, "host", plainEntry("https://ok"), ""),
+		profile.Change{Base: 2, Document: []byte(moved), Reason: ""},
 	)
 	if err != nil {
 		t.Errorf("same change with open: %v", err)
@@ -403,7 +448,7 @@ func TestSaveRules(t *testing.T) {
 		t.Fatalf("Create other: %v", err)
 	}
 
-	theirs, err := f.m.Revision(t.Context(), f.ns, other.ID, 1)
+	theirs, err := f.m.Revision(t.Context(), f.ns, other.ID, profile.At{Number: 1})
 	if err != nil {
 		t.Fatalf("Revision: %v", err)
 	}
@@ -413,7 +458,7 @@ func TestSaveRules(t *testing.T) {
 	}
 
 	// The sealed text of this profile can be sent back.
-	mine, err := f.m.Revision(t.Context(), f.ns, p.ID, 1)
+	mine, err := f.m.Revision(t.Context(), f.ns, p.ID, profile.At{Number: 1})
 	if err != nil {
 		t.Fatalf("Revision: %v", err)
 	}
@@ -426,52 +471,6 @@ func TestSaveRules(t *testing.T) {
 	_, _, err = f.svc.Create(t.Context(), actor("writer"), f.ns, newProfileInput("copy", string(theirs.Document), ""))
 	if !errors.Is(err, profile.ErrInvalid) {
 		t.Errorf("create with a copied sealed value: error = %v, want ErrInvalid", err)
-	}
-}
-
-func TestEntryEdits(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t)
-	p := f.create(t)
-	target := f.target(profile.RefByID(p.ID))
-
-	plain := "n3w"
-	secretEntry := profile.EntryInput{Value: nil, Secret: &plain, Final: false, NeverStore: true, Description: ""}
-
-	p, _, err := f.svc.SaveEntry(
-		t.Context(),
-		actor("writer"),
-		target,
-		entryChange(1, "db.password", secretEntry, "rotate"),
-	)
-	if err != nil || p.Latest != 2 {
-		t.Fatalf("SaveEntry: %+v, %v", p, err)
-	}
-
-	v, err := f.svc.Read(t.Context(), actor("admin"), target, readOf(0, "", true))
-	if err != nil || v.Secrets["db.password"] != "n3w" {
-		t.Fatalf("after SaveEntry: %+v, %v", v.Secrets, err)
-	}
-
-	remove := func(base int) (profile.Profile, error) {
-		got, _, delErr := f.svc.DeleteEntry(t.Context(), actor("writer"), target,
-			profile.EntryRemoval{Base: base, Path: "region", Reason: ""})
-
-		return got, delErr
-	}
-
-	if p, err = remove(2); err != nil || p.Latest != 3 {
-		t.Fatalf("DeleteEntry: %+v, %v", p, err)
-	}
-
-	if _, err = remove(3); !errors.Is(err, profile.ErrNotFound) {
-		t.Errorf("second DeleteEntry: error = %v, want ErrNotFound", err)
-	}
-
-	v, err = f.svc.Read(t.Context(), actor("reader"), target, readOf(1, "", false))
-	if err != nil || len(v.Entries) != 2 {
-		t.Errorf("revision 1 changed: %+v, %v", v.Entries, err)
 	}
 }
 

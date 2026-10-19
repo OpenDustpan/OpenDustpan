@@ -72,7 +72,7 @@ func insertProfileRevision(ctx context.Context, q *db.Queries, nsID string, r pr
 
 // Create implements profile.Store.
 func (p *Profiles) Create(
-	ctx context.Context, pr profile.Profile, r profile.Revision, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, pr profile.Profile, r profile.Revision, fence namespace.Fence, e []audit.Entry,
 ) (profile.Profile, error) {
 	if r.Number != 1 || r.Profile != pr.ID || pr.Latest != 1 || pr.Namespace != fence.Namespace {
 		return profile.Profile{}, fmt.Errorf("%w: a new profile has revision 1 of its own", profile.ErrInvalid)
@@ -81,7 +81,7 @@ func (p *Profiles) Create(
 	p.store.mu.RLock()
 	defer p.store.mu.RUnlock()
 
-	err := p.store.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+	err := p.inAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, pr.Namespace)
 		if err != nil {
 			return err
@@ -215,8 +215,9 @@ func (p *Profiles) Revision(
 	ctx context.Context,
 	ns namespace.Name,
 	id profile.ID,
-	number int,
+	at profile.At,
 ) (profile.Revision, error) {
+	number := at.Number
 	if number < 0 {
 		return profile.Revision{}, fmt.Errorf("%w: revision number %d", profile.ErrInvalid, number)
 	}
@@ -313,14 +314,14 @@ func (p *Profiles) Revisions(
 
 // Save implements profile.Store.
 func (p *Profiles) Save(
-	ctx context.Context, at profile.Anchor, r profile.Revision, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, at profile.Anchor, r profile.Revision, fence namespace.Fence, e []audit.Entry,
 ) (profile.Profile, error) {
 	p.store.mu.RLock()
 	defer p.store.mu.RUnlock()
 
 	var updated profile.Profile
 
-	err := p.store.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+	err := p.inAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, at.Namespace)
 		if err != nil {
 			return err
@@ -378,11 +379,11 @@ func checkNextRevision(row db.Profile, at profile.Anchor, r profile.Revision) er
 }
 
 // Delete implements profile.Store.
-func (p *Profiles) Delete(ctx context.Context, at profile.Anchor, fence namespace.Fence, e audit.Entry) error {
+func (p *Profiles) Delete(ctx context.Context, at profile.Anchor, fence namespace.Fence, e []audit.Entry) error {
 	p.store.mu.RLock()
 	defer p.store.mu.RUnlock()
 
-	return p.store.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+	return p.inAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		nsID, err := profileNamespaceID(ctx, q, at.Namespace)
 		if err != nil {
 			return err
@@ -398,7 +399,7 @@ func (p *Profiles) Delete(ctx context.Context, at profile.Anchor, fence namespac
 		}
 
 		n, err := q.MarkProfileDeleted(ctx, db.MarkProfileDeletedParams{
-			DeletedAtMs: e.At.UnixMilli(), NamespaceID: nsID, ID: string(at.ID), IfLatest: int64(at.Latest),
+			DeletedAtMs: e[0].At.UnixMilli(), NamespaceID: nsID, ID: string(at.ID), IfLatest: int64(at.Latest),
 		})
 		if err != nil {
 			return fmt.Errorf("delete profile: %w", err)
@@ -406,6 +407,44 @@ func (p *Profiles) Delete(ctx context.Context, at profile.Anchor, fence namespac
 
 		if n == 0 {
 			return fmt.Errorf("%w: the profile changed", profile.ErrConflict)
+		}
+
+		return nil
+	})
+}
+
+// inAuditedTx runs fn and appends each entry of es in the same fenced
+// transaction. It checks every entry before the transaction starts.
+func (p *Profiles) inAuditedTx(
+	ctx context.Context, fence namespace.Fence, es []audit.Entry, fn func(q *db.Queries) error,
+) error {
+	if len(es) == 0 {
+		return fmt.Errorf("%w: a write needs at least one audit entry", profile.ErrInvalid)
+	}
+
+	for n := range es {
+		if err := es[n].Validate(); err != nil {
+			return fmt.Errorf("audit entry: %w", err)
+		}
+
+		if es[n].Namespace != fence.Namespace {
+			return fmt.Errorf("%w: entry names %q, fence names %q",
+				audit.ErrInvalidEntry, es[n].Namespace, fence.Namespace)
+		}
+	}
+
+	// The store appends the last entry after fn, so fn appends the others.
+	last := es[len(es)-1]
+
+	return p.store.inFencedAuditedTx(ctx, fence, &last, func(q *db.Queries) error {
+		if err := fn(q); err != nil {
+			return err
+		}
+
+		for n := range len(es) - 1 {
+			if _, err := appendAuditEntry(ctx, q, es[n]); err != nil {
+				return fmt.Errorf("append audit entry: %w", err)
+			}
 		}
 
 		return nil

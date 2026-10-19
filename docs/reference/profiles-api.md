@@ -2,7 +2,7 @@
 
 A profile is a named set of config values and secrets in one namespace. This
 page describes the routes that create, read, list, change and delete
-profiles and their entries. No tool reads a profile through these routes
+profiles. No tool reads a profile through these routes
 yet. A client that manages profiles, for example a script or the console,
 uses this API.
 
@@ -19,11 +19,11 @@ relative to `/api/dustpan/v1/namespaces/{namespace}`.
 | `DELETE /profiles/{profile}` | `profile:manage` | No body |
 | `GET /profiles/{profile}/revisions` | `profile:read` | One page of the revisions, newest first |
 | `POST /profiles/{profile}/revisions` | `profile:write` | The profile, with the new revision |
-| `GET /profiles/{profile}/revisions/{revision}` | `profile:read` | The document and the entries of one revision |
-| `GET /profiles/{profile}/entries` | `profile:read` | The entries of the newest revision |
-| `GET /profiles/{profile}/entries/{entry}` | `profile:read` | One entry |
-| `PUT /profiles/{profile}/entries/{entry}` | `profile:write` | The profile, with the new revision |
-| `DELETE /profiles/{profile}/entries/{entry}` | `profile:write` | The profile, with the new revision |
+| `GET /profiles/{profile}/revisions/{revision}` | `profile:read` | The document and the entries of one revision. `revision` is a number or `latest`. |
+
+A write or a delete does not need `profile:read`. A caller with only
+`profile:write` can save a revision, and a caller with only `profile:manage`
+can delete a profile.
 
 The built-in roles give `profile:read` to each role that holds
 `namespace:read`. The role `admin` holds all the profile actions. A grant
@@ -61,7 +61,10 @@ A revision holds one YAML document. The top-level keys are
 | `$type` | A map with the `kind` of the value |
 | `$description` | Text for people |
 
-An entry holds exactly one of `$value`, `$secret` and `$sealed`. The
+An entry holds exactly one of `$value`, `$secret` and `$sealed`. A key that
+starts with `$` is allowed only under `values`. In `providers`, `rotators`,
+`exports`, `checks` and `imports`, such a key answers 400: put the secret in
+`values` and read it with `${ values.<path> }`. The
 server writes the document again from its tree when the document has a
 `$secret`. Comments and the order of keys stay, and the spacing can change.
 
@@ -79,11 +82,13 @@ audit entry.
   of a revision holds `$sealed` values. A `$sealed` value works only in the
   profile that made it. A save with a `$sealed` value of another profile
   answers 400.
-- A read with `showSecrets=true` also answers the plain text of each secret.
+- A read of a revision with `showSecrets=true` also answers the plain text of each secret.
   It needs `profile:open`. The answer has `Cache-Control: no-store`. The
   server writes an audit entry of the kind `reveal` before it answers, and
   the entry names the number of values and never a value. If the server
-  cannot write the entry, no value leaves.
+  cannot write the entry, no value leaves. A read with `showSecrets=true`
+  that lacks `profile:open` answers 403, and the server writes an audit
+  entry of the kind `reveal` with the outcome `denied`.
 
 ## Routing changes
 
@@ -102,9 +107,10 @@ change.
 
 Each answer that returns one profile has an `ETag` header and an `etag`
 field. The tag names the newest revision: `"prf-k3v9q2m7x4t8p1w6z5r0.3"`. A write on
-`/revisions` or on `/entries/{entry}` needs `If-Match` with the tag that the
-caller read. A missing header answers 428. A tag that is not the newest
-revision answers 412. `DELETE /profiles/{profile}` takes `If-Match` too, but
+`/revisions` needs `If-Match` with the tag that the caller read. A missing
+header answers 428. A tag that is not the newest revision answers 412. A
+weak tag (`W/"..."`) answers 412, because the server compares tags in the
+strong way. `DELETE /profiles/{profile}` takes `If-Match` too, but
 does not need it.
 
 ## Lists
@@ -130,7 +136,7 @@ errors, `errorCode`.
 | 400 | A bad name, document, body or query value |
 | 401 | No valid token |
 | 403 | The caller lacks the action, or a routing change lacks `profile:open` |
-| 404 | An unknown namespace, profile, revision or entry |
+| 404 | An unknown namespace, profile or revision |
 | 409 | A name in use |
 | 412 | `If-Match` does not match the newest revision |
 | 422 | A document above a limit, or a `schemaVersion` above 1 |

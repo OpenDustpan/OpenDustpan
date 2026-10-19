@@ -458,16 +458,17 @@ const (
 
 	// ActionProfileRead allows reading the metadata, the revisions and the
 	// documents of a profile with sealed secrets, and listing profiles. Its
-	// object is the profile, or the namespace for a list.
+	// object is the namespace that holds the profile.
 	ActionProfileRead Action = "profile:read"
 	// ActionProfileWrite allows creating a profile and saving a revision.
-	// Its object is the namespace for a create, else the profile.
+	// Its object is the namespace that holds the profile.
 	ActionProfileWrite Action = "profile:write"
 	// ActionProfileOpen allows reading the secret values of a profile and
-	// saving a routing change. Its object is the profile.
+	// saving a routing change. Its object is the namespace that holds the
+	// profile.
 	ActionProfileOpen Action = "profile:open"
 	// ActionProfileManage allows deleting a profile. Its object is the
-	// profile.
+	// namespace that holds the profile.
 	ActionProfileManage Action = "profile:manage"
 )
 

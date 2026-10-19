@@ -54,6 +54,26 @@ func TestParseDocument(t *testing.T) {
 			profile.ErrInvalid,
 		},
 		{"provider without use", "schemaVersion: 1\nproviders:\n  a: {}\n", profile.ErrInvalid},
+		{
+			"secret under providers",
+			"schemaVersion: 1\nproviders:\n  a:\n    use: login/x\n    with: { token: { $secret: abc } }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"sealed under providers",
+			"schemaVersion: 1\nproviders:\n  a:\n    use: login/x\n    with: { token: { $sealed: abc } }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"secret under rotators",
+			"schemaVersion: 1\nrotators:\n  a:\n    use: rotate/x\n    with: { token: { $secret: abc } }\n",
+			profile.ErrInvalid,
+		},
+		{
+			"secret under exports variables",
+			"schemaVersion: 1\nexports:\n  variables:\n    TOKEN: { $secret: abc }\n",
+			profile.ErrInvalid,
+		},
 		{"export key", "schemaVersion: 1\nexports:\n  bogus: {}\n", profile.ErrInvalid},
 		{"import with bad name", "schemaVersion: 1\nimports: [Bad Name]\n", profile.ErrInvalid},
 		{"import with tag", "schemaVersion: 1\nimports: [aws/prod@stable]\n", nil},
@@ -196,53 +216,6 @@ func TestSealWithoutSecretsKeepsTheText(t *testing.T) {
 	}
 }
 
-func TestWithEntryAndWithoutEntry(t *testing.T) {
-	t.Parallel()
-
-	plain := "x"
-
-	doc := mustDoc(t, "schemaVersion: 1\n")
-
-	doc, err := doc.WithEntry("db.host", plainInput("h"))
-	if err != nil {
-		t.Fatalf("WithEntry host: %v", err)
-	}
-
-	doc, err = doc.WithEntry(
-		"db.password",
-		profile.EntryInput{Value: nil, Secret: &plain, Final: false, NeverStore: true, Description: "pw"},
-	)
-	if err != nil {
-		t.Fatalf("WithEntry password: %v", err)
-	}
-
-	if _, err = doc.WithEntry("db.host.deeper", plainInput(1)); !errors.Is(err, profile.ErrInvalid) {
-		t.Errorf("path through a value: error = %v, want ErrInvalid", err)
-	}
-
-	if _, err = doc.WithEntry("db.$x", plainInput(1)); !errors.Is(err, profile.ErrInvalid) {
-		t.Errorf("segment with $: error = %v, want ErrInvalid", err)
-	}
-
-	got := map[string]profile.Entry{}
-	for _, e := range doc.Entries() {
-		got[e.Path] = e
-	}
-
-	if !got["db.password"].Secret || !got["db.password"].NeverStore || got["db.host"].Value != "h" {
-		t.Errorf("entries = %+v", got)
-	}
-
-	doc, err = doc.WithoutEntry("db.host")
-	if err != nil || doc.HasEntry("db.host") {
-		t.Fatalf("WithoutEntry: %v, still there: %v", err, doc.HasEntry("db.host"))
-	}
-
-	if _, err = doc.WithoutEntry("db.host"); !errors.Is(err, profile.ErrNotFound) {
-		t.Errorf("second WithoutEntry error = %v, want ErrNotFound", err)
-	}
-}
-
 func TestRoutingChanges(t *testing.T) {
 	t.Parallel()
 
@@ -346,6 +319,32 @@ values:
 	}
 }
 
+func TestRoutingChangesSeesHiddenReads(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"brace in a string", `${ "}" + values.host }`},
+		{"computed name through env", `${ $env["val" + "ues"].host }`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			text := "schemaVersion: 1\nproviders:\n  p: { use: login/x, with: { url: '" + tc.url +
+				"' } }\nvalues:\n  host: a\n"
+			got := profile.RoutingChanges(mustDoc(t, text), mustDoc(t, strings.Replace(text, "host: a", "host: b", 1)))
+
+			if len(got) == 0 {
+				t.Error("a change of values.host is not a routing change")
+			}
+		})
+	}
+}
+
 func mustDoc(t *testing.T, text string) *profile.Document {
 	t.Helper()
 
@@ -355,9 +354,4 @@ func mustDoc(t *testing.T, text string) *profile.Document {
 	}
 
 	return d
-}
-
-// plainInput is an entry with a value and no mark.
-func plainInput(v any) profile.EntryInput {
-	return profile.EntryInput{Value: v, Secret: nil, Final: false, NeverStore: false, Description: ""}
 }

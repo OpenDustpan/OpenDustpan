@@ -52,7 +52,6 @@ const (
 	profilesPath  = v1Prefix + "/namespaces/{namespace}/profiles"
 	profilePath   = profilesPath + "/{profile}"
 	revisionsPath = profilePath + "/revisions"
-	entriesPath   = profilePath + "/entries"
 )
 
 // buildRoutes returns the route table. It is the single source of the
@@ -70,10 +69,6 @@ func (h *Handler) buildRoutes() []Route {
 		h.route(http.MethodGet, revisionsPath, read, h.listRevisions),
 		h.route(http.MethodPost, revisionsPath, write, h.save),
 		h.route(http.MethodGet, revisionsPath+"/{revision}", read, h.readRevision),
-		h.route(http.MethodGet, entriesPath, read, h.listEntries),
-		h.route(http.MethodGet, entriesPath+"/{entry}", read, h.readEntry),
-		h.route(http.MethodPut, entriesPath+"/{entry}", write, h.putEntry),
-		h.route(http.MethodDelete, entriesPath+"/{entry}", write, h.deleteEntry),
 	}
 }
 

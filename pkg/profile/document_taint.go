@@ -2,12 +2,12 @@ package profile
 
 import (
 	"regexp"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
 
 var (
-	exprRef     = regexp.MustCompile(`\$\{[^}]*\}`)
 	valuesRef   = regexp.MustCompile(`\bvalues((?:\.[A-Za-z_][A-Za-z0-9_-]*|\[\s*"[^"]*"\s*\]|\[\s*'[^']*'\s*\])*)`)
 	pathSegment = regexp.MustCompile(`\.([A-Za-z_][A-Za-z0-9_-]*)|\[\s*"([^"]*)"\s*\]|\[\s*'([^']*)'\s*\]`)
 )
@@ -29,20 +29,28 @@ func refsIn(n *yaml.Node) [][]string {
 }
 
 // refsInText returns the paths under values that the expressions in text
-// read.
+// read. A scalar with an expression is scanned whole, because a "}" inside a
+// string in the expression ends a match of "${...}" early. A scalar that
+// reads $env may build the name of a key, so it reads the whole values tree.
 func refsInText(text string) [][]string {
+	if !strings.Contains(text, "${") {
+		return nil
+	}
+
 	var out [][]string
 
-	for _, expr := range exprRef.FindAllString(text, -1) {
-		for _, m := range valuesRef.FindAllStringSubmatch(expr, -1) {
-			var segs []string
+	for _, m := range valuesRef.FindAllStringSubmatch(text, -1) {
+		var segs []string
 
-			for _, s := range pathSegment.FindAllStringSubmatch(m[1], -1) {
-				segs = append(segs, s[1]+s[2]+s[3])
-			}
-
-			out = append(out, segs)
+		for _, s := range pathSegment.FindAllStringSubmatch(m[1], -1) {
+			segs = append(segs, s[1]+s[2]+s[3])
 		}
+
+		out = append(out, segs)
+	}
+
+	if strings.Contains(text, "$env") {
+		out = append(out, []string{})
 	}
 
 	return out

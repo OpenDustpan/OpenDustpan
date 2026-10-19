@@ -45,6 +45,8 @@ func Run(t *testing.T, newStore Factory) {
 		{"a stale fence refuses every write", testFenced},
 		{"a failed audit write leaves no profile", testAuditRollsBack},
 		{"each write appends its audit entry", testAuditAppended},
+		{"a write appends every entry in order", testAuditMany},
+		{"a write with no audit entry is invalid and changes nothing", testAuditNone},
 		{"list is ordered by name and pages", testListPages},
 		{"list filters by folder and hides deleted profiles", testListFilters},
 		{"save adds the next revision and moves the newest", testSave},
@@ -115,7 +117,13 @@ func entry(ns namespace.Name, action string) audit.Entry {
 		Object: "namespace:" + ns.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
+		PrincipalKind: "", JobID: "",
 	}
+}
+
+// entries is the audit entries of a write that appends one entry.
+func entries(ns namespace.Name, action string) []audit.Entry {
+	return []audit.Entry{entry(ns, action)}
 }
 
 func newProfile(ns namespace.Name, name string) (profile.Profile, profile.Revision) {
@@ -145,7 +153,7 @@ func create(t *testing.T, s Store, ns namespace.Namespace, name string) profile.
 
 	p, r := newProfile(ns.Name, name)
 
-	got, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry(ns.Name, "profile:write"))
+	got, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries(ns.Name, "profile:write"))
 	if err != nil {
 		t.Fatalf("Create(%q): %v", name, err)
 	}
@@ -166,7 +174,7 @@ func save(t *testing.T, s Store, ns namespace.Namespace, p profile.Profile, text
 	t.Helper()
 
 	got, err := s.Profiles.Save(t.Context(), anchor(ns.Name, p.ID, p.Latest), nextRevision(p, text), ns.Fence(),
-		entry(ns.Name, "profile:write"))
+		entries(ns.Name, "profile:write"))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -177,7 +185,7 @@ func save(t *testing.T, s Store, ns namespace.Namespace, p profile.Profile, text
 func remove(t *testing.T, s Store, ns namespace.Namespace, p profile.Profile) {
 	t.Helper()
 
-	err := s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 0), ns.Fence(), entry(ns.Name, "profile:manage"))
+	err := s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 0), ns.Fence(), entries(ns.Name, "profile:manage"))
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}

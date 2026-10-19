@@ -73,16 +73,6 @@ type Secret struct {
 	Sealed []byte
 }
 
-// EntryInput is the new content of one entry. Secret set means the entry is
-// a secret with that plain text, and Value is then ignored.
-type EntryInput struct {
-	Value       any
-	Secret      *string
-	Final       bool
-	NeverStore  bool
-	Description string
-}
-
 // Document is a parsed and checked document.
 type Document struct {
 	root   *yaml.Node
@@ -160,11 +150,6 @@ func (d *Document) Entries() []Entry {
 	}
 
 	return out
-}
-
-// HasEntry reports whether values holds a leaf at path.
-func (d *Document) HasEntry(path string) bool {
-	return slices.ContainsFunc(d.Entries(), func(e Entry) bool { return e.Path == path })
 }
 
 // Secrets returns the secret leaves of values, in document order. It returns
@@ -255,86 +240,6 @@ func (d *Document) Seal(seal func(plain [][]byte) ([][]byte, error)) ([]byte, er
 	}
 
 	return d.encode()
-}
-
-// WithEntry returns a copy of d with the entry at path set to in. It makes
-// the maps on the way. It returns ErrInvalid when the path goes through a
-// value that is not a map. The result is checked again.
-func (d *Document) WithEntry(path string, in EntryInput) (*Document, error) {
-	segs, err := splitPath(path)
-	if err != nil {
-		return nil, err
-	}
-
-	c, err := d.clone()
-	if err != nil {
-		return nil, err
-	}
-
-	leafNode, err := in.node()
-	if err != nil {
-		return nil, err
-	}
-
-	cur := c.valuesNode()
-
-	for _, seg := range segs[:len(segs)-1] {
-		if cur.Kind != yaml.MappingNode || isEntryMap(cur) {
-			return nil, fmt.Errorf("%w: entry path %q goes through a value that is not a map", ErrInvalid, path)
-		}
-
-		next := mapGet(cur, seg)
-		if next == nil {
-			next = newNode(yaml.MappingNode, tagMap, "")
-			cur.Content = append(cur.Content, newNode(yaml.ScalarNode, tagStr, seg), next)
-		}
-
-		cur = next
-	}
-
-	if cur.Kind != yaml.MappingNode || isEntryMap(cur) {
-		return nil, fmt.Errorf("%w: entry path %q goes through a value that is not a map", ErrInvalid, path)
-	}
-
-	last := segs[len(segs)-1]
-	if existing := mapGet(cur, last); existing != nil {
-		*existing = *leafNode
-	} else {
-		cur.Content = append(cur.Content, newNode(yaml.ScalarNode, tagStr, last), leafNode)
-	}
-
-	return c.reparse()
-}
-
-// WithoutEntry returns a copy of d without the entry at path. It returns
-// ErrNotFound when the path holds no leaf. A map that the removal leaves
-// empty stays.
-func (d *Document) WithoutEntry(path string) (*Document, error) {
-	segs, err := splitPath(path)
-	if err != nil {
-		return nil, err
-	}
-
-	c, err := d.clone()
-	if err != nil {
-		return nil, err
-	}
-
-	cur := mapGet(c.root, topValues)
-
-	for _, seg := range segs[:len(segs)-1] {
-		if cur == nil || cur.Kind != yaml.MappingNode || isEntryMap(cur) {
-			return nil, fmt.Errorf("%w: entry %q", ErrNotFound, path)
-		}
-
-		cur = mapGet(cur, seg)
-	}
-
-	if cur == nil || cur.Kind != yaml.MappingNode || isEntryMap(cur) || !removeKey(cur, segs[len(segs)-1]) {
-		return nil, fmt.Errorf("%w: entry %q", ErrNotFound, path)
-	}
-
-	return c.reparse()
 }
 
 // RoutingChanges returns what a change from before to after changes in where
@@ -437,11 +342,61 @@ func (d *Document) check() error {
 		func() error { return checkBlocks(seen[topRotators], topRotators, MaxRotatorBlocks) },
 		func() error { return checkExports(seen[topExports]) },
 		func() error { return checkChecks(seen[topChecks]) },
+		func() error { return checkNoEntryKeys(seen) },
 		func() error { return d.collectLeaves(seen[topValues]) },
 	}
 
 	for _, c := range checks {
 		if err := c(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkNoEntryKeys fails for a key that starts with "$" in any map outside
+// values. Only values holds entries, so a $secret elsewhere would stay in
+// plain text.
+func checkNoEntryKeys(top map[string]*yaml.Node) error {
+	for _, key := range []string{topImports, topProviders, topRotators, topExports, topChecks} {
+		if n := top[key]; n != nil {
+			if err := noEntryKeys(n, key); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func noEntryKeys(n *yaml.Node, path string) error {
+	if n.Kind == yaml.MappingNode {
+		return noEntryKeysInMap(n, path)
+	}
+
+	if n.Kind != yaml.SequenceNode {
+		return nil
+	}
+
+	for i, c := range n.Content {
+		if err := noEntryKeys(c, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func noEntryKeysInMap(n *yaml.Node, path string) error {
+	for i := 0; i+1 < len(n.Content); i += pairSize {
+		k := n.Content[i].Value
+		if strings.HasPrefix(k, "$") {
+			return fmt.Errorf("%w: %s.%s: entry keys such as $secret are allowed only under values: "+
+				"put the secret in values and read it with ${ values.<path> }", ErrInvalid, path, k)
+		}
+
+		if err := noEntryKeys(n.Content[i+1], path+"."+k); err != nil {
 			return err
 		}
 	}
@@ -466,39 +421,12 @@ func (d *Document) encode() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// clone returns an independent copy of d.
-func (d *Document) clone() (*Document, error) {
-	return ParseDocument(d.text)
-}
-
-// reparse writes d and reads it again, so the result is checked and its
-// text is the stored form.
-func (d *Document) reparse() (*Document, error) {
-	text, err := d.encode()
-	if err != nil {
-		return nil, err
-	}
-
-	return ParseDocument(text)
-}
-
 func (d *Document) orEmpty() *Document {
 	if d != nil {
 		return d
 	}
 
 	return &Document{root: newNode(yaml.MappingNode, tagMap, ""), text: nil, leaves: nil}
-}
-
-// valuesNode returns the values map, and adds an empty one when d has none.
-func (d *Document) valuesNode() *yaml.Node {
-	values := mapGet(d.root, topValues)
-	if values == nil {
-		values = newNode(yaml.MappingNode, tagMap, "")
-		d.root.Content = append(d.root.Content, newNode(yaml.ScalarNode, tagStr, topValues), values)
-	}
-
-	return values
 }
 
 type secretNode struct {
@@ -589,19 +517,6 @@ func mapGet(n *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// removeKey deletes key from the map n and reports whether it was there.
-func removeKey(n *yaml.Node, key string) bool {
-	for i := 0; i+1 < len(n.Content); i += pairSize {
-		if n.Content[i].Value == key {
-			n.Content = slices.Delete(n.Content, i, i+pairSize)
-
-			return true
-		}
-	}
-
-	return false
-}
-
 func blockOf(d *Document, group, name string) *yaml.Node {
 	if blocks := mapGet(d.root, group); blocks != nil {
 		return mapGet(blocks, name)
@@ -648,36 +563,6 @@ func joinSegments(p []string) string {
 	return sb.String()
 }
 
-// splitPath splits an entry path at each "." that has no "\" before it.
-func splitPath(path string) ([]string, error) {
-	var segs []string
-
-	var cur strings.Builder
-
-	for i := 0; i < len(path); i++ {
-		switch c := path[i]; {
-		case c == '\\' && i+1 < len(path) && (path[i+1] == '.' || path[i+1] == '\\'):
-			i++
-			cur.WriteByte(path[i])
-		case c == '.':
-			segs = append(segs, cur.String())
-			cur.Reset()
-		default:
-			cur.WriteByte(c)
-		}
-	}
-
-	segs = append(segs, cur.String())
-
-	for _, s := range segs {
-		if s == "" || strings.HasPrefix(s, "$") {
-			return nil, fmt.Errorf("%w: entry path %q: a segment is empty or starts with \"$\"", ErrInvalid, path)
-		}
-	}
-
-	return segs, nil
-}
-
 func nodeText(n *yaml.Node) string {
 	if n == nil {
 		return ""
@@ -689,43 +574,4 @@ func nodeText(n *yaml.Node) string {
 	}
 
 	return string(b)
-}
-
-// node writes the entry as a YAML node: a plain node for a bare value, else
-// an entry map.
-func (in EntryInput) node() (*yaml.Node, error) {
-	form := newNode(yaml.ScalarNode, tagStr, "")
-	key := keyValue
-
-	if in.Secret != nil {
-		key = keySecret
-		form.Value = *in.Secret
-	} else if err := form.Encode(in.Value); err != nil {
-		return nil, fmt.Errorf("%w: value: %w", ErrInvalid, err)
-	}
-
-	if in.Secret == nil && !in.Final && !in.NeverStore && in.Description == "" {
-		return form, nil
-	}
-
-	n := newNode(yaml.MappingNode, tagMap, "")
-	add := func(k string, v *yaml.Node) {
-		n.Content = append(n.Content, newNode(yaml.ScalarNode, tagStr, k), v)
-	}
-
-	add(key, form)
-
-	if in.Final {
-		add(keyFinal, newNode(yaml.ScalarNode, tagBool, "true"))
-	}
-
-	if in.NeverStore {
-		add(keyNeverStore, newNode(yaml.ScalarNode, tagBool, "true"))
-	}
-
-	if in.Description != "" {
-		add(keyDescription, newNode(yaml.ScalarNode, tagStr, in.Description))
-	}
-
-	return n, nil
 }

@@ -2,6 +2,7 @@ package profiletest_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -43,6 +44,8 @@ type mem struct {
 	namespaces map[namespace.Name]namespace.Namespace
 	profiles   map[profile.ID]*memProfile
 	entries    map[namespace.Name][]audit.Entry
+	// failAppend makes the audit port refuse an Append, for a test.
+	failAppend bool
 }
 
 func newMem() *mem {
@@ -51,6 +54,7 @@ func newMem() *mem {
 		namespaces: map[namespace.Name]namespace.Namespace{},
 		profiles:   map[profile.ID]*memProfile{},
 		entries:    map[namespace.Name][]audit.Entry{},
+		failAppend: false,
 	}
 }
 
@@ -85,11 +89,18 @@ func (memNamespaces) ListNamespaces(context.Context) ([]namespace.Namespace, err
 
 func (memNamespaces) Ping(context.Context) error { return nil }
 
+// errAppend is what the audit port answers when failAppend is set.
+var errAppend = errors.New("audit store is down")
+
 type memAudit struct{ m *mem }
 
 func (a memAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
 	a.m.mu.Lock()
 	defer a.m.mu.Unlock()
+
+	if a.m.failAppend {
+		return audit.Entry{}, errAppend
+	}
 
 	a.m.entries[e.Namespace] = append(a.m.entries[e.Namespace], e)
 
@@ -111,12 +122,12 @@ func (memAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error
 }
 
 func (m *mem) Create(
-	_ context.Context, p profile.Profile, r profile.Revision, f namespace.Fence, e audit.Entry,
+	_ context.Context, p profile.Profile, r profile.Revision, f namespace.Fence, es []audit.Entry,
 ) (profile.Profile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.begin(f, e); err != nil {
+	if err := m.begin(f, es); err != nil {
 		return profile.Profile{}, err
 	}
 
@@ -143,7 +154,7 @@ func (m *mem) Create(
 	}
 
 	m.profiles[p.ID] = &memProfile{Profile: p, revisions: []profile.Revision{r}, deleted: false}
-	m.entries[e.Namespace] = append(m.entries[e.Namespace], e)
+	m.entries[f.Namespace] = append(m.entries[f.Namespace], es...)
 
 	return p, nil
 }
@@ -191,9 +202,11 @@ func (m *mem) List(_ context.Context, q profile.Filter) (profile.Page, error) {
 	return profile.Page{Profiles: all[:q.Limit], Next: all[q.Limit-1].Name}, nil
 }
 
-func (m *mem) Revision(_ context.Context, ns namespace.Name, id profile.ID, number int) (profile.Revision, error) {
+func (m *mem) Revision(_ context.Context, ns namespace.Name, id profile.ID, at profile.At) (profile.Revision, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	number := at.Number
 
 	if number < 0 {
 		return profile.Revision{}, profile.ErrInvalid
@@ -242,14 +255,14 @@ func (m *mem) Revisions(
 }
 
 func (m *mem) Save(
-	_ context.Context, at profile.Anchor, r profile.Revision, f namespace.Fence, e audit.Entry,
+	_ context.Context, at profile.Anchor, r profile.Revision, f namespace.Fence, es []audit.Entry,
 ) (profile.Profile, error) {
 	ns, id, base := at.Namespace, at.ID, at.Latest
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.begin(f, e); err != nil {
+	if err := m.begin(f, es); err != nil {
 		return profile.Profile{}, err
 	}
 
@@ -269,18 +282,18 @@ func (m *mem) Save(
 	p.revisions = append(p.revisions, r)
 	p.Latest = r.Number
 	p.UpdatedAt = r.CreatedAt
-	m.entries[e.Namespace] = append(m.entries[e.Namespace], e)
+	m.entries[f.Namespace] = append(m.entries[f.Namespace], es...)
 
 	return p.Profile, nil
 }
 
-func (m *mem) Delete(_ context.Context, at profile.Anchor, f namespace.Fence, e audit.Entry) error {
+func (m *mem) Delete(_ context.Context, at profile.Anchor, f namespace.Fence, es []audit.Entry) error {
 	ns, id, ifLatest := at.Namespace, at.ID, at.Latest
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.begin(f, e); err != nil {
+	if err := m.begin(f, es); err != nil {
 		return err
 	}
 
@@ -294,7 +307,7 @@ func (m *mem) Delete(_ context.Context, at profile.Anchor, f namespace.Fence, e 
 	}
 
 	p.deleted = true
-	m.entries[e.Namespace] = append(m.entries[e.Namespace], e)
+	m.entries[f.Namespace] = append(m.entries[f.Namespace], es...)
 
 	return nil
 }
@@ -303,13 +316,19 @@ func (m *mem) Delete(_ context.Context, at profile.Anchor, f namespace.Fence, e 
 func epochTime() time.Time { return time.UnixMilli(1_700_000_000_000).UTC() }
 
 // begin checks the fence and the entry, as the SQL stores do in a transaction.
-func (m *mem) begin(f namespace.Fence, e audit.Entry) error {
-	if err := e.Validate(); err != nil {
-		return fmt.Errorf("audit entry: %w", err)
+func (m *mem) begin(f namespace.Fence, es []audit.Entry) error {
+	if len(es) == 0 {
+		return fmt.Errorf("%w: a write needs an audit entry", profile.ErrInvalid)
 	}
 
-	if e.Namespace != f.Namespace {
-		return fmt.Errorf("%w: entry names %q", audit.ErrInvalidEntry, e.Namespace)
+	for n := range es {
+		if err := es[n].Validate(); err != nil {
+			return fmt.Errorf("audit entry: %w", err)
+		}
+
+		if es[n].Namespace != f.Namespace {
+			return fmt.Errorf("%w: entry names %q", audit.ErrInvalidEntry, es[n].Namespace)
+		}
 	}
 
 	ns, ok := m.namespaces[f.Namespace]

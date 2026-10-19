@@ -136,8 +136,8 @@ func (p *profileTag) remember(body string) error {
 
 // profileScenario drives the profile routes of the e2e namespace over the
 // API as the platform engineer, principal A. It creates a profile with a
-// secret entry, reads it back masked, edits an entry, saves a revision and
-// deletes the profile. tool names the scenario, so the scenarios of the two
+// secret entry, reads it back masked, saves two revisions and deletes the
+// profile. tool names the scenario, so the scenarios of the two
 // tools use two names.
 func profileScenario(t *testing.T, env *e2e.Env, tool string) {
 	t.Helper()
@@ -164,7 +164,7 @@ func profileScenario(t *testing.T, env *e2e.Env, tool string) {
 	profileWrites(t, env, one, &tag)
 
 	profileStep(t, env, profileRequest("a write with a stale tag is refused",
-		http.MethodDelete, one+"/entries/region", http.StatusPreconditionFailed).withTag(`"`+tag.id+`.1"`))
+		http.MethodDelete, one, http.StatusPreconditionFailed).withTag(`"`+tag.id+`.1"`))
 	profileStep(t, env, profileRequest("a profile that does not exist is not found",
 		http.MethodGet, profilesBase+"/absent", http.StatusNotFound))
 	profileStep(t, env, profileRequest("delete the profile",
@@ -181,27 +181,28 @@ func profileReads(t *testing.T, env *e2e.Env, one, tool string) {
 		checking(profileMasked(`"name":"e2e-`+tool+`"`)))
 	profileStep(t, env, profileRequest("list the profiles", http.MethodGet, profilesBase, http.StatusOK).
 		checking(profileMasked(`"e2e-`+tool+`"`)))
-	profileStep(t, env, profileRequest("read the entries masked", http.MethodGet, one+"/entries", http.StatusOK).
-		checking(profileMasked(`"path":"db.password","secret":true`, `"path":"region"`)))
-	profileStep(t, env, profileRequest("read the secret entry masked",
-		http.MethodGet, one+"/entries/db.password", http.StatusOK).checking(profileMasked(`"secret":true`)))
 	profileStep(t, env, profileRequest("the stored revision holds the secret sealed",
 		http.MethodGet, one+"/revisions/1", http.StatusOK).checking(profileMasked(`$sealed`)))
+	profileStep(t, env, profileRequest("the entries of a revision answer the secret masked",
+		http.MethodGet, one+"/revisions/1", http.StatusOK).
+		checking(profileMasked(`"path":"db.password","secret":true`, `"path":"region"`)))
 	profileStep(t, env, profileRequest("a reveal by an administrator answers the plain text",
-		http.MethodGet, one+"/entries/db.password?showSecrets=true", http.StatusOK).checking(profileRevealed))
+		http.MethodGet, one+"/revisions/1?showSecrets=true", http.StatusOK).checking(profileRevealed))
 }
 
-// profileWrites edits an entry, saves a revision and removes an entry, each
-// on the tag of the step before.
+// profileWrites saves two revisions, each on the tag of the step before.
 func profileWrites(t *testing.T, env *e2e.Env, one string, tag *profileTag) {
 	t.Helper()
 
-	profileStep(t, env, profileRequest("set a plain entry",
-		http.MethodPut, one+"/entries/tags.team", http.StatusOK).
-		withBody(`{"value":"payments","description":"owner"}`).withTag(tag.etag).checking(tag.remember))
-	profileStep(t, env, profileRequest("mark the secret entry never store",
-		http.MethodPut, one+"/entries/db.password", http.StatusOK).
-		withBody(`{"secret":"`+profileSecret+`","neverStore":true}`).withTag(tag.etag).checking(tag.remember))
+	withEntries, err := json.Marshal(map[string]string{"document": "schemaVersion: 1\nvalues:\n  region: eu-west-1\n" +
+		"  tags:\n    team: payments\n  db:\n    password: { $secret: " + profileSecret + ", $neverStore: true }\n"})
+	if err != nil {
+		t.Fatalf("encode profile body: %v", err)
+	}
+
+	profileStep(t, env, profileRequest("save a revision with a plain entry and a never-store secret",
+		http.MethodPost, one+"/revisions", http.StatusCreated).
+		withBody(string(withEntries)).withTag(tag.etag).checking(tag.remember))
 	profileStep(t, env, profileRequest("save a revision",
 		http.MethodPost, one+"/revisions", http.StatusCreated).
 		withBody(`{"document":"schemaVersion: 1\nvalues:\n  region: eu-central-1\n","reason":"e2e"}`).
@@ -210,11 +211,6 @@ func profileWrites(t *testing.T, env *e2e.Env, one string, tag *profileTag) {
 		t,
 		env,
 		profileRequest("the revisions list newest first", http.MethodGet, one+"/revisions", http.StatusOK).
-			checking(profileMasked(`"revision":4`, `"reason":"e2e"`)),
+			checking(profileMasked(`"revision":3`, `"reason":"e2e"`)),
 	)
-	profileStep(t, env, profileRequest("add a throwaway entry",
-		http.MethodPut, one+"/entries/extra", http.StatusOK).
-		withBody(`{"value":1}`).withTag(tag.etag).checking(tag.remember))
-	profileStep(t, env, profileRequest("delete the entry",
-		http.MethodDelete, one+"/entries/extra", http.StatusOK).withTag(tag.etag).checking(tag.remember))
 }

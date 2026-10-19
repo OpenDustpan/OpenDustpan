@@ -38,7 +38,7 @@ func testCreateAndGet(t *testing.T, s Store) {
 func checkFirstRevision(t *testing.T, s Store, p profile.Profile) {
 	t.Helper()
 
-	r, err := s.Profiles.Revision(t.Context(), p.Namespace, p.ID, 1)
+	r, err := s.Profiles.Revision(t.Context(), p.Namespace, p.ID, profile.At{Number: 1})
 	if err != nil || r.Number != 1 || r.Author != subject || r.Profile != p.ID {
 		t.Errorf("Revision 1 = %+v, %v", r, err)
 	}
@@ -51,7 +51,7 @@ func testDuplicateName(t *testing.T, s Store) {
 	create(t, s, ns, "aws-prod")
 
 	p, r := newProfile(ns.Name, "aws-prod")
-	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry(ns.Name, "profile:write"))
+	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries(ns.Name, "profile:write"))
 	wantErr(t, "duplicate create", err, profile.ErrConflict)
 }
 
@@ -72,13 +72,13 @@ func testOtherNamespace(t *testing.T, s Store) {
 	_, err := s.Profiles.Get(t.Context(), b.Name, profile.RefByID(p.ID))
 	wantErr(t, "Get in other namespace", err, profile.ErrNotFound)
 
-	_, err = s.Profiles.Revision(t.Context(), b.Name, p.ID, 1)
+	_, err = s.Profiles.Revision(t.Context(), b.Name, p.ID, profile.At{Number: 1})
 	wantErr(t, "Revision in other namespace", err, profile.ErrNotFound)
 
 	_, err = s.Profiles.Get(t.Context(), a.Name, profile.RefByName("missing"))
 	wantErr(t, "Get of a missing name", err, profile.ErrNotFound)
 
-	err = s.Profiles.Delete(t.Context(), anchor(b.Name, p.ID, 0), b.Fence(), entry(b.Name, "profile:manage"))
+	err = s.Profiles.Delete(t.Context(), anchor(b.Name, p.ID, 0), b.Fence(), entries(b.Name, "profile:manage"))
 	wantErr(t, "Delete in other namespace", err, profile.ErrNotFound)
 }
 
@@ -89,13 +89,13 @@ func testFirstRevisionNumber(t *testing.T, s Store) {
 	p, r := newProfile(ns.Name, "aws-prod")
 	r.Number = 2
 
-	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry(ns.Name, "profile:write"))
+	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries(ns.Name, "profile:write"))
 	wantErr(t, "create with revision 2", err, profile.ErrInvalid)
 
 	p, r = newProfile(ns.Name, "aws-prod")
 	r.Profile = profile.NewID()
 
-	_, err = s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry(ns.Name, "profile:write"))
+	_, err = s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries(ns.Name, "profile:write"))
 	wantErr(t, "create with a revision of another profile", err, profile.ErrInvalid)
 }
 
@@ -109,14 +109,14 @@ func testFenced(t *testing.T, s Store) {
 	stale.FailoverVersion = ns.FailoverVersion - 1
 
 	np, nr := newProfile(ns.Name, "other")
-	_, err := s.Profiles.Create(t.Context(), np, nr, stale, entry(ns.Name, "profile:write"))
+	_, err := s.Profiles.Create(t.Context(), np, nr, stale, entries(ns.Name, "profile:write"))
 	wantErr(t, "Create", err, namespace.ErrFenced)
 
 	_, err = s.Profiles.Save(t.Context(), anchor(ns.Name, p.ID, 1), nextRevision(p, doc), stale,
-		entry(ns.Name, "profile:write"))
+		entries(ns.Name, "profile:write"))
 	wantErr(t, "Save", err, namespace.ErrFenced)
 
-	err = s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 0), stale, entry(ns.Name, "profile:manage"))
+	err = s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 0), stale, entries(ns.Name, "profile:manage"))
 	wantErr(t, "Delete", err, namespace.ErrFenced)
 
 	got, err := s.Profiles.Get(t.Context(), ns.Name, profile.RefByID(p.ID))
@@ -136,18 +136,24 @@ func testAuditRollsBack(t *testing.T, s Store) {
 	bad.Subject = ""
 
 	p, r := newProfile(ns.Name, "aws-prod")
-	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), bad)
+	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), []audit.Entry{bad})
 	wantErr(t, "create with an invalid entry", err, audit.ErrInvalidEntry)
 
 	_, err = s.Profiles.Get(t.Context(), ns.Name, profile.RefByName("aws-prod"))
 	wantErr(t, "profile after the failed create", err, profile.ErrNotFound)
 
-	_, err = s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry("globex", "profile:write"))
+	_, err = s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries("globex", "profile:write"))
 	wantErr(t, "create with an entry of another namespace", err, audit.ErrInvalidEntry)
 
 	q := create(t, s, ns, "ok")
 
-	_, err = s.Profiles.Save(t.Context(), anchor(ns.Name, q.ID, 1), nextRevision(q, doc), ns.Fence(), bad)
+	_, err = s.Profiles.Save(
+		t.Context(),
+		anchor(ns.Name, q.ID, 1),
+		nextRevision(q, doc),
+		ns.Fence(),
+		[]audit.Entry{bad},
+	)
 	wantErr(t, "save with an invalid entry", err, audit.ErrInvalidEntry)
 
 	got, err := s.Profiles.Get(t.Context(), ns.Name, profile.RefByID(q.ID))
@@ -155,7 +161,7 @@ func testAuditRollsBack(t *testing.T, s Store) {
 		t.Errorf("latest after the failed save = %d, %v, want 1", got.Latest, err)
 	}
 
-	err = s.Profiles.Delete(t.Context(), anchor(ns.Name, q.ID, 0), ns.Fence(), bad)
+	err = s.Profiles.Delete(t.Context(), anchor(ns.Name, q.ID, 0), ns.Fence(), []audit.Entry{bad})
 	wantErr(t, "delete with an invalid entry", err, audit.ErrInvalidEntry)
 
 	if _, err = s.Profiles.Get(t.Context(), ns.Name, profile.RefByID(q.ID)); err != nil {
@@ -184,6 +190,53 @@ func testAuditAppended(t *testing.T, s Store) {
 	got := strings.Join(actions, ",")
 	if !strings.Contains(got, "profile:manage") || strings.Count(got, "profile:write") != 2 {
 		t.Errorf("audit actions (newest first) = %v, want two profile:write and one profile:manage", actions)
+	}
+}
+
+func testAuditMany(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	p, r := newProfile(ns.Name, "aws-prod")
+	two := []audit.Entry{entry(ns.Name, "profile:write"), entry(ns.Name, "profile:open")}
+
+	if _, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), two); err != nil {
+		t.Fatalf("Create with two entries: %v", err)
+	}
+
+	l, err := s.Audit.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: bigPage})
+	if err != nil {
+		t.Fatalf("audit List: %v", err)
+	}
+
+	if len(l.Entries) != 2 || l.Entries[0].Action != "profile:open" || l.Entries[1].Action != "profile:write" {
+		t.Errorf("audit entries (newest first) = %+v, want profile:open then profile:write", l.Entries)
+	}
+}
+
+func testAuditNone(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	p, r := newProfile(ns.Name, "aws-prod")
+
+	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), nil)
+	wantErr(t, "create with no entry", err, profile.ErrInvalid)
+
+	_, err = s.Profiles.Get(t.Context(), ns.Name, profile.RefByName("aws-prod"))
+	wantErr(t, "profile after the failed create", err, profile.ErrNotFound)
+
+	q := create(t, s, ns, "ok")
+
+	_, err = s.Profiles.Save(t.Context(), anchor(ns.Name, q.ID, 1), nextRevision(q, doc), ns.Fence(), []audit.Entry{})
+	wantErr(t, "save with no entry", err, profile.ErrInvalid)
+
+	err = s.Profiles.Delete(t.Context(), anchor(ns.Name, q.ID, 0), ns.Fence(), nil)
+	wantErr(t, "delete with no entry", err, profile.ErrInvalid)
+
+	got, err := s.Profiles.Get(t.Context(), ns.Name, profile.RefByID(q.ID))
+	if err != nil || got.Latest != 1 {
+		t.Errorf("profile after the refused writes = %+v, %v", got, err)
 	}
 }
 
@@ -266,12 +319,12 @@ func testSave(t *testing.T, s Store) {
 		t.Errorf("Get after save = %+v, %v", got, err)
 	}
 
-	r, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, 0)
+	r, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, profile.At{Number: 0})
 	if err != nil || r.Number != 2 || r.Author != "bob" || !strings.Contains(string(r.Document), "b: 2") {
 		t.Errorf("newest revision = %+v, %v", r, err)
 	}
 
-	old, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, 1)
+	old, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, profile.At{Number: 1})
 	if err != nil || strings.Contains(string(old.Document), "b: 2") {
 		t.Errorf("revision 1 changed: %+v, %v", old, err)
 	}
@@ -285,11 +338,11 @@ func testSaveStale(t *testing.T, s Store) {
 	save(t, s, ns, p, doc+"  b: 2\n")
 
 	_, err := s.Profiles.Save(t.Context(), anchor(ns.Name, p.ID, 1), nextRevision(p, doc+"  c: 3\n"), ns.Fence(),
-		entry(ns.Name, "profile:write"))
+		entries(ns.Name, "profile:write"))
 	wantErr(t, "save on base 1", err, profile.ErrConflict)
 
 	_, err = s.Profiles.Save(t.Context(), anchor(ns.Name, profile.NewID(), 1), nextRevision(p, doc), ns.Fence(),
-		entry(ns.Name, "profile:write"))
+		entries(ns.Name, "profile:write"))
 	wantErr(t, "save of an unknown profile", err, profile.ErrNotFound)
 }
 
@@ -302,13 +355,13 @@ func testSaveNumber(t *testing.T, s Store) {
 	r := nextRevision(p, doc)
 	r.Number = pageSize
 
-	_, err := s.Profiles.Save(t.Context(), anchor(ns.Name, p.ID, 1), r, ns.Fence(), entry(ns.Name, "profile:write"))
+	_, err := s.Profiles.Save(t.Context(), anchor(ns.Name, p.ID, 1), r, ns.Fence(), entries(ns.Name, "profile:write"))
 	wantErr(t, "save with number 5", err, profile.ErrInvalid)
 
 	r = nextRevision(p, doc)
 	r.Profile = profile.NewID()
 
-	_, err = s.Profiles.Save(t.Context(), anchor(ns.Name, p.ID, 1), r, ns.Fence(), entry(ns.Name, "profile:write"))
+	_, err = s.Profiles.Save(t.Context(), anchor(ns.Name, p.ID, 1), r, ns.Fence(), entries(ns.Name, "profile:write"))
 	wantErr(t, "save with another profile in the revision", err, profile.ErrInvalid)
 }
 
@@ -318,13 +371,13 @@ func testRevisionRead(t *testing.T, s Store) {
 	ns := newNamespace(t, s, "acme")
 	p := create(t, s, ns, "aws-prod")
 
-	_, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, secondRevision)
+	_, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, profile.At{Number: secondRevision})
 	wantErr(t, "revision 2", err, profile.ErrNotFound)
 
-	_, err = s.Profiles.Revision(t.Context(), ns.Name, p.ID, -1)
+	_, err = s.Profiles.Revision(t.Context(), ns.Name, p.ID, profile.At{Number: -1})
 	wantErr(t, "revision -1", err, profile.ErrInvalid)
 
-	r, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, 0)
+	r, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, profile.At{Number: 0})
 	if err != nil || r.Number != 1 {
 		t.Errorf("revision 0 = %+v, %v", r, err)
 	}
@@ -367,10 +420,10 @@ func testDelete(t *testing.T, s Store) {
 	_, err := s.Profiles.Get(t.Context(), ns.Name, profile.RefByID(p.ID))
 	wantErr(t, "Get after delete", err, profile.ErrNotFound)
 
-	_, err = s.Profiles.Revision(t.Context(), ns.Name, p.ID, 1)
+	_, err = s.Profiles.Revision(t.Context(), ns.Name, p.ID, profile.At{Number: 1})
 	wantErr(t, "Revision after delete", err, profile.ErrNotFound)
 
-	err = s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 0), ns.Fence(), entry(ns.Name, "profile:manage"))
+	err = s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 0), ns.Fence(), entries(ns.Name, "profile:manage"))
 	wantErr(t, "second Delete", err, profile.ErrNotFound)
 
 	again := create(t, s, ns, "aws-prod")
@@ -386,14 +439,14 @@ func testDeleteStale(t *testing.T, s Store) {
 	p := create(t, s, ns, "aws-prod")
 	save(t, s, ns, p, doc)
 
-	err := s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 1), ns.Fence(), entry(ns.Name, "profile:manage"))
+	err := s.Profiles.Delete(t.Context(), anchor(ns.Name, p.ID, 1), ns.Fence(), entries(ns.Name, "profile:manage"))
 	wantErr(t, "delete if latest is 1", err, profile.ErrConflict)
 
 	err = s.Profiles.Delete(
 		t.Context(),
 		anchor(ns.Name, p.ID, secondRevision),
 		ns.Fence(),
-		entry(ns.Name, "profile:manage"),
+		entries(ns.Name, "profile:manage"),
 	)
 	if err != nil {
 		t.Errorf("delete if latest is 2: %v", err)
@@ -408,11 +461,11 @@ func testDocumentBytes(t *testing.T, s Store) {
 	r.Document = []byte("schemaVersion: 1\r\n# ünïcode ✓\r\nvalues:\r\n  a: \"b\"\r\n")
 	r.Reason = "first"
 
-	if _, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry(ns.Name, "profile:write")); err != nil {
+	if _, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries(ns.Name, "profile:write")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, 1)
+	got, err := s.Profiles.Revision(t.Context(), ns.Name, p.ID, profile.At{Number: 1})
 	if err != nil || !bytes.Equal(got.Document, r.Document) || got.SHA256 != r.SHA256 || got.Reason != "first" {
 		t.Errorf("revision = %+v, %v, want the document, the hash and the reason as stored", got, err)
 	}
@@ -428,7 +481,7 @@ func testLimit(t *testing.T, s Store) {
 	}
 
 	p, r := newProfile(ns.Name, "one-more")
-	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry(ns.Name, "profile:write"))
+	_, err := s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries(ns.Name, "profile:write"))
 
 	if !errors.Is(err, profile.ErrLimit) {
 		t.Errorf("profile %d: error = %v, want ErrLimit", profile.MaxProfiles+1, err)
@@ -441,7 +494,7 @@ func testLimit(t *testing.T, s Store) {
 
 	remove(t, s, ns, first)
 
-	if _, err = s.Profiles.Create(t.Context(), p, r, ns.Fence(), entry(ns.Name, "profile:write")); err != nil {
+	if _, err = s.Profiles.Create(t.Context(), p, r, ns.Fence(), entries(ns.Name, "profile:write")); err != nil {
 		t.Errorf("create after a delete: %v", err)
 	}
 }

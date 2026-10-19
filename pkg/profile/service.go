@@ -76,21 +76,6 @@ type Change struct {
 	Reason   string
 }
 
-// EntryChange sets one entry on top of Base.
-type EntryChange struct {
-	Base   int
-	Path   string
-	Input  EntryInput
-	Reason string
-}
-
-// EntryRemoval removes one entry on top of Base.
-type EntryRemoval struct {
-	Base   int
-	Path   string
-	Reason string
-}
-
 // Removal is the content of a delete. A non-zero IfLatest names the
 // revision that the caller read.
 type Removal struct {
@@ -105,14 +90,12 @@ type RevisionPage struct {
 	Limit  int
 }
 
-// ReadOptions selects what a read answers. Revision 0 is the newest. A
-// non-empty Entry limits the answer to the entry at that path. Reveal also
-// answers the plain text of each secret: it needs profile:open and writes an
-// audit entry of the kind reveal before it answers. If the entry fails, no
-// value leaves.
+// ReadOptions selects what a read answers. Revision 0 is the newest. Reveal
+// also answers the plain text of each secret: it needs profile:open and
+// writes an audit entry of the kind reveal before it answers. If the entry
+// fails, no value leaves.
 type ReadOptions struct {
 	Revision int
-	Entry    string
 	Reveal   bool
 }
 
@@ -146,7 +129,7 @@ func NewService(cfg Config) (*Service, error) {
 
 // Create makes the profile with revision 1. A document with a routing
 // change also needs profile:open.
-func (s *Service) Create(ctx context.Context, a Actor, ns namespace.Name, in NewProfile) (Profile, Revision, error) {
+func (s *Service) Create(ctx context.Context, a *Actor, ns namespace.Name, in NewProfile) (Profile, Revision, error) {
 	if err := s.require(ctx, a, ns, identity.ActionProfileWrite); err != nil {
 		return Profile{}, Revision{}, err
 	}
@@ -187,7 +170,7 @@ func (s *Service) Create(ctx context.Context, a Actor, ns namespace.Name, in New
 		reason: in.Reason,
 	})
 
-	created, err := s.store.Create(ctx, p, r, fence, e)
+	created, err := s.store.Create(ctx, p, r, fence, []audit.Entry{e})
 	if err != nil {
 		return Profile{}, Revision{}, fmt.Errorf("create profile %s: %w", in.Name, err)
 	}
@@ -195,8 +178,29 @@ func (s *Service) Create(ctx context.Context, a Actor, ns namespace.Name, in New
 	return created, r, nil
 }
 
+// Locate finds the profile that a write or a delete acts on. It checks action
+// on the namespace, which is the action of the route, and not profile:read:
+// a caller that may only write can still save. The action must be
+// profile:write or profile:manage.
+func (s *Service) Locate(ctx context.Context, a *Actor, t Target, action identity.Action) (Profile, error) {
+	if action != identity.ActionProfileWrite && action != identity.ActionProfileManage {
+		return Profile{}, fmt.Errorf("%w: locate needs profile:write or profile:manage", ErrInvalid)
+	}
+
+	if err := s.require(ctx, a, t.Namespace, action); err != nil {
+		return Profile{}, err
+	}
+
+	p, err := s.store.Get(ctx, t.Namespace, t.Ref)
+	if err != nil {
+		return Profile{}, fmt.Errorf("get profile %s: %w", t.Ref, err)
+	}
+
+	return p, nil
+}
+
 // Get reads the metadata of one profile.
-func (s *Service) Get(ctx context.Context, a Actor, t Target) (Profile, error) {
+func (s *Service) Get(ctx context.Context, a *Actor, t Target) (Profile, error) {
 	if err := s.require(ctx, a, t.Namespace, identity.ActionProfileRead); err != nil {
 		return Profile{}, err
 	}
@@ -210,7 +214,7 @@ func (s *Service) Get(ctx context.Context, a Actor, t Target) (Profile, error) {
 }
 
 // List reads one page of profiles of the namespace in q.
-func (s *Service) List(ctx context.Context, a Actor, q Filter) (Page, error) {
+func (s *Service) List(ctx context.Context, a *Actor, q Filter) (Page, error) {
 	if err := s.require(ctx, a, q.Namespace, identity.ActionProfileRead); err != nil {
 		return Page{}, err
 	}
@@ -224,7 +228,7 @@ func (s *Service) List(ctx context.Context, a Actor, q Filter) (Page, error) {
 }
 
 // Revisions reads the revisions of a profile, newest first.
-func (s *Service) Revisions(ctx context.Context, a Actor, t Target, page RevisionPage) ([]Revision, error) {
+func (s *Service) Revisions(ctx context.Context, a *Actor, t Target, page RevisionPage) ([]Revision, error) {
 	p, err := s.Get(ctx, a, t)
 	if err != nil {
 		return nil, err
@@ -239,13 +243,17 @@ func (s *Service) Revisions(ctx context.Context, a Actor, t Target, page Revisio
 }
 
 // Read reads one revision of a profile.
-func (s *Service) Read(ctx context.Context, a Actor, t Target, o ReadOptions) (View, error) {
+func (s *Service) Read(ctx context.Context, a *Actor, t Target, o ReadOptions) (View, error) {
 	if err := s.require(ctx, a, t.Namespace, identity.ActionProfileRead); err != nil {
 		return View{}, err
 	}
 
 	if o.Reveal {
 		if err := s.require(ctx, a, t.Namespace, identity.ActionProfileOpen); err != nil {
+			if errors.Is(err, identity.ErrDenied) {
+				err = errors.Join(err, s.recordDenied(ctx, a, t))
+			}
+
 			return View{}, err
 		}
 	}
@@ -255,7 +263,7 @@ func (s *Service) Read(ctx context.Context, a Actor, t Target, o ReadOptions) (V
 		return View{}, fmt.Errorf("get profile %s: %w", t.Ref, err)
 	}
 
-	r, err := s.store.Revision(ctx, t.Namespace, p.ID, o.Revision)
+	r, err := s.store.Revision(ctx, t.Namespace, p.ID, At{Number: o.Revision})
 	if err != nil {
 		return View{}, fmt.Errorf("read revision %d of %s: %w", o.Revision, p.Name, err)
 	}
@@ -267,22 +275,15 @@ func (s *Service) Read(ctx context.Context, a Actor, t Target, o ReadOptions) (V
 
 	v := View{Profile: p, Revision: r, Entries: doc.Entries(), Secrets: nil}
 
-	if o.Entry != "" {
-		v.Entries = onlyEntry(v.Entries, o.Entry)
-		if len(v.Entries) == 0 {
-			return View{}, fmt.Errorf("%w: entry %q of %s", ErrNotFound, o.Entry, p.Name)
-		}
-	}
-
 	if !o.Reveal {
 		return v, nil
 	}
 
-	return s.reveal(ctx, a, v, doc, o.Entry)
+	return s.reveal(ctx, a, v, doc)
 }
 
 // Save adds a revision on top of the revision that the caller read.
-func (s *Service) Save(ctx context.Context, a Actor, t Target, in Change) (Profile, Revision, error) {
+func (s *Service) Save(ctx context.Context, a *Actor, t Target, in Change) (Profile, Revision, error) {
 	p, prev, err := s.prepare(ctx, a, t, in.Base, in.Reason)
 	if err != nil {
 		return Profile{}, Revision{}, err
@@ -296,40 +297,8 @@ func (s *Service) Save(ctx context.Context, a Actor, t Target, in Change) (Profi
 	return s.commit(ctx, a, p, pending{prev: prev, doc: doc, reason: in.Reason})
 }
 
-// SaveEntry sets the entry at a path on top of the revision that the caller
-// read. It is a save of the newest revision with that one leaf changed.
-func (s *Service) SaveEntry(ctx context.Context, a Actor, t Target, in EntryChange) (Profile, Revision, error) {
-	p, prev, err := s.prepare(ctx, a, t, in.Base, in.Reason)
-	if err != nil {
-		return Profile{}, Revision{}, err
-	}
-
-	doc, err := prev.WithEntry(in.Path, in.Input)
-	if err != nil {
-		return Profile{}, Revision{}, err
-	}
-
-	return s.commit(ctx, a, p, pending{prev: prev, doc: doc, reason: in.Reason})
-}
-
-// DeleteEntry removes the entry at a path on top of the revision that the
-// caller read.
-func (s *Service) DeleteEntry(ctx context.Context, a Actor, t Target, in EntryRemoval) (Profile, Revision, error) {
-	p, prev, err := s.prepare(ctx, a, t, in.Base, in.Reason)
-	if err != nil {
-		return Profile{}, Revision{}, err
-	}
-
-	doc, err := prev.WithoutEntry(in.Path)
-	if err != nil {
-		return Profile{}, Revision{}, err
-	}
-
-	return s.commit(ctx, a, p, pending{prev: prev, doc: doc, reason: in.Reason})
-}
-
 // Delete removes a profile.
-func (s *Service) Delete(ctx context.Context, a Actor, t Target, in Removal) error {
+func (s *Service) Delete(ctx context.Context, a *Actor, t Target, in Removal) error {
 	if err := s.require(ctx, a, t.Namespace, identity.ActionProfileManage); err != nil {
 		return err
 	}
@@ -353,7 +322,9 @@ func (s *Service) Delete(ctx context.Context, a Actor, t Target, in Removal) err
 		kind: audit.KindChange, reason: in.Reason,
 	})
 
-	if err = s.store.Delete(ctx, Anchor{Namespace: t.Namespace, ID: p.ID, Latest: in.IfLatest}, fence, e); err != nil {
+	at := Anchor{Namespace: t.Namespace, ID: p.ID, Latest: in.IfLatest}
+
+	if err = s.store.Delete(ctx, at, fence, []audit.Entry{e}); err != nil {
 		return fmt.Errorf("delete profile %s: %w", p.Name, err)
 	}
 
@@ -387,7 +358,7 @@ type sealJob struct {
 	doc    *Document
 }
 
-func (s *Service) require(ctx context.Context, a Actor, ns namespace.Name, action identity.Action) error {
+func (s *Service) require(ctx context.Context, a *Actor, ns namespace.Name, action identity.Action) error {
 	if err := s.authz.Authorize(ctx, a.Principal, action, identity.NamespaceObject(ns)); err != nil {
 		return fmt.Errorf("authorize %s: %w", action, err)
 	}
@@ -406,7 +377,7 @@ func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence
 
 // entry makes the audit entry of one write. It names the profile and never a
 // value.
-func (s *Service) entry(a Actor, r record) audit.Entry {
+func (s *Service) entry(a *Actor, r record) audit.Entry {
 	e := a.By
 	e.At = s.now().UTC()
 	e.Namespace = r.ns
@@ -430,7 +401,7 @@ func (s *Service) entry(a Actor, r record) audit.Entry {
 // seal checks the routing rule against the revision that the document
 // replaces, checks each $sealed value, seals each $secret and returns the
 // text to store.
-func (s *Service) seal(ctx context.Context, a Actor, job sealJob) ([]byte, error) {
+func (s *Service) seal(ctx context.Context, a *Actor, job sealJob) ([]byte, error) {
 	sc, err := scopeOf(job.ns, job.id)
 	if err != nil {
 		return nil, err
@@ -502,22 +473,41 @@ func (s *Service) checkSealed(ctx context.Context, sc secret.Scope, doc *Documen
 	return nil
 }
 
+// recordDenied writes the audit entry of a reveal that profile:open refused.
+// A profile or a namespace that is not found writes no entry: the caller
+// then gets the denial only.
+func (s *Service) recordDenied(ctx context.Context, a *Actor, t Target) error {
+	fence, err := s.fence(ctx, t.Namespace)
+	if err != nil {
+		return nil //nolint:nilerr // The denial is the answer; a missing namespace has no audit log to write.
+	}
+
+	p, err := s.store.Get(ctx, t.Namespace, t.Ref)
+	if err != nil {
+		return nil //nolint:nilerr // The denial is the answer; a missing profile has nothing to name.
+	}
+
+	e := s.entry(a, record{
+		ns: t.Namespace, action: identity.ActionProfileOpen, id: p.ID, name: p.Name, rev: 0,
+		kind: audit.KindReveal, reason: "",
+	})
+	e.Outcome = audit.OutcomeDenied
+
+	if _, err = s.audit.Append(ctx, fence, e); err != nil {
+		return fmt.Errorf("record denied reveal of %s: %w", p.Name, err)
+	}
+
+	return nil
+}
+
 // reveal opens the secrets of v, writes the audit entry and answers them.
-func (s *Service) reveal(ctx context.Context, a Actor, v View, doc *Document, only string) (View, error) {
+func (s *Service) reveal(ctx context.Context, a *Actor, v View, doc *Document) (View, error) {
 	secrets, err := doc.Secrets()
 	if err != nil {
 		return View{}, err
 	}
 
-	var picked []Secret
-
-	for _, sec := range secrets {
-		if only == "" || sec.Path == only {
-			picked = append(picked, sec)
-		}
-	}
-
-	plain, err := s.openSecrets(ctx, v, picked)
+	plain, err := s.openSecrets(ctx, v, secrets)
 	if err != nil {
 		return View{}, err
 	}
@@ -527,20 +517,19 @@ func (s *Service) reveal(ctx context.Context, a Actor, v View, doc *Document, on
 		return View{}, err
 	}
 
-	count := int64(len(picked))
+	count := int64(len(secrets))
 	e := s.entry(a, record{
 		ns: v.Profile.Namespace, action: identity.ActionProfileOpen, id: v.Profile.ID, name: v.Profile.Name,
 		rev: v.Revision.Number, kind: audit.KindReveal, reason: "",
 	})
 	e.ValueCount = &count
-	e.ValuePath = only
 
 	if _, err = s.audit.Append(ctx, fence, e); err != nil {
 		return View{}, fmt.Errorf("record reveal of %s: %w", v.Profile.Name, err)
 	}
 
-	v.Secrets = make(map[string]string, len(picked))
-	for i, sec := range picked {
+	v.Secrets = make(map[string]string, len(secrets))
+	for i, sec := range secrets {
 		v.Secrets[sec.Path] = string(plain[i])
 	}
 
@@ -572,7 +561,13 @@ func (s *Service) openSecrets(ctx context.Context, v View, picked []Secret) ([][
 
 // prepare checks the caller and the base of a save, and parses the revision
 // that the save builds on.
-func (s *Service) prepare(ctx context.Context, a Actor, t Target, base int, reason string) (Profile, *Document, error) {
+func (s *Service) prepare(
+	ctx context.Context,
+	a *Actor,
+	t Target,
+	base int,
+	reason string,
+) (Profile, *Document, error) {
 	if err := s.require(ctx, a, t.Namespace, identity.ActionProfileWrite); err != nil {
 		return Profile{}, nil, err
 	}
@@ -595,7 +590,7 @@ func (s *Service) prepare(ctx context.Context, a Actor, t Target, base int, reas
 			ErrConflict, base, p.Name, p.Latest)
 	}
 
-	r, err := s.store.Revision(ctx, t.Namespace, p.ID, base)
+	r, err := s.store.Revision(ctx, t.Namespace, p.ID, At{Number: base})
 	if err != nil {
 		return Profile{}, nil, fmt.Errorf("read revision %d of %s: %w", base, p.Name, err)
 	}
@@ -609,7 +604,7 @@ func (s *Service) prepare(ctx context.Context, a Actor, t Target, base int, reas
 }
 
 // commit seals the document of ch and adds it as the next revision of p.
-func (s *Service) commit(ctx context.Context, a Actor, p Profile, ch pending) (Profile, Revision, error) {
+func (s *Service) commit(ctx context.Context, a *Actor, p Profile, ch pending) (Profile, Revision, error) {
 	fence, err := s.fence(ctx, p.Namespace)
 	if err != nil {
 		return Profile{}, Revision{}, err
@@ -629,7 +624,13 @@ func (s *Service) commit(ctx context.Context, a Actor, p Profile, ch pending) (P
 		kind: audit.KindChange, reason: ch.reason,
 	})
 
-	updated, err := s.store.Save(ctx, Anchor{Namespace: p.Namespace, ID: p.ID, Latest: p.Latest}, r, fence, e)
+	updated, err := s.store.Save(
+		ctx,
+		Anchor{Namespace: p.Namespace, ID: p.ID, Latest: p.Latest},
+		r,
+		fence,
+		[]audit.Entry{e},
+	)
 	if err != nil {
 		return Profile{}, Revision{}, fmt.Errorf("save profile %s: %w", p.Name, err)
 	}
@@ -655,14 +656,4 @@ func newRevision(id ID, number int, text []byte, at time.Time) Revision {
 		Profile: id, Number: number, Document: text, SHA256: hex.EncodeToString(sum[:]),
 		Author: "", CreatedAt: at, Reason: "",
 	}
-}
-
-func onlyEntry(all []Entry, path string) []Entry {
-	for _, e := range all {
-		if e.Path == path {
-			return []Entry{e}
-		}
-	}
-
-	return nil
 }
