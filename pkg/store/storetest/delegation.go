@@ -122,14 +122,15 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: svc, Namespaces: st, Tokens: svc, Now: nil, NewID: nil},
+		principal.Config{TempAdmins: nil, Store: st, Guard: svc, Namespaces: st, Tokens: svc, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      st, Principals: st, Freshness: nil, Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -149,12 +150,21 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 
 // bootstrap is the bootstrap admin token: it holds every action.
 func bootstrap() identity.Principal {
-	return identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{}}
+	return identity.Principal{
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+	}
 }
 
 // signedIn returns the caller of p after a sign-in: no access token.
 func signedIn(p principal.Principal) identity.Principal {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        p.Subject,
 		DisplayName:    "",
 		Admin:          false,

@@ -61,12 +61,44 @@ The tool-neutral flag in the inventory that shows who holds a unit for a change.
 _Avoid_: Lease (for the inventory field), unit status
 
 **Import**:
-The act of moving the state of a unit from a source into OpenDustpan. It moves history and secrets where the tool can export them. The source stays unchanged. An import is not the Pulumi update of kind `import`. That update records one `pulumi stack import` command. An import is also not the Pulumi command `pulumi import`.
+The act of moving the state of a unit from a source into OpenDustpan. It moves history and secrets where the tool or the source gives them. The source stays unchanged. Two paths exist. The import tool is a resource of a namespace that the server runs (`unitimport.Import`, ADR 241). The CLI path of the guide uses the CLI of each tool (ADR 29). An import is not the Pulumi update of kind `import`. That update records one `pulumi stack import` command. An import is also not the Pulumi command `pulumi import` or an OpenTofu `import` block. It is not the `import` action of an unmanaged resource finding.
 _Avoid_: Migration (it means a SQL schema migration), transfer, onboarding
 
 **Source**:
 The backend or product that holds the state of a unit before an import. Examples: a Pulumi service backend, an OpenTofu backend or HCP Terraform.
 _Avoid_: Origin, legacy backend
+
+**Source kind**:
+The protocol that a source adapter speaks: `tfe-api`, `pulumi-service`, `s3`, `opentofu-http` or `upload` (`unitimport.SourceKind`, ADR 243). A source kind names a protocol, not a product. The docs name the products that each kind works with.
+_Avoid_: Source type, provider (that is a block of a profile or a plugin of a tool)
+
+**Upload source**:
+The source kind `upload`. A client sends each version of a unit to the import, oldest first (ADR 241 decision 3). It is the way for a source that the server cannot reach or has no adapter for.
+_Avoid_: Manual import, push
+
+**Import unit**:
+One unit that an import moves, with its source unit, its target name, its state and its ledger (`unitimport.ImportUnit`, ADR 241 decision 7). A failed import unit with committed versions is partial. A release soft-deletes a failed or partial target unit.
+_Avoid_: Import item, import task
+
+**Import ledger**:
+The rows of an import unit, one for each source version that it committed, with the source digest and the target history item. A resume starts at the first version with no row (ADR 241 decision 9).
+_Avoid_: Import log, checkpoint (that is a Pulumi state document)
+
+**Import plan**:
+The result of the dry run of an import (ADR 241 decision 8). It gives each unit with its versions, its bytes and its secrets provider. It puts each part of a unit in one class: verbatim, mapped or lost (ADR 242 decision 1). It also gives the carry-over findings that the server can find before the move.
+_Avoid_: Plan (alone), preview (alone)
+
+**Import hold**:
+The manual lock that an import puts on each target unit (ADR 241 decision 12). It starts at the create of the unit and ends at the release or the cancel of the import. Only the release or the cancel ends it. While it holds a unit, only the import writes state. Each other route that writes state, renames or deletes the unit answers 423. A Pulumi preview can still run (ADR 244 decision 12).
+_Avoid_: Import lock, freeze
+
+**Move check**:
+The check that compares moved units with their source (`unitimport.Report`, ADR 244). It compares the state digest, the resource count, the secrets, the history and the source head. It needs a plan with no change, and it gives the carry-over findings. Its scope is one unit or a namespace.
+_Avoid_: Migration check, verification (alone), validation
+
+**Carry-over finding**:
+A finding of a move check or an import plan. It names a part of a unit that the move did not carry over (ADR 244 decision 6). It has a code, a severity and the command that helps. An example is `carry.reference`.
+_Avoid_: Breakage, gap
 
 **Installation**:
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path, and its actions have the area `installation:` (ADR 210). The authorization and audit object of the installation keeps the name `@server`. Write `@server` only for that object, and "installation" in each other place.
@@ -261,6 +293,14 @@ The administrator settings of the access token life cycle for the installation: 
 
 **Inactivity disable**:
 The job that disables an access token or a user account after a set period with no use. The default period is 90 days. An administrator can change the period or turn the job off (ADR 53).
+
+**Temporary administrator**:
+A principal of the kind person that the host command makes for one named person after every administrator is lost. It works until a fixed expiry: at most 24 hours, or the token policy maximum when it is shorter. Then the server disables it. The API marks it with a flag, so the console shows a banner for it. Each step writes an audit entry: the create with its reason, each sign-in, and the expiry. A second host run for the same person is refused: the name must name no principal that exists. It is not a break-glass account: it has no `break_glass` flag, and it cannot sign in through an identity provider (ADR 245).
+_Avoid_: Shared admin account, emergency account
+
+**Host recovery**:
+The recovery path through the host command `host create-temp-admin`: the operator makes a temporary administrator with a reason, straight through the database. The inactivity disable never ends a temporary administrator that still works, and only the fixed expiry ends it. The command refuses when the recovery mode is `none` or when `DUSTPAN_DISABLE_HOST_RECOVERY` turns it off (ADR 245).
+_Avoid_: Break-glass, backdoor
 
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
@@ -1276,14 +1316,15 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
-- **Break-glass** has four meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. A break-glass of a job starts a job during an active freeze (ADR 103). A break-glass for gates in error passes the gates whose result is `error` for one change (ADR 224 decision 13). Name which one.
+- **Break-glass** has four meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor (the setting `--recovery-mode`). Host recovery is the path of the host command, not a break-glass account. A break-glass of a job starts a job during an active freeze (ADR 103). A break-glass for gates in error passes the gates whose result is `error` for one change (ADR 224 decision 13). Name which one.
 - **Sweep** names the Sweep feature only: a cloud sweep or a state check. The task that purges deleted units is the retention expiry. The delete of key blobs with no record is the orphan cleanup (ADR 151). The Go name `inventory.Sweeper` is older than this rule.
 - **Source** has two meanings. The term **Source** is the backend of a unit before an import. A source snapshot and the source filter name the code of a commit for a runner job (ADR 135). The unit setting that names that code is the code location (ADR 100). Never write "source" alone for the code.
 - **Snapshot** is the source snapshot only (ADR 135). Do not use it for state, a backup, a checkpoint or a state version.
 - **Session** has three meanings: the console session of a person, a job session of a launcher (ADR 133), and an MCP session (ADR 123). Name which one.
 - **Job token** and **handoff token** are different. A job token is the access token of a tool for the unit of a job (ADR 100). A handoff token opens one job session (ADR 133).
 - **Executor** and **launcher** are different. An executor is the way a job runs: write-back or runners (ADR 100). The launcher runs the steps of one claim (ADR 134).
-- **Plan** has six meanings. They are the operation `plan` of a job, the phase kind `plan` and a stored plan. They are also the OpenTofu plan, a plan revision and a unit plan (ADR 195). Name which one.
+- **Plan** names seven things. They are the operation `plan` of a job, the phase kind `plan` and a stored plan. They are also the OpenTofu plan, a plan revision, a unit plan (ADR 195) and the import plan (ADR 241). Name which one.
+- **Release** has two meanings: a release of the software, and the release of an import, which ends its import hold (ADR 241 decision 15). Name which one.
 - **Signature** has three meanings. A webhook delivery has one (ADR 145), a signed audit segment has one (RFC 71), and a change order has signatures (ADR 191). Name which one.
 - **Gate** names only the stored rule at a decision point (ADR 224). The confirmation step and the secret consent of an agent are fixed controls, which older ADRs call the confirmation gate and the secret gate. A CI model check (ADR 70 decision 30) is a check, and "gates" as a verb is "needs".
 - **Policy** alone names no object. Say gate, access limit, approval rule, source filter, session policy, token policy or resource policy report.

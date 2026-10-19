@@ -32,6 +32,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
+	"opendustpan.org/opendustpan/pkg/tempadmin/tempadmintest"
 )
 
 func TestConformance(t *testing.T) {
@@ -118,6 +119,17 @@ func TestSessionConformance(t *testing.T) {
 	t.Parallel()
 
 	sessiontest.Run(t, func(t *testing.T) sessiontest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestTempAdminConformance runs the temporary administrator store suite.
+func TestTempAdminConformance(t *testing.T) {
+	t.Parallel()
+
+	tempadmintest.Run(t, func(t *testing.T) tempadmintest.Store {
 		t.Helper()
 
 		return open(t)

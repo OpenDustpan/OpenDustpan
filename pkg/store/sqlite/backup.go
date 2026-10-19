@@ -465,7 +465,7 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 		return errors.Join(renameErr, reopenErr)
 	}
 
-	conn, err := openDatabase(ctx, s.path)
+	conn, err := openDatabase(ctx, s.path, nil)
 	if err != nil {
 		return err
 	}
@@ -480,7 +480,7 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 // before the rename. Restore runs offline, so the destination stays usable.
 // The caller holds the store lock.
 func (s *Store) reopenDatabase(ctx context.Context) error {
-	conn, err := openDatabase(ctx, s.path)
+	conn, err := openDatabase(ctx, s.path, nil)
 	if err != nil {
 		return err
 	}

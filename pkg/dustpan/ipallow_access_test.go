@@ -140,18 +140,22 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 
 	authn := tokenMapAuthenticator{tokens: map[string]identity.Principal{
 		nsAdminToken: {
-			Subject:        "nsadmin",
-			DisplayName:    "nsadmin",
-			Admin:          false,
-			TokenID:        "",
-			TokenExpiresAt: time.Time{},
+			Subject:                "nsadmin",
+			DisplayName:            "nsadmin",
+			Admin:                  false,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
 		},
 		instAdminToken: {
-			Subject:        "instadmin",
-			DisplayName:    "instadmin",
-			Admin:          false,
-			TokenID:        "",
-			TokenExpiresAt: time.Time{},
+			Subject:                "instadmin",
+			DisplayName:            "instadmin",
+			Admin:                  false,
+			TokenID:                "",
+			TokenExpiresAt:         time.Time{},
+			TemporaryAdministrator: false,
+			TemporaryExpiresAt:     time.Time{},
 		},
 	}}
 

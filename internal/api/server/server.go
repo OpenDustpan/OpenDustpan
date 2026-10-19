@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -26,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -105,6 +107,12 @@ type Config struct {
 	// Nil means the store keeps no deleted units: the sweep route answers
 	// 501. Both SQL adapters keep them.
 	DeletedUnits DeletedUnitSweeper
+	// TempAdmins reads the temporary administrator records for the banner
+	// flag of the principal routes. Nil means no record is read: the flag
+	// stays false. Both SQL adapters keep them.
+	TempAdmins tempadmin.Reader
+	// Now returns the current time for the banner flag. Nil means time.Now.
+	Now func() time.Time
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
@@ -155,6 +163,8 @@ type Handler struct {
 	epochs         CheckpointEpochs
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
+	tempAdmins     tempadmin.Reader
+	now            func() time.Time
 	auditChain     AuditChain
 	auditSinks     AuditSinkSource
 	signIn         *signInState
@@ -191,16 +201,22 @@ func NewHandler(cfg Config) (*Handler, error) {
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
 		deletedUnits:   cfg.DeletedUnits,
+		tempAdmins:     cfg.TempAdmins,
 		auditChain:     cfg.AuditChain,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
 		sessions:       cfg.SessionPolicy,
 		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
+		now:            cfg.Now,
 		auditSinks:     cfg.AuditSinks,
 		signIn:         signIn,
 		mux:            newPatternMux(),
 		routes:         nil,
+	}
+
+	if h.now == nil {
+		h.now = time.Now
 	}
 
 	h.routes = h.buildRoutes()

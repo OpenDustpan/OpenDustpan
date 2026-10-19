@@ -1,6 +1,6 @@
 # 39. Commands never touch the database
 
-Status: accepted · 2026-10-11 · decisions 1 and 4 superseded in part by ADRs 237 and 238
+Status: accepted · 2026-10-11 · decisions 1 and 4 superseded in part by ADRs 237, 238 and 245
 
 ## Context
 

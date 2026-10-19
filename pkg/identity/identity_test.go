@@ -441,6 +441,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 	}
 
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "admin",
 		Admin:          true,
@@ -448,6 +449,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		TokenExpiresAt: time.Time{},
 	}
 	viewer := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "viewer",
 		DisplayName:    "viewer",
 		Admin:          false,
@@ -682,6 +684,7 @@ func TestChain(t *testing.T) {
 	var none identity.Principal
 
 	alice := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice",
 		DisplayName:    "Alice",
 		Admin:          false,
@@ -689,6 +692,7 @@ func TestChain(t *testing.T) {
 		TokenExpiresAt: time.Time{},
 	}
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "admin",
 		Admin:          true,
@@ -737,6 +741,7 @@ func TestSelfAllowed(t *testing.T) {
 
 	authz := identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: []identity.Action{identity.ActionTokenManageOwn}}
 	person := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "bob",
 		DisplayName:    "Bob",
 		Admin:          false,
@@ -794,7 +799,9 @@ func TestSelfAllowedListObjectsForwards(t *testing.T) {
 	})
 	authz := identity.SelfAllowed{Next: next, Actions: []identity.Action{identity.ActionTokenManageOwn}}
 	alice := identity.Principal{
-		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
 	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
