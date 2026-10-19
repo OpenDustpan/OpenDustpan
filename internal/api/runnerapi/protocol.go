@@ -159,7 +159,7 @@ func (h *Handler) entry(
 		Changes: nil, SourceIP: clientip.String(r), UserAgent: truncateUserAgent(r.UserAgent()),
 		Channel: sessionauth.AuditChannel(r, channelHeader), Kind: rule.Kind, Outcome: audit.OutcomeSuccess,
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0, Reason: "",
+		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
 	}
 }
 

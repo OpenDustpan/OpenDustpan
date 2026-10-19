@@ -143,6 +143,7 @@ func (h *Handler) manageEntry(
 	rule := runner.AuditRules()[event]
 	e := h.entry(r, c.ns.Name, c.principal.Subject, rule, h.now())
 	e.TokenID = c.principal.TokenID
+	e.PrincipalKind = string(c.principal.Kind)
 	e.ObjectID = objectID
 	e.Changes = append(
 		[]audit.Change{{Key: changeEvent, Old: nil, New: string(event), Layer: "", TakesEffect: ""}},

@@ -186,7 +186,7 @@ func TestRunnersOpenSessionRace(t *testing.T) {
 			Action: "namespace:manage-runners", Object: "namespace:" + string(fence.Namespace), Version: "",
 			ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 			Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
-			Hash: "", Sequence: 0, FenceVersion: fence.FailoverVersion, Reason: "",
+			Hash: "", Sequence: 0, FenceVersion: fence.FailoverVersion, PrincipalKind: "", JobID: "", Reason: "",
 		}}
 	}
 

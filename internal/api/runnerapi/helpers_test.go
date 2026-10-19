@@ -113,7 +113,7 @@ func (adminAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 
 	return identity.Principal{
 		Subject: "ada", DisplayName: "ada", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
-		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
 	}, nil
 }
 
