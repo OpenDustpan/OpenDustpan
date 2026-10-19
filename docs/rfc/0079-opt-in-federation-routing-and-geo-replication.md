@@ -1,13 +1,14 @@
 ---
 rfc: 79
 title: Opt-in federation of installations, routing and geo-replication
-status: draft
+status: dropped
 created: 2026-10-18
 ---
 
 # RFC 79. Opt-in federation of installations, routing and geo-replication
 
-Status: draft. It decides nothing.
+Status: dropped. [ADR 248](../adr/0248-federation-model.md) decides the
+federation model. See "Outcome".
 
 ## Problem
 
@@ -251,4 +252,10 @@ Designed against these, as a comparison only, never a compliance claim:
 
 ## Outcome
 
-None yet.
+Dropped on 2026-10-19. The project owner decided the federation model in
+[RFC 88](0088-federation-model.md), and
+[ADR 248](../adr/0248-federation-model.md) records it. There are no
+regions, no control home, no namespace directory with one writer, no home
+lease and no automatic promotion, and a partition does not stop writes.
+Section 8 (joins between namespaces) moves into the "Not decided" section of ADR 248, with
+"installation" for "region". Open questions 3 and 6 are moot.

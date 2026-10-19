@@ -1,6 +1,6 @@
 # 4. Namespaces, home regions and failover-version fencing
 
-Status: accepted · 2026-10-08
+Status: accepted · 2026-10-08 · the first two decisions (home region, standby regions) superseded by ADR 248
 
 ## Context
 
