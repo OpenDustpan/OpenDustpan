@@ -4340,18 +4340,38 @@ func (q *Queries) GetIdempotencyRecord(ctx context.Context, arg GetIdempotencyRe
 	return i, err
 }
 
-const getIdempotencyServerKey = `-- name: GetIdempotencyServerKey :one
-SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1
+const getIdempotencyServerKeyExclusive = `-- name: GetIdempotencyServerKeyExclusive :one
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR UPDATE
 `
 
-type GetIdempotencyServerKeyRow struct {
+type GetIdempotencyServerKeyExclusiveRow struct {
 	WrappedKey []byte
 	WrapperID  string
 }
 
-func (q *Queries) GetIdempotencyServerKey(ctx context.Context) (GetIdempotencyServerKeyRow, error) {
-	row := q.db.QueryRow(ctx, getIdempotencyServerKey)
-	var i GetIdempotencyServerKeyRow
+// A reset takes this lock. Two processes that hold the share lock and then
+// write the row wait for each other, so a reset starts again with this lock.
+func (q *Queries) GetIdempotencyServerKeyExclusive(ctx context.Context) (GetIdempotencyServerKeyExclusiveRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyServerKeyExclusive)
+	var i GetIdempotencyServerKeyExclusiveRow
+	err := row.Scan(&i.WrappedKey, &i.WrapperID)
+	return i, err
+}
+
+const getIdempotencyServerKeyShared = `-- name: GetIdempotencyServerKeyShared :one
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR SHARE
+`
+
+type GetIdempotencyServerKeySharedRow struct {
+	WrappedKey []byte
+	WrapperID  string
+}
+
+// The share lock keeps a reset by another process from changing the row before
+// the transaction ends.
+func (q *Queries) GetIdempotencyServerKeyShared(ctx context.Context) (GetIdempotencyServerKeySharedRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyServerKeyShared)
+	var i GetIdempotencyServerKeySharedRow
 	err := row.Scan(&i.WrappedKey, &i.WrapperID)
 	return i, err
 }
@@ -11285,20 +11305,25 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 	return result.RowsAffected(), nil
 }
 
-const replaceIdempotencyServerKey = `-- name: ReplaceIdempotencyServerKey :exec
-INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
-VALUES (1, $1, $2)
-ON CONFLICT (id) DO UPDATE SET wrapped_key = excluded.wrapped_key, wrapper_id = excluded.wrapper_id
+const replaceIdempotencyServerKey = `-- name: ReplaceIdempotencyServerKey :execrows
+UPDATE idempotency_server_key
+SET wrapped_key = $1, wrapper_id = $2
+WHERE id = 1 AND wrapped_key = $3
 `
 
 type ReplaceIdempotencyServerKeyParams struct {
-	WrappedKey []byte
-	WrapperID  string
+	NewWrappedKey []byte
+	NewWrapperID  string
+	OldWrappedKey []byte
 }
 
-func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) error {
-	_, err := q.db.Exec(ctx, replaceIdempotencyServerKey, arg.WrappedKey, arg.WrapperID)
-	return err
+// It changes no row when another process replaced the key first.
+func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceIdempotencyServerKey, arg.NewWrappedKey, arg.NewWrapperID, arg.OldWrappedKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const restoreStack = `-- name: RestoreStack :execrows

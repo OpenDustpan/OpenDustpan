@@ -2,6 +2,8 @@ package idempotencytest
 
 import (
 	"bytes"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,6 +51,13 @@ func (w sameIDWrapper) ID() string { return w.id }
 type SealedDB interface {
 	// Open returns a new store value on the same database that seals with w.
 	Open(t *testing.T, w secret.Wrapper) idempotency.Store
+	// OpenMany returns one store value for each wrapper, all open at the same
+	// time on the same database. Each value keeps its own server key, as the
+	// processes of a deployment do.
+	OpenMany(t *testing.T, ws ...secret.Wrapper) []idempotency.Store
+	// Wipe deletes every row of the server key table and of the record table,
+	// as an online restore of an empty backup does.
+	Wipe(t *testing.T)
 	// RawServerKey returns the bytes that the server key row holds.
 	RawServerKey(t *testing.T) []byte
 	// RawFingerprint returns the fingerprint of the only record.
@@ -74,6 +83,8 @@ func RunSealed(t *testing.T, newDB SealedFactory) {
 		{"a new store value on the same database still replays", testSealedReplay},
 		{"another key-encryption key resets the key and the records", testSealedOtherKey},
 		{"a key-encryption key with the same ID and another key resets too", testSealedSameID},
+		{"a process whose server key row changed replays the records of the new row", testSealedStaleKey},
+		{"two processes with a new key-encryption key reset the key to one value", testSealedConcurrentReset},
 	}
 
 	for _, tc := range cases {
@@ -148,4 +159,62 @@ func testSealedSameID(t *testing.T, d SealedDB) {
 
 	got := begin(t, d.Open(t, other), ref("k1"), payload(), epoch().Add(time.Minute))
 	wantOutcome(t, got, idempotency.Started)
+}
+
+func testSealedStaleKey(t *testing.T, d SealedDB) {
+	t.Helper()
+
+	w := TestWrapper(t, seedFirst)
+	stores := d.OpenMany(t, w, w)
+	a, b := stores[0], stores[1]
+	at := epoch().Add(time.Minute)
+
+	wantOutcome(t, begin(t, a, ref("k0"), payload(), at), idempotency.Started)
+
+	d.Wipe(t)
+
+	wantOutcome(t, begin(t, b, ref("k0"), payload(), at), idempotency.Started)
+
+	first := started(t, a, ref("k1"), at)
+
+	if err := a.Complete(t.Context(), ref("k1"), first.Token, answer()); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	wantOutcome(t, begin(t, b, ref("k1"), payload(), at), idempotency.Replayed)
+}
+
+func testSealedConcurrentReset(t *testing.T, d SealedDB) {
+	t.Helper()
+
+	completed(t, d.Open(t, TestWrapper(t, seedFirst)))
+
+	w := TestWrapper(t, seedSecond)
+	stores := d.OpenMany(t, w, w)
+	a, b := stores[0], stores[1]
+	at := epoch().Add(time.Minute)
+
+	var wg sync.WaitGroup
+
+	for i, s := range stores {
+		wg.Go(func() {
+			if _, err := s.Begin(t.Context(), ref(fmt.Sprintf("c%d", i)), payload(), at); err != nil {
+				t.Errorf("begin on store %d: %v", i, err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if t.Failed() {
+		return
+	}
+
+	first := started(t, a, ref("k2"), at)
+
+	if err := a.Complete(t.Context(), ref("k2"), first.Token, answer()); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	wantOutcome(t, begin(t, b, ref("k2"), payload(), at), idempotency.Replayed)
 }

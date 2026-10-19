@@ -50,6 +50,49 @@ func (d *sealedDB) Open(t *testing.T, w secret.Wrapper) idempotency.Store {
 	return s.Idempotency(w)
 }
 
+// OpenMany implements idempotencytest.SealedDB. The file allows one open
+// store, so the values share it and keep their own server keys.
+func (d *sealedDB) OpenMany(t *testing.T, ws ...secret.Wrapper) []idempotency.Store {
+	t.Helper()
+
+	d.closeCurrent(t)
+
+	s, err := sqlite.Open(t.Context(), d.path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	d.cur = s
+
+	stores := make([]idempotency.Store, 0, len(ws))
+	for _, w := range ws {
+		stores = append(stores, s.Idempotency(w))
+	}
+
+	return stores
+}
+
+func (d *sealedDB) Wipe(t *testing.T) {
+	t.Helper()
+
+	conn, err := openRawDB(d.path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	for _, query := range []string{`DELETE FROM idempotency_records`, `DELETE FROM idempotency_server_key`} {
+		if _, err = conn.ExecContext(t.Context(), query); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+}
+
 func (d *sealedDB) RawServerKey(t *testing.T) []byte {
 	t.Helper()
 

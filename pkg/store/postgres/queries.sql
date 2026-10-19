@@ -3230,8 +3230,15 @@ WHERE created_at_ms < (
          CASE WHEN sqlc.arg(now_override_ms)::bigint <> 0 THEN sqlc.arg(now_override_ms)::bigint
             ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - sqlc.arg(pending_ttl_ms));
 
--- name: GetIdempotencyServerKey :one
-SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1;
+-- name: GetIdempotencyServerKeyShared :one
+-- The share lock keeps a reset by another process from changing the row before
+-- the transaction ends.
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR SHARE;
+
+-- name: GetIdempotencyServerKeyExclusive :one
+-- A reset takes this lock. Two processes that hold the share lock and then
+-- write the row wait for each other, so a reset starts again with this lock.
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR UPDATE;
 
 -- name: InsertIdempotencyServerKey :exec
 -- It changes no row when a key is in place: the first writer wins.
@@ -3239,10 +3246,11 @@ INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
 VALUES (1, sqlc.arg(wrapped_key), sqlc.arg(wrapper_id))
 ON CONFLICT DO NOTHING;
 
--- name: ReplaceIdempotencyServerKey :exec
-INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
-VALUES (1, sqlc.arg(wrapped_key), sqlc.arg(wrapper_id))
-ON CONFLICT (id) DO UPDATE SET wrapped_key = excluded.wrapped_key, wrapper_id = excluded.wrapper_id;
+-- name: ReplaceIdempotencyServerKey :execrows
+-- It changes no row when another process replaced the key first.
+UPDATE idempotency_server_key
+SET wrapped_key = sqlc.arg(new_wrapped_key), wrapper_id = sqlc.arg(new_wrapper_id)
+WHERE id = 1 AND wrapped_key = sqlc.arg(old_wrapped_key);
 
 -- name: DeleteAllIdempotencyRecords :exec
 DELETE FROM idempotency_records;

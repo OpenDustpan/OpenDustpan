@@ -30,9 +30,10 @@ const (
 	// PendingTTL is how long a record with no final answer lives. After it, a
 	// request with the same key does the operation.
 	PendingTTL = 5 * time.Minute
-	// MaxAnswerBytes is the largest body of a stored answer. The server does
-	// not store a larger answer: the first request still answers, and a retry
-	// with the same key does the operation again.
+	// MaxAnswerBytes is the largest body of a stored answer. A write whose
+	// answer is over the limit fails and rolls back, so a retry with the same
+	// key does the operation again. An error answer over the limit is sent to
+	// the client and is not stored.
 	MaxAnswerBytes = 1 << 20
 )
 

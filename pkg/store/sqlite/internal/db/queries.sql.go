@@ -10902,20 +10902,25 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 	return result.RowsAffected()
 }
 
-const replaceIdempotencyServerKey = `-- name: ReplaceIdempotencyServerKey :exec
-INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
-VALUES (1, ?1, ?2)
-ON CONFLICT (id) DO UPDATE SET wrapped_key = excluded.wrapped_key, wrapper_id = excluded.wrapper_id
+const replaceIdempotencyServerKey = `-- name: ReplaceIdempotencyServerKey :execrows
+UPDATE idempotency_server_key
+SET wrapped_key = ?1, wrapper_id = ?2
+WHERE id = 1 AND wrapped_key = ?3
 `
 
 type ReplaceIdempotencyServerKeyParams struct {
-	WrappedKey []byte
-	WrapperID  string
+	NewWrappedKey []byte
+	NewWrapperID  string
+	OldWrappedKey []byte
 }
 
-func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) error {
-	_, err := q.db.ExecContext(ctx, replaceIdempotencyServerKey, arg.WrappedKey, arg.WrapperID)
-	return err
+// It changes no row when another process replaced the key first.
+func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceIdempotencyServerKey, arg.NewWrappedKey, arg.NewWrapperID, arg.OldWrappedKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const restoreStack = `-- name: RestoreStack :execrows

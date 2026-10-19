@@ -14,12 +14,13 @@ package idempotent
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"slices"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -173,8 +174,7 @@ func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) erro
 
 	// The query and the If-Match header are part of the request: another
 	// query or another precondition is another request.
-	material := append(append(slices.Clip(body), 0), r.URL.RawQuery...)
-	material = append(append(material, 0), r.Header.Get("If-Match")...)
+	material := frame(body, []byte(r.URL.RawQuery), []byte(strings.Join(r.Header.Values("If-Match"), ",")))
 
 	res, err := m.store.Begin(r.Context(), ref, material, m.now())
 	if err != nil {
@@ -323,6 +323,19 @@ func buildAnswer(c Call) func(result any) (idempotency.Answer, error) {
 			Body:    nil,
 		}, nil
 	}
+}
+
+// frame joins parts into one byte string that no other list of parts makes:
+// each part follows its length as a big-endian uint64.
+func frame(parts ...[]byte) []byte {
+	var out []byte
+
+	for _, part := range parts {
+		out = binary.BigEndian.AppendUint64(out, uint64(len(part)))
+		out = append(out, part...)
+	}
+
+	return out
 }
 
 // end keeps the answer in rec when the server stores its status, else it

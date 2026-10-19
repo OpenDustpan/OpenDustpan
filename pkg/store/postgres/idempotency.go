@@ -20,7 +20,8 @@ var _ idempotency.Store = (*Idempotency)(nil)
 // implements idempotency.Store.
 //
 // The server key of the fingerprints is a random key that the key-encryption
-// key seals in the database. A process unwraps it one time and keeps it. When
+// key seals in the database. A process keeps the key it unwrapped, and uses it only while the
+// database row has the same sealed bytes. When
 // the key-encryption key cannot open the sealed key (the operator lost it or
 // changed it), the next Begin replaces the sealed key and deletes every
 // record in one transaction: a retry then does its operation again, and no
@@ -36,14 +37,40 @@ func (s *Store) Idempotency(wrapper secret.Wrapper) *Idempotency {
 	return &Idempotency{store: s, keys: codec.NewIdempotencyKeys(wrapper)}
 }
 
+// sharedKeyOps returns the operations of the key row in the transaction of q.
+// The row has a share lock.
+func sharedKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
+	return idempotencyKeyOps(q, func(ctx context.Context) (codec.IdempotencyKeyRow, error) {
+		row, err := q.GetIdempotencyServerKeyShared(ctx)
+
+		return codec.IdempotencyKeyRow{WrappedKey: row.WrappedKey, WrapperID: row.WrapperID}, err
+	})
+}
+
+// exclusiveKeyOps returns the operations of the key row in the transaction of
+// q. The row has an exclusive lock.
+func exclusiveKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
+	ops := idempotencyKeyOps(q, func(ctx context.Context) (codec.IdempotencyKeyRow, error) {
+		row, err := q.GetIdempotencyServerKeyExclusive(ctx)
+
+		return codec.IdempotencyKeyRow{WrappedKey: row.WrappedKey, WrapperID: row.WrapperID}, err
+	})
+	ops.Exclusive = true
+
+	return ops
+}
+
 // idempotencyKeyOps returns the operations of the key row in the transaction
-// of q.
-func idempotencyKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
+// of q. get reads the row with the lock that the caller wants.
+func idempotencyKeyOps(
+	q *db.Queries, get func(context.Context) (codec.IdempotencyKeyRow, error),
+) codec.IdempotencyKeyOps {
 	return codec.IdempotencyKeyOps{
+		Exclusive: false,
 		Get: func(ctx context.Context) (codec.IdempotencyKeyRow, bool, error) {
 			var none codec.IdempotencyKeyRow
 
-			row, err := q.GetIdempotencyServerKey(ctx)
+			row, err := get(ctx)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return none, false, nil
 			}
@@ -52,7 +79,7 @@ func idempotencyKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
 				return none, false, fmt.Errorf("select idempotency server key: %w", err)
 			}
 
-			return codec.IdempotencyKeyRow{WrappedKey: row.WrappedKey, WrapperID: row.WrapperID}, true, nil
+			return row, true, nil
 		},
 		Insert: func(ctx context.Context, row codec.IdempotencyKeyRow) error {
 			err := q.InsertIdempotencyServerKey(ctx, db.InsertIdempotencyServerKeyParams{
@@ -64,15 +91,15 @@ func idempotencyKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
 
 			return nil
 		},
-		Replace: func(ctx context.Context, row codec.IdempotencyKeyRow) error {
-			err := q.ReplaceIdempotencyServerKey(ctx, db.ReplaceIdempotencyServerKeyParams{
-				WrappedKey: row.WrappedKey, WrapperID: row.WrapperID,
+		Replace: func(ctx context.Context, old []byte, row codec.IdempotencyKeyRow) (bool, error) {
+			n, err := q.ReplaceIdempotencyServerKey(ctx, db.ReplaceIdempotencyServerKeyParams{
+				NewWrappedKey: row.WrappedKey, NewWrapperID: row.WrapperID, OldWrappedKey: old,
 			})
 			if err != nil {
-				return fmt.Errorf("replace idempotency server key: %w", err)
+				return false, fmt.Errorf("replace idempotency server key: %w", err)
 			}
 
-			return nil
+			return n == 1, nil
 		},
 		DeleteRecords: func(ctx context.Context) error {
 			if err := q.DeleteAllIdempotencyRecords(ctx); err != nil {
@@ -97,34 +124,18 @@ func (i *Idempotency) Begin(
 		return idempotency.Result{}, err
 	}
 
-	var res idempotency.Result
+	at := codec.IdempotencyAttempt{Ref: ref, Fingerprint: nil, Token: token, Now: now}
 
-	serverKey, cached := i.keys.Cached()
+	res, key, err := i.attempt(ctx, at, material, sharedKeyOps)
+	if errors.Is(err, codec.ErrIdempotencyResetNeeded) {
+		res, key, err = i.attempt(ctx, at, material, exclusiveKeyOps)
+	}
 
-	err = i.store.inTx(ctx, func(q *db.Queries) error {
-		if !cached {
-			var keyErr error
-
-			if serverKey, keyErr = i.keys.Resolve(ctx, idempotencyKeyOps(q)); keyErr != nil {
-				return keyErr
-			}
-		}
-
-		var txErr error
-
-		res, txErr = startOrFind(ctx, q, codec.IdempotencyAttempt{
-			Ref: ref, Fingerprint: idempotency.Fingerprint(serverKey, material), Token: token, Now: now,
-		})
-
-		return txErr
-	})
 	if err != nil {
 		return idempotency.Result{}, err
 	}
 
-	if !cached {
-		i.keys.Remember(serverKey)
-	}
+	i.keys.Remember(key)
 
 	return res, nil
 }
@@ -246,6 +257,37 @@ func (i *Idempotency) Sweep(ctx context.Context, now time.Time) (int, error) {
 	}
 
 	return int(n), nil
+}
+
+// attempt runs one transaction of Begin with the key operations that keyOps
+// makes. It returns codec.ErrIdempotencyResetNeeded when the key row needs a
+// reset and the operations do not hold the row exclusively.
+func (i *Idempotency) attempt(
+	ctx context.Context, at codec.IdempotencyAttempt, material []byte,
+	keyOps func(*db.Queries) codec.IdempotencyKeyOps,
+) (idempotency.Result, codec.IdempotencyKey, error) {
+	var (
+		res idempotency.Result
+		key codec.IdempotencyKey
+	)
+
+	err := i.store.inTx(ctx, func(q *db.Queries) error {
+		var keyErr error
+
+		if key, keyErr = i.keys.Resolve(ctx, keyOps(q)); keyErr != nil {
+			return keyErr
+		}
+
+		at.Fingerprint = idempotency.Fingerprint(key.Key, material)
+
+		var txErr error
+
+		res, txErr = startOrFind(ctx, q, at)
+
+		return txErr
+	})
+
+	return res, key, err
 }
 
 // finishCompletion stores the answer of the Completion that ctx carries, in

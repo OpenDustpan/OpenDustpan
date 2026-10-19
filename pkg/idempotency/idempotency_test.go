@@ -121,6 +121,26 @@ func TestCompletionFinish(t *testing.T) {
 	}
 }
 
+func TestCompletionFinishRefusesAnAnswerOverTheLimit(t *testing.T) {
+	t.Parallel()
+
+	big := idempotency.Answer{Status: 201, Headers: nil, Body: make([]byte, idempotency.MaxAnswerBytes+1)}
+	c := idempotency.NewCompletion(emptyRef(), "tok", func(any) (idempotency.Answer, error) { return big, nil })
+	stored := false
+
+	err := c.Finish("r", func(string, idempotency.Answer) error { stored = true; return nil })
+	if !errors.Is(err, idempotency.ErrInvalid) || stored || c.Stored() {
+		t.Fatalf("Finish: err = %v, stored = %t, Stored() = %t, want ErrInvalid and nothing stored",
+			err, stored, c.Stored())
+	}
+
+	big.Body = big.Body[:idempotency.MaxAnswerBytes]
+
+	if err = c.Finish("r", func(string, idempotency.Answer) error { return nil }); err != nil {
+		t.Fatalf("Finish at the limit: %v", err)
+	}
+}
+
 var errUnexpectedResult = errors.New("unexpected result")
 
 func emptyRef() idempotency.Ref {

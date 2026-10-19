@@ -40,6 +40,25 @@ func (d sealedDB) Open(t *testing.T, w secret.Wrapper) idempotency.Store {
 	return openURL(t, d.url).Idempotency(w)
 }
 
+// OpenMany implements idempotencytest.SealedDB.
+func (d sealedDB) OpenMany(t *testing.T, ws ...secret.Wrapper) []idempotency.Store {
+	t.Helper()
+
+	stores := make([]idempotency.Store, 0, len(ws))
+	for _, w := range ws {
+		stores = append(stores, openURL(t, d.url).Idempotency(w))
+	}
+
+	return stores
+}
+
+func (d sealedDB) Wipe(t *testing.T) {
+	t.Helper()
+
+	d.exec(t, `DELETE FROM idempotency_records`)
+	d.exec(t, `DELETE FROM idempotency_server_key`)
+}
+
 func (d sealedDB) RawServerKey(t *testing.T) []byte {
 	t.Helper()
 
@@ -68,6 +87,26 @@ func (d sealedDB) RecordCount(t *testing.T) int {
 	d.scan(t, `SELECT COUNT(*) FROM idempotency_records`, &n)
 
 	return n
+}
+
+// exec runs the statement query on the schema.
+func (d sealedDB) exec(t *testing.T, query string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), d.url)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close connection: %v", closeErr)
+		}
+	}()
+
+	if _, err = conn.Exec(t.Context(), query); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
 }
 
 // scan reads one value of query from the schema.

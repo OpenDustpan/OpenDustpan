@@ -19,7 +19,8 @@ var _ idempotency.Store = (*Idempotency)(nil)
 // implements idempotency.Store.
 //
 // The server key of the fingerprints is a random key that the key-encryption
-// key seals in the database. A process unwraps it one time and keeps it. When
+// key seals in the database. A process keeps the key it unwrapped, and uses it only while the
+// database row has the same sealed bytes. When
 // the key-encryption key cannot open the sealed key (the operator lost it or
 // changed it), the next Begin replaces the sealed key and deletes every
 // record in one transaction: a retry then does its operation again, and no
@@ -36,9 +37,10 @@ func (s *Store) Idempotency(wrapper secret.Wrapper) *Idempotency {
 }
 
 // idempotencyKeyOps returns the operations of the key row in the transaction
-// of q.
+// of q. The write transaction of the database holds the row exclusively.
 func idempotencyKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
 	return codec.IdempotencyKeyOps{
+		Exclusive: true,
 		Get: func(ctx context.Context) (codec.IdempotencyKeyRow, bool, error) {
 			var none codec.IdempotencyKeyRow
 
@@ -63,15 +65,15 @@ func idempotencyKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
 
 			return nil
 		},
-		Replace: func(ctx context.Context, row codec.IdempotencyKeyRow) error {
-			err := q.ReplaceIdempotencyServerKey(ctx, db.ReplaceIdempotencyServerKeyParams{
-				WrappedKey: row.WrappedKey, WrapperID: row.WrapperID,
+		Replace: func(ctx context.Context, old []byte, row codec.IdempotencyKeyRow) (bool, error) {
+			n, err := q.ReplaceIdempotencyServerKey(ctx, db.ReplaceIdempotencyServerKeyParams{
+				NewWrappedKey: row.WrappedKey, NewWrapperID: row.WrapperID, OldWrappedKey: old,
 			})
 			if err != nil {
-				return fmt.Errorf("replace idempotency server key: %w", err)
+				return false, fmt.Errorf("replace idempotency server key: %w", err)
 			}
 
-			return nil
+			return n == 1, nil
 		},
 		DeleteRecords: func(ctx context.Context) error {
 			if err := q.DeleteAllIdempotencyRecords(ctx); err != nil {
@@ -101,21 +103,19 @@ func (i *Idempotency) Begin(
 
 	var res idempotency.Result
 
-	serverKey, cached := i.keys.Cached()
+	var resolved codec.IdempotencyKey
 
 	err = i.store.inTx(ctx, func(q *db.Queries) error {
-		if !cached {
-			var keyErr error
+		var keyErr error
 
-			if serverKey, keyErr = i.keys.Resolve(ctx, idempotencyKeyOps(q)); keyErr != nil {
-				return keyErr
-			}
+		if resolved, keyErr = i.keys.Resolve(ctx, idempotencyKeyOps(q)); keyErr != nil {
+			return keyErr
 		}
 
 		var txErr error
 
 		res, txErr = startOrFind(ctx, q, codec.IdempotencyAttempt{
-			Ref: ref, Fingerprint: idempotency.Fingerprint(serverKey, material), Token: token, Now: now,
+			Ref: ref, Fingerprint: idempotency.Fingerprint(resolved.Key, material), Token: token, Now: now,
 		})
 
 		return txErr
@@ -124,9 +124,7 @@ func (i *Idempotency) Begin(
 		return idempotency.Result{}, err
 	}
 
-	if !cached {
-		i.keys.Remember(serverKey)
-	}
+	i.keys.Remember(resolved)
 
 	return res, nil
 }

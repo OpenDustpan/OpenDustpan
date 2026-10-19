@@ -3046,10 +3046,11 @@ INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
 VALUES (1, sqlc.arg(wrapped_key), sqlc.arg(wrapper_id))
 ON CONFLICT DO NOTHING;
 
--- name: ReplaceIdempotencyServerKey :exec
-INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
-VALUES (1, sqlc.arg(wrapped_key), sqlc.arg(wrapper_id))
-ON CONFLICT (id) DO UPDATE SET wrapped_key = excluded.wrapped_key, wrapper_id = excluded.wrapper_id;
+-- name: ReplaceIdempotencyServerKey :execrows
+-- It changes no row when another process replaced the key first.
+UPDATE idempotency_server_key
+SET wrapped_key = sqlc.arg(new_wrapped_key), wrapper_id = sqlc.arg(new_wrapper_id)
+WHERE id = 1 AND wrapped_key = sqlc.arg(old_wrapped_key);
 
 -- name: DeleteAllIdempotencyRecords :exec
 DELETE FROM idempotency_records;

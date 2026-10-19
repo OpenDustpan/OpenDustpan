@@ -3,6 +3,7 @@ package idempotent_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -207,6 +208,76 @@ func TestIfMatchIsPartOfTheRequest(t *testing.T) {
 	_, err = callWith(t, mw, c, nil)
 	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Code != idempotent.CodeReused {
 		t.Errorf("no If-Match: err = %v, want %s", err, idempotent.CodeReused)
+	}
+}
+
+func TestTheFingerprintFramesQueryAndBody(t *testing.T) {
+	t.Parallel()
+
+	store := idempotencytest.NewMemory()
+	mw := newMiddleware(t, store, 1<<20)
+	answer := idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: nil}
+	c := idempotent.Call{
+		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false,
+		Serve: func(w http.ResponseWriter, r *http.Request) {
+			finish(t, store, r)
+			idempotent.Write(w, answer)
+		},
+	}
+	refused := func(err error) bool {
+		refusal, ok := errors.AsType[*idempotent.Error](err)
+
+		return ok && refusal.Code == idempotent.CodeReused
+	}
+
+	// The old join put a zero byte between body and query: body "a\x00q" with
+	// no query and body "a" with query "q" gave the same bytes.
+	_, err := callWith(t, mw, c, func(r *http.Request) {
+		r.Body = io.NopCloser(strings.NewReader("a\x00q"))
+		r.URL.RawQuery = ""
+	})
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	_, err = callWith(t, mw, c, func(r *http.Request) {
+		r.Body = io.NopCloser(strings.NewReader("a"))
+		r.URL.RawQuery = "q"
+	})
+	if !refused(err) {
+		t.Errorf("body a with query q: err = %v, want %s", err, idempotent.CodeReused)
+	}
+}
+
+func TestEveryIfMatchValueIsPartOfTheRequest(t *testing.T) {
+	t.Parallel()
+
+	store := idempotencytest.NewMemory()
+	mw := newMiddleware(t, store, 1<<20)
+	answer := idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: nil}
+	c := idempotent.Call{
+		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false,
+		Serve: func(w http.ResponseWriter, r *http.Request) {
+			finish(t, store, r)
+			idempotent.Write(w, answer)
+		},
+	}
+	values := func(v ...string) func(*http.Request) {
+		return func(r *http.Request) { r.Header["If-Match"] = v }
+	}
+
+	if _, err := callWith(t, mw, c, values(`"1"`, `"2"`)); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	again, err := callWith(t, mw, c, values(`"1"`, `"2"`))
+	if err != nil || again.Header().Get(idempotent.ReplayedHeader) != "true" {
+		t.Errorf("same values: %v %v, want a replay", err, again.Header())
+	}
+
+	_, err = callWith(t, mw, c, values(`"1"`, `"3"`))
+	if refusal, ok := errors.AsType[*idempotent.Error](err); !ok || refusal.Code != idempotent.CodeReused {
+		t.Errorf("another second value: err = %v, want %s", err, idempotent.CodeReused)
 	}
 }
 
