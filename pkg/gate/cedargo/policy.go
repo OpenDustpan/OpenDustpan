@@ -3,7 +3,9 @@ package cedargo
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	cedar "github.com/cedar-policy/cedar-go"
@@ -17,8 +19,8 @@ import (
 // clauseTemplates parse one clause of a gate. The text of a gate is only
 // a parse input: the engine builds the policy from the parsed expressions.
 const (
-	whenTemplate   = "permit (principal, action, resource) when { %s };"
-	unlessTemplate = "permit (principal, action, resource) unless { %s };"
+	whenTemplate   = "permit (principal, action, resource) when {\n%s\n};"
+	unlessTemplate = "permit (principal, action, resource) unless {\n%s\n};"
 )
 
 // errPolicy is the cause of a refused policy. Check and Evaluate give its
@@ -116,7 +118,7 @@ func clauseBody(template, expr string, kind xast.Condition) (xast.Node, error) {
 
 	policies, err := parseAll(fmt.Sprintf(template, expr))
 	if err != nil {
-		return xast.Node{}, err
+		return xast.Node{}, fmt.Errorf("%w: %s", errPolicy, userPositions(err))
 	}
 
 	if len(policies) != 1 {
@@ -131,6 +133,29 @@ func clauseBody(template, expr string, kind xast.Condition) (xast.Node, error) {
 	}
 
 	return xast.NewNode(conds[0].Body), nil
+}
+
+// positionPattern matches the position that the Cedar parser gives in an
+// error: "<input>:line:column".
+var positionPattern = regexp.MustCompile(`<input>:(\d+):(\d+)`)
+
+// userPositions returns the text of a parse error with each position moved
+// to the text of the author. The template puts the text of the author on
+// the second line, so the line is one less. A position on the first line
+// is in the template and stays as it is.
+func userPositions(err error) string {
+	msg := strings.TrimPrefix(err.Error(), errPolicy.Error()+": ")
+
+	return positionPattern.ReplaceAllStringFunc(msg, func(m string) string {
+		parts := positionPattern.FindStringSubmatch(m)
+
+		line, convErr := strconv.Atoi(parts[1])
+		if convErr != nil || line < 2 {
+			return m
+		}
+
+		return "<input>:" + strconv.Itoa(line-1) + ":" + parts[2]
+	})
 }
 
 // buildLimit parses the text of an access limit. It refuses a text that
@@ -211,25 +236,37 @@ func forEachNode(p *xast.Policy, fn func(xast.IsNode)) {
 }
 
 // checkReads refuses the has operator, and a read of a field of a group
-// with the flag available that does not read the flag.
+// with the flag available that does not read the flag. It checks each
+// clause on its own: a clause that reads a field of such a group reads the
+// flag of the group itself, and the flag in the other clause does not count.
 func checkReads(p *xast.Policy) error {
+	for _, c := range p.Conditions {
+		if err := checkClauseReads(xast.NewNode(c.Body)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkClauseReads applies the rules of checkReads to one clause.
+func checkClauseReads(body xast.Node) error {
 	var (
 		hasUsed bool
-		flagged = map[gate.Group]bool{}
 		whole   = map[gate.Group]int{}
 		fields  = map[gate.Group][]string{}
 	)
 
-	forEachNode(p, func(n xast.IsNode) {
+	xast.Inspect(body, func(n xast.IsNode) bool {
 		if _, ok := n.(xast.NodeTypeHas); ok {
 			hasUsed = true
 
-			return
+			return true
 		}
 
 		acc, ok := n.(xast.NodeTypeAccess)
 		if !ok {
-			return
+			return true
 		}
 
 		if g, ok := contextGroup(acc); ok {
@@ -237,6 +274,8 @@ func checkReads(p *xast.Policy) error {
 		} else if g, ok := contextGroup(acc.Arg); ok {
 			fields[g] = append(fields[g], string(acc.Value))
 		}
+
+		return true
 	})
 
 	if hasUsed {
@@ -252,12 +291,14 @@ func checkReads(p *xast.Policy) error {
 		}
 
 		reads := fields[g]
-		flagged[g] = slices.Contains(reads, "available")
-
+		flagged := slices.Contains(reads, "available")
 		other := slices.DeleteFunc(slices.Clone(reads), func(f string) bool { return f == "available" })
 
-		if (len(other) > 0 || n > len(reads)) && !flagged[g] {
-			return fmt.Errorf("%w: the condition reads context.%s and not context.%s.available", errPolicy, g, g)
+		if (len(other) > 0 || n > len(reads)) && !flagged {
+			return fmt.Errorf(
+				"%w: each clause that reads context.%s must read context.%s.available",
+				errPolicy, g, g,
+			)
 		}
 	}
 

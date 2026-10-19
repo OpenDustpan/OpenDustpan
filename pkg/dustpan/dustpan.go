@@ -67,7 +67,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
-	gatemodel "opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -157,7 +156,6 @@ type settings struct {
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
-	gateEngine           gatemodel.Engine
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
 	logger               *slog.Logger
@@ -306,13 +304,6 @@ func WithBlobCache(maxBytes int64) Option {
 // server serves no profile route.
 func WithProfileStore(st profile.Store) Option {
 	return func(o *settings) { o.profileStore = st }
-}
-
-// WithGateEngine sets the policy engine that evaluates gates. It is
-// optional. No route reads it yet: the gate service takes it when the first
-// decision point uses the gate service.
-func WithGateEngine(e gatemodel.Engine) Option {
-	return func(o *settings) { o.gateEngine = e }
 }
 
 // WithInventoryReader sets the inventory projection reader. Required.
@@ -612,7 +603,6 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
-		gateEngine:              nil,
 		authenticator:           nil,
 		authorizer:              nil,
 		logger:                  slog.New(slog.DiscardHandler),

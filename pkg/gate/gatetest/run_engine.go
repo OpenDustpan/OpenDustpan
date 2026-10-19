@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -23,8 +24,8 @@ func EngineAccessActions() []string {
 }
 
 // RunEngine executes each case of EngineCases against engines from
-// newEngine, except the cases whose name starts with "external-". The cases
-// that have no runner yet are skipped.
+// newEngine, except the cases whose name starts with "external-". A case
+// with another name and no runner fails.
 func RunEngine(t *testing.T, newEngine EngineFactory) {
 	t.Helper()
 
@@ -33,6 +34,10 @@ func RunEngine(t *testing.T, newEngine EngineFactory) {
 	for _, c := range EngineCases() {
 		run, ok := runners[c.Name]
 		if !ok {
+			if !strings.HasPrefix(c.Name, "external-") {
+				t.Errorf("case %s has no runner", c.Name)
+			}
+
 			continue
 		}
 
@@ -435,6 +440,43 @@ func runErrorIsDiagnostic(t *testing.T, e gate.Engine) {
 	wantDiagnostics(t, a[0].Diagnostics, overflow)
 }
 
+func runLimitErrorIsDiagnostic(t *testing.T, e gate.Engine) {
+	t.Helper()
+
+	fx := newFixtures()
+	access := accessSchema()
+
+	overflow := pid(fx.prod, "auth-overflow")
+	set := gate.PolicySet{Schema: access, Policies: []gate.Policy{limitPolicy(overflow,
+		`forbid (principal, action == OpenDustpan::Action::"unit:write", resource)`+
+			` when { context.authAgeSeconds * 4611686018427387904 > 0 };`)}}
+	a := evaluate(t, e, set, accessRequest(t, "r1", gate.PrincipalPerson))
+	if got := matched(&a[0]); len(got) != 0 {
+		t.Fatalf("matched %v, want no match for a limit with an error", got)
+	}
+
+	wantDiagnostics(t, a[0].Diagnostics, overflow)
+}
+
+func runDuplicatePolicyIDIsInvalid(t *testing.T, e gate.Engine) {
+	t.Helper()
+
+	fx := newFixtures()
+	planned := plannedSchema()
+
+	p := gatePolicy(pid(fx.acme, "always"), pointPlanned, "", "")
+	set := gate.PolicySet{Schema: planned, Policies: []gate.Policy{p, p}}
+
+	_, err := e.Evaluate(
+		t.Context(),
+		set,
+		[]gate.Request{factsRequest(t, "r1", string(pointPlanned), plannedFacts(nil))},
+	)
+	if !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("Evaluate of a set with a policy twice = %v, want ErrInvalid", err)
+	}
+}
+
 func runNoCompileIsDiagnostic(t *testing.T, e gate.Engine) {
 	t.Helper()
 
@@ -707,6 +749,8 @@ func engineRunners() map[string]engineRunner {
 		"principal-groups-are-parents":          runPrincipalGroupsAreParents,
 		"path-set-attributes":                   runPathSetAttributes,
 		"error-is-diagnostic":                   runErrorIsDiagnostic,
+		"limit-error-is-diagnostic":             runLimitErrorIsDiagnostic,
+		"duplicate-policy-id-is-invalid":        runDuplicatePolicyIDIsInvalid,
 		"no-compile-is-diagnostic":              runNoCompileIsDiagnostic,
 		"request-needs-one-context":             runRequestNeedsOneContext,
 		"answers-in-request-order":              runAnswersInRequestOrder,

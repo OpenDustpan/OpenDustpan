@@ -10,6 +10,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate/gatetest"
 )
 
+const costCap = "context.cost.available && context.cost.deltaMonthly > 10000"
+
 func newEngine(t *testing.T) *cedargo.Engine {
 	t.Helper()
 
@@ -108,22 +110,104 @@ func TestRefusedPolicyIsCached(t *testing.T) {
 	}
 }
 
-// TestDuplicatePolicyIDIsInvalid checks that a set with two policies of one
-// ID is refused, so a matched ID is never ambiguous.
-func TestDuplicatePolicyIDIsInvalid(t *testing.T) {
+// TestCheckGateText checks the text of a gate against the linked engine:
+// a comment at the end of a clause, the injection probes, and the rule that
+// each clause reads the flag available of a group that it reads.
+func TestCheckGateText(t *testing.T) {
 	t.Parallel()
+
+	tests := []struct {
+		name      string
+		condition string
+		unless    string
+		refused   bool
+	}{
+		{"trailing comment in the condition", "context.plan.available // why", "", false},
+		{"trailing comment in the unless", "", "context.plan.available // why", false},
+		{
+			"comment hides the text of an injection",
+			"true // }; permit (principal, action, resource) when { true",
+			"",
+			false,
+		},
+		{"second policy", "true }; permit (principal, action, resource) when { true", "", true},
+		{"second policy in the unless", "", "true }; permit (principal, action, resource) when { true", true},
+		{"closing brace and a new clause", "true } unless { true", "", true},
+		{
+			"flag in the condition and in the unless",
+			costCap,
+			"context.cost.available && context.cost.deltaMonthly < 5",
+			false,
+		},
+		{"flag in the condition only", costCap, "context.cost.deltaMonthly < 5", true},
+		{"flag in the unless only", "context.cost.deltaMonthly > 5", "context.cost.available", true},
+		{"flag read in both clauses of other groups", "context.plan.available", "context.cost.available", false},
+	}
 
 	schema := gate.Schema{
 		Version:  gate.SchemaVersion{Subject: string(gate.PointChangePlanned), Major: 1, Minor: 0},
 		PathSets: nil,
 	}
-	p := gate.Policy{
-		ID: gate.PolicyID{Scope: gate.InstallationScope(), ID: "always"}, Version: 1, Kind: gate.PolicyGate,
-		Point: gate.PointChangePlanned, Condition: "", Unless: "", Text: "",
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := gate.Policy{
+				ID: gate.PolicyID{Scope: gate.InstallationScope(), ID: "text"}, Version: 1, Kind: gate.PolicyGate,
+				Point: gate.PointChangePlanned, Condition: tt.condition, Unless: tt.unless, Text: "",
+			}
+
+			diags, err := newEngine(t).Check(t.Context(), schema, []gate.Policy{p})
+			if err != nil {
+				t.Fatalf("Check = %v", err)
+			}
+
+			if got := len(diags) > 0; got != tt.refused {
+				t.Fatalf("Check = %v, refused = %v, want refused = %v", diags, got, tt.refused)
+			}
+		})
+	}
+}
+
+// TestParseErrorPointsIntoTheText checks that the line and the column of a
+// parse error refer to the text of the author, not to the template.
+func TestParseErrorPointsIntoTheText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		condition string
+		unless    string
+		want      string
+	}{
+		{"first line of the condition", "context.plan.available &&", "", "<input>:2:"},
+		{"second line of the condition", "true &&\n(", "", "<input>:3:"},
+		{"first line of the unless", "", "context.plan.available &&", "<input>:2:"},
 	}
 
-	_, err := newEngine(t).Evaluate(t.Context(), gate.PolicySet{Schema: schema, Policies: []gate.Policy{p, p}}, nil)
-	if err == nil || !strings.Contains(err.Error(), "twice") {
-		t.Fatalf("Evaluate = %v, want an error that names the duplicate", err)
+	schema := gate.Schema{
+		Version:  gate.SchemaVersion{Subject: string(gate.PointChangePlanned), Major: 1, Minor: 0},
+		PathSets: nil,
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := gate.Policy{
+				ID: gate.PolicyID{Scope: gate.InstallationScope(), ID: "text"}, Version: 1, Kind: gate.PolicyGate,
+				Point: gate.PointChangePlanned, Condition: tt.condition, Unless: tt.unless, Text: "",
+			}
+
+			diags, err := newEngine(t).Check(t.Context(), schema, []gate.Policy{p})
+			if err != nil || len(diags) != 1 {
+				t.Fatalf("Check = %v, %v, want one diagnostic", diags, err)
+			}
+
+			if !strings.Contains(diags[0].Message, tt.want) {
+				t.Fatalf("message %q, want a position that starts with %q", diags[0].Message, tt.want)
+			}
+		})
 	}
 }
