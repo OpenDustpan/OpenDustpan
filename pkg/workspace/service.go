@@ -17,7 +17,9 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -265,6 +267,18 @@ type Config struct {
 	// Retention is how long a deleted workspace stays before its final
 	// delete (ADR 47, decision 2). Zero means inventory.DeletedRetention.
 	Retention time.Duration
+	// ManualLocks refuses a lock request on a workspace that a manual lock
+	// covers. Nil turns the check off.
+	ManualLocks ManualLocks
+}
+
+// ManualLocks is the read side of the manual locks of the shared core. A lock
+// request of OpenTofu asks it before the workspace takes its own lock.
+type ManualLocks interface {
+	// Covering returns the manual lock that covers the unit: a lock on the
+	// unit, or on the collection that holds it. It returns
+	// manuallock.ErrNotLocked when no manual lock covers the unit.
+	Covering(ctx context.Context, unit collection.UnitRef) (manuallock.Lock, error)
 }
 
 // lockStripes is the number of striped mutexes serializing declares and
@@ -286,6 +300,7 @@ type Service struct {
 	maxState   int64
 	maxPending int
 	retention  time.Duration
+	manual     ManualLocks
 	stateAt    StateAtReader
 	names      inventory.HistoryReader
 	stripes    [lockStripes]sync.Mutex
@@ -332,6 +347,7 @@ func NewService(cfg Config) (*Service, error) {
 		maxState:   cfg.MaxStateBytes,
 		maxPending: cfg.MaxPendingVersions,
 		retention:  cfg.Retention,
+		manual:     cfg.ManualLocks,
 		stateAt:    nil,
 		names:      nil,
 		stripes:    [lockStripes]sync.Mutex{},
@@ -536,6 +552,10 @@ func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Works
 		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
 	}
 
+	if err := s.checkManualLock(ctx, id); err != nil {
+		return Workspace{}, err
+	}
+
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
 		return w.lock(now, holder, reason)
 	})
@@ -552,6 +572,10 @@ func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID 
 
 	if !validLockID(lockID) {
 		return Workspace{}, fmt.Errorf("%w: %d characters", ErrInvalidLockID, len(lockID))
+	}
+
+	if err := s.checkManualLock(ctx, id); err != nil {
+		return Workspace{}, err
 	}
 
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
@@ -2527,4 +2551,31 @@ func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy tim
 	}
 
 	return nil
+}
+
+// checkManualLock refuses a lock request on the workspace id while a manual
+// lock covers it. The error matches ErrLocked and manuallock.ErrLocked, and
+// names the holder and the reason of the manual lock.
+func (s *Service) checkManualLock(ctx context.Context, id ID) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	l, err := s.manual.Covering(ctx, collection.UnitRef{
+		Namespace: w.Ref.Namespace, Tool: InventoryTool, Name: w.Ref.Name.String(),
+	})
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of %s: %w", w.Ref, err)
+	}
+
+	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{Lock: l})
 }

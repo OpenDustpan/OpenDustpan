@@ -128,6 +128,7 @@ var Tables = []string{
 	"runners",
 	"profiles",
 	"profile_revisions",
+	"manual_locks",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

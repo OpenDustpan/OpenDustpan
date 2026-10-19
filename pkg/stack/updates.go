@@ -19,7 +19,9 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -160,6 +162,18 @@ type UpdatesConfig struct {
 	// with ErrMissingDependency, so an update without a replayer never
 	// ends with a built checkpoint.
 	Replayer JournalReplayer
+	// ManualLocks refuses the start of a mutating update on a stack that a
+	// manual lock covers. Nil turns the check off.
+	ManualLocks ManualLocks
+}
+
+// ManualLocks is the read side of the manual locks of the shared core. The
+// start of a mutating update asks it before the stack takes its update lease.
+type ManualLocks interface {
+	// Covering returns the manual lock that covers the unit: a lock on the
+	// unit, or on the collection that holds it. It returns
+	// manuallock.ErrNotLocked when no manual lock covers the unit.
+	Covering(ctx context.Context, unit collection.UnitRef) (manuallock.Lock, error)
 }
 
 // Updates implements the update cycle of the Pulumi CLI: create and start an
@@ -179,6 +193,7 @@ type Updates struct {
 	maxCheckpoints int
 	journal        *JournalEntries
 	replayer       JournalReplayer
+	manual         ManualLocks
 	stateAt        StateAtReader
 	names          inventory.HistoryReader
 }
@@ -221,6 +236,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		maxCheckpoints: cfg.MaxCheckpointBytes,
 		journal:        cfg.Journal,
 		replayer:       cfg.Replayer,
+		manual:         cfg.ManualLocks,
 		stateAt:        nil,
 		names:          nil,
 	}
@@ -335,6 +351,12 @@ func (s *Updates) StartBy(
 	}
 
 	now := s.clock()
+
+	if u.Mutates() {
+		if lockErr := s.checkManualLock(ctx, ref); lockErr != nil {
+			return Started{}, lockErr
+		}
+	}
 
 	u, err = u.start(now, Lease{ExpiresAt: now.Add(DefaultLease), Digest: tok.Digest()})
 	if err != nil {
@@ -1652,4 +1674,26 @@ func (s *Updates) cancelJournaled(ctx context.Context, ref Ref, id UpdateID) (Up
 	return s.transition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
 		return u.cancel(now)
 	})
+}
+
+// checkManualLock refuses the start of a mutating update on the stack ref while
+// a manual lock covers it. The error matches ErrUpdateConflict and
+// manuallock.ErrLocked, and names the holder and the reason of the manual lock.
+func (s *Updates) checkManualLock(ctx context.Context, ref Ref) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	l, err := s.manual.Covering(ctx, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
+	})
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of %s: %w", ref, err)
+	}
+
+	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{Lock: l})
 }

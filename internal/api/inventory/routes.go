@@ -77,7 +77,6 @@ const v1Prefix = "/api/dustpan/v1"
 // Contract: never remove or rename these endpoints or status codes. The
 // console reads only this API, and it ships on its own schedule.
 func (h *Handler) buildRoutes() []Route {
-	//nolint:prealloc // The table is one literal; the collection rows are appended only when a collection service is set.
 	routes := []Route{
 		{
 			Method: http.MethodGet,
@@ -141,11 +140,15 @@ func (h *Handler) buildRoutes() []Route {
 		},
 	}
 
-	if h.collections == nil {
-		return routes
+	if h.collections != nil {
+		routes = append(routes, h.collectionRoutes()...)
 	}
 
-	return append(routes, h.collectionRoutes()...)
+	if h.locks != nil {
+		routes = append(routes, h.lockRoutes()...)
+	}
+
+	return routes
 }
 
 // Routes returns a copy of the route table. The Actions lists are copied

@@ -2494,6 +2494,37 @@ func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID str
 	return err
 }
 
+const deleteManualLock = `-- name: DeleteManualLock :execrows
+DELETE FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+`
+
+type DeleteManualLockParams struct {
+	Kind     string
+	ObjectID string
+}
+
+func (q *Queries) DeleteManualLock(ctx context.Context, arg DeleteManualLockParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteManualLock, arg.Kind, arg.ObjectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteManualLocksOfObject = `-- name: DeleteManualLocksOfObject :exec
+DELETE FROM manual_locks
+WHERE object_id = $1
+`
+
+// Removes the manual lock of one object by its stable ID. The purge of a unit
+// and the delete of a collection call it in the same transaction as their own
+// rows.
+func (q *Queries) DeleteManualLocksOfObject(ctx context.Context, objectID string) error {
+	_, err := q.db.Exec(ctx, deleteManualLocksOfObject, objectID)
+	return err
+}
+
 const deleteMissingCollectionMembership = `-- name: DeleteMissingCollectionMembership :exec
 DELETE FROM collection_members
 WHERE unit_id = $1 AND NOT EXISTS (
@@ -3828,6 +3859,51 @@ func (q *Queries) GetCollectionNameByID(ctx context.Context, arg GetCollectionNa
 	return name, err
 }
 
+const getCoveringManualLocks = `-- name: GetCoveringManualLocks :one
+SELECT ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
+       cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3
+`
+
+type GetCoveringManualLocksParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+type GetCoveringManualLocksRow struct {
+	UnitHolder        pgtype.Text
+	UnitReason        pgtype.Text
+	UnitSinceMs       pgtype.Int8
+	CollectionHolder  pgtype.Text
+	CollectionReason  pgtype.Text
+	CollectionSinceMs pgtype.Int8
+	CollectionName    pgtype.Text
+}
+
+// The manual locks that can cover one unit: its own lock, and the lock of the
+// collection it is in now. No row means that the inventory holds no such unit.
+func (q *Queries) GetCoveringManualLocks(ctx context.Context, arg GetCoveringManualLocksParams) (GetCoveringManualLocksRow, error) {
+	row := q.db.QueryRow(ctx, getCoveringManualLocks, arg.Namespace, arg.Tool, arg.Name)
+	var i GetCoveringManualLocksRow
+	err := row.Scan(
+		&i.UnitHolder,
+		&i.UnitReason,
+		&i.UnitSinceMs,
+		&i.CollectionHolder,
+		&i.CollectionReason,
+		&i.CollectionSinceMs,
+		&i.CollectionName,
+	)
+	return i, err
+}
+
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
@@ -4297,26 +4373,37 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 const getInventoryEntryByUnitID = `-- name: GetInventoryEntryByUnitID :one
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
-       COALESCE(c.name, '') AS collection
+       COALESCE(c.name, '') AS collection,
+       ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
+       cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
+       cl.since_ms AS collection_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
 WHERE i.unit_id = $1
 `
 
 type GetInventoryEntryByUnitIDRow struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount pgtype.Int8
-	LockHolder    pgtype.Text
-	LockSinceMs   pgtype.Int8
-	LockOperation pgtype.Text
-	Collection    string
+	Namespace               string
+	Tool                    string
+	Name                    string
+	UnitID                  string
+	DisplayName             string
+	LastChangedMs           int64
+	Status                  string
+	ResourceCount           pgtype.Int8
+	LockHolder              pgtype.Text
+	LockSinceMs             pgtype.Int8
+	LockOperation           pgtype.Text
+	Collection              string
+	UnitManualHolder        pgtype.Text
+	UnitManualReason        pgtype.Text
+	UnitManualSinceMs       pgtype.Int8
+	CollectionManualHolder  pgtype.Text
+	CollectionManualReason  pgtype.Text
+	CollectionManualSinceMs pgtype.Int8
 }
 
 // One live unit by its stable ID, which is unique in the installation.
@@ -4336,6 +4423,12 @@ func (q *Queries) GetInventoryEntryByUnitID(ctx context.Context, unitID string) 
 		&i.LockSinceMs,
 		&i.LockOperation,
 		&i.Collection,
+		&i.UnitManualHolder,
+		&i.UnitManualReason,
+		&i.UnitManualSinceMs,
+		&i.CollectionManualHolder,
+		&i.CollectionManualReason,
+		&i.CollectionManualSinceMs,
 	)
 	return i, err
 }
@@ -4460,6 +4553,30 @@ func (q *Queries) GetLiveProfileByName(ctx context.Context, arg GetLiveProfileBy
 		&i.UpdatedAtMs,
 		&i.DeletedAtMs,
 	)
+	return i, err
+}
+
+const getManualLock = `-- name: GetManualLock :one
+SELECT holder, reason, since_ms
+FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+`
+
+type GetManualLockParams struct {
+	Kind     string
+	ObjectID string
+}
+
+type GetManualLockRow struct {
+	Holder  string
+	Reason  string
+	SinceMs int64
+}
+
+func (q *Queries) GetManualLock(ctx context.Context, arg GetManualLockParams) (GetManualLockRow, error) {
+	row := q.db.QueryRow(ctx, getManualLock, arg.Kind, arg.ObjectID)
+	var i GetManualLockRow
+	err := row.Scan(&i.Holder, &i.Reason, &i.SinceMs)
 	return i, err
 }
 
@@ -6507,6 +6624,38 @@ func (q *Queries) InsertJournalSequence(ctx context.Context, arg InsertJournalSe
 	return err
 }
 
+const insertManualLock = `-- name: InsertManualLock :execrows
+INSERT INTO manual_locks (kind, object_id, namespace, holder, reason, since_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (kind, object_id) DO NOTHING
+`
+
+type InsertManualLockParams struct {
+	Kind      string
+	ObjectID  string
+	Namespace string
+	Holder    string
+	Reason    string
+	SinceMs   int64
+}
+
+// Records the manual lock of one object. A row that exists for the object is
+// not written. The caller checks the fence in the same transaction.
+func (q *Queries) InsertManualLock(ctx context.Context, arg InsertManualLockParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertManualLock,
+		arg.Kind,
+		arg.ObjectID,
+		arg.Namespace,
+		arg.Holder,
+		arg.Reason,
+		arg.SinceMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertOIDCProvider = `-- name: InsertOIDCProvider :exec
 INSERT INTO oidc_providers (provider_id, issuer, created_at_ms) VALUES ($1, $2, $3)
 ON CONFLICT (provider_id) DO NOTHING
@@ -8495,27 +8644,38 @@ func (q *Queries) ListInstallationWrapperIDs(ctx context.Context) ([]string, err
 const listInventory = `-- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
-       COALESCE(c.name, '') AS collection
+       COALESCE(c.name, '') AS collection,
+       ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
+       cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
+       cl.since_ms AS collection_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
 WHERE i.namespace = $1
 ORDER BY i.tool, i.name
 `
 
 type ListInventoryRow struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount pgtype.Int8
-	LockHolder    pgtype.Text
-	LockSinceMs   pgtype.Int8
-	LockOperation pgtype.Text
-	Collection    string
+	Namespace               string
+	Tool                    string
+	Name                    string
+	UnitID                  string
+	DisplayName             string
+	LastChangedMs           int64
+	Status                  string
+	ResourceCount           pgtype.Int8
+	LockHolder              pgtype.Text
+	LockSinceMs             pgtype.Int8
+	LockOperation           pgtype.Text
+	Collection              string
+	UnitManualHolder        pgtype.Text
+	UnitManualReason        pgtype.Text
+	UnitManualSinceMs       pgtype.Int8
+	CollectionManualHolder  pgtype.Text
+	CollectionManualReason  pgtype.Text
+	CollectionManualSinceMs pgtype.Int8
 }
 
 func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListInventoryRow, error) {
@@ -8540,6 +8700,12 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 			&i.LockSinceMs,
 			&i.LockOperation,
 			&i.Collection,
+			&i.UnitManualHolder,
+			&i.UnitManualReason,
+			&i.UnitManualSinceMs,
+			&i.CollectionManualHolder,
+			&i.CollectionManualReason,
+			&i.CollectionManualSinceMs,
 		); err != nil {
 			return nil, err
 		}

@@ -699,5 +699,6 @@ func portableSpec() []PortableTable {
 		portableBlameTables(),
 		portableRunnerTables(),
 		portableProfileTables(),
+		portableManualLockTables(),
 	)
 }

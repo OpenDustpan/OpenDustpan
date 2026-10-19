@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -93,7 +94,7 @@ func (h *Handler) lockWorkspace(
 	locked, err := h.workspaces.Lock(ctx, id, p.Subject, reason)
 	if err != nil {
 		if errors.Is(err, workspace.ErrLocked) {
-			h.writeConflict(ctx, w, lockConflictDetail(id, h.lockHolder(ctx, id)))
+			h.writeConflict(ctx, w, h.lockRefusalDetail(ctx, id, err))
 
 			return
 		}
@@ -127,12 +128,23 @@ func (h *Handler) retryLock(
 	}
 
 	if errors.Is(err, workspace.ErrLocked) || errors.Is(err, workspace.ErrConcurrentModification) {
-		h.writeConflict(ctx, w, lockConflictDetail(id, h.lockHolder(ctx, id)))
+		h.writeConflict(ctx, w, h.lockRefusalDetail(ctx, id, err))
 
 		return
 	}
 
 	h.writeError(ctx, w, err)
+}
+
+// lockRefusalDetail returns the detail of a refused lock request. A manual lock
+// names the object, the holder and the reason in its own words. A lock of a
+// tool uses the words go-tfe parses.
+func (h *Handler) lockRefusalDetail(ctx context.Context, id workspace.ID, err error) string {
+	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
+		return fmt.Sprintf("Workspace %s: %s", id, manual.Error())
+	}
+
+	return lockConflictDetail(id, h.lockHolder(ctx, id))
 }
 
 // unlockWorkspace serves POST /api/v2/workspaces/{id}/actions/unlock. The

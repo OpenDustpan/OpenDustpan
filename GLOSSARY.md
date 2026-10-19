@@ -36,6 +36,10 @@ _Avoid_: Environment, deployment, target
 The tool, the namespace and the tool's own name for a unit, written as `<tool>:<namespace>/<name>`, for example `pulumi:acme/web/prod`.
 _Avoid_: Unit ID, path, address
 
+**Manual lock**:
+A lock that a person puts on one unit or on one collection, with a reason of at most 500 characters. While it covers a unit, a lock request of a tool for that unit fails and names the holder and the reason. It covers each unit that is in the collection now. The holder unlocks it, or a person with `unit:manage` on the object force-unlocks it with an audit entry. A tool force-unlock never ends it. The inventory shows it as a flag that is apart from the unit lock (ADR 213 decision 10).
+_Avoid_: Freeze (that is a schedule of a namespace), hold, pause
+
 **State**:
 The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state and may read it. A read masks secret values (ADR 41).
 _Avoid_: State file (except for OpenTofu), snapshot

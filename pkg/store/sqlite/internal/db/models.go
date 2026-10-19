@@ -349,6 +349,15 @@ type InventoryLabel struct {
 	LabelValue string
 }
 
+type ManualLock struct {
+	Kind      string
+	ObjectID  string
+	Namespace string
+	Holder    string
+	Reason    string
+	SinceMs   int64
+}
+
 type Namespace struct {
 	Name                string
 	HomeRegion          string

@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -87,6 +88,27 @@ func lockInfoOf(l workspace.Lock) lockInfo {
 	}
 }
 
+// writeManualLocked answers 423 for a manual lock. The lock info names the
+// holder in Who and the reason in Info, which the backend shows to the user.
+func (h *Handler) writeManualLocked(w http.ResponseWriter, l manuallock.Lock) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusLocked)
+
+	info := lockInfo{
+		ID:        "manual-lock",
+		Operation: "manual lock",
+		Info:      l.String(),
+		Who:       l.Holder,
+		Version:   "",
+		Created:   l.Since.Format(time.RFC3339),
+		Path:      "",
+	}
+
+	if err := json.NewEncoder(w).Encode(info); err != nil {
+		h.logger.Warn("write lock info", slog.String("error", err.Error()))
+	}
+}
+
 // writeLocked answers 423 with the lock info of the current lock, which the
 // backend shows to the user (ADR 49, decision 6).
 func (h *Handler) writeLocked(w http.ResponseWriter, held workspace.Lock) {
@@ -153,6 +175,12 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 // writeHeld answers a refused LOCK with the lock that holds the workspace now.
 // A lock that cannot be read answers with the refusal.
 func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, refusal error) {
+	if manual, ok := errors.AsType[*manuallock.LockedError](refusal); ok {
+		h.writeManualLocked(w, manual.Lock)
+
+		return
+	}
+
 	current, err := h.ws.Get(ctx, c.ref)
 	if err != nil || !current.Lock.Locked() {
 		h.writeError(ctx, w, refusal)

@@ -753,6 +753,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 	}
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              openFixtureBlobs(t),

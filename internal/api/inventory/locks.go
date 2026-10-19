@@ -1,0 +1,264 @@
+package inventory
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
+)
+
+// maxLockBodyBytes bounds the body of a manual lock. The body holds one reason
+// of at most 500 characters, and a character takes up to four bytes.
+const maxLockBodyBytes = 4096
+
+// errLockBody names the body that a manual lock needs. Its text is the error of
+// the 400 answer.
+var errLockBody = errors.New(`invalid lock body: provide {"reason":"<why the object is locked>"}`)
+
+// unitLockPath is the route of the manual lock of one unit. The unit query
+// value names the unit.
+const unitLockPath = "/api/inventory/unit-lock"
+
+// collectionLockPath is the route of the manual lock of one collection.
+const collectionLockPath = v1Prefix + "/namespaces/{namespace}/collections/{collection}/lock"
+
+// lockRoutes returns the manual lock rows of the route table. Reading a lock
+// needs read access to the object. Taking a lock and removing your own lock
+// need unit:lock on the object, and a force-unlock needs unit:manage on it.
+// The object of a collection route is the collection, so a grant on the
+// collection or on its namespace reaches it.
+func (h *Handler) lockRoutes() []Route {
+	unit := func(method, path string, action identity.Action, serve RouteHandler) Route {
+		return Route{
+			Method:           method,
+			Path:             path,
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{action},
+			Resolve:          resolveUnitQuery,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            serve,
+		}
+	}
+
+	coll := func(method, path string, action identity.Action, serve RouteHandler) Route {
+		return Route{
+			Method:           method,
+			Path:             path,
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{action},
+			Resolve:          resolveCollectionPath,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            serve,
+		}
+	}
+
+	return []Route{
+		unit(http.MethodPut, unitLockPath, identity.ActionUnitLock, h.putLock),
+		unit(http.MethodGet, unitLockPath, identity.ActionUnitRead, h.getLock),
+		unit(http.MethodDelete, unitLockPath, identity.ActionUnitLock, h.deleteLock),
+		unit(http.MethodPost, unitLockPath+"/force-unlock", identity.ActionUnitManage, h.forceUnlock),
+		coll(http.MethodPut, collectionLockPath, identity.ActionUnitLock, h.putLock),
+		coll(http.MethodGet, collectionLockPath, identity.ActionCollectionRead, h.getLock),
+		coll(http.MethodDelete, collectionLockPath, identity.ActionUnitLock, h.deleteLock),
+		coll(http.MethodPost, collectionLockPath+"/force-unlock", identity.ActionUnitManage, h.forceUnlock),
+	}
+}
+
+// lockEntryDocument is a manual lock as the console reads it. Kind is "unit" or
+// "collection". Object is the unit reference, or <namespace>/<collection>. Since
+// is an RFC 3339 time in UTC.
+//
+// Contract: never remove or rename these fields.
+type lockEntryDocument struct {
+	Kind   string `json:"kind"`
+	Object string `json:"object"`
+	Holder string `json:"holder"`
+	Reason string `json:"reason"`
+	Since  string `json:"since"`
+}
+
+// manualLockEntry is the manual lock flag of a unit in the unit list: the lock
+// that covers the unit now, with the object that holds it.
+//
+// Contract: never remove or rename these fields.
+type manualLockEntry = lockEntryDocument
+
+// lockTarget returns the object of a lock route: the unit or the collection that
+// the route resolved.
+func lockTarget(obj identity.Object) manuallock.Target {
+	if obj.IsCollection() {
+		return manuallock.CollectionTarget(collectionRef(obj))
+	}
+
+	return manuallock.UnitTarget(collection.UnitRef{
+		Namespace: obj.Namespace(), Tool: obj.Tool(), Name: obj.UnitName(),
+	})
+}
+
+// lockObjectName returns the name that a lock document shows for its object.
+func lockObjectName(t manuallock.Target) string {
+	if t.Kind == manuallock.KindCollection {
+		return t.Collection.String()
+	}
+
+	return t.Unit.String()
+}
+
+// toLockDocument maps a manual lock to its wire shape.
+func toLockDocument(l manuallock.Lock) lockEntryDocument {
+	return lockEntryDocument{
+		Kind:   string(l.Target.Kind),
+		Object: lockObjectName(l.Target),
+		Holder: l.Holder,
+		Reason: l.Reason,
+		Since:  formatTime(l.Since),
+	}
+}
+
+// toManualLockEntry maps the manual lock flag of a projection entry, or nil when
+// no manual lock covers the unit, so the field stays omitted.
+func toManualLockEntry(l *coreinventory.ManualLock) *manualLockEntry {
+	if l == nil {
+		return nil
+	}
+
+	return &manualLockEntry{
+		Kind: l.Kind, Object: l.Object, Holder: l.Holder, Reason: l.Reason, Since: formatTime(l.Since),
+	}
+}
+
+// putLock serves PUT on a lock route. The body gives the reason. It answers 200
+// with the lock. An object that has a lock answers 409 and names its holder. The
+// write and its audit entry are one transaction in the store.
+func (h *Handler) putLock(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+	ctx := r.Context()
+
+	reason, err := readLockReason(w, r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "")
+
+	l, err := h.locks.Lock(ctx, lockTarget(obj), p.Subject, reason, entry)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, toLockDocument(l))
+}
+
+// getLock serves GET on a lock route. An object with no lock answers 404.
+func (h *Handler) getLock(w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object) {
+	ctx := r.Context()
+
+	l, err := h.locks.Get(ctx, lockTarget(obj))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, toLockDocument(l))
+}
+
+// deleteLock serves DELETE on a lock route: the holder removes the lock. It
+// answers 204. A lock that another principal holds answers 409 and stays.
+func (h *Handler) deleteLock(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+	ctx := r.Context()
+
+	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "unlock")
+
+	if err := h.locks.Unlock(ctx, lockTarget(obj), p.Subject, entry); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// forceUnlock serves POST on a force-unlock route. The route checked unit:manage
+// on the object. The audit entry names the principal that forced the removal,
+// and the store adds the holder and the reason of the lock that ends. A tool
+// force-unlock never reaches this lock. It answers 204.
+func (h *Handler) forceUnlock(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+	ctx := r.Context()
+
+	entry := lockAuditEntry(r, p, obj, identity.ActionUnitManage, "force-unlock")
+
+	if err := h.locks.ForceUnlock(ctx, lockTarget(obj), entry); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// lockAuditEntry returns the audit entry of a lock change. version names the
+// kind of removal; it is empty for a lock.
+func lockAuditEntry(
+	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
+) audit.Entry {
+	return auditEntry(r, p, obj, action, version)
+}
+
+// readLockReason decodes a lock body. It refuses an unknown field, a body that
+// is not one object, and a body without a reason.
+func readLockReason(w http.ResponseWriter, r *http.Request) (string, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLockBodyBytes))
+	if err != nil {
+		return "", errLockBody
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+
+	var in struct {
+		Reason *string `json:"reason"`
+	}
+
+	if err := dec.Decode(&in); err != nil {
+		return "", errLockBody
+	}
+
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", errLockBody
+	}
+
+	if in.Reason == nil {
+		return "", errLockBody
+	}
+
+	return *in.Reason, nil
+}
+
+// classifyLock maps the errors of the lock routes to an HTTP status and a
+// message safe to show callers. ok is false for any other error.
+func classifyLock(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, manuallock.ErrTargetNotFound), errors.Is(err, manuallock.ErrNotLocked):
+		return http.StatusNotFound, err.Error(), true
+	case errors.Is(err, manuallock.ErrAlreadyLocked), errors.Is(err, manuallock.ErrNotHolder):
+		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, manuallock.ErrReasonRequired), errors.Is(err, manuallock.ErrInvalidTarget),
+		errors.Is(err, audit.ErrInvalidReason), errors.Is(err, errLockBody):
+		return http.StatusBadRequest, err.Error(), true
+	default:
+		return 0, "", false
+	}
+}

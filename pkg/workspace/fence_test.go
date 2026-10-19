@@ -253,6 +253,7 @@ func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
 	failing := &failPutBlobs{Store: f.blobs, mu: sync.Mutex{}, keys: nil}
 
 	failingSvc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
 		Blobs:              failing,
