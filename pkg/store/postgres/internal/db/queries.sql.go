@@ -1041,6 +1041,44 @@ func (q *Queries) CountNamespacesByNames(ctx context.Context, names []string) (i
 	return count, err
 }
 
+const countOpenOperationsOfKinds = `-- name: CountOpenOperationsOfKinds :one
+SELECT COUNT(*)
+FROM durable_operations
+WHERE kind IN ($1, $2) AND state IN ('pending', 'running')
+`
+
+type CountOpenOperationsOfKindsParams struct {
+	KindA string
+	KindB string
+}
+
+// The durable operations of the kinds that did not end. A pool is in use
+// while one names it.
+func (q *Queries) CountOpenOperationsOfKinds(ctx context.Context, arg CountOpenOperationsOfKindsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenOperationsOfKinds, arg.KindA, arg.KindB)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenRunnerJoinTokens = `-- name: CountOpenRunnerJoinTokens :one
+SELECT COUNT(*)
+FROM runner_join_tokens
+WHERE pool_id = $1 AND used_at_ms = 0 AND revoked_at_ms = 0 AND expires_at_ms > $2
+`
+
+type CountOpenRunnerJoinTokensParams struct {
+	PoolID string
+	NowMs  int64
+}
+
+func (q *Queries) CountOpenRunnerJoinTokens(ctx context.Context, arg CountOpenRunnerJoinTokensParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenRunnerJoinTokens, arg.PoolID, arg.NowMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -1214,6 +1252,60 @@ SELECT COUNT(*) FROM durable_operations WHERE kind = $1 AND state IN ('pending',
 // a second approval waits for the first and refuses.
 func (q *Queries) CountRunnableDurableOperations(ctx context.Context, kind string) (int64, error) {
 	row := q.db.QueryRow(ctx, countRunnableDurableOperations, kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRunnerPoolNamed = `-- name: CountRunnerPoolNamed :one
+SELECT COUNT(*) FROM runner_pools WHERE namespace_id = $1 AND name = $2
+`
+
+type CountRunnerPoolNamedParams struct {
+	NamespaceID string
+	Name        string
+}
+
+func (q *Queries) CountRunnerPoolNamed(ctx context.Context, arg CountRunnerPoolNamedParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunnerPoolNamed, arg.NamespaceID, arg.Name)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRunnerPoolsOfNamespace = `-- name: CountRunnerPoolsOfNamespace :one
+SELECT COUNT(*) FROM runner_pools WHERE namespace_id = $1
+`
+
+func (q *Queries) CountRunnerPoolsOfNamespace(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunnerPoolsOfNamespace, namespaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRunnerSessionsOfClaim = `-- name: CountRunnerSessionsOfClaim :one
+SELECT COUNT(*) FROM runner_sessions WHERE operation_id = $1 AND token = $2
+`
+
+type CountRunnerSessionsOfClaimParams struct {
+	OperationID string
+	Token       int64
+}
+
+func (q *Queries) CountRunnerSessionsOfClaim(ctx context.Context, arg CountRunnerSessionsOfClaimParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunnerSessionsOfClaim, arg.OperationID, arg.Token)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRunnersOfPool = `-- name: CountRunnersOfPool :one
+SELECT COUNT(*) FROM runners WHERE pool_id = $1 AND retired_at_ms = 0
+`
+
+func (q *Queries) CountRunnersOfPool(ctx context.Context, poolID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunnersOfPool, poolID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2180,6 +2272,15 @@ func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error
 	return err
 }
 
+const deleteExpiredRunnerNonces = `-- name: DeleteExpiredRunnerNonces :exec
+DELETE FROM runner_nonces WHERE expires_at_ms < $1
+`
+
+func (q *Queries) DeleteExpiredRunnerNonces(ctx context.Context, beforeMs int64) error {
+	_, err := q.db.Exec(ctx, deleteExpiredRunnerNonces, beforeMs)
+	return err
+}
+
 const deleteGateObject = `-- name: DeleteGateObject :execrows
 DELETE FROM gate_objects
 WHERE namespace_id = $1 AND scope_key = $2
@@ -2495,6 +2596,47 @@ func (q *Queries) DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteRunnerHandoffTokensOfClaim = `-- name: DeleteRunnerHandoffTokensOfClaim :exec
+DELETE FROM runner_handoff_tokens WHERE operation_id = $1 AND token = $2
+`
+
+type DeleteRunnerHandoffTokensOfClaimParams struct {
+	OperationID string
+	Token       int64
+}
+
+func (q *Queries) DeleteRunnerHandoffTokensOfClaim(ctx context.Context, arg DeleteRunnerHandoffTokensOfClaimParams) error {
+	_, err := q.db.Exec(ctx, deleteRunnerHandoffTokensOfClaim, arg.OperationID, arg.Token)
+	return err
+}
+
+const deleteRunnerPool = `-- name: DeleteRunnerPool :exec
+DELETE FROM runner_pools WHERE id = $1
+`
+
+func (q *Queries) DeleteRunnerPool(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteRunnerPool, id)
+	return err
+}
+
+const deleteRunnerPoolJoinTokens = `-- name: DeleteRunnerPoolJoinTokens :exec
+DELETE FROM runner_join_tokens WHERE pool_id = $1
+`
+
+func (q *Queries) DeleteRunnerPoolJoinTokens(ctx context.Context, poolID string) error {
+	_, err := q.db.Exec(ctx, deleteRunnerPoolJoinTokens, poolID)
+	return err
+}
+
+const deleteRunnerPoolRunners = `-- name: DeleteRunnerPoolRunners :exec
+DELETE FROM runners WHERE pool_id = $1
+`
+
+func (q *Queries) DeleteRunnerPoolRunners(ctx context.Context, poolID string) error {
+	_, err := q.db.Exec(ctx, deleteRunnerPoolRunners, poolID)
+	return err
 }
 
 const deleteScopeGateObjects = `-- name: DeleteScopeGateObjects :exec
@@ -3008,6 +3150,36 @@ func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const expireRunnerClaims = `-- name: ExpireRunnerClaims :exec
+UPDATE durable_operations
+SET claim_owner = NULL, claim_expires_at_ms = 0
+WHERE state = 'running' AND claim_owner = $1::text
+`
+
+// Ends every live claim of the runner, also a claim with a job session.
+func (q *Queries) ExpireRunnerClaims(ctx context.Context, runnerID string) error {
+	_, err := q.db.Exec(ctx, expireRunnerClaims, runnerID)
+	return err
+}
+
+const expireRunnerClaimsWithoutSession = `-- name: ExpireRunnerClaimsWithoutSession :exec
+UPDATE durable_operations
+SET claim_owner = NULL, claim_expires_at_ms = 0
+WHERE state = 'running' AND claim_owner = $1::text
+  AND NOT EXISTS (
+    SELECT 1 FROM runner_sessions s
+    WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+  )
+`
+
+// Ends the live claims of the runner that have no job session, as an expiry
+// does: the claim has no owner and its expiry passed, so the next claim of
+// the operation takes it over with a new token.
+func (q *Queries) ExpireRunnerClaimsWithoutSession(ctx context.Context, runnerID string) error {
+	_, err := q.db.Exec(ctx, expireRunnerClaimsWithoutSession, runnerID)
+	return err
 }
 
 const extendDurableClaim = `-- name: ExtendDurableClaim :exec
@@ -4561,6 +4733,276 @@ func (q *Queries) GetRole(ctx context.Context, id string) (GetRoleRow, error) {
 		&i.Actions,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getRunner = `-- name: GetRunner :one
+SELECT r.id, r.namespace_id, n.name AS namespace_name, r.pool_id, r.name, r.kind, r.isolation, r.labels,
+       r.release, r.key_public, r.key_created_at_ms, r.previous_key_public, r.previous_key_created_at_ms,
+       r.rotated_at_ms, r.joined_with, r.draining, r.retired_at_ms, r.last_seen_at_ms, r.joined_at_ms
+FROM runners r
+JOIN namespaces n ON n.id = r.namespace_id
+WHERE r.id = $1
+`
+
+type GetRunnerRow struct {
+	ID                     string
+	NamespaceID            string
+	NamespaceName          string
+	PoolID                 string
+	Name                   string
+	Kind                   string
+	Isolation              string
+	Labels                 string
+	Release                string
+	KeyPublic              []byte
+	KeyCreatedAtMs         int64
+	PreviousKeyPublic      []byte
+	PreviousKeyCreatedAtMs int64
+	RotatedAtMs            int64
+	JoinedWith             string
+	Draining               bool
+	RetiredAtMs            int64
+	LastSeenAtMs           int64
+	JoinedAtMs             int64
+}
+
+func (q *Queries) GetRunner(ctx context.Context, id string) (GetRunnerRow, error) {
+	row := q.db.QueryRow(ctx, getRunner, id)
+	var i GetRunnerRow
+	err := row.Scan(
+		&i.ID,
+		&i.NamespaceID,
+		&i.NamespaceName,
+		&i.PoolID,
+		&i.Name,
+		&i.Kind,
+		&i.Isolation,
+		&i.Labels,
+		&i.Release,
+		&i.KeyPublic,
+		&i.KeyCreatedAtMs,
+		&i.PreviousKeyPublic,
+		&i.PreviousKeyCreatedAtMs,
+		&i.RotatedAtMs,
+		&i.JoinedWith,
+		&i.Draining,
+		&i.RetiredAtMs,
+		&i.LastSeenAtMs,
+		&i.JoinedAtMs,
+	)
+	return i, err
+}
+
+const getRunnerClaim = `-- name: GetRunnerClaim :one
+SELECT claimed_at_ms, job_id, phase FROM runner_claims
+WHERE operation_id = $1 AND token = $2
+`
+
+type GetRunnerClaimParams struct {
+	OperationID string
+	Token       int64
+}
+
+type GetRunnerClaimRow struct {
+	ClaimedAtMs int64
+	JobID       string
+	Phase       int64
+}
+
+func (q *Queries) GetRunnerClaim(ctx context.Context, arg GetRunnerClaimParams) (GetRunnerClaimRow, error) {
+	row := q.db.QueryRow(ctx, getRunnerClaim, arg.OperationID, arg.Token)
+	var i GetRunnerClaimRow
+	err := row.Scan(&i.ClaimedAtMs, &i.JobID, &i.Phase)
+	return i, err
+}
+
+const getRunnerJoinToken = `-- name: GetRunnerJoinToken :one
+SELECT id, namespace_id, pool_id, sha256, created_by, created_at_ms, expires_at_ms, used_at_ms, used_by, revoked_at_ms
+FROM runner_join_tokens
+WHERE id = $1
+`
+
+func (q *Queries) GetRunnerJoinToken(ctx context.Context, id string) (RunnerJoinToken, error) {
+	row := q.db.QueryRow(ctx, getRunnerJoinToken, id)
+	var i RunnerJoinToken
+	err := row.Scan(
+		&i.ID,
+		&i.NamespaceID,
+		&i.PoolID,
+		&i.Sha256,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+		&i.UsedAtMs,
+		&i.UsedBy,
+		&i.RevokedAtMs,
+	)
+	return i, err
+}
+
+const getRunnerJoinTokenBySHA256 = `-- name: GetRunnerJoinTokenBySHA256 :one
+SELECT id, namespace_id, pool_id, sha256, created_by, created_at_ms, expires_at_ms, used_at_ms, used_by, revoked_at_ms
+FROM runner_join_tokens
+WHERE sha256 = $1
+`
+
+func (q *Queries) GetRunnerJoinTokenBySHA256(ctx context.Context, sha256 string) (RunnerJoinToken, error) {
+	row := q.db.QueryRow(ctx, getRunnerJoinTokenBySHA256, sha256)
+	var i RunnerJoinToken
+	err := row.Scan(
+		&i.ID,
+		&i.NamespaceID,
+		&i.PoolID,
+		&i.Sha256,
+		&i.CreatedBy,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+		&i.UsedAtMs,
+		&i.UsedBy,
+		&i.RevokedAtMs,
+	)
+	return i, err
+}
+
+const getRunnerNamed = `-- name: GetRunnerNamed :one
+SELECT r.id, r.namespace_id, n.name AS namespace_name, r.pool_id, r.name, r.kind, r.isolation, r.labels,
+       r.release, r.key_public, r.key_created_at_ms, r.previous_key_public, r.previous_key_created_at_ms,
+       r.rotated_at_ms, r.joined_with, r.draining, r.retired_at_ms, r.last_seen_at_ms, r.joined_at_ms
+FROM runners r
+JOIN namespaces n ON n.id = r.namespace_id
+WHERE r.pool_id = $1 AND r.name = $2 AND r.retired_at_ms = 0
+`
+
+type GetRunnerNamedParams struct {
+	PoolID string
+	Name   string
+}
+
+type GetRunnerNamedRow struct {
+	ID                     string
+	NamespaceID            string
+	NamespaceName          string
+	PoolID                 string
+	Name                   string
+	Kind                   string
+	Isolation              string
+	Labels                 string
+	Release                string
+	KeyPublic              []byte
+	KeyCreatedAtMs         int64
+	PreviousKeyPublic      []byte
+	PreviousKeyCreatedAtMs int64
+	RotatedAtMs            int64
+	JoinedWith             string
+	Draining               bool
+	RetiredAtMs            int64
+	LastSeenAtMs           int64
+	JoinedAtMs             int64
+}
+
+// The runner of the pool with the name that is not retired.
+func (q *Queries) GetRunnerNamed(ctx context.Context, arg GetRunnerNamedParams) (GetRunnerNamedRow, error) {
+	row := q.db.QueryRow(ctx, getRunnerNamed, arg.PoolID, arg.Name)
+	var i GetRunnerNamedRow
+	err := row.Scan(
+		&i.ID,
+		&i.NamespaceID,
+		&i.NamespaceName,
+		&i.PoolID,
+		&i.Name,
+		&i.Kind,
+		&i.Isolation,
+		&i.Labels,
+		&i.Release,
+		&i.KeyPublic,
+		&i.KeyCreatedAtMs,
+		&i.PreviousKeyPublic,
+		&i.PreviousKeyCreatedAtMs,
+		&i.RotatedAtMs,
+		&i.JoinedWith,
+		&i.Draining,
+		&i.RetiredAtMs,
+		&i.LastSeenAtMs,
+		&i.JoinedAtMs,
+	)
+	return i, err
+}
+
+const getRunnerPool = `-- name: GetRunnerPool :one
+SELECT p.id, p.namespace_id, n.name AS namespace_name, p.name, p.purpose, p.lease_ms, p.concurrency, p.isolation,
+       p.git_mode, p.git_helper, p.created_at_ms, p.updated_at_ms
+FROM runner_pools p
+JOIN namespaces n ON n.id = p.namespace_id
+WHERE p.id = $1
+`
+
+type GetRunnerPoolRow struct {
+	ID            string
+	NamespaceID   string
+	NamespaceName string
+	Name          string
+	Purpose       string
+	LeaseMs       int64
+	Concurrency   int64
+	Isolation     string
+	GitMode       string
+	GitHelper     string
+	CreatedAtMs   int64
+	UpdatedAtMs   int64
+}
+
+func (q *Queries) GetRunnerPool(ctx context.Context, id string) (GetRunnerPoolRow, error) {
+	row := q.db.QueryRow(ctx, getRunnerPool, id)
+	var i GetRunnerPoolRow
+	err := row.Scan(
+		&i.ID,
+		&i.NamespaceID,
+		&i.NamespaceName,
+		&i.Name,
+		&i.Purpose,
+		&i.LeaseMs,
+		&i.Concurrency,
+		&i.Isolation,
+		&i.GitMode,
+		&i.GitHelper,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getRunnerSession = `-- name: GetRunnerSession :one
+SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
+       COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1)::bigint AS runner_retired_at_ms
+FROM runner_sessions s
+WHERE s.id = $1
+`
+
+type GetRunnerSessionRow struct {
+	ID                string
+	OperationID       string
+	Token             int64
+	RunnerID          string
+	KeyPublic         []byte
+	KeyCreatedAtMs    int64
+	CreatedAtMs       int64
+	RunnerRetiredAtMs int64
+}
+
+func (q *Queries) GetRunnerSession(ctx context.Context, id string) (GetRunnerSessionRow, error) {
+	row := q.db.QueryRow(ctx, getRunnerSession, id)
+	var i GetRunnerSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.OperationID,
+		&i.Token,
+		&i.RunnerID,
+		&i.KeyPublic,
+		&i.KeyCreatedAtMs,
+		&i.CreatedAtMs,
+		&i.RunnerRetiredAtMs,
 	)
 	return i, err
 }
@@ -6190,6 +6632,204 @@ type InsertPurgedImportParams struct {
 
 func (q *Queries) InsertPurgedImport(ctx context.Context, arg InsertPurgedImportParams) error {
 	_, err := q.db.Exec(ctx, insertPurgedImport, arg.NamespaceID, arg.ID, arg.PurgedAtMs)
+	return err
+}
+
+const insertRunner = `-- name: InsertRunner :exec
+INSERT INTO runners (id, namespace_id, pool_id, name, kind, isolation, labels, release, key_public,
+                     key_created_at_ms, previous_key_public, previous_key_created_at_ms, rotated_at_ms, joined_with,
+                     draining, retired_at_ms, last_seen_at_ms, joined_at_ms)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8, $9,
+        $10, ''::bytea, 0, 0, $11, false, 0, $12,
+        $13)
+`
+
+type InsertRunnerParams struct {
+	ID             string
+	NamespaceID    string
+	PoolID         string
+	Name           string
+	Kind           string
+	Isolation      string
+	Labels         string
+	Release        string
+	KeyPublic      []byte
+	KeyCreatedAtMs int64
+	JoinedWith     string
+	LastSeenAtMs   int64
+	JoinedAtMs     int64
+}
+
+func (q *Queries) InsertRunner(ctx context.Context, arg InsertRunnerParams) error {
+	_, err := q.db.Exec(ctx, insertRunner,
+		arg.ID,
+		arg.NamespaceID,
+		arg.PoolID,
+		arg.Name,
+		arg.Kind,
+		arg.Isolation,
+		arg.Labels,
+		arg.Release,
+		arg.KeyPublic,
+		arg.KeyCreatedAtMs,
+		arg.JoinedWith,
+		arg.LastSeenAtMs,
+		arg.JoinedAtMs,
+	)
+	return err
+}
+
+const insertRunnerClaimTime = `-- name: InsertRunnerClaimTime :exec
+INSERT INTO runner_claims (operation_id, token, claimed_at_ms, job_id, phase)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (operation_id, token) DO NOTHING
+`
+
+type InsertRunnerClaimTimeParams struct {
+	OperationID string
+	Token       int64
+	ClaimedAtMs int64
+	JobID       string
+	Phase       int64
+}
+
+func (q *Queries) InsertRunnerClaimTime(ctx context.Context, arg InsertRunnerClaimTimeParams) error {
+	_, err := q.db.Exec(ctx, insertRunnerClaimTime,
+		arg.OperationID,
+		arg.Token,
+		arg.ClaimedAtMs,
+		arg.JobID,
+		arg.Phase,
+	)
+	return err
+}
+
+const insertRunnerHandoffToken = `-- name: InsertRunnerHandoffToken :exec
+INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms)
+VALUES ($1, $2, $3, $4, $5,
+        $6, 0)
+`
+
+type InsertRunnerHandoffTokenParams struct {
+	Sha256      string
+	OperationID string
+	Token       int64
+	RunnerID    string
+	IssuedAtMs  int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) InsertRunnerHandoffToken(ctx context.Context, arg InsertRunnerHandoffTokenParams) error {
+	_, err := q.db.Exec(ctx, insertRunnerHandoffToken,
+		arg.Sha256,
+		arg.OperationID,
+		arg.Token,
+		arg.RunnerID,
+		arg.IssuedAtMs,
+		arg.ExpiresAtMs,
+	)
+	return err
+}
+
+const insertRunnerJoinToken = `-- name: InsertRunnerJoinToken :exec
+INSERT INTO runner_join_tokens (id, namespace_id, pool_id, sha256, created_by, created_at_ms, expires_at_ms,
+                                used_at_ms, used_by, revoked_at_ms)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, 0, '', 0)
+`
+
+type InsertRunnerJoinTokenParams struct {
+	ID          string
+	NamespaceID string
+	PoolID      string
+	Sha256      string
+	CreatedBy   string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) InsertRunnerJoinToken(ctx context.Context, arg InsertRunnerJoinTokenParams) error {
+	_, err := q.db.Exec(ctx, insertRunnerJoinToken,
+		arg.ID,
+		arg.NamespaceID,
+		arg.PoolID,
+		arg.Sha256,
+		arg.CreatedBy,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+	)
+	return err
+}
+
+const insertRunnerPool = `-- name: InsertRunnerPool :exec
+
+INSERT INTO runner_pools (id, namespace_id, name, purpose, lease_ms, concurrency, isolation, git_mode, git_helper,
+                          created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8, $9,
+        $10, $11)
+`
+
+type InsertRunnerPoolParams struct {
+	ID          string
+	NamespaceID string
+	Name        string
+	Purpose     string
+	LeaseMs     int64
+	Concurrency int64
+	Isolation   string
+	GitMode     string
+	GitHelper   string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// Runner pools, join tokens and runners. The tables hold the stable ID of the
+// namespace. A zero in a *_ms column that can be empty means "not set".
+func (q *Queries) InsertRunnerPool(ctx context.Context, arg InsertRunnerPoolParams) error {
+	_, err := q.db.Exec(ctx, insertRunnerPool,
+		arg.ID,
+		arg.NamespaceID,
+		arg.Name,
+		arg.Purpose,
+		arg.LeaseMs,
+		arg.Concurrency,
+		arg.Isolation,
+		arg.GitMode,
+		arg.GitHelper,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const insertRunnerSession = `-- name: InsertRunnerSession :exec
+INSERT INTO runner_sessions (id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7)
+`
+
+type InsertRunnerSessionParams struct {
+	ID             string
+	OperationID    string
+	Token          int64
+	RunnerID       string
+	KeyPublic      []byte
+	KeyCreatedAtMs int64
+	CreatedAtMs    int64
+}
+
+func (q *Queries) InsertRunnerSession(ctx context.Context, arg InsertRunnerSessionParams) error {
+	_, err := q.db.Exec(ctx, insertRunnerSession,
+		arg.ID,
+		arg.OperationID,
+		arg.Token,
+		arg.RunnerID,
+		arg.KeyPublic,
+		arg.KeyCreatedAtMs,
+		arg.CreatedAtMs,
+	)
 	return err
 }
 
@@ -8710,6 +9350,205 @@ func (q *Queries) ListRoles(ctx context.Context) ([]ListRolesRow, error) {
 	return items, nil
 }
 
+const listRunnerClaimsWithoutSession = `-- name: ListRunnerClaimsWithoutSession :many
+SELECT id
+FROM durable_operations
+WHERE state = 'running' AND claim_owner = $1::text
+  AND NOT EXISTS (
+    SELECT 1 FROM runner_sessions s
+    WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+  )
+ORDER BY id
+`
+
+// The operations whose live claim ExpireRunnerClaimsWithoutSession ends.
+func (q *Queries) ListRunnerClaimsWithoutSession(ctx context.Context, runnerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listRunnerClaimsWithoutSession, runnerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunnerJoinTokens = `-- name: ListRunnerJoinTokens :many
+SELECT id, namespace_id, pool_id, sha256, created_by, created_at_ms, expires_at_ms, used_at_ms, used_by, revoked_at_ms
+FROM runner_join_tokens
+WHERE pool_id = $1
+ORDER BY created_at_ms DESC, id DESC
+`
+
+func (q *Queries) ListRunnerJoinTokens(ctx context.Context, poolID string) ([]RunnerJoinToken, error) {
+	rows, err := q.db.Query(ctx, listRunnerJoinTokens, poolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunnerJoinToken
+	for rows.Next() {
+		var i RunnerJoinToken
+		if err := rows.Scan(
+			&i.ID,
+			&i.NamespaceID,
+			&i.PoolID,
+			&i.Sha256,
+			&i.CreatedBy,
+			&i.CreatedAtMs,
+			&i.ExpiresAtMs,
+			&i.UsedAtMs,
+			&i.UsedBy,
+			&i.RevokedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunnerPools = `-- name: ListRunnerPools :many
+SELECT p.id, p.namespace_id, n.name AS namespace_name, p.name, p.purpose, p.lease_ms, p.concurrency, p.isolation,
+       p.git_mode, p.git_helper, p.created_at_ms, p.updated_at_ms
+FROM runner_pools p
+JOIN namespaces n ON n.id = p.namespace_id
+WHERE n.name = $1
+ORDER BY p.name
+`
+
+type ListRunnerPoolsRow struct {
+	ID            string
+	NamespaceID   string
+	NamespaceName string
+	Name          string
+	Purpose       string
+	LeaseMs       int64
+	Concurrency   int64
+	Isolation     string
+	GitMode       string
+	GitHelper     string
+	CreatedAtMs   int64
+	UpdatedAtMs   int64
+}
+
+func (q *Queries) ListRunnerPools(ctx context.Context, namespace string) ([]ListRunnerPoolsRow, error) {
+	rows, err := q.db.Query(ctx, listRunnerPools, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRunnerPoolsRow
+	for rows.Next() {
+		var i ListRunnerPoolsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.NamespaceID,
+			&i.NamespaceName,
+			&i.Name,
+			&i.Purpose,
+			&i.LeaseMs,
+			&i.Concurrency,
+			&i.Isolation,
+			&i.GitMode,
+			&i.GitHelper,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunners = `-- name: ListRunners :many
+SELECT r.id, r.namespace_id, n.name AS namespace_name, r.pool_id, r.name, r.kind, r.isolation, r.labels,
+       r.release, r.key_public, r.key_created_at_ms, r.previous_key_public, r.previous_key_created_at_ms,
+       r.rotated_at_ms, r.joined_with, r.draining, r.retired_at_ms, r.last_seen_at_ms, r.joined_at_ms
+FROM runners r
+JOIN namespaces n ON n.id = r.namespace_id
+WHERE r.pool_id = $1 AND r.retired_at_ms = 0
+ORDER BY r.name
+`
+
+type ListRunnersRow struct {
+	ID                     string
+	NamespaceID            string
+	NamespaceName          string
+	PoolID                 string
+	Name                   string
+	Kind                   string
+	Isolation              string
+	Labels                 string
+	Release                string
+	KeyPublic              []byte
+	KeyCreatedAtMs         int64
+	PreviousKeyPublic      []byte
+	PreviousKeyCreatedAtMs int64
+	RotatedAtMs            int64
+	JoinedWith             string
+	Draining               bool
+	RetiredAtMs            int64
+	LastSeenAtMs           int64
+	JoinedAtMs             int64
+}
+
+func (q *Queries) ListRunners(ctx context.Context, poolID string) ([]ListRunnersRow, error) {
+	rows, err := q.db.Query(ctx, listRunners, poolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRunnersRow
+	for rows.Next() {
+		var i ListRunnersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.NamespaceID,
+			&i.NamespaceName,
+			&i.PoolID,
+			&i.Name,
+			&i.Kind,
+			&i.Isolation,
+			&i.Labels,
+			&i.Release,
+			&i.KeyPublic,
+			&i.KeyCreatedAtMs,
+			&i.PreviousKeyPublic,
+			&i.PreviousKeyCreatedAtMs,
+			&i.RotatedAtMs,
+			&i.JoinedWith,
+			&i.Draining,
+			&i.RetiredAtMs,
+			&i.LastSeenAtMs,
+			&i.JoinedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listScopeGateObjectKeys = `-- name: ListScopeGateObjectKeys :many
 SELECT kind, id, scope_key
 FROM gate_objects
@@ -9466,6 +10305,29 @@ func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	return err
 }
 
+const lockRunnerHandoffToken = `-- name: LockRunnerHandoffToken :one
+SELECT sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms
+FROM runner_handoff_tokens
+WHERE sha256 = $1
+FOR UPDATE
+`
+
+// Holds the row until the transaction ends, so two opens of one token run one after the other.
+func (q *Queries) LockRunnerHandoffToken(ctx context.Context, sha256 string) (RunnerHandoffToken, error) {
+	row := q.db.QueryRow(ctx, lockRunnerHandoffToken, sha256)
+	var i RunnerHandoffToken
+	err := row.Scan(
+		&i.Sha256,
+		&i.OperationID,
+		&i.Token,
+		&i.RunnerID,
+		&i.IssuedAtMs,
+		&i.ExpiresAtMs,
+		&i.UsedAtMs,
+	)
+	return i, err
+}
+
 const lockServerAuditScope = `-- name: LockServerAuditScope :exec
 SELECT pg_advisory_xact_lock(418581342580)
 `
@@ -10118,6 +10980,43 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 	return items, nil
 }
 
+const rejoinRunner = `-- name: RejoinRunner :exec
+UPDATE runners
+SET kind = $1, isolation = $2, labels = $3, release = $4,
+    key_public = $5, key_created_at_ms = $6, previous_key_public = ''::bytea,
+    previous_key_created_at_ms = 0, rotated_at_ms = 0, joined_with = $7,
+    last_seen_at_ms = $8
+WHERE id = $9
+`
+
+type RejoinRunnerParams struct {
+	Kind           string
+	Isolation      string
+	Labels         string
+	Release        string
+	KeyPublic      []byte
+	KeyCreatedAtMs int64
+	JoinedWith     string
+	LastSeenAtMs   int64
+	ID             string
+}
+
+// A join again keeps the ID, takes the new key, and clears the previous key.
+func (q *Queries) RejoinRunner(ctx context.Context, arg RejoinRunnerParams) error {
+	_, err := q.db.Exec(ctx, rejoinRunner,
+		arg.Kind,
+		arg.Isolation,
+		arg.Labels,
+		arg.Release,
+		arg.KeyPublic,
+		arg.KeyCreatedAtMs,
+		arg.JoinedWith,
+		arg.LastSeenAtMs,
+		arg.ID,
+	)
+	return err
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL
@@ -10216,6 +11115,20 @@ func (q *Queries) RestoreWorkspace(ctx context.Context, arg RestoreWorkspacePara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const retireRunner = `-- name: RetireRunner :exec
+UPDATE runners SET retired_at_ms = $1 WHERE id = $2
+`
+
+type RetireRunnerParams struct {
+	RetiredAtMs int64
+	ID          string
+}
+
+func (q *Queries) RetireRunner(ctx context.Context, arg RetireRunnerParams) error {
+	_, err := q.db.Exec(ctx, retireRunner, arg.RetiredAtMs, arg.ID)
+	return err
 }
 
 const reviewGrants = `-- name: ReviewGrants :many
@@ -10537,6 +11450,20 @@ func (q *Queries) RevokeGrantsOnTarget(ctx context.Context, arg RevokeGrantsOnTa
 	return result.RowsAffected(), nil
 }
 
+const revokeRunnerJoinToken = `-- name: RevokeRunnerJoinToken :exec
+UPDATE runner_join_tokens SET revoked_at_ms = $1 WHERE id = $2
+`
+
+type RevokeRunnerJoinTokenParams struct {
+	RevokedAtMs int64
+	ID          string
+}
+
+func (q *Queries) RevokeRunnerJoinToken(ctx context.Context, arg RevokeRunnerJoinTokenParams) error {
+	_, err := q.db.Exec(ctx, revokeRunnerJoinToken, arg.RevokedAtMs, arg.ID)
+	return err
+}
+
 const revokeTempAdminTokens = `-- name: RevokeTempAdminTokens :execrows
 UPDATE access_tokens SET revoked_at_ms = $1
 WHERE principal_id = $2 AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
@@ -10610,6 +11537,31 @@ func (q *Queries) RolesByIDs(ctx context.Context, ids []string) ([]RolesByIDsRow
 		return nil, err
 	}
 	return items, nil
+}
+
+const rotateRunnerKey = `-- name: RotateRunnerKey :exec
+UPDATE runners
+SET previous_key_public = key_public, previous_key_created_at_ms = key_created_at_ms,
+    rotated_at_ms = $1, key_public = $2,
+    key_created_at_ms = $3
+WHERE id = $4
+`
+
+type RotateRunnerKeyParams struct {
+	RotatedAtMs    int64
+	KeyPublic      []byte
+	KeyCreatedAtMs int64
+	ID             string
+}
+
+func (q *Queries) RotateRunnerKey(ctx context.Context, arg RotateRunnerKeyParams) error {
+	_, err := q.db.Exec(ctx, rotateRunnerKey,
+		arg.RotatedAtMs,
+		arg.KeyPublic,
+		arg.KeyCreatedAtMs,
+		arg.ID,
+	)
+	return err
 }
 
 const runningMutatingUpdates = `-- name: RunningMutatingUpdates :one
@@ -11119,6 +12071,37 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 	return result.RowsAffected(), nil
 }
 
+const setRunnerClaimExpiry = `-- name: SetRunnerClaimExpiry :exec
+UPDATE durable_operations
+SET claim_expires_at_ms = $1
+WHERE id = $2 AND claim_token = $3
+`
+
+type SetRunnerClaimExpiryParams struct {
+	ExpiresAtMs pgtype.Int8
+	ID          string
+	Token       int64
+}
+
+func (q *Queries) SetRunnerClaimExpiry(ctx context.Context, arg SetRunnerClaimExpiryParams) error {
+	_, err := q.db.Exec(ctx, setRunnerClaimExpiry, arg.ExpiresAtMs, arg.ID, arg.Token)
+	return err
+}
+
+const setRunnerDraining = `-- name: SetRunnerDraining :exec
+UPDATE runners SET draining = $1::boolean WHERE id = $2
+`
+
+type SetRunnerDrainingParams struct {
+	Draining bool
+	ID       string
+}
+
+func (q *Queries) SetRunnerDraining(ctx context.Context, arg SetRunnerDrainingParams) error {
+	_, err := q.db.Exec(ctx, setRunnerDraining, arg.Draining, arg.ID)
+	return err
+}
+
 const setSessionPolicy = `-- name: SetSessionPolicy :execrows
 UPDATE session_policy
 SET idle_ms = $1::bigint, max_length_ms = $2::bigint,
@@ -11414,6 +12397,21 @@ type TouchDurableOperationParams struct {
 
 func (q *Queries) TouchDurableOperation(ctx context.Context, arg TouchDurableOperationParams) error {
 	_, err := q.db.Exec(ctx, touchDurableOperation, arg.NowMs, arg.ID)
+	return err
+}
+
+const touchRunner = `-- name: TouchRunner :exec
+UPDATE runners SET release = $1, last_seen_at_ms = $2 WHERE id = $3
+`
+
+type TouchRunnerParams struct {
+	Release      string
+	LastSeenAtMs int64
+	ID           string
+}
+
+func (q *Queries) TouchRunner(ctx context.Context, arg TouchRunnerParams) error {
+	_, err := q.db.Exec(ctx, touchRunner, arg.Release, arg.LastSeenAtMs, arg.ID)
 	return err
 }
 
@@ -11768,6 +12766,39 @@ func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const updateRunnerPool = `-- name: UpdateRunnerPool :exec
+UPDATE runner_pools
+SET name = $1, lease_ms = $2, concurrency = $3,
+    isolation = $4, git_mode = $5, git_helper = $6,
+    updated_at_ms = $7
+WHERE id = $8
+`
+
+type UpdateRunnerPoolParams struct {
+	Name        string
+	LeaseMs     int64
+	Concurrency int64
+	Isolation   string
+	GitMode     string
+	GitHelper   string
+	UpdatedAtMs int64
+	ID          string
+}
+
+func (q *Queries) UpdateRunnerPool(ctx context.Context, arg UpdateRunnerPoolParams) error {
+	_, err := q.db.Exec(ctx, updateRunnerPool,
+		arg.Name,
+		arg.LeaseMs,
+		arg.Concurrency,
+		arg.Isolation,
+		arg.GitMode,
+		arg.GitHelper,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
+	return err
+}
+
 const updateSignInProvider = `-- name: UpdateSignInProvider :execrows
 UPDATE sign_in_providers
 SET issuer = $1, display_name = $2, client_id = $3,
@@ -11943,6 +12974,58 @@ func (q *Queries) UpsertUnitCollection(ctx context.Context, arg UpsertUnitCollec
 		arg.AssignedAtMs,
 	)
 	return err
+}
+
+const useRunnerHandoffToken = `-- name: UseRunnerHandoffToken :exec
+UPDATE runner_handoff_tokens SET used_at_ms = $1 WHERE sha256 = $2
+`
+
+type UseRunnerHandoffTokenParams struct {
+	UsedAtMs int64
+	Sha256   string
+}
+
+func (q *Queries) UseRunnerHandoffToken(ctx context.Context, arg UseRunnerHandoffTokenParams) error {
+	_, err := q.db.Exec(ctx, useRunnerHandoffToken, arg.UsedAtMs, arg.Sha256)
+	return err
+}
+
+const useRunnerJoinToken = `-- name: UseRunnerJoinToken :exec
+UPDATE runner_join_tokens SET used_at_ms = $1, used_by = $2 WHERE id = $3
+`
+
+type UseRunnerJoinTokenParams struct {
+	UsedAtMs int64
+	UsedBy   string
+	ID       string
+}
+
+func (q *Queries) UseRunnerJoinToken(ctx context.Context, arg UseRunnerJoinTokenParams) error {
+	_, err := q.db.Exec(ctx, useRunnerJoinToken, arg.UsedAtMs, arg.UsedBy, arg.ID)
+	return err
+}
+
+const useRunnerNonce = `-- name: UseRunnerNonce :execrows
+INSERT INTO runner_nonces (subject, nonce, expires_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (subject, nonce) DO NOTHING
+`
+
+type UseRunnerNonceParams struct {
+	Subject     string
+	Nonce       string
+	ExpiresAtMs int64
+}
+
+// Keeps the nonce until its expiry. It changes nothing, and so returns 0
+// rows, when the store holds the nonce. The caller deletes the nonces whose
+// expiry passed first, in the same transaction.
+func (q *Queries) UseRunnerNonce(ctx context.Context, arg UseRunnerNonceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useRunnerNonce, arg.Subject, arg.Nonce, arg.ExpiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const workspaceExists = `-- name: WorkspaceExists :one

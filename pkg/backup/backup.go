@@ -123,6 +123,9 @@ var Tables = []string{
 	"workspace_blame_cursors",
 	"workspace_blame_items",
 	"workspace_resource_changes",
+	"runner_pools",
+	"runner_join_tokens",
+	"runners",
 	"profiles",
 	"profile_revisions",
 }

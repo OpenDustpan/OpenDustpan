@@ -103,11 +103,15 @@ type PhaseClaim struct {
 
 // ClaimRequest asks for one phase to run. Kinds are the durable kinds that
 // the executor runs. Owner names the runner or the instance, for status.
-// Lease is the time from the claim to its expiry.
+// Lease is the time from the claim to its expiry. MaxVersions is the limit
+// of the version of the operation for each kind, as in
+// durable.ClaimRequest: a phase above the limit of its kind stays for
+// another claimer. A kind with no entry has no limit.
 type ClaimRequest struct {
-	Owner string
-	Kinds []durable.Kind
-	Lease time.Duration
+	Owner       string
+	Kinds       []durable.Kind
+	MaxVersions map[durable.Kind]int
+	Lease       time.Duration
 }
 
 // Assignment is a claimed phase: the phase claim and the job as it was at
