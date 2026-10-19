@@ -272,12 +272,17 @@ func runManualLockOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	defer cancel()
 
-	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), e2e.Pulumi().Versions()[0])
+	pulumiVersions, tofuVersions := e2e.Pulumi().Versions(), e2e.OpenTofu().Versions()
+	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+		t.Fatal("each tool needs at least one version in its matrix")
+	}
+
+	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
 	if err != nil {
 		t.Fatalf("install pulumi: %v", err)
 	}
 
-	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), e2e.OpenTofu().Versions()[0])
+	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
 	if err != nil {
 		t.Fatalf("install tofu: %v", err)
 	}
