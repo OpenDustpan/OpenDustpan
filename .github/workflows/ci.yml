@@ -71,6 +71,10 @@ jobs:
         run: go mod tidy -diff
       - name: Verify module checksums
         run: go mod verify
+      - name: Each module version is at least 14 days old
+        run: |
+          python3 -I scripts/module-age-gate.py --selftest
+          python3 -I scripts/module-age-gate.py
       - uses: sqlc-dev/setup-sqlc@bac53b7fb28c039a6c7f5736fd1e89744021bdd6 # v5.0.0
         with:
           sqlc-version: "1.31.1"
