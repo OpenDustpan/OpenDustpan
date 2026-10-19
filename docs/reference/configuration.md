@@ -225,3 +225,17 @@ Each client command takes only the flags in its row:
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of
 the backup commands. The [audit log guide](../guides/audit-log.md) shows
 the audit chain commands.
+
+## Host command
+
+`opendustpan host create-temp-admin` opens the database itself, as `serve`
+does, and makes a temporary administrator for one named person. It reads
+these settings. The [host recovery guide](../guides/host-recovery.md) shows
+the steps.
+
+| Flag | Environment | Default |
+| --- | --- | --- |
+| `--database` | `DUSTPAN_DATABASE` | `sqlite:dustpan.db` (or `postgres://...`) |
+| `--reason` | (none) | (none) |
+| `--recovery-mode` | `DUSTPAN_RECOVERY_MODE` | `bootstrap`: recovery through the bootstrap administrator or the host command. `signed-request`: recovery with a request signed with an offline operator key. `none`: no break-glass, the operator restores from a backup, and the host command refuses to run |
+| (none) | `DUSTPAN_DISABLE_HOST_RECOVERY` | (none: the host command is on). Set `true` or `1` in the environment of the operator account to turn it off. `false`, `0` and an empty value keep it on. The host command refuses any other value |

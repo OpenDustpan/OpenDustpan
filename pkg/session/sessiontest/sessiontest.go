@@ -682,8 +682,11 @@ func mustSweep(t *testing.T, s Store) accesstoken.SweepResult {
 		return e
 	}
 
-	res, err := s.SweepInactive(t.Context(), accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: false, Accounts: true},
-		entryFn)
+	res, err := s.SweepInactive(
+		t.Context(),
+		accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: false, Accounts: true},
+		entryFn,
+	)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}

@@ -87,6 +87,8 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -540,6 +542,8 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := apiserver.NewHandler(apiserver.Config{
+		Now:           nil,
+		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{
 			identity.ActionServerRestore: true,
@@ -743,6 +747,8 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),
@@ -860,6 +866,8 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:       nil,
+		Now:              nil,
 		CheckpointEpochs: nil,
 		SignIn:           nil,
 		Authenticator:    tokenAuthenticator{},
@@ -968,6 +976,8 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:       nil,
+		Now:              nil,
 		CheckpointEpochs: nil,
 		SignIn:           nil,
 		Authenticator:    tokenAuthenticator{},

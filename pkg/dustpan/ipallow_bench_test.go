@@ -218,6 +218,7 @@ func BenchmarkIPAllowlistAuthorize1000Stacks(b *testing.B) {
 	gate := ipallow.Gate{Next: benchAllowAll{}, Rules: st, Enabled: true, IncludeBootstrap: true}
 
 	principal := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice@example.com",
 		DisplayName:    "alice@example.com",
 		Admin:          false,

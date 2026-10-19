@@ -184,6 +184,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
+		Now:            nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:         slog.New(slog.DiscardHandler),
@@ -1002,13 +1004,16 @@ func TestSignInProviderDown(t *testing.T) {
 	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
 	principals, err := principal.NewService(principal.Config{
-		Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principals: %v", err)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
+		Now:            nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:         slog.New(slog.DiscardHandler),

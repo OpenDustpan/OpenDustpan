@@ -1809,10 +1809,13 @@ SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms;
 
 -- name: DisableInactiveAccessTokens :many
 -- A token of a break-glass account is always exempt from the inactivity
--- disable.
+-- disable. A token of a temporary administrator that still works is exempt
+-- too: only the fixed expiry ends it. An expired record is a tombstone, not
+-- an exemption: it never keeps a token.
 UPDATE access_tokens SET disabled_at_ms = sqlc.arg('at_ms')::bigint
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
   AND COALESCE(last_used_at_ms, created_at_ms) <= sqlc.arg('cutoff_ms')::bigint
+  AND principal_id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > sqlc.arg('at_ms')::bigint)
   AND NOT EXISTS (
     SELECT 1 FROM principals p
     WHERE p.id = access_tokens.principal_id AND p.break_glass = TRUE
@@ -1825,7 +1828,9 @@ RETURNING id, principal_id;
 -- last use of each of its console sessions are all at or before the
 -- cutoff. The session use counts by itself, so the result does not depend
 -- on the maximum length of a session. A break-glass account is always
--- exempt from the inactivity disable.
+-- exempt from the inactivity disable. A temporary administrator that still
+-- works is exempt too: only the fixed expiry ends it. An expired record is
+-- a tombstone, not an exemption: it never keeps a principal.
 UPDATE principals SET disabled_at_ms = sqlc.arg('at_ms')::bigint
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND break_glass = FALSE
@@ -1841,6 +1846,7 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     SELECT 1 FROM sessions s
     WHERE s.principal_id = principals.id AND s.last_seen_at_ms > sqlc.arg('cutoff_ms')::bigint
   )
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > sqlc.arg('at_ms')::bigint)
 RETURNING id;
 
 -- name: EnablePrincipal :execrows
@@ -1952,6 +1958,73 @@ UPDATE session_policy
 SET idle_ms = sqlc.arg('idle_ms')::bigint, max_length_ms = sqlc.arg('max_length_ms')::bigint,
   updated_at_ms = sqlc.arg('updated_at_ms')::bigint, token_freshness_ms = sqlc.narg('token_freshness_ms')::bigint
 WHERE id = 1;
+
+-- name: CreateTempAdmin :execrows
+-- Records the principal as a temporary administrator with its fixed expiry.
+-- A principal holds at most one record.
+INSERT INTO temp_admins (principal_id, subject, expires_at_ms, created_at_ms, created_by, reason)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: GetTempAdmin :one
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
+FROM temp_admins WHERE principal_id = $1;
+
+-- name: GetTempAdminBySubject :one
+-- Answers the record of the live principal with the subject. A record of a
+-- deleted principal never answers, so a new person with a reused subject
+-- is not the old temporary administrator.
+SELECT t.principal_id, t.subject, t.expires_at_ms, t.created_at_ms, t.created_by, t.reason, t.ended_at_ms
+FROM temp_admins t
+JOIN principals p ON p.id = t.principal_id
+WHERE p.subject = $1 AND p.deleted_at_ms IS NULL;
+
+-- name: ListTempAdmins :many
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms
+FROM temp_admins ORDER BY expires_at_ms, principal_id;
+
+-- name: CreateFirstHostToken :execrows
+-- Inserts the first token of a temporary administrator that the host
+-- command just made. It inserts nothing unless the principal is a live,
+-- enabled person of the installation with no token of any status, made in
+-- the window before the time of the token and not after it, and a record
+-- names the principal that works past the time and the expiry of the token.
+INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
+SELECT sqlc.arg('id'), p.id, sqlc.arg('name'), sqlc.arg('kind'), sqlc.arg('digest'),
+  sqlc.arg('created_at_ms')::bigint, sqlc.arg('expires_at_ms')::bigint, sqlc.arg('created_by')
+FROM principals p
+JOIN temp_admins t ON t.principal_id = p.id
+WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+  AND p.kind = 'person' AND p.namespace = ''
+  AND p.created_at_ms <= sqlc.arg('created_at_ms')::bigint
+  AND p.created_at_ms >= sqlc.arg('created_at_ms')::bigint - sqlc.arg('window_ms')::bigint
+  AND t.expires_at_ms > sqlc.arg('created_at_ms')::bigint
+  AND t.expires_at_ms >= sqlc.arg('expires_at_ms')::bigint
+  AND NOT EXISTS (SELECT 1 FROM access_tokens a WHERE a.principal_id = p.id)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteTempAdmin :execrows
+DELETE FROM temp_admins WHERE principal_id = $1;
+
+-- name: RevokeTempAdminTokens :execrows
+-- Ends every live token of the principal at the expiry of its temporary
+-- administrator record, whatever its name. Tokens that already ended stay
+-- as they are.
+UPDATE access_tokens SET revoked_at_ms = $1
+WHERE principal_id = $2 AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND expires_at_ms > $3;
+
+-- name: EndTempAdmin :execrows
+-- Marks the record of the principal as ended at the expiry. A record that
+-- already ended stays as it is, so a repeated expiry changes nothing.
+UPDATE temp_admins SET ended_at_ms = $1
+WHERE principal_id = $2 AND ended_at_ms IS NULL;
+
+-- name: DisablePrincipalForExpiry :execrows
+-- Disables the principal at the expiry of its temporary administrator
+-- record. A principal that is already disabled stays as it is.
+UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint
+WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
 
 -- name: InsertOIDCProvider :exec
 -- The first start with a provider ID records its issuer. A later start

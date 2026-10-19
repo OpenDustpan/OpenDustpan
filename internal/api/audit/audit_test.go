@@ -200,6 +200,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "Tester",
 		Admin:          false,

@@ -537,6 +537,18 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "temp_admins",
+			columns: []string{
+				backupColPrincipalID,
+				backupColSubject,
+				backupColExpiresAtMs,
+				backupColCreatedAtMs,
+				backupColCreatedBy,
+				"reason",
+				"ended_at_ms",
+			},
+		},
+		{
 			table: "access_tokens",
 			columns: []string{
 				"id",

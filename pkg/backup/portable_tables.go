@@ -448,6 +448,19 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   TableTempAdmins,
+			OrderBy: []string{portColPrincipalID},
+			Columns: []Column{
+				{Name: portColPrincipalID, Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
+				{Name: portColExpiresAtMs, Kind: KindTime},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColCreatedBy, Kind: KindText},
+				{Name: "reason", Kind: KindText},
+				{Name: "ended_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   TableAccessTokens,
 			OrderBy: []string{"id"},
 			Columns: []Column{
