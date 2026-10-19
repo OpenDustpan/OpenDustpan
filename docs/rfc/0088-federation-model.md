@@ -121,7 +121,8 @@ A manual promotion fits this mechanism with no change to the fence:
 - RFC 79 section 8: a join between two namespaces has two halves, each
   written only by the primary installation of its namespace. It needs no synchronous write
   between installations, so it fits the owner decision with "region"
-  replaced by "installation".
+  replaced by "installation". ADR 248 does not decide joins yet. They stay
+  open, and issue #1058 decides them.
 
 ## What goes
 
@@ -157,7 +158,10 @@ when forwarding is on.
 With no lease, an operator can promote a replica while the old primary still
 runs on the far side of a partition. Both installations then accept writes
 for the namespace until the promotion change reaches the old primary. The
-owner accepted this. ADR 248 limits it:
+owner accepted this. These steps limit it. ADR 248 decides the manual
+promotion (decision 10), the divergent tail (decision 11) and the
+signing keys (decision 12). It does not decide the steps of a planned and a
+forced promotion yet. They stay open, and issue #1052 decides them:
 
 - **Planned promotion.** The old primary answers. The operator first demotes
   it: the old primary writes a change that names the new primary and raises the
@@ -183,7 +187,8 @@ A federation replicates namespaces only. Each installation keeps its own
 installation scope: its installation principals, groups and roles, its
 installation settings, its `@server` audit scope and its sessions. No row
 of the installation scope has a writer on another installation. So no
-installation needs a control home.
+installation needs a control home. ADR 248 does not decide the scope yet. It
+stays open, and issue #1051 decides which tables replicate.
 
 - The principals, groups, roles and tokens whose principal home is a
   namespace replicate with the namespace (ADR 215). A token of such a
@@ -198,7 +203,9 @@ installation needs a control home.
 
 No installation asks a peer before it creates a namespace. A namespace name
 is unique on its installation (ADR 215 decision 5). Two members can each
-create a namespace of the same name. ADR 248 decides:
+create a namespace of the same name. ADR 248 does not decide the items
+below yet. They stay open. Issue #1051 decides the first item, issue #1054
+decides the second, and the third is a placement detail:
 
 - A replica installation refuses to replicate a namespace whose name it
   already uses with another namespace ID. It reports the conflict in the
@@ -213,10 +220,13 @@ create a namespace of the same name. ADR 248 decides:
 
 The issuer URL of a namespace never changes (ADR 204 decision 1). Without a
 lease, two installations can sign at the same time after a forced
-promotion. ADR 248 decides:
+promotion. ADR 248 decision 12 decides the keys at a promotion. The
+discovery document from a replica stays open, and issue #1056 decides it.
+The items are:
 
 - Each member that holds a namespace answers its discovery document and
-  JWKS from its replica. Only the primary installation signs.
+  JWKS from its replica. Only the primary installation signs. This item is
+  open (issue #1056).
 - The issuer base URL of a replicated namespace is a host name that the
   operator can move to the new primary, for example a DNS name of the
   federation. A namespace that sets `issuerURL` keeps it.
@@ -232,7 +242,8 @@ promotion. ADR 248 decides:
 
 Each installation has its own key-encryption key. The namespace key record
 of a replicated namespace holds one wrap for each installation that holds
-the namespace. RFC 79 section 3 recommends this for regions. The same
+the namespace. This item stays open, and issue #1055 decides it. RFC 79
+section 3 recommends this for regions. The same
 answer holds for installations. A customer key (ADR 217) in one KMS location
 adds the latency of that location to each refresh on a far installation.
 The docs can tell a customer to use a multi-Region key.

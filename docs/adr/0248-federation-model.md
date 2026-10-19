@@ -203,5 +203,5 @@ only after the owner accepts it.
 - **Joins between namespaces.** Each namespace writes its own half of a
   join, on its own primary installation, under its own fence. A read across a
   join answers with the time of the data it read, and never opens a
-  transaction across two namespaces. Section 8 of RFC 79 gives the text. No
-  design issue exists yet.
+  transaction across two namespaces. Section 8 of RFC 79 gives the text.
+  Issue #1058 decides.
