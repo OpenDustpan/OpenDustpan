@@ -2969,13 +2969,6 @@ UPDATE durable_operations
 SET claim_owner = NULL, claim_expires_at_ms = 0
 WHERE state = 'running' AND claim_owner = sqlc.arg(runner_id)::text;
 
--- name: ReleaseRunnerClaim :exec
--- Gives the claim back as durable.Store.Release does.
-UPDATE durable_operations
-SET state = CASE WHEN cancel_requested THEN 'canceled' ELSE 'pending' END,
-    not_before_ms = sqlc.arg(now_ms), claim_owner = NULL, claim_expires_at_ms = NULL, updated_at_ms = sqlc.arg(now_ms)
-WHERE id = sqlc.arg(id) AND claim_token = sqlc.arg(token) AND claim_owner = sqlc.arg(owner) AND state = 'running';
-
 -- name: SetRunnerClaimExpiry :exec
 UPDATE durable_operations
 SET claim_expires_at_ms = sqlc.arg(expires_at_ms)

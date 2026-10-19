@@ -9929,31 +9929,6 @@ func (q *Queries) RejoinRunner(ctx context.Context, arg RejoinRunnerParams) erro
 	return err
 }
 
-const releaseRunnerClaim = `-- name: ReleaseRunnerClaim :exec
-UPDATE durable_operations
-SET state = CASE WHEN cancel_requested THEN 'canceled' ELSE 'pending' END,
-    not_before_ms = ?1, claim_owner = NULL, claim_expires_at_ms = NULL, updated_at_ms = ?1
-WHERE id = ?2 AND claim_token = ?3 AND claim_owner = ?4 AND state = 'running'
-`
-
-type ReleaseRunnerClaimParams struct {
-	NowMs int64
-	ID    string
-	Token int64
-	Owner sql.NullString
-}
-
-// Gives the claim back as durable.Store.Release does.
-func (q *Queries) ReleaseRunnerClaim(ctx context.Context, arg ReleaseRunnerClaimParams) error {
-	_, err := q.db.ExecContext(ctx, releaseRunnerClaim,
-		arg.NowMs,
-		arg.ID,
-		arg.Token,
-		arg.Owner,
-	)
-	return err
-}
-
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL

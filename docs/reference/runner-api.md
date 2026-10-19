@@ -115,7 +115,9 @@ runner that is online fails with 409. A key older than 30 days gets
 A poll takes the work from the pool of the runner. A runner never names the
 kinds. The poll has the highest assignment version that the launcher of the
 runner reads, and the server never claims a phase or sweep above that version.
-A runner has one poll at a time. A second poll while the first runs gets 429. A
+A runner has one poll at a time. A second poll while the first runs gets 429.
+This holds for each server instance: two polls of one runner on two instances
+can both run. A
 draining or retired runner gets 204 at once, also when the drain starts during
 a long poll. When the lease of a claim lapses,
 the next poll of any runner of the pool can take the work with a new claim

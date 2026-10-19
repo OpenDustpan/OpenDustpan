@@ -176,22 +176,25 @@ type SessionStore interface {
 	OpenSession(ctx context.Context, sha256 string, k Key, now time.Time) (Session, error)
 	// RunnerRenew is the renewal of the claim c by its runner, before the
 	// launcher opens a session. In one transaction, with the rules of
-	// CheckRunnerRenew, it:
+	// CheckRunnerRenew, it checks the fence (namespace.ErrFenced for a stale
+	// fence) and then:
 	//   - returns ErrClaimLost when c is not live, or when its owner is not
 	//     the runner of the request;
 	//   - returns ErrSessionOpen when the claim has a job session. It does
 	//     not renew: the launcher renews the claim through its session.
-	//   - releases the claim, as SweepClaimer.Release and job.Claimer do,
-	//     and returns ErrClaimLost, when now is later than MaxSessionWait
-	//     after the claim time and the claim has no session. This is the
-	//     one error after which the store has changed something.
+	//   - returns ErrSessionWaitPassed (it wraps ErrClaimLost) when now is
+	//     later than MaxSessionWait after the claim time and the claim has
+	//     no session. It changes nothing: the caller releases the claim
+	//     through job.Claimer or SweepClaimer, which apply their own rules.
 	//   - else moves the expiry of c to the time of the database plus d and
 	//     returns the claim.
 	//
 	// The argument now is only for the session wait limit. It returns
 	// ErrClaimLost for a claim with no record (RecordClaim), and ErrInvalid
 	// for a d that is not positive.
-	RunnerRenew(ctx context.Context, c durable.Claim, d time.Duration, now time.Time) (durable.Claim, error)
+	RunnerRenew(
+		ctx context.Context, c durable.Claim, fence namespace.Fence, d time.Duration, now time.Time,
+	) (durable.Claim, error)
 	// Session returns the session id, or ErrNotFound. It returns
 	// ErrClaimLost when the claim of the session is no longer live, so a
 	// launcher of a claim that another claim replaced writes nothing, and

@@ -75,7 +75,8 @@ type Config struct {
 	PollInterval time.Duration
 }
 
-// Handler serves the runner protocol and the runner management API.
+// Handler serves the runner protocol and the runner management API. The 429
+// for a second concurrent poll of one runner holds for each server instance.
 type Handler struct {
 	namespaces *namespace.Service
 	pools      runner.PoolStore

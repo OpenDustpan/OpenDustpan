@@ -100,6 +100,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a new handoff token replaces the old one until a session opens", testHandoffTokenReplace},
 		{"a nonce is good for one proof up to and at its expiry", testNonce},
 		{"a runner renews a claim until the session wait limit", testRunnerRenew},
+		{"a renewal with a stale fence changes nothing", testRunnerRenewStaleFence},
 		{"a session opens up to the session wait limit", testSessionNearWaitLimit},
 		{"a session of a claim that a takeover replaced is lost", testSessionAfterTakeover},
 		{"a recorded claim keeps the database time, the job and the phase", testRecordClaim},

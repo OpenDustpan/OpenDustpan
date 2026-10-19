@@ -826,10 +826,14 @@ func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.
 }
 
 func (m *mem) RunnerRenew(
-	_ context.Context, c durable.Claim, d time.Duration, now time.Time,
+	_ context.Context, c durable.Claim, fence namespace.Fence, d time.Duration, now time.Time,
 ) (durable.Claim, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := checkFence(m, fence); err != nil {
+		return durable.Claim{}, err
+	}
 
 	if d <= 0 {
 		return durable.Claim{}, fmt.Errorf("%w: a renewal needs a positive lease", runner.ErrInvalid)
@@ -845,7 +849,7 @@ func (m *mem) RunnerRenew(
 
 	err := runner.CheckRunnerRenew(m.ops[c.Operation].claimedAt, hasSession(m, c.Operation, c.Token), now)
 	if errors.Is(err, runner.ErrClaimLost) {
-		releaseOp(m, c.Operation)
+		return durable.Claim{}, runner.ErrSessionWaitPassed
 	}
 
 	if err != nil {

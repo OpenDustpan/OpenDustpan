@@ -1,6 +1,7 @@
 package runnerapi
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -329,6 +330,15 @@ func (h *Handler) claimState(r *http.Request, runnerID, operation string) (claim
 		return claimInfo{lost: true, canceled: false}, nil
 	}
 
+	_, err = h.handoffs.LookupClaim(r.Context(), op.Claim)
+
+	switch {
+	case errors.Is(err, runner.ErrClaimLost):
+		return claimInfo{lost: true, canceled: false}, nil
+	case err != nil && !errors.Is(err, runner.ErrNotFound):
+		return claimInfo{lost: false, canceled: false}, fmt.Errorf("look up claim: %w", err)
+	}
+
 	return claimInfo{lost: false, canceled: op.CancelRequested}, nil
 }
 
@@ -493,6 +503,14 @@ func (h *Handler) claimPhase(
 	claim := a.Claim
 
 	if err = h.handoffs.RecordClaim(ctx, claim.Claim, string(claim.Job), claim.Phase); err != nil {
+		// Nothing else knows the claim, so release it now. Its lease would
+		// block the operation until the lease ends.
+		phase := job.PhaseClaim{Job: claim.Job, Phase: claim.Phase, Claim: claim.Claim, Fence: claim.Fence}
+		if relErr := h.claimer.Release(context.WithoutCancel(ctx), phase); relErr != nil {
+			h.logger.WarnContext(ctx, "release of a claim that failed to record", slog.String("runner", rn.ID),
+				slog.String("operation", string(claim.Claim.Operation)), slog.Any("error", relErr))
+		}
+
 		return none, false, fmt.Errorf("record claim: %w", err)
 	}
 
@@ -530,6 +548,11 @@ func (h *Handler) claimSweep(
 	}
 
 	if err = h.handoffs.RecordClaim(ctx, s.Claim, "", 0); err != nil {
+		if relErr := h.sweeps.Release(context.WithoutCancel(ctx), s.Claim); relErr != nil {
+			h.logger.WarnContext(ctx, "release of a claim that failed to record", slog.String("runner", rn.ID),
+				slog.String("operation", string(s.Claim.Operation)), slog.Any("error", relErr))
+		}
+
 		return none, false, fmt.Errorf("record claim: %w", err)
 	}
 
@@ -619,9 +642,26 @@ func (h *Handler) renew(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 
-	renewed, err := h.handoffs.RunnerRenew(ctx, claim, pool.EffectiveLease(), h.now())
+	fence, err := h.fenceOf(r, c.runner.Namespace)
+	if err != nil {
+		h.writeError(ctx, w, ScopeRunnerKey, err)
+
+		return
+	}
+
+	renewed, err := h.handoffs.RunnerRenew(ctx, claim, fence, pool.EffectiveLease(), h.now())
 
 	switch {
+	case errors.Is(err, runner.ErrSessionWaitPassed):
+		// The store changed nothing. The claimer releases the claim with
+		// its own rules, then the runner gets the claim-lost answer.
+		if giveErr := h.giveBack(r, &c.runner, claim); giveErr != nil {
+			h.writeError(ctx, w, ScopeRunnerKey, giveErr)
+
+			return
+		}
+
+		h.writeError(ctx, w, ScopeRunnerKey, err)
 	case errors.Is(err, runner.ErrSessionOpen):
 		h.writeJSON(ctx, w, http.StatusOK, protocol.RenewResponse{
 			ExpiresAt: claim.ExpiresAt.UTC(), Canceled: op.CancelRequested, SessionOpen: true,

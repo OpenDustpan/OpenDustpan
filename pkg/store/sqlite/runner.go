@@ -1200,7 +1200,7 @@ func openableHandoff(ctx context.Context, q *db.Queries, sum string, now time.Ti
 
 // RunnerRenew implements runner.SessionStore.
 func (r *Runners) RunnerRenew(
-	ctx context.Context, c durable.Claim, d time.Duration, now time.Time,
+	ctx context.Context, c durable.Claim, fence namespace.Fence, d time.Duration, now time.Time,
 ) (durable.Claim, error) {
 	if d <= 0 {
 		return durable.Claim{}, fmt.Errorf("%w: a renewal needs a positive lease", runner.ErrInvalid)
@@ -1209,22 +1209,16 @@ func (r *Runners) RunnerRenew(
 	r.store.mu.RLock()
 	defer r.store.mu.RUnlock()
 
-	var (
-		out      durable.Claim
-		released error
-	)
+	var out durable.Claim
 
-	err := r.store.inTx(ctx, func(q *db.Queries) error {
+	err := r.store.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		lost, err := renewState(ctx, q, c, now)
 		if err != nil {
 			return err
 		}
 
 		if lost {
-			// The claim is released and the transaction commits.
-			released = fmt.Errorf("%w: no job session %v after the claim", runner.ErrClaimLost, runner.MaxSessionWait)
-
-			return releaseClaim(ctx, q, c)
+			return runner.ErrSessionWaitPassed
 		}
 
 		dbNow, err := storeNow(ctx, q)
@@ -1248,10 +1242,6 @@ func (r *Runners) RunnerRenew(
 	})
 	if err != nil {
 		return durable.Claim{}, err
-	}
-
-	if released != nil {
-		return durable.Claim{}, released
 	}
 
 	return out, nil
@@ -1293,23 +1283,6 @@ func renewState(ctx context.Context, q *db.Queries, c durable.Claim, now time.Ti
 	}
 
 	return checkErr != nil, nil
-}
-
-// releaseClaim gives the claim c back, as durable.Store.Release does.
-func releaseClaim(ctx context.Context, q *db.Queries, c durable.Claim) error {
-	now, err := storeNow(ctx, q)
-	if err != nil {
-		return err
-	}
-
-	err = q.ReleaseRunnerClaim(ctx, db.ReleaseRunnerClaimParams{
-		ID: string(c.Operation), Token: c.Token, Owner: sql.NullString{String: c.Owner, Valid: true}, NowMs: now,
-	})
-	if err != nil {
-		return fmt.Errorf("release claim: %w", err)
-	}
-
-	return nil
 }
 
 // Session implements runner.SessionStore.

@@ -444,7 +444,14 @@ func (f *fakeRunner) call(path string, body any) (int, []byte) {
 func (f *fakeRunner) callWith(key ed25519.PrivateKey, path string, body any) (int, []byte) {
 	f.e.t.Helper()
 
-	return f.rawSigned(key, path, body, f.release, fresh(f.e.t))
+	st := fresh(f.e.t)
+	if f.e.clock != nil {
+		// The proof carries the time of the clock of the server, so a test
+		// can move that clock forward.
+		st.at = f.e.clock.now()
+	}
+
+	return f.rawSigned(key, path, body, f.release, st)
 }
 
 func newNonce(t *testing.T) string {

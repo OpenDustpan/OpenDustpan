@@ -784,10 +784,10 @@ func testRejoinKeepsSessions(t *testing.T, h Harness) {
 		t.Fatalf("Session of a launcher after a join again of its runner = %+v, %v, want it live", got, lost)
 	}
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), l.c, runner.DefaultLease, offline)
+	_, err = h.Sessions.RunnerRenew(t.Context(), l.c, f.fence, runner.DefaultLease, offline)
 	wantErr(t, "RunnerRenew of the claim with a session after a join again", err, runner.ErrSessionOpen)
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, runner.DefaultLease, offline)
+	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, f.fence, runner.DefaultLease, offline)
 	wantErr(t, "RunnerRenew of a claim with no session after a join again", err, runner.ErrClaimLost)
 
 	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), offline)
@@ -800,23 +800,23 @@ func testRunnerRenew(t *testing.T, h Harness) {
 	l := handoffSetUp(t, h)
 	f, r, c := l.f, l.r, l.c
 
-	got, err := h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, now.Add(time.Minute))
+	got, err := h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, now.Add(time.Minute))
 	if err != nil || got.Token != c.Token {
 		t.Fatalf("RunnerRenew = %+v, %v, want the claim of the same token", got, err)
 	}
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), c, 0, now)
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, 0, now)
 	wantErr(t, "RunnerRenew with no lease", err, runner.ErrInvalid)
 
 	other := c
 	other.Owner = "rn-other"
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), other, runner.DefaultLease, now)
+	_, err = h.Sessions.RunnerRenew(t.Context(), other, f.fence, runner.DefaultLease, now)
 	wantErr(t, "RunnerRenew of a claim with another owner", err, runner.ErrClaimLost)
 
 	limit := now.Add(runner.MaxSessionWait)
 
-	if _, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, limit); err != nil {
+	if _, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, limit); err != nil {
 		t.Fatalf("RunnerRenew at the session wait limit: %v", err)
 	}
 
@@ -827,21 +827,29 @@ func testRunnerRenew(t *testing.T, h Harness) {
 
 	after := now.Add(runner.MaxSessionWait + time.Second)
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, after)
-	wantErr(t, "RunnerRenew after the session wait limit", err, runner.ErrClaimLost)
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, after)
+	wantErr(t, "RunnerRenew after the session wait limit", err, runner.ErrSessionWaitPassed)
+	wantErr(t, "RunnerRenew after the session wait limit, as a lost claim", err, runner.ErrClaimLost)
+
+	// The store releases nothing: the operation is still running with the
+	// same token, and the caller releases it through its claimer.
+	rec, err := h.Sessions.LookupClaim(t.Context(), c)
+	if err != nil || rec.HasSession {
+		t.Fatalf("LookupClaim after the session wait limit = %+v, %v, want the live claim with no session", rec, err)
+	}
 
 	_, err = h.Sessions.OpenSession(t.Context(), late.SHA256, newKey(t), after)
-	wantErr(t, "OpenSession of a released claim", err, runner.ErrClaimLost)
+	wantErr(t, "OpenSession after the session wait limit", err, runner.ErrClaimLost)
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, after)
-	wantErr(t, "RunnerRenew of a released claim", err, runner.ErrClaimLost)
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, after)
+	wantErr(t, "RunnerRenew again after the session wait limit", err, runner.ErrSessionWaitPassed)
 
 	renewed, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), renewed, runner.DefaultLease, time.Now())
+	_, err = h.Sessions.RunnerRenew(t.Context(), renewed, f.fence, runner.DefaultLease, time.Now())
 	wantErr(t, "RunnerRenew of a claim with no record", err, runner.ErrClaimLost)
 
 	// The claim time of a recorded claim is the database time: the times
@@ -852,7 +860,7 @@ func testRunnerRenew(t *testing.T, h Harness) {
 		t.Fatalf("RecordClaim: %v", err)
 	}
 
-	if _, err = h.Sessions.RunnerRenew(t.Context(), renewed, runner.DefaultLease, start); err != nil {
+	if _, err = h.Sessions.RunnerRenew(t.Context(), renewed, f.fence, runner.DefaultLease, start); err != nil {
 		t.Fatalf("RunnerRenew before a handoff token: %v", err)
 	}
 
@@ -865,6 +873,25 @@ func testRunnerRenew(t *testing.T, h Harness) {
 
 	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), pastLimit)
 	wantErr(t, "OpenSession after the session wait limit from the recorded claim time", err, runner.ErrClaimLost)
+}
+
+func testRunnerRenewStaleFence(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	f, c := l.f, l.c
+
+	newer, err := h.Domain.BumpFence(t.Context(), f.fence)
+	if err != nil {
+		t.Fatalf("BumpFence: %v", err)
+	}
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, now)
+	wantErr(t, "RunnerRenew with a stale fence", err, namespace.ErrFenced)
+
+	if _, err = h.Sessions.RunnerRenew(t.Context(), c, newer, runner.DefaultLease, now); err != nil {
+		t.Fatalf("RunnerRenew with the new fence: %v", err)
+	}
 }
 
 func testSessionNearWaitLimit(t *testing.T, h Harness) {
@@ -884,7 +911,7 @@ func testSessionNearWaitLimit(t *testing.T, h Harness) {
 		t.Fatalf("OpenSession at the session wait limit: %v", err)
 	}
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, limit.Add(time.Minute))
+	_, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, limit.Add(time.Minute))
 	wantErr(t, "RunnerRenew after the limit of a claim with a session", err, runner.ErrSessionOpen)
 
 	if _, err = h.Sessions.Session(t.Context(), s.ID); err != nil {
@@ -1063,7 +1090,7 @@ func testClaimLeasePasses(t *testing.T, h Harness) {
 	case <-timer.C:
 	}
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, runner.DefaultLease, time.Now())
+	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, f.fence, runner.DefaultLease, time.Now())
 	wantErr(t, "RunnerRenew after the lease passed", err, runner.ErrClaimLost)
 
 	late, _ := handoffToken(t, waiting, r.ID, time.Now())
@@ -1074,7 +1101,7 @@ func testClaimLeasePasses(t *testing.T, h Harness) {
 	_, err = h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), time.Now())
 	wantErr(t, "OpenSession after the lease passed", err, runner.ErrClaimLost)
 
-	_, err = h.Sessions.RunnerRenew(t.Context(), withSession, runner.DefaultLease, time.Now())
+	_, err = h.Sessions.RunnerRenew(t.Context(), withSession, f.fence, runner.DefaultLease, time.Now())
 	wantErr(t, "RunnerRenew of a claim with a session after the lease passed", err, runner.ErrClaimLost)
 
 	_, err = h.Sessions.Session(t.Context(), s.ID)
@@ -1103,7 +1130,7 @@ func testRenewExpiryFromDatabase(t *testing.T, h Harness) {
 
 	// The clock of the caller is far in the past. The expiry still comes
 	// from the clock of the database.
-	got, err := h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, lo)
+	got, err := h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, lo)
 	if err != nil {
 		t.Fatalf("RunnerRenew: %v", err)
 	}
@@ -1114,7 +1141,7 @@ func testRenewExpiryFromDatabase(t *testing.T, h Harness) {
 			earliest, latest)
 	}
 
-	skewed, err := h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, lo.Add(time.Minute))
+	skewed, err := h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, lo.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("RunnerRenew with a clock a minute ahead: %v", err)
 	}
