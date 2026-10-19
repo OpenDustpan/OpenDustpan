@@ -1223,6 +1223,24 @@ func (s *fakeBackupStore) GetDeletedUnit(
 	return inventory.DeletedEntry{}, inventory.ErrNotFound
 }
 
+// GetUnit implements inventory.Reader.
+func (s *fakeBackupStore) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return inventory.Entry{}, errFakeClosed
+	}
+
+	for key := range s.data.entries {
+		if e := s.data.entries[key]; e.UnitID == unitID {
+			return e, nil
+		}
+	}
+
+	return inventory.Entry{}, inventory.ErrUnitNotFound
+}
+
 // ListUnits implements inventory.Reader, ordered by tool then name.
 func (s *fakeBackupStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	s.mu.RLock()

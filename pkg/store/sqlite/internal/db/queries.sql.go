@@ -3701,6 +3701,52 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 	return state, err
 }
 
+const getInventoryEntryByUnitID = `-- name: GetInventoryEntryByUnitID :one
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.unit_id = ?
+`
+
+type GetInventoryEntryByUnitIDRow struct {
+	Namespace     string
+	Tool          string
+	Name          string
+	UnitID        string
+	DisplayName   string
+	LastChangedMs int64
+	Status        string
+	ResourceCount sql.NullInt64
+	LockHolder    sql.NullString
+	LockSinceMs   sql.NullInt64
+	LockOperation sql.NullString
+	Collection    string
+}
+
+// One live unit by its stable ID, which is unique in the installation.
+func (q *Queries) GetInventoryEntryByUnitID(ctx context.Context, unitID string) (GetInventoryEntryByUnitIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getInventoryEntryByUnitID, unitID)
+	var i GetInventoryEntryByUnitIDRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Tool,
+		&i.Name,
+		&i.UnitID,
+		&i.DisplayName,
+		&i.LastChangedMs,
+		&i.Status,
+		&i.ResourceCount,
+		&i.LockHolder,
+		&i.LockSinceMs,
+		&i.LockOperation,
+		&i.Collection,
+	)
+	return i, err
+}
+
 const getInventoryUnit = `-- name: GetInventoryUnit :one
 SELECT unit_id
 FROM inventory
@@ -7459,6 +7505,42 @@ func (q *Queries) ListInventoryUnitBounds(ctx context.Context, arg ListInventory
 			&i.Kind,
 			&i.ResourceCount,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryUnitLabels = `-- name: ListInventoryUnitLabels :many
+SELECT label_key, label_value
+FROM inventory_labels
+WHERE unit_id = ?
+ORDER BY label_key
+`
+
+type ListInventoryUnitLabelsRow struct {
+	LabelKey   string
+	LabelValue string
+}
+
+// Every label of one live unit.
+func (q *Queries) ListInventoryUnitLabels(ctx context.Context, unitID string) ([]ListInventoryUnitLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listInventoryUnitLabels, unitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInventoryUnitLabelsRow
+	for rows.Next() {
+		var i ListInventoryUnitLabelsRow
+		if err := rows.Scan(&i.LabelKey, &i.LabelValue); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

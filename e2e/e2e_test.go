@@ -1327,7 +1327,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 	// The ended update releases the lock: the inventory entry holds none.
-	checkInventoryUnlocked(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
+	checkInventoryUnlockedByID(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
 
 	// A crashed CLI leaves its update running: hold the stack through the
 	// API as the orphaned update, save the up's checkpoint with the crash
@@ -5559,6 +5559,7 @@ type inventoryLockDoc struct {
 type inventoryUnitDoc struct {
 	Tool       string            `json:"tool"`
 	Reference  string            `json:"reference"`
+	UnitID     string            `json:"unitID"`
 	Namespace  string            `json:"namespace"`
 	Name       string            `json:"name"`
 	LastChange string            `json:"lastChange"`
@@ -5616,6 +5617,67 @@ func namespaceOf(ref string) string {
 	ns, _, _ := strings.Cut(rest, "/")
 
 	return ns
+}
+
+// checkInventoryUnitByID proves GET /api/dustpan/v1/namespaces/-/units/{unit_id} answers
+// the list entry of ref, and answers 404 for an ID that no unit holds. It
+// fails the test otherwise.
+func checkInventoryUnitByID(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	listed := findInventoryUnit(readInventoryUnits(ctx, t, env, namespaceOf(ref)), ref)
+	if listed == nil || listed.UnitID == "" {
+		t.Fatalf("inventory holds no entry %q with a unit ID", ref)
+	}
+
+	unit := readInventoryUnitByID(ctx, t, env, listed.UnitID, http.StatusOK)
+	if unit.Reference != ref || unit.UnitID != listed.UnitID || unit.Namespace != namespaceOf(ref) ||
+		unit.Tool != listed.Tool || unit.Name != listed.Name || unit.LastChange == "" {
+		t.Fatalf("unit by ID = %+v, want the list entry %+v", unit, *listed)
+	}
+
+	readInventoryUnitByID(ctx, t, env, "no-such-unit", http.StatusNotFound)
+}
+
+// checkInventoryUnlockedByID proves the inventory entry of ref holds no lock
+// and that the unit reads by its ID.
+func checkInventoryUnlockedByID(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	checkInventoryUnlocked(ctx, t, env, ref)
+	checkInventoryUnitByID(ctx, t, env, ref)
+}
+
+// readInventoryUnitByID reads GET /api/dustpan/v1/namespaces/-/units/{unit_id} as
+// principal A, fails the test unless the status is want, and returns the
+// decoded unit for a 200.
+func readInventoryUnitByID(
+	ctx context.Context, t *testing.T, env *e2e.Env, unitID string, want int,
+) inventoryUnitDoc {
+	t.Helper()
+
+	got, err := env.StatusWithHeader(
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/-/units/"+unitID, "",
+	)
+	if err != nil {
+		t.Fatalf("GET /api/dustpan/v1/namespaces/-/units/%s: %v", unitID, err)
+	}
+
+	if got.Status != want {
+		t.Fatalf(
+			"GET /api/dustpan/v1/namespaces/-/units/%s answers %d, want %d (%s)",
+			unitID, got.Status, want, got.Body,
+		)
+	}
+
+	var unit inventoryUnitDoc
+	if want == http.StatusOK {
+		if err = json.Unmarshal([]byte(got.Body), &unit); err != nil {
+			t.Fatalf("decode unit %q: %v (%s)", unitID, err, got.Body)
+		}
+	}
+
+	return unit
 }
 
 // lockedUnit is one unit with the lock the test expects: its reference,
@@ -5713,7 +5775,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Scheme:    "",
 	})
 
-	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
+	checkInventoryUnlockedByID(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:     nil,
