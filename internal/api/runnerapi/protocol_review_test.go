@@ -212,12 +212,13 @@ func TestJoinAgainAuditNamesTheKeysAndClaims(t *testing.T) {
 	}
 	got := e.rejoinChanges()
 
-	if got["keyID"] == nil || *got["keyID"].Old != oldKey.ID() || got["keyID"].New != newKey.ID() {
-		t.Fatalf("keyID change = %+v, want %s to %s", got["keyID"], oldKey.ID(), newKey.ID())
+	keyID, ended := got["keyID"], got["endedClaims"]
+	if keyID == nil || keyID.Old == nil || *keyID.Old != oldKey.ID() || keyID.New != newKey.ID() {
+		t.Fatalf("keyID change = %+v, want %s to %s", keyID, oldKey.ID(), newKey.ID())
 	}
 
-	if got["endedClaims"].New != work.Operation {
-		t.Fatalf("endedClaims = %q, want %q", got["endedClaims"].New, work.Operation)
+	if ended == nil || ended.New != work.Operation {
+		t.Fatalf("endedClaims change = %+v, want %q", ended, work.Operation)
 	}
 }
 
