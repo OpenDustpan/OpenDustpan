@@ -20,7 +20,7 @@ func portableImportRecords() []PortableTable {
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "id", Kind: KindText},
 				{Name: "kind", Kind: KindText},
-				{Name: "address", Kind: KindText},
+				{Name: portColAddress, Kind: KindText},
 				{Name: "selection", Kind: KindText},
 				{Name: "credential", Kind: KindText},
 				{Name: "profile", Kind: KindText},

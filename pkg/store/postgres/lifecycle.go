@@ -321,7 +321,7 @@ func restoreWorkspaceRow(
 }
 
 // PurgeWorkspace implements workspace.Store. In one fenced transaction with
-// the audit entry e, it removes the deleted workspace id with its state
+// the audit entry e, it removes the deleted workspace id with its blame, its state
 // versions, its data key and its deleted inventory entry (ADR 47).
 func (s *Store) PurgeWorkspace(
 	ctx context.Context,
@@ -367,6 +367,11 @@ func purgeWorkspaceRows(
 		return workspace.ErrNotFound
 	}
 
+	err = deleteWorkspaceBlame(ctx, q, id)
+	if err != nil {
+		return err
+	}
+
 	if err = q.DeleteStateVersionsOfWorkspace(ctx, id.String()); err != nil {
 		return fmt.Errorf("delete state versions of workspace: %w", err)
 	}
@@ -390,6 +395,24 @@ func purgeWorkspaceRows(
 	}
 
 	return purgeUnitContext(ctx, q, ns, id.String())
+}
+
+// deleteWorkspaceBlame deletes the resource change rows, the blame items and
+// the blame cursor of the workspace id.
+func deleteWorkspaceBlame(ctx context.Context, q *db.Queries, id workspace.ID) error {
+	if err := q.DeleteWorkspaceResourceChanges(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete resource changes of workspace: %w", err)
+	}
+
+	if err := q.DeleteWorkspaceBlameItems(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete blame items of workspace: %w", err)
+	}
+
+	if err := q.DeleteWorkspaceBlameCursor(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete blame cursor of workspace: %w", err)
+	}
+
+	return nil
 }
 
 // retentionEnded reports whether the retention period of the deleted unit
