@@ -109,25 +109,40 @@ const redacted = "[credential]"
 // encodings fail, so it cannot reach a log line, an error text or a stored
 // record.
 type Credential struct {
-	secret []byte
+	// secret returns the bytes. fmt prints a func value as an address, so
+	// a Credential in an unexported field of another value, where fmt
+	// cannot call Format, still never prints the bytes.
+	secret func() []byte
 }
 
 // NewCredential returns a Credential that holds a copy of b.
 func NewCredential(b []byte) Credential {
-	return Credential{secret: append([]byte(nil), b...)}
+	b = append([]byte(nil), b...)
+
+	return Credential{secret: func() []byte { return b }}
 }
 
 // Bytes returns a copy of the credential for one request of an adapter.
-func (c Credential) Bytes() []byte { return append([]byte(nil), c.secret...) }
+func (c Credential) Bytes() []byte {
+	if c.secret == nil {
+		return nil
+	}
+
+	return append([]byte(nil), c.secret()...)
+}
 
 // Empty reports whether c holds no credential.
-func (c Credential) Empty() bool { return len(c.secret) == 0 }
+func (c Credential) Empty() bool { return c.secret == nil || len(c.secret()) == 0 }
 
 // Clear writes zeros over the bytes of c. Each copy of c shares these
 // bytes, so Clear clears every copy, and Empty stays false. Clear is best
 // effort: a copy that Bytes returned, or a copy that the runtime made,
 // stays in memory until the garbage collector frees it.
-func (c Credential) Clear() { clear(c.secret) }
+func (c Credential) Clear() {
+	if c.secret != nil {
+		clear(c.secret())
+	}
+}
 
 // Format writes the redacted form for every verb, so an integer or a rune
 // verb (%d, %o, %b, %c, %U) never prints the bytes.
@@ -170,7 +185,7 @@ func CheckAddress(raw string) error {
 	case u.Scheme == "" || u.Host == "" || u.Opaque != "":
 		return fmt.Errorf("%w: the address needs a scheme and a host", ErrAddressInvalid)
 	case u.Scheme != "https" && u.Scheme != "s3":
-		return fmt.Errorf("%w: the scheme must be https", ErrAddressInvalid)
+		return fmt.Errorf("%w: the scheme must be https or s3", ErrAddressInvalid)
 	case u.User != nil:
 		return fmt.Errorf("%w: the address holds userinfo", ErrAddressInvalid)
 	case u.RawQuery != "" || u.ForceQuery:

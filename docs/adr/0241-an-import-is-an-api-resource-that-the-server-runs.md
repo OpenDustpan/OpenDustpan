@@ -1,6 +1,6 @@
 # 241. An import is an API resource that the server runs
 
-Status: accepted · 2026-10-19. ADRs 242 to 244 give the other parts. Supersedes in part ADR 29 decisions 1, 5 and 8, and ADR 213 decision 10. Extends ADR 203 decision 1, ADR 224 decision 16 and ADR 145 decision 5. Answers part of RFC 42 and RFC 66. Accepts RFC 81
+Status: accepted · 2026-10-19. ADRs 242 to 244 give the other parts. Supersedes in part ADR 29 decisions 1, 5 and 8, and ADR 213 decision 10. Extends ADR 203 decision 1, ADR 224 decision 16, ADR 145 decision 5 and ADR 201 decision 7. Extends the reservations of ADR 115 and the `state.write` fact schema of ADR 226. Answers part of RFC 42 and RFC 66. Accepts RFC 81
 
 ## Context
 
@@ -141,7 +141,7 @@ Facts:
    Go type of a credential (ADR 243) has no exported field. Its `Format`,
    `String`, `GoString` and `LogValue` methods answer `[credential]`, so
    every `fmt` verb prints `[credential]`, also `%d`, `%o`, `%b`, `%c` and
-   `%U`. Its JSON and text encodings fail. Its `Clear` method writes zeros
+   `%U`. Its JSON and text encodings fail. The bytes are behind a func value, so a Credential in an unexported field of another value prints an address, not the bytes. Its `Clear` method writes zeros
    over its bytes, as a best effort: a copy that a request made stays in
    memory until the garbage collector frees it. The canary test of ADR 32 covers each route of this ADR
    and each source adapter.

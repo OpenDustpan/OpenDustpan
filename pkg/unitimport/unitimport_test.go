@@ -26,19 +26,23 @@ func TestCredentialNeverPrints(t *testing.T) {
 
 	verbs := []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%o", "%b", "%c", "%U"}
 
-	printed := make([]string, 0, 3+2*len(verbs))
+	printed := make([]string, 0, 3+3*len(verbs))
 	printed = append(printed, cred.String(), cred.GoString(), logged.String())
 
 	wrapped := struct {
 		C unitimport.Credential `json:"c"`
 	}{cred}
 
+	// fmt cannot call a method of an unexported field, so it prints the
+	// fields of this Credential.
+	hidden := struct{ c unitimport.Credential }{cred}
+
 	for _, verb := range verbs {
 		if got := fmt.Sprintf(verb, cred); got != "[credential]" {
 			t.Errorf("Sprintf(%q) = %q, want %q", verb, got, "[credential]")
 		}
 
-		printed = append(printed, fmt.Sprintf(verb, wrapped), fmt.Sprintf(verb, &cred))
+		printed = append(printed, fmt.Sprintf(verb, wrapped), fmt.Sprintf(verb, hidden), fmt.Sprintf(verb, &cred))
 	}
 
 	for _, out := range printed {
@@ -64,6 +68,10 @@ func TestCredentialBytesIsACopy(t *testing.T) {
 	src[0] = 'X'
 
 	got := cred.Bytes()
+	if got == nil {
+		t.Fatal("Bytes = nil, want the credential")
+	}
+
 	if string(got) != canary {
 		t.Fatalf("Bytes = %q, want %q", got, canary)
 	}
