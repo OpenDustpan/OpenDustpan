@@ -95,4 +95,10 @@ Accepted in part as [ADR 211](../adr/0211-optional-modules-and-the-capabilities-
 on 2026-10-18, as the project manager decided under the owner's decision rule: the core that is never off, one declared switch
 for each optional module, 404 and no schedules for an off module, every
 migration always applies, and the capabilities document. The roles of the
-binary and `opendustpan serve --role` stay open.
+binary and `opendustpan serve --role` stayed open.
+
+On 2026-10-19 the project owner decided the open part in
+[RFC 87](0087-components-of-the-server-process.md), and
+[ADR 249](../adr/0249-components-of-the-server-process.md) records it. The
+word is "component", the first components are `api` and `worker`, and
+`opendustpan serve --components` selects them, with `all` as the default.

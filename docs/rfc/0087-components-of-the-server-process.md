@@ -1,16 +1,19 @@
 ---
 rfc: 87
 title: Components of the server process, and a start flag that selects them
-status: draft
+status: accepted
 created: 2026-10-19
+adr: 249
 ---
 
 # RFC 87. Components of the server process, and a start flag that selects them
 
-Status: draft. The product manager wrote this RFC from the spike
-[multi-instance](../spikes/multi-instance.md). No code exists for it. The
-proposals have the label "(product manager)". The owner answers the
-questions at the end.
+Status: accepted. The product manager wrote this RFC from the spike
+[multi-instance](../spikes/multi-instance.md). The proposals have the label
+"(product manager)". On 2026-10-19 the project owner answered the open
+questions, as the project manager relayed.
+[ADR 249](../adr/0249-components-of-the-server-process.md) records the
+decision. No code exists for it yet.
 
 This RFC takes over the open part of
 [RFC 7](0007-one-binary-many-roles.md): "the roles of the binary and
@@ -92,7 +95,7 @@ artifact registry and the upstream proxy of RFC 7.
 
 Each process, whatever its components, runs the parts that every process
 needs: the store and its migrations, the key-encryption key check,
-`/health/live`, `/health/ready` and the metrics route. If the owner accepts the recommendation of question 7, each process also renews the home lease of a federation.
+`/health/live`, `/health/ready` and the metrics route.
 
 ### The flag
 
@@ -138,8 +141,9 @@ the operation waits. So:
 - The installation API reports each due schedule and each operation that
   no worker claimed for more than 2 lease periods.
 - A metric gives the age of the oldest unclaimed operation.
-- An `api` process with no worker in the installation still accepts
-  requests. Owner question 3.
+- When no worker claimed work for 2 lease periods, an `api` process
+  refuses each request that starts an operation with 503 and the command
+  that helps. The owner decided this (question 3, option b).
 
 ### Who owns each item of the spike
 
@@ -185,53 +189,34 @@ goes:
 
 ## Open questions
 
-1. **The word.** "component", "service", "duty", or another word?
-   Recommendation: "component".
-2. **The first components.** Only `api` and `worker`, or more now (for
-   example `scheduler` apart from `worker`)? Recommendation: 2. A
-   schedule claim is one conditional `UPDATE`, so it needs no own
-   component.
-3. **An installation with no worker.** When no `worker` claimed work for 2
-   lease periods, does `api` refuse requests that start an operation
-   (backup, restore), or accept them and report the wait? Options:
-   a. Accept and report (proposal). b. Refuse with 503 and the command
-   that helps. c. Refuse only in maintenance mode.
-4. **Migrations.** Does each process migrate at start (today, ADR 246
-   decision 15), or only a process with `api`? Recommendation: each
-   process, under the advisory lock, so that the start order does not
-   matter.
-5. **Configuration that applies to one component.** Some flags have readers in both components: `api` reads `--backup-target` for the manifest and check routes, and `worker` writes the backups. Does a flag that no selected component reads stop the start, or does the process ignore it? Recommendation: ignore, and log at start that the flag has no effect.
-6. **RFC 79 open question 6: does a lease partition stop writes?** The
-   owner answers it in RFC 79. RFC 79 section 5 makes a home region
-   refuse writes and signatures when it cannot renew its home lease at
-   the control home. So a network partition from the control home stops
-   the writes of each namespace in the regions that it cuts off. The
-   options a to d are as RFC 79 writes them:
-   a. **Stop writes (RFC 79 proposal).** Consistency first. No two homes
-      write one namespace. A partition is an outage of writes in the
-      cut-off region. The docs publish the lease time with the lag.
-   b. **A lease authority in each region.** Each region renews at its own
-      authority. A partition between regions does not stop writes. A
-      promotion must then reach the authority of the old home, so a
-      promotion waits for the partition to end, or for an operator.
-   c. **Keep writing, and promote only after an operator checks that
-      the old home stopped.** Availability first. A partition stops
-      nothing, but no automatic promotion happens while the old home
-      cannot answer.
-   d. **A quorum of members as the lease authority.** A home renews at a
-      majority of members. Only the minority side of a partition stops.
-      It costs a consensus protocol in the server.
-   Recommendation: option a for the first federation, as RFC 79
-   proposes.
-7. **Which processes renew the home lease?** When the `worker` processes
-   of a home region stop, the home lease is not renewed. Does that also
-   stop writes on `api` (the same rule as a partition)? Recommendation:
-   each process renews the home lease, whatever its components, so that
-   the loss of all `worker` processes does not stop writes. A process
-   with only `api` then does background work for the lease.
-8. **Liveness of `worker`.** Does the `worker` liveness probe also check the claim loop? A failed readiness probe does not restart a pod. A liveness probe that checks the claim loop restarts a stuck worker, and it can also restart all workers when the database is down. Recommendation: no. `/health/live` stays the same for each component. Readiness and the metric of the oldest unclaimed operation report a stuck worker.
+The owner answered each question on 2026-10-19.
+
+1. **The word.** "component". ADR 52 keeps "role" for a set of actions.
+2. **The first components.** Two components for now: `api` and `worker`.
+   A schedule claim stays in `worker`.
+3. **An installation with no worker.** Option b. When no `worker` claimed
+   work for 2 lease periods, an `api` process refuses each request that
+   starts an operation (for example a backup or a restore) with 503 and
+   the command that helps. Other requests stay as they are.
+4. **Migrations.** Each process migrates at start, under the advisory
+   lock, whatever its components. The start order does not matter.
+5. **Configuration that applies to one component.** A process ignores a
+   flag that no selected component reads, and logs at start that the flag
+   has no effect. The flag does not stop the start.
+6. **Does a lease partition stop writes?** Moot. ADR 248 has no home lease
+   and no control home, and a partition does not stop writes.
+7. **Which processes renew the home lease?** Moot. There is no home lease
+   (ADR 248). This RFC no longer has the sentence on the renewal of the
+   home lease under "Components".
+8. **Liveness of `worker`.** No. `/health/live` does not check the claim
+   loop, and stays the same for each component. Readiness and the metric
+   of the age of the oldest unclaimed operation report a stuck worker.
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
-When this RFC is accepted, the Outcome of RFC 7 links the ADR.
+Accepted on 2026-10-19 by the project owner, as the project manager
+relayed: [ADR 249](../adr/0249-components-of-the-server-process.md). The
+word is "component". The first components are `api` and `worker`, and
+`opendustpan serve --components` selects them, with `all` as the default.
+The open questions above hold each answer. The Outcome of
+[RFC 7](0007-one-binary-many-roles.md) links ADR 249.
