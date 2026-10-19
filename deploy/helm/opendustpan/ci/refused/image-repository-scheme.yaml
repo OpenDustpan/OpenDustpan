@@ -1,0 +1,9 @@
+# Refused: a repository with a scheme.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+image:
+  repository: https://ghcr.io/opendustpan/opendustpan

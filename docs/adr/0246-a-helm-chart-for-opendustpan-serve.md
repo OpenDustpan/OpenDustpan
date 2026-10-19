@@ -80,7 +80,7 @@ Facts that this design depends on:
 3. **An OCI artifact (product manager).** The tag workflow pushes the chart
    as an OCI artifact to the registry of the image. It publishes no
    `index.yaml` on a web page. The registry and signing are not decided
-   (ADR 27 decision 8). See "Open", item 3.
+   (ADR 27 decision 8). See "Open", item 2.
    Benchmark: Bitnami and Harbor publish charts as OCI artifacts.
 
 ### What the chart runs
@@ -114,16 +114,16 @@ Facts that this design depends on:
    | Secret | Values | How the pod gets it |
    | --- | --- | --- |
    | database URL | `database.existingSecret` (required) | `DUSTPAN_DATABASE` from `secretKeyRef` |
-   | key-encryption key | `keyEncryptionKey.existingSecret` (required) | a file with mode 0400 in a Secret volume, at the path in `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` |
-   | bootstrap admin tokens | `adminToken.existingSecret` (optional) | a file in a Secret volume, at the path in `DUSTPAN_ADMIN_TOKEN_FILE` |
+   | key-encryption key | `keyEncryptionKey.existingSecret` (required) | `DUSTPAN_KEY_ENCRYPTION_KEY` from `secretKeyRef` |
+   | bootstrap admin tokens | `adminToken.existingSecret` (optional) | `DUSTPAN_ADMIN_TOKEN` from `secretKeyRef` |
    | S3 credentials | `s3.credentials.existingSecret` (optional) | `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from `secretKeyRef` |
    | built-in TLS | `server.tls.existingSecret` (optional) | a `kubernetes.io/tls` Secret volume, at the paths in `DUSTPAN_TLS_CERT` and `DUSTPAN_TLS_KEY` |
    | backup schedule token | `backup.schedule.tokenSecret` | the CronJob of decision 19 |
    | metrics token | `metrics.serviceMonitor.tokenSecret` | the `authorization` of the ServiceMonitor |
 
-   The key file is outside the blob directory and outside a `dir` backup
-   target, so the start warning of ADR 238 decision 4 does not apply. Mode
-   0400 passes the mode check of `doctor` (ADR 238 decision 10).
+   A Secret volume gives the file the group of `fsGroup` and mode 0440, and
+   `serve` refuses a key file that the group can read. So the chart gives
+   the key in the environment.
    With no S3 Secret, the server uses the default credential chain, for
    example a role that `serviceAccount.annotations` gives to the pod.
    Benchmark: the Keycloak (codecentric), Harbor and Bitnami charts take an
@@ -135,9 +135,17 @@ Facts that this design depends on:
    has no `kms` key, and `additionalProperties: false` refuses one. The
    chart has no value for a setting that the server does not have.
 9. **The schema refuses a plain value for a secret name.** In `server.extraEnv`, a
-   name that ends in `SECRET`, `TOKEN`, `PASSWORD`, `KEY` or `CREDENTIALS`
+   name that ends in `SECRET`, `TOKEN`, `PASSWORD`, `KEY`, `CREDENTIAL` or `CREDENTIALS`
    needs `valueFrom.secretKeyRef`, and the schema refuses `value`. The
    schema also refuses each variable that the chart sets itself.
+   The schema also refuses these names, because they could change a
+   setting that the chart sets from another place: `PG` variables (they
+   could change the database connection that the Secret sets), `GODEBUG`
+   (it changes the behavior of the Go runtime, for example of TLS),
+   `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION` and
+   `AWS_DEFAULT_REGION` (they could point the S3 client at an endpoint or a
+   region other than `s3.endpoint` and `s3.region`). In `server.extraEnv`,
+   `valueFrom` holds only `secretKeyRef`, with a name and a key.
 
 ### Storage
 
@@ -152,26 +160,37 @@ Facts that this design depends on:
 
 ### Instances and rollout
 
-12. **One instance by default, and shared storage for more (product
-    manager).** `replicas` is 1 by default. The schema accepts more than 1
-    only with `blobStore.type: s3` and a backup target that is not `dir`.
-    An `fs` claim and a `dir` target keep data on the disk of one pod. The
+12. **One instance in `v0.1.0` (product manager).** The schema caps
+    `replicas` at 1: `"minimum": 1` and `"maximum": 1`. The server work of
+    ADR 72 is not complete, and the guide says that several instances are
+    not supported yet. The release that completes that work and passes the
+    smoke test with 2 instances removes the cap. In the same pull request,
+    the schema gets back the rule that more than 1 instance needs
+    `blobStore.type: s3` and a backup target that is not `dir`, because an
+    `fs` claim and a `dir` target keep data on the disk of one pod. The
     workload is a Deployment, not a StatefulSet: the instances have no
     identity, no peer protocol and no disk of their own (ADR 72 decisions 2
     and 9). The chart has no leader election, because the leases, the
     schedule rows and the fence are in the database.
-    Benchmark: the Harbor core and the Grafana chart use a Deployment for
-    instances that share a database. The Vault chart uses a StatefulSet
-    because its Raft storage keeps data on each pod.
-13. **The update strategy follows the storage.** With `blobStore.type: fs`
-    the strategy is `Recreate`, because a ReadWriteOnce claim attaches to
-    one node and one instance holds the blob directory. With `s3` the
-    strategy is `RollingUpdate` with `maxSurge: 1` and `maxUnavailable: 0`.
-    A rolling update runs two releases on one schema for a short time.
-    Expand and contract with K = 2 makes that safe (ADR 72 decision 11).
-14. **A PodDisruptionBudget for more than one instance.** The chart makes
-    a PodDisruptionBudget with `maxUnavailable: 1` only when `replicas` is
-    more than 1. With 1 instance, a budget would block each node drain.
+    Benchmark: the Vault and Keycloak charts ship single-instance defaults
+    until clustering is ready. The Harbor core and the Grafana chart use a
+    Deployment for instances that share a database. The Vault chart uses a
+    StatefulSet because its Raft storage keeps data on each pod.
+13. **The update strategy is `Recreate` for each blob store.** Until the
+    release that lifts the cap on `replicas`, the strategy is `Recreate` for
+    each blob store. The old pod stops before the new pod migrates. For
+    `fs`, a ReadWriteOnce claim also attaches to one node, and one instance
+    holds the blob directory. When the cap goes, `blobStore.type: s3` gets
+    the strategy `RollingUpdate` with `maxSurge: 1` and
+    `maxUnavailable: 0`, and `fs` keeps `Recreate`. A rolling update runs
+    two releases on one schema for a short time. Expand and contract with
+    K = 2 makes that safe (ADR 72 decision 11).
+14. **No PodDisruptionBudget in `v0.1.0`.** With 1 instance, a budget
+    would block each node drain, so the chart makes none. When the cap goes,
+    the chart makes a PodDisruptionBudget with `maxUnavailable: 1` only when
+    `replicas` is more than 1. The values and the schema get
+    `podDisruptionBudget` in that release, because the chart has no value
+    for a setting that it does not use.
     Benchmark: the Grafana and Keycloak (codecentric) charts make the budget
     optional.
 
@@ -187,7 +206,15 @@ Facts that this design depends on:
     - A hook Job is a second holder of the database URL, with its own
       failure and cleanup.
     - Expand and contract (ADR 72 decision 11) lets the old pods run on the
-      new schema while the update rolls.
+      new schema while a rolling update runs, after the cap on `replicas`
+      goes (decision 13).
+
+    A startup-probe kill during a migration rolls the migration back,
+    because it is one transaction under an advisory lock. A migration that
+    runs longer than the startup probe allows rolls back and restarts, and
+    then starts again. `opendustpan upgrade check` and the guide name the
+    release notes of a long migration. The operator raises
+    `probes.startup.failureThreshold` for it.
 
     Benchmark: Grafana and Keycloak migrate at start. The Temporal chart and
     older Harbor charts run a schema Job as a Helm hook.
@@ -196,16 +223,25 @@ Facts that this design depends on:
     version works while the minimum binary version of the schema is not
     above the old binary (ADR 72 decision 11). Otherwise the old pod refuses
     to start and names both versions. The startup probe then fails:
-    - With `RollingUpdate`, the new pods keep serving, because
+    - `RollingUpdate` comes with the removal of the cap on `replicas`
+      (decision 13). Then the new pods keep serving, because
       `maxUnavailable` is 0.
-    - With `Recreate`, the server is down until the operator rolls forward
-      again.
+    - With `Recreate`, which is the strategy in `v0.1.0`, the server is down
+      until the operator rolls forward again.
 
     The project has no down migration (ADR 33 decision 6). To go back past a
     contract migration, the operator restores the backup made before the
     upgrade into an empty database (ADR 38), and starts the older chart. The
     guide asks for `opendustpan upgrade check` and `opendustpan backup`
     before each `helm upgrade`.
+
+    **No pre-upgrade backup hook (product manager).** The backup stays a
+    step in the guide. The chart has no hook that runs `opendustpan backup`
+    before an upgrade, because a hook adds a failure point to every upgrade.
+    The project looks at this again after the first upgrade between two
+    tags.
+    Benchmark: as we read the Grafana and Keycloak (codecentric) charts in
+    2026, they add no backup step to an upgrade.
 
 ### Probes, resources and the pod
 
@@ -232,7 +268,13 @@ Facts that this design depends on:
     release, with an access token from a Secret. The CronJob uses the same
     image and the same security context. It does not mount the
     key-encryption key or the database URL, because the server makes the
-    backup (ADR 39). The default schedule is once a day, which keeps the
+    backup (ADR 39). The CronJob uses its own ServiceAccount with no
+    annotations, `automountServiceAccountToken: false`, and gets no S3
+    credentials and no `AWS_*` variable. Its only secret is the token from
+    `backup.schedule.tokenSecret`. It sets `concurrencyPolicy: Forbid`. The
+    schema does not parse the cron syntax. `kubeconform` checks the
+    CronJob against the Kubernetes schema, and the API server checks the
+    cron string when it admits the CronJob. The default schedule is once a day, which keeps the
     25-hour check of `doctor` green. A restore is an API call (ADR 38), and
     the chart has no restore Job.
     Benchmark: the GitLab chart runs its backups from a CronJob.
@@ -265,20 +307,39 @@ Facts that this design depends on:
     - `seccompProfile: RuntimeDefault`
     - `capabilities.drop: [ALL]`
 
-    The schema holds these values fixed. It refuses user 0 and group 0.
-    `automountServiceAccountToken` is `false`, because the server does not
-    call the Kubernetes API.
+    The schema holds each boolean, the seccomp profile and the dropped
+    capabilities fixed. It accepts a user and a group above 0. It holds
+    `automountServiceAccountToken` fixed at `false`, because the server does
+    not call the Kubernetes API. The schema refuses the AppArmor and
+    seccomp annotations in `podAnnotations`.
     Benchmark: the Vault and Grafana charts run as a user that is not root.
     Bitnami charts set `readOnlyRootFilesystem: true` and drop all
     capabilities by default.
-23. **A NetworkPolicy by default (product manager).** `networkPolicy.enabled`
-    is `true`. The policy lets `networkPolicy.ingressFrom` reach the server
-    port. An empty list lets every source reach it. Egress is open by
-    default, because the database, S3, sign-in providers and webhooks have
-    addresses that the chart does not know. With `allowAllEgress: false`,
-    the policy allows DNS and the rules in `extraEgress` only.
-    Benchmark: Bitnami charts make a NetworkPolicy by default, with open
-    egress.
+23. **A NetworkPolicy by default, with closed egress (product manager).**
+    `networkPolicy.enabled` is `true`. The policy lets
+    `networkPolicy.ingressFrom` reach the server port. An empty list lets
+    every source reach it. Each item of `ingressFrom` and of `extraEgress`
+    is an object with at least one key, because an empty peer matches every
+    source. When `ingressFrom` is not empty, the chart adds a rule for the
+    pods of its backup CronJob. An example for `ingressFrom` is the namespace
+    of Prometheus, for the ServiceMonitor of decision 24.
+
+    `allowAllEgress` is `false` by default. The policy then allows:
+    - DNS, UDP and TCP port 53, to the pods with the label
+      `k8s-app: kube-dns` in the namespace `kube-system`.
+      `networkPolicy.dns` (`namespaceSelector` and `podSelector`) replaces
+      these selectors.
+    - TCP port 5432 (the database) and TCP port 443 (S3, sign-in providers
+      and webhooks) to `0.0.0.0/0` and `::/0`.
+    - The rules in `extraEgress`, for other ports. Examples: a webhook on
+      port 8443, and the metadata server `169.254.169.254` on port 80.
+
+    The chart does not know the addresses of the database, S3 and sign-in
+    providers, so it limits the ports and not the addresses. With
+    `allowAllEgress: true`, the policy allows all egress.
+    Benchmark: PCI DSS requirement 1.3.2 restricts outbound traffic to what
+    the installation needs. Bitnami charts make a NetworkPolicy by default,
+    with open egress. Our default is stricter than theirs.
 24. **Metrics (optional).** `metrics.serviceMonitor.enabled` makes a
     ServiceMonitor of the Prometheus Operator for `GET /metrics`. It sends
     an access token from `tokenSecret` (ADR 32 decision 4). The default is
@@ -298,6 +359,15 @@ Facts that this design depends on:
     The schema enforces each item that a value can break. Values can not
     break the other items, because no template takes such a value.
 
+    Each object in the schema lists every key of `values.yaml` in
+    `required`, so `null` cannot remove a key.
+
+    The templates `fail` when the backup token or the metrics token names
+    the same Secret and key as `adminToken`, and when the database ref and
+    the key ref are the same Secret and key. The schema cannot compare two
+    values, so these checks are in the templates. The pull request that adds
+    the templates adds a template test case for each check.
+
 ### CI, tests and docs
 
 26. **Static checks in CI (product manager).** A `make chart-lint` target
@@ -305,7 +375,15 @@ Facts that this design depends on:
     - `helm lint --strict` with the default values, which must fail,
       because the schema needs a key and a database
     - `helm lint --strict` with each file in `ci/`, which must pass
-    - one file for each refused case, each of which must fail
+    - one file for each refused case in `ci/refused/`, each of which must
+      fail. The cases include: `replicas` above 1, the tag `latest`, each
+      refused name and each plain secret value in `server.extraEnv`, a
+      `valueFrom` that is not a `secretKeyRef`, a root user, a root group,
+      a privileged container, `automountServiceAccountToken: true`, an
+      AppArmor annotation and a seccomp annotation in `podAnnotations`,
+      and `null` for each key of `networkPolicy`, `probes` and
+      `serviceAccount`, and for the root keys `networkPolicy`, `probes`,
+      `serviceAccount`, `automountServiceAccountToken` and `console`
     - `helm template` with each file in `ci/`, through `kubeconform -strict`,
       for the oldest and the newest supported Kubernetes minor version
 
@@ -314,7 +392,7 @@ Facts that this design depends on:
     SHA-256. On this design, `helm lint` takes under 1 second for each values
     file, so the job does not make CI slower than the Go job.
     `make check` does not include the target, so a contributor needs no
-    Helm. The tools need the owner's yes. See "Open", item 2.
+    Helm. The tools need the owner's yes. See "Open", item 1.
     Benchmark: the Grafana and Bitnami chart repositories lint each chart
     with `helm lint` and check the output against the Kubernetes schemas.
 27. **A smoke test on kind, later (product manager).** With the templates,
@@ -340,11 +418,19 @@ Facts that this design depends on:
     install, the upgrade steps of decision 16, and the limit on several
     instances. A test compares the reference page with `values.yaml`.
 
+29. **The supported Kubernetes versions (product manager).** `Chart.yaml`
+    sets `kubeVersion` to the minor versions that the Kubernetes project
+    supports on the release day. `make chart-lint` runs `kubeconform` for
+    the oldest and the newest of them (decision 26).
+    Benchmark: the Kubernetes version skew policy names the supported minor
+    versions, so the chart follows the project and does not choose its own
+    range.
+
 ## Consequences
 
 - An install of the chart with only the defaults fails at `helm install`,
-  with the names of the two missing Secrets. This is the same fail-closed
-  rule as `serve` and the image (ADR 238).
+  and the message names the two values that are empty. This is the same
+  fail-closed rule as `serve` and the image (ADR 238).
 - An operator makes at least two Secrets before the install: the database
   URL and the key-encryption key.
 - The chart has no SQLite mode. A trial on a laptop uses `opendustpan dev`
@@ -354,7 +440,17 @@ Facts that this design depends on:
 - A rollback across a contract migration needs a restore from a backup.
 - The settings that the chart does not name, for example the OIDC settings,
   go in `server.extraEnv`. A value with a secret in it needs a
-  `secretKeyRef`.
+  `secretKeyRef`. `DUSTPAN_OIDC_CLIENT_SECRET` works from a `secretKeyRef`.
+- No value mounts a Secret file for a `_FILE` setting, and the chart cannot
+  set those settings. The chart cannot turn on audit chain signing:
+  `DUSTPAN_AUDIT_SIGNING_KEY_FILE` and the other `_FILE` secrets that
+  `serve` checks have no environment form. A server change that accepts a
+  file with owner user 0, the group of the process and mode 0440 would
+  need an RFC.
+- In `v0.1.0` the chart runs one instance with the `Recreate` strategy, and
+  each upgrade has a short time with no server.
+- The chart makes the egress of the server narrow by default. A webhook on
+  a port other than 443, or the metadata server, needs `extraEgress`.
 - The templates come in a later pull request. That pull request runs
   `make chart-lint` and adds the guide.
 - RFC 35 keeps its other open items (ACME). ADR 27 decision 8 keeps its
@@ -366,27 +462,13 @@ Facts that this design depends on:
 
 Questions for the project owner. Each has a recommendation.
 
-1. **More than one instance in `v0.1.0`.** The schema accepts `replicas`
-   above 1 with shared storage. The server work of ADR 72 is not complete,
-   and the guide says that several instances are not supported yet.
-   Recommendation: if `v0.1.0` ships before that work, set `maximum: 1` on
-   `replicas` in the `v0.1.0` schema. Remove it in the release that
-   completes ADR 72 and passes the smoke test with 2 instances.
-2. **The tools for CI.** `helm` and `kubeconform` now, and `kind` and
+1. **The tools for CI.** `helm` and `kubeconform` now, and `kind` and
    `chart-testing` with the smoke test. CLAUDE.md asks for the owner's yes
    before the project adds a tool (ADR 27 decision 7 has the same rule).
    Recommendation: yes, each pinned by version and SHA-256, downloaded only
    in CI and in the make targets.
-3. **The registry and signing of the chart.** ADR 27 decision 8 leaves the
+2. **The registry and signing of the chart.** ADR 27 decision 8 leaves the
    registry and signing open. `values.yaml` uses
    `ghcr.io/opendustpan/opendustpan` as a placeholder.
    Recommendation: the chart goes to the same OCI registry as the image,
    and gets the same signing when the image gets it.
-4. **The supported Kubernetes versions.** `Chart.yaml` has no `kubeVersion`
-   yet. Recommendation: the minor versions that the Kubernetes project
-   supports on the release day, checked by `kubeconform` for the oldest and
-   the newest.
-5. **A backup before each upgrade.** Decision 16 makes the backup a step in
-   the guide. A pre-upgrade hook could run `opendustpan backup` instead.
-   Recommendation: no hook now, because it adds a hook to every upgrade.
-   Look at it again after the first upgrade between two tags.

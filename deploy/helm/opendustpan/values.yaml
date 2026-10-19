@@ -26,9 +26,8 @@ image:
 # Names of Secrets of type kubernetes.io/dockerconfigjson for the image pull.
 imagePullSecrets: []
 
-# The number of server instances. More than 1 needs blobStore.type `s3` and
-# a backup target that is not `dir`, because those keep data on the disk of
-# one pod. The schema checks both.
+# The number of server instances. The schema accepts 1 only in this release,
+# because the server work for several instances is not complete.
 replicas: 1
 
 # The external PostgreSQL database. The chart runs no database.
@@ -43,7 +42,9 @@ database:
 
 # The key-encryption key. The server stops at start without one. Make it
 # once with `opendustpan key generate --out <file>`, put it in a Secret, and
-# keep a copy outside the cluster. A lost key loses every secret.
+# keep a copy outside the cluster. A lost key loses every secret. The pod
+# gets the key in DUSTPAN_KEY_ENCRYPTION_KEY from a secretKeyRef, because a
+# Secret volume gives the file a group mode that `serve` refuses.
 keyEncryptionKey:
   existingSecret:
     # Required. The name of a Secret in the namespace of the release.
@@ -51,8 +52,9 @@ keyEncryptionKey:
     # The key in the Secret that holds the base64 key.
     key: key-encryption-key
 
-# Optional bootstrap admin tokens, one for each line, from a Secret. Empty
-# name means no bootstrap admin token.
+# Optional bootstrap admin tokens, comma-separated, from a Secret. The pod
+# gets them in DUSTPAN_ADMIN_TOKEN. Empty name means no bootstrap admin
+# token.
 adminToken:
   existingSecret:
     name: ""
@@ -76,7 +78,7 @@ s3:
 # Where the server keeps state content.
 blobStore:
   # `fs` keeps it on a PersistentVolumeClaim that one pod mounts.
-  # `s3` keeps it in a bucket. More than 1 instance needs `s3`.
+  # `s3` keeps it in a bucket.
   type: fs
   fs:
     persistence:
@@ -153,15 +155,17 @@ server:
   tls:
     existingSecret: ""
   # More environment variables for settings that this file does not name.
-  # The schema refuses the variables that the chart sets, `DUSTPAN_DEV`, and
-  # a plain `value` for a name that holds a secret: use valueFrom with a
-  # secretKeyRef for those.
+  # The schema refuses the variables that the chart sets, `DUSTPAN_DEV`, the
+  # `PG` variables, `GODEBUG`, and the AWS endpoint and region variables. It
+  # also refuses a plain `value` for a name that holds a secret: use
+  # valueFrom with a secretKeyRef for those. valueFrom holds only a
+  # secretKeyRef.
   extraEnv: []
 
 service:
   type: ClusterIP
-  # Empty means 80 with plain HTTP and 443 with built-in TLS.
-  port: null
+  # 0 means 80 with plain HTTP and 443 with built-in TLS.
+  port: 0
   annotations: {}
 
 ingress:
@@ -233,25 +237,43 @@ serviceAccount:
   # For example the role annotation of a cloud provider for S3 or KMS.
   annotations: {}
 
-# The server does not call the Kubernetes API, so the pod gets no token.
+# The server does not call the Kubernetes API, so the pod gets no token. The
+# schema holds this value at false.
 automountServiceAccountToken: false
 
 networkPolicy:
   enabled: true
   # Sources that may reach the server port. Empty means every source.
-  # Each item is a NetworkPolicyPeer, for example a namespaceSelector for
-  # the namespace of the ingress controller.
+  # Each item is a NetworkPolicyPeer with at least one key, for example a
+  # namespaceSelector for the namespace of the ingress controller, or for
+  # the namespace of Prometheus. When the list is not empty, the chart adds
+  # a rule for the pods of the backup CronJob.
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: monitoring
   ingressFrom: []
-  # true allows all egress. The server reaches the database, S3, sign-in
-  # providers and webhooks at addresses that the chart does not know.
-  # false allows DNS and the rules in extraEgress only.
-  allowAllEgress: true
+  # false allows DNS, TCP 5432 and TCP 443 to any address, and the rules in
+  # extraEgress. The server reaches the database, S3 and sign-in providers
+  # at addresses that the chart does not know, so the chart limits the ports.
+  # true allows all egress.
+  allowAllEgress: false
+  # The DNS server that the egress rule for port 53 allows.
+  dns:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+  # More egress rules, for other ports. Each item is a NetworkPolicyEgressRule.
+  # For example a webhook on port 8443, or the metadata server:
+  #  - to:
+  #      - ipBlock:
+  #          cidr: 169.254.169.254/32
+  #    ports:
+  #      - protocol: TCP
+  #        port: 80
   extraEgress: []
-
-# Made only when replicas is more than 1.
-podDisruptionBudget:
-  enabled: true
-  maxUnavailable: 1
 
 metrics:
   # A ServiceMonitor of the Prometheus Operator for GET /metrics.
@@ -266,6 +288,7 @@ metrics:
       name: ""
       key: token
 
+# The schema refuses the AppArmor and seccomp annotations here.
 podAnnotations: {}
 podLabels: {}
 nodeSelector: {}

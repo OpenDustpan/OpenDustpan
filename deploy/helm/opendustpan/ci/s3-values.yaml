@@ -1,5 +1,5 @@
-# Two instances: blobs and backups in S3, behind an ingress.
-replicas: 2
+# One instance: blobs and backups in S3, behind an ingress.
+replicas: 1
 database:
   existingSecret:
     name: opendustpan-database
@@ -58,3 +58,18 @@ metrics:
     enabled: true
     tokenSecret:
       name: opendustpan-metrics-token
+networkPolicy:
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  extraEgress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80

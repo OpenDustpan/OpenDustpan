@@ -83,7 +83,7 @@ internal/              code that is not part of the SDK
   metrics/, token/...  helpers shared across packages
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
-deploy/helm/opendustpan/ the Helm chart: values.yaml and values.schema.json (templates later)
+deploy/helm/           the Helm chart in opendustpan/: values.yaml and values.schema.json (templates later)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
 GLOSSARY.md            the project's domain language: one word per concept
