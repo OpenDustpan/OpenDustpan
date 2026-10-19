@@ -1,0 +1,8 @@
+# Refused: null removes networkPolicy.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+networkPolicy: null

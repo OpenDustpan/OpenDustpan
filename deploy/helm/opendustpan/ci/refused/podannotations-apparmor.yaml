@@ -1,0 +1,9 @@
+# Refused: an AppArmor annotation.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+podAnnotations:
+  container.apparmor.security.beta.kubernetes.io/opendustpan: unconfined

@@ -1,0 +1,11 @@
+# Refused: DUSTPAN_DEV.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+server:
+  extraEnv:
+    - name: DUSTPAN_DEV
+      value: "true"
