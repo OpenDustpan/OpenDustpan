@@ -231,9 +231,9 @@ type deletedUnitBody struct {
 
 // deletedUnitsBody is the decoded GET /api/dustpan/v1/namespaces/{namespace}/deleted-units response.
 type deletedUnitsBody struct {
-	NextCursor string            `json:"nextCursor"`
-	Units      []deletedUnitBody `json:"units"`
-	Total      int               `json:"total"`
+	NextPageToken string            `json:"nextPageToken"`
+	Units         []deletedUnitBody `json:"units"`
+	Total         int               `json:"total"`
 }
 
 func decodeDeleted(t *testing.T, rec *httptest.ResponseRecorder) deletedUnitsBody {
@@ -290,7 +290,7 @@ func TestListDeletedUnitsFields(t *testing.T) {
 	got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{}), ""))
 
 	want := deletedUnitsBody{
-		NextCursor: "",
+		NextPageToken: "",
 		Units: []deletedUnitBody{{
 			Tool:       "Pulumi",
 			Reference:  "pulumi:acme/web/prod",
@@ -303,7 +303,7 @@ func TestListDeletedUnitsFields(t *testing.T) {
 		Total: 1,
 	}
 
-	if got.NextCursor != want.NextCursor || got.Total != want.Total || len(got.Units) != 1 ||
+	if got.NextPageToken != want.NextPageToken || got.Total != want.Total || len(got.Units) != 1 ||
 		got.Units[0] != want.Units[0] {
 		t.Fatalf("deleted units = %+v, want %+v", got, want)
 	}
@@ -363,9 +363,9 @@ func TestListDeletedUnitsPages(t *testing.T) {
 	cursor := ""
 
 	for range 5 {
-		q := url.Values{"limit": {"2"}}
+		q := url.Values{"pageSize": {"2"}}
 		if cursor != "" {
-			q.Set("cursor", cursor)
+			q.Set("pageToken", cursor)
 		}
 
 		got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(q), ""))
@@ -374,7 +374,7 @@ func TestListDeletedUnitsPages(t *testing.T) {
 		}
 
 		seen = append(seen, unitIDs(got.Units)...)
-		cursor = got.NextCursor
+		cursor = got.NextPageToken
 
 		if cursor == "" {
 			break
@@ -391,12 +391,13 @@ func TestListDeletedUnitsInvalidQuery(t *testing.T) {
 	t.Parallel()
 
 	cases := []url.Values{
-		{"limit": {"-1"}},
-		{"limit": {"501"}},
-		{"limit": {"ten"}},
+		{"pageSize": {"-1"}},
+		{"pageSize": {"0"}},
+		{"pageSize": {"501"}},
+		{"pageSize": {"ten"}},
 		{"purgeWithinDays": {"3651"}},
-		{"cursor": {"!!"}},
-		{"cursor": {"bm90LWpzb24"}},
+		{"pageToken": {"!!"}},
+		{"pageToken": {"bm90LWpzb24"}},
 	}
 
 	for _, q := range cases {
@@ -441,9 +442,9 @@ func TestListDeletedUnitsReadScope(t *testing.T) {
 	cursor := ""
 
 	for range 5 {
-		q := url.Values{"limit": {"1"}}
+		q := url.Values{"pageSize": {"1"}}
 		if cursor != "" {
-			q.Set("cursor", cursor)
+			q.Set("pageToken", cursor)
 		}
 
 		got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(q), ""))
@@ -452,7 +453,7 @@ func TestListDeletedUnitsReadScope(t *testing.T) {
 		}
 
 		seen = append(seen, unitIDs(got.Units)...)
-		cursor = got.NextCursor
+		cursor = got.NextPageToken
 
 		if cursor == "" {
 			break
@@ -485,7 +486,7 @@ func TestListDeletedUnitsEmptyScope(t *testing.T) {
 	f := buildDeletedFixture(t, fiveDeleted(), allow, nil, fixedScope{err: nil, ids: nil, all: false})
 
 	got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{}), ""))
-	if got.Total != 0 || len(got.Units) != 0 || got.NextCursor != "" {
+	if got.Total != 0 || len(got.Units) != 0 || got.NextPageToken != "" {
 		t.Fatalf("deleted units = %+v, want none", got)
 	}
 

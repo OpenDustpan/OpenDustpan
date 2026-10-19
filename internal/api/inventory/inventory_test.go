@@ -298,7 +298,7 @@ type unitBody struct {
 // lockBody is one decoded lock object.
 type lockBody struct {
 	Holder    string `json:"holder"`
-	Since     int64  `json:"since"`
+	Since     string `json:"since"`
 	Operation string `json:"operation"`
 }
 
@@ -596,7 +596,7 @@ func TestListUnitsOmitsUnknown(t *testing.T) {
 }
 
 // TestListUnitsLockField proves a locked unit answers its lock with the
-// holder, the take time in Unix seconds and the operation.
+// holder, the take time in RFC 3339 and the operation.
 func TestListUnitsLockField(t *testing.T) {
 	t.Parallel()
 
@@ -648,7 +648,9 @@ func TestListUnitsLockField(t *testing.T) {
 		t.Fatalf("unit reference = %q, want the locked stack", locked.Reference)
 	}
 
-	checkLock(t, locked.Lock, &lockBody{Holder: "admin", Since: since.Unix(), Operation: "update"})
+	checkLock(t, locked.Lock, &lockBody{
+		Holder: "admin", Since: since.UTC().Format(time.RFC3339Nano), Operation: "update",
+	})
 }
 
 // TestListUnitsOmitsLock proves an unlocked unit omits the lock field from

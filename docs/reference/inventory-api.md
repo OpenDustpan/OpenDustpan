@@ -54,7 +54,7 @@ These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 | `lastChange` | The time of the last change, an RFC 3339 time in UTC |
 | `status` | The status. The field is not there when the status is not known. |
 | `resourceCount` | The count of resources. The field is not there when the count is not known. |
-| `lock` | `holder`, `since` and `operation`. The field is not there when the unit is not locked. |
+| `lock` | `holder`, `since` (an RFC 3339 time in UTC) and `operation`. The field is not there when the unit is not locked. |
 | `collection` | The name of the collection. The field is not there when the unit has none. |
 | `labels` | The labels of the unit, as an object of strings. The field is not there when the unit has no label. |
 | `consoleUrl` | The URL of the page of the unit in the console. The field is not there when the server has no public URL, and not for a unit that is deleted. |

@@ -26,9 +26,9 @@ type deletedUnitDoc struct {
 
 // deletedUnitsDoc is the answer of GET /api/dustpan/v1/namespaces/{namespace}/deleted-units.
 type deletedUnitsDoc struct {
-	NextCursor string           `json:"nextCursor"`
-	Units      []deletedUnitDoc `json:"units"`
-	Total      int              `json:"total"`
+	NextPageToken string           `json:"nextPageToken"`
+	Units         []deletedUnitDoc `json:"units"`
+	Total         int              `json:"total"`
 }
 
 // restoredUnitDoc is the answer of a restore: the live unit.

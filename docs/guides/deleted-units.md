@@ -42,18 +42,18 @@ These query values filter and page the list:
 - `purgeWithinDays`: only units whose retention period ends in this number
   of days or less, from 0 to 3650. A unit whose retention period has ended
   also matches.
-- `limit`: the page size, from 1 to 500. The default (missing or 0) is 50.
-- `cursor`: the `nextCursor` value of the previous page.
+- `pageSize`: the page size, from 1 to 500. The default (missing) is 50.
+- `pageToken`: the `nextPageToken` value of the previous page.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/dustpan/v1/namespaces/acme/deleted-units?tool=pulumi&limit=20"
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/deleted-units?tool=pulumi&pageSize=20"
 ```
 
-The answer has `units`, `total` and `nextCursor`. Each unit has `tool`,
+The answer has `units`, `total` and `nextPageToken`. Each unit has `tool`,
 `reference`, `namespace`, `name`, `unitID`, `deletedAt` and `purgeAfter`
 (RFC 3339 times in UTC). `total` counts the deleted units that match the
-filters and that you can read. `nextCursor` is empty on the last page.
+filters and that you can read. `nextPageToken` is not in the answer on the last page.
 
 ## Restore a deleted unit
 
@@ -154,7 +154,7 @@ To keep such a unit, restore it before the first run. First list the
 deleted units whose retention period ends within one day. The units that the
 first run purges are in this list. The list holds the units of one
 namespace, so list each namespace. The list comes in pages: when the answer has a
-`nextCursor`, send it as `cursor` to get the next page.
+`nextPageToken`, send it as `pageToken` to get the next page.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \

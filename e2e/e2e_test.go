@@ -5545,10 +5545,10 @@ func statePullLacksGreeting(r e2e.Result) error {
 }
 
 // inventoryLockDoc decodes the lock object of GET /api/dustpan/v1/namespaces/{namespace}/units: the
-// holder, the take time in Unix seconds, and the operation.
+// holder, the take time as an RFC 3339 time, and the operation.
 type inventoryLockDoc struct {
 	Holder    string `json:"holder"`
-	Since     int64  `json:"since"`
+	Since     string `json:"since"`
 	Operation string `json:"operation"`
 }
 
@@ -5639,7 +5639,7 @@ func checkInventoryLock(ctx context.Context, t *testing.T, env *e2e.Env, want lo
 		t.Fatalf("inventory entry %q holds no lock", want.ref)
 	}
 
-	if unit.Lock.Holder != want.holder || unit.Lock.Operation != want.operation || unit.Lock.Since <= 0 {
+	if unit.Lock.Holder != want.holder || unit.Lock.Operation != want.operation || unit.Lock.Since == "" {
 		t.Fatalf(
 			"inventory lock of %q = %+v, want holder %q operation %q with a take time",
 			want.ref,

@@ -173,12 +173,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // lockEntry is the lock of a unit as the console reads it: the subject of
-// the principal that holds it, the take time in Unix seconds, and the tool's own word for what holds it. It never holds
-// a token, a
+// the principal that holds it, the take time as an RFC 3339 time in UTC,
+// and the tool's own word for what holds it. It never holds a token, a
 // secret or a capability path: the projection stores only the subject.
 type lockEntry struct {
 	Holder    string `json:"holder"`
-	Since     int64  `json:"since"`
+	Since     string `json:"since"`
 	Operation string `json:"operation"`
 }
 
@@ -275,7 +275,7 @@ func toLockEntry(lock *coreinventory.Lock) *lockEntry {
 		return nil
 	}
 
-	return &lockEntry{Holder: lock.Holder, Since: lock.Since.Unix(), Operation: lock.Operation}
+	return &lockEntry{Holder: lock.Holder, Since: formatTime(lock.Since), Operation: lock.Operation}
 }
 
 // listUnits answers GET /api/dustpan/v1/namespaces/{namespace}/units with one
