@@ -1,6 +1,6 @@
 # 204. OpenDustpan as an OIDC issuer
 
-Status: accepted · 2026-10-18 · part of ADR 200
+Status: accepted · 2026-10-18 · part of ADR 200 · decision 4 amended by ADR 248 (planned and forced promotions between installations)
 
 ## Context
 

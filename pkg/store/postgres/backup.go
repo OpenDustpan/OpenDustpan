@@ -100,6 +100,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
 	tables = append(tables, pgCopyImportTables()...)
+	tables = append(tables, pgCopyBlameTables()...)
 	tables = append(tables, pgCopyRunnerTables()...)
 	tables = append(tables, pgCopyProfileTables()...)
 
@@ -190,7 +191,7 @@ func pgInventoryChangeTables() []pgCopyTable {
 			table: "inventory_changes",
 			columns: []string{
 				pgColNamespaceID, pgColSeq, pgColAtMs, pgColTool, pgColUnitID, pgColName, pgColDisplayName,
-				pgColStatus, "collection", "kind", "resource_count",
+				pgColStatus, "collection", pgColKind, pgColResourceCount,
 			},
 			orderBy: []string{pgColNamespaceID, pgColSeq},
 		},
@@ -299,7 +300,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "state_versions",
 			columns: []string{
-				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", pgColSize,
+				"id", pgColWorkspaceID, pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
 				"sensitive_marks", "fenced_by", "unlocked_write",

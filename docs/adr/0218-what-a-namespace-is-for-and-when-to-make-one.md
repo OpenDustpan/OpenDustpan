@@ -1,6 +1,6 @@
 # 218. What a namespace is for, and when to make a namespace or a collection (owner)
 
-Status: accepted · 2026-10-18 · decides the backup of one namespace that ADR 30 decision 1 left out
+Status: accepted · 2026-10-18 · decides the backup of one namespace that ADR 30 decision 1 left out. The region of decisions 1, 2 and 5 amended by ADR 248 (primary installation)
 
 ## Context
 

@@ -204,7 +204,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColDisplayName,
 				"last_changed_ms",
 				backupColStatus,
-				"resource_count",
+				backupColResourceCount,
 				"lock_holder",
 				"lock_since_ms",
 				"lock_operation",
@@ -297,7 +297,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespaceID, "seq", backupColAtMs, backupColTool, backupColUnitID, backupColName,
 				backupColDisplayName,
-				backupColStatus, "collection", backupColKind, "resource_count",
+				backupColStatus, "collection", backupColKind, backupColResourceCount,
 			},
 		},
 		{
@@ -333,7 +333,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "state_versions",
 			columns: []string{
 				"id",
-				"workspace_id",
+				backupColWorkspaceID,
 				backupColStatus,
 				"serial",
 				"lineage",
@@ -397,6 +397,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteIdentityBackupTables(),
 		sqliteSessionBackupTables(),
 		sqliteImportBackupTables(),
+		sqliteBlameBackupTables(),
 		sqliteRunnerBackupTables(),
 		sqliteProfileBackupTables(),
 	)
@@ -411,7 +412,7 @@ func sqliteControlTables() []sqliteBackupTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", "kind", "input", "version", "state", "attempt", "expiries", "failures",
+				"id", "start_key", backupColKind, "input", "version", "state", "attempt", "expiries", "failures",
 				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
 				"not_before_ms", "created_at_ms", "updated_at_ms",
 			},

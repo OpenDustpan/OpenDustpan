@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo checks-agent
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke compose-smoke demo checks-agent
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -196,3 +196,6 @@ demo: build ## Run the server with the web console and demo data on 127.0.0.1:80
 
 image-smoke: ## Build the container image and run the local smoke test (needs docker; not part of check).
 	./scripts/smoke-image.sh
+
+compose-smoke: ## Start the stack of deploy/compose and drive the real Pulumi CLI and OpenTofu against it (needs docker with compose and openssl; not part of check).
+	E2E_COMPOSE=1 go test -tags e2e -race -count=1 -timeout 30m -run '^TestComposeQuickstart$$' ./e2e/...
