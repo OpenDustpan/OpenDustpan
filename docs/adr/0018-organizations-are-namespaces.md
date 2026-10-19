@@ -1,6 +1,6 @@
 # 18. Organizations are namespaces
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10 · the standby region amended by ADR 248 (replica installation)
 
 ## Context
 

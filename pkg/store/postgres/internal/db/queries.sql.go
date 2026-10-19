@@ -166,6 +166,28 @@ func (q *Queries) AdvanceAuditSinkCursor(ctx context.Context, arg AdvanceAuditSi
 	return err
 }
 
+const advanceWorkspaceBlameCursor = `-- name: AdvanceWorkspaceBlameCursor :execrows
+INSERT INTO workspace_blame_cursors (workspace_id, ordinal)
+VALUES ($1, $2)
+ON CONFLICT (workspace_id) DO UPDATE SET ordinal = excluded.ordinal
+WHERE workspace_blame_cursors.ordinal < excluded.ordinal
+`
+
+type AdvanceWorkspaceBlameCursorParams struct {
+	WorkspaceID string
+	Ordinal     int64
+}
+
+// Moves the blame cursor of a workspace up to an ordinal. It changes nothing,
+// and affects no row, when the cursor is already at or past the ordinal.
+func (q *Queries) AdvanceWorkspaceBlameCursor(ctx context.Context, arg AdvanceWorkspaceBlameCursorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, advanceWorkspaceBlameCursor, arg.WorkspaceID, arg.Ordinal)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const appendEvent = `-- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
 VALUES ($1, $2, $3, $4, $5)
@@ -2762,6 +2784,33 @@ WHERE stack_id = $1
 
 func (q *Queries) DeleteUpdatesOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.Exec(ctx, deleteUpdatesOfStack, stackID)
+	return err
+}
+
+const deleteWorkspaceBlameCursor = `-- name: DeleteWorkspaceBlameCursor :exec
+DELETE FROM workspace_blame_cursors WHERE workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceBlameCursor(ctx context.Context, workspaceID string) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceBlameCursor, workspaceID)
+	return err
+}
+
+const deleteWorkspaceBlameItems = `-- name: DeleteWorkspaceBlameItems :exec
+DELETE FROM workspace_blame_items WHERE workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceBlameItems(ctx context.Context, workspaceID string) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceBlameItems, workspaceID)
+	return err
+}
+
+const deleteWorkspaceResourceChanges = `-- name: DeleteWorkspaceResourceChanges :exec
+DELETE FROM workspace_resource_changes WHERE workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceResourceChanges(ctx context.Context, workspaceID string) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceResourceChanges, workspaceID)
 	return err
 }
 
@@ -5553,6 +5602,47 @@ func (q *Queries) GetWorkspace(ctx context.Context, arg GetWorkspaceParams) (Wor
 	return i, err
 }
 
+const getWorkspaceBlameCursor = `-- name: GetWorkspaceBlameCursor :one
+SELECT ordinal FROM workspace_blame_cursors WHERE workspace_id = $1
+`
+
+func (q *Queries) GetWorkspaceBlameCursor(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceBlameCursor, workspaceID)
+	var ordinal int64
+	err := row.Scan(&ordinal)
+	return ordinal, err
+}
+
+const getWorkspaceBlameItem = `-- name: GetWorkspaceBlameItem :one
+SELECT ordinal, opaque, lineage_changed, resource_count
+FROM workspace_blame_items
+WHERE workspace_id = $1 AND state_version_id = $2
+`
+
+type GetWorkspaceBlameItemParams struct {
+	WorkspaceID    string
+	StateVersionID string
+}
+
+type GetWorkspaceBlameItemRow struct {
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
+	ResourceCount  int64
+}
+
+func (q *Queries) GetWorkspaceBlameItem(ctx context.Context, arg GetWorkspaceBlameItemParams) (GetWorkspaceBlameItemRow, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceBlameItem, arg.WorkspaceID, arg.StateVersionID)
+	var i GetWorkspaceBlameItemRow
+	err := row.Scan(
+		&i.Ordinal,
+		&i.Opaque,
+		&i.LineageChanged,
+		&i.ResourceCount,
+	)
+	return i, err
+}
+
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
@@ -6739,6 +6829,74 @@ func (q *Queries) InsertRunnerSession(ctx context.Context, arg InsertRunnerSessi
 		arg.KeyPublic,
 		arg.KeyCreatedAtMs,
 		arg.CreatedAtMs,
+	)
+	return err
+}
+
+const insertWorkspaceBlameItem = `-- name: InsertWorkspaceBlameItem :exec
+INSERT INTO workspace_blame_items (workspace_id, state_version_id, ordinal, opaque, lineage_changed, resource_count)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertWorkspaceBlameItemParams struct {
+	WorkspaceID    string
+	StateVersionID string
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
+	ResourceCount  int64
+}
+
+func (q *Queries) InsertWorkspaceBlameItem(ctx context.Context, arg InsertWorkspaceBlameItemParams) error {
+	_, err := q.db.Exec(ctx, insertWorkspaceBlameItem,
+		arg.WorkspaceID,
+		arg.StateVersionID,
+		arg.Ordinal,
+		arg.Opaque,
+		arg.LineageChanged,
+		arg.ResourceCount,
+	)
+	return err
+}
+
+const insertWorkspaceResourceChange = `-- name: InsertWorkspaceResourceChange :exec
+INSERT INTO workspace_resource_changes (
+    workspace_id, state_version_id, address, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id,
+    changed_paths, restored, forced, lineage_changed
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+`
+
+type InsertWorkspaceResourceChangeParams struct {
+	WorkspaceID    string
+	StateVersionID string
+	Address        string
+	Ordinal        int64
+	Kind           string
+	AtMs           int64
+	BySubject      string
+	ByTokenID      string
+	ByJobID        string
+	ChangedPaths   int64
+	Restored       bool
+	Forced         bool
+	LineageChanged bool
+}
+
+func (q *Queries) InsertWorkspaceResourceChange(ctx context.Context, arg InsertWorkspaceResourceChangeParams) error {
+	_, err := q.db.Exec(ctx, insertWorkspaceResourceChange,
+		arg.WorkspaceID,
+		arg.StateVersionID,
+		arg.Address,
+		arg.Ordinal,
+		arg.Kind,
+		arg.AtMs,
+		arg.BySubject,
+		arg.ByTokenID,
+		arg.ByJobID,
+		arg.ChangedPaths,
+		arg.Restored,
+		arg.Forced,
+		arg.LineageChanged,
 	)
 	return err
 }
@@ -9867,6 +10025,196 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 	return items, nil
 }
 
+const listWorkspaceBlameSummaries = `-- name: ListWorkspaceBlameSummaries :many
+SELECT i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count,
+    COALESCE(SUM(CASE WHEN c.kind = 'created' THEN 1 ELSE 0 END), 0)::bigint AS created,
+    COALESCE(SUM(CASE WHEN c.kind = 'updated' THEN 1 ELSE 0 END), 0)::bigint AS updated,
+    COALESCE(SUM(CASE WHEN c.kind = 'replaced' THEN 1 ELSE 0 END), 0)::bigint AS replaced,
+    COALESCE(SUM(CASE WHEN c.kind = 'deleted' THEN 1 ELSE 0 END), 0)::bigint AS deleted
+FROM workspace_blame_items AS i
+LEFT JOIN workspace_resource_changes AS c
+    ON c.workspace_id = i.workspace_id AND c.state_version_id = i.state_version_id
+WHERE i.workspace_id = $1 AND i.state_version_id = ANY($2::text[])
+GROUP BY i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count
+`
+
+type ListWorkspaceBlameSummariesParams struct {
+	WorkspaceID     string
+	StateVersionIds []string
+}
+
+type ListWorkspaceBlameSummariesRow struct {
+	StateVersionID string
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
+	ResourceCount  int64
+	Created        int64
+	Updated        int64
+	Replaced       int64
+	Deleted        int64
+}
+
+// One row for each blame item among the state versions, with the count of its
+// resource change rows by kind.
+func (q *Queries) ListWorkspaceBlameSummaries(ctx context.Context, arg ListWorkspaceBlameSummariesParams) ([]ListWorkspaceBlameSummariesRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceBlameSummaries, arg.WorkspaceID, arg.StateVersionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceBlameSummariesRow
+	for rows.Next() {
+		var i ListWorkspaceBlameSummariesRow
+		if err := rows.Scan(
+			&i.StateVersionID,
+			&i.Ordinal,
+			&i.Opaque,
+			&i.LineageChanged,
+			&i.ResourceCount,
+			&i.Created,
+			&i.Updated,
+			&i.Replaced,
+			&i.Deleted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceResourceChangesOfItem = `-- name: ListWorkspaceResourceChangesOfItem :many
+SELECT address, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id, changed_paths, restored, forced,
+    lineage_changed
+FROM workspace_resource_changes
+WHERE workspace_id = $1 AND state_version_id = $2
+ORDER BY address COLLATE "C"
+`
+
+type ListWorkspaceResourceChangesOfItemParams struct {
+	WorkspaceID    string
+	StateVersionID string
+}
+
+type ListWorkspaceResourceChangesOfItemRow struct {
+	Address        string
+	Ordinal        int64
+	Kind           string
+	AtMs           int64
+	BySubject      string
+	ByTokenID      string
+	ByJobID        string
+	ChangedPaths   int64
+	Restored       bool
+	Forced         bool
+	LineageChanged bool
+}
+
+func (q *Queries) ListWorkspaceResourceChangesOfItem(ctx context.Context, arg ListWorkspaceResourceChangesOfItemParams) ([]ListWorkspaceResourceChangesOfItemRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceResourceChangesOfItem, arg.WorkspaceID, arg.StateVersionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceResourceChangesOfItemRow
+	for rows.Next() {
+		var i ListWorkspaceResourceChangesOfItemRow
+		if err := rows.Scan(
+			&i.Address,
+			&i.Ordinal,
+			&i.Kind,
+			&i.AtMs,
+			&i.BySubject,
+			&i.ByTokenID,
+			&i.ByJobID,
+			&i.ChangedPaths,
+			&i.Restored,
+			&i.Forced,
+			&i.LineageChanged,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceResourceHistory = `-- name: ListWorkspaceResourceHistory :many
+SELECT state_version_id, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id, changed_paths, restored,
+    forced, lineage_changed
+FROM workspace_resource_changes
+WHERE workspace_id = $1 AND address = $2 AND ordinal < $3
+ORDER BY ordinal DESC
+LIMIT $4::bigint
+`
+
+type ListWorkspaceResourceHistoryParams struct {
+	WorkspaceID string
+	Address     string
+	Before      int64
+	MaxRows     int64
+}
+
+type ListWorkspaceResourceHistoryRow struct {
+	StateVersionID string
+	Ordinal        int64
+	Kind           string
+	AtMs           int64
+	BySubject      string
+	ByTokenID      string
+	ByJobID        string
+	ChangedPaths   int64
+	Restored       bool
+	Forced         bool
+	LineageChanged bool
+}
+
+// The rows of one resource instance, newest first, with an ordinal below
+// before.
+func (q *Queries) ListWorkspaceResourceHistory(ctx context.Context, arg ListWorkspaceResourceHistoryParams) ([]ListWorkspaceResourceHistoryRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceResourceHistory,
+		arg.WorkspaceID,
+		arg.Address,
+		arg.Before,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceResourceHistoryRow
+	for rows.Next() {
+		var i ListWorkspaceResourceHistoryRow
+		if err := rows.Scan(
+			&i.StateVersionID,
+			&i.Ordinal,
+			&i.Kind,
+			&i.AtMs,
+			&i.BySubject,
+			&i.ByTokenID,
+			&i.ByJobID,
+			&i.ChangedPaths,
+			&i.Restored,
+			&i.Forced,
+			&i.LineageChanged,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaces = `-- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
@@ -12703,6 +13051,24 @@ func (q *Queries) WorkspaceExistsByID(ctx context.Context, id string) (string, e
 	var id_2 string
 	err := row.Scan(&id_2)
 	return id_2, err
+}
+
+const workspaceOwnedBy = `-- name: WorkspaceOwnedBy :one
+SELECT id FROM workspaces WHERE id = $1 AND namespace = $2
+`
+
+type WorkspaceOwnedByParams struct {
+	ID        string
+	Namespace string
+}
+
+// The ID of a workspace of a namespace, also a deleted one that the retention
+// period keeps.
+func (q *Queries) WorkspaceOwnedBy(ctx context.Context, arg WorkspaceOwnedByParams) (string, error) {
+	row := q.db.QueryRow(ctx, workspaceOwnedBy, arg.ID, arg.Namespace)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const workspaceStateAt = `-- name: WorkspaceStateAt :one

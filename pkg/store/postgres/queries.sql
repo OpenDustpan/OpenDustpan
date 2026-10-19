@@ -2790,6 +2790,77 @@ SELECT namespace_id
 FROM gate_records
 WHERE id = sqlc.arg(id);
 
+-- name: WorkspaceOwnedBy :one
+-- The ID of a workspace of a namespace, also a deleted one that the retention
+-- period keeps.
+SELECT id FROM workspaces WHERE id = $1 AND namespace = $2;
+
+-- name: AdvanceWorkspaceBlameCursor :execrows
+-- Moves the blame cursor of a workspace up to an ordinal. It changes nothing,
+-- and affects no row, when the cursor is already at or past the ordinal.
+INSERT INTO workspace_blame_cursors (workspace_id, ordinal)
+VALUES ($1, $2)
+ON CONFLICT (workspace_id) DO UPDATE SET ordinal = excluded.ordinal
+WHERE workspace_blame_cursors.ordinal < excluded.ordinal;
+
+-- name: GetWorkspaceBlameCursor :one
+SELECT ordinal FROM workspace_blame_cursors WHERE workspace_id = $1;
+
+-- name: InsertWorkspaceBlameItem :exec
+INSERT INTO workspace_blame_items (workspace_id, state_version_id, ordinal, opaque, lineage_changed, resource_count)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: GetWorkspaceBlameItem :one
+SELECT ordinal, opaque, lineage_changed, resource_count
+FROM workspace_blame_items
+WHERE workspace_id = $1 AND state_version_id = $2;
+
+-- name: ListWorkspaceBlameSummaries :many
+-- One row for each blame item among the state versions, with the count of its
+-- resource change rows by kind.
+SELECT i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count,
+    COALESCE(SUM(CASE WHEN c.kind = 'created' THEN 1 ELSE 0 END), 0)::bigint AS created,
+    COALESCE(SUM(CASE WHEN c.kind = 'updated' THEN 1 ELSE 0 END), 0)::bigint AS updated,
+    COALESCE(SUM(CASE WHEN c.kind = 'replaced' THEN 1 ELSE 0 END), 0)::bigint AS replaced,
+    COALESCE(SUM(CASE WHEN c.kind = 'deleted' THEN 1 ELSE 0 END), 0)::bigint AS deleted
+FROM workspace_blame_items AS i
+LEFT JOIN workspace_resource_changes AS c
+    ON c.workspace_id = i.workspace_id AND c.state_version_id = i.state_version_id
+WHERE i.workspace_id = sqlc.arg(workspace_id) AND i.state_version_id = ANY(sqlc.arg(state_version_ids)::text[])
+GROUP BY i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count;
+
+-- name: InsertWorkspaceResourceChange :exec
+INSERT INTO workspace_resource_changes (
+    workspace_id, state_version_id, address, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id,
+    changed_paths, restored, forced, lineage_changed
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+
+-- name: ListWorkspaceResourceChangesOfItem :many
+SELECT address, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id, changed_paths, restored, forced,
+    lineage_changed
+FROM workspace_resource_changes
+WHERE workspace_id = $1 AND state_version_id = $2
+ORDER BY address COLLATE "C";
+
+-- name: ListWorkspaceResourceHistory :many
+-- The rows of one resource instance, newest first, with an ordinal below
+-- before.
+SELECT state_version_id, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id, changed_paths, restored,
+    forced, lineage_changed
+FROM workspace_resource_changes
+WHERE workspace_id = sqlc.arg(workspace_id) AND address = sqlc.arg(address) AND ordinal < sqlc.arg(before)
+ORDER BY ordinal DESC
+LIMIT sqlc.arg(max_rows)::bigint;
+
+-- name: DeleteWorkspaceResourceChanges :exec
+DELETE FROM workspace_resource_changes WHERE workspace_id = $1;
+
+-- name: DeleteWorkspaceBlameItems :exec
+DELETE FROM workspace_blame_items WHERE workspace_id = $1;
+
+-- name: DeleteWorkspaceBlameCursor :exec
+DELETE FROM workspace_blame_cursors WHERE workspace_id = $1;
+
 -- Runner pools, join tokens and runners. The tables hold the stable ID of the
 -- namespace. A zero in a *_ms column that can be empty means "not set".
 
@@ -3100,3 +3171,4 @@ UPDATE profiles
 SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
+
