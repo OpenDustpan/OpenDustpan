@@ -1,6 +1,6 @@
 # 49. OpenTofu also connects through the http backend
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13. Decision 6 extended by ADR 239
 
 ## Context
 

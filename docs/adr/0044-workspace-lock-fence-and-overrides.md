@@ -1,6 +1,6 @@
 # 44. A force-unlock fences the old holder, and overrides are opt-in
 
-Status: accepted · 2026-10-12
+Status: accepted · 2026-10-12. Decisions 4 and 6 extended by ADR 239
 
 ## Context
 
