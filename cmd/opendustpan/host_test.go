@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -569,6 +571,63 @@ func (f failRecoveryStore) CreateHostRecovery(ctx context.Context, r *accesstoke
 	return f.store.CreateHostRecovery(ctx, r)
 }
 
+// errExpiryRefused is the failure of failSweepStore.
+var errExpiryRefused = errors.New("expiry refused")
+
+// failSweepStore lists one ended record that it cannot expire, so each sweep
+// ends with ErrSweepIncomplete.
+type failSweepStore struct {
+	store
+}
+
+// ListTempAdmins implements tempadmin.Store with one record past its expiry.
+func (failSweepStore) ListTempAdmins(context.Context) ([]tempadmin.TempAdmin, error) {
+	return []tempadmin.TempAdmin{{
+		CreatedAt:   time.UnixMilli(1),
+		ExpiresAt:   time.UnixMilli(2),
+		EndedAt:     time.Time{},
+		PrincipalID: "prn_ended",
+		Subject:     "ended",
+		CreatedBy:   "test",
+		Reason:      "test",
+	}}, nil
+}
+
+// ExpireTempAdmin implements tempadmin.Store with a failure.
+func (failSweepStore) ExpireTempAdmin(context.Context, string, audit.Entry) error {
+	return errExpiryRefused
+}
+
+// TestHostIncompleteSweepWarns proves that a sweep which does not end every
+// record writes one line to standard error and does not stop the create.
+func TestHostIncompleteSweepWarns(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler), openMigrate)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(st.close)
+
+	var stderr bytes.Buffer
+
+	made, err := createTempAdmin(ctx, failSweepStore{store: st}, aliceInput(), &stderr)
+	if err != nil {
+		t.Fatalf("create with an incomplete sweep: %v", err)
+	}
+
+	if made.subject != "alice" || made.secret == "" {
+		t.Fatalf("create = %+v, want a person and a secret", made)
+	}
+
+	if got := stderr.String(); got != hostSweepNote+"\n" {
+		t.Fatalf("standard error = %q, want %q", got, hostSweepNote+"\n")
+	}
+}
+
 // TestHostFailureLeavesNothing proves that a failure at the token step
 // rolls back the person, the grant and the record of the same transaction,
 // so a retry with the same name succeeds.
@@ -584,7 +643,7 @@ func TestHostFailureLeavesNothing(t *testing.T) {
 
 	t.Cleanup(st.close)
 
-	if _, err := createTempAdmin(ctx, failRecoveryStore{store: st}, aliceInput()); !errors.Is(
+	if _, err := createTempAdmin(ctx, failRecoveryStore{store: st}, aliceInput(), io.Discard); !errors.Is(
 		err, accesstoken.ErrNotOwnToken,
 	) {
 		t.Fatalf("host run with a refused token = %v, want ErrNotOwnToken", err)
@@ -639,7 +698,7 @@ func requireHostCleanup(ctx context.Context, t *testing.T, st store) {
 func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 	t.Helper()
 
-	made, err := createTempAdmin(ctx, st, aliceInput())
+	made, err := createTempAdmin(ctx, st, aliceInput(), io.Discard)
 	if err != nil {
 		t.Fatalf("retry after a failed run: %v", err)
 	}
@@ -802,7 +861,23 @@ func TestHostRefusesPendingMigrations(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	db := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+	file := filepath.Join(t.TempDir(), "dustpan.db")
+	db := "sqlite:" + file
+
+	raw, openErr := sql.Open("sqlite", file)
+	if openErr != nil {
+		t.Fatalf("open raw database: %v", openErr)
+	}
+
+	_, execErr := raw.ExecContext(ctx,
+		`CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL) STRICT`)
+	if execErr != nil {
+		t.Fatalf("create schema_migrations: %v", execErr)
+	}
+
+	if closeErr := raw.Close(); closeErr != nil {
+		t.Fatalf("close raw database: %v", closeErr)
+	}
 
 	var stdout, stderr bytes.Buffer
 

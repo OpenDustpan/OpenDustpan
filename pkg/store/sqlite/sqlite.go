@@ -304,12 +304,28 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
+	var probe Store
+	for _, opt := range opts {
+		opt(&probe)
+	}
+
+	if probe.noMigrate {
+		if _, statErr := os.Stat(resolved); statErr != nil {
+			return nil, fmt.Errorf("open database file %s: %w", resolved, statErr)
+		}
+	}
+
 	guard, err := acquireGuard(resolved)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := openDatabase(ctx, resolved)
+	var extra url.Values
+	if probe.noMigrate {
+		extra = url.Values{"mode": {"rw"}}
+	}
+
+	conn, err := openDatabase(ctx, resolved, extra)
 	if err != nil {
 		return nil, errors.Join(err, guard.release())
 	}
@@ -423,9 +439,13 @@ func followLinkChain(abs string) (string, error) {
 	}
 }
 
-// openDatabase opens the database file at abs with the store pragmas.
-func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
+// openDatabase opens the database file at abs with the store pragmas and
+// the extra URL parameters. The parameter mode=rw opens a file that exists
+// and creates none.
+func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, error) {
 	query := url.Values{}
+	maps.Copy(query, extra)
+
 	query.Set("_txlock", "immediate")
 	query.Add("_pragma", "busy_timeout(10000)")
 	query.Add("_pragma", "journal_mode(wal)")
@@ -1160,8 +1180,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		name    TEXT    NOT NULL
 	) STRICT`
 
-	if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
-		return fmt.Errorf("create schema_migrations: %w", execErr)
+	if !s.noMigrate {
+		if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
+			return fmt.Errorf("create schema_migrations: %w", execErr)
+		}
 	}
 
 	recorded, recordedErr := s.recordedMigrations(ctx)

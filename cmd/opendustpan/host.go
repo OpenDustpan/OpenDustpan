@@ -87,6 +87,11 @@ const (
 	modeNone          = "none"
 )
 
+// hostSweepNote is the line that the host command writes to standard error
+// when the sweep of ended temporary administrators does not end every record.
+const hostSweepNote = "some ended temporary administrators did not expire: " +
+	"run the command again, then check the server log"
+
 // hostReviewNote is the line that the host command writes to standard error
 // after a create: no store keeps break-glass reviews yet, so no review opens
 // at the expiry.
@@ -197,7 +202,7 @@ func hostCreateTempAdminWithIO(
 		return err
 	}
 
-	made, err := runHostCreate(ctx, f.database, hostInput{person: person, reason: reason})
+	made, err := runHostCreate(ctx, f.database, hostInput{person: person, reason: reason}, stderr)
 	if err != nil {
 		return err
 	}
@@ -270,7 +275,7 @@ func hostReason(flagValue string, in hostIO, stderr io.Writer) (string, error) {
 
 // runHostCreate opens the database with no migration and makes the
 // temporary administrator of in.
-func runHostCreate(ctx context.Context, database string, in hostInput) (hostMade, error) {
+func runHostCreate(ctx context.Context, database string, in hostInput, stderr io.Writer) (hostMade, error) {
 	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler), openNoMigrate)
 	if errors.Is(err, schema.ErrMigrationsPending) {
 		return hostMade{}, fmt.Errorf(
@@ -294,7 +299,7 @@ func runHostCreate(ctx context.Context, database string, in hostInput) (hostMade
 
 	defer st.close()
 
-	return createTempAdmin(ctx, st, in)
+	return createTempAdmin(ctx, st, in, stderr)
 }
 
 // hostInput names one run: the person and the reason.
@@ -317,14 +322,20 @@ type hostMade struct {
 // transaction, so a crash leaves all of them or none. The record and the
 // token share one lifetime: the token policy maximum when that is below
 // the fixed temporary administrator lifetime, or that lifetime otherwise.
-func createTempAdmin(ctx context.Context, st store, in hostInput) (hostMade, error) {
+func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writer) (hostMade, error) {
 	temps, err := tempadmin.NewService(tempadmin.Config{Store: st, Reviews: nil, Now: nil, Logger: nil})
 	if err != nil {
 		return hostMade{}, fmt.Errorf("temporary administrator service: %w", err)
 	}
 
 	if _, sweepErr := temps.Sweep(ctx, hostEntry(tempadmin.Action)); sweepErr != nil {
-		return hostMade{}, fmt.Errorf("sweep ended temporary administrators: %w", sweepErr)
+		if !errors.Is(sweepErr, tempadmin.ErrSweepIncomplete) {
+			return hostMade{}, fmt.Errorf("sweep ended temporary administrators: %w", sweepErr)
+		}
+
+		if _, werr := fmt.Fprintln(stderr, hostSweepNote); werr != nil {
+			return hostMade{}, fmt.Errorf("write sweep note: %w", werr)
+		}
 	}
 
 	if _, readErr := st.GetPrincipalBySubject(ctx, in.person); readErr == nil {

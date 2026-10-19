@@ -21,6 +21,8 @@ The command runs only when the installation allows host recovery:
   with `--recovery-mode` or `DUSTPAN_RECOVERY_MODE`. When the mode is `none`,
   the installation has no break-glass: the command refuses, and the operator
   restores from a backup. To use the command, set the mode to `bootstrap`.
+  Set `DUSTPAN_RECOVERY_MODE` in the environment of each operator account:
+  no store keeps the mode yet.
 - `DUSTPAN_DISABLE_HOST_RECOVERY` is not `true` or `1`. See
   [Turn the command off](#turn-the-command-off).
 - The database has no pending migration. The command applies no migration:

@@ -199,6 +199,10 @@ owner. The other decisions are the fixes of the review.
   that adapter exists, for each record that ends, by the sweep or by a use
   after the expiry. Until then, the expiry writes its audit entry and
   opens no review.
+- A stored recovery mode. No store keeps the mode yet, and `serve` does not
+  read `--recovery-mode`. The host command reads only its own flag and
+  environment, so the mode `none` holds only where the operator account sets
+  `DUSTPAN_RECOVERY_MODE=none`.
 
 ## Consequences
 
