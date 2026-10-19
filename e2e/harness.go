@@ -951,7 +951,7 @@ type InventoryUnit struct {
 	Name      string `json:"name"`
 }
 
-// inventoryUnitList is the document of GET /api/inventory/units.
+// inventoryUnitList is the document of GET /api/dustpan/v1/namespaces/{namespace}/units.
 type inventoryUnitList struct {
 	Units []InventoryUnit `json:"units"`
 }
@@ -959,7 +959,7 @@ type inventoryUnitList struct {
 // ListInventory returns the inventory units of ns through the inventory API
 // as principal A, so scenarios can prove a CLI step published its unit.
 func (e *Env) ListInventory(ctx context.Context, ns string) ([]InventoryUnit, error) {
-	path := "/api/inventory/units?organization=" + url.QueryEscape(ns)
+	path := "/api/dustpan/v1/namespaces/" + url.PathEscape(ns) + "/units"
 
 	status, body, err := e.APIStatus(ctx, http.MethodGet, path, "")
 	if err != nil {

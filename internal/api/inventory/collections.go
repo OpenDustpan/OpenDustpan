@@ -41,10 +41,23 @@ var errMissingUnit = errors.New(
 // the rest (see moveUnit): it changes who can reach the unit, so it is an access
 // change (ADR 61, decision 4).
 func (h *Handler) collectionRoutes() []Route {
+	return append(h.collectionPathRoutes(), Route{
+		Method:  http.MethodPut,
+		Path:    "/api/inventory/unit-collection",
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionUnitMove},
+		Resolve: resolveUnitQuery,
+		Serve:   h.moveUnit,
+	})
+}
+
+// collectionPathRoutes returns the rows of the collection routes that have a
+// path under /api/dustpan/v1.
+func (h *Handler) collectionPathRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/inventory/namespaces/{namespace}/collections",
+			Path:    v1Prefix + "/namespaces/{namespace}/collections",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCollectionRead},
 			Resolve: resolveCollectionNamespace,
@@ -52,7 +65,7 @@ func (h *Handler) collectionRoutes() []Route {
 		},
 		{
 			Method:  http.MethodPost,
-			Path:    "/api/inventory/namespaces/{namespace}/collections",
+			Path:    v1Prefix + "/namespaces/{namespace}/collections",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCollectionCreate},
 			Resolve: resolveCollectionNamespace,
@@ -60,7 +73,7 @@ func (h *Handler) collectionRoutes() []Route {
 		},
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/inventory/namespaces/{namespace}/collections/{collection}",
+			Path:    v1Prefix + "/namespaces/{namespace}/collections/{collection}",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCollectionRead},
 			Resolve: resolveCollectionPath,
@@ -68,19 +81,11 @@ func (h *Handler) collectionRoutes() []Route {
 		},
 		{
 			Method:  http.MethodDelete,
-			Path:    "/api/inventory/namespaces/{namespace}/collections/{collection}",
+			Path:    v1Prefix + "/namespaces/{namespace}/collections/{collection}",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCollectionDelete},
 			Resolve: resolveCollectionPath,
 			Serve:   h.deleteCollection,
-		},
-		{
-			Method:  http.MethodPut,
-			Path:    "/api/inventory/unit-collection",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitMove},
-			Resolve: resolveUnitQuery,
-			Serve:   h.moveUnit,
 		},
 	}
 }

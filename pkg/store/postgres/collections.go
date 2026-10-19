@@ -103,6 +103,13 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
+		removed, gateErr := purgeCollectionGate(ctx, q, ref, audit.MaxChanges-len(e.Changes))
+		if gateErr != nil {
+			return gateErr
+		}
+
+		e.Changes = append(e.Changes, removed...)
+
 		return removeCollection(ctx, q, ref)
 	})
 }
@@ -164,6 +171,10 @@ func setUnitCollection(ctx context.Context, q *db.Queries, m collection.Move, e 
 
 	if current.Key() != from.Key() {
 		return collection.ErrCollectionChanged
+	}
+
+	if joinErr := checkGateJoin(ctx, q, m); joinErr != nil {
+		return joinErr
 	}
 
 	err = q.UpsertUnitCollection(ctx, db.UpsertUnitCollectionParams{

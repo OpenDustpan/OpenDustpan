@@ -69,6 +69,7 @@ func (fakeUnits) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventor
 	return []coreinventory.Entry{{
 		LastChanged: time.Unix(0, 0), Namespace: ns, Tool: "opentofu", Name: "net", UnitID: testUnitID,
 		DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, Collection: "",
+		Labels: nil,
 	}}, nil
 }
 
@@ -482,11 +483,11 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	handler := newHandler(t, authz, newFakeStore())
 
 	for _, path := range []string{
-		"/api/context/namespaces/absent",
-		"/api/context/namespaces/absent/units/opentofu/" + testUnitID,
-		"/api/context/namespaces/acme/units/opentofu/ws-absent",
-		"/api/context/namespaces/other/units/opentofu/" + testUnitID,
-		"/api/context/namespaces/BAD%20NAME",
+		"/api/dustpan/v1/namespaces/absent/context",
+		"/api/dustpan/v1/namespaces/absent/units/" + testUnitID + "/context",
+		"/api/dustpan/v1/namespaces/acme/units/ws-absent/context",
+		"/api/dustpan/v1/namespaces/other/units/" + testUnitID + "/context",
+		"/api/dustpan/v1/namespaces/BAD%20NAME/context",
 	} {
 		rec := serve(t, handler, request{method: http.MethodGet, path: path, token: testToken, body: ""})
 		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `"message":"not found"`) {
@@ -496,6 +497,26 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 
 	if got := authz.seen(); len(got) != 0 {
 		t.Errorf("checks = %q, want none for an object that does not exist", got)
+	}
+}
+
+// TestUnitContextByUnitID proves that the path of a unit holds the unit ID and
+// no tool, and answers the context document of the unit.
+func TestUnitContextByUnitID(t *testing.T) {
+	t.Parallel()
+
+	handler := newHandler(t, newAuthorizer(
+		"namespace:read acme", "unit:read opentofu:acme/net",
+	), newFakeStore())
+
+	for _, path := range []string{
+		"/api/dustpan/v1/namespaces/acme/units/" + testUnitID + "/context?include=identity,health",
+		"/api/dustpan/v1/namespaces/acme/context",
+	} {
+		rec := serve(t, handler, request{method: http.MethodGet, path: path, token: testToken, body: ""})
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"sections"`) {
+			t.Errorf("GET %s = %d %s, want 200 with sections", path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

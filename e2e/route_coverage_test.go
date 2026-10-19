@@ -132,6 +132,7 @@ func adapterOf(route e2e.RouteRef) string {
 		strings.HasPrefix(route.Path, "/tofu/"):
 		return e2e.ToolTofu
 	case strings.HasPrefix(route.Path, "/api/inventory/") ||
+		strings.HasPrefix(route.Path, "/api/dustpan/v1/") ||
 		strings.HasPrefix(route.Path, "/api/server/") ||
 		strings.HasPrefix(route.Path, "/health/"):
 		return ""

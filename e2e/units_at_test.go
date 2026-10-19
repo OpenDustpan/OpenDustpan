@@ -27,7 +27,7 @@ type unitAtDoc struct {
 	DeletedAt   string `json:"deletedAt"`
 }
 
-// unitsAtDoc is the answer of GET /api/inventory/units with the at value.
+// unitsAtDoc is the answer of GET /api/dustpan/v1/namespaces/{namespace}/units with the at value.
 type unitsAtDoc struct {
 	Units   []unitAtDoc `json:"units"`
 	At      int64       `json:"at"`
@@ -39,10 +39,9 @@ type unitsAtDoc struct {
 // the inventory API, as the administrator of the e2e server.
 func unitsAt(ctx context.Context, env *e2e.Env, org string, at time.Time) (unitsAtDoc, string, error) {
 	q := url.Values{}
-	q.Set("organization", org)
 	q.Set("at", strconv.FormatInt(at.UnixMilli(), 10))
 
-	path := "/api/inventory/units?" + q.Encode()
+	path := "/api/dustpan/v1/namespaces/" + url.PathEscape(org) + "/units?" + q.Encode()
 
 	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
 	if err != nil {

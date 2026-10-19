@@ -93,10 +93,13 @@ type pgCopyTable struct {
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
+	tables = append(tables, pgCopyCollectionTables()...)
+	tables = append(tables, pgCopyGateTables()...)
 	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
+	tables = append(tables, pgCopyImportTables()...)
 
 	return tables
 }
@@ -184,7 +187,7 @@ func pgInventoryChangeTables() []pgCopyTable {
 		{
 			table: "inventory_changes",
 			columns: []string{
-				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
+				pgColNamespaceID, pgColSeq, pgColAtMs, pgColTool, pgColUnitID, pgColName, pgColDisplayName,
 				pgColStatus, "collection", "kind", "resource_count",
 			},
 			orderBy: []string{pgColNamespaceID, pgColSeq},
@@ -213,10 +216,22 @@ func pgCopyScopeTables() []pgCopyTable {
 			orderBy: []string{pgColNamespace, pgColTool, pgColName},
 		},
 		{
+			table:   "inventory_labels",
+			columns: []string{pgColNamespace, pgColUnitID, "label_key", "label_value"},
+			orderBy: []string{pgColUnitID, "label_key"},
+		},
+		{
 			table:   "inventory_deleted",
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
 		},
+	}
+}
+
+// pgCopyCollectionTables holds the COPY columns of the collection, context and
+// blob purge tables, in foreign-key order.
+func pgCopyCollectionTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
 			table: "collections",
 			columns: []string{
@@ -293,7 +308,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table: "audit_entries",
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
-				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
+				"object", pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 				"changes", "object_id", "fence_version", "principal_kind", "job_id", pgColReason,
 			},

@@ -415,8 +415,10 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	ps := portableRestoreStores(t, newStore(t), newStore(t))
 	ctx := t.Context()
 
-	seedBackupStore(t, ps.src)
+	seed := seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
+	checkImportRowCounts(t, ps.src, sum)
+	requireSeededGate(t, ps.src, sum)
 
 	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
@@ -427,8 +429,10 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	}
 
 	checkRestoredSuspendedMember(t, ps.dst)
+	checkRestoredImports(t, ps.dst, seed.acme, seed.imports)
 
 	again, sum2, _ := exportPortable(t, ps.dst)
+	requireSeededGate(t, ps.dst, sum2)
 
 	wantRows := maps.Clone(sum.RowCounts)
 	if _, ok := wantRows[sinkCursorTable]; ok {
