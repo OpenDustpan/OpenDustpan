@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -91,6 +92,7 @@ type Handler struct {
 	serverURL  string
 	now        func() time.Time
 	interval   time.Duration
+	polls      sync.Map
 	mux        *patternMux
 	routes     []Route
 }
@@ -131,7 +133,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces: cfg.Namespaces, pools: cfg.Pools, members: cfg.Members, handoffs: cfg.Handoffs,
 		claimer: cfg.Claimer, sweeps: cfg.Sweeps, operations: cfg.Operations,
 		authn: cfg.Authenticator, authz: cfg.Authorizer, sessions: cfg.Sessions, logger: cfg.Logger,
-		release: cfg.Release, serverURL: cfg.ServerURL, now: now, interval: interval,
+		release: cfg.Release, serverURL: cfg.ServerURL, now: now, interval: interval, polls: sync.Map{},
 		mux: newPatternMux(), routes: nil,
 	}
 

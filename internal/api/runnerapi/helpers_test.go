@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,13 +55,15 @@ type env struct {
 	handler *runnerapi.Handler
 	claimer *opsClaimer
 	fence   namespace.Fence
+	clock   *skewClock
 }
 
 // opsClaimer is a job.Claimer on the durable store: the phases of a job are
 // durable operations. The lease is the lease of the test, not of the pool.
 type opsClaimer struct {
-	ops   durable.Store
-	lease time.Duration
+	ops      durable.Store
+	lease    time.Duration
+	released atomic.Int64
 }
 
 var _ job.Claimer = (*opsClaimer)(nil)
@@ -73,7 +76,7 @@ func (c *opsClaimer) Claim(ctx context.Context, req job.ClaimRequest) (job.Assig
 
 	op, err := c.ops.Claim(
 		ctx,
-		durable.ClaimRequest{Owner: req.Owner, Kinds: req.Kinds, MaxVersions: nil, Lease: lease},
+		durable.ClaimRequest{Owner: req.Owner, Kinds: req.Kinds, MaxVersions: req.MaxVersions, Lease: lease},
 	)
 	if err != nil {
 		return job.Assignment{}, fmt.Errorf("claim: %w", err)
@@ -99,7 +102,17 @@ func (*opsClaimer) Renew(context.Context, job.PhaseClaim, time.Duration) (job.Ph
 	return job.PhaseClaim{}, errUnused
 }
 
-func (*opsClaimer) Release(context.Context, job.PhaseClaim) error { return errUnused }
+// Release counts the call and gives the operation back, as the job service
+// does for a phase with no started step.
+func (c *opsClaimer) Release(ctx context.Context, p job.PhaseClaim) error {
+	c.released.Add(1)
+
+	if err := c.ops.Release(ctx, p.Claim); err != nil {
+		return fmt.Errorf("release: %w", err)
+	}
+
+	return nil
+}
 
 func (*opsClaimer) Finish(context.Context, job.PhaseClaim, job.Outcome) error { return errUnused }
 
@@ -191,14 +204,36 @@ func newEnvOn(t *testing.T, lease time.Duration, open func(t *testing.T) stores)
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	h, srv, claimer := serve(t, s, lease)
+	clock := &skewClock{offset: atomic.Int64{}}
+	h, srv, claimer := serve(t, s, serveOptions{lease: lease, now: clock.now, authz: identity.AdminOnly{}})
 
-	return &env{t: t, store: s, server: srv, handler: h, claimer: claimer, fence: ns.Fence()}
+	return &env{t: t, store: s, server: srv, handler: h, claimer: claimer, fence: ns.Fence(), clock: clock}
+}
+
+// skewClock is the clock of the server in a test: the real time plus an
+// offset that the test moves forward.
+type skewClock struct {
+	offset atomic.Int64
+}
+
+func (c *skewClock) now() time.Time { return time.Now().Add(time.Duration(c.offset.Load())) }
+
+// advance moves the clock of the server forward by d. Proofs of runners
+// carry the real time, so a test advances the clock only for requests that
+// carry none.
+func (c *skewClock) advance(d time.Duration) { c.offset.Add(int64(d)) }
+
+// serveOptions are the settings of serve. A zero lease takes the lease of
+// the pool.
+type serveOptions struct {
+	lease time.Duration
+	now   func() time.Time
+	authz identity.Authorizer
 }
 
 // serve returns a handler over s on a test server. Two calls with the stores
 // of two instances of one installation give two replicas of the server.
-func serve(t *testing.T, s stores, lease time.Duration) (*runnerapi.Handler, *httptest.Server, *opsClaimer) {
+func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *httptest.Server, *opsClaimer) {
 	t.Helper()
 
 	service, err := namespace.NewService(namespace.Config{Store: s.namespaces, Now: nil, Region: region})
@@ -206,13 +241,13 @@ func serve(t *testing.T, s stores, lease time.Duration) (*runnerapi.Handler, *ht
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	claimer := &opsClaimer{ops: s.operations, lease: lease}
+	claimer := &opsClaimer{ops: s.operations, lease: opts.lease, released: atomic.Int64{}}
 
 	h, err := runnerapi.NewHandler(runnerapi.Config{
 		Namespaces: service, Pools: s.runners, Members: s.runners, Handoffs: s.runners, Claimer: claimer, Sweeps: nil,
-		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: identity.AdminOnly{},
+		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: opts.authz,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL,
-		Now: nil, PollInterval: 20 * time.Millisecond,
+		Now: opts.now, PollInterval: 20 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -308,12 +343,39 @@ func (e *env) joinToken(pool string) string {
 	return tok.Token
 }
 
+// joinToken2 makes a join token of a pool of the namespace globex and
+// returns its secret.
+func (e *env) joinToken2(pool string) string {
+	e.t.Helper()
+
+	status, body := e.admin(http.MethodPost, "/api/runners/globex/pools/"+pool+"/join-tokens", nil)
+	if status != http.StatusCreated {
+		e.t.Fatalf("create join token = %d %s, want 201", status, body)
+	}
+
+	var tok struct {
+		Token string `json:"token"`
+	}
+
+	decode(e.t, body, &tok)
+
+	return tok.Token
+}
+
 // startOperation starts a durable operation of the phases of the pool.
 func (e *env) startOperation(pool string) {
 	e.t.Helper()
 
+	e.startOperationAt(pool, phaseKey, 0)
+}
+
+// startOperationAt starts the durable operation key of the phases of the
+// pool, in the assignment version version.
+func (e *env) startOperationAt(pool, key string, version int) {
+	e.t.Helper()
+
 	_, _, err := e.store.operations.Start(e.t.Context(), durable.StartRequest{
-		Key: phaseKey, Kind: job.RunnerKind(pool), Version: 0, Input: nil,
+		Key: key, Kind: job.RunnerKind(pool), Version: version, Input: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("start operation: %v", err)
@@ -479,8 +541,15 @@ func opPath(operation, suffix string) string {
 func (f *fakeRunner) poll(wait time.Duration) *protocol.Work {
 	f.e.t.Helper()
 
+	return f.pollAt(wait, runner.AssignmentVersion)
+}
+
+// pollAt is poll with the assignment version that the launcher reads.
+func (f *fakeRunner) pollAt(wait time.Duration, version int) *protocol.Work {
+	f.e.t.Helper()
+
 	status, body := f.call(protocol.PathPoll, protocol.PollRequest{
-		Wait: protocol.FromStd(wait), AssignmentVersion: runner.AssignmentVersion,
+		Wait: protocol.FromStd(wait), AssignmentVersion: version,
 	})
 
 	switch status {

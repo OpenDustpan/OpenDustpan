@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
@@ -261,7 +262,7 @@ func TestLapsedLeaseMakesThePhaseClaimable(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			t.Parallel()
 
-			lapsedLeaseMakesThePhaseClaimable(t, newEnvOn(t, 50*time.Millisecond, b.open))
+			lapsedLeaseMakesThePhaseClaimable(t, newEnvOn(t, 200*time.Millisecond, b.open))
 		})
 	}
 }
@@ -285,7 +286,7 @@ func lapsedLeaseMakesThePhaseClaimable(t *testing.T, e *env) {
 		t.Fatal("first poll = 204, want work")
 	}
 
-	pause(t, 100*time.Millisecond)
+	pause(t, 400*time.Millisecond)
 
 	taken := second.poll(2 * time.Second)
 	if taken == nil || taken.Operation != old.Operation || taken.Token != old.Token+1 {
@@ -333,10 +334,10 @@ func TestReplicasClaimOnePhase(t *testing.T) {
 	first, second := openPostgresAt(t, schemaURL), openPostgresAt(t, schemaURL)
 
 	e := newEnvOn(t, 0, func(*testing.T) stores { return first })
-	_, replica, _ := serve(t, second, 0)
+	_, replica, _ := serve(t, second, serveOptions{lease: 0, now: nil, authz: identity.AdminOnly{}})
 
 	pool := e.createPool()
-	servers := []*env{e, {t: t, store: second, server: replica, handler: nil, claimer: nil, fence: e.fence}}
+	servers := []*env{e, {t: t, store: second, server: replica, handler: nil, claimer: nil, fence: e.fence, clock: nil}}
 
 	runners := make([]*fakeRunner, 0, replicaRunners)
 

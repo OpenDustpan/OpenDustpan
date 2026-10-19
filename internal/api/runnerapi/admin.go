@@ -1,6 +1,7 @@
 package runnerapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -73,8 +74,12 @@ func (h *Handler) resolvePool(r *http.Request, c *call) (runner.Pool, error) {
 
 	if strings.HasPrefix(ref, runner.PoolIDPrefix) {
 		p, err := h.pools.Pool(ctx, ref)
-		if err != nil || p.Namespace != c.ns.Name {
+		if errors.Is(err, runner.ErrNotFound) || (err == nil && p.Namespace != c.ns.Name) {
 			return runner.Pool{}, errNotFound
+		}
+
+		if err != nil {
+			return runner.Pool{}, fmt.Errorf("select pool: %w", err)
 		}
 
 		return p, nil
@@ -206,6 +211,128 @@ func (h *Handler) createPool(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	h.writeJSON(ctx, w, http.StatusCreated, poolOut(&stored))
+}
+
+// poolPatch is the body of a pool update. A field that the body leaves out
+// keeps its value. A purpose that differs from the pool is refused.
+type poolPatch struct {
+	Name           *string             `json:"name"`
+	Purpose        *string             `json:"purpose"`
+	Lease          *protocol.Duration  `json:"lease"`
+	Concurrency    *int                `json:"concurrency"`
+	Isolation      *[]string           `json:"isolation"`
+	GitCredentials *gitCredentialsJSON `json:"gitCredentials"`
+}
+
+// apply returns old with the fields of the patch, and the audit changes
+// that name each field that the patch changes.
+func (pp *poolPatch) apply(old *runner.Pool, at time.Time) (runner.Pool, []audit.Change) {
+	next := *old
+	next.UpdatedAt = at
+
+	var changes []audit.Change
+
+	note := func(key, before, after string) {
+		if before != after {
+			changes = append(changes, audit.Change{Key: key, Old: &before, New: after, Layer: "", TakesEffect: ""})
+		}
+	}
+
+	if pp.Name != nil {
+		next.Name = *pp.Name
+		note("name", old.Name, next.Name)
+	}
+
+	if pp.Purpose != nil {
+		next.Purpose = runner.Purpose(*pp.Purpose)
+		note("purpose", string(old.Purpose), string(next.Purpose))
+	}
+
+	if pp.Lease != nil {
+		next.Lease = pp.Lease.Std()
+		note("lease", old.EffectiveLease().String(), next.EffectiveLease().String())
+	}
+
+	if pp.Concurrency != nil {
+		next.Concurrency = *pp.Concurrency
+		note("concurrency", strconv.Itoa(old.EffectiveConcurrency()), strconv.Itoa(next.EffectiveConcurrency()))
+	}
+
+	if pp.Isolation != nil {
+		next.Isolation = make([]runner.Isolation, 0, len(*pp.Isolation))
+		for _, k := range *pp.Isolation {
+			next.Isolation = append(next.Isolation, runner.Isolation(k))
+		}
+
+		note("isolation", joinIsolation(old.Isolation), joinIsolation(next.Isolation))
+	}
+
+	if pp.GitCredentials != nil {
+		next.GitCredentials = runner.GitCredentials{
+			Mode:   runner.GitCredentialMode(pp.GitCredentials.Mode),
+			Helper: pp.GitCredentials.Helper,
+		}
+
+		note("gitCredentials", gitCredentialsText(old.GitCredentials), gitCredentialsText(next.GitCredentials))
+	}
+
+	return next, changes
+}
+
+// joinIsolation returns the isolation kinds as a comma-separated list.
+func joinIsolation(kinds []runner.Isolation) string {
+	names := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		names = append(names, string(k))
+	}
+
+	return strings.Join(names, ",")
+}
+
+// gitCredentialsText returns the mode, and the helper when there is one.
+func gitCredentialsText(g runner.GitCredentials) string {
+	if g.Helper == "" {
+		return string(g.Mode)
+	}
+
+	return string(g.Mode) + ":" + g.Helper
+}
+
+func (h *Handler) updatePool(w http.ResponseWriter, r *http.Request, c *call) {
+	ctx := r.Context()
+
+	var patch poolPatch
+	if err := decodeBody(c.body, &patch); err != nil {
+		h.writeError(ctx, w, ScopeAuthorized, err)
+
+		return
+	}
+
+	old, err := h.resolvePool(r, c)
+	if err != nil {
+		h.writeError(ctx, w, ScopeAuthorized, err)
+
+		return
+	}
+
+	fence, err := h.writable(r, c)
+	if err != nil {
+		h.writeError(ctx, w, ScopeAuthorized, err)
+
+		return
+	}
+
+	next, changes := patch.apply(&old, h.now())
+	e := h.manageEntry(r, c, runner.EventPoolChanged, old.ID, changes...)
+
+	stored, err := h.pools.UpdatePool(ctx, next, fence, []audit.Entry{e})
+	if err != nil {
+		h.writeError(ctx, w, ScopeAuthorized, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, poolOut(&stored))
 }
 
 func (h *Handler) deletePool(w http.ResponseWriter, r *http.Request, c *call) {
@@ -483,8 +610,12 @@ func (h *Handler) listRunners(w http.ResponseWriter, r *http.Request, c *call) {
 // resolveRunner finds the runner of the path in the namespace of the call.
 func (h *Handler) resolveRunner(r *http.Request, c *call) (runner.Runner, error) {
 	rn, err := h.members.Runner(r.Context(), r.PathValue("runner"))
-	if err != nil || rn.Namespace != c.ns.Name {
+	if errors.Is(err, runner.ErrNotFound) || (err == nil && rn.Namespace != c.ns.Name) {
 		return runner.Runner{}, errNotFound
+	}
+
+	if err != nil {
+		return runner.Runner{}, fmt.Errorf("select runner: %w", err)
 	}
 
 	return rn, nil

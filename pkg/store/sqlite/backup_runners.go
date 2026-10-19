@@ -73,7 +73,10 @@ func sqliteRunnerBackupTables() []sqliteBackupTable {
 // the runner protocol.
 func sqliteRunnerControlTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
-		{table: "runner_claims", columns: []string{backupColOperationID, backupColToken, "claimed_at_ms"}},
+		{
+			table:   "runner_claims",
+			columns: []string{backupColOperationID, backupColToken, "claimed_at_ms", "job_id", "phase"},
+		},
 		{
 			table: "runner_handoff_tokens",
 			columns: []string{

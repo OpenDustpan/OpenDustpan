@@ -52,6 +52,12 @@ func (d *runnerDomain) BumpFence(ctx context.Context, fence namespace.Fence) (na
 }
 
 func (d *runnerDomain) Claim(ctx context.Context, kind durable.Kind, owner string) (durable.Claim, error) {
+	return d.ClaimLease(ctx, kind, owner, time.Hour)
+}
+
+func (d *runnerDomain) ClaimLease(
+	ctx context.Context, kind durable.Kind, owner string, lease time.Duration,
+) (durable.Claim, error) {
 	ops := d.s.DurableOperations()
 
 	key := fmt.Sprintf("op-%d", d.counter.Add(1))
@@ -60,7 +66,7 @@ func (d *runnerDomain) Claim(ctx context.Context, kind durable.Kind, owner strin
 	}
 
 	op, err := ops.Claim(ctx, durable.ClaimRequest{
-		Owner: owner, Kinds: []durable.Kind{kind}, MaxVersions: nil, Lease: time.Hour,
+		Owner: owner, Kinds: []durable.Kind{kind}, MaxVersions: nil, Lease: lease,
 	})
 	if err != nil {
 		return durable.Claim{}, fmt.Errorf("claim operation: %w", err)
@@ -89,6 +95,14 @@ func (d *runnerDomain) Takeover(ctx context.Context, c durable.Claim) (durable.C
 	}
 
 	return taken.Claim, nil
+}
+
+func (d *runnerDomain) End(ctx context.Context, c durable.Claim) error {
+	if err := d.s.DurableOperations().Complete(ctx, c); err != nil {
+		return fmt.Errorf("complete operation: %w", err)
+	}
+
+	return nil
 }
 
 func (d *runnerDomain) UsePool(ctx context.Context, _ namespace.Fence, id string) error {

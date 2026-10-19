@@ -31,9 +31,9 @@ var (
 // names of the three ports apart from the other ports of the Store.
 //
 // The live claim of a durable operation is the row of durable_operations: the
-// operation is running and holds the owner and the token of the claim. The
-// expiry of the lease does not end a claim by itself: the next claim of the
-// operation takes it over with a new token.
+// operation is running, holds the owner and the token of the claim, and its
+// lease did not pass on the clock of the database. A lease that passed ends
+// the claim: the next claim of the operation takes it over with a new token.
 type Runners struct {
 	store *Store
 }
@@ -70,18 +70,43 @@ func loadPool(ctx context.Context, q *db.Queries, id string) (runner.Pool, strin
 	return p, row.NamespaceID, err
 }
 
-// loadRunner returns the runner id, or runner.ErrNotFound.
-func loadRunner(ctx context.Context, q *db.Queries, id string) (runner.Runner, error) {
+// loadRunnerRow returns the runner id and the ID of its namespace, or
+// runner.ErrNotFound.
+func loadRunnerRow(ctx context.Context, q *db.Queries, id string) (runner.Runner, string, error) {
 	row, err := q.GetRunner(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return runner.Runner{}, runner.ErrNotFound
+		return runner.Runner{}, "", runner.ErrNotFound
 	}
 
 	if err != nil {
-		return runner.Runner{}, fmt.Errorf("select runner: %w", err)
+		return runner.Runner{}, "", fmt.Errorf("select runner: %w", err)
 	}
 
-	return codec.RunnerFromRow(codec.RunnerRow(row))
+	rn, err := codec.RunnerFromRow(codec.RunnerRow(row))
+
+	return rn, row.NamespaceID, err
+}
+
+// loadRunner returns the runner id, or runner.ErrNotFound.
+func loadRunner(ctx context.Context, q *db.Queries, id string) (runner.Runner, error) {
+	rn, _, err := loadRunnerRow(ctx, q, id)
+
+	return rn, err
+}
+
+// loadRunnerOf returns the runner id of the namespace nsID. A runner of
+// another namespace is runner.ErrNotFound, as an unknown runner is.
+func loadRunnerOf(ctx context.Context, q *db.Queries, id, nsID string) (runner.Runner, error) {
+	rn, rnNS, err := loadRunnerRow(ctx, q, id)
+	if err != nil {
+		return runner.Runner{}, err
+	}
+
+	if rnNS != nsID {
+		return runner.Runner{}, runner.ErrNotFound
+	}
+
+	return rn, nil
 }
 
 // CreatePool implements runner.PoolStore.
@@ -485,24 +510,26 @@ func join(ctx context.Context, q *db.Queries, j runner.Joining, fence namespace.
 		return runner.Joined{}, fmt.Errorf("encode labels: %w", err)
 	}
 
-	id, rejoined, err := placeRunner(ctx, q, &placement{nsID: nsID, pool: &pool, joining: &j, labels: labels})
+	placed, err := placeRunner(ctx, q, &placement{nsID: nsID, pool: &pool, joining: &j, labels: labels})
 	if err != nil {
 		return runner.Joined{}, err
 	}
 
 	err = q.UseRunnerJoinToken(ctx, db.UseRunnerJoinTokenParams{
-		UsedAtMs: j.At.UnixMilli(), UsedBy: id, ID: tok.ID,
+		UsedAtMs: j.At.UnixMilli(), UsedBy: placed.id, ID: tok.ID,
 	})
 	if err != nil {
 		return runner.Joined{}, fmt.Errorf("use join token: %w", err)
 	}
 
-	stored, err := loadRunner(ctx, q, id)
+	stored, err := loadRunner(ctx, q, placed.id)
 	if err != nil {
 		return runner.Joined{}, err
 	}
 
-	return runner.Joined{Runner: stored, Rejoined: rejoined}, nil
+	return runner.Joined{
+		Runner: stored, Rejoined: placed.rejoined, PreviousKeyID: placed.previousKeyID, EndedClaims: placed.ended,
+	}, nil
 }
 
 // usableJoinToken returns the join token with the hash sum of the namespace
@@ -535,9 +562,20 @@ type placement struct {
 	labels  string
 }
 
+// placed is the result of placeRunner: the ID of the runner, and for a join
+// again the ID of its key before the join and the claims that the join ended.
+type placed struct {
+	id            string
+	rejoined      bool
+	previousKeyID string
+	ended         []string
+}
+
 // placeRunner inserts the runner of j, or takes the runner of the same name
 // over, and returns its ID.
-func placeRunner(ctx context.Context, q *db.Queries, pl *placement) (string, bool, error) {
+func placeRunner(ctx context.Context, q *db.Queries, pl *placement) (placed, error) {
+	none := placed{id: "", rejoined: false, previousKeyID: "", ended: nil}
+
 	nsID, pool, j, labels := pl.nsID, pl.pool, pl.joining, pl.labels
 	req := j.Request
 
@@ -545,11 +583,11 @@ func placeRunner(ctx context.Context, q *db.Queries, pl *placement) (string, boo
 	if errors.Is(err, pgx.ErrNoRows) {
 		count, countErr := q.CountRunnersOfPool(ctx, pool.ID)
 		if countErr != nil {
-			return "", false, fmt.Errorf("count runners: %w", countErr)
+			return none, fmt.Errorf("count runners: %w", countErr)
 		}
 
 		if count >= runner.MaxRunnersPerPool {
-			return "", false, fmt.Errorf("%w: a pool has at most %d runners", runner.ErrLimit, runner.MaxRunnersPerPool)
+			return none, fmt.Errorf("%w: a pool has at most %d runners", runner.ErrLimit, runner.MaxRunnersPerPool)
 		}
 
 		id := ident.NewID(runner.RunnerIDPrefix)
@@ -561,27 +599,32 @@ func placeRunner(ctx context.Context, q *db.Queries, pl *placement) (string, boo
 			LastSeenAtMs: j.At.UnixMilli(), JoinedAtMs: j.At.UnixMilli(),
 		})
 		if err != nil {
-			return "", false, fmt.Errorf("insert runner: %w", err)
+			return none, fmt.Errorf("insert runner: %w", err)
 		}
 
-		return id, false, nil
+		return placed{id: id, rejoined: false, previousKeyID: "", ended: nil}, nil
 	}
 
 	if err != nil {
-		return "", false, fmt.Errorf("select runner: %w", err)
+		return none, fmt.Errorf("select runner: %w", err)
 	}
 
 	known, err := codec.RunnerFromRow(codec.RunnerRow(existing))
 	if err != nil {
-		return "", false, err
+		return none, err
 	}
 
 	if !known.CanRejoin(j.At) {
-		return "", false, runner.ErrRunnerOnline
+		return none, runner.ErrRunnerOnline
+	}
+
+	ended, err := q.ListRunnerClaimsWithoutSession(ctx, known.ID)
+	if err != nil {
+		return none, fmt.Errorf("select waiting claims: %w", err)
 	}
 
 	if err = q.ExpireRunnerClaimsWithoutSession(ctx, known.ID); err != nil {
-		return "", false, fmt.Errorf("expire waiting claims: %w", err)
+		return none, fmt.Errorf("expire waiting claims: %w", err)
 	}
 
 	err = q.RejoinRunner(ctx, db.RejoinRunnerParams{
@@ -590,10 +633,10 @@ func placeRunner(ctx context.Context, q *db.Queries, pl *placement) (string, boo
 		JoinedWith: j.TokenSHA256, LastSeenAtMs: j.At.UnixMilli(),
 	})
 	if err != nil {
-		return "", false, fmt.Errorf("rejoin runner: %w", err)
+		return none, fmt.Errorf("rejoin runner: %w", err)
 	}
 
-	return known.ID, true, nil
+	return placed{id: known.ID, rejoined: true, previousKeyID: known.Key.ID(), ended: ended}, nil
 }
 
 // releaseString encodes a release, with the empty string for the zero
@@ -691,7 +734,11 @@ func (r *Runners) RotateKey(
 
 	// A request that changes nothing appends no audit entry: errNoChange
 	// rolls the transaction back.
-	err := r.inRunnerTx(ctx, fence, e, func(q *db.Queries, _ string) error {
+	err := r.inRunnerTx(ctx, fence, e, func(q *db.Queries, nsID string) error {
+		if _, err := loadRunnerOf(ctx, q, rot.Runner, nsID); err != nil {
+			return err
+		}
+
 		current, err := liveRunner(ctx, q, rot.Runner, rot.Next.CreatedAt)
 		if err != nil {
 			return err
@@ -735,8 +782,8 @@ func (r *Runners) RotateKey(
 func (r *Runners) SetDraining(
 	ctx context.Context, id string, draining bool, fence namespace.Fence, e []audit.Entry,
 ) error {
-	return r.inRunnerTx(ctx, fence, e, func(q *db.Queries, _ string) error {
-		rn, err := loadRunner(ctx, q, id)
+	return r.inRunnerTx(ctx, fence, e, func(q *db.Queries, nsID string) error {
+		rn, err := loadRunnerOf(ctx, q, id, nsID)
 		if err != nil {
 			return err
 		}
@@ -757,8 +804,8 @@ func (r *Runners) SetDraining(
 func (r *Runners) Retire(
 	ctx context.Context, id string, now time.Time, fence namespace.Fence, e []audit.Entry,
 ) error {
-	err := r.inRunnerTx(ctx, fence, e, func(q *db.Queries, _ string) error {
-		rn, err := loadRunner(ctx, q, id)
+	err := r.inRunnerTx(ctx, fence, e, func(q *db.Queries, nsID string) error {
+		rn, err := loadRunnerOf(ctx, q, id, nsID)
 		if err != nil {
 			return err
 		}
@@ -785,10 +832,12 @@ func (r *Runners) Retire(
 }
 
 // operationClaim reports whether c is the live claim of the operation in
-// row, and returns the durable kind of the operation.
-func operationClaim(row *db.DurableOperation, c durable.Claim) (durable.Kind, bool) {
+// row at nowMs, the time of the database: the lease of the claim did not
+// pass. It returns the durable kind of the operation.
+func operationClaim(row *db.DurableOperation, c durable.Claim, nowMs int64) (durable.Kind, bool) {
 	live := row.State == string(durable.StateRunning) && row.ClaimToken == c.Token &&
-		row.ClaimOwner.Valid && row.ClaimOwner.String == c.Owner
+		row.ClaimOwner.Valid && row.ClaimOwner.String == c.Owner &&
+		row.ClaimExpiresAtMs.Valid && row.ClaimExpiresAtMs.Int64 > nowMs
 
 	return durable.Kind(row.Kind), live
 }
@@ -805,7 +854,12 @@ func liveClaim(ctx context.Context, q *db.Queries, c durable.Claim) (durable.Kin
 		return "", false, fmt.Errorf("select durable operation: %w", err)
 	}
 
-	kind, live := operationClaim(&row, c)
+	nowMs, err := storeNow(ctx, q)
+	if err != nil {
+		return "", false, err
+	}
+
+	kind, live := operationClaim(&row, c, nowMs)
 
 	return kind, live, nil
 }
@@ -822,9 +876,81 @@ func lockClaim(ctx context.Context, q *db.Queries, c durable.Claim) (durable.Kin
 		return "", false, fmt.Errorf("lock durable operation: %w", err)
 	}
 
-	kind, live := operationClaim(&row, c)
+	nowMs, err := storeNow(ctx, q)
+	if err != nil {
+		return "", false, err
+	}
+
+	kind, live := operationClaim(&row, c, nowMs)
 
 	return kind, live, nil
+}
+
+// RecordClaim implements runner.SessionStore.
+func (r *Runners) RecordClaim(ctx context.Context, c durable.Claim, jobID string, phase int) error {
+	return r.store.inTx(ctx, func(q *db.Queries) error {
+		_, live, err := lockClaim(ctx, q, c)
+		if err != nil {
+			return err
+		}
+
+		if !live {
+			return runner.ErrClaimLost
+		}
+
+		nowMs, err := storeNow(ctx, q)
+		if err != nil {
+			return err
+		}
+
+		return recordClaimTime(ctx, q, c, claimStamp{atMs: nowMs, jobID: jobID, phase: phase})
+	})
+}
+
+// LookupClaim implements runner.SessionStore.
+func (r *Runners) LookupClaim(ctx context.Context, c durable.Claim) (runner.ClaimRecord, error) {
+	var out runner.ClaimRecord
+
+	err := r.store.inTx(ctx, func(q *db.Queries) error {
+		_, live, err := lockClaim(ctx, q, c)
+		if err != nil {
+			return err
+		}
+
+		if !live {
+			return runner.ErrClaimLost
+		}
+
+		row, err := q.GetRunnerClaim(ctx, db.GetRunnerClaimParams{OperationID: string(c.Operation), Token: c.Token})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return runner.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select claim: %w", err)
+		}
+
+		sessions, err := q.CountRunnerSessionsOfClaim(ctx, db.CountRunnerSessionsOfClaimParams{
+			OperationID: string(c.Operation), Token: c.Token,
+		})
+		if err != nil {
+			return fmt.Errorf("count sessions: %w", err)
+		}
+
+		out = runner.ClaimRecord{
+			Job:        row.JobID,
+			Phase:      int(row.Phase),
+			ClaimedAt:  codec.RunnerTime(row.ClaimedAtMs),
+			HasSession: sessions > 0,
+		}
+
+		return nil
+	})
+	if err != nil {
+		return runner.ClaimRecord{}, err
+	}
+
+	return out, nil
 }
 
 // IssueHandoffToken implements runner.SessionStore.
@@ -851,7 +977,7 @@ func (r *Runners) IssueHandoffToken(ctx context.Context, t runner.HandoffToken, 
 			return stepErr
 		}
 
-		return recordClaimTime(ctx, q, c, t.IssuedAt)
+		return recordClaimTime(ctx, q, c, claimStamp{atMs: t.IssuedAt.UnixMilli(), jobID: "", phase: 0})
 	})
 }
 
@@ -917,10 +1043,25 @@ func storeHandoffToken(ctx context.Context, q *db.Queries, t runner.HandoffToken
 	return nil
 }
 
-// recordClaimTime records the claim time at of the claim c, when it has none.
-func recordClaimTime(ctx context.Context, q *db.Queries, c durable.Claim, at time.Time) error {
+// claimStamp is the claim time in Unix milliseconds of a claim, with its job
+// and phase.
+type claimStamp struct {
+	atMs  int64
+	jobID string
+	phase int
+}
+
+// recordClaimTime records the claim time of the claim c, with its job and
+// phase, when it has no record.
+func recordClaimTime(ctx context.Context, q *db.Queries, c durable.Claim, rec claimStamp) error {
 	err := q.InsertRunnerClaimTime(ctx, db.InsertRunnerClaimTimeParams{
-		OperationID: string(c.Operation), Token: c.Token, ClaimedAtMs: at.UnixMilli(),
+		OperationID: string(
+			c.Operation,
+		),
+		Token:       c.Token,
+		ClaimedAtMs: rec.atMs,
+		JobID:       rec.jobID,
+		Phase:       int64(rec.phase),
 	})
 	if err != nil {
 		return fmt.Errorf("record claim time: %w", err)
@@ -997,12 +1138,16 @@ func openableHandoff(ctx context.Context, q *db.Queries, sum string, now time.Ti
 		return runner.HandoffToken{}, runner.ErrClaimLost
 	}
 
-	claimed, err := q.GetRunnerClaimTime(ctx, db.GetRunnerClaimTimeParams{OperationID: t.Operation, Token: t.Token})
+	claimed, err := q.GetRunnerClaim(ctx, db.GetRunnerClaimParams{OperationID: t.Operation, Token: t.Token})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return runner.HandoffToken{}, fmt.Errorf("%w: the claim has no record", runner.ErrClaimLost)
+	}
+
 	if err != nil {
 		return runner.HandoffToken{}, fmt.Errorf("select claim time: %w", err)
 	}
 
-	if now.Sub(codec.RunnerTime(claimed)) > runner.MaxSessionWait {
+	if now.Sub(codec.RunnerTime(claimed.ClaimedAtMs)) > runner.MaxSessionWait {
 		return runner.HandoffToken{}, fmt.Errorf("%w: no job session %v after the claim", runner.ErrClaimLost,
 			runner.MaxSessionWait)
 	}
@@ -1036,16 +1181,22 @@ func (r *Runners) RunnerRenew(
 			return releaseClaim(ctx, q, c)
 		}
 
-		expires := now.Add(d)
+		dbNow, err := storeNow(ctx, q)
+		if err != nil {
+			return err
+		}
+
+		expires := dbNow + d.Milliseconds()
+
 		err = q.SetRunnerClaimExpiry(ctx, db.SetRunnerClaimExpiryParams{
-			ID: string(c.Operation), Token: c.Token, ExpiresAtMs: pgtype.Int8{Int64: expires.UnixMilli(), Valid: true},
+			ID: string(c.Operation), Token: c.Token, ExpiresAtMs: pgtype.Int8{Int64: expires, Valid: true},
 		})
 		if err != nil {
 			return fmt.Errorf("move claim expiry: %w", err)
 		}
 
 		out = c
-		out.ExpiresAt = expires
+		out.ExpiresAt = codec.RunnerTime(expires)
 
 		return nil
 	})
@@ -1072,14 +1223,13 @@ func renewState(ctx context.Context, q *db.Queries, c durable.Claim, now time.Ti
 		return false, runner.ErrClaimLost
 	}
 
-	err = recordClaimTime(ctx, q, c, now)
-	if err != nil {
-		return false, err
-	}
-
-	claimed, err := q.GetRunnerClaimTime(ctx, db.GetRunnerClaimTimeParams{
+	claimed, err := q.GetRunnerClaim(ctx, db.GetRunnerClaimParams{
 		OperationID: string(c.Operation), Token: c.Token,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("%w: the claim has no record", runner.ErrClaimLost)
+	}
+
 	if err != nil {
 		return false, fmt.Errorf("select claim time: %w", err)
 	}
@@ -1091,7 +1241,7 @@ func renewState(ctx context.Context, q *db.Queries, c durable.Claim, now time.Ti
 		return false, fmt.Errorf("count sessions: %w", err)
 	}
 
-	checkErr := runner.CheckRunnerRenew(codec.RunnerTime(claimed), sessions > 0, now)
+	checkErr := runner.CheckRunnerRenew(codec.RunnerTime(claimed.ClaimedAtMs), sessions > 0, now)
 	if checkErr != nil && !errors.Is(checkErr, runner.ErrClaimLost) {
 		return false, checkErr
 	}
@@ -1107,7 +1257,7 @@ func releaseClaim(ctx context.Context, q *db.Queries, c durable.Claim) error {
 	}
 
 	err = q.ReleaseRunnerClaim(ctx, db.ReleaseRunnerClaimParams{
-		ID: string(c.Operation), Token: c.Token, NowMs: now,
+		ID: string(c.Operation), Token: c.Token, Owner: pgtype.Text{String: c.Owner, Valid: true}, NowMs: now,
 	})
 	if err != nil {
 		return fmt.Errorf("release claim: %w", err)

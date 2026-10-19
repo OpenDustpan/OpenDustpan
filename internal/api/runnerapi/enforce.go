@@ -186,16 +186,21 @@ func (h *Handler) checkRunner(r *http.Request, route Route, c *call) error {
 
 	rn, err := h.members.Runner(ctx, proof.Subject)
 	if errors.Is(err, runner.ErrNotFound) {
-		return fmt.Errorf("%w: unknown runner", runner.ErrBadProof)
+		return errProofRefused
 	}
 
 	if err != nil {
 		return fmt.Errorf("select runner: %w", err)
 	}
 
-	keys := rn.ProofKeys(now)
-	if route.Path == protocol.PathRotate {
-		keys = rn.RotationKeys(now)
+	// The signature comes first, so a caller without the key learns nothing
+	// about the runner: not its retire and not the age of its key.
+	sum := sha256.Sum256(c.body)
+	signed := runner.Signed{Method: r.Method, PathQuery: r.URL.RequestURI(), BodySHA256: sum[:]}
+
+	signer, err := verifyAny(signingKeys(&rn, route.Path, now), proof, signed, now)
+	if err != nil {
+		return err
 	}
 
 	switch {
@@ -203,14 +208,6 @@ func (h *Handler) checkRunner(r *http.Request, route Route, c *call) error {
 		return runner.ErrRetired
 	case rn.Key.ExpiredAt(now):
 		return runner.ErrKeyExpired
-	}
-
-	sum := sha256.Sum256(c.body)
-	signed := runner.Signed{Method: r.Method, PathQuery: r.URL.RequestURI(), BodySHA256: sum[:]}
-
-	signer, err := verifyAny(keys, proof, signed, now)
-	if err != nil {
-		return err
 	}
 
 	if protocol.NeedsNonce(route.Path) {
@@ -228,18 +225,33 @@ func (h *Handler) checkRunner(r *http.Request, route Route, c *call) error {
 // verifyAny returns the first key of keys that verifies the proof, or the
 // error of the last check.
 func verifyAny(keys []runner.Key, proof runner.Proof, signed runner.Signed, now time.Time) (runner.Key, error) {
-	err := fmt.Errorf("%w: the runner has no key that authenticates", runner.ErrBadProof)
-
 	for _, k := range keys {
-		checkErr := runner.CheckProof(k, proof, signed, now)
-		if checkErr == nil {
+		if runner.CheckProof(k, proof, signed, now) == nil {
 			return k, nil
 		}
-
-		err = checkErr
 	}
 
-	return runner.Key{Public: nil, CreatedAt: time.Time{}}, fmt.Errorf("check proof: %w", err)
+	return runner.Key{Public: nil, CreatedAt: time.Time{}}, errProofRefused
+}
+
+// errProofRefused is the one answer for a proof of an unknown runner and for
+// a proof that no key of a known runner verifies, so the answer does not tell
+// whether the runner exists.
+var errProofRefused = fmt.Errorf("%w: the proof does not authenticate", runner.ErrBadProof)
+
+// signingKeys returns the keys that may have signed a request of rn on the
+// path at now, whatever the age of the key and whether the runner is
+// retired: the current key, and on a rotation the previous key for
+// runner.RotateGrace after the rotation.
+func signingKeys(rn *runner.Runner, path string, now time.Time) []runner.Key {
+	keys := []runner.Key{rn.Key}
+
+	if path == protocol.PathRotate && len(rn.PreviousKey.Public) != 0 && !rn.RotatedAt.IsZero() &&
+		now.Sub(rn.RotatedAt) <= runner.RotateGrace {
+		keys = append(keys, rn.PreviousKey)
+	}
+
+	return keys
 }
 
 // readBody reads the body of r up to limit bytes. A longer body is an

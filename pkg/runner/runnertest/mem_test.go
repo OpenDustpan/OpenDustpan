@@ -37,6 +37,9 @@ type op struct {
 	token     int64
 	expires   time.Time
 	claimedAt time.Time
+	recorded  bool
+	job       string
+	phase     int
 }
 
 // nonceKey is a nonce of one subject.
@@ -113,14 +116,27 @@ func (m *mem) BumpFence(_ context.Context, fence namespace.Fence) (namespace.Fen
 	return namespace.Fence{Namespace: fence.Namespace, FailoverVersion: m.fences[fence.Namespace]}, nil
 }
 
-func (m *mem) Claim(_ context.Context, kind durable.Kind, owner string) (durable.Claim, error) {
+// hour is the lease of the claims that Claim makes.
+const hour = time.Hour
+
+func (m *mem) Claim(ctx context.Context, kind durable.Kind, owner string) (durable.Claim, error) {
+	return m.ClaimLease(ctx, kind, owner, hour)
+}
+
+func (m *mem) ClaimLease(
+	_ context.Context, kind durable.Kind, owner string, lease time.Duration,
+) (durable.Claim, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	id := durable.ID(nextID(m, "op-"))
-	m.ops[id] = op{kind: kind, owner: owner, token: 1, expires: time.Time{}, claimedAt: time.Time{}}
+	expires := time.Now().Add(lease)
+	m.ops[id] = op{
+		kind: kind, owner: owner, token: 1, expires: expires, claimedAt: time.Time{}, recorded: false, job: "",
+		phase: 0,
+	}
 
-	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: time.Time{}}, nil
+	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: expires}, nil
 }
 
 func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error) {
@@ -133,10 +149,23 @@ func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error
 	}
 
 	o.token++
-	o.owner, o.claimedAt = c.Owner, time.Time{}
+	o.owner, o.claimedAt, o.recorded, o.expires = c.Owner, time.Time{}, false, time.Now().Add(hour)
 	m.ops[c.Operation] = o
 
-	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: time.Time{}}, nil
+	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: o.expires}, nil
+}
+
+func (m *mem) End(_ context.Context, c durable.Claim) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !liveClaim(m, c) {
+		return durable.ErrClaimLost
+	}
+
+	delete(m.ops, c.Operation)
+
+	return nil
 }
 
 func (m *mem) UsePool(_ context.Context, _ namespace.Fence, id string) error {
@@ -246,6 +275,19 @@ func (m *mem) DeletePool(_ context.Context, id string, fence namespace.Fence, e 
 	}
 
 	delete(m.pools, id)
+
+	for k := range m.runners {
+		if m.runners[k].Pool == id {
+			delete(m.runners, k)
+		}
+	}
+
+	for k := range m.tokens {
+		if m.tokens[k].Pool == id {
+			delete(m.tokens, k)
+		}
+	}
+
 	appendAudit(m, fence, e)
 
 	return nil
@@ -420,6 +462,9 @@ func (m *mem) Join(
 
 	r := runnerNamed(m, p.ID, req.Name)
 	rejoined := r.ID != ""
+	previousKeyID := r.Key.ID()
+
+	var ended []string
 
 	switch {
 	case !rejoined:
@@ -428,7 +473,7 @@ func (m *mem) Join(
 	case !r.CanRejoin(now):
 		return runner.Joined{}, runner.ErrRunnerOnline
 	default:
-		expireWaitingClaims(m, r.ID)
+		ended = expireWaitingClaims(m, r.ID)
 	}
 
 	key := req.Key
@@ -441,7 +486,11 @@ func (m *mem) Join(
 	t.UsedAt, t.UsedBy = now, r.ID
 	m.tokens[t.ID] = t
 
-	out := runner.Joined{Runner: r, Rejoined: rejoined}
+	out := runner.Joined{Runner: r, Rejoined: rejoined, PreviousKeyID: "", EndedClaims: ended}
+	if rejoined {
+		out.PreviousKeyID = previousKeyID
+	}
+
 	appendAudit(m, fence, e(&out))
 
 	return out, nil
@@ -538,6 +587,10 @@ func (m *mem) RotateKey(
 		return runner.Runner{}, err
 	}
 
+	if own, ok := m.runners[id]; ok && own.Namespace != fence.Namespace {
+		return runner.Runner{}, runner.ErrNotFound
+	}
+
 	r, err := liveRunner(m, id, next.CreatedAt)
 	if err != nil {
 		return runner.Runner{}, err
@@ -566,7 +619,7 @@ func (m *mem) SetDraining(_ context.Context, id string, draining bool, fence nam
 	r, ok := m.runners[id]
 
 	switch {
-	case !ok:
+	case !ok, r.Namespace != fence.Namespace:
 		return runner.ErrNotFound
 	case !r.RetiredAt.IsZero():
 		return runner.ErrRetired
@@ -590,7 +643,7 @@ func (m *mem) Retire(_ context.Context, id string, now time.Time, fence namespac
 	r, ok := m.runners[id]
 
 	switch {
-	case !ok:
+	case !ok, r.Namespace != fence.Namespace:
 		return runner.ErrNotFound
 	case !r.RetiredAt.IsZero():
 		return nil
@@ -615,20 +668,28 @@ func expireAllClaims(m *mem, id string) {
 }
 
 // expireWaitingClaims ends the live claims of the runner id that have no
-// job session.
-func expireWaitingClaims(m *mem, id string) {
+// job session, and returns their operation IDs in order.
+func expireWaitingClaims(m *mem, id string) []string {
+	var ended []string
+
 	for k, o := range m.ops {
 		if o.owner == id && !hasSession(m, k, o.token) {
 			releaseOp(m, k)
+
+			ended = append(ended, string(k))
 		}
 	}
+
+	slices.Sort(ended)
+
+	return ended
 }
 
 // releaseOp ends the live claim of the operation id.
 func releaseOp(m *mem, id durable.ID) {
 	o := m.ops[id]
 	o.token++
-	o.owner, o.claimedAt = "", time.Time{}
+	o.owner, o.claimedAt, o.recorded, o.expires = "", time.Time{}, false, time.Time{}
 	m.ops[id] = o
 }
 
@@ -645,7 +706,7 @@ func hasSession(m *mem, id durable.ID, token int64) bool {
 func liveClaim(m *mem, c durable.Claim) bool {
 	o, ok := m.ops[c.Operation]
 
-	return ok && o.token == c.Token && o.owner == c.Owner
+	return ok && o.token == c.Token && o.owner == c.Owner && o.expires.After(time.Now())
 }
 
 func (m *mem) IssueHandoffToken(_ context.Context, t runner.HandoffToken, c durable.Claim) error {
@@ -683,18 +744,49 @@ func (m *mem) IssueHandoffToken(_ context.Context, t runner.HandoffToken, c dura
 	}
 
 	m.launches[t.SHA256] = t
-	recordClaimTime(m, c.Operation, t.IssuedAt)
+	recordClaimTime(m, c.Operation, t.IssuedAt, "", 0)
 
 	return nil
 }
 
 // recordClaimTime records the claim time at of the live claim of the
-// operation id, when it has none.
-func recordClaimTime(m *mem, id durable.ID, at time.Time) {
-	if o := m.ops[id]; o.claimedAt.IsZero() {
-		o.claimedAt = at
+// operation id, with its job and phase, when it has no record.
+func recordClaimTime(m *mem, id durable.ID, at time.Time, jobID string, phase int) {
+	if o := m.ops[id]; !o.recorded {
+		o.claimedAt, o.recorded, o.job, o.phase = at, true, jobID, phase
 		m.ops[id] = o
 	}
+}
+
+func (m *mem) RecordClaim(_ context.Context, c durable.Claim, jobID string, phase int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !liveClaim(m, c) {
+		return runner.ErrClaimLost
+	}
+
+	recordClaimTime(m, c.Operation, time.Now(), jobID, phase)
+
+	return nil
+}
+
+func (m *mem) LookupClaim(_ context.Context, c durable.Claim) (runner.ClaimRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !liveClaim(m, c) {
+		return runner.ClaimRecord{}, runner.ErrClaimLost
+	}
+
+	o := m.ops[c.Operation]
+	if !o.recorded {
+		return runner.ClaimRecord{}, runner.ErrNotFound
+	}
+
+	return runner.ClaimRecord{
+		Job: o.job, Phase: o.phase, ClaimedAt: o.claimedAt, HasSession: hasSession(m, c.Operation, c.Token),
+	}, nil
 }
 
 func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.Time) (runner.Session, error) {
@@ -715,7 +807,7 @@ func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.
 		return runner.Session{}, runner.ErrClaimLost
 	}
 
-	if now.Sub(m.ops[op].claimedAt) > runner.MaxSessionWait {
+	if !m.ops[op].recorded || now.Sub(m.ops[op].claimedAt) > runner.MaxSessionWait {
 		return runner.Session{}, fmt.Errorf("%w: no job session %v after the claim", runner.ErrClaimLost,
 			runner.MaxSessionWait)
 	}
@@ -747,7 +839,9 @@ func (m *mem) RunnerRenew(
 		return durable.Claim{}, runner.ErrClaimLost
 	}
 
-	recordClaimTime(m, c.Operation, now)
+	if !m.ops[c.Operation].recorded {
+		return durable.Claim{}, fmt.Errorf("%w: the claim has no record", runner.ErrClaimLost)
+	}
 
 	err := runner.CheckRunnerRenew(m.ops[c.Operation].claimedAt, hasSession(m, c.Operation, c.Token), now)
 	if errors.Is(err, runner.ErrClaimLost) {
@@ -759,7 +853,7 @@ func (m *mem) RunnerRenew(
 	}
 
 	o := m.ops[c.Operation]
-	o.expires = now.Add(d)
+	o.expires = time.Now().Add(d)
 	m.ops[c.Operation] = o
 	c.ExpiresAt = o.expires
 
@@ -775,7 +869,9 @@ func (m *mem) Session(_ context.Context, id string) (runner.Session, error) {
 		return runner.Session{}, runner.ErrNotFound
 	}
 
-	if !m.runners[s.Runner].RetiredAt.IsZero() {
+	// A runner that no longer exists authenticates nothing, as a retired
+	// runner does.
+	if rn, found := m.runners[s.Runner]; !found || !rn.RetiredAt.IsZero() {
 		return runner.Session{}, runner.ErrRetired
 	}
 

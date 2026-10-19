@@ -466,6 +466,8 @@ type RunnerClaim struct {
 	OperationID string
 	Token       int64
 	ClaimedAtMs int64
+	JobID       string
+	Phase       int64
 }
 
 type RunnerHandoffToken struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -603,6 +604,11 @@ func testRejoinNeedsOffline(t *testing.T, h Harness) {
 			first.ID)
 	}
 
+	if joined.PreviousKeyID != first.Key.ID() || !slices.Equal(joined.EndedClaims, []string{string(c.Operation)}) {
+		t.Fatalf("Join again = previous key %q and ended claims %v, want %q and [%s]", joined.PreviousKeyID,
+			joined.EndedClaims, first.Key.ID(), c.Operation)
+	}
+
 	tok, _ := handoffToken(t, c, first.ID, offline)
 
 	err = h.Sessions.IssueHandoffToken(t.Context(), tok, c)
@@ -795,8 +801,8 @@ func testRunnerRenew(t *testing.T, h Harness) {
 	f, r, c := l.f, l.r, l.c
 
 	got, err := h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, now.Add(time.Minute))
-	if err != nil || got.Token != c.Token || !got.ExpiresAt.Equal(now.Add(time.Minute+runner.DefaultLease)) {
-		t.Fatalf("RunnerRenew = %+v, %v, want the expiry %v", got, err, now.Add(time.Minute+runner.DefaultLease))
+	if err != nil || got.Token != c.Token {
+		t.Fatalf("RunnerRenew = %+v, %v, want the claim of the same token", got, err)
 	}
 
 	_, err = h.Sessions.RunnerRenew(t.Context(), c, 0, now)
@@ -835,17 +841,30 @@ func testRunnerRenew(t *testing.T, h Harness) {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	if _, err = h.Sessions.RunnerRenew(t.Context(), renewed, runner.DefaultLease, now); err != nil {
+	_, err = h.Sessions.RunnerRenew(t.Context(), renewed, runner.DefaultLease, time.Now())
+	wantErr(t, "RunnerRenew of a claim with no record", err, runner.ErrClaimLost)
+
+	// The claim time of a recorded claim is the database time: the times
+	// below are from the clock of the cases, which is the same clock.
+	start := time.Now()
+
+	if err = h.Sessions.RecordClaim(t.Context(), renewed, "", 0); err != nil {
+		t.Fatalf("RecordClaim: %v", err)
+	}
+
+	if _, err = h.Sessions.RunnerRenew(t.Context(), renewed, runner.DefaultLease, start); err != nil {
 		t.Fatalf("RunnerRenew before a handoff token: %v", err)
 	}
 
-	tok, _ := handoffToken(t, renewed, r.ID, now.Add(runner.MaxSessionWait-time.Minute))
+	tok, _ := handoffToken(t, renewed, r.ID, start.Add(runner.MaxSessionWait-time.Minute))
 	if err = h.Sessions.IssueHandoffToken(t.Context(), tok, renewed); err != nil {
 		t.Fatalf("IssueHandoffToken: %v", err)
 	}
 
-	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), after)
-	wantErr(t, "OpenSession after the session wait limit from the first renewal", err, runner.ErrClaimLost)
+	pastLimit := start.Add(runner.MaxSessionWait + time.Second)
+
+	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), pastLimit)
+	wantErr(t, "OpenSession after the session wait limit from the recorded claim time", err, runner.ErrClaimLost)
 }
 
 func testSessionNearWaitLimit(t *testing.T, h Harness) {
@@ -889,4 +908,279 @@ func testSessionNearWaitLimit(t *testing.T, h Harness) {
 
 	_, err = h.Sessions.OpenSession(t.Context(), next.SHA256, newKey(t), limit.Add(time.Second))
 	wantErr(t, "OpenSession after the session wait limit with a new token", err, runner.ErrClaimLost)
+}
+
+// window is a span of the clock of the cases that holds the claim time of a
+// claim: lo is at most the claim time, and hi is at least the claim time.
+type window struct {
+	lo, hi time.Time
+}
+
+// bracket records the claim c as the poll does, and returns the window of
+// its claim time.
+func bracket(t *testing.T, h Harness, c durable.Claim, jobID string, phase int) window {
+	t.Helper()
+
+	lo := time.Now().Truncate(time.Millisecond)
+
+	if err := h.Sessions.RecordClaim(t.Context(), c, jobID, phase); err != nil {
+		t.Fatalf("RecordClaim: %v", err)
+	}
+
+	return window{lo: lo, hi: time.Now()}
+}
+
+func testRecordClaim(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	r, err := join(t, f, joinToken(t, f, time.Hour), "cluster-a", now)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	_, err = h.Sessions.LookupClaim(t.Context(), c)
+	wantErr(t, "LookupClaim of a claim with no record", err, runner.ErrNotFound)
+
+	w := bracket(t, h, c, "job-1", 2)
+
+	rec, err := h.Sessions.LookupClaim(t.Context(), c)
+	if err != nil || rec.Job != "job-1" || rec.Phase != 2 || rec.HasSession {
+		t.Fatalf("LookupClaim = %+v, %v, want job-1, phase 2 and no session", rec, err)
+	}
+
+	if rec.ClaimedAt.Before(w.lo) || rec.ClaimedAt.After(w.hi) {
+		t.Fatalf("claim time %v is not between %v and %v: it must be the time of the database", rec.ClaimedAt, w.lo,
+			w.hi)
+	}
+
+	recordClaimIsOnce(t, h, recordedClaim{runner: r, claim: c, record: rec, hi: w.hi})
+}
+
+// recordedClaim is a claim of a runner with its record and the end of the
+// window of its claim time.
+type recordedClaim struct {
+	runner runner.Runner
+	claim  durable.Claim
+	record runner.ClaimRecord
+	hi     time.Time
+}
+
+// recordClaimIsOnce proves that a second RecordClaim and a session change
+// nothing of the record rec of the claim c, and that a claim of another owner
+// has no record.
+func recordClaimIsOnce(t *testing.T, h Harness, in recordedClaim) {
+	t.Helper()
+
+	r, c, rec, hi := in.runner, in.claim, &in.record, in.hi
+
+	if err := h.Sessions.RecordClaim(t.Context(), c, "job-2", 5); err != nil {
+		t.Fatalf("RecordClaim again: %v", err)
+	}
+
+	tok, secret := handoffToken(t, c, r.ID, hi)
+	if err := h.Sessions.IssueHandoffToken(t.Context(), tok, c); err != nil {
+		t.Fatalf("IssueHandoffToken: %v", err)
+	}
+
+	if _, err := h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), hi); err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+
+	again, err := h.Sessions.LookupClaim(t.Context(), c)
+	if err != nil || again.Job != "job-1" || again.Phase != 2 || !again.ClaimedAt.Equal(rec.ClaimedAt) ||
+		!again.HasSession {
+		t.Fatalf("LookupClaim after a second record and a session = %+v, %v, want the first record with a session",
+			again, err)
+	}
+
+	stranger := c
+	stranger.Owner = "rn-other"
+
+	err = h.Sessions.RecordClaim(t.Context(), stranger, "", 0)
+	wantErr(t, "RecordClaim of a claim with another owner", err, runner.ErrClaimLost)
+
+	_, err = h.Sessions.LookupClaim(t.Context(), stranger)
+	wantErr(t, "LookupClaim of a claim with another owner", err, runner.ErrClaimLost)
+}
+
+// shortLease is the lease of a claim that the cases let pass, and
+// leaseWait is the time to wait until it passed.
+const (
+	shortLease = 500 * time.Millisecond
+	leaseWait  = 800 * time.Millisecond
+)
+
+func testClaimLeasePasses(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	r, err := join(t, f, joinToken(t, f, time.Hour), "cluster-a", now)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	waiting, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, shortLease)
+	if err != nil {
+		t.Fatalf("ClaimLease: %v", err)
+	}
+
+	at := bracket(t, h, waiting, "job-1", 0).hi
+
+	tok, secret := handoffToken(t, waiting, r.ID, at)
+	if err = h.Sessions.IssueHandoffToken(t.Context(), tok, waiting); err != nil {
+		t.Fatalf("IssueHandoffToken: %v", err)
+	}
+
+	withSession, err := h.Domain.ClaimLease(t.Context(), job.RunnerKind(f.pool.ID), r.ID, shortLease)
+	if err != nil {
+		t.Fatalf("ClaimLease: %v", err)
+	}
+
+	bracket(t, h, withSession, "job-2", 0)
+
+	open, openSecret := handoffToken(t, withSession, r.ID, at)
+	if err = h.Sessions.IssueHandoffToken(t.Context(), open, withSession); err != nil {
+		t.Fatalf("IssueHandoffToken: %v", err)
+	}
+
+	s, err := h.Sessions.OpenSession(t.Context(), hash(openSecret), newKey(t), at)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+
+	timer := time.NewTimer(leaseWait)
+	select {
+	case <-t.Context().Done():
+		t.Fatal("the case ended before the lease passed")
+	case <-timer.C:
+	}
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, runner.DefaultLease, time.Now())
+	wantErr(t, "RunnerRenew after the lease passed", err, runner.ErrClaimLost)
+
+	late, _ := handoffToken(t, waiting, r.ID, time.Now())
+
+	err = h.Sessions.IssueHandoffToken(t.Context(), late, waiting)
+	wantErr(t, "IssueHandoffToken after the lease passed", err, runner.ErrClaimLost)
+
+	_, err = h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), time.Now())
+	wantErr(t, "OpenSession after the lease passed", err, runner.ErrClaimLost)
+
+	_, err = h.Sessions.RunnerRenew(t.Context(), withSession, runner.DefaultLease, time.Now())
+	wantErr(t, "RunnerRenew of a claim with a session after the lease passed", err, runner.ErrClaimLost)
+
+	_, err = h.Sessions.Session(t.Context(), s.ID)
+	wantErr(t, "Session after the lease passed", err, runner.ErrClaimLost)
+
+	err = h.Sessions.RecordClaim(t.Context(), waiting, "job-1", 0)
+	wantErr(t, "RecordClaim after the lease passed", err, runner.ErrClaimLost)
+}
+
+func testRenewExpiryFromDatabase(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	r, err := join(t, f, joinToken(t, f, time.Hour), "cluster-a", now)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	lo := bracket(t, h, c, "", 0).lo
+
+	// The clock of the caller is far in the past. The expiry still comes
+	// from the clock of the database.
+	got, err := h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, lo)
+	if err != nil {
+		t.Fatalf("RunnerRenew: %v", err)
+	}
+
+	earliest, latest := lo.Add(runner.DefaultLease), time.Now().Add(runner.DefaultLease)
+	if got.ExpiresAt.Before(earliest) || got.ExpiresAt.After(latest) {
+		t.Fatalf("RunnerRenew expiry = %v, want between %v and %v: the database time plus the lease", got.ExpiresAt,
+			earliest, latest)
+	}
+
+	skewed, err := h.Sessions.RunnerRenew(t.Context(), c, runner.DefaultLease, lo.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("RunnerRenew with a clock a minute ahead: %v", err)
+	}
+
+	if skewed.ExpiresAt.Equal(lo.Add(time.Minute + runner.DefaultLease)) {
+		t.Fatalf("RunnerRenew expiry = %v, which is the clock of the caller plus the lease", skewed.ExpiresAt)
+	}
+}
+
+func testOtherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	r, err := join(t, f, joinToken(t, f, time.Hour), "cluster-a", now)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	other, err := h.Domain.CreateNamespace(t.Context(), "globex")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	err = h.Members.SetDraining(t.Context(), r.ID, true, other, entries(other))
+	wantErr(t, "SetDraining with the fence of another namespace", err, runner.ErrNotFound)
+
+	err = h.Members.Retire(t.Context(), r.ID, now, other, entries(other))
+	wantErr(t, "Retire with the fence of another namespace", err, runner.ErrNotFound)
+
+	next := newKey(t)
+	next.CreatedAt = now.Add(runner.RotateKeyAfter)
+
+	_, err = h.Members.RotateKey(t.Context(), runner.Rotation{Runner: r.ID, Signer: r.Key.ID(), Next: next}, other,
+		entries(other))
+	wantErr(t, "RotateKey with the fence of another namespace", err, runner.ErrNotFound)
+
+	stored, err := h.Members.Runner(t.Context(), r.ID)
+	if err != nil || stored.Draining || !stored.RetiredAt.IsZero() || !bytes.Equal(stored.Key.Public, r.Key.Public) {
+		t.Fatalf("Runner after refused changes = %+v, %v, want it unchanged", stored, err)
+	}
+
+	got, err := h.Domain.AuditEntries(t.Context(), "globex")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("AuditEntries of the other namespace = %d, %v, want none", len(got), err)
+	}
+}
+
+func testSessionOfDeletedRunner(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+
+	if err = h.Domain.End(t.Context(), l.c); err != nil {
+		t.Fatalf("End: %v", err)
+	}
+
+	if err = h.Pools.DeletePool(t.Context(), l.f.pool.ID, l.f.fence, entries(l.f.fence)); err != nil {
+		t.Fatalf("DeletePool: %v", err)
+	}
+
+	_, err = h.Sessions.Session(t.Context(), s.ID)
+	wantErr(t, "Session of a runner that the delete of its pool removed", err, runner.ErrRetired)
 }

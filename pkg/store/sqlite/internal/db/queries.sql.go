@@ -4242,20 +4242,27 @@ func (q *Queries) GetRunner(ctx context.Context, id string) (GetRunnerRow, error
 	return i, err
 }
 
-const getRunnerClaimTime = `-- name: GetRunnerClaimTime :one
-SELECT claimed_at_ms FROM runner_claims WHERE operation_id = ?1 AND token = ?2
+const getRunnerClaim = `-- name: GetRunnerClaim :one
+SELECT claimed_at_ms, job_id, phase FROM runner_claims
+WHERE operation_id = ?1 AND token = ?2
 `
 
-type GetRunnerClaimTimeParams struct {
+type GetRunnerClaimParams struct {
 	OperationID string
 	Token       int64
 }
 
-func (q *Queries) GetRunnerClaimTime(ctx context.Context, arg GetRunnerClaimTimeParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getRunnerClaimTime, arg.OperationID, arg.Token)
-	var claimed_at_ms int64
-	err := row.Scan(&claimed_at_ms)
-	return claimed_at_ms, err
+type GetRunnerClaimRow struct {
+	ClaimedAtMs int64
+	JobID       string
+	Phase       int64
+}
+
+func (q *Queries) GetRunnerClaim(ctx context.Context, arg GetRunnerClaimParams) (GetRunnerClaimRow, error) {
+	row := q.db.QueryRowContext(ctx, getRunnerClaim, arg.OperationID, arg.Token)
+	var i GetRunnerClaimRow
+	err := row.Scan(&i.ClaimedAtMs, &i.JobID, &i.Phase)
+	return i, err
 }
 
 const getRunnerHandoffToken = `-- name: GetRunnerHandoffToken :one
@@ -4436,7 +4443,7 @@ func (q *Queries) GetRunnerPool(ctx context.Context, id string) (GetRunnerPoolRo
 
 const getRunnerSession = `-- name: GetRunnerSession :one
 SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
-       CAST(COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 0) AS INTEGER) AS runner_retired_at_ms
+       CAST(COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1) AS INTEGER) AS runner_retired_at_ms
 FROM runner_sessions s
 WHERE s.id = ?1
 `
@@ -6080,8 +6087,8 @@ func (q *Queries) InsertRunner(ctx context.Context, arg InsertRunnerParams) erro
 }
 
 const insertRunnerClaimTime = `-- name: InsertRunnerClaimTime :exec
-INSERT INTO runner_claims (operation_id, token, claimed_at_ms)
-VALUES (?1, ?2, ?3)
+INSERT INTO runner_claims (operation_id, token, claimed_at_ms, job_id, phase)
+VALUES (?1, ?2, ?3, ?4, ?5)
 ON CONFLICT (operation_id, token) DO NOTHING
 `
 
@@ -6089,10 +6096,18 @@ type InsertRunnerClaimTimeParams struct {
 	OperationID string
 	Token       int64
 	ClaimedAtMs int64
+	JobID       string
+	Phase       int64
 }
 
 func (q *Queries) InsertRunnerClaimTime(ctx context.Context, arg InsertRunnerClaimTimeParams) error {
-	_, err := q.db.ExecContext(ctx, insertRunnerClaimTime, arg.OperationID, arg.Token, arg.ClaimedAtMs)
+	_, err := q.db.ExecContext(ctx, insertRunnerClaimTime,
+		arg.OperationID,
+		arg.Token,
+		arg.ClaimedAtMs,
+		arg.JobID,
+		arg.Phase,
+	)
 	return err
 }
 
@@ -8652,6 +8667,41 @@ func (q *Queries) ListRoles(ctx context.Context) ([]ListRolesRow, error) {
 	return items, nil
 }
 
+const listRunnerClaimsWithoutSession = `-- name: ListRunnerClaimsWithoutSession :many
+SELECT id
+FROM durable_operations
+WHERE state = 'running' AND claim_owner = ?1
+  AND NOT EXISTS (
+    SELECT 1 FROM runner_sessions s
+    WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+  )
+ORDER BY id
+`
+
+// The operations whose live claim ExpireRunnerClaimsWithoutSession ends.
+func (q *Queries) ListRunnerClaimsWithoutSession(ctx context.Context, runnerID sql.NullString) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listRunnerClaimsWithoutSession, runnerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRunnerJoinTokens = `-- name: ListRunnerJoinTokens :many
 SELECT id, namespace_id, pool_id, sha256, created_by, created_at_ms, expires_at_ms, used_at_ms, used_by, revoked_at_ms
 FROM runner_join_tokens
@@ -9883,18 +9933,24 @@ const releaseRunnerClaim = `-- name: ReleaseRunnerClaim :exec
 UPDATE durable_operations
 SET state = CASE WHEN cancel_requested THEN 'canceled' ELSE 'pending' END,
     not_before_ms = ?1, claim_owner = NULL, claim_expires_at_ms = NULL, updated_at_ms = ?1
-WHERE id = ?2 AND claim_token = ?3 AND state = 'running'
+WHERE id = ?2 AND claim_token = ?3 AND claim_owner = ?4 AND state = 'running'
 `
 
 type ReleaseRunnerClaimParams struct {
 	NowMs int64
 	ID    string
 	Token int64
+	Owner sql.NullString
 }
 
 // Gives the claim back as durable.Store.Release does.
 func (q *Queries) ReleaseRunnerClaim(ctx context.Context, arg ReleaseRunnerClaimParams) error {
-	_, err := q.db.ExecContext(ctx, releaseRunnerClaim, arg.NowMs, arg.ID, arg.Token)
+	_, err := q.db.ExecContext(ctx, releaseRunnerClaim,
+		arg.NowMs,
+		arg.ID,
+		arg.Token,
+		arg.Owner,
+	)
 	return err
 }
 

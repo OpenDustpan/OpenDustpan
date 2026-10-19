@@ -75,6 +75,7 @@ func (h *Handler) buildRoutes() []Route {
 		{Method: http.MethodGet, Path: poolsPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listPools},
 		{Method: http.MethodPost, Path: poolsPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.createPool},
 		{Method: http.MethodGet, Path: poolPath, Scope: ScopeAuthorized, Actions: read, Serve: h.getPool},
+		{Method: http.MethodPatch, Path: poolPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.updatePool},
 		{Method: http.MethodDelete, Path: poolPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.deletePool},
 		{Method: http.MethodGet, Path: joinTokensPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listJoinTokens},
 		{

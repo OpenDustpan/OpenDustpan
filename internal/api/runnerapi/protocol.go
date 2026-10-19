@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
@@ -144,6 +145,14 @@ func (h *Handler) joinEntry(
 		{Key: "release", Old: nil, New: j.Runner.Release.String(), Layer: "", TakesEffect: ""},
 		{Key: "isolation", Old: nil, New: string(j.Runner.Isolation), Layer: "", TakesEffect: ""},
 		{Key: "keyID", Old: nil, New: j.Runner.Key.ID(), Layer: "", TakesEffect: ""},
+	}
+
+	if j.Rejoined {
+		e.Changes[len(e.Changes)-1].Old = &j.PreviousKeyID
+		e.Changes = append(e.Changes,
+			audit.Change{
+				Key: "endedClaims", Old: nil, New: strings.Join(j.EndedClaims, ","), Layer: "", TakesEffect: "",
+			})
 	}
 
 	return e
@@ -324,7 +333,8 @@ func (h *Handler) claimState(r *http.Request, runnerID, operation string) (claim
 }
 
 // poll long-polls for one phase or sweep of the pool of the runner. The
-// server takes the kinds from the pool, never from the request.
+// server takes the kinds from the pool, never from the request. A runner has
+// one poll at a time.
 func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 	ctx := r.Context()
 
@@ -335,11 +345,13 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 
-	if c.runner.Draining {
-		w.WriteHeader(http.StatusNoContent)
+	if _, busy := h.polls.LoadOrStore(c.runner.ID, struct{}{}); busy {
+		h.writeError(ctx, w, ScopeRunnerKey, fmt.Errorf("%w: a runner has one poll at a time", runner.ErrLimit))
 
 		return
 	}
+
+	defer h.polls.Delete(c.runner.ID)
 
 	pool, err := h.pools.Pool(ctx, c.runner.Pool)
 	if err != nil {
@@ -354,15 +366,19 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 	defer deadline.Stop()
 
 	for {
-		work, found, claimErr := h.tryClaim(r, &c.runner, &pool)
-		if claimErr != nil {
+		work, result, claimErr := h.pollOnce(r, &c.runner, &pool, req.AssignmentVersion)
+
+		switch {
+		case claimErr != nil:
 			h.writeError(ctx, w, ScopeRunnerKey, claimErr)
 
 			return
-		}
-
-		if found {
+		case result == pollWork:
 			h.writeJSON(ctx, w, http.StatusOK, work)
+
+			return
+		case result == pollStop:
+			w.WriteHeader(http.StatusNoContent)
 
 			return
 		}
@@ -384,64 +400,144 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 }
 
+// pollResult is what one try of a poll found.
+type pollResult int
+
+const (
+	// pollIdle means no work now: the poll goes on until its deadline.
+	pollIdle pollResult = iota
+	// pollWork means the poll claimed work.
+	pollWork
+	// pollStop means the runner is draining or retired: the poll ends.
+	pollStop
+)
+
+// pollOnce tries one claim for the runner. A runner that is draining or
+// retired now claims nothing: the server reads the runner again, because a
+// drain or a retire may start during a long poll.
+func (h *Handler) pollOnce(
+	r *http.Request, caller *runner.Runner, pool *runner.Pool, assignmentVersion int,
+) (protocol.Work, pollResult, error) {
+	var none protocol.Work
+
+	rn, err := h.members.Runner(r.Context(), caller.ID)
+	if err != nil {
+		return none, pollIdle, fmt.Errorf("select runner: %w", err)
+	}
+
+	if rn.Draining || !rn.RetiredAt.IsZero() {
+		return none, pollStop, nil
+	}
+
+	work, found, err := h.tryClaim(r, &rn, pool, assignmentVersion)
+	if found {
+		return work, pollWork, nil
+	}
+
+	return work, pollIdle, err
+}
+
 // tryClaim asks the claimer of the purpose of pool for one phase or sweep.
-func (h *Handler) tryClaim(r *http.Request, rn *runner.Runner, pool *runner.Pool) (protocol.Work, bool, error) {
+func (h *Handler) tryClaim(
+	r *http.Request, rn *runner.Runner, pool *runner.Pool, assignmentVersion int,
+) (protocol.Work, bool, error) {
+	kinds, err := runner.ClaimKinds(pool)
+	if err != nil {
+		return protocol.Work{}, false, fmt.Errorf("claim kinds: %w", err)
+	}
+
+	// The claim never takes an operation above the assignment version that
+	// the launcher reads.
+	maxVersions := make(map[durable.Kind]int, len(kinds))
+	for _, k := range kinds {
+		maxVersions[k] = assignmentVersion
+	}
+
+	switch pool.Purpose {
+	case runner.PurposeJobs:
+		return h.claimPhase(r, rn, pool, kinds, maxVersions)
+	case runner.PurposeSweeps:
+		return h.claimSweep(r, rn, pool, kinds, maxVersions)
+	default:
+		return protocol.Work{}, false, fmt.Errorf("%w: unknown purpose %q", runner.ErrInvalid, pool.Purpose)
+	}
+}
+
+// claimPhase takes one phase of the kinds for the runner and records the
+// claim.
+func (h *Handler) claimPhase(
+	r *http.Request, rn *runner.Runner, pool *runner.Pool, kinds []durable.Kind, maxVersions map[durable.Kind]int,
+) (protocol.Work, bool, error) {
 	ctx := r.Context()
 
 	var none protocol.Work
 
-	kinds, err := runner.ClaimKinds(pool)
-	if err != nil {
-		return none, false, fmt.Errorf("claim kinds: %w", err)
+	if h.claimer == nil {
+		return none, false, nil
 	}
 
 	lease := pool.EffectiveLease()
 
-	switch pool.Purpose {
-	case runner.PurposeJobs:
-		if h.claimer == nil {
-			return none, false, nil
-		}
-
-		a, err := h.claimer.Claim(ctx, job.ClaimRequest{Owner: rn.ID, Kinds: kinds, Lease: lease})
-		if errors.Is(err, durable.ErrNoWork) {
-			return none, false, nil
-		}
-
-		if err != nil {
-			return none, false, fmt.Errorf("claim phase: %w", err)
-		}
-
-		limits := runner.LimitsFor(a.Job.Spec.Steps)
-		claim := a.Claim
-
-		return protocol.Work{
-			Operation: string(claim.Claim.Operation), Token: claim.Claim.Token, ExpiresAt: claim.Claim.ExpiresAt.UTC(),
-			Lease: protocol.FromStd(lease), Job: string(claim.Job), Phase: claim.Phase, Sweep: "", Image: "",
-			ServiceAccount: "", Deadline: protocol.FromStd(limits.Deadline), Grace: protocol.FromStd(limits.Grace),
-		}, true, nil
-	case runner.PurposeSweeps:
-		if h.sweeps == nil {
-			return none, false, nil
-		}
-
-		s, err := h.sweeps.Claim(ctx, durable.ClaimRequest{Owner: rn.ID, Kinds: kinds, MaxVersions: nil, Lease: lease})
-		if errors.Is(err, durable.ErrNoWork) {
-			return none, false, nil
-		}
-
-		if err != nil {
-			return none, false, fmt.Errorf("claim sweep: %w", err)
-		}
-
-		return protocol.Work{
-			Operation: string(s.Claim.Operation), Token: s.Claim.Token, ExpiresAt: s.Claim.ExpiresAt.UTC(),
-			Lease: protocol.FromStd(lease), Job: "", Phase: 0, Sweep: s.Work.Sweep, Image: s.Work.Image,
-			ServiceAccount: "", Deadline: protocol.FromStd(s.Work.Deadline), Grace: protocol.FromStd(s.Work.Grace),
-		}, true, nil
-	default:
-		return none, false, fmt.Errorf("%w: unknown purpose %q", runner.ErrInvalid, pool.Purpose)
+	a, err := h.claimer.Claim(ctx, job.ClaimRequest{
+		Owner: rn.ID, Kinds: kinds, MaxVersions: maxVersions, Lease: lease,
+	})
+	if errors.Is(err, durable.ErrNoWork) {
+		return none, false, nil
 	}
+
+	if err != nil {
+		return none, false, fmt.Errorf("claim phase: %w", err)
+	}
+
+	limits := runner.LimitsFor(a.Job.Spec.Steps)
+	claim := a.Claim
+
+	if err = h.handoffs.RecordClaim(ctx, claim.Claim, string(claim.Job), claim.Phase); err != nil {
+		return none, false, fmt.Errorf("record claim: %w", err)
+	}
+
+	return protocol.Work{
+		Operation: string(claim.Claim.Operation), Token: claim.Claim.Token, ExpiresAt: claim.Claim.ExpiresAt.UTC(),
+		Lease: protocol.FromStd(lease), Job: string(claim.Job), Phase: claim.Phase, Sweep: "", Image: "",
+		ServiceAccount: "", Deadline: protocol.FromStd(limits.Deadline), Grace: protocol.FromStd(limits.Grace),
+	}, true, nil
+}
+
+// claimSweep takes one sweep of the kinds for the runner and records the
+// claim.
+func (h *Handler) claimSweep(
+	r *http.Request, rn *runner.Runner, pool *runner.Pool, kinds []durable.Kind, maxVersions map[durable.Kind]int,
+) (protocol.Work, bool, error) {
+	ctx := r.Context()
+
+	var none protocol.Work
+
+	if h.sweeps == nil {
+		return none, false, nil
+	}
+
+	lease := pool.EffectiveLease()
+
+	s, err := h.sweeps.Claim(ctx, durable.ClaimRequest{
+		Owner: rn.ID, Kinds: kinds, MaxVersions: maxVersions, Lease: lease,
+	})
+	if errors.Is(err, durable.ErrNoWork) {
+		return none, false, nil
+	}
+
+	if err != nil {
+		return none, false, fmt.Errorf("claim sweep: %w", err)
+	}
+
+	if err = h.handoffs.RecordClaim(ctx, s.Claim, "", 0); err != nil {
+		return none, false, fmt.Errorf("record claim: %w", err)
+	}
+
+	return protocol.Work{
+		Operation: string(s.Claim.Operation), Token: s.Claim.Token, ExpiresAt: s.Claim.ExpiresAt.UTC(),
+		Lease: protocol.FromStd(lease), Job: "", Phase: 0, Sweep: s.Work.Sweep, Image: s.Work.Image,
+		ServiceAccount: "", Deadline: protocol.FromStd(s.Work.Deadline), Grace: protocol.FromStd(s.Work.Grace),
+	}, true, nil
 }
 
 // liveClaim returns the live claim of the runner on the operation of the
@@ -560,7 +656,7 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 		return
 	}
 
-	if err = h.operations.Release(ctx, claim); err != nil {
+	if err = h.giveBack(r, &c.runner, claim); err != nil {
 		h.writeError(ctx, w, ScopeRunnerKey, err)
 
 		return
@@ -569,6 +665,57 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 	h.logger.InfoContext(ctx, "runner released a claim", slog.String("runner", c.runner.ID),
 		slog.String("operation", string(claim.Operation)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// giveBack releases the claim of the runner through the claimer of the
+// purpose of its pool, so the rules of the claimer decide what the release
+// does to the operation: a phase after a started change fails, and a cancel
+// ends the job. A claim with a job session is not released.
+func (h *Handler) giveBack(r *http.Request, rn *runner.Runner, claim durable.Claim) error {
+	ctx := r.Context()
+
+	rec, err := h.handoffs.LookupClaim(ctx, claim)
+	if err != nil {
+		return fmt.Errorf("look up claim: %w", err)
+	}
+
+	if rec.HasSession {
+		return fmt.Errorf("%w: the claim has a job session", runner.ErrConflict)
+	}
+
+	pool, err := h.pools.Pool(ctx, rn.Pool)
+	if err != nil {
+		return fmt.Errorf("select pool: %w", err)
+	}
+
+	switch pool.Purpose {
+	case runner.PurposeJobs:
+		if h.claimer == nil {
+			return runner.ErrNotFound
+		}
+
+		fence, fenceErr := h.fenceOf(r, rn.Namespace)
+		if fenceErr != nil {
+			return fenceErr
+		}
+
+		phase := job.PhaseClaim{Job: job.ID(rec.Job), Phase: rec.Phase, Claim: claim, Fence: fence}
+		if err = h.claimer.Release(ctx, phase); err != nil {
+			return fmt.Errorf("release phase: %w", err)
+		}
+	case runner.PurposeSweeps:
+		if h.sweeps == nil {
+			return runner.ErrNotFound
+		}
+
+		if err = h.sweeps.Release(ctx, claim); err != nil {
+			return fmt.Errorf("release sweep: %w", err)
+		}
+	default:
+		return fmt.Errorf("%w: unknown purpose %q", runner.ErrInvalid, pool.Purpose)
+	}
+
+	return nil
 }
 
 // newSecret returns a secret that starts with prefix and holds 256 random

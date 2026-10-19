@@ -267,6 +267,8 @@ func TestRunnerManagement(t *testing.T) {
 		t.Fatalf("delete a pool in use = %d %s, want 409", status, body)
 	}
 
+	e.retireThenDrain(r.id)
+
 	entries := e.auditActions()
 	for _, want := range []runner.Event{
 		runner.EventPoolCreated, runner.EventJoinTokenCreated, runner.EventRunnerJoined, runner.EventRunnerDrained,
@@ -274,5 +276,178 @@ func TestRunnerManagement(t *testing.T) {
 		if !entries[string(want)] {
 			t.Errorf("audit log has no entry for %s", want)
 		}
+	}
+}
+
+// TestPoolUpdate drives PATCH on a pool: the fields of the body change, the
+// others stay, the purpose never changes, and each change has an audit entry.
+func TestPoolUpdate(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+	pool := e.createPool()
+	path := "/api/runners/acme/pools/" + pool
+
+	status, body := e.admin(http.MethodPatch, path, map[string]any{"concurrency": 4, "lease": 120_000})
+	if status != http.StatusOK || !strings.Contains(string(body), `"concurrency":4`) ||
+		!strings.Contains(string(body), `"lease":120000`) || !strings.Contains(string(body), `"name":"prod"`) {
+		t.Fatalf("patch = %d %s, want 200 with the new concurrency and lease, and the old name", status, body)
+	}
+
+	status, body = e.admin(http.MethodPatch, path, map[string]any{"name": "staging"})
+	if status != http.StatusOK || !strings.Contains(string(body), `"name":"staging"`) ||
+		!strings.Contains(string(body), `"concurrency":4`) {
+		t.Fatalf("patch of the name = %d %s, want 200 with the name and the earlier concurrency", status, body)
+	}
+
+	tests := []struct {
+		name string
+		body any
+		want int
+	}{
+		{"a purpose that differs", map[string]any{"purpose": "sweeps"}, http.StatusConflict},
+		{"an unknown field", map[string]any{"flavor": "red"}, http.StatusBadRequest},
+		{"a name that is not valid", map[string]any{"name": "Prod!"}, http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		if status, body = e.admin(http.MethodPatch, path, tc.body); status != tc.want {
+			t.Errorf("patch with %s = %d %s, want %d", tc.name, status, body, tc.want)
+		}
+	}
+
+	status, body = e.admin(http.MethodPatch, "/api/runners/acme/pools/rp-missing", map[string]any{})
+	if status != http.StatusNotFound {
+		t.Errorf("patch of an unknown pool = %d %s, want 404", status, body)
+	}
+
+	if !e.auditActions()[string(runner.EventPoolChanged)] {
+		t.Errorf("audit log has no entry for %s", runner.EventPoolChanged)
+	}
+}
+
+// onlyIn allows every action on the objects of one namespace.
+type onlyIn struct {
+	ns namespace.Name
+}
+
+func (o onlyIn) Authorize(_ context.Context, _ identity.Principal, _ identity.Action, obj identity.Object) error {
+	if obj.Namespace() == o.ns {
+		return nil
+	}
+
+	return identity.ErrDenied
+}
+
+func (onlyIn) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Scope{}, errNoListing
+}
+
+// TestOtherNamespaceIsNotFound proves that a principal of one namespace
+// cannot drain, retire or revoke a runner or a join token of another
+// namespace by its ID: each answers 404 and changes nothing.
+func TestOtherNamespaceIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t)
+
+	other := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: "globex", HomeRegion: region,
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := e.store.namespaces.CreateNamespace(t.Context(), other); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	status, body := e.admin(
+		http.MethodPost,
+		"/api/runners/globex/pools",
+		map[string]any{"name": "prod", "purpose": "jobs"},
+	)
+	if status != http.StatusCreated {
+		t.Fatalf("create pool in globex = %d %s, want 201", status, body)
+	}
+
+	var pool struct {
+		ID string `json:"id"`
+	}
+
+	decode(t, body, &pool)
+
+	status, body = e.admin(http.MethodPost, "/api/runners/globex/pools/"+pool.ID+"/join-tokens", nil)
+	if status != http.StatusCreated {
+		t.Fatalf("create join token in globex = %d %s, want 201", status, body)
+	}
+
+	var tok struct {
+		ID    string `json:"id"`
+		Token string `json:"token"`
+	}
+
+	decode(t, body, &tok)
+
+	foreign := e.newRunner("foreign")
+	if status, body = foreign.join(pool.ID, e.joinToken2(pool.ID)); status != http.StatusOK {
+		t.Fatalf("join in globex = %d %s, want 200", status, body)
+	}
+
+	// The same stores, behind an authorizer that holds acme only.
+	_, srv, _ := serve(t, e.store, serveOptions{lease: 0, now: nil, authz: onlyIn{ns: "acme"}})
+	acme := &env{t: t, store: e.store, server: srv, handler: nil, claimer: nil, fence: e.fence, clock: nil}
+	acmePool := acme.createPool()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"drain by ID", http.MethodPost, "/api/runners/acme/runners/" + foreign.id + "/drain"},
+		{"retire by ID", http.MethodPost, "/api/runners/acme/runners/" + foreign.id + "/retire"},
+		{
+			"revoke a token by ID",
+			http.MethodPost,
+			"/api/runners/acme/pools/" + acmePool + "/join-tokens/" + tok.ID + "/revoke",
+		},
+		{
+			"revoke through the pool ID",
+			http.MethodPost,
+			"/api/runners/acme/pools/" + pool.ID + "/join-tokens/" + tok.ID + "/revoke",
+		},
+		{"read the pool by ID", http.MethodGet, "/api/runners/acme/pools/" + pool.ID},
+		{"drain in the namespace", http.MethodPost, "/api/runners/globex/runners/" + foreign.id + "/drain"},
+	}
+
+	for _, tc := range tests {
+		if status, body = acme.admin(tc.method, tc.path, nil); status != http.StatusNotFound {
+			t.Errorf("%s = %d %s, want 404", tc.name, status, body)
+		}
+	}
+
+	status, body = e.admin(http.MethodGet, "/api/runners/globex/pools/"+pool.ID+"/runners", nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"draining":false`) ||
+		strings.Contains(string(body), `"status":"retired"`) {
+		t.Errorf("runners of globex = %d %s, want the runner not draining and not retired", status, body)
+	}
+
+	status, body = e.admin(http.MethodGet, "/api/runners/globex/pools/"+pool.ID+"/join-tokens", nil)
+	if status != http.StatusOK || strings.Contains(string(body), `"revokedAt"`) {
+		t.Errorf("join tokens of globex = %d %s, want none revoked", status, body)
+	}
+}
+
+// retireThenDrain retires the runner and proves that a drain of a retired
+// runner answers 409 with the reason.
+func (e *env) retireThenDrain(id string) {
+	e.t.Helper()
+
+	status, body := e.admin(http.MethodPost, "/api/runners/acme/runners/"+id+"/retire", nil)
+	if status != http.StatusNoContent {
+		e.t.Fatalf("retire = %d %s, want 204", status, body)
+	}
+
+	status, body = e.admin(http.MethodPost, "/api/runners/acme/runners/"+id+"/drain", nil)
+	if status != http.StatusConflict || !strings.Contains(string(body), "the runner is retired") {
+		e.t.Fatalf("drain of a retired runner = %d %s, want 409 with the message that the runner is retired",
+			status, body)
 	}
 }

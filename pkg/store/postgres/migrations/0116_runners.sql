@@ -4,7 +4,7 @@
 -- when the pool takes the default. isolation and labels hold JSON.
 CREATE TABLE runner_pools (
     id             text    NOT NULL PRIMARY KEY,
-    namespace_id   text    NOT NULL,
+    namespace_id   text    NOT NULL REFERENCES namespaces (id),
     name           text    NOT NULL,
     purpose        text    NOT NULL,
     lease_ms       bigint NOT NULL,
@@ -21,7 +21,7 @@ CREATE TABLE runner_pools (
 -- The store keeps the SHA-256 of the secret, never the secret.
 CREATE TABLE runner_join_tokens (
     id            text    NOT NULL PRIMARY KEY,
-    namespace_id  text    NOT NULL,
+    namespace_id  text    NOT NULL REFERENCES namespaces (id),
     pool_id       text    NOT NULL REFERENCES runner_pools (id),
     sha256        text    NOT NULL UNIQUE,
     created_by    text    NOT NULL,
@@ -36,7 +36,7 @@ CREATE INDEX runner_join_tokens_pool ON runner_join_tokens (pool_id, created_at_
 
 CREATE TABLE runners (
     id                     text    NOT NULL PRIMARY KEY,
-    namespace_id           text    NOT NULL,
+    namespace_id           text    NOT NULL REFERENCES namespaces (id),
     pool_id                text    NOT NULL REFERENCES runner_pools (id),
     name                   text    NOT NULL,
     kind                   text    NOT NULL,
@@ -59,8 +59,9 @@ CREATE TABLE runners (
 -- A runner name is unique in its pool while the runner is not retired.
 CREATE UNIQUE INDEX runners_name ON runners (pool_id, name) WHERE retired_at_ms = 0;
 
--- Control data: a backup does not hold the tables below. A claim time is
--- recorded once for each claim, a handoff token and a job session belong to
+-- Control data: a backup does not hold the tables below. The poll records
+-- a claim with its claim time, the job and the phase once for each claim (job_id
+-- is empty for a sweep), a handoff token and a job session belong to
 -- one claim, and a nonce lives until its expiry. The claim of a durable
 -- operation has no foreign key here, because the operation rows are control
 -- data too.
@@ -68,6 +69,8 @@ CREATE TABLE runner_claims (
     operation_id  text    NOT NULL,
     token         bigint NOT NULL,
     claimed_at_ms bigint NOT NULL,
+    job_id        text    NOT NULL DEFAULT '',
+    phase         bigint NOT NULL DEFAULT 0,
     PRIMARY KEY (operation_id, token)
 );
 

@@ -2744,6 +2744,17 @@ UPDATE runners SET draining = sqlc.arg(draining) WHERE id = sqlc.arg(id);
 -- name: RetireRunner :exec
 UPDATE runners SET retired_at_ms = sqlc.arg(retired_at_ms) WHERE id = sqlc.arg(id);
 
+-- name: ListRunnerClaimsWithoutSession :many
+-- The operations whose live claim ExpireRunnerClaimsWithoutSession ends.
+SELECT id
+FROM durable_operations
+WHERE state = 'running' AND claim_owner = sqlc.arg(runner_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM runner_sessions s
+    WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+  )
+ORDER BY id;
+
 -- name: ExpireRunnerClaimsWithoutSession :exec
 -- Ends the live claims of the runner that have no job session, as an expiry
 -- does: the claim has no owner and its expiry passed, so the next claim of
@@ -2767,19 +2778,20 @@ WHERE state = 'running' AND claim_owner = sqlc.arg(runner_id);
 UPDATE durable_operations
 SET state = CASE WHEN cancel_requested THEN 'canceled' ELSE 'pending' END,
     not_before_ms = sqlc.arg(now_ms), claim_owner = NULL, claim_expires_at_ms = NULL, updated_at_ms = sqlc.arg(now_ms)
-WHERE id = sqlc.arg(id) AND claim_token = sqlc.arg(token) AND state = 'running';
+WHERE id = sqlc.arg(id) AND claim_token = sqlc.arg(token) AND claim_owner = sqlc.arg(owner) AND state = 'running';
 
 -- name: SetRunnerClaimExpiry :exec
 UPDATE durable_operations
 SET claim_expires_at_ms = sqlc.arg(expires_at_ms)
 WHERE id = sqlc.arg(id) AND claim_token = sqlc.arg(token);
 
--- name: GetRunnerClaimTime :one
-SELECT claimed_at_ms FROM runner_claims WHERE operation_id = sqlc.arg(operation_id) AND token = sqlc.arg(token);
+-- name: GetRunnerClaim :one
+SELECT claimed_at_ms, job_id, phase FROM runner_claims
+WHERE operation_id = sqlc.arg(operation_id) AND token = sqlc.arg(token);
 
 -- name: InsertRunnerClaimTime :exec
-INSERT INTO runner_claims (operation_id, token, claimed_at_ms)
-VALUES (sqlc.arg(operation_id), sqlc.arg(token), sqlc.arg(claimed_at_ms))
+INSERT INTO runner_claims (operation_id, token, claimed_at_ms, job_id, phase)
+VALUES (sqlc.arg(operation_id), sqlc.arg(token), sqlc.arg(claimed_at_ms), sqlc.arg(job_id), sqlc.arg(phase))
 ON CONFLICT (operation_id, token) DO NOTHING;
 
 -- name: DeleteRunnerHandoffTokensOfClaim :exec
@@ -2808,7 +2820,7 @@ SELECT COUNT(*) FROM runner_sessions WHERE operation_id = sqlc.arg(operation_id)
 
 -- name: GetRunnerSession :one
 SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
-       CAST(COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 0) AS INTEGER) AS runner_retired_at_ms
+       CAST(COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1) AS INTEGER) AS runner_retired_at_ms
 FROM runner_sessions s
 WHERE s.id = sqlc.arg(id);
 

@@ -20,6 +20,7 @@ it, but lacks the action of the route, gets 403.
 | `GET /pools` | `namespace:read-runners` | The pools of the namespace |
 | `POST /pools` | `namespace:manage-runners` | A new pool |
 | `GET /pools/{pool}` | `namespace:read-runners` | One pool |
+| `PATCH /pools/{pool}` | `namespace:manage-runners` | The pool with the changed fields |
 | `DELETE /pools/{pool}` | `namespace:manage-runners` | No body |
 | `GET /pools/{pool}/join-tokens` | `namespace:read-runners` | The join tokens, with no secret |
 | `POST /pools/{pool}/join-tokens` | `namespace:manage-runners` | A new join token, with its secret |
@@ -45,6 +46,13 @@ never changes. The body of `POST /pools` has these fields:
 | `concurrency` | The phases that one runner runs at a time, from 1 to 64. Zero takes 1. |
 | `isolation` | The isolation kinds that a runner may use. An empty list allows every kind but `process`. |
 | `gitCredentials` | `mode` (`none`, `forge` or `custom`) and `helper` |
+
+`PATCH /pools/{pool}` takes the same fields, and every field is optional. A
+field that the body leaves out keeps its value. A `purpose` that differs from
+the pool fails with 409. The answer is the pool, and the change writes one audit
+entry that lists each field that changed. A runner that joined with an
+isolation that the new settings refuse keeps its key, but claims nothing until
+an administrator retires it or changes the pool again.
 
 A namespace has at most 50 pools. `DELETE` fails with 409 while a phase or a
 sweep that did not end names the pool.
@@ -87,15 +95,17 @@ code `version-ahead`, and an older one gets 426 with `version-unsupported`.
 | `POST /poll` | the longest wait, at most 50 seconds | 200 with one phase or sweep, or 204 |
 | `POST /claims/{operation}/handoff` | none | the handoff token |
 | `POST /claims/{operation}/renew` | none | the new expiry, `canceled`, `sessionOpen` |
-| `POST /claims/{operation}/release` | the reason | 204 |
+| `POST /claims/{operation}/release` | the reason | 204, or 409 when the claim has a job session |
 
 Every path but the join needs the header `Dustpan-Proof`:
 `v1 sub=<runner ID> t=<Unix milliseconds> n=<nonce in hex> sig=<signature in base64url>`.
 The signature is an Ed25519 signature of the runner key. It covers the
 subject, the method, the path with its query, the SHA-256 of the body, the time
 and the nonce. The server refuses a time more than 60 seconds from its clock.
-On `/rotate`, `/poll`, `/claims/{operation}/handoff`, it keeps the nonce for
-two minutes and refuses a second proof with the same nonce.
+On `/rotate`, `/poll` and `/claims/{operation}/handoff`, it keeps the nonce for
+two minutes and refuses a second proof with the same nonce. The exchange of a
+handoff token for a job session is the fourth path that needs a nonce. It comes
+with the session paths.
 
 The join has no proof of an existing key. The join token and the signature of
 the new key over the join challenge authenticate it. A join with the name of a
@@ -103,11 +113,20 @@ runner that is online fails with 409. A key older than 30 days gets
 `key-expired`, and the runner must join again with a new join token.
 
 A poll takes the work from the pool of the runner. A runner never names the
-kinds. A draining runner gets 204 at once. When the lease of a claim lapses,
+kinds. The poll has the highest assignment version that the launcher of the
+runner reads, and the server never claims a phase or sweep above that version.
+A runner has one poll at a time. A second poll while the first runs gets 429. A
+draining or retired runner gets 204 at once, also when the drain starts during
+a long poll. When the lease of a claim lapses,
 the next poll of any runner of the pool can take the work with a new claim
 token. The runner that held the lapsed claim gets `claim-lost` on its next
 renewal, and the claim is in `lost` in its next heartbeat. The runner renews a
 claim after a third of the lease.
+
+A release gives the claim back through the job service, with the same rules as
+the end of a claim. When no step that changes resources began, the phase waits
+for the next claim. Else the phase fails. A release of a claim that has a job
+session fails with 409, because the launcher holds the claim.
 
 The paths of the job session (the launcher), the steps, the logs and the plans
 are not part of this API yet.

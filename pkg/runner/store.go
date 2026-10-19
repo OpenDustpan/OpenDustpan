@@ -133,15 +133,29 @@ type MemberStore interface {
 
 // SessionStore is the persistence port for handoff tokens and job sessions.
 //
-// The claim time of a claim of a runner is the IssuedAt of its first
-// handoff token, or the now of its first RunnerRenew if that comes first.
-// The store records it once for each claim. A new handoff token for the
-// same claim never moves it. The coordinator asks for the handoff token
-// right after the claim, so the claim time is at most one renewal after
-// the claim. MaxSessionWait counts from the claim time.
+// The claim time of a claim of a runner is the database time of its
+// RecordClaim, which the poll calls right after the claim. The store
+// records it once for each claim. A claim with no record gets the IssuedAt
+// of its first handoff token as its claim time, and a new handoff token for
+// the same claim never moves it. MaxSessionWait counts from the claim time.
+//
+// A claim is live while its operation is running with the owner and the
+// token of the claim, and its lease did not pass on the clock of the
+// database. A lease that passed ends the claim for every method of this
+// port, as an expiry does.
 type SessionStore interface {
+	// RecordClaim records the claim c of its runner, with the job and the
+	// phase that it works on (job is empty for a sweep), and the claim time:
+	// the time of the database. It runs in its own transaction. A second
+	// call for the same claim changes nothing. It returns ErrClaimLost when
+	// c is not live.
+	RecordClaim(ctx context.Context, c durable.Claim, job string, phase int) error
+	// LookupClaim returns what RecordClaim stored for the claim c, and
+	// whether the claim has a job session. It returns ErrNotFound for a
+	// claim with no record, and ErrClaimLost when c is not live.
+	LookupClaim(ctx context.Context, c durable.Claim) (ClaimRecord, error)
 	// IssueHandoffToken stores t for the live claim c of the runner
-	// t.Runner, and records the claim time t.IssuedAt when c has none. It
+	// t.Runner, and records the claim time t.IssuedAt when c has no record. It
 	// returns ErrClaimLost when c is not the live claim of its operation,
 	// or when the owner of c is not t.Runner, so a runner never gets a
 	// token for the claim of another runner. It returns ErrInvalid when
@@ -171,10 +185,12 @@ type SessionStore interface {
 	//     and returns ErrClaimLost, when now is later than MaxSessionWait
 	//     after the claim time and the claim has no session. This is the
 	//     one error after which the store has changed something.
-	//   - else moves the expiry of c to now plus d and returns the claim.
+	//   - else moves the expiry of c to the time of the database plus d and
+	//     returns the claim.
 	//
-	// It records the claim time now when c has none. It returns
-	// ErrInvalid for a d that is not positive.
+	// The argument now is only for the session wait limit. It returns
+	// ErrClaimLost for a claim with no record (RecordClaim), and ErrInvalid
+	// for a d that is not positive.
 	RunnerRenew(ctx context.Context, c durable.Claim, d time.Duration, now time.Time) (durable.Claim, error)
 	// Session returns the session id, or ErrNotFound. It returns
 	// ErrClaimLost when the claim of the session is no longer live, so a
@@ -249,10 +265,27 @@ type Rotation struct {
 }
 
 // Joined is the result of MemberStore.Join: the runner, and whether the
-// join was a join again of a runner of the same name.
+// join was a join again of a runner of the same name. For a join again,
+// PreviousKeyID is the ID of the key that the runner had before the join,
+// and EndedClaims holds the operation IDs of the claims that the join
+// ended. Both are empty for a first join.
 type Joined struct {
-	Runner   Runner
-	Rejoined bool
+	Runner        Runner
+	Rejoined      bool
+	PreviousKeyID string
+	EndedClaims   []string
+}
+
+// ClaimRecord is what RecordClaim stored for a claim.
+type ClaimRecord struct {
+	// Job is the ID of the job of the phase, or empty for a sweep.
+	Job string
+	// Phase is the index of the phase of the job.
+	Phase int
+	// ClaimedAt is the claim time, on the clock of the database.
+	ClaimedAt time.Time
+	// HasSession is true when the claim has a job session.
+	HasSession bool
 }
 
 // JoinAudit returns the audit entries of a join, from its result. The

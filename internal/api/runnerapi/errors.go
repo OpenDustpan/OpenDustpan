@@ -148,6 +148,8 @@ func classifyManagementConflict(err error) (int, string) {
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, runner.ErrLimit):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, runner.ErrRetired):
+		return http.StatusConflict, "the runner is retired"
 	case errors.Is(err, namespace.ErrFenced):
 		return http.StatusConflict, "write fenced: try again"
 	case errors.Is(err, namespace.ErrNotHome):

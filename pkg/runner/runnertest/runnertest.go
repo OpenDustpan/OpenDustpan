@@ -49,9 +49,15 @@ type Domain interface {
 	// Claim starts a durable operation of kind and claims it for owner,
 	// as the runner protocol does at a poll, and returns the claim.
 	Claim(ctx context.Context, kind durable.Kind, owner string) (durable.Claim, error)
+	// ClaimLease is Claim with the lease of the claim. A claim is live
+	// only while its lease did not pass on the clock of the database.
+	ClaimLease(ctx context.Context, kind durable.Kind, owner string, lease time.Duration) (durable.Claim, error)
 	// Takeover expires the claim c and claims its operation again, as a
 	// takeover does, and returns the new claim.
 	Takeover(ctx context.Context, c durable.Claim) (durable.Claim, error)
+	// End completes the operation of the live claim c, as the end of a
+	// phase does. The operation then names no pool.
+	End(ctx context.Context, c durable.Claim) error
 	// UsePool makes a job that is not terminal name the pool id, so a
 	// delete of the pool fails.
 	UsePool(ctx context.Context, fence namespace.Fence, id string) error
@@ -96,6 +102,11 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a runner renews a claim until the session wait limit", testRunnerRenew},
 		{"a session opens up to the session wait limit", testSessionNearWaitLimit},
 		{"a session of a claim that a takeover replaced is lost", testSessionAfterTakeover},
+		{"a recorded claim keeps the database time, the job and the phase", testRecordClaim},
+		{"a claim ends when its lease passes", testClaimLeasePasses},
+		{"a renewal moves the expiry from the database time", testRenewExpiryFromDatabase},
+		{"a runner of another namespace is not found for a drain, retire or rotation", testOtherNamespace},
+		{"a session of a runner that no longer exists is refused", testSessionOfDeletedRunner},
 		{"each change appends its audit entry", testAuditEntries},
 	}
 

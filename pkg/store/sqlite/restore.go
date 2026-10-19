@@ -492,7 +492,7 @@ var keepControlStatements = []string{
 // the control tables. A restore keeps the live handoff tokens and job
 // sessions, because they name the claims of the live durable operations.
 const (
-	runnerClaimColumns   = `operation_id, token, claimed_at_ms`
+	runnerClaimColumns   = `operation_id, token, claimed_at_ms, job_id, phase`
 	runnerHandoffColumns = `sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms`
 	runnerSessionColumns = `id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms`
 	runnerNonceColumns   = `subject, nonce, expires_at_ms`
