@@ -135,7 +135,7 @@ project's API group as ours. A migration tool converts them instead.
 The draft so far covers how a resource creates a unit. These questions cover
 update and delete. Each recommendation is proposed, not decided.
 
-**31.1 Lifecycle.** What does the operator do for each change to a resource?
+**31.9 Lifecycle.** What does the operator do for each change to a resource?
 
 - A new resource starts a plan, then an apply.
 - A change to the spec starts a new plan. The approval rules (RFC 13) cover
@@ -144,7 +144,7 @@ update and delete. Each recommendation is proposed, not decided.
 
 Proposed: all three, as listed. The operator is not limited to create.
 
-**31.2 Default deletion policy.** What happens to the stack or workspace and
+**31.10 Default deletion policy.** What happens to the stack or workspace and
 its infrastructure when the resource is deleted?
 
 1. Orphan: keep the unit and its infrastructure. Release the resource.
@@ -159,12 +159,12 @@ removes a resource from the cluster, could destroy real infrastructure, and a
 destroy cannot be undone. Proposed: orphan is the default. A resource opts in
 to destroy, and a destroy waits for an approval unless policy says otherwise.
 
-**31.3 Gates on a destroy.** Proposed: a destroy that starts from a resource
+**31.11 Gates on a destroy.** Proposed: a destroy that starts from a resource
 deletion goes through the same gates, access limits and approval rules as a
 destroy that starts in the console. The operator has no separate path. The
 approval happens in OpenDustpan, not in the cluster.
 
-**31.4 A failed destroy.** A failed destroy leaves the finalizer in place, and
+**31.12 A failed destroy.** A failed destroy leaves the finalizer in place, and
 the resource stays in the `Terminating` state. Open questions: which condition
 and event does the operator show, and how does a person resolve it? Options:
 retry the destroy, orphan the unit and remove the finalizer, or remove the
@@ -173,7 +173,7 @@ the job and links to its log. A person with the right permission chooses
 retry or orphan in OpenDustpan. The operator never removes the finalizer
 without that decision.
 
-**31.5 Changes outside the resource.** A person can change the same stack or
+**31.13 Changes outside the resource.** A person can change the same stack or
 workspace in the console or with the CLI. Options:
 
 1. Treat the change as drift against the resource, and show it in the status.
@@ -183,13 +183,13 @@ workspace in the console or with the CLI. Options:
 Proposed: refuse a change to the inputs that the resource declares. Treat a
 change to the state, such as a CLI run outside the operator, as drift.
 
-**31.6 Adoption.** How does a resource take over infrastructure that exists
+**31.14 Adoption.** How does a resource take over infrastructure that exists
 already? Options: an import step before the first apply, or a resource that
 refers to an existing stack or workspace. Proposed: an import into the stack
 or workspace, then a resource that manages it, so that the first plan shows no
 change for the imported objects.
 
-**31.7 Related open themes.** Other issues affect the answers above.
+**31.15 Related open themes.** Other issues affect the answers above.
 
 - Provider and module supply chain (#1089): a job that the operator starts
   uses only the mirror.
