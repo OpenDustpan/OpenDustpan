@@ -257,7 +257,9 @@ The server answers CORS on `/api/` (including the TFE-compatible API at
 `/tofu/state/`.
 
 Each value of `--allowed-origins` has the form `scheme://host[:port]`. The
-scheme is `http` or `https`. The value has no path, query or fragment, and no
+scheme is `http` or `https`. The host is in lower case and uses ASCII only
+(write an internationalized host in punycode). The value has no default port
+(`:443` for `https`, `:80` for `http`), no path, query or fragment, and no
 trailing slash. The server refuses to start with the value `null`, the value
 `*`, or any other value that does not have this form.
 

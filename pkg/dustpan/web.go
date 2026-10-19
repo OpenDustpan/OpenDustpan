@@ -10,6 +10,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // consoleHandler serves a built single-page app from dir, for GET and HEAD
@@ -89,11 +90,10 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 // server compares each origin to the Origin header as an exact string.
 func checkAllowedOrigins(origins []string) error {
 	for _, o := range origins {
-		u, err := url.Parse(o)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
-			o != u.Scheme+"://"+u.Host {
+		if !validAllowedOrigin(o) {
 			return fmt.Errorf(
-				"%w: allowed origin %q must be http:// or https:// with a host and an optional port, "+
+				"%w: WithAllowedOrigins: origin %q must be http:// or https:// with a host and an optional port, "+
+					"in lower case with an ASCII (punycode) host and no default port, "+
 					"and no path, query or fragment, for example https://console.example.com",
 				ErrInvalidOption, o,
 			)
@@ -101,4 +101,24 @@ func checkAllowedOrigins(origins []string) error {
 	}
 
 	return nil
+}
+
+// validAllowedOrigin reports whether o can equal the Origin header of a
+// browser: scheme://host[:port] in lower case, ASCII only, with no default
+// port.
+func validAllowedOrigin(o string) bool {
+	const (
+		schemeHTTP  = "http"
+		schemeHTTPS = "https"
+	)
+
+	u, err := url.Parse(o)
+	if err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) || u.Hostname() == "" ||
+		o != u.Scheme+"://"+u.Host || o != strings.ToLower(o) ||
+		strings.ContainsFunc(o, func(r rune) bool { return r > unicode.MaxASCII }) ||
+		strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+
+	return (u.Scheme != schemeHTTPS || u.Port() != "443") && (u.Scheme != schemeHTTP || u.Port() != "80")
 }
