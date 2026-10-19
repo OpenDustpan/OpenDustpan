@@ -64,7 +64,7 @@ TRIVY_CANARY_MODULE := github.com/xen0n/gosmopolitan@v1.3.0
 TRIVY_LICENSE_FLAGS := --scanners license --disable-telemetry --skip-version-check --no-progress
 
 trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile), secrets in the tree, and dependency licenses.
-	trivy fs --scanners vuln,misconfig,secret --exit-code 1 \
+	trivy fs --scanners vuln,misconfig,secret --exit-code 1 --ignorefile .trivyignore.yaml \
 		--disable-telemetry --skip-version-check --no-progress .
 	go mod download
 	go mod download $(TRIVY_CANARY_MODULE)

@@ -3,6 +3,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "opendustpan.fullname" . }}
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "opendustpan.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
