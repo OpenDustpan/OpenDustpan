@@ -33,11 +33,17 @@ type DBProxy struct {
 	listener net.Listener
 	target   string
 	port     string
+	url      string
 	conns    map[net.Conn]struct{}
 	// paused makes the proxy close each accepted connection at once.
 	paused bool
 	// shut marks the end of the test: the listener is closed.
 	shut bool
+}
+
+// URL returns the database URL that reaches PostgreSQL through the proxy.
+func (p *DBProxy) URL() string {
+	return p.url
 }
 
 // startDBProxy listens on loopback, forwards to the host and port of
@@ -67,6 +73,7 @@ func startDBProxy(ctx context.Context, tb testing.TB, directURL string) (*DBProx
 		listener: listener,
 		target:   target,
 		port:     port,
+		url:      proxiedPostgresURL(tb, directURL, port),
 		conns:    map[net.Conn]struct{}{},
 		paused:   false,
 		shut:     false,
@@ -76,7 +83,7 @@ func startDBProxy(ctx context.Context, tb testing.TB, directURL string) (*DBProx
 
 	tb.Cleanup(proxy.shutdown)
 
-	return proxy, proxiedPostgresURL(tb, directURL, port)
+	return proxy, proxy.url
 }
 
 // openProxiedPostgresStore opens the PostgreSQL server at base in a fresh

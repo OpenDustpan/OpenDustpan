@@ -61,7 +61,7 @@ var (
 	ErrDisabled = errors.New("principal is disabled")
 	// ErrNotSignInTarget reports a principal that a sign-in through an
 	// identity provider cannot name: one that is not a person, a principal
-	// of a namespace, or a break-glass account.
+	// of a namespace, a break-glass account, or a temporary administrator.
 	ErrNotSignInTarget = errors.New("principal cannot sign in through an identity provider")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
@@ -122,9 +122,12 @@ const (
 
 // ID prefixes. An ID is opaque: never parse it.
 const (
-	principalIDPrefix = "prn-"
+	principalIDPrefix = IDPrefix
 	groupIDPrefix     = "grp-"
 )
+
+// IDPrefix starts the ID of every principal.
+const IDPrefix = "prn-"
 
 // Principal is the stored record of one principal. ID is stable and opaque,
 // with the prefix "prn-". Subject is the name that an Authenticator answers

@@ -40,6 +40,8 @@ func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) *apiser
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:       nil,
+		Now:              nil,
 		Authenticator:    adminAuthenticator{},
 		Authorizer:       identity.AdminOnly{},
 		Logger:           slog.New(slog.DiscardHandler),

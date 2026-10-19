@@ -310,7 +310,10 @@ func (s *Store) SweepInactive(
 }
 
 // sweepInactive disables the inactive tokens and accounts of sw in the
-// transaction of q, at the time of the database clock.
+// transaction of q, at the time of the database clock. The run keeps the
+// temporary administrators that still work, and only their fixed expiry
+// ends them. An expired record is a tombstone, not an exemption: it never
+// keeps a token or a principal.
 func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (accesstoken.SweepResult, error) {
 	nowMs, err := q.DatabaseNowMs(ctx)
 	if err != nil {

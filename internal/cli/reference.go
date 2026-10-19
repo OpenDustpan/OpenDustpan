@@ -17,6 +17,7 @@ func Reference() string {
 	writeSecrets(&out)
 	writeStepInputs(&out)
 	writeClients(&out)
+	writeHost(&out)
 
 	return out.String()
 }
@@ -325,4 +326,33 @@ func clientRows() []clientRow {
 	}
 
 	return rows
+}
+
+// writeHost writes the host command section from the settings of the host
+// row, so the reference lists the same settings as the command reads.
+func writeHost(out *strings.Builder) {
+	out.WriteString("\n")
+	out.WriteString("## Host command\n")
+	out.WriteString("\n")
+	out.WriteString("`opendustpan host create-temp-admin` opens the database itself, as `serve`\n")
+	out.WriteString("does, and makes a temporary administrator for one named person. It reads\n")
+	out.WriteString("these settings. The [host recovery guide](../guides/host-recovery.md) shows\n")
+	out.WriteString("the steps.\n")
+	out.WriteString("\n")
+	out.WriteString("| Flag | Environment | Default |\n")
+	out.WriteString("| --- | --- | --- |\n")
+
+	for _, s := range HostCreateTempAdminCommand(nil).Settings {
+		flag, env := referenceNone, referenceNone
+
+		if s.Kind != KindBool {
+			flag = "`--" + s.Flag + "`"
+		}
+
+		if s.Env != "" {
+			env = "`" + s.Env + "`"
+		}
+
+		out.WriteString("| " + flag + " | " + env + " | " + s.Reference + " |\n")
+	}
 }

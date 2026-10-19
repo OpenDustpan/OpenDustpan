@@ -33,6 +33,10 @@ var ErrBadMinimum = errors.New("minimum binary version must have the form vMAJOR
 // does not embed and lacks migrations the binary embeds.
 var ErrSchemaDiverged = errors.New("database schema and binary have diverged")
 
+// ErrMigrationsPending reports a database with migrations that the binary
+// embeds and has not applied, opened by a caller that applies none.
+var ErrMigrationsPending = errors.New("database schema has pending migrations")
+
 // MinimumError reports the minimum binary version of the database schema and
 // the version of the binary that is below it. The adapters return it.
 type MinimumError struct {

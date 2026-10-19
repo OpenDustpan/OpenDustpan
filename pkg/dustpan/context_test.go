@@ -117,12 +117,14 @@ func newContextWorld(t *testing.T) contextWorld {
 	person := func(subject string) identity.Principal {
 		return identity.Principal{
 			Subject: subject, DisplayName: subject, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		}
 	}
 
 	authn := tokenMapAuthenticator{tokens: map[string]identity.Principal{
 		ctxAdminToken: {
 			Subject: "operator", DisplayName: "operator", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		},
 		ctxOwnerToken:  person("owen"),
 		ctxWriterToken: person("wanda"),

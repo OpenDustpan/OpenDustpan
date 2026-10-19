@@ -585,16 +585,17 @@ func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) (
 	return handle, handle.url
 }
 
-// DatabaseURL returns the --database value of the binary environment, so a
-// test does not rebuild it for RunBinary. It needs E2E_SERVER=binary.
+// DatabaseURL returns the --database value of the environment, so a test
+// runs a command against the same database the server serves without
+// rebuilding it.
 func (e *Env) DatabaseURL(tb testing.TB) string {
 	tb.Helper()
 
-	if e.binPath == "" {
-		tb.Fatalf("DatabaseURL needs E2E_SERVER=binary")
+	if e.dbURL == "" {
+		tb.Fatalf("DatabaseURL needs a database")
 	}
 
-	return e.backendCfg.dbURL
+	return e.dbURL
 }
 
 // BackupTarget returns the --backup-target value of the binary environment
@@ -735,8 +736,8 @@ func (e *Env) BackupTargetDir(tb testing.TB) string {
 
 // RunBinary runs `opendustpan <args>` as a child process with the environment
 // tokens. It reuses the binary that serverBinary built and the environment
-// that backendEnv builds. Callers pass the flags the subcommand needs. It
-// needs E2E_SERVER=binary.
+// that backendEnv builds. Callers pass the flags the subcommand needs. In
+// the in-process mode it builds the server binary first.
 func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) BinaryResult {
 	tb.Helper()
 
@@ -746,15 +747,17 @@ func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) Bina
 // RunBinaryWithEnv runs `opendustpan <args>` as RunBinary does, with extra
 // NAME=value pairs added to the child environment. An entry replaces the
 // backend entry of the same name, so a test overrides the key-encryption key
-// for a wrong-key restore without changing the server. It needs
-// E2E_SERVER=binary.
+// for a wrong-key restore without changing the server. In the in-process
+// mode it builds the server binary first, so a step runs the real command
+// against the database of the environment. It needs E2E_SERVER=binary for
+// commands that talk to the server process itself.
 func (e *Env) RunBinaryWithEnv(
 	ctx context.Context, tb testing.TB, extra []string, args ...string,
 ) BinaryResult {
 	tb.Helper()
 
 	if e.binPath == "" {
-		tb.Fatalf("RunBinary needs E2E_SERVER=binary")
+		e.binPath = serverBinary(ctx, tb, tb.TempDir())
 	}
 
 	return e.runBinaryAt(ctx, tb, e.binPath, extra, args...)
@@ -1158,6 +1161,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   handle.logs,
 		certBundle:    "",
 		dbProxy:       dbProxy,
+		dbURL:         cfg.dbURL,
 		signIn:        signIn,
 	}
 

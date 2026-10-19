@@ -1,6 +1,6 @@
 # 57. Break-glass recovery when the last administrator loses every factor
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13 · decision 2 refined by ADR 245: the setting `--recovery-mode` holds the mode, and the host command refuses mode 3
 
 ## Context
 

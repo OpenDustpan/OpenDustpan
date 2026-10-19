@@ -456,6 +456,16 @@ type StateVersion struct {
 	UnlockedWrite     bool
 }
 
+type TempAdmin struct {
+	PrincipalID string
+	Subject     string
+	ExpiresAtMs int64
+	CreatedAtMs int64
+	CreatedBy   string
+	Reason      string
+	EndedAtMs   sql.NullInt64
+}
+
 type Update struct {
 	StackID               string
 	ID                    string

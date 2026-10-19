@@ -232,6 +232,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 	switch token {
 	case adminToken:
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "alice",
 			DisplayName:    "",
 			Admin:          true,
@@ -240,6 +241,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 		}, nil
 	case userToken:
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "bob",
 			DisplayName:    "",
 			Admin:          false,
@@ -248,6 +250,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 		}, nil
 	default:
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "",
 			DisplayName:    "",
 			Admin:          false,

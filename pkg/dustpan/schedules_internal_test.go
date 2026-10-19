@@ -124,6 +124,7 @@ func checkTickKeysOnce(t *testing.T, srv *Server, kind durable.Kind) {
 // testServer returns a Server with only the fields that the job tests use.
 func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
+		tempAdmins:       nil,
 		handler:          nil,
 		logger:           slog.New(slog.DiscardHandler),
 		listenAddr:       "",
@@ -312,7 +313,8 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 	})
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Authorizer: nil,
+		TempAdmins: nil,
+		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
 		Logger: slog.New(slog.DiscardHandler), Now: time.Now, NewID: nil,
 	})
 	if err != nil {
