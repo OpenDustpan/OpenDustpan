@@ -34,7 +34,7 @@ The project owner accepted these decisions on 2026-10-19.
      navbar for the list that covers all tools.
 2. Words for internal mechanisms stay in code, API fields and logs. Copy
    says the effect and the one next step. For example, "write fenced: stale
-   namespace failover version" becomes "The server was restored while this
+   namespace failover version" becomes "The namespace changed while this
    write ran. Run the command again."
 3. Keep an industry word only when its common meaning matches ours. Explain
    it once, where it first shows. For example: "principal: a person, a

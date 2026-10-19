@@ -183,7 +183,7 @@ _Avoid_: Failover (as the name of the action), switchover
 **Failover version**:
 A number that increases by one at each promotion of a namespace.
 _Avoid_: Epoch, generation
-_Copy says_: no name. Say the effect and the one next step: "The server was restored while this write ran. Run the command again." Where a name is needed, write "the number of promotions of the namespace".
+_Copy says_: no name. Say the effect and the one next step: "The namespace changed while this write ran. Run the command again." Where a name is needed, write "the number of promotions of the namespace".
 
 **Fence**:
 The namespace and failover version that a write carries. A store rejects the write when the failover version is no longer current.

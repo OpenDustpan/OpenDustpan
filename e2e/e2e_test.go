@@ -12556,7 +12556,7 @@ func checkBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("opendustpan backup exits with status %d: %s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	for _, want := range []string{"bkp-", "succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "sealed"} {
+	for _, want := range []string{"bkp-", "succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "encrypted"} {
 		if !strings.Contains(res.Stdout, want) {
 			t.Fatalf("opendustpan backup output lacks %q: %q", want, res.Stdout)
 		}
@@ -13278,7 +13278,7 @@ func runBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) string {
 		t.Fatalf("opendustpan backup exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	for _, want := range []string{"succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "sealed"} {
+	for _, want := range []string{"succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "encrypted"} {
 		if !strings.Contains(res.Stdout, want) {
 			t.Fatalf("opendustpan backup output lacks %q:\n%s", want, res.Stdout)
 		}
