@@ -1,0 +1,19 @@
+apiVersion: v2
+name: opendustpan
+description: >-
+  OpenDustpan, a self-hostable backend for infrastructure-as-code tools.
+  The chart runs `opendustpan serve` against an external PostgreSQL database.
+type: application
+# The chart version and the app version are the same as the release tag
+# without its "v". A release of the binary and the image releases the chart.
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/OpenDustpan/OpenDustpan
+sources:
+  - https://github.com/OpenDustpan/OpenDustpan
+keywords:
+  - opentofu
+  - pulumi
+  - state
+annotations:
+  licenses: Apache-2.0

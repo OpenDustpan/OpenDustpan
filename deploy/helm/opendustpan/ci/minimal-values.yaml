@@ -1,0 +1,7 @@
+# The smallest install: one instance, blobs on a PersistentVolumeClaim.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key

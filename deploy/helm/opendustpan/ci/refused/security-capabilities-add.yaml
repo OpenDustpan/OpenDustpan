@@ -1,0 +1,11 @@
+# Refused: capabilities other than drop ALL.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+containerSecurityContext:
+  capabilities:
+    add:
+      - NET_ADMIN

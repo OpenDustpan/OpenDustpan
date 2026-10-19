@@ -1,0 +1,9 @@
+# Refused: a writable root filesystem.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+containerSecurityContext:
+  readOnlyRootFilesystem: false

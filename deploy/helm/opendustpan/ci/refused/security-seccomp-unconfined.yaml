@@ -1,0 +1,10 @@
+# Refused: the seccomp profile Unconfined.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+containerSecurityContext:
+  seccompProfile:
+    type: Unconfined
