@@ -4782,7 +4782,7 @@ func (q *Queries) GetWorkspaceBlameCursor(ctx context.Context, workspaceID strin
 }
 
 const getWorkspaceBlameItem = `-- name: GetWorkspaceBlameItem :one
-SELECT ordinal, opaque, lineage_changed
+SELECT ordinal, opaque, lineage_changed, resource_count
 FROM workspace_blame_items
 WHERE workspace_id = ? AND state_version_id = ?
 `
@@ -4796,12 +4796,18 @@ type GetWorkspaceBlameItemRow struct {
 	Ordinal        int64
 	Opaque         bool
 	LineageChanged bool
+	ResourceCount  int64
 }
 
 func (q *Queries) GetWorkspaceBlameItem(ctx context.Context, arg GetWorkspaceBlameItemParams) (GetWorkspaceBlameItemRow, error) {
 	row := q.db.QueryRowContext(ctx, getWorkspaceBlameItem, arg.WorkspaceID, arg.StateVersionID)
 	var i GetWorkspaceBlameItemRow
-	err := row.Scan(&i.Ordinal, &i.Opaque, &i.LineageChanged)
+	err := row.Scan(
+		&i.Ordinal,
+		&i.Opaque,
+		&i.LineageChanged,
+		&i.ResourceCount,
+	)
 	return i, err
 }
 
@@ -5825,8 +5831,8 @@ func (q *Queries) InsertPurgedImport(ctx context.Context, arg InsertPurgedImport
 }
 
 const insertWorkspaceBlameItem = `-- name: InsertWorkspaceBlameItem :exec
-INSERT INTO workspace_blame_items (workspace_id, state_version_id, ordinal, opaque, lineage_changed)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO workspace_blame_items (workspace_id, state_version_id, ordinal, opaque, lineage_changed, resource_count)
+VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type InsertWorkspaceBlameItemParams struct {
@@ -5835,6 +5841,7 @@ type InsertWorkspaceBlameItemParams struct {
 	Ordinal        int64
 	Opaque         bool
 	LineageChanged bool
+	ResourceCount  int64
 }
 
 func (q *Queries) InsertWorkspaceBlameItem(ctx context.Context, arg InsertWorkspaceBlameItemParams) error {
@@ -5844,6 +5851,7 @@ func (q *Queries) InsertWorkspaceBlameItem(ctx context.Context, arg InsertWorksp
 		arg.Ordinal,
 		arg.Opaque,
 		arg.LineageChanged,
+		arg.ResourceCount,
 	)
 	return err
 }
@@ -8925,6 +8933,82 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 			&i.JournalVersion,
 			&i.TokenID,
 			&i.CheckpointBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceBlameSummaries = `-- name: ListWorkspaceBlameSummaries :many
+SELECT i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count,
+    CAST(COALESCE(SUM(CASE WHEN c.kind = 'created' THEN 1 ELSE 0 END), 0) AS INTEGER) AS created,
+    CAST(COALESCE(SUM(CASE WHEN c.kind = 'updated' THEN 1 ELSE 0 END), 0) AS INTEGER) AS updated,
+    CAST(COALESCE(SUM(CASE WHEN c.kind = 'replaced' THEN 1 ELSE 0 END), 0) AS INTEGER) AS replaced,
+    CAST(COALESCE(SUM(CASE WHEN c.kind = 'deleted' THEN 1 ELSE 0 END), 0) AS INTEGER) AS deleted
+FROM workspace_blame_items AS i
+LEFT JOIN workspace_resource_changes AS c
+    ON c.workspace_id = i.workspace_id AND c.state_version_id = i.state_version_id
+WHERE i.workspace_id = ?1 AND i.state_version_id IN (/*SLICE:state_version_ids*/?)
+GROUP BY i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count
+`
+
+type ListWorkspaceBlameSummariesParams struct {
+	WorkspaceID     string
+	StateVersionIds []string
+}
+
+type ListWorkspaceBlameSummariesRow struct {
+	StateVersionID string
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
+	ResourceCount  int64
+	Created        int64
+	Updated        int64
+	Replaced       int64
+	Deleted        int64
+}
+
+// One row for each blame item among the state versions, with the count of its
+// resource change rows by kind.
+func (q *Queries) ListWorkspaceBlameSummaries(ctx context.Context, arg ListWorkspaceBlameSummariesParams) ([]ListWorkspaceBlameSummariesRow, error) {
+	query := listWorkspaceBlameSummaries
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.WorkspaceID)
+	if len(arg.StateVersionIds) > 0 {
+		for _, v := range arg.StateVersionIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:state_version_ids*/?", strings.Repeat(",?", len(arg.StateVersionIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:state_version_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceBlameSummariesRow
+	for rows.Next() {
+		var i ListWorkspaceBlameSummariesRow
+		if err := rows.Scan(
+			&i.StateVersionID,
+			&i.Ordinal,
+			&i.Opaque,
+			&i.LineageChanged,
+			&i.ResourceCount,
+			&i.Created,
+			&i.Updated,
+			&i.Replaced,
+			&i.Deleted,
 		); err != nil {
 			return nil, err
 		}

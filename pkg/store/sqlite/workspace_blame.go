@@ -27,6 +27,10 @@ func (s *Store) RecordResourceChanges(
 		return fmt.Errorf("record resource changes: %w", err)
 	}
 
+	if fence.Namespace != ns {
+		return fmt.Errorf("record resource changes: %w", namespace.ErrFenced)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -38,6 +42,11 @@ func (s *Store) RecordResourceChanges(
 
 		if err != nil {
 			return fmt.Errorf("select workspace: %w", err)
+		}
+
+		skip, err := checkBlameOrder(ctx, q, b)
+		if err != nil || skip {
+			return err
 		}
 
 		moved, err := q.AdvanceWorkspaceBlameCursor(ctx, db.AdvanceWorkspaceBlameCursorParams{
@@ -55,6 +64,40 @@ func (s *Store) RecordResourceChanges(
 	})
 }
 
+// checkBlameOrder reads the cursor and the item of b. It returns true when b
+// is at or below the cursor, so the record changes nothing, and
+// workspace.ErrInvalidBlame when b leaves a gap in the order, or when its
+// state version already has a blame.
+func checkBlameOrder(ctx context.Context, q *db.Queries, b workspace.ItemBlame) (bool, error) {
+	cursor, err := q.GetWorkspaceBlameCursor(ctx, b.Workspace.String())
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("select blame cursor: %w", err)
+	}
+
+	if b.Ordinal <= cursor {
+		return true, nil
+	}
+
+	if b.Ordinal != cursor+1 {
+		return false, fmt.Errorf(
+			"%w: ordinal %d does not follow the cursor %d", workspace.ErrInvalidBlame, b.Ordinal, cursor,
+		)
+	}
+
+	_, err = q.GetWorkspaceBlameItem(ctx, db.GetWorkspaceBlameItemParams{
+		WorkspaceID: b.Workspace.String(), StateVersionID: b.StateVersion.String(),
+	})
+	if err == nil {
+		return false, fmt.Errorf("%w: state version %s already has a blame", workspace.ErrInvalidBlame, b.StateVersion)
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("select blame item: %w", err)
+	}
+
+	return false, nil
+}
+
 // insertBlame writes the item row of b, and its resource change rows.
 func insertBlame(ctx context.Context, q *db.Queries, b workspace.ItemBlame) error {
 	err := q.InsertWorkspaceBlameItem(ctx, db.InsertWorkspaceBlameItemParams{
@@ -63,6 +106,7 @@ func insertBlame(ctx context.Context, q *db.Queries, b workspace.ItemBlame) erro
 		Ordinal:        b.Ordinal,
 		Opaque:         b.Opaque,
 		LineageChanged: b.LineageChanged,
+		ResourceCount:  b.ResourceCount,
 	})
 	if err != nil {
 		return fmt.Errorf("insert blame item: %w", err)
@@ -167,6 +211,7 @@ func (s *Store) ItemChanges(
 		StateVersion:   sv,
 		Changes:        []workspace.ResourceChange{},
 		Ordinal:        0,
+		ResourceCount:  0,
 		Opaque:         false,
 		LineageChanged: false,
 	}
@@ -190,6 +235,7 @@ func (s *Store) ItemChanges(
 	}
 
 	out.Ordinal = item.Ordinal
+	out.ResourceCount = item.ResourceCount
 	out.Opaque = item.Opaque
 	out.LineageChanged = item.LineageChanged
 
@@ -208,6 +254,47 @@ func (s *Store) ItemChanges(
 			Forced:         r.Forced,
 			LineageChanged: r.LineageChanged,
 		})
+	}
+
+	return out, nil
+}
+
+// ItemSummaries implements workspace.BlameStore.
+func (s *Store) ItemSummaries(
+	ctx context.Context, id workspace.ID, svs []workspace.StateVersionID,
+) (map[workspace.StateVersionID]workspace.ItemSummary, error) {
+	out := make(map[workspace.StateVersionID]workspace.ItemSummary, len(svs))
+	if len(svs) == 0 {
+		return out, nil
+	}
+
+	ids := make([]string, 0, len(svs))
+	for _, sv := range svs {
+		ids = append(ids, sv.String())
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.ListWorkspaceBlameSummaries(ctx, db.ListWorkspaceBlameSummariesParams{
+		WorkspaceID: id.String(), StateVersionIds: ids,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select blame summaries: %w", err)
+	}
+
+	for i := range rows {
+		r := &rows[i]
+		out[workspace.StateVersionID(r.StateVersionID)] = workspace.ItemSummary{
+			Ordinal:        r.Ordinal,
+			ResourceCount:  r.ResourceCount,
+			Created:        r.Created,
+			Updated:        r.Updated,
+			Replaced:       r.Replaced,
+			Deleted:        r.Deleted,
+			Opaque:         r.Opaque,
+			LineageChanged: r.LineageChanged,
+		}
 	}
 
 	return out, nil

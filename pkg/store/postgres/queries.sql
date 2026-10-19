@@ -2807,13 +2807,27 @@ WHERE workspace_blame_cursors.ordinal < excluded.ordinal;
 SELECT ordinal FROM workspace_blame_cursors WHERE workspace_id = $1;
 
 -- name: InsertWorkspaceBlameItem :exec
-INSERT INTO workspace_blame_items (workspace_id, state_version_id, ordinal, opaque, lineage_changed)
-VALUES ($1, $2, $3, $4, $5);
+INSERT INTO workspace_blame_items (workspace_id, state_version_id, ordinal, opaque, lineage_changed, resource_count)
+VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: GetWorkspaceBlameItem :one
-SELECT ordinal, opaque, lineage_changed
+SELECT ordinal, opaque, lineage_changed, resource_count
 FROM workspace_blame_items
 WHERE workspace_id = $1 AND state_version_id = $2;
+
+-- name: ListWorkspaceBlameSummaries :many
+-- One row for each blame item among the state versions, with the count of its
+-- resource change rows by kind.
+SELECT i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count,
+    COALESCE(SUM(CASE WHEN c.kind = 'created' THEN 1 ELSE 0 END), 0)::bigint AS created,
+    COALESCE(SUM(CASE WHEN c.kind = 'updated' THEN 1 ELSE 0 END), 0)::bigint AS updated,
+    COALESCE(SUM(CASE WHEN c.kind = 'replaced' THEN 1 ELSE 0 END), 0)::bigint AS replaced,
+    COALESCE(SUM(CASE WHEN c.kind = 'deleted' THEN 1 ELSE 0 END), 0)::bigint AS deleted
+FROM workspace_blame_items AS i
+LEFT JOIN workspace_resource_changes AS c
+    ON c.workspace_id = i.workspace_id AND c.state_version_id = i.state_version_id
+WHERE i.workspace_id = sqlc.arg(workspace_id) AND i.state_version_id = ANY(sqlc.arg(state_version_ids)::text[])
+GROUP BY i.state_version_id, i.ordinal, i.opaque, i.lineage_changed, i.resource_count;
 
 -- name: InsertWorkspaceResourceChange :exec
 INSERT INTO workspace_resource_changes (

@@ -5,6 +5,7 @@ const (
 	pgColWorkspaceID    = "workspace_id"
 	pgColStateVersionID = "state_version_id"
 	pgColOrdinal        = "ordinal"
+	pgColResourceCount  = "resource_count"
 	pgColAddress        = "address"
 )
 
@@ -18,8 +19,10 @@ func pgCopyBlameTables() []pgCopyTable {
 			orderBy: []string{pgColWorkspaceID},
 		},
 		{
-			table:   "workspace_blame_items",
-			columns: []string{pgColWorkspaceID, pgColStateVersionID, pgColOrdinal, "opaque", "lineage_changed"},
+			table: "workspace_blame_items",
+			columns: []string{
+				pgColWorkspaceID, pgColStateVersionID, pgColOrdinal, "opaque", "lineage_changed", pgColResourceCount,
+			},
 			orderBy: []string{pgColWorkspaceID, pgColStateVersionID},
 		},
 		{

@@ -35,7 +35,9 @@ func (e *NoStateAtError) Is(target error) bool {
 // ErrInvalidBlame reports an ItemBlame that the store cannot keep: a row of
 // another workspace, state version or ordinal, an unknown kind or an empty
 // address, two rows with one address, a row on an opaque blame, an ordinal
-// below 1, or no state version.
+// below 1, a negative resource count, a resource count on an opaque blame,
+// no state version, a state version that already has a blame, or an ordinal
+// above the cursor plus 1.
 var ErrInvalidBlame = errors.New("invalid blame")
 
 // ResourceChangeKind is what one state version did to one resource
@@ -89,12 +91,14 @@ type ResourceChange struct {
 // with the last readable one before it. LineageChanged is true when the
 // state version has another lineage than the state version that it
 // compares with. Blame still compares across lineages, and the mark stays
-// also when the blame has no row.
+// also when the blame has no row. ResourceCount is the count of resource
+// instances in the state version. It is 0 for an opaque state version.
 type ItemBlame struct {
 	Workspace      ID
 	StateVersion   StateVersionID
 	Changes        []ResourceChange
 	Ordinal        int64
+	ResourceCount  int64
 	Opaque         bool
 	LineageChanged bool
 }
@@ -111,6 +115,10 @@ func (b ItemBlame) Validate() error {
 		return fmt.Errorf("%w: ordinal %d is below 1", ErrInvalidBlame, b.Ordinal)
 	case b.Opaque && len(b.Changes) > 0:
 		return fmt.Errorf("%w: an opaque state version has no row", ErrInvalidBlame)
+	case b.ResourceCount < 0:
+		return fmt.Errorf("%w: resource count %d is below 0", ErrInvalidBlame, b.ResourceCount)
+	case b.Opaque && b.ResourceCount != 0:
+		return fmt.Errorf("%w: an opaque state version has no resource count", ErrInvalidBlame)
 	}
 
 	seen := make(map[string]bool, len(b.Changes))
@@ -168,10 +176,13 @@ type BlameStore interface {
 	// fence of ns. When the cursor is at or past b.Ordinal, it answers nil
 	// and changes nothing, so a repeated run writes no row twice. It returns
 	// ErrInvalidBlame for a blame that the store cannot keep, before it
-	// writes anything. It returns ErrNotFound when the workspace
-	// b.Workspace does not exist in ns, also for a workspace of another
-	// namespace, and namespace.ErrFenced when the fence is stale. A workspace
-	// in the retention period of a delete exists.
+	// writes anything. It returns ErrInvalidBlame when b.Ordinal is above the
+	// cursor plus 1, or when the state version already has a blame at
+	// another ordinal, and writes nothing. It returns ErrNotFound when the
+	// workspace b.Workspace does not exist in ns, also for a workspace of
+	// another namespace, and namespace.ErrFenced when the fence is stale or
+	// names another namespace. A workspace in the retention period of a
+	// delete exists.
 	RecordResourceChanges(ctx context.Context, ns namespace.Name, b ItemBlame, fence namespace.Fence) error
 	// BlameCursor returns the last ordinal that the blame operation compared
 	// for the workspace id, or 0 when it compared none.
@@ -185,6 +196,26 @@ type BlameStore interface {
 	// the blame operation did not compare reads as an empty blame with the
 	// workspace and the state version set and the ordinal 0.
 	ItemChanges(ctx context.Context, id ID, sv StateVersionID) (ItemBlame, error)
+	// ItemSummaries returns the summary of each state version of svs that
+	// the blame operation compared in the workspace id, in one query. A
+	// state version without a blame is absent from the map, and an empty svs
+	// gives an empty map. A workspace that does not exist has no blame, so
+	// the map is empty.
+	ItemSummaries(ctx context.Context, id ID, svs []StateVersionID) (map[StateVersionID]ItemSummary, error)
+}
+
+// ItemSummary is the blame of one state version without its rows: the
+// counts of the rows by kind. ResourceCount is the count of resource
+// instances in the state version.
+type ItemSummary struct {
+	Ordinal        int64
+	ResourceCount  int64
+	Created        int64
+	Updated        int64
+	Replaced       int64
+	Deleted        int64
+	Opaque         bool
+	LineageChanged bool
 }
 
 // StateAt names the state version that was current in a workspace at a

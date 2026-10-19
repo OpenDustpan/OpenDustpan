@@ -21,7 +21,8 @@ func TestItemBlameValidate(t *testing.T) {
 	}
 	blame := func(changes ...workspace.ResourceChange) workspace.ItemBlame {
 		return workspace.ItemBlame{
-			Workspace: "ws-1", StateVersion: "sv-1", Changes: changes, Ordinal: 1, Opaque: false, LineageChanged: false,
+			Workspace: "ws-1", StateVersion: "sv-1", Changes: changes, Ordinal: 1, ResourceCount: 0,
+			Opaque: false, LineageChanged: false,
 		}
 	}
 

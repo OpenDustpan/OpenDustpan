@@ -678,6 +678,7 @@ type WorkspaceBlameItem struct {
 	Ordinal        int64
 	Opaque         bool
 	LineageChanged bool
+	ResourceCount  int64
 }
 
 type WorkspaceResourceChange struct {

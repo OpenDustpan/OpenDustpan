@@ -5,6 +5,7 @@ const (
 	backupColWorkspaceID    = "workspace_id"
 	backupColStateVersionID = "state_version_id"
 	backupColOrdinal        = "ordinal"
+	backupColResourceCount  = "resource_count"
 	backupColAddress        = "address"
 )
 
@@ -24,6 +25,7 @@ func sqliteBlameBackupTables() []sqliteBackupTable {
 				backupColOrdinal,
 				"opaque",
 				"lineage_changed",
+				backupColResourceCount,
 			},
 		},
 		{

@@ -16,6 +16,7 @@ CREATE TABLE workspace_blame_items (
     ordinal          bigint  NOT NULL CHECK (ordinal >= 1),
     opaque           boolean NOT NULL,
     lineage_changed  boolean NOT NULL,
+    resource_count   bigint  NOT NULL CHECK (resource_count >= 0),
     PRIMARY KEY (workspace_id, state_version_id),
     UNIQUE (workspace_id, ordinal)
 );

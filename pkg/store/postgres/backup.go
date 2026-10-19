@@ -190,7 +190,7 @@ func pgInventoryChangeTables() []pgCopyTable {
 			table: "inventory_changes",
 			columns: []string{
 				pgColNamespaceID, pgColSeq, pgColAtMs, pgColTool, pgColUnitID, pgColName, pgColDisplayName,
-				pgColStatus, "collection", pgColKind, "resource_count",
+				pgColStatus, "collection", pgColKind, pgColResourceCount,
 			},
 			orderBy: []string{pgColNamespaceID, pgColSeq},
 		},

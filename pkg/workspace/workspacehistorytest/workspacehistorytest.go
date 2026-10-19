@@ -57,6 +57,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a record for a workspace of another namespace is refused", test: testOtherNamespace},
 		{name: "a malformed blame is refused and changes nothing", test: testInvalidBlame},
 		{name: "a record keeps the rows of each workspace apart", test: testWorkspacesApart},
+		{name: "a fence of another namespace refuses a record", test: testFenceOfOtherNamespace},
+		{name: "a record that skips an ordinal is refused", test: testSkippedOrdinal},
+		{name: "a state version with a blame is refused at another ordinal", test: testSecondBlame},
+		{name: "summaries count the rows by kind and leave out a state version without a blame", test: testSummaries},
 	}
 
 	for _, tc := range cases {
@@ -166,6 +170,7 @@ func blame(id workspace.ID, ordinal int64, rows ...workspace.ResourceChange) wor
 		StateVersion:   svOf(ordinal),
 		Changes:        rows,
 		Ordinal:        ordinal,
+		ResourceCount:  0,
 		Opaque:         false,
 		LineageChanged: false,
 	}
@@ -193,21 +198,22 @@ func testEmpty(t *testing.T, s Store) {
 func testItemChanges(t *testing.T, s Store) {
 	t.Helper()
 	f := makeNamespace(t, s)
-	mustRecord(
-		t,
-		s,
-		f,
-		blame(
-			"ws-one",
-			1,
-			row("ws-one", 1, addrVPC, workspace.ResourceCreated),
-			row("ws-one", 1, addrSubnet, workspace.ResourceCreated),
-		),
+	counted := blame(
+		"ws-one",
+		1,
+		row("ws-one", 1, addrVPC, workspace.ResourceCreated),
+		row("ws-one", 1, addrSubnet, workspace.ResourceCreated),
 	)
+	counted.ResourceCount = 7
+	mustRecord(t, s, f, counted)
 
 	b, err := s.ItemChanges(t.Context(), "ws-one", svOf(1))
 	if err != nil {
 		t.Fatalf("item changes: %v", err)
+	}
+
+	if b.ResourceCount != 7 {
+		t.Errorf("resource count = %d, want 7", b.ResourceCount)
 	}
 
 	addrs := make([]string, 0, len(b.Changes))
@@ -233,13 +239,14 @@ func testOpaque(t *testing.T, s Store) {
 		s,
 		f,
 		workspace.ItemBlame{
-			Workspace: "ws-one", StateVersion: svOf(1), Changes: nil, Ordinal: 1, Opaque: true, LineageChanged: false,
+			Workspace: "ws-one", StateVersion: svOf(1), Changes: nil, Ordinal: 1, ResourceCount: 0,
+			Opaque: true, LineageChanged: false,
 		},
 	)
 
 	b, err := s.ItemChanges(t.Context(), "ws-one", svOf(1))
-	if err != nil || !b.Opaque || len(b.Changes) != 0 {
-		t.Errorf("blame = %+v, %v, want opaque with no row", b, err)
+	if err != nil || !b.Opaque || len(b.Changes) != 0 || b.ResourceCount != 0 {
+		t.Errorf("blame = %+v, %v, want opaque with no row and no resource count", b, err)
 	}
 
 	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 1 {
@@ -275,16 +282,30 @@ func testLineageChanged(t *testing.T, s Store) {
 func testRepeat(t *testing.T, s Store) {
 	t.Helper()
 	f := makeNamespace(t, s)
-	mustRecord(t, s, f, blame("ws-one", 2, row("ws-one", 2, addrVPC, workspace.ResourceCreated)))
-	mustRecord(t, s, f, blame("ws-one", 2, row("ws-one", 2, addrVPC, workspace.ResourceCreated)))
-	mustRecord(t, s, f, blame("ws-one", 1, row("ws-one", 1, addrSubnet, workspace.ResourceCreated)))
+	first := blame("ws-one", 1, row("ws-one", 1, addrSubnet, workspace.ResourceCreated))
+	first.ResourceCount = 4
+	second := blame("ws-one", 2, row("ws-one", 2, addrVPC, workspace.ResourceCreated))
+	second.ResourceCount = 5
+	mustRecord(t, s, f, first)
+	mustRecord(t, s, f, second)
 
-	if b, err := s.ItemChanges(t.Context(), "ws-one", svOf(2)); err != nil || len(b.Changes) != 1 {
-		t.Errorf("rows of ordinal 2 after a repeat = %d, %v, want 1", len(b.Changes), err)
+	again := blame("ws-one", 2, row("ws-one", 2, addrVPC, workspace.ResourceCreated))
+	again.ResourceCount = 9
+	mustRecord(t, s, f, again)
+	mustRecord(t, s, f, first)
+
+	b, err := s.ItemChanges(t.Context(), "ws-one", svOf(2))
+	if err != nil || len(b.Changes) != 1 || b.ResourceCount != 5 {
+		t.Errorf("blame of ordinal 2 after a repeat = %+v, %v, want 1 row and the first resource count 5", b, err)
 	}
 
-	if b, err := s.ItemChanges(t.Context(), "ws-one", svOf(1)); err != nil || len(b.Changes) != 0 {
-		t.Errorf("rows of ordinal 1 below the cursor = %d, %v, want none", len(b.Changes), err)
+	b, err = s.ItemChanges(t.Context(), "ws-one", svOf(1))
+	if err != nil || len(b.Changes) != 1 || b.ResourceCount != 4 {
+		t.Errorf("blame of ordinal 1 after a repeat = %+v, %v, want 1 row and resource count 4", b, err)
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 2 {
+		t.Errorf("cursor = %d, %v, want 2", cursor, err)
 	}
 }
 
@@ -295,7 +316,7 @@ func testResourceHistory(t *testing.T, s Store) {
 	mustRecord(t, s, f, blame("ws-one", 2, row("ws-one", 2, addrVPC, workspace.ResourceUpdated)))
 	mustRecord(t, s, f, blame("ws-one", 3, row("ws-one", 3, addrSubnet, workspace.ResourceCreated)))
 	mustRecord(t, s, f, blame("ws-one", 4, row("ws-one", 4, addrVPC, workspace.ResourceDeleted)))
-	mustRecord(t, s, f, blame("ws-two", 9, row("ws-two", 9, addrVPC, workspace.ResourceCreated)))
+	mustRecord(t, s, f, blame("ws-two", 1, row("ws-two", 1, addrVPC, workspace.ResourceCreated)))
 
 	first, err := s.ResourceHistory(t.Context(), "ws-one", addrVPC, 0, 2)
 	if err != nil || len(first) != 2 {
@@ -400,6 +421,13 @@ func testInvalidBlame(t *testing.T, s Store) {
 	noVersion := blame("ws-one", 2)
 	noVersion.StateVersion = ""
 
+	negativeCount := blame("ws-one", 1)
+	negativeCount.ResourceCount = -1
+
+	opaqueWithCount := blame("ws-one", 1)
+	opaqueWithCount.Opaque = true
+	opaqueWithCount.ResourceCount = 3
+
 	cases := []struct {
 		name string
 		b    workspace.ItemBlame
@@ -421,6 +449,8 @@ func testInvalidBlame(t *testing.T, s Store) {
 		{name: "an opaque blame with a row", b: opaqueWithRow},
 		{name: "an ordinal below 1", b: blame("ws-one", 0)},
 		{name: "no state version", b: noVersion},
+		{name: "a negative resource count", b: negativeCount},
+		{name: "an opaque blame with a resource count", b: opaqueWithCount},
 	}
 
 	for _, tc := range cases {
@@ -436,6 +466,139 @@ func testInvalidBlame(t *testing.T, s Store) {
 
 	if b, err := s.ItemChanges(t.Context(), "ws-one", svOf(2)); err != nil || len(b.Changes) != 0 {
 		t.Errorf("a refused record left %d rows, %v", len(b.Changes), err)
+	}
+}
+
+func testFenceOfOtherNamespace(t *testing.T, s Store) {
+	t.Helper()
+	makeNamespace(t, s)
+	other := makeNamespaceNamed(t, s, "beta")
+
+	err := s.RecordResourceChanges(
+		t.Context(),
+		"acme",
+		blame("ws-one", 1, row("ws-one", 1, addrVPC, workspace.ResourceCreated)),
+		other,
+	)
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Errorf("record with the current fence of another namespace err = %v, want ErrFenced", err)
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 0 {
+		t.Errorf("a fenced record moved the cursor to %d, %v", cursor, err)
+	}
+}
+
+func testSkippedOrdinal(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+	mustRecord(t, s, f, blame("ws-one", 1, row("ws-one", 1, addrVPC, workspace.ResourceCreated)))
+
+	err := s.RecordResourceChanges(
+		t.Context(), "acme", blame("ws-one", 3, row("ws-one", 3, addrVPC, workspace.ResourceUpdated)), f,
+	)
+	if !errors.Is(err, workspace.ErrInvalidBlame) {
+		t.Errorf("record that skips ordinal 2 err = %v, want ErrInvalidBlame", err)
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 1 {
+		t.Errorf("cursor = %d, %v, want 1", cursor, err)
+	}
+
+	if b, err := s.ItemChanges(t.Context(), "ws-one", svOf(3)); err != nil || b.Ordinal != 0 {
+		t.Errorf("blame of the skipped record = %+v, %v, want ordinal 0", b, err)
+	}
+}
+
+func testSecondBlame(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+	mustRecord(t, s, f, blame("ws-one", 1, row("ws-one", 1, addrVPC, workspace.ResourceCreated)))
+
+	again := blame("ws-one", 2, row("ws-one", 2, addrVPC, workspace.ResourceUpdated))
+	again.StateVersion = svOf(1)
+
+	for i := range again.Changes {
+		again.Changes[i].StateVersion = svOf(1)
+	}
+
+	err := s.RecordResourceChanges(t.Context(), "acme", again, f)
+	if !errors.Is(err, workspace.ErrInvalidBlame) {
+		t.Errorf("second blame of one state version err = %v, want ErrInvalidBlame", err)
+	}
+
+	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 1 {
+		t.Errorf("cursor = %d, %v, want 1", cursor, err)
+	}
+
+	if b, err := s.ItemChanges(t.Context(), "ws-one", svOf(1)); err != nil || b.Ordinal != 1 || len(b.Changes) != 1 {
+		t.Errorf("blame of the state version = %+v, %v, want the first blame", b, err)
+	}
+}
+
+func testSummaries(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+
+	mixed := blame(
+		"ws-one",
+		1,
+		row("ws-one", 1, "a", workspace.ResourceCreated),
+		row("ws-one", 1, "b", workspace.ResourceCreated),
+		row("ws-one", 1, "c", workspace.ResourceUpdated),
+		row("ws-one", 1, "d", workspace.ResourceReplaced),
+		row("ws-one", 1, "e", workspace.ResourceDeleted),
+	)
+	mixed.ResourceCount = 6
+	mustRecord(t, s, f, mixed)
+
+	opaque := workspace.ItemBlame{
+		Workspace: "ws-one", StateVersion: svOf(2), Changes: nil, Ordinal: 2, ResourceCount: 0,
+		Opaque: true, LineageChanged: true,
+	}
+	mustRecord(t, s, f, opaque)
+	mustRecord(t, s, f, blame("ws-two", 1, row("ws-two", 1, "z", workspace.ResourceCreated)))
+
+	got, err := s.ItemSummaries(t.Context(), "ws-one", []workspace.StateVersionID{svOf(1), svOf(2), svOf(3)})
+	if err != nil {
+		t.Fatalf("item summaries: %v", err)
+	}
+
+	want := map[workspace.StateVersionID]workspace.ItemSummary{
+		svOf(1): {
+			Ordinal:        1,
+			ResourceCount:  6,
+			Created:        2,
+			Updated:        1,
+			Replaced:       1,
+			Deleted:        1,
+			Opaque:         false,
+			LineageChanged: false,
+		},
+		svOf(2): {
+			Ordinal:        2,
+			ResourceCount:  0,
+			Created:        0,
+			Updated:        0,
+			Replaced:       0,
+			Deleted:        0,
+			Opaque:         true,
+			LineageChanged: true,
+		},
+	}
+	if len(got) != len(want) || got[svOf(1)] != want[svOf(1)] || got[svOf(2)] != want[svOf(2)] {
+		t.Errorf("summaries = %+v, want %+v with no entry for a state version without a blame", got, want)
+	}
+
+	// The row of ws-two is under the same state version ID, and must not show.
+	other, err := s.ItemSummaries(t.Context(), "ws-two", []workspace.StateVersionID{svOf(1), svOf(2)})
+	if err != nil || len(other) != 1 || other[svOf(1)].Created != 1 {
+		t.Errorf("summaries of ws-two = %+v, %v, want its one item", other, err)
+	}
+
+	none, err := s.ItemSummaries(t.Context(), "ws-one", nil)
+	if err != nil || len(none) != 0 {
+		t.Errorf("summaries of no state version = %+v, %v, want none", none, err)
 	}
 }
 

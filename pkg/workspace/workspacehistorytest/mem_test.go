@@ -3,6 +3,7 @@ package workspacehistorytest_test
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ type mem struct {
 	opaque     map[itemKey]bool
 	lineage    map[itemKey]bool
 	ordinals   map[itemKey]int64
+	counts     map[itemKey]int64
 	rows       []workspace.ResourceChange
 	mu         sync.Mutex
 }
@@ -45,6 +47,7 @@ func newMem() *mem {
 		opaque:     map[itemKey]bool{},
 		lineage:    map[itemKey]bool{},
 		ordinals:   map[itemKey]int64{},
+		counts:     map[itemKey]int64{},
 		rows:       nil,
 		mu:         sync.Mutex{},
 	}
@@ -114,13 +117,23 @@ func (m *mem) RecordResourceChanges(
 		return workspace.ErrNotFound
 	}
 
-	if m.cursors[b.Workspace] >= b.Ordinal {
+	cursor := m.cursors[b.Workspace]
+	if cursor >= b.Ordinal {
 		return nil
 	}
 
+	if b.Ordinal != cursor+1 {
+		return fmt.Errorf("%w: ordinal %d does not follow the cursor %d", workspace.ErrInvalidBlame, b.Ordinal, cursor)
+	}
+
 	key := itemKey{workspace: b.Workspace, stateVersion: b.StateVersion}
+	if _, found := m.ordinals[key]; found {
+		return fmt.Errorf("%w: state version %s already has a blame", workspace.ErrInvalidBlame, b.StateVersion)
+	}
+
 	m.rows = append(m.rows, b.Changes...)
 	m.ordinals[key] = b.Ordinal
+	m.counts[key] = b.ResourceCount
 	m.opaque[key] = b.Opaque
 	m.lineage[key] = b.LineageChanged
 	m.cursors[b.Workspace] = b.Ordinal
@@ -169,6 +182,7 @@ func (m *mem) ItemChanges(
 		StateVersion:   sv,
 		Changes:        []workspace.ResourceChange{},
 		Ordinal:        m.ordinals[key],
+		ResourceCount:  m.counts[key],
 		Opaque:         m.opaque[key],
 		LineageChanged: m.lineage[key],
 	}
@@ -183,4 +197,58 @@ func (m *mem) ItemChanges(
 	slices.SortFunc(b.Changes, func(a, c workspace.ResourceChange) int { return cmp.Compare(a.Address, c.Address) })
 
 	return b, nil
+}
+
+func (m *mem) ItemSummaries(
+	_ context.Context,
+	id workspace.ID,
+	svs []workspace.StateVersionID,
+) (map[workspace.StateVersionID]workspace.ItemSummary, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := map[workspace.StateVersionID]workspace.ItemSummary{}
+
+	for _, sv := range svs {
+		key := itemKey{workspace: id, stateVersion: sv}
+
+		ordinal, found := m.ordinals[key]
+		if !found {
+			continue
+		}
+
+		sum := workspace.ItemSummary{
+			Ordinal:        ordinal,
+			ResourceCount:  m.counts[key],
+			Created:        0,
+			Updated:        0,
+			Replaced:       0,
+			Deleted:        0,
+			Opaque:         m.opaque[key],
+			LineageChanged: m.lineage[key],
+		}
+
+		for i := range m.rows {
+			r := &m.rows[i]
+			if r.Workspace != id || r.StateVersion != sv {
+				continue
+			}
+
+			switch r.Kind {
+			case workspace.ResourceCreated:
+				sum.Created++
+			case workspace.ResourceUpdated:
+				sum.Updated++
+			case workspace.ResourceReplaced:
+				sum.Replaced++
+			case workspace.ResourceDeleted:
+				sum.Deleted++
+			default:
+			}
+		}
+
+		out[sv] = sum
+	}
+
+	return out, nil
 }

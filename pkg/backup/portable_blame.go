@@ -5,6 +5,7 @@ const (
 	portColWorkspaceID    = "workspace_id"
 	portColStateVersionID = "state_version_id"
 	portColOrdinal        = "ordinal"
+	portColResourceCount  = "resource_count"
 	portColAddress        = "address"
 )
 
@@ -30,6 +31,7 @@ func portableBlameTables() []PortableTable {
 				{Name: portColOrdinal, Kind: KindInteger},
 				{Name: "opaque", Kind: KindBool},
 				{Name: "lineage_changed", Kind: KindBool},
+				{Name: portColResourceCount, Kind: KindInteger},
 			},
 		},
 		{

@@ -60,12 +60,13 @@ func seedBlameRows(t *testing.T, s BackupStore, seed blameSeed) {
 			row("module.net.aws_subnet.a[0]", workspace.ResourceReplaced, true),
 		},
 		Ordinal:        1,
+		ResourceCount:  3,
 		Opaque:         false,
 		LineageChanged: false,
 	}
 	opaque := workspace.ItemBlame{
 		Workspace: w.ID, StateVersion: workspace.StateVersionID(second), Changes: nil,
-		Ordinal: 2, Opaque: true, LineageChanged: true,
+		Ordinal: 2, ResourceCount: 0, Opaque: true, LineageChanged: true,
 	}
 
 	for _, b := range []workspace.ItemBlame{readable, opaque} {
@@ -111,8 +112,8 @@ func checkRestoredBlame(t *testing.T, dst RestoreStore, seed blameSeed) {
 	}
 
 	got, err := blames.ItemChanges(ctx, w.ID, workspace.StateVersionID(first))
-	if err != nil || got.Ordinal != 1 || len(got.Changes) != 2 {
-		t.Fatalf("restored blame of the first state version = %+v, %v, want 2 rows", got, err)
+	if err != nil || got.Ordinal != 1 || got.ResourceCount != 3 || len(got.Changes) != 2 {
+		t.Fatalf("restored blame of the first state version = %+v, %v, want 2 rows and resource count 3", got, err)
 	}
 
 	checkRestoredRow(t, got.Changes[0])

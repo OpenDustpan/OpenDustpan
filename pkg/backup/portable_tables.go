@@ -208,7 +208,7 @@ func portableSpec() []PortableTable {
 				{Name: portColDisplayName, Kind: KindText},
 				{Name: "last_changed_ms", Kind: KindTime},
 				{Name: portColStatus, Kind: KindText},
-				{Name: "resource_count", Kind: KindInteger},
+				{Name: portColResourceCount, Kind: KindInteger},
 				{Name: "lock_holder", Kind: KindText},
 				{Name: "lock_since_ms", Kind: KindTime},
 				{Name: "lock_operation", Kind: KindText},
@@ -258,7 +258,7 @@ func portableSpec() []PortableTable {
 				{Name: portColStatus, Kind: KindText},
 				{Name: "collection", Kind: KindText},
 				{Name: portColKind, Kind: KindText},
-				{Name: "resource_count", Kind: KindInteger},
+				{Name: portColResourceCount, Kind: KindInteger},
 			},
 		},
 		{

@@ -204,7 +204,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColDisplayName,
 				"last_changed_ms",
 				backupColStatus,
-				"resource_count",
+				backupColResourceCount,
 				"lock_holder",
 				"lock_since_ms",
 				"lock_operation",
@@ -297,7 +297,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespaceID, "seq", backupColAtMs, backupColTool, backupColUnitID, backupColName,
 				backupColDisplayName,
-				backupColStatus, "collection", backupColKind, "resource_count",
+				backupColStatus, "collection", backupColKind, backupColResourceCount,
 			},
 		},
 		{
@@ -393,8 +393,6 @@ func sqliteBackupTables() []sqliteBackupTable {
 // sqliteLaterBackupTables lists the column lists of the tables that follow the
 // base list in the order of backup.Tables.
 func sqliteLaterBackupTables() []sqliteBackupTable {
-	
-
 	return slices.Concat(
 		sqliteIdentityBackupTables(),
 		sqliteSessionBackupTables(),
