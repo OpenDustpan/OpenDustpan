@@ -153,6 +153,19 @@ func (m *memStore) Ping(_ context.Context) error {
 	return nil
 }
 
+func (m *memStore) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key := range m.entries {
+		if e := m.entries[key]; e.UnitID == unitID {
+			return e, nil
+		}
+	}
+
+	return inventory.Entry{}, inventory.ErrUnitNotFound
+}
+
 func (m *memStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

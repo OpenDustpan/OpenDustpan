@@ -483,6 +483,33 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 	return out, nil
 }
 
+// GetUnit implements inventory.Reader: the live unit with the stable ID
+// unitID, or inventory.ErrUnitNotFound. A deleted unit is not a live unit.
+func (s *Store) GetUnit(ctx context.Context, unitID string) (inventory.Entry, error) {
+	row, err := s.queries.GetInventoryEntryByUnitID(ctx, unitID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return inventory.Entry{}, inventory.ErrUnitNotFound
+	}
+
+	if err != nil {
+		return inventory.Entry{}, fmt.Errorf("select inventory unit: %w", err)
+	}
+
+	labelRows, err := s.queries.ListInventoryUnitLabels(ctx, unitID)
+	if err != nil {
+		return inventory.Entry{}, fmt.Errorf("select inventory unit labels: %w", err)
+	}
+
+	entry := inventoryEntry(db.ListInventoryRow(row))
+	entry.Labels = make(map[string]string, len(labelRows))
+
+	for _, l := range labelRows {
+		entry.Labels[l.LabelKey] = l.LabelValue
+	}
+
+	return entry, nil
+}
+
 // inventoryLabels reads the labels of every live unit of ns from the
 // projection, keyed by unit ID.
 func (s *Store) inventoryLabels(ctx context.Context, ns namespace.Name) (map[string]map[string]string, error) {
