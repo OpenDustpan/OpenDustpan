@@ -56,7 +56,7 @@ consumer, and nothing tests that the adapters agree.
 - **Forge credentials are sealed credentials of the namespace** (ADR 213
   decision 7): sealed with a data key that the key-encryption key wraps,
   never answered, rotated with two active sets, with a WARN log line and
-  the metric `forge_credential_fallback_total` for a fallback.
+  the metric `git_host_credential_fallback_total` for a fallback.
 - **A namespace can have many forge connections and one default** (ADR
   213 decision 8). The removal of the default fails until another
   connection is the default.
@@ -469,16 +469,16 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   `ParseEvent` puts the installation ID of the event in `Event`, and the
   server maps it to the connection whose installation ID parameter matches.
   An event for an installation that no connection names is dropped with 204
-  and counted in `forge_event_rejected_total` with the reason
+  and counted in `git_host_event_rejected_total` with the reason
   `unknown-installation`.
 - The route reads at most 2 MiB of body (proposed), finds the registration
   by the hook ID, and calls `ParseEvent` with the active event secrets of
   that hook ID. The intake checks the event against those secrets before it
   trusts `InstallationID`. It answers 204 to each request,
   also for an unknown hook ID and a bad signature. The metric
-  `forge_event_rejected_total` counts the rejects by reason and connection.
+  `git_host_event_rejected_total` counts the rejects by reason and connection.
   A body above the limit is dropped with 204, counted as
-  `forge_event_rejected_total{reason="too-large"}`, and the poll catches the
+  `git_host_event_rejected_total{reason="too-large"}`, and the poll catches the
   change that it announced.
 - The server drops a delivery ID that it saw for the same connection in
   the last 24 hours.
@@ -718,26 +718,32 @@ can allow only some of them, so the call can be refused (`ErrRefused`).
 
 ## User-facing words
 
-The code term is "forge". A person who reads the text does not need to know
-it, so user-facing text says "Git host" (owner decision of 19 October 2026).
-The Go packages, types and metric names keep "forge". These places change
-in this RFC:
+The code term is "forge". User-facing text never says "forge" (owner
+decision of 19 October 2026). It names the service when it can: "GitHub",
+"GitLab" or "Forgejo", taken from the kind of the connection. Only text that
+must cover every kind says "Git host". The Go packages and types keep
+"forge". These places change in this RFC:
 
 - the path `/api/dustpan/v1/namespaces/{namespace}/git-host-connections`
-  and its sub-paths;
-- the actions `namespace:read-git-host-connections`,
+  and its sub-paths, and the actions `namespace:read-git-host-connections`,
   `namespace:manage-git-host-connections` and
-  `namespace:use-git-host-connection`, and the object kind
-  `git-host-connection`;
-- the text of the port errors, for example "object not found on the Git host", which
-  an API error can carry;
-- the console label "Git host connection" and the documentation page title
-  "Git host connections" (proposed, in the pull request that adds the
+  `namespace:use-git-host-connection`, with the object kind
+  `git-host-connection`. A path or an action covers every kind, so it uses
+  the generic term;
+- the text of an error. An adapter error that knows its kind names the
+  service, for example "GitHub refused the credential". A sentinel of the
+  port covers every kind and may say "Git host", for example "object not
+  found on the Git host";
+- the console label and the documentation page title name the service when
+  the kind is known ("GitHub connection"). "Git host connections" stays only
+  for a list that mixes kinds (proposed, in the pull request that adds the
   feature);
+- the metrics `git_host_event_rejected_total` and
+  `git_host_credential_fallback_total`, which operators read;
 - the path of the intake, which has no such word (`/webhooks/{hook ID}`).
 
-The wire value `forge` of the git credential mode of a runner pool stays,
-because the runner API shipped it.
+A JSON field name that a user sees follows the same rule. The wire value of
+the kind (`github`, `gitlab`, `forgejo`) stays.
 
 ## Consequences
 
@@ -747,6 +753,10 @@ because the runner API shipped it.
   it. This RFC does not edit ADR 146.
 - A comment command and a chat message follow the same approval rule, so
   the two surfaces cannot differ.
+- ADR 213 decision 7 names the metric `forge_credential_fallback_total`. A follow-up ADR note gives the new name `git_host_credential_fallback_total`.
+- Follow-up: rename the value `forge` of the git credential mode of a runner
+  pool before the first release. It is a wire value in the runner reference,
+  so it needs its own pull request.
 
 ## Hard to change later
 

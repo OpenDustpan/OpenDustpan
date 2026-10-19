@@ -149,11 +149,11 @@ The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutra
 _Avoid_: Feature list, handshake, capability (alone)
 
 **Forge**:
-A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection (RFC 89, proposed). User-facing text says: Git host.
-_Avoid_: VCS provider, SCM, VCS (alone), "forge" in user-facing text (use Git host)
+A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection (RFC 89, proposed). Internal term. User-facing text names the service (GitHub, GitLab, Forgejo). Where a generic term is needed, it says Git host.
+_Avoid_: VCS provider, SCM, VCS (alone). In user-facing text: forge
 
 **Forge connection**:
-The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213). User-facing text says: Git host connection.
+The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213). User-facing text names the service ("GitHub connection"). Where a generic term is needed, it says Git host connection.
 _Avoid_: VCS integration, VCS provider, app (alone)
 
 **Review request**:
