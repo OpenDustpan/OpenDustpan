@@ -21,8 +21,10 @@ import (
 )
 
 // envPattern finds environment names in Go string literals: a DUSTPAN_
-// setting the code reads, prints or sets.
-var envPattern = regexp.MustCompile(`DUSTPAN_[A-Z0-9_]+`)
+// setting the code reads, prints or sets. The word boundary keeps a name
+// that only ends in DUSTPAN_ (the OPENDUSTPAN_ variables of the compose
+// stack, which are not server settings) from counting as one.
+var envPattern = regexp.MustCompile(`\bDUSTPAN_[A-Z0-9_]+`)
 
 // TestEveryEnvVarHasADeclaration scans the Go sources for DUSTPAN_ names
 // and proves each one has a setting declaration, so no setting is read
