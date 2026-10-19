@@ -1,7 +1,7 @@
 # Manual locks
 
-This guide shows how to stop all changes to one unit or to one collection with
-a manual lock, and how to remove the lock.
+This guide shows how to put a manual lock on one unit or on one collection, what
+the lock stops now, and how to remove the lock.
 
 A manual lock is a lock that a person puts on an object, with a reason that
 everyone sees. It is not the lock of a tool. OpenTofu takes its own lock on a
@@ -11,31 +11,75 @@ API, and a force-unlock of a tool never removes it.
 
 ## What a manual lock stops
 
-While a manual lock covers a unit:
+This version of manual locks stops two things. While a manual lock covers a unit:
 
-- A lock request of OpenTofu for the workspace fails. `tofu plan` and
-  `tofu apply` with the remote lock stop before they read or write state.
+- A lock request of OpenTofu for the workspace fails, on the OpenTofu HTTP
+  backend and on the cloud block. `tofu plan` and `tofu apply` with the remote
+  lock stop before they read or write state.
 - The start of a mutating update of the Pulumi CLI for the stack fails. `pulumi
   up`, `pulumi refresh` and `pulumi destroy` stop. `pulumi preview` still works.
-- A tool that already holds its own lock on the unit keeps it. The lock holder
-  can still write state and release the lock.
 
-Both tools show the same text, which names the object, the holder, the time and
-the reason:
+A job phase that started before the lock runs on. When that phase asks for a
+lock of OpenTofu or for the start of a mutating Pulumi update, the request
+meets the lock and fails. A request that is in progress at the moment of the
+lock can pass: the check and the request run in separate transactions. The next
+request meets the lock.
+
+A tool that already holds its own lock on the unit keeps it. The lock holder can
+still write state and release the lock.
+
+## What a manual lock does not stop yet
+
+A manual lock does not stop these changes. Do not use a manual lock as the only
+protection against them:
+
+- A write of state through the OpenTofu HTTP backend that names no lock. The
+  write of a client that holds no lock is not checked against the manual lock.
+- `pulumi stack import`.
+- A removal or an edit of the state of a unit, for example `pulumi state delete`.
+- A removal of the unit.
+
+A manual lock does not stop reads. A tool force-unlock, for example
+`tofu force-unlock`, ends the lock of the tool only.
+
+## What the tools print
+
+The text names the unit in the words of the tool, the holder, the time and the
+reason. The Pulumi CLI prints, for a stack in a locked collection:
 
 ```text
-collection acme/payments has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed
+stack acme/web/prod is in collection acme/payments, which has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed
 ```
 
-The Pulumi CLI prints the text. OpenTofu prints its own line for a refused lock
-request, `workspace already locked`, because it does not show the detail of the
-server answer. The answer of the server to the lock request holds the full text,
-and the inventory shows the lock on the unit. The OpenTofu HTTP backend prints
-the holder and the reason in its lock information.
+For a lock on the stack itself the text starts with `stack acme/web/prod has a
+manual lock by`. OpenTofu names a `workspace` in the same way.
 
-A manual lock does not stop reads, and it does not stop a job that already
-started its phase. A tool force-unlock, for example `tofu force-unlock`, ends
-the lock of the tool only.
+The OpenTofu HTTP backend shows the lock information of the answer 423. This is
+the output of `tofu apply` for a lock of `admin` on the workspace
+`acme/e2e-workspace` (OpenTofu 1.12.7):
+
+```text
+Error: Error acquiring the state lock
+
+Error message: HTTP remote state already locked: ID=A manual lock blocks this
+run. To remove it, send `DELETE
+/api/inventory/unit-lock?unit=opentofu:acme/e2e-workspace`.
+Lock Info:
+  ID:        A manual lock blocks this run. To remove it, send `DELETE /api/inventory/unit-lock?unit=opentofu:acme/e2e-workspace`.
+  Path:      
+  Operation: manual lock
+  Who:       admin
+  Version:   
+  Created:   2026-10-19 21:55:37 +0000 UTC
+  Info:      workspace acme/e2e-workspace has a manual lock by admin since 2026-10-19T21:55:37Z: change window closed. `tofu force-unlock` does not remove a manual lock. The holder sends `DELETE /api/inventory/unit-lock?unit=opentofu:acme/e2e-workspace`. A person with unit:manage sends `POST /api/inventory/unit-lock/force-unlock?unit=opentofu:acme/e2e-workspace`.
+```
+
+The `ID` is no lock ID of a tool, so `tofu force-unlock` cannot use it. For a
+lock on a collection, the routes are the routes of the collection. The cloud
+block of OpenTofu prints its own line for a refused lock request, `workspace
+already locked`, because it does not show the detail of the server answer. The
+answer of the server to the lock request holds the full text, and the inventory
+shows the lock on the unit.
 
 ## The object of a lock
 

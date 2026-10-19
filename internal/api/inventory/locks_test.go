@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -104,7 +105,7 @@ func (m *memLocks) CoveringLock(_ context.Context, _ collection.UnitRef) (manual
 
 // known reports whether the route tests have the object.
 func (m *memLocks) known(t manuallock.Target) bool {
-	return t.String() == "unit "+lockUnitRef || t.String() == "collection acme/payments"
+	return t.String() == lockUnitRef || t.String() == "collection acme/payments"
 }
 
 // subjectAuthenticator maps the token "<subject>-token" to the subject.
@@ -687,5 +688,53 @@ func TestListUnitsManualLockField(t *testing.T) {
 
 	if strings.Count(rec.Body.String(), `"manualLock"`) != 1 {
 		t.Errorf("body = %s, want the manualLock field once, omitted on the unit with no lock", rec.Body.String())
+	}
+}
+
+// TestLockReasonOfEscapedAstralCharacters proves a reason of 500 characters
+// that the client writes as JSON surrogate-pair escapes (12 bytes for each
+// character) fits in the body limit and is locked with all 500 characters. A
+// reason of 501 such characters is refused for its length, not for its size.
+func TestLockReasonOfEscapedAstralCharacters(t *testing.T) {
+	t.Parallel()
+
+	const (
+		escaped = "\\ud83d\\ude00" // the JSON escape of U+1F600: 12 bytes for one character
+		maxLen  = 500
+	)
+
+	body := func(n int) string {
+		return `{"reason":"` + strings.Repeat(escaped, n) + `"}`
+	}
+
+	for _, obj := range lockObjects() {
+		t.Run(obj.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLockFixture(t, selectiveAuthorizer{deny: nil})
+
+			rec := f.do(t, "alice", http.MethodPut, obj.path, body(maxLen+1))
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "500") {
+				t.Fatalf("501 characters: status = %d, body = %s, want 400 that names the 500 limit",
+					rec.Code, rec.Body.String())
+			}
+
+			rec = f.do(t, "alice", http.MethodPut, obj.path, body(maxLen))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("500 characters: status = %d, body = %s, want %d", rec.Code, rec.Body.String(), http.StatusOK)
+			}
+
+			var doc struct {
+				Reason string `json:"reason"`
+			}
+
+			if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+				t.Fatalf("decode %q: %v", rec.Body.String(), err)
+			}
+
+			if got := utf8.RuneCountInString(doc.Reason); got != maxLen {
+				t.Errorf("reason has %d characters, want %d", got, maxLen)
+			}
+		})
 	}
 }

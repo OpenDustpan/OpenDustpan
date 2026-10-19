@@ -408,20 +408,36 @@ func TestReadsPassThrough(t *testing.T) {
 func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 	t.Parallel()
 
+	const detail = "by alice since 2026-10-19T10:00:00Z: change window closed"
+
 	cases := []struct {
 		name   string
 		target manuallock.Target
+		noun   string
+		object string
 		want   string
 	}{
 		{
-			name:   "unit",
-			target: manuallock.UnitTarget(webUnit()),
-			want:   "unit opentofu:acme/web has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed",
+			name: "stack", target: manuallock.UnitTarget(webUnit()), noun: "stack", object: "acme/web/prod",
+			want: "stack acme/web/prod has a manual lock " + detail,
 		},
 		{
-			name:   "collection",
-			target: manuallock.CollectionTarget(paymentsRef()),
-			want:   "collection acme/payments has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed",
+			name: "workspace", target: manuallock.UnitTarget(webUnit()), noun: "workspace", object: "acme/web",
+			want: "workspace acme/web has a manual lock " + detail,
+		},
+		{
+			name: "stack in a locked collection", target: manuallock.CollectionTarget(paymentsRef()),
+			noun: "stack", object: "acme/web/prod",
+			want: "stack acme/web/prod is in collection acme/payments, which has a manual lock " + detail,
+		},
+		{
+			name: "workspace in a locked collection", target: manuallock.CollectionTarget(paymentsRef()),
+			noun: "workspace", object: "acme/web",
+			want: "workspace acme/web is in collection acme/payments, which has a manual lock " + detail,
+		},
+		{
+			name: "a tool that sets no noun", target: manuallock.UnitTarget(webUnit()), noun: "", object: "acme/web",
+			want: "object acme/web has a manual lock " + detail,
 		},
 	}
 
@@ -430,10 +446,14 @@ func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 			t.Parallel()
 
 			l := manuallock.Lock{Since: fixedNow(), Target: tc.target, Holder: "alice", Reason: "change window closed"}
-			err := error(&manuallock.LockedError{Lock: l})
+			err := error(&manuallock.LockedError{Lock: l, Noun: tc.noun, Name: tc.object})
 
 			if err.Error() != tc.want {
 				t.Errorf("text = %q, want %q", err.Error(), tc.want)
+			}
+
+			if strings.Contains(err.Error(), "unit") {
+				t.Errorf("text = %q: the word unit is not a word of any tool", err.Error())
 			}
 
 			if !errors.Is(err, manuallock.ErrLocked) {

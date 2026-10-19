@@ -2998,8 +2998,10 @@ FROM manual_locks
 WHERE kind = ? AND object_id = ?;
 
 -- name: DeleteManualLock :execrows
+-- Deletes the lock that the caller read, and no other lock: the holder and the
+-- time must match too.
 DELETE FROM manual_locks
-WHERE kind = ? AND object_id = ?;
+WHERE kind = ? AND object_id = ? AND holder = ? AND since_ms = ?;
 
 -- name: DeleteManualLocksOfObject :exec
 -- Removes the manual lock of one object by its stable ID. The purge of a unit

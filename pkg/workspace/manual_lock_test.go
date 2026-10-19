@@ -86,7 +86,11 @@ func checkLockedError(t *testing.T, err error) {
 		t.Fatalf("err = %v, want ErrLocked and manuallock.ErrLocked", err)
 	}
 
-	for _, want := range []string{"alice", "change window closed", "acme/payments"} {
+	if strings.Contains(err.Error(), "unit") {
+		t.Errorf("err = %q, want the word workspace, not unit", err)
+	}
+
+	for _, want := range []string{"workspace acme/", "alice", "change window closed", "acme/payments"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to name %q", err, want)
 		}

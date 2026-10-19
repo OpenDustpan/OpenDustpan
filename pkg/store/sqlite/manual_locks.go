@@ -77,7 +77,7 @@ func (s *Store) RemoveLock(
 			return err
 		}
 
-		held, err := readManualLock(ctx, q, t, id)
+		held, err := readManualLockForRemoval(ctx, q, t, id)
 		if err != nil {
 			return err
 		}
@@ -86,9 +86,25 @@ func (s *Store) RemoveLock(
 			return fmt.Errorf("%w: held by %s", manuallock.ErrNotHolder, held.Holder)
 		}
 
-		del := db.DeleteManualLockParams{Kind: string(t.Kind), ObjectID: id}
-		if _, err := q.DeleteManualLock(ctx, del); err != nil {
+		del := db.DeleteManualLockParams{
+			Kind:     string(t.Kind),
+			ObjectID: id,
+			Holder:   held.Holder,
+			SinceMs:  codec.Millis(held.Since),
+		}
+
+		n, err := q.DeleteManualLock(ctx, del)
+		if err != nil {
 			return fmt.Errorf("delete manual lock: %w", err)
+		}
+
+		// Defense in depth: the read above already holds the lock against a
+		// concurrent change, and the delete matches the holder and the time of
+		// that read. This check stays so that a delete which removes no row or
+		// another row is never reported as a removal, and so that no audit entry
+		// "ended" is written for a lock that this call did not end.
+		if n != 1 {
+			return manuallock.ErrLockChanged
 		}
 
 		e.ObjectID = id
@@ -211,6 +227,15 @@ func readManualLock(ctx context.Context, q *db.Queries, t manuallock.Target, id 
 	}
 
 	return manuallock.Lock{Since: codec.FromMillis(row.SinceMs), Target: t, Holder: row.Holder, Reason: row.Reason}, nil
+}
+
+// readManualLockForRemoval reads the lock inside the write transaction. SQLite
+// allows one writer at a time, and the transaction began as IMMEDIATE, so no
+// other write can change the row before the delete.
+func readManualLockForRemoval(
+	ctx context.Context, q *db.Queries, t manuallock.Target, id string,
+) (manuallock.Lock, error) {
+	return readManualLock(ctx, q, t, id)
 }
 
 // endedLockChanges returns the audit changes of a removal: the holder, the

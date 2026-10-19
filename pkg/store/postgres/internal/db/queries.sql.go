@@ -2605,16 +2605,25 @@ func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID str
 
 const deleteManualLock = `-- name: DeleteManualLock :execrows
 DELETE FROM manual_locks
-WHERE kind = $1 AND object_id = $2
+WHERE kind = $1 AND object_id = $2 AND holder = $3 AND since_ms = $4
 `
 
 type DeleteManualLockParams struct {
 	Kind     string
 	ObjectID string
+	Holder   string
+	SinceMs  int64
 }
 
+// Deletes the lock that the caller read, and no other lock: the holder and the
+// time must match too.
 func (q *Queries) DeleteManualLock(ctx context.Context, arg DeleteManualLockParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteManualLock, arg.Kind, arg.ObjectID)
+	result, err := q.db.Exec(ctx, deleteManualLock,
+		arg.Kind,
+		arg.ObjectID,
+		arg.Holder,
+		arg.SinceMs,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -4763,6 +4772,33 @@ type GetManualLockRow struct {
 func (q *Queries) GetManualLock(ctx context.Context, arg GetManualLockParams) (GetManualLockRow, error) {
 	row := q.db.QueryRow(ctx, getManualLock, arg.Kind, arg.ObjectID)
 	var i GetManualLockRow
+	err := row.Scan(&i.Holder, &i.Reason, &i.SinceMs)
+	return i, err
+}
+
+const getManualLockForUpdate = `-- name: GetManualLockForUpdate :one
+SELECT holder, reason, since_ms
+FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+FOR UPDATE
+`
+
+type GetManualLockForUpdateParams struct {
+	Kind     string
+	ObjectID string
+}
+
+type GetManualLockForUpdateRow struct {
+	Holder  string
+	Reason  string
+	SinceMs int64
+}
+
+// Reads the lock and holds a row lock until the transaction ends, so that a
+// removal and a new lock cannot interleave between the read and the delete.
+func (q *Queries) GetManualLockForUpdate(ctx context.Context, arg GetManualLockForUpdateParams) (GetManualLockForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getManualLockForUpdate, arg.Kind, arg.ObjectID)
+	var i GetManualLockForUpdateRow
 	err := row.Scan(&i.Holder, &i.Reason, &i.SinceMs)
 	return i, err
 }

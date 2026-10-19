@@ -27,7 +27,9 @@ func (m manualLockedWorkspaces) Lock(_ context.Context, id workspace.ID, _, _ st
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}
 
-	return workspace.Workspace{}, fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{Lock: m.lock})
+	refusal := &manuallock.LockedError{Lock: m.lock, Noun: "workspace", Name: "acme/web"}
+
+	return workspace.Workspace{}, fmt.Errorf("%w: %w", workspace.ErrLocked, refusal)
 }
 
 // TestLockRefusedByAManualLock proves a lock request that a manual lock refuses
@@ -39,17 +41,18 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 	cases := []struct {
 		name   string
 		target manuallock.Target
-		want   []string
+		want   string
 	}{
 		{
 			name:   "lock on the unit",
 			target: manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"}),
-			want:   []string{"unit opentofu:acme/web", "alice", "change window closed"},
+			want:   "workspace acme/web has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed",
 		},
 		{
 			name:   "lock on the collection",
 			target: manuallock.CollectionTarget(collection.Ref{Namespace: "acme", Name: "payments"}),
-			want:   []string{"collection acme/payments", "alice", "change window closed"},
+			want: "workspace acme/web is in collection acme/payments, which has a manual lock by alice since " +
+				"2026-10-19T10:00:00Z: change window closed",
 		},
 	}
 
@@ -84,15 +87,25 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 
 			detail := lockErrorDetail(t, handler, "/api/v2/workspaces/ws-test123/actions/lock")
 
-			for _, want := range tc.want {
-				if !strings.Contains(detail, want) {
-					t.Errorf("detail = %q, want it to hold %q", detail, want)
-				}
-			}
-
-			if strings.Contains(detail, "is locked by User") {
-				t.Errorf("detail = %q: a manual lock does not use the words of a tool lock", detail)
-			}
+			checkManualDetail(t, detail, tc.want)
 		})
+	}
+}
+
+// checkManualDetail checks that the detail holds the text of the manual lock in
+// the words of the CLI: workspace, not unit, and not the words of a tool lock.
+func checkManualDetail(t *testing.T, detail, want string) {
+	t.Helper()
+
+	if !strings.Contains(detail, want) {
+		t.Errorf("detail = %q, want it to hold %q", detail, want)
+	}
+
+	if strings.Contains(detail, "unit") {
+		t.Errorf("detail = %q: the CLI shows the word workspace, not unit", detail)
+	}
+
+	if strings.Contains(detail, "is locked by User") {
+		t.Errorf("detail = %q: a manual lock does not use the words of a tool lock", detail)
 	}
 }

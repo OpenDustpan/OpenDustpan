@@ -72,7 +72,7 @@ func (s *Store) RemoveLock(
 			return err
 		}
 
-		held, err := readManualLock(ctx, q, t, id)
+		held, err := readManualLockForRemoval(ctx, q, t, id)
 		if err != nil {
 			return err
 		}
@@ -81,9 +81,25 @@ func (s *Store) RemoveLock(
 			return fmt.Errorf("%w: held by %s", manuallock.ErrNotHolder, held.Holder)
 		}
 
-		del := db.DeleteManualLockParams{Kind: string(t.Kind), ObjectID: id}
-		if _, err := q.DeleteManualLock(ctx, del); err != nil {
+		del := db.DeleteManualLockParams{
+			Kind:     string(t.Kind),
+			ObjectID: id,
+			Holder:   held.Holder,
+			SinceMs:  codec.Millis(held.Since),
+		}
+
+		n, err := q.DeleteManualLock(ctx, del)
+		if err != nil {
 			return fmt.Errorf("delete manual lock: %w", err)
+		}
+
+		// Defense in depth: the read above already holds the lock against a
+		// concurrent change, and the delete matches the holder and the time of
+		// that read. This check stays so that a delete which removes no row or
+		// another row is never reported as a removal, and so that no audit entry
+		// "ended" is written for a lock that this call did not end.
+		if n != 1 {
+			return manuallock.ErrLockChanged
 		}
 
 		e.ObjectID = id
@@ -197,6 +213,24 @@ func readManualLock(ctx context.Context, q *db.Queries, t manuallock.Target, id 
 
 	if err != nil {
 		return manuallock.Lock{}, fmt.Errorf("select manual lock: %w", err)
+	}
+
+	return manuallock.Lock{Since: codec.FromMillis(row.SinceMs), Target: t, Holder: row.Holder, Reason: row.Reason}, nil
+}
+
+// readManualLockForRemoval is readManualLock that also locks the row until the
+// transaction ends. The first of two concurrent removals deletes the row. The
+// second waits, then finds no row and returns ErrNotLocked.
+func readManualLockForRemoval(
+	ctx context.Context, q *db.Queries, t manuallock.Target, id string,
+) (manuallock.Lock, error) {
+	row, err := q.GetManualLockForUpdate(ctx, db.GetManualLockForUpdateParams{Kind: string(t.Kind), ObjectID: id})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
+
+	if err != nil {
+		return manuallock.Lock{}, fmt.Errorf("select manual lock for removal: %w", err)
 	}
 
 	return manuallock.Lock{Since: codec.FromMillis(row.SinceMs), Target: t, Holder: row.Holder, Reason: row.Reason}, nil

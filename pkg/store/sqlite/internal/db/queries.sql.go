@@ -2377,16 +2377,25 @@ func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID str
 
 const deleteManualLock = `-- name: DeleteManualLock :execrows
 DELETE FROM manual_locks
-WHERE kind = ? AND object_id = ?
+WHERE kind = ? AND object_id = ? AND holder = ? AND since_ms = ?
 `
 
 type DeleteManualLockParams struct {
 	Kind     string
 	ObjectID string
+	Holder   string
+	SinceMs  int64
 }
 
+// Deletes the lock that the caller read, and no other lock: the holder and the
+// time must match too.
 func (q *Queries) DeleteManualLock(ctx context.Context, arg DeleteManualLockParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteManualLock, arg.Kind, arg.ObjectID)
+	result, err := q.db.ExecContext(ctx, deleteManualLock,
+		arg.Kind,
+		arg.ObjectID,
+		arg.Holder,
+		arg.SinceMs,
+	)
 	if err != nil {
 		return 0, err
 	}

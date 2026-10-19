@@ -141,7 +141,7 @@ func (h *Handler) retryLock(
 // tool uses the words go-tfe parses.
 func (h *Handler) lockRefusalDetail(ctx context.Context, id workspace.ID, err error) string {
 	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
-		return fmt.Sprintf("Workspace %s: %s", id, manual.Error())
+		return manual.Error()
 	}
 
 	return lockConflictDetail(id, h.lockHolder(ctx, id))

@@ -552,6 +552,10 @@ func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Works
 		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
 	}
 
+	// The manual lock check and the tool lock below run in separate
+	// transactions. A manual lock that commits between them is missed by this
+	// one request, the same as a job phase that started before the lock. The
+	// next request meets the lock.
 	if err := s.checkManualLock(ctx, id); err != nil {
 		return Workspace{}, err
 	}
@@ -574,6 +578,10 @@ func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID 
 		return Workspace{}, fmt.Errorf("%w: %d characters", ErrInvalidLockID, len(lockID))
 	}
 
+	// The manual lock check and the tool lock below run in separate
+	// transactions. A manual lock that commits between them is missed by this
+	// one request, the same as a job phase that started before the lock. The
+	// next request meets the lock.
 	if err := s.checkManualLock(ctx, id); err != nil {
 		return Workspace{}, err
 	}
@@ -2577,5 +2585,5 @@ func (s *Service) checkManualLock(ctx context.Context, id ID) error {
 		return fmt.Errorf("read manual lock of %s: %w", w.Ref, err)
 	}
 
-	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{Lock: l})
+	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{Lock: l, Noun: "workspace", Name: w.Ref.String()})
 }

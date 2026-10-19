@@ -149,11 +149,85 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		Redact: false,
 	})
 
+	runTofuHTTPManualLock(t, env, backendEnv)
+
 	runTofuHTTPMigration(t, env, address, backendEnv)
 
 	runTofuHTTPForceUnlock(t, env, backendEnv)
 
 	tofuNotHomeScenario(t, env, backendEnv)
+}
+
+// runTofuHTTPManualLock proves a manual lock on the workspace stops the http
+// backend: the LOCK request answers 423, and the CLI prints the lock info. The
+// info says that a manual lock blocks the run and names the API route that
+// removes it. After the holder removes the lock, apply works again.
+func runTofuHTTPManualLock(t *testing.T, env *e2e.Env, backendEnv []string) {
+	t.Helper()
+
+	ctx := t.Context()
+	path := unitLockPath(tofuUnitRef())
+
+	lockCall(t, env, actorA, collectionCall{
+		name: "http backend: lock the workspace", method: http.MethodPut, path: path,
+		body: lockBody(lockReasonText), want: http.StatusOK, check: nil,
+	})
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  checkTofuHTTPManualLock(env),
+		Name:   "apply while a manual lock holds the workspace",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   true,
+		Redact: false,
+	})
+
+	lockCall(t, env, actorA, collectionCall{
+		name: "http backend: remove the manual lock", method: http.MethodDelete, path: path,
+		body: "", want: http.StatusNoContent, check: nil,
+	})
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  checkTofuHTTPApplied(),
+		Name:   "apply after the manual lock goes",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+}
+
+// checkTofuHTTPManualLock proves the CLI stopped on the manual lock and printed
+// the lock info: the plain words that a manual lock blocks the run, the route
+// that removes it, the holder and the reason. The server answered the LOCK
+// request with 423.
+func checkTofuHTTPManualLock(env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		out := r.Stdout + r.Stderr
+
+		for _, want := range []string{
+			"Error acquiring the state lock",
+			"A manual lock blocks this run.",
+			"`DELETE /api/inventory/unit-lock?unit=" + tofuUnitRef() + "`",
+			e2e.Subject,
+			lockReasonText,
+		} {
+			if !strings.Contains(out, want) {
+				return fmt.Errorf("%w: apply output lacks %q: %s", errUnexpected, want, out)
+			}
+		}
+
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			if entries[i].Method == "LOCK" && entries[i].Status == http.StatusLocked {
+				return nil
+			}
+		}
+
+		return fmt.Errorf("%w: no LOCK request answered %d", errUnexpected, http.StatusLocked)
+	}
 }
 
 // runTofuHTTPMigration moves the state of the workspace from the http backend

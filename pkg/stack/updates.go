@@ -352,6 +352,10 @@ func (s *Updates) StartBy(
 
 	now := s.clock()
 
+	// The manual lock check and the start of the update below run in separate
+	// transactions. A manual lock that commits between them is missed by this
+	// one request, the same as a job phase that started before the lock. The
+	// update that started keeps running, and the next start meets the lock.
 	if u.Mutates() {
 		if lockErr := s.checkManualLock(ctx, ref); lockErr != nil {
 			return Started{}, lockErr
@@ -1695,5 +1699,5 @@ func (s *Updates) checkManualLock(ctx context.Context, ref Ref) error {
 		return fmt.Errorf("read manual lock of %s: %w", ref, err)
 	}
 
-	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{Lock: l})
+	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{Lock: l, Noun: "stack", Name: ref.String()})
 }

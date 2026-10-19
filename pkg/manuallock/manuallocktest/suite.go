@@ -13,6 +13,7 @@ package manuallocktest
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +49,7 @@ const (
 	toolOpenTofu = "opentofu"
 	toolPulumi   = "pulumi"
 	alice        = "alice"
+	bob          = "bob"
 )
 
 // Factory returns a fresh, empty store for one subtest.
@@ -70,6 +72,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "the holder removes the lock and another principal cannot", test: testRemove},
 		{name: "a forced removal ends the lock of another principal", test: testForcedRemove},
 		{name: "a removal of a lock that does not exist is refused", test: testRemoveMissing},
+		{name: "an unlock after a force-unlock and a new lock keeps the new lock", test: testStaleUnlockKeepsNewLock},
+		{name: "two concurrent removals end the lock once", test: testConcurrentRemoval},
 		{name: "a lock and its removal write an audit entry", test: testAuditEntries},
 		{name: "a unit lock covers the unit only", test: testUnitLockCovers},
 		{name: "a collection lock covers its units", test: testCollectionLockCovers},
@@ -143,7 +147,7 @@ func testAlreadyLocked(t *testing.T, s Store) {
 	} {
 		f.lock(t, tc.target, alice, "first")
 
-		err := f.tryLock(t, tc.target, "bob", "second")
+		err := f.tryLock(t, tc.target, bob, "second")
 		if !errors.Is(err, manuallock.ErrAlreadyLocked) {
 			t.Errorf("%s: second lock: err = %v, want ErrAlreadyLocked", tc.name, err)
 		}
@@ -252,7 +256,7 @@ func testRemove(t *testing.T, s Store) {
 
 	f.lock(t, target, alice, testReason)
 
-	_, err := s.RemoveLock(t.Context(), target, "bob", f.ns.Fence(), lockAudit(f.ns.Fence()))
+	_, err := s.RemoveLock(t.Context(), target, bob, f.ns.Fence(), lockAudit(f.ns.Fence()))
 	if !errors.Is(err, manuallock.ErrNotHolder) {
 		t.Fatalf("removal by another principal: err = %v, want ErrNotHolder", err)
 	}
@@ -274,7 +278,7 @@ func testRemove(t *testing.T, s Store) {
 		t.Errorf("after the removal: err = %v, want ErrNotLocked", err)
 	}
 
-	f.lock(t, target, "bob", "a new lock after the removal")
+	f.lock(t, target, bob, "a new lock after the removal")
 }
 
 func testForcedRemove(t *testing.T, s Store) {
@@ -313,6 +317,106 @@ func testRemoveMissing(t *testing.T, s Store) {
 		if !errors.Is(err, manuallock.ErrNotLocked) {
 			t.Errorf("holder %q: err = %v, want ErrNotLocked", holder, err)
 		}
+	}
+}
+
+func testStaleUnlockKeepsNewLock(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+
+	for _, target := range []manuallock.Target{
+		manuallock.UnitTarget(f.web),
+		manuallock.CollectionTarget(f.payments.Ref),
+	} {
+		f.lock(t, target, alice, testReason)
+
+		// Another principal force-unlocks the lock of alice and takes a new one.
+		if _, err := s.RemoveLock(t.Context(), target, "", f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+			t.Fatalf("%s: force-unlock: %v", target, err)
+		}
+
+		f.lock(t, target, bob, "the new lock of bob")
+
+		// The unlock that alice sent before the force-unlock arrives now.
+		_, err := s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence()))
+		if !errors.Is(err, manuallock.ErrNotHolder) {
+			t.Fatalf("%s: stale unlock: err = %v, want ErrNotHolder", target, err)
+		}
+
+		got, err := s.GetLock(t.Context(), target)
+		if err != nil || got.Holder != bob || got.Reason != "the new lock of bob" {
+			t.Errorf("%s: after the stale unlock: lock = %+v, err = %v, want the lock of bob", target, got, err)
+		}
+	}
+}
+
+func testConcurrentRemoval(t *testing.T, s Store) {
+	t.Helper()
+
+	const callers = 6
+
+	f := newFixture(t, s)
+	target := manuallock.UnitTarget(f.web)
+
+	f.lock(t, target, alice, "freeze for the race")
+
+	var (
+		wg   sync.WaitGroup
+		errs [callers]error
+	)
+
+	start := make(chan struct{})
+
+	for i := range callers {
+		wg.Go(func() {
+			<-start
+
+			// An empty holder is a force-unlock; the holder alice is the owner. Both
+			// kinds of caller race for the same lock.
+			holder := ""
+			if i%2 == 0 {
+				holder = alice
+			}
+
+			_, errs[i] = s.RemoveLock(t.Context(), target, holder, f.ns.Fence(), lockAudit(f.ns.Fence()))
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	removed := 0
+
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			removed++
+		case errors.Is(err, manuallock.ErrNotLocked):
+		default:
+			t.Errorf("caller %d: err = %v, want nil or ErrNotLocked", i, err)
+		}
+	}
+
+	if removed != 1 {
+		t.Errorf("%d removals succeeded, want exactly 1", removed)
+	}
+
+	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Number: 1, Size: auditPageSize})
+	if err != nil {
+		t.Fatalf("List audit: %v", err)
+	}
+
+	ended := 0
+
+	for i := range listing.Entries {
+		if hasChange(listing.Entries[i], "lock-holder", alice) {
+			ended++
+		}
+	}
+
+	if ended != 1 {
+		t.Errorf("%d audit entries end the lock, want exactly 1", ended)
 	}
 }
 
@@ -446,10 +550,10 @@ func testUnitLockWins(t *testing.T, s Store) {
 	f := newFixture(t, s)
 	f.put(t, f.web, f.payments)
 	f.lock(t, manuallock.CollectionTarget(f.payments.Ref), alice, "collection reason")
-	f.lock(t, manuallock.UnitTarget(f.web), "bob", "unit reason")
+	f.lock(t, manuallock.UnitTarget(f.web), bob, "unit reason")
 
 	got, err := s.CoveringLock(t.Context(), f.web)
-	if err != nil || got.Holder != "bob" || got.Reason != "unit reason" {
+	if err != nil || got.Holder != bob || got.Reason != "unit reason" {
 		t.Errorf("covering lock = %+v, %v; want the lock of the unit", got, err)
 	}
 
@@ -562,10 +666,10 @@ func testInventoryFlag(t *testing.T, s Store) {
 		t.Errorf("flag of a unit outside the collection = %+v, want none", got[f.api.Name])
 	}
 
-	f.lock(t, manuallock.UnitTarget(f.web), "bob", "unit reason")
+	f.lock(t, manuallock.UnitTarget(f.web), bob, "unit reason")
 
 	wantUnit := &inventory.ManualLock{
-		Since: now(), Kind: string(manuallock.KindUnit), Object: f.web.String(), Holder: "bob", Reason: "unit reason",
+		Since: now(), Kind: string(manuallock.KindUnit), Object: f.web.String(), Holder: bob, Reason: "unit reason",
 	}
 
 	if got := flags(t, s, f.ns.Name)[f.web.Name]; got == nil || *got != *wantUnit {

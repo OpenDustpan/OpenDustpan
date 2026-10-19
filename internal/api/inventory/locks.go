@@ -15,8 +15,10 @@ import (
 )
 
 // maxLockBodyBytes bounds the body of a manual lock. The body holds one reason
-// of at most 500 characters, and a character takes up to four bytes.
-const maxLockBodyBytes = 4096
+// of at most 500 characters. A JSON escape writes a character outside the Basic
+// Multilingual Plane as a surrogate pair of 12 bytes, so the reason takes up to
+// 6000 bytes, and the rest of the body takes less than 200 bytes.
+const maxLockBodyBytes = 8192
 
 // errLockBody names the body that a manual lock needs. Its text is the error of
 // the 400 answer.
@@ -253,7 +255,8 @@ func classifyLock(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, manuallock.ErrTargetNotFound), errors.Is(err, manuallock.ErrNotLocked):
 		return http.StatusNotFound, err.Error(), true
-	case errors.Is(err, manuallock.ErrAlreadyLocked), errors.Is(err, manuallock.ErrNotHolder):
+	case errors.Is(err, manuallock.ErrAlreadyLocked), errors.Is(err, manuallock.ErrNotHolder),
+		errors.Is(err, manuallock.ErrLockChanged):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, manuallock.ErrReasonRequired), errors.Is(err, manuallock.ErrInvalidTarget),
 		errors.Is(err, audit.ErrInvalidReason), errors.Is(err, errLockBody):

@@ -153,7 +153,11 @@ func checkRefusal(t *testing.T, err error, locks *fakeManualLocks) {
 		t.Fatalf("err = %v, want ErrUpdateConflict and manuallock.ErrLocked", err)
 	}
 
-	for _, want := range []string{"alice", "change window closed", "acme/payments"} {
+	if strings.Contains(err.Error(), "unit") {
+		t.Errorf("err = %q, want the word stack, not unit", err)
+	}
+
+	for _, want := range []string{"stack acme/web/dev", "alice", "change window closed", "acme/payments"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to name %q", err, want)
 		}

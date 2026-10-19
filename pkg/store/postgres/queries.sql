@@ -3195,9 +3195,19 @@ SELECT holder, reason, since_ms
 FROM manual_locks
 WHERE kind = $1 AND object_id = $2;
 
+-- name: GetManualLockForUpdate :one
+-- Reads the lock and holds a row lock until the transaction ends, so that a
+-- removal and a new lock cannot interleave between the read and the delete.
+SELECT holder, reason, since_ms
+FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+FOR UPDATE;
+
 -- name: DeleteManualLock :execrows
+-- Deletes the lock that the caller read, and no other lock: the holder and the
+-- time must match too.
 DELETE FROM manual_locks
-WHERE kind = $1 AND object_id = $2;
+WHERE kind = $1 AND object_id = $2 AND holder = $3 AND since_ms = $4;
 
 -- name: DeleteManualLocksOfObject :exec
 -- Removes the manual lock of one object by its stable ID. The purge of a unit

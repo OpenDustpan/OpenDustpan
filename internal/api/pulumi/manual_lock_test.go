@@ -71,8 +71,14 @@ func checkManualLockBody(t *testing.T, body string, lock manuallock.Lock) {
 		t.Errorf("code = %d, want %d", failure.Code, http.StatusConflict)
 	}
 
-	if want := lock.String(); failure.Message != want {
+	want := "stack acme/web/prod is in collection acme/payments, which has a manual lock by alice since " +
+		lock.Since.UTC().Format(time.RFC3339) + ": change window closed"
+	if failure.Message != want {
 		t.Errorf("message = %q, want %q", failure.Message, want)
+	}
+
+	if strings.Contains(failure.Message, "unit") {
+		t.Errorf("message = %q: the CLI shows the word stack, not unit", failure.Message)
 	}
 
 	for _, want := range []string{"alice", "change window closed", "acme/payments"} {

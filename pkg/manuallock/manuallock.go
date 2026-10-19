@@ -30,7 +30,7 @@ import (
 var (
 	// ErrLocked reports that a manual lock covers the unit. The error
 	// that carries it is a *LockedError, which names the holder and the reason.
-	ErrLocked = errors.New("unit has a manual lock")
+	ErrLocked = errors.New("object has a manual lock")
 	// ErrAlreadyLocked reports a lock on an object that already holds a
 	// manual lock.
 	ErrAlreadyLocked = errors.New("object already has a manual lock")
@@ -41,6 +41,10 @@ var (
 	// lock. Only a force-unlock removes the lock of another principal.
 	ErrNotHolder = errors.New("manual lock is held by another principal: " +
 		"ask the holder to remove it, or force-unlock it with unit:manage")
+	// ErrLockChanged reports a removal that found the lock changed since it
+	// read it: another principal ended the lock and took a new one. The new
+	// lock stays. Read the lock again and decide again.
+	ErrLockChanged = errors.New("manual lock changed during the removal: read the lock again")
 	// ErrTargetNotFound reports that the unit or the collection to lock does
 	// not exist.
 	ErrTargetNotFound = errors.New("object to lock not found")
@@ -102,14 +106,16 @@ func (t Target) Valid() error {
 	}
 }
 
-// String returns the object as a person reads it: the unit reference, or
-// "collection <namespace>/<name>".
+// String returns the object for a log line or an error that wraps a store
+// failure: "collection <namespace>/<name>", or the unit reference
+// "<tool>:<namespace>/<name>". It names no noun for a unit, because each tool
+// has its own word for it. A refusal that a person reads uses LockedError.
 func (t Target) String() string {
 	if t.Kind == KindCollection {
 		return "collection " + t.Collection.String()
 	}
 
-	return "unit " + t.Unit.String()
+	return t.Unit.String()
 }
 
 // Lock is one manual lock. Holder is the subject of the principal that took
@@ -121,23 +127,39 @@ type Lock struct {
 	Reason string
 }
 
-// String returns the lock as the text that a refused tool request shows: the
-// object, the holder, the time and the reason.
-func (l Lock) String() string {
-	return fmt.Sprintf("%s has a manual lock by %s since %s: %s",
-		l.Target, l.Holder, l.Since.UTC().Format(time.RFC3339), l.Reason)
+// Detail returns the holder, the time and the reason of the lock, without a
+// name for the object: "by <holder> since <time>: <reason>". A tool adds its
+// own word for the unit.
+func (l Lock) Detail() string {
+	return fmt.Sprintf("by %s since %s: %s", l.Holder, l.Since.UTC().Format(time.RFC3339), l.Reason)
 }
 
 // LockedError is the error of a request that a manual lock refuses. It
-// matches ErrLocked. Its text names the holder and the reason, and is the
-// same text for each tool.
+// matches ErrLocked. The tool that refuses the request sets Noun to its own
+// word for the unit, for example "stack" or "workspace", and Name to the name
+// of the unit in that tool. The text names the unit, the holder and the
+// reason.
 type LockedError struct {
 	Lock Lock
+	Noun string
+	Name string
 }
 
-// Error returns the text of the lock.
+// Error returns the text of the refusal. A lock on the unit gives
+// "<noun> <name> has a manual lock by ...". A lock on the collection of the
+// unit gives "<noun> <name> is in collection <ref>, which has a manual lock
+// by ...".
 func (e *LockedError) Error() string {
-	return e.Lock.String()
+	noun := e.Noun
+	if noun == "" {
+		noun = "object"
+	}
+
+	if e.Lock.Target.Kind == KindCollection {
+		return fmt.Sprintf("%s %s is in %s, which has a manual lock %s", noun, e.Name, e.Lock.Target, e.Lock.Detail())
+	}
+
+	return fmt.Sprintf("%s %s has a manual lock %s", noun, e.Name, e.Lock.Detail())
 }
 
 // Is reports whether target is ErrLocked.
@@ -158,9 +180,10 @@ type Store interface {
 	// RemoveLock removes the manual lock of t and appends e, with the holder
 	// and the reason of the lock it ends. A holder that is not empty must
 	// hold the lock, else it returns ErrNotHolder. An empty holder removes
-	// the lock whoever holds it. It returns the lock it removed, ErrNotLocked
-	// when the object has none, and namespace.ErrFenced when the fence is
-	// stale.
+	// the lock whoever holds it. It removes only the lock that it read and
+	// checked: a lock that changed in between stays, and the call returns
+	// ErrLockChanged. It returns the lock it removed, ErrNotLocked when the
+	// object has none, and namespace.ErrFenced when the fence is stale.
 	RemoveLock(ctx context.Context, t Target, holder string, fence namespace.Fence, e audit.Entry) (Lock, error)
 	// GetLock returns the manual lock of t, or ErrNotLocked. It does not
 	// look at the collection of a unit.

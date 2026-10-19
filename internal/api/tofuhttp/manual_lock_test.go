@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,22 +27,43 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 		Reason: "change window closed",
 	}
 
-	manual := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{Lock: held})
+	refusal := &manuallock.LockedError{Lock: held, Noun: "workspace", Name: "acme/web"}
+	manual := fmt.Errorf("%w: %w", workspace.ErrLocked, refusal)
+
+	heldUnit := held
+	heldUnit.Target = manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"})
+	manualUnit := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
+		Lock: heldUnit, Noun: "workspace", Name: "acme/web",
+	})
 
 	cases := []struct {
-		name     string
-		lockErr  error
-		want     int
-		wantWho  string
-		wantInfo string
+		name    string
+		lockErr error
+		want    int
+		info    manualInfoWant
 	}{
 		{
 			name: "manual lock", lockErr: manual, want: http.StatusLocked,
-			wantWho: "alice", wantInfo: held.String(),
+			info: manualInfoWant{
+				who:    "alice",
+				remove: "/api/dustpan/v1/namespaces/acme/collections/payments/lock",
+				force:  "/api/dustpan/v1/namespaces/acme/collections/payments/lock/force-unlock",
+				text: "workspace acme/web is in collection acme/payments, which has a manual lock " +
+					"by alice since 2026-10-19T10:00:00Z: change window closed",
+			},
+		},
+		{
+			name: "manual lock on the unit", lockErr: manualUnit, want: http.StatusLocked,
+			info: manualInfoWant{
+				who:    "alice",
+				remove: "/api/inventory/unit-lock?unit=opentofu:acme/web",
+				force:  "/api/inventory/unit-lock/force-unlock?unit=opentofu:acme/web",
+				text:   "workspace acme/web has a manual lock by alice since 2026-10-19T10:00:00Z: change window closed",
+			},
 		},
 		{
 			name: "lock of a tool without a lock to show", lockErr: workspace.ErrLocked, want: http.StatusLocked,
-			wantWho: "", wantInfo: "",
+			info: manualInfoWant{who: "", text: "", remove: "", force: ""},
 		},
 	}
 
@@ -58,28 +80,57 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
 			}
 
-			if tc.wantWho == "" {
+			if tc.info.who == "" {
 				return
 			}
 
-			var info struct {
-				Who  string `json:"Who"`  //nolint:tagliatelle // The OpenTofu http backend reads PascalCase keys.
-				Info string `json:"Info"` //nolint:tagliatelle // The OpenTofu http backend reads PascalCase keys.
-			}
-
-			if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
-				t.Fatalf("lock body %q: %v", rec.Body.String(), err)
-			}
-
-			if info.Who != tc.wantWho || info.Info != tc.wantInfo {
-				t.Errorf(
-					"lock info = Who %q Info %q, want Who %q Info %q",
-					info.Who,
-					info.Info,
-					tc.wantWho,
-					tc.wantInfo,
-				)
-			}
+			checkManualInfo(t, rec.Body.Bytes(), tc.info)
 		})
+	}
+}
+
+// manualInfoWant is the lock info that a manual lock must give: the holder, the
+// start of the text, and the routes that remove the lock.
+type manualInfoWant struct {
+	who    string
+	text   string
+	remove string
+	force  string
+}
+
+// checkManualInfo checks the lock info of a manual lock: the holder, the text of
+// the lock, plain words first and then the routes in monospace. The ID is no
+// tool lock ID that `tofu force-unlock` could use.
+func checkManualInfo(t *testing.T, body []byte, w manualInfoWant) {
+	t.Helper()
+
+	var info struct {
+		ID   string `json:"ID"`   //nolint:tagliatelle // The OpenTofu http backend reads PascalCase keys.
+		Who  string `json:"Who"`  //nolint:tagliatelle // The OpenTofu http backend reads PascalCase keys.
+		Info string `json:"Info"` //nolint:tagliatelle // The OpenTofu http backend reads PascalCase keys.
+	}
+
+	if err := json.Unmarshal(body, &info); err != nil {
+		t.Fatalf("lock body %q: %v", body, err)
+	}
+
+	if info.Who != w.who || !strings.HasPrefix(info.Info, w.text) {
+		t.Errorf("lock info = Who %q Info %q, want Who %q and Info that starts with %q",
+			info.Who, info.Info, w.who, w.text)
+	}
+
+	route := "`DELETE " + w.remove + "`"
+	for field, got := range map[string]string{"ID": info.ID, "Info": info.Info} {
+		if !strings.Contains(got, route) {
+			t.Errorf("%s = %q, want the route %s", field, got, route)
+		}
+	}
+
+	if !strings.HasPrefix(info.ID, "A manual lock blocks this run.") {
+		t.Errorf("ID = %q, want plain words that say a manual lock blocks the run", info.ID)
+	}
+
+	if !strings.Contains(info.Info, "`POST "+w.force+"`") {
+		t.Errorf("Info = %q, want the force-unlock route", info.Info)
 	}
 }
