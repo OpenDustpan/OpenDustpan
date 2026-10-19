@@ -1,0 +1,60 @@
+# Two instances: blobs and backups in S3, behind an ingress.
+replicas: 2
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+s3:
+  endpoint: https://s3.example
+  region: eu-west-1
+  credentials:
+    existingSecret:
+      name: opendustpan-s3
+blobStore:
+  type: s3
+  s3:
+    bucket: dustpan-state
+    prefix: prod
+backup:
+  target:
+    type: s3
+    s3:
+      bucket: dustpan-backups
+      prefix: prod
+  schedule:
+    enabled: true
+    tokenSecret:
+      name: opendustpan-backup-token
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+server:
+  publicURL: https://dustpan.example
+  trustedProxies:
+    - 10.0.0.0/8
+  extraEnv:
+    - name: DUSTPAN_OIDC_ISSUER
+      value: https://idp.example
+    - name: DUSTPAN_OIDC_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: opendustpan-oidc
+          key: client-secret
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: dustpan.example
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: dustpan-example-tls
+      hosts:
+        - dustpan.example
+metrics:
+  serviceMonitor:
+    enabled: true
+    tokenSecret:
+      name: opendustpan-metrics-token
