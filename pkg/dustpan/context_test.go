@@ -151,10 +151,16 @@ func newContextWorld(t *testing.T) contextWorld {
 		ctxServiceToken: {
 			Subject: "svc-reader", DisplayName: "svc-reader", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Kind:       identity.KindService,
+			Credential: "",
+			JobID:      "",
 		},
 		ctxWorkloadToken: {
 			Subject: "wl-reader", DisplayName: "wl-reader", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Kind:       identity.KindWorkload,
+			Credential: "",
+			JobID:      "",
 		},
 	}}
 
