@@ -235,23 +235,51 @@ func TestGetUnitByID(t *testing.T) {
 	}
 }
 
-// TestGetUnitByIDOldPath proves that the path without a namespace segment is
-// not served.
+// TestGetUnitByIDOldPath proves that the paths without the "-" namespace
+// segment are not served.
 func TestGetUnitByIDOldPath(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/api/dustpan/v1/units/" + acmeUnitID,
+		"/api/dustpan/v1/namespaces/acme/units/" + acmeUnitID,
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			handler := newUnitHandler(t, grantAuthorizer{allow: nil})
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+			req.Header.Set("Authorization", "token test-token")
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusNotFound, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestListUnitsDashNamespace proves that the list route refuses "-" as a
+// namespace name.
+func TestListUnitsDashNamespace(t *testing.T) {
 	t.Parallel()
 
 	handler := newUnitHandler(t, grantAuthorizer{allow: nil})
 
 	req := httptest.NewRequestWithContext(
-		t.Context(), http.MethodGet, "/api/dustpan/v1/units/"+acmeUnitID, http.NoBody,
+		t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/-/units", http.NoBody,
 	)
 	req.Header.Set("Authorization", "token test-token")
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusNotFound, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 

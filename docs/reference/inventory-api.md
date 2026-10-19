@@ -13,7 +13,7 @@ page is relative to that prefix.
 | Method and path | Action | Answer |
 | --- | --- | --- |
 | `GET /namespaces/{namespace}/units` | `namespace:read`, then `unit:read` on each unit | One page of the units that the caller can read |
-| `GET /units/{unit_id}` | `unit:read` on the unit, and `namespace:read` on its namespace | One unit |
+| `GET /namespaces/-/units/{unit_id}` | `unit:read` on the unit, and `namespace:read` on its namespace | One unit |
 | `GET /namespaces/{namespace}/deleted-units` | `namespace:read`, then `unit:read` on each unit | One page of the deleted units |
 | `GET /namespaces/{namespace}/collections` | `collection:read` | The collections of the namespace |
 | `POST /namespaces/{namespace}/collections` | `collection:create` | A new collection |
