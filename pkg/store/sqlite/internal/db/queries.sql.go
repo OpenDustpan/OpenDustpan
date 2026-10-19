@@ -616,6 +616,25 @@ func (q *Queries) CountGroupsOfPrincipal(ctx context.Context, arg CountGroupsOfP
 	return count, err
 }
 
+const countImportLedger = `-- name: CountImportLedger :one
+SELECT COUNT(*) FROM import_ledger
+WHERE namespace_id = ?1 AND import_id = ?2
+`
+
+type CountImportLedgerParams struct {
+	NamespaceID string
+	ImportID    string
+}
+
+// The number of committed versions of an import. An import that has one
+// cannot plan again.
+func (q *Queries) CountImportLedger(ctx context.Context, arg CountImportLedgerParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countImportLedger, arg.NamespaceID, arg.ImportID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
 SELECT COUNT(*)
 FROM collection_members AS m

@@ -28,7 +28,7 @@ var stateMoves = map[State][]State{ //nolint:gochecknoglobals // Frozen table, l
 var unitMoves = map[UnitState][]UnitState{ //nolint:gochecknoglobals // Frozen table, like job.Next.
 	UnitPlanned:  {UnitSkipped, UnitRunning, UnitCanceled},
 	UnitSkipped:  {UnitCanceled},
-	UnitRunning:  {UnitPaused, UnitImported, UnitFailed, UnitCanceled},
+	UnitRunning:  {UnitPaused, UnitImported, UnitFailed, UnitSkipped, UnitCanceled},
 	UnitPaused:   {UnitRunning, UnitFailed, UnitCanceled},
 	UnitImported: {UnitRunning, UnitCanceled},
 	UnitFailed:   {UnitRunning, UnitCanceled},

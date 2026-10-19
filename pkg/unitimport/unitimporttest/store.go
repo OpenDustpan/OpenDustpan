@@ -333,6 +333,8 @@ func testTransitions(t *testing.T, h Harness) {
 		mustIs(t, "released to "+string(to), err, unitimport.ErrTransition)
 	}
 
+	checkPausedWithLedger(t, h, fence)
+
 	if _, err := h.Store.Create(t.Context(), fence, newImport("acme", "imp-2"), e); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -686,4 +688,30 @@ func sameImport(got, want unitimport.Import) bool {
 func sameStart(got, want unitimport.Import) bool {
 	return got.State == unitimport.StatePlanning && got.CreatedBy == want.CreatedBy &&
 		got.CreatedAt.Equal(want.CreatedAt) && got.EndedAt.IsZero()
+}
+
+// checkPausedWithLedger checks that an import with a committed version does
+// not plan again.
+func checkPausedWithLedger(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	e := entry("acme", "import:run")
+
+	if _, err := h.Store.Create(t.Context(), fence, newImport("acme", "imp-3"), e); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	walk(t, h, fence, "imp-3",
+		unitimport.StatePlanning, unitimport.StatePlanned, unitimport.StateRunning, unitimport.StatePaused)
+
+	row := ledgerRow("u-1", "v1", at())
+	row.ImportID = "imp-3"
+
+	if err := h.SeedLedger(t.Context(), "acme", row); err != nil {
+		t.Fatalf("seed ledger row: %v", err)
+	}
+
+	m := unitimport.Move{From: unitimport.StatePaused, To: unitimport.StatePlanning, Reason: ""}
+	err := h.Store.Transition(t.Context(), fence, "imp-3", m, e)
+	mustIs(t, "plan again with a committed version", err, unitimport.ErrTransition)
 }

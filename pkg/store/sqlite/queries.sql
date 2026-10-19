@@ -2320,6 +2320,12 @@ INSERT INTO import_ledger (
     sqlc.arg(item_kind), sqlc.arg(item_id), sqlc.arg(committed_at_ms)
 );
 
+-- name: CountImportLedger :one
+-- The number of committed versions of an import. An import that has one
+-- cannot plan again.
+SELECT COUNT(*) FROM import_ledger
+WHERE namespace_id = sqlc.arg(namespace_id) AND import_id = sqlc.arg(import_id);
+
 -- name: ListImportLedger :many
 -- The ledger rows of an import unit, oldest first.
 SELECT namespace_id, import_id, import_unit_id, version, source_sha256, stored_sha256, item_tool,

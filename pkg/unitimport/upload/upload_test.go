@@ -2,6 +2,7 @@ package upload_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -380,5 +381,68 @@ func TestSourceIgnoresTheCredential(t *testing.T) {
 		if _, err := s.Head(t.Context(), cred, unit()); err != nil {
 			t.Errorf("head: %v", err)
 		}
+	}
+}
+
+// lostResponseStore stores the facts key and then reports ErrExists, as a
+// store does when it retries a write after it lost the response.
+type lostResponseStore struct {
+	blob.Store
+}
+
+func (l lostResponseStore) Put(ctx context.Context, k blob.Key, r io.Reader) error {
+	if err := l.Store.Put(ctx, k, r); err != nil {
+		return err
+	}
+
+	if strings.HasSuffix(k.String(), "1.json") {
+		return blob.ErrExists
+	}
+
+	return nil
+}
+
+func TestPutAfterALostResponseKeepsTheBody(t *testing.T) {
+	t.Parallel()
+
+	inner, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	s, err := upload.New(lostResponseStore{Store: inner}, prefix, maxBytes, clock)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	v := put(t, s, unit(), 1, []byte("kept"))
+
+	if got := readBody(t, s, v.ID); got != "kept" {
+		t.Errorf("body = %q, want kept", got)
+	}
+}
+
+func TestDeleteRemovesEachObject(t *testing.T) {
+	t.Parallel()
+
+	s, store := newSource(t)
+	put(t, s, unit(), 1, []byte("one"))
+
+	orphan, err := blob.ParseKey(prefix + "/pulumi/acme/web/prod/2.deadbeef.bin")
+	if err != nil {
+		t.Fatalf("parse key: %v", err)
+	}
+
+	if err = store.Put(t.Context(), orphan, strings.NewReader("orphan")); err != nil {
+		t.Fatalf("put orphan: %v", err)
+	}
+
+	if err = s.Delete(t.Context()); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	objs, err := store.List(t.Context(), prefix)
+	if err != nil || len(objs) != 0 {
+		t.Fatalf("list after delete = %v, %v, want none", objs, err)
 	}
 }

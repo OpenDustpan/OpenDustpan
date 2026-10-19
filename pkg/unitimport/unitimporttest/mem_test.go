@@ -127,6 +127,11 @@ func (m *memStore) Transition(
 			return fmt.Errorf("next state: %w", err)
 		}
 
+		if mv.From == unitimport.StatePaused && mv.To == unitimport.StatePlanning &&
+			len(m.ledger[key(fence.Namespace, id)]) > 0 {
+			return fmt.Errorf("%w: the import has committed versions and cannot plan again", unitimport.ErrTransition)
+		}
+
 		imp.State, imp.Reason = mv.To, mv.Reason
 		if mv.To.Ended() {
 			imp.EndedAt = e.At

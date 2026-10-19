@@ -17,6 +17,7 @@
 // write of the facts file is the commit of a version: the first attempt that
 // writes it wins, and the body of each other attempt is deleted or stays as
 // an unreferenced object. A body that no facts file names is never read.
+// The cancel and the release of the import delete each object below the prefix.
 package upload
 
 import (
@@ -274,6 +275,23 @@ func (s *Source) Put(
 	return s.commit(ctx, u, f, bk, unitFile)
 }
 
+// Delete deletes each object below the prefix of the import: the unit files,
+// the facts files and the bodies, also the bodies that no facts file names.
+func (s *Source) Delete(ctx context.Context) error {
+	objs, err := s.blobs.List(ctx, s.prefix)
+	if err != nil {
+		return fmt.Errorf("%w: list uploads: %w", unitimport.ErrSourceUnreachable, err)
+	}
+
+	for _, o := range objs {
+		if err = blob.DeleteRetried(ctx, s.blobs, o.Key); err != nil {
+			return fmt.Errorf("%w: delete upload: %w", unitimport.ErrSourceUnreachable, err)
+		}
+	}
+
+	return nil
+}
+
 // prepare checks a Put before it writes. It returns the facts with the
 // longest size and digest, and the encoded unit file. The longest facts are
 // the largest facts, so a file that is too large is refused before the body
@@ -340,7 +358,7 @@ func (s *Source) commit(
 
 	switch err = s.blobs.Put(ctx, k, bytes.NewReader(encoded)); {
 	case errors.Is(err, blob.ErrExists):
-		return unitimport.SourceVersion{}, s.discard(ctx, bk, invalid("sequence %d is stored", f.Sequence))
+		return s.settle(ctx, u, f, bk)
 	case err != nil:
 		// The write may have stored the facts file, and then the body is in
 		// use. The body stays.
@@ -350,6 +368,26 @@ func (s *Source) commit(
 	default:
 		return f.version(), nil
 	}
+}
+
+// settle resolves a create-only write of the facts file that the store
+// refused as existing. The store may have retried its own write after it lost
+// the response, and then the stored facts file is the one of this attempt.
+func (s *Source) settle(
+	ctx context.Context, u unitimport.SourceUnit, f facts, bk blob.Key,
+) (unitimport.SourceVersion, error) {
+	stored, err := s.loadFacts(ctx, u, f.Sequence)
+	if err != nil {
+		// The facts file may be this attempt's, and then the body is in use.
+		// The body stays.
+		return unitimport.SourceVersion{}, fmt.Errorf("%w: read upload file: %w", unitimport.ErrSourceUnreachable, err)
+	}
+
+	if stored.Body == f.Body {
+		return f.version(), nil
+	}
+
+	return unitimport.SourceVersion{}, s.discard(ctx, bk, invalid("sequence %d is stored", f.Sequence))
 }
 
 // discard deletes the body at k, which only the failed attempt wrote, and it

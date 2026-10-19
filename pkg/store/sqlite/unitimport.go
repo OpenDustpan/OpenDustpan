@@ -119,6 +119,10 @@ func (i *Imports) Transition(
 			return fmt.Errorf("next state: %w", err)
 		}
 
+		if err := checkReplan(ctx, q, nsID, id, m); err != nil {
+			return err
+		}
+
 		var endedMs int64
 		if m.To.Ended() {
 			endedMs = codec.Millis(e.At)
@@ -138,6 +142,27 @@ func (i *Imports) Transition(
 
 		return nil
 	})
+}
+
+// checkReplan refuses the move of a paused import to planning when the import
+// has committed versions.
+func checkReplan(ctx context.Context, q *db.Queries, nsID, id string, m unitimport.Move) error {
+	if m.From != unitimport.StatePaused || m.To != unitimport.StatePlanning {
+		return nil
+	}
+
+	held, err := q.CountImportLedger(ctx, db.CountImportLedgerParams{NamespaceID: nsID, ImportID: id})
+	if err != nil {
+		return fmt.Errorf("count import ledger: %w", err)
+	}
+
+	if held > 0 {
+		return fmt.Errorf(
+			"%w: the import has committed versions and cannot plan again", unitimport.ErrTransition,
+		)
+	}
+
+	return nil
 }
 
 // SetPlan implements unitimport.Store.

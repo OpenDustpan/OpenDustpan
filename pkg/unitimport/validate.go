@@ -136,8 +136,9 @@ func (i Import) validateSource() error {
 }
 
 // ValidateNew checks an import unit before it is stored in the import id.
-// It wraps ErrInvalid. A new unit is planned or skipped, with no committed
-// version and no target yet.
+// It wraps ErrInvalid. A new unit is planned, skipped or failed, with no
+// committed version and no target yet. A skipped or failed unit names its
+// reason in the error code.
 func (u ImportUnit) ValidateNew(id string) error {
 	for _, f := range []struct {
 		name, v string
@@ -157,11 +158,22 @@ func (u ImportUnit) ValidateNew(id string) error {
 		return err
 	}
 
-	switch {
-	case u.ImportID != "" && u.ImportID != id:
+	if u.ImportID != "" && u.ImportID != id {
 		return fmt.Errorf("%w: unit %q names import %q, not %q", ErrInvalid, u.ID, u.ImportID, id)
-	case u.State != UnitPlanned && u.State != UnitSkipped:
-		return fmt.Errorf("%w: unit %q starts in state %q, want planned or skipped", ErrInvalid, u.ID, u.State)
+	}
+
+	return u.validateStart()
+}
+
+// validateStart checks the state and the counts of a new unit.
+func (u ImportUnit) validateStart() error {
+	switch {
+	case u.State != UnitPlanned && u.State != UnitSkipped && u.State != UnitFailed:
+		return fmt.Errorf(
+			"%w: unit %q starts in state %q, want planned, skipped or failed", ErrInvalid, u.ID, u.State,
+		)
+	case u.State != UnitPlanned && u.ErrorCode == "":
+		return fmt.Errorf("%w: unit %q starts in state %q and needs an error code", ErrInvalid, u.ID, u.State)
 	case u.Versions < 0 || u.Bytes < 0 || u.Committed != 0:
 		return fmt.Errorf("%w: unit %q has bad counts", ErrInvalid, u.ID)
 	}

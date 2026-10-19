@@ -196,6 +196,19 @@ func testUnitTransitions(t *testing.T, h Harness) {
 		mustIs(t, fmt.Sprintf("unit %s to %s", tc.from, tc.to), move(tc.from, tc.to, ""), unitimport.ErrTransition)
 	}
 
+	// A running unit may end skipped, with the reason in the code.
+	if err := move(unitimport.UnitImported, unitimport.UnitRunning, ""); err != nil {
+		t.Fatalf("unit imported to running: %v", err)
+	}
+
+	if err := move(unitimport.UnitRunning, unitimport.UnitSkipped, "import.denied"); err != nil {
+		t.Fatalf("unit running to skipped: %v", err)
+	}
+
+	if got := mustUnit(t, h, "u-1"); got.State != unitimport.UnitSkipped || got.ErrorCode != "import.denied" {
+		t.Fatalf("unit = %s %q, want skipped %q", got.State, got.ErrorCode, "import.denied")
+	}
+
 	m := unitimport.UnitMove{From: unitimport.UnitPlanned, To: unitimport.UnitRunning, Code: ""}
 	err := h.Units.TransitionUnit(t.Context(), fence, unitKey("missing"), m, entry("acme", "import:run"))
 	mustIs(t, "unknown unit", err, unitimport.ErrNotFound)

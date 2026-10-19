@@ -73,7 +73,7 @@ func TestNextUnitStateMatrix(t *testing.T) {
 	allowed := map[unitimport.UnitState][]unitimport.UnitState{
 		planned:  {skipped, running, canceled},
 		skipped:  {canceled},
-		running:  {paused, imported, failed, canceled},
+		running:  {paused, imported, failed, skipped, canceled},
 		paused:   {running, failed, canceled},
 		imported: {running, canceled},
 		failed:   {running, canceled},
