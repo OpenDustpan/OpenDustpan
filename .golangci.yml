@@ -145,6 +145,7 @@ linters:
             - "**/pkg/incident/**"
             - "**/pkg/catalog/**"
             - "**/pkg/policy/**"
+            - "**/pkg/gate/**"
             - "**/pkg/quota/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
@@ -165,6 +166,22 @@ linters:
               desc: SQL belongs in store/, not in the domain.
             - pkg: opendustpan.org/opendustpan/internal/metrics
               desc: Domain code must not import metrics; only dustpan.go and HTTP middleware do.
+        gateleaf:
+          # pkg/gate is a leaf of the domain graph: the owner packages of the
+          # objects that a gate guards import it, so it imports none of them.
+          # The globs match the absolute path of a file.
+          list-mode: strict
+          files:
+            - "**/pkg/gate/*.go"
+            - "!**/*_test.go"
+            - "!**/pkg/gate/gatetest/**"
+          allow:
+            - $gostd
+            - opendustpan.org/opendustpan/internal/ident
+            - opendustpan.org/opendustpan/pkg/namespace
+            - opendustpan.org/opendustpan/pkg/identity
+            - opendustpan.org/opendustpan/pkg/audit
+            - opendustpan.org/opendustpan/pkg/collection
         clientpkg:
           # Client commands live in internal/cli/client and take --server:
           # they never open the database, a blob adapter, a backup target or
@@ -431,7 +448,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/inventory/inventorytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^pkg/agent/agenttest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^pkg/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^pkg/calendar/calendartest/|^pkg/freeze/freezetest/|^pkg/breakglass/breakglasstest/|^pkg/oncall/oncalltest/|^pkg/cost/costtest/|^pkg/notify/notifytest/|^pkg/chatops/chatopstest/|^pkg/incident/incidenttest/|^pkg/catalog/catalogtest/|^pkg/policy/policytest/|^pkg/quota/quotatest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/inventory/inventorytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^pkg/agent/agenttest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^pkg/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^pkg/calendar/calendartest/|^pkg/freeze/freezetest/|^pkg/breakglass/breakglasstest/|^pkg/oncall/oncalltest/|^pkg/cost/costtest/|^pkg/notify/notifytest/|^pkg/chatops/chatopstest/|^pkg/incident/incidenttest/|^pkg/catalog/catalogtest/|^pkg/policy/policytest/|^pkg/quota/quotatest/|^pkg/gate/gatetest/)
         linters:
           - mnd
           - funlen

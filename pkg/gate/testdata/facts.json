@@ -1,0 +1,100 @@
+{
+  "budget": {
+    "available": true,
+    "level": "warning",
+    "percentUsed": 82
+  },
+  "change": {
+    "inputKeys": [
+      "replicas"
+    ],
+    "secretKeys": [],
+    "truncatedKeys": [],
+    "paths": [
+      "modules/net/main.tf"
+    ]
+  },
+  "cost": {
+    "available": true,
+    "deltaMonthly": 15000,
+    "totalMonthly": 90000,
+    "currency": "USD"
+  },
+  "dependents": {
+    "available": true,
+    "count": 1,
+    "units": [
+      "opentofu:acme/net"
+    ]
+  },
+  "document": {
+    "truncated": []
+  },
+  "drift": {
+    "available": false,
+    "resources": 0,
+    "ageSeconds": 0
+  },
+  "externalChecks": {
+    "passed": [
+      "scan"
+    ],
+    "failed": [],
+    "pending": [],
+    "timedOut": [
+      "ticket"
+    ]
+  },
+  "operation": {
+    "kind": "apply"
+  },
+  "paths": {
+    "available": true,
+    "touches": {
+      "network": true
+    },
+    "only": {
+      "network": true
+    }
+  },
+  "plan": {
+    "available": true,
+    "add": 2,
+    "change": 1,
+    "replace": 0,
+    "destroy": 1,
+    "resourceTypes": [
+      "aws:s3/bucket:Bucket"
+    ]
+  },
+  "principal": {
+    "kind": "person",
+    "credential": "session"
+  },
+  "quota": {
+    "available": true,
+    "maxPercentUsed": 40,
+    "exceeded": []
+  },
+  "resourcePolicy": {
+    "available": true,
+    "mandatoryFailed": 0,
+    "advisoryFailed": 1,
+    "unreadable": 0
+  },
+  "schema": "change.planned/1.0",
+  "source": {
+    "kind": "forge",
+    "ref": "refs/heads/main",
+    "protected": true,
+    "commit": "9f2c",
+    "upstreamUnit": ""
+  },
+  "unit": {
+    "tool": "pulumi",
+    "collection": "prod",
+    "labels": [
+      "team=web"
+    ]
+  }
+}
