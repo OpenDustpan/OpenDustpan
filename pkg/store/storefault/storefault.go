@@ -789,6 +789,15 @@ func (s *Store) DeleteExpiredPendingStateVersions(
 	return s.inner.DeleteExpiredPendingStateVersions(ctx, id, expiredBefore, fence)
 }
 
+// GetUnit returns the live unit unitID, unless a fault fires first.
+func (s *Store) GetUnit(ctx context.Context, unitID string) (inventory.Entry, error) {
+	if err := s.before(ctx, "GetUnit"); err != nil {
+		return inventory.Entry{}, err
+	}
+
+	return s.inner.GetUnit(ctx, unitID)
+}
+
 // ListUnits returns the inventory entries of ns, unless a fault fires first.
 func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	if err := s.before(ctx, "ListUnits"); err != nil {
@@ -916,13 +925,13 @@ func (s *Store) before(ctx context.Context, method string) error {
 
 // defaultErr returns the failure of method where the port documents one:
 // maintenance.ErrUnavailable for the maintenance methods, a plain error for
-// ListUnits, which defines no sentinel, and namespace.ErrUnavailable
+// ListUnits and GetUnit, which define no failure sentinel, and namespace.ErrUnavailable
 // otherwise.
 func defaultErr(method string) error {
 	switch method {
 	case "GetState", "SetState", "SetStateIf":
 		return maintenance.ErrUnavailable
-	case "ListUnits":
+	case "ListUnits", "GetUnit":
 		return errInjected
 	default:
 		return namespace.ErrUnavailable

@@ -565,6 +565,23 @@ LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.colle
 WHERE i.namespace = $1
 ORDER BY i.tool, i.name;
 
+-- name: GetInventoryEntryByUnitID :one
+-- One live unit by its stable ID, which is unique in the installation.
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.unit_id = $1;
+
+-- name: ListInventoryUnitLabels :many
+-- Every label of one live unit.
+SELECT label_key, label_value
+FROM inventory_labels
+WHERE unit_id = $1
+ORDER BY label_key;
+
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
@@ -898,7 +915,7 @@ ORDER BY content_key;
 -- checkpoints. A missing entry matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence = $2;
 
@@ -907,7 +924,7 @@ WHERE namespace = $1 AND sequence = $2;
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -917,15 +934,15 @@ LIMIT 1;
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
     at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-    fence_version, reason
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23);
+    fence_version, reason, principal_kind, job_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -943,7 +960,7 @@ WHERE namespace = $1;
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC

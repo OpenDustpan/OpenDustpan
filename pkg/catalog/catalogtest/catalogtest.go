@@ -161,8 +161,10 @@ func entry(action identity.Action, object string) audit.Entry {
 		Action: string(action), Object: object, Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
 		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: 0,
-		Reason:       "",
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

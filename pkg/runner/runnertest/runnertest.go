@@ -152,8 +152,10 @@ func entries(fence namespace.Fence) []audit.Entry {
 		Action: "namespace:manage-runners", Object: "namespace:" + string(fence.Namespace), Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
-		FenceVersion: fence.FailoverVersion,
-		Reason:       "",
+		FenceVersion:  fence.FailoverVersion,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}}
 }
 

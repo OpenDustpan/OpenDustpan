@@ -549,6 +549,23 @@ LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.colle
 WHERE i.namespace = ?
 ORDER BY i.tool, i.name;
 
+-- name: GetInventoryEntryByUnitID :one
+-- One live unit by its stable ID, which is unique in the installation.
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.unit_id = ?;
+
+-- name: ListInventoryUnitLabels :many
+-- Every label of one live unit.
+SELECT label_key, label_value
+FROM inventory_labels
+WHERE unit_id = ?
+ORDER BY label_key;
+
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
@@ -833,7 +850,7 @@ SET failover_version = failover_version + 1;
 -- checkpoints. A missing entry matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence = ?;
 
@@ -842,7 +859,7 @@ WHERE namespace = ? AND sequence = ?;
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -852,15 +869,15 @@ LIMIT 1;
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
     at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-    fence_version, reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    fence_version, reason, principal_kind, job_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -878,7 +895,7 @@ WHERE namespace = ?;
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC

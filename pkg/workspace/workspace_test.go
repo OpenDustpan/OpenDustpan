@@ -153,6 +153,19 @@ func (m *memStore) Ping(_ context.Context) error {
 	return nil
 }
 
+func (m *memStore) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key := range m.entries {
+		if e := m.entries[key]; e.UnitID == unitID {
+			return e, nil
+		}
+	}
+
+	return inventory.Entry{}, inventory.ErrUnitNotFound
+}
+
 func (m *memStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1424,29 +1437,31 @@ func (nopWriteCloser) Close() error { return nil }
 // The service sets its time.
 func retentionEntry() audit.Entry {
 	return audit.Entry{
-		At:           time.Time{},
-		Namespace:    "acme",
-		Subject:      "alice@example.com",
-		IDPSubject:   "",
-		TokenID:      "",
-		Action:       "unit:manage",
-		Object:       "opentofu:acme/e2e-workspace",
-		Version:      "",
-		ValuePath:    "",
-		ValueCount:   nil,
-		Changes:      nil,
-		SourceIP:     "192.0.2.1",
-		UserAgent:    "workspace_test",
-		Channel:      audit.ChannelAPI,
-		Kind:         audit.KindChange,
-		Outcome:      audit.OutcomeSuccess,
-		RequestID:    "",
-		ObjectID:     "",
-		PrevHash:     "",
-		Hash:         "",
-		Sequence:     0,
-		FenceVersion: 0,
-		Reason:       "",
+		At:            time.Time{},
+		Namespace:     "acme",
+		Subject:       "alice@example.com",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:manage",
+		Object:        "opentofu:acme/e2e-workspace",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "workspace_test",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
 	}
 }
 

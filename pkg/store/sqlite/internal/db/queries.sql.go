@@ -3067,7 +3067,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 const getAuditEntry = `-- name: GetAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence = ?
 `
@@ -3106,6 +3106,8 @@ func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (A
 		&i.ObjectID,
 		&i.FenceVersion,
 		&i.Reason,
+		&i.PrincipalKind,
+		&i.JobID,
 	)
 	return i, err
 }
@@ -3710,6 +3712,52 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 	var state string
 	err := row.Scan(&state)
 	return state, err
+}
+
+const getInventoryEntryByUnitID = `-- name: GetInventoryEntryByUnitID :one
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.unit_id = ?
+`
+
+type GetInventoryEntryByUnitIDRow struct {
+	Namespace     string
+	Tool          string
+	Name          string
+	UnitID        string
+	DisplayName   string
+	LastChangedMs int64
+	Status        string
+	ResourceCount sql.NullInt64
+	LockHolder    sql.NullString
+	LockSinceMs   sql.NullInt64
+	LockOperation sql.NullString
+	Collection    string
+}
+
+// One live unit by its stable ID, which is unique in the installation.
+func (q *Queries) GetInventoryEntryByUnitID(ctx context.Context, unitID string) (GetInventoryEntryByUnitIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getInventoryEntryByUnitID, unitID)
+	var i GetInventoryEntryByUnitIDRow
+	err := row.Scan(
+		&i.Namespace,
+		&i.Tool,
+		&i.Name,
+		&i.UnitID,
+		&i.DisplayName,
+		&i.LastChangedMs,
+		&i.Status,
+		&i.ResourceCount,
+		&i.LockHolder,
+		&i.LockSinceMs,
+		&i.LockOperation,
+		&i.Collection,
+	)
+	return i, err
 }
 
 const getInventoryUnit = `-- name: GetInventoryUnit :one
@@ -5000,34 +5048,36 @@ const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
     at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-    fence_version, reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    fence_version, reason, principal_kind, job_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAuditEntryParams struct {
-	Namespace    string
-	Sequence     int64
-	Subject      string
-	IdpSubject   string
-	TokenID      string
-	Action       string
-	Object       string
-	Version      string
-	ValuePath    string
-	AtMs         int64
-	SourceIp     string
-	UserAgent    string
-	Channel      string
-	Kind         string
-	Outcome      string
-	RequestID    string
-	PrevHash     string
-	Hash         string
-	ValueCount   sql.NullInt64
-	Changes      sql.NullString
-	ObjectID     string
-	FenceVersion int64
-	Reason       string
+	Namespace     string
+	Sequence      int64
+	Subject       string
+	IdpSubject    string
+	TokenID       string
+	Action        string
+	Object        string
+	Version       string
+	ValuePath     string
+	AtMs          int64
+	SourceIp      string
+	UserAgent     string
+	Channel       string
+	Kind          string
+	Outcome       string
+	RequestID     string
+	PrevHash      string
+	Hash          string
+	ValueCount    sql.NullInt64
+	Changes       sql.NullString
+	ObjectID      string
+	FenceVersion  int64
+	Reason        string
+	PrincipalKind string
+	JobID         string
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -5055,6 +5105,8 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.ObjectID,
 		arg.FenceVersion,
 		arg.Reason,
+		arg.PrincipalKind,
+		arg.JobID,
 	)
 	return err
 }
@@ -5839,7 +5891,7 @@ func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace str
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -5875,6 +5927,8 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.ObjectID,
 		&i.FenceVersion,
 		&i.Reason,
+		&i.PrincipalKind,
+		&i.JobID,
 	)
 	return i, err
 }
@@ -5983,7 +6037,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -6033,6 +6087,8 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.ObjectID,
 			&i.FenceVersion,
 			&i.Reason,
+			&i.PrincipalKind,
+			&i.JobID,
 		); err != nil {
 			return nil, err
 		}
@@ -6050,7 +6106,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -6098,6 +6154,8 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.ObjectID,
 			&i.FenceVersion,
 			&i.Reason,
+			&i.PrincipalKind,
+			&i.JobID,
 		); err != nil {
 			return nil, err
 		}
@@ -7609,6 +7667,42 @@ func (q *Queries) ListInventoryUnitBounds(ctx context.Context, arg ListInventory
 			&i.Kind,
 			&i.ResourceCount,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryUnitLabels = `-- name: ListInventoryUnitLabels :many
+SELECT label_key, label_value
+FROM inventory_labels
+WHERE unit_id = ?
+ORDER BY label_key
+`
+
+type ListInventoryUnitLabelsRow struct {
+	LabelKey   string
+	LabelValue string
+}
+
+// Every label of one live unit.
+func (q *Queries) ListInventoryUnitLabels(ctx context.Context, unitID string) ([]ListInventoryUnitLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listInventoryUnitLabels, unitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInventoryUnitLabelsRow
+	for rows.Next() {
+		var i ListInventoryUnitLabelsRow
+		if err := rows.Scan(&i.LabelKey, &i.LabelValue); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

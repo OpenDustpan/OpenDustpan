@@ -1327,7 +1327,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 	// The ended update releases the lock: the inventory entry holds none.
-	checkInventoryUnlocked(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
+	checkInventoryUnlockedByID(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
 
 	// A crashed CLI leaves its update running: hold the stack through the
 	// API as the orphaned update, save the up's checkpoint with the crash
@@ -3537,6 +3537,9 @@ type auditListItem struct {
 	ObjectID   string `json:"objectID"`
 	Hash       string `json:"hash"`
 	Reason     string `json:"reason"`
+	// PrincipalKind is the kind of the principal record that acted.
+	PrincipalKind string `json:"principalKind"`
+	JobID         string `json:"jobID"`
 }
 
 // checkUnitObjectIDs fails the test unless each successful entry on a unit
@@ -4250,13 +4253,14 @@ output "peer_secret" {
 `
 }
 
-// countDownloadEntries counts the tool-operation entries with the action
-// unit:read-secrets and an empty value path for unit: the state downloads.
+// countDownloadEntries counts the reveal entries with the action
+// unit:read-secrets and an empty value path for unit: the state downloads of
+// the bootstrap token, which has no principal record and counts as a person.
 func countDownloadEntries(entries []auditListItem, unit string) int {
 	count := 0
 
 	for i := range entries {
-		if e := &entries[i]; e.Kind == "tool-operation" && e.Action == "unit:read-secrets" &&
+		if e := &entries[i]; e.Kind == "reveal" && e.Action == "unit:read-secrets" &&
 			e.Object == unit && e.ValuePath == "" {
 			count++
 		}
@@ -4265,9 +4269,9 @@ func countDownloadEntries(entries []auditListItem, unit string) int {
 	return count
 }
 
-// tofuAuditScenario proves the audit entries of the kind tool-operation for
-// state that the CLI reads (ADR 41 decision 9): the apply commits a
-// sensitive output, the plan with a terraform_remote_state read of that
+// tofuAuditScenario proves the audit entries for state that the CLI reads:
+// downloads write the kind reveal and the read of one sensitive output writes
+// the kind tool-operation. The apply commits a sensitive output, the plan with a terraform_remote_state read of that
 // output leaves more download entries, and reading the sensitive output
 // leaves an output entry, with a valid chain. The output step is redacted,
 // so the secret value never reaches the log or the report. It runs last, so
@@ -4300,35 +4304,33 @@ func tofuAuditScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 	checkAuditChain(ctx, t, env, e2e.Namespace)
 }
 
-// remoteStateHits reports which tool-operation entries a plan with a
-// remote-state read left: a download entry and an output entry.
+// remoteStateHits reports which entries a plan with a remote-state read left:
+// a download entry of the kind reveal and an output entry of the kind
+// tool-operation.
 type remoteStateHits struct {
 	download bool
 	output   bool
 }
 
-// remoteStateEntries scans entries for the tool-operation entries of unit
-// with the action unit:read-secrets: a download entry carries the state
-// version and an empty value path, and an output entry carries the value
-// path of the sensitive output. It reports which of the two it found.
+// remoteStateEntries scans entries for the entries of unit with the action
+// unit:read-secrets: a download entry of the kind reveal carries the state
+// version and an empty value path, and an output entry of the kind
+// tool-operation carries the value path of the sensitive output. It reports
+// which of the two it found.
 func remoteStateEntries(entries []auditListItem, unit string) remoteStateHits {
 	var hits remoteStateHits
 
 	for i := range entries {
 		e := &entries[i]
-		if e.Kind != "tool-operation" || e.Action != "unit:read-secrets" || e.Object != unit {
+		if e.Action != "unit:read-secrets" || e.Object != unit || e.Version == "" {
 			continue
 		}
 
-		if e.Version == "" {
-			continue
-		}
-
-		if e.ValuePath == "" {
+		if e.Kind == "reveal" && e.ValuePath == "" {
 			hits.download = true
 		}
 
-		if e.ValuePath == "/outputs/secret" {
+		if e.Kind == "tool-operation" && e.ValuePath == "/outputs/secret" {
 			hits.output = true
 		}
 	}
@@ -4337,9 +4339,9 @@ func remoteStateEntries(entries []auditListItem, unit string) remoteStateHits {
 }
 
 // checkAuditPlanRemote proves the plan with the remote-state read left more
-// download entries of the kind tool-operation (ADR 41 decision 9): the CLI
-// reads remote state through the download route, which carries the sensitive
-// values. It also proves the read worked and the plan hid the secret value.
+// download entries of the kind reveal: the CLI reads remote state through the
+// download route, which carries the sensitive values, and the bootstrap token
+// counts as a person. It also proves the read worked and the plan hid the secret value.
 func checkAuditPlanRemote(ctx context.Context, env *e2e.Env, before int) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if !strings.Contains(r.Stdout, "peer_secret") {
@@ -5557,6 +5559,7 @@ type inventoryLockDoc struct {
 type inventoryUnitDoc struct {
 	Tool       string            `json:"tool"`
 	Reference  string            `json:"reference"`
+	UnitID     string            `json:"unitID"`
 	Namespace  string            `json:"namespace"`
 	Name       string            `json:"name"`
 	LastChange string            `json:"lastChange"`
@@ -5614,6 +5617,67 @@ func namespaceOf(ref string) string {
 	ns, _, _ := strings.Cut(rest, "/")
 
 	return ns
+}
+
+// checkInventoryUnitByID proves GET /api/dustpan/v1/namespaces/-/units/{unit_id} answers
+// the list entry of ref, and answers 404 for an ID that no unit holds. It
+// fails the test otherwise.
+func checkInventoryUnitByID(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	listed := findInventoryUnit(readInventoryUnits(ctx, t, env, namespaceOf(ref)), ref)
+	if listed == nil || listed.UnitID == "" {
+		t.Fatalf("inventory holds no entry %q with a unit ID", ref)
+	}
+
+	unit := readInventoryUnitByID(ctx, t, env, listed.UnitID, http.StatusOK)
+	if unit.Reference != ref || unit.UnitID != listed.UnitID || unit.Namespace != namespaceOf(ref) ||
+		unit.Tool != listed.Tool || unit.Name != listed.Name || unit.LastChange == "" {
+		t.Fatalf("unit by ID = %+v, want the list entry %+v", unit, *listed)
+	}
+
+	readInventoryUnitByID(ctx, t, env, "no-such-unit", http.StatusNotFound)
+}
+
+// checkInventoryUnlockedByID proves the inventory entry of ref holds no lock
+// and that the unit reads by its ID.
+func checkInventoryUnlockedByID(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	checkInventoryUnlocked(ctx, t, env, ref)
+	checkInventoryUnitByID(ctx, t, env, ref)
+}
+
+// readInventoryUnitByID reads GET /api/dustpan/v1/namespaces/-/units/{unit_id} as
+// principal A, fails the test unless the status is want, and returns the
+// decoded unit for a 200.
+func readInventoryUnitByID(
+	ctx context.Context, t *testing.T, env *e2e.Env, unitID string, want int,
+) inventoryUnitDoc {
+	t.Helper()
+
+	got, err := env.StatusWithHeader(
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/-/units/"+unitID, "",
+	)
+	if err != nil {
+		t.Fatalf("GET /api/dustpan/v1/namespaces/-/units/%s: %v", unitID, err)
+	}
+
+	if got.Status != want {
+		t.Fatalf(
+			"GET /api/dustpan/v1/namespaces/-/units/%s answers %d, want %d (%s)",
+			unitID, got.Status, want, got.Body,
+		)
+	}
+
+	var unit inventoryUnitDoc
+	if want == http.StatusOK {
+		if err = json.Unmarshal([]byte(got.Body), &unit); err != nil {
+			t.Fatalf("decode unit %q: %v (%s)", unitID, err, got.Body)
+		}
+	}
+
+	return unit
 }
 
 // lockedUnit is one unit with the lock the test expects: its reference,
@@ -5711,7 +5775,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Scheme:    "",
 	})
 
-	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
+	checkInventoryUnlockedByID(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:     nil,

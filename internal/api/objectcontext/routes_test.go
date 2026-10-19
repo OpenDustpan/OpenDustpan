@@ -73,6 +73,21 @@ func (fakeUnits) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventor
 	}}, nil
 }
 
+func (f fakeUnits) GetUnit(ctx context.Context, unitID string) (coreinventory.Entry, error) {
+	entries, err := f.ListUnits(ctx, "acme")
+	if err != nil {
+		return coreinventory.Entry{}, err
+	}
+
+	for i := range entries {
+		if entries[i].UnitID == unitID {
+			return entries[i], nil
+		}
+	}
+
+	return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
+}
+
 // fakeDeleted holds no deleted unit.
 type fakeDeleted struct{}
 
@@ -163,6 +178,9 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 	return identity.Principal{
 		Subject: "ada", DisplayName: "ada", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Kind:       "",
+		Credential: "",
+		JobID:      "",
 	}, nil
 }
 
