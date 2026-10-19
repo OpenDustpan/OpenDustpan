@@ -402,6 +402,21 @@ func (q *Queries) ContextUnitExists(ctx context.Context, arg ContextUnitExistsPa
 	return present, err
 }
 
+const copyStackTagsToInventoryLabels = `-- name: CopyStackTagsToInventoryLabels :exec
+INSERT INTO inventory_labels (namespace, unit_id, label_key, label_value)
+SELECT s.namespace, t.stack_id, t.name, t.value
+FROM stack_tags AS t
+JOIN stacks AS s ON s.id = t.stack_id
+WHERE t.stack_id = ?
+`
+
+// Writes the tags of one stack as the labels of its unit. The caller removes
+// the old labels first, in the same transaction.
+func (q *Queries) CopyStackTagsToInventoryLabels(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, copyStackTagsToInventoryLabels, stackID)
+	return err
+}
+
 const countAccessToken = `-- name: CountAccessToken :one
 SELECT COUNT(*) FROM access_tokens WHERE id = ?
 `
@@ -1803,6 +1818,37 @@ type DeleteInventoryParams struct {
 
 func (q *Queries) DeleteInventory(ctx context.Context, arg DeleteInventoryParams) error {
 	_, err := q.db.ExecContext(ctx, deleteInventory, arg.Namespace, arg.Tool, arg.Name)
+	return err
+}
+
+const deleteInventoryLabels = `-- name: DeleteInventoryLabels :exec
+DELETE FROM inventory_labels
+WHERE unit_id = ?
+`
+
+// Removes the labels of one unit by its stable ID.
+func (q *Queries) DeleteInventoryLabels(ctx context.Context, unitID string) error {
+	_, err := q.db.ExecContext(ctx, deleteInventoryLabels, unitID)
+	return err
+}
+
+const deleteInventoryLabelsByName = `-- name: DeleteInventoryLabelsByName :exec
+DELETE FROM inventory_labels
+WHERE unit_id IN (
+    SELECT i.unit_id FROM inventory AS i WHERE i.namespace = ? AND i.tool = ? AND i.name = ?
+)
+`
+
+type DeleteInventoryLabelsByNameParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+// Removes the labels of the unit that the live entry names. It runs before
+// DeleteInventory removes the entry.
+func (q *Queries) DeleteInventoryLabelsByName(ctx context.Context, arg DeleteInventoryLabelsByNameParams) error {
+	_, err := q.db.ExecContext(ctx, deleteInventoryLabelsByName, arg.Namespace, arg.Tool, arg.Name)
 	return err
 }
 
@@ -6231,6 +6277,43 @@ func (q *Queries) ListInventoryChanges(ctx context.Context, arg ListInventoryCha
 			&i.Kind,
 			&i.ResourceCount,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryLabels = `-- name: ListInventoryLabels :many
+SELECT unit_id, label_key, label_value
+FROM inventory_labels
+WHERE namespace = ?
+ORDER BY unit_id, label_key
+`
+
+type ListInventoryLabelsRow struct {
+	UnitID     string
+	LabelKey   string
+	LabelValue string
+}
+
+// Every label of the live units of a namespace.
+func (q *Queries) ListInventoryLabels(ctx context.Context, namespace string) ([]ListInventoryLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listInventoryLabels, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInventoryLabelsRow
+	for rows.Next() {
+		var i ListInventoryLabelsRow
+		if err := rows.Scan(&i.UnitID, &i.LabelKey, &i.LabelValue); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

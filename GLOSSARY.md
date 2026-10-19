@@ -53,7 +53,7 @@ A rule of a namespace that matches a Pulumi project and a stack-name pattern. It
 _Avoid_: Routing rule, assignment rule
 
 **Label**:
-A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11).
+A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
 **Unit lock**:

@@ -13,7 +13,7 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// deletedUnitDoc is one entry of GET /api/inventory/deleted-units.
+// deletedUnitDoc is one entry of GET /api/dustpan/v1/namespaces/{namespace}/deleted-units.
 type deletedUnitDoc struct {
 	Tool       string `json:"tool"`
 	Reference  string `json:"reference"`
@@ -24,7 +24,7 @@ type deletedUnitDoc struct {
 	PurgeAfter string `json:"purgeAfter"`
 }
 
-// deletedUnitsDoc is the answer of GET /api/inventory/deleted-units.
+// deletedUnitsDoc is the answer of GET /api/dustpan/v1/namespaces/{namespace}/deleted-units.
 type deletedUnitsDoc struct {
 	NextCursor string           `json:"nextCursor"`
 	Units      []deletedUnitDoc `json:"units"`
@@ -53,11 +53,10 @@ type unitTarget struct {
 // API.
 func listDeletedUnits(ctx context.Context, env *e2e.Env, u unitTarget, prefix string) (deletedUnitsDoc, error) {
 	q := url.Values{}
-	q.Set("organization", u.org)
 	q.Set("tool", u.tool)
 	q.Set("namePrefix", prefix)
 
-	path := "/api/inventory/deleted-units?" + q.Encode()
+	path := "/api/dustpan/v1/namespaces/" + url.PathEscape(u.org) + "/deleted-units?" + q.Encode()
 
 	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
 	if err != nil {

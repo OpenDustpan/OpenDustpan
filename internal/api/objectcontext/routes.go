@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -66,21 +65,12 @@ type Route struct {
 
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces. The
-// paths under /api/dustpan/v1 hold the unit ID and no tool. The paths under
-// /api/context/ are older and deprecated: a released console still calls
-// them. Both serve the same handlers with the same checks.
+// paths hold the unit ID and no tool.
 func (h *Handler) buildRoutes() []Route {
-	return slices.Concat(
-		h.contextRoutes(
-			"/api/dustpan/v1/namespaces/{namespace}/context",
-			"/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/context",
-			h.resolveUnitByID,
-		),
-		h.contextRoutes(
-			"/api/context/namespaces/{namespace}",
-			"/api/context/namespaces/{namespace}/units/{tool}/{unit_id}",
-			h.resolveUnit,
-		),
+	return h.contextRoutes(
+		"/api/dustpan/v1/namespaces/{namespace}/context",
+		"/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/context",
+		h.resolveUnitByID,
 	)
 }
 

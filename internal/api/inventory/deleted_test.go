@@ -229,7 +229,7 @@ type deletedUnitBody struct {
 	PurgeAfter string `json:"purgeAfter"`
 }
 
-// deletedUnitsBody is the decoded GET /api/inventory/deleted-units response.
+// deletedUnitsBody is the decoded GET /api/dustpan/v1/namespaces/{namespace}/deleted-units response.
 type deletedUnitsBody struct {
 	NextCursor string            `json:"nextCursor"`
 	Units      []deletedUnitBody `json:"units"`
@@ -267,9 +267,7 @@ func unitIDs(units []deletedUnitBody) []string {
 
 // listTarget is the deleted-units path of acme with the query values q.
 func listTarget(q url.Values) string {
-	q.Set("organization", "acme")
-
-	return "/api/inventory/deleted-units?" + q.Encode()
+	return "/api/dustpan/v1/namespaces/acme/deleted-units?" + q.Encode()
 }
 
 // fiveDeleted is the fixture of the list tests: three Pulumi stacks and two
@@ -506,7 +504,7 @@ func TestListDeletedUnitsUnknownNamespace(t *testing.T) {
 
 	f := newDeletedFixture(t, nil, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil)
 
-	rec := f.serve(t, http.MethodGet, "/api/inventory/deleted-units?organization=other", "")
+	rec := f.serve(t, http.MethodGet, "/api/dustpan/v1/namespaces/other/deleted-units", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}

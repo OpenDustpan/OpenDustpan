@@ -52,7 +52,7 @@ func (h *Handler) collectionRoutes() []Route {
 }
 
 // collectionPathRoutes returns the rows of the collection routes that have a
-// path under /api/dustpan/v1 and the older path of each.
+// path under /api/dustpan/v1.
 func (h *Handler) collectionPathRoutes() []Route {
 	return []Route{
 		{
@@ -82,38 +82,6 @@ func (h *Handler) collectionPathRoutes() []Route {
 		{
 			Method:  http.MethodDelete,
 			Path:    v1Prefix + "/namespaces/{namespace}/collections/{collection}",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCollectionDelete},
-			Resolve: resolveCollectionPath,
-			Serve:   h.deleteCollection,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/inventory/namespaces/{namespace}/collections",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCollectionRead},
-			Resolve: resolveCollectionNamespace,
-			Serve:   h.listCollections,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/inventory/namespaces/{namespace}/collections",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCollectionCreate},
-			Resolve: resolveCollectionNamespace,
-			Serve:   h.createCollection,
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/inventory/namespaces/{namespace}/collections/{collection}",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCollectionRead},
-			Resolve: resolveCollectionPath,
-			Serve:   h.readCollection,
-		},
-		{
-			Method:  http.MethodDelete,
-			Path:    "/api/inventory/namespaces/{namespace}/collections/{collection}",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCollectionDelete},
 			Resolve: resolveCollectionPath,

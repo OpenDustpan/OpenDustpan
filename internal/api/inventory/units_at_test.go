@@ -94,6 +94,16 @@ func newHistoryHandler(
 ) *apiinventory.Handler {
 	t.Helper()
 
+	return newHistoryHandlerWithURL(t, history, authz, "")
+}
+
+// newHistoryHandlerWithURL is newHistoryHandler with the public URL of the
+// server.
+func newHistoryHandlerWithURL(
+	t *testing.T, history coreinventory.HistoryReader, authz identity.Authorizer, publicURL string,
+) *apiinventory.Handler {
+	t.Helper()
+
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
@@ -116,7 +126,7 @@ func newHistoryHandler(
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		PublicURL:     "",
+		PublicURL:     publicURL,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -128,7 +138,7 @@ func newHistoryHandler(
 func getUnitsAt(t *testing.T, handler *apiinventory.Handler, at string) (*httptest.ResponseRecorder, unitsAtBody) {
 	t.Helper()
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme&at="+at, "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at="+at, "test-token")
 
 	var got unitsAtBody
 	if rec.Code == http.StatusOK {
@@ -286,7 +296,7 @@ func TestListUnitsAtErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			rec := authorizedGet(t, tc.handler, "/api/inventory/units?organization=acme&at="+tc.at, "test-token")
+			rec := authorizedGet(t, tc.handler, "/api/dustpan/v1/namespaces/acme/units?at="+tc.at, "test-token")
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
 			}
@@ -299,8 +309,61 @@ func TestListUnitsAtNeedsNamespaceRead(t *testing.T) {
 
 	handler := newHistoryHandler(t, seededHistory(), stubAuthorizer{})
 
-	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme&at=100", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at=100", "test-token")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
 	}
+}
+
+// TestListUnitsAtConsoleURL checks that a unit of the view has a consoleUrl,
+// and that a unit that is soft-deleted now has none: the console has no page
+// for it.
+func TestListUnitsAtConsoleURL(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandlerWithURL(
+		t,
+		seededHistory(),
+		selectiveAuthorizer{deny: nil},
+		"https://dustpan.example.com",
+	)
+	at := strconv.FormatInt(atTime(5).UnixMilli(), 10)
+
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at="+at, "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var got consoleURLView
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+
+	if len(got.Units) == 0 {
+		t.Fatal("view holds no unit")
+	}
+
+	for _, u := range got.Units {
+		want := "https://dustpan.example.com/units/" + u.UnitID
+		if u.Deleted {
+			want = ""
+		}
+
+		if u.ConsoleURL != want {
+			t.Fatalf("unit %s (deleted %v) consoleUrl = %q, want %q", u.UnitID, u.Deleted, u.ConsoleURL, want)
+		}
+	}
+}
+
+// consoleURLView is the view at a time, with the console link of each unit.
+type consoleURLView struct {
+	Units []consoleURLUnit `json:"units"`
+}
+
+// consoleURLUnit is one unit of consoleURLView.
+type consoleURLUnit struct {
+	UnitID     string `json:"unitID"`
+	Deleted    bool   `json:"deleted"`
+	ConsoleURL string `json:"consoleUrl"` //nolint:tagliatelle // The tool-neutral API names this field consoleUrl.
 }

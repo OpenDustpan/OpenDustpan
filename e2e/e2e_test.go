@@ -2999,7 +2999,7 @@ func tombstoneLists(org string) []string {
 		"/api/user/stacks",
 		"/api/user/stacks?organization=" + org,
 		"/api/user/stacks?organization=" + org + "&project=" + e2e.Project,
-		"/api/inventory/units?organization=" + org,
+		"/api/dustpan/v1/namespaces/" + org + "/units",
 	}
 }
 
@@ -4587,7 +4587,7 @@ func checkNoDeletedWorkspace(ctx context.Context, env *e2e.Env, r e2e.Result, re
 		path string
 	}{
 		{read: env.TFEStatusA, path: "/api/v2/organizations/" + e2e.Namespace + "/workspaces"},
-		{read: env.APIStatus, path: "/api/inventory/units?organization=" + e2e.Namespace},
+		{read: env.APIStatus, path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units"},
 	}
 
 	for _, rd := range reads {
@@ -5544,7 +5544,7 @@ func statePullLacksGreeting(r e2e.Result) error {
 	return nil
 }
 
-// inventoryLockDoc decodes the lock object of GET /api/inventory/units: the
+// inventoryLockDoc decodes the lock object of GET /api/dustpan/v1/namespaces/{namespace}/units: the
 // holder, the take time in Unix seconds, and the operation.
 type inventoryLockDoc struct {
 	Holder    string `json:"holder"`
@@ -5552,13 +5552,13 @@ type inventoryLockDoc struct {
 	Operation string `json:"operation"`
 }
 
-// inventoryUnitDoc decodes one unit of GET /api/inventory/units.
+// inventoryUnitDoc decodes one unit of GET /api/dustpan/v1/namespaces/{namespace}/units.
 type inventoryUnitDoc struct {
 	Tool       string            `json:"tool"`
 	Reference  string            `json:"reference"`
 	Namespace  string            `json:"namespace"`
 	Name       string            `json:"name"`
-	LastChange int64             `json:"lastChange"`
+	LastChange string            `json:"lastChange"`
 	Lock       *inventoryLockDoc `json:"lock"`
 }
 
@@ -5568,14 +5568,19 @@ func readInventoryUnits(ctx context.Context, t *testing.T, env *e2e.Env, ns stri
 	t.Helper()
 
 	got, err := env.StatusWithHeader(
-		ctx, "token "+env.TokenA(), http.MethodGet, "/api/inventory/units?organization="+ns, "",
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/"+ns+"/units", "",
 	)
 	if err != nil {
-		t.Fatalf("GET /api/inventory/units: %v", err)
+		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units: %v", err)
 	}
 
 	if got.Status != http.StatusOK {
-		t.Fatalf("GET /api/inventory/units answers %d, want %d (%s)", got.Status, http.StatusOK, got.Body)
+		t.Fatalf(
+			"GET /api/dustpan/v1/namespaces/{namespace}/units answers %d, want %d (%s)",
+			got.Status,
+			http.StatusOK,
+			got.Body,
+		)
 	}
 
 	var doc struct {
@@ -14498,10 +14503,10 @@ func checkMaintenanceShapes(ctx context.Context, t *testing.T, env *e2e.Env) {
 	})
 
 	got, err = env.StatusWithHeader(
-		ctx, "token "+env.TokenA(), http.MethodGet, "/api/inventory/units?organization="+e2e.Namespace, "",
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/"+e2e.Namespace+"/units", "",
 	)
 	if err != nil {
-		t.Fatalf("GET /api/inventory/units in maintenance: %v", err)
+		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units in maintenance: %v", err)
 	}
 
 	checkMaintenanceRefusal(t, got.Status, got.Header, got.Body, refusalExpect{

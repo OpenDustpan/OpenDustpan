@@ -247,6 +247,13 @@ type InventoryDeleted struct {
 	PurgeAfterMs int64
 }
 
+type InventoryLabel struct {
+	Namespace  string
+	UnitID     string
+	LabelKey   string
+	LabelValue string
+}
+
 type Namespace struct {
 	Name                string
 	HomeRegion          string

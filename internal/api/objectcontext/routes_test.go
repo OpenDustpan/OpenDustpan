@@ -480,11 +480,6 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	handler := newHandler(t, authz, newFakeStore())
 
 	for _, path := range []string{
-		"/api/context/namespaces/absent",
-		"/api/context/namespaces/absent/units/opentofu/" + testUnitID,
-		"/api/context/namespaces/acme/units/opentofu/ws-absent",
-		"/api/context/namespaces/other/units/opentofu/" + testUnitID,
-		"/api/context/namespaces/BAD%20NAME",
 		"/api/dustpan/v1/namespaces/absent/context",
 		"/api/dustpan/v1/namespaces/absent/units/" + testUnitID + "/context",
 		"/api/dustpan/v1/namespaces/acme/units/ws-absent/context",
@@ -502,29 +497,22 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	}
 }
 
-// TestUnitContextPathsAnswerAlike proves that the path of a unit under
-// /api/dustpan/v1, which holds the unit ID and no tool, answers the document
-// that the older path answers, and that a namespace path does the same.
-func TestUnitContextPathsAnswerAlike(t *testing.T) {
+// TestUnitContextByUnitID proves that the path of a unit holds the unit ID and
+// no tool, and answers the context document of the unit.
+func TestUnitContextByUnitID(t *testing.T) {
 	t.Parallel()
 
 	handler := newHandler(t, newAuthorizer(
 		"namespace:read acme", "unit:read opentofu:acme/net",
 	), newFakeStore())
 
-	for _, pair := range [][2]string{
-		{
-			"/api/dustpan/v1/namespaces/acme/units/" + testUnitID + "/context?include=identity,health",
-			"/api/context/namespaces/acme/units/opentofu/" + testUnitID + "?include=identity,health",
-		},
-		{"/api/dustpan/v1/namespaces/acme/context", "/api/context/namespaces/acme"},
+	for _, path := range []string{
+		"/api/dustpan/v1/namespaces/acme/units/" + testUnitID + "/context?include=identity,health",
+		"/api/dustpan/v1/namespaces/acme/context",
 	} {
-		next := serve(t, handler, request{method: http.MethodGet, path: pair[0], token: testToken, body: ""})
-		older := serve(t, handler, request{method: http.MethodGet, path: pair[1], token: testToken, body: ""})
-
-		if next.Code != http.StatusOK || older.Code != http.StatusOK || next.Body.String() != older.Body.String() {
-			t.Errorf("GET %s = %d %s\nGET %s = %d %s", pair[0], next.Code, next.Body.String(),
-				pair[1], older.Code, older.Body.String())
+		rec := serve(t, handler, request{method: http.MethodGet, path: path, token: testToken, body: ""})
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"sections"`) {
+			t.Errorf("GET %s = %d %s, want 200 with sections", path, rec.Code, rec.Body.String())
 		}
 	}
 }

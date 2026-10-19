@@ -97,22 +97,6 @@ type collectionRouteCase struct {
 // collectionRouteCases maps the method and path of each collection route to its
 // request body and its allowed status. A route missing here fails the test.
 var collectionRouteCases = map[string]collectionRouteCase{ //nolint:gochecknoglobals // A read-only table of expected answers.
-	http.MethodGet + " /api/inventory/namespaces/{namespace}/collections": {
-		body:   "",
-		status: http.StatusOK,
-	},
-	http.MethodPost + " /api/inventory/namespaces/{namespace}/collections": {
-		body:   `{"name":"platform"}`,
-		status: http.StatusCreated,
-	},
-	http.MethodGet + " /api/inventory/namespaces/{namespace}/collections/{collection}": {
-		body:   "",
-		status: http.StatusOK,
-	},
-	http.MethodDelete + " /api/inventory/namespaces/{namespace}/collections/{collection}": {
-		body:   "",
-		status: http.StatusNoContent,
-	},
 	http.MethodGet + " /api/dustpan/v1/namespaces/{namespace}/collections": {
 		body:   "",
 		status: http.StatusOK,

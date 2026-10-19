@@ -384,62 +384,6 @@ func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
 	}
 }
 
-// TestResolveListUnits proves the route resolves the namespace in the
-// organization value, and fails on a missing or invalid value.
-func TestResolveListUnits(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t)
-
-	var resolve apiinventory.ObjectResolver
-
-	for _, route := range handler.Routes() {
-		if route.Method+" "+route.Path == "GET /api/inventory/units" {
-			resolve = route.Resolve
-		}
-	}
-
-	if resolve == nil {
-		t.Fatal("GET /api/inventory/units declares no resolver")
-	}
-
-	resolveOK(t, resolve, "/api/inventory/units?organization=acme", "acme")
-
-	for _, target := range []string{"/api/inventory/units", "/api/inventory/units?organization="} {
-		resolveFails(t, resolve, target)
-	}
-
-	resolveFails(t, resolve, "/api/inventory/units?organization=../x")
-}
-
-// resolveOK proves resolve maps target to the namespace ns.
-func resolveOK(t *testing.T, resolve apiinventory.ObjectResolver, target, ns string) {
-	t.Helper()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
-	obj, err := resolve(rec, req)
-	if err != nil {
-		t.Fatalf("resolve %q: %v", target, err)
-	}
-
-	if obj.String() != ns || obj.IsUnit() {
-		t.Fatalf("object = %q (unit %v), want namespace %q", obj.String(), obj.IsUnit(), ns)
-	}
-}
-
-// resolveFails proves resolve rejects target with an error.
-func resolveFails(t *testing.T, resolve apiinventory.ObjectResolver, target string) {
-	t.Helper()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
-
-	if _, err := resolve(rec, req); err == nil {
-		t.Fatalf("resolve %q succeeded, want an error", target)
-	}
-}
-
 // recordedCall is one Authorize call: the action on the object wire form.
 type recordedCall struct {
 	action identity.Action

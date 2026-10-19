@@ -67,8 +67,13 @@ func atQuery(r *http.Request) (time.Time, bool, error) {
 
 // toUnitAtEntry maps one unit of the view to its wire shape.
 func (h *Handler) toUnitAtEntry(u coreinventory.UnitAt) unitAtEntry {
+	entry := h.toUnitEntry(u.Entry)
+	if u.Deleted() {
+		entry.ConsoleURL = ""
+	}
+
 	out := unitAtEntry{
-		unitEntry:   h.toUnitEntry(u.Entry),
+		unitEntry:   entry,
 		UnitID:      u.Entry.UnitID,
 		CurrentName: u.CurrentName,
 		Deleted:     u.Deleted(),
@@ -95,7 +100,7 @@ func unitAtObject(u coreinventory.UnitAt) (identity.Object, error) {
 	return obj.WithUnitID(u.Entry.UnitID), nil
 }
 
-// listUnitsAt answers GET /api/inventory/units with the at value: the units
+// listUnitsAt answers GET /api/dustpan/v1/namespaces/{namespace}/units with the at value: the units
 // of the namespace at that time. The route wrapper already allowed
 // namespace:read on the namespace; this removes every unit that the caller
 // may not read now (unit:read) and counts it in omitted. It lists a renamed

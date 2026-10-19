@@ -85,7 +85,7 @@ type Handler struct {
 	authn       identity.Authenticator
 	sessions    *sessionauth.Checker
 	authz       identity.Authorizer
-	publicURL   string
+	publicURL   *url.URL
 	logger      *slog.Logger
 	now         func() time.Time
 	mux         *patternMux
@@ -119,6 +119,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		now = time.Now
 	}
 
+	publicURL, err := parsePublicURL(cfg.PublicURL)
+	if err != nil {
+		return nil, err
+	}
+
 	h := &Handler{
 		namespaces:  cfg.Namespaces,
 		units:       cfg.Units,
@@ -131,7 +136,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
-		publicURL:   strings.TrimRight(cfg.PublicURL, "/"),
+		publicURL:   publicURL,
 		logger:      cfg.Logger,
 		now:         now,
 		mux:         newPatternMux(),
@@ -146,14 +151,30 @@ func NewHandler(cfg Config) (*Handler, error) {
 	return h, nil
 }
 
+// parsePublicURL parses the public URL of the server. An empty value is no
+// public URL and gives nil.
+func parsePublicURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil //nolint:nilnil // No public URL is a valid setup: the entries have no consoleUrl.
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return nil, fmt.Errorf("%w: public URL", ErrMissingDependency)
+	}
+
+	return u, nil
+}
+
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
 // lockEntry is the lock of a unit as the console reads it: the subject of
-// the principal that holds it, the take time in Unix seconds as lastChange
-// is, and the tool's own word for what holds it. It never holds a token, a
+// the principal that holds it, the take time in Unix seconds, and the tool's own word for what holds it. It never holds
+// a token, a
 // secret or a capability path: the projection stores only the subject.
 type lockEntry struct {
 	Holder    string `json:"holder"`
@@ -166,7 +187,7 @@ type lockEntry struct {
 // with the stored lowercase tool code ("pulumi:acme/web/prod"). UnitID is the
 // stable ID of the unit, which a rename keeps. Name is the
 // tool's own name for the unit. LastChange is the time of the unit's last
-// change in Unix seconds, as lastUpdate is in the stack list. Status is
+// change, an RFC 3339 time in UTC. Status is
 // omitted when unknown; ResourceCount is omitted when unknown. Lock is
 // omitted when the unit is not locked: a lock is a flag, not a status, so a
 // unit can hold one in any status.
@@ -180,7 +201,7 @@ type unitEntry struct {
 	UnitID        string     `json:"unitID"`
 	Namespace     string     `json:"namespace"`
 	Name          string     `json:"name"`
-	LastChange    int64      `json:"lastChange"`
+	LastChange    string     `json:"lastChange"`
 	Status        string     `json:"status,omitempty"`
 	ResourceCount *int64     `json:"resourceCount,omitempty"`
 	Lock          *lockEntry `json:"lock,omitempty"`
@@ -190,15 +211,17 @@ type unitEntry struct {
 	// Labels are the labels of the unit, omitted when the unit has none.
 	Labels map[string]string `json:"labels,omitempty"`
 	// ConsoleURL is the URL of the page of the unit in the console, omitted
-	// when the installation has no public URL.
+	// when the installation has no public URL or the unit is deleted.
 	ConsoleURL string `json:"consoleUrl,omitempty"` //nolint:tagliatelle // The tool-neutral API names this field consoleUrl.
 }
 
-// listUnitsResponse is the answered document of the unit list.
+// listUnitsResponse is one page of the unit list. NextPageToken is omitted on
+// the last page.
 //
 // Contract: never remove or rename the units field.
 type listUnitsResponse struct {
-	Units []unitEntry `json:"units"`
+	Units         []unitEntry `json:"units"`
+	NextPageToken string      `json:"nextPageToken,omitempty"`
 }
 
 // toolLabel maps a stored lowercase tool code to the tool label of the
@@ -224,7 +247,7 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		UnitID:        e.UnitID,
 		Namespace:     e.Namespace.String(),
 		Name:          e.Name,
-		LastChange:    e.LastChanged.Unix(),
+		LastChange:    formatTime(e.LastChanged),
 		Status:        e.Status,
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
@@ -238,11 +261,11 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 // empty string when the installation has no public URL. The path holds the
 // unit ID, so a rename of the unit keeps the link.
 func (h *Handler) consoleURL(unitID string) string {
-	if h.publicURL == "" {
+	if h.publicURL == nil {
 		return ""
 	}
 
-	return h.publicURL + "/units/" + url.PathEscape(unitID)
+	return h.publicURL.JoinPath("units", url.PathEscape(unitID)).String()
 }
 
 // toLockEntry maps one projection lock to its wire shape, or nil when the
@@ -255,9 +278,8 @@ func toLockEntry(lock *coreinventory.Lock) *lockEntry {
 	return &lockEntry{Holder: lock.Holder, Since: lock.Since.Unix(), Operation: lock.Operation}
 }
 
-// listUnits answers GET /api/dustpan/v1/namespaces/{namespace}/units, and the
-// older GET /api/inventory/units, with the entries of the
-// namespace that the caller may read. The route wrapper already allowed
+// listUnits answers GET /api/dustpan/v1/namespaces/{namespace}/units with one
+// page of the entries of the namespace that the caller may read. The route wrapper already allowed
 // namespace:read on the namespace; this removes every entry whose unit the
 // caller may not read (unit:read on the reference). An unknown namespace
 // answers 404.
@@ -288,7 +310,20 @@ func (h *Handler) listUnits(
 			return
 		}
 
+		if r.URL.Query().Get("pageToken") != "" {
+			h.writeError(ctx, w, errPageTokenAt)
+
+			return
+		}
+
 		h.listUnitsAt(w, r, p, obj, at)
+
+		return
+	}
+
+	page, err := parseUnitPage(r, ns, filter)
+	if err != nil {
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -306,31 +341,45 @@ func (h *Handler) listUnits(
 		return
 	}
 
-	units, err := h.readableUnits(ctx, p, entries, filter)
+	units, next, err := h.readableUnits(ctx, p, entries, filter, page)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, listUnitsResponse{Units: units})
+	resp := listUnitsResponse{Units: units, NextPageToken: ""}
+	if next != "" {
+		resp.NextPageToken = encodePageToken(next, queryFingerprint(ns, filter))
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, resp)
 }
 
-// readableUnits returns the wire entries of the units in entries that pass the
-// filter and that the caller may read (unit:read on the reference). A denied
-// unit is not in the result.
+// readableUnits returns one page of the wire entries of the units in entries
+// that pass the filter and that the caller may read (unit:read on the
+// reference), in the order of the unit ID. A denied unit is not in the result.
+// The second result is the ID of the last unit of the page when a later page
+// exists, else empty.
 func (h *Handler) readableUnits(
-	ctx context.Context, p identity.Principal, entries []coreinventory.Entry, filter unitFilter,
-) ([]unitEntry, error) {
-	units := make([]unitEntry, 0, len(entries))
+	ctx context.Context, p identity.Principal, entries []coreinventory.Entry, filter unitFilter, page unitPage,
+) ([]unitEntry, string, error) {
+	units := make([]unitEntry, 0, min(len(entries), page.size+1))
 
-	for i := range entries {
-		uobj, err := unitObject(entries[i])
-		if err != nil {
-			return nil, err
+	sorted := sortedByUnitID(entries, func(e coreinventory.Entry) string { return e.UnitID })
+
+	for i := range sorted {
+		e := &sorted[i]
+		if page.after != "" && e.UnitID <= page.after {
+			continue
 		}
 
-		if !filter.matches(entries[i], uobj) {
+		uobj, err := unitObject(*e)
+		if err != nil {
+			return nil, "", err
+		}
+
+		if !filter.matches(*e, uobj) {
 			continue
 		}
 
@@ -339,13 +388,17 @@ func (h *Handler) readableUnits(
 				continue
 			}
 
-			return nil, fmt.Errorf("authorize %s: %w", identity.ActionUnitRead, err)
+			return nil, "", fmt.Errorf("authorize %s: %w", identity.ActionUnitRead, err)
 		}
 
-		units = append(units, h.toUnitEntry(entries[i]))
+		if len(units) == page.size {
+			return units, units[len(units)-1].UnitID, nil
+		}
+
+		units = append(units, h.toUnitEntry(*e))
 	}
 
-	return units, nil
+	return units, "", nil
 }
 
 // unitObject maps one inventory entry to its tool-neutral unit reference. It

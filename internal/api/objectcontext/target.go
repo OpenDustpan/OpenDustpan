@@ -56,49 +56,30 @@ func (h *Handler) findNamespace(r *http.Request) (namespace.Namespace, error) {
 	return ns, nil
 }
 
-// resolveUnit finds the unit of the path in the namespace of the path, live
-// or soft-deleted. A unit of another namespace, an unknown unit and a purged
-// unit answer errNotFound alike.
-func (h *Handler) resolveUnit(r *http.Request) (target, error) {
-	return h.findUnit(r, r.PathValue("tool"), r.PathValue("unit_id"))
-}
-
 // resolveUnitByID finds the unit with the unit ID of the path in the
 // namespace of the path, live or soft-deleted. The unit ID is unique in the
-// installation, so the path holds no tool. The answers for a missing unit are
-// those of resolveUnit.
+// installation, so the path holds no tool. A unit of another namespace, an
+// unknown unit and a purged unit answer errNotFound alike.
 func (h *Handler) resolveUnitByID(r *http.Request) (target, error) {
-	return h.findUnit(r, "", r.PathValue("unit_id"))
-}
-
-// findUnit finds the unit with the ID unitID in the namespace of the path.
-// A tool that is not empty must be the tool of the unit.
-func (h *Handler) findUnit(r *http.Request, tool, unitID string) (target, error) {
 	ns, err := h.findNamespace(r)
 	if err != nil {
 		return target{}, err
 	}
 
-	ctx := r.Context()
+	unitID := r.PathValue("unit_id")
 
-	live, err := h.units.ListUnits(ctx, ns.Name)
+	live, err := h.units.ListUnits(r.Context(), ns.Name)
 	if err != nil {
 		return target{}, fmt.Errorf("list units: %w", err)
 	}
 
 	for i := range live {
-		if live[i].UnitID != unitID || (tool != "" && live[i].Tool != tool) {
-			continue
+		if live[i].UnitID == unitID {
+			return h.liveTarget(ns, live[i])
 		}
-
-		return h.liveTarget(ns, live[i])
 	}
 
-	if tool == "" {
-		return h.deletedTargetByID(r, ns, unitID)
-	}
-
-	return h.deletedTarget(r, ns, tool, unitID)
+	return h.deletedTargetByID(r, ns, unitID)
 }
 
 // liveTarget returns the target of the live unit e.
@@ -131,25 +112,6 @@ func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, uni
 	}
 
 	return target{}, errNotFound
-}
-
-// deletedTarget returns the target of the soft-deleted unit unitID of tool,
-// or errNotFound.
-func (h *Handler) deletedTarget(r *http.Request, ns namespace.Namespace, tool, unitID string) (target, error) {
-	if objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: tool, ID: unitID}).Validate() != nil {
-		return target{}, errNotFound
-	}
-
-	gone, err := h.deleted.GetDeletedUnit(r.Context(), ns.Name, tool, unitID)
-	if errors.Is(err, coreinventory.ErrNotFound) {
-		return target{}, errNotFound
-	}
-
-	if err != nil {
-		return target{}, fmt.Errorf("get deleted unit: %w", err)
-	}
-
-	return h.goneTarget(ns, gone)
 }
 
 // goneTarget returns the target of the soft-deleted unit gone.

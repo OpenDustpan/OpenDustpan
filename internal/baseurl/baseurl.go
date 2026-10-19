@@ -13,7 +13,7 @@ import (
 )
 
 // ErrInvalid reports a public URL that is not an absolute http or https URL
-// with a host and no query.
+// with a host, no query and no fragment.
 var ErrInvalid = errors.New("invalid public URL")
 
 // Resolver returns the external base URL for a request. Adapters receive it
@@ -22,8 +22,8 @@ type Resolver struct {
 	publicURL string
 }
 
-// Parse checks raw as an absolute http or https URL with a host and no
-// query, and returns its Resolver. An empty raw returns a Resolver without a
+// Parse checks raw as an absolute http or https URL with a host, no query and
+// no fragment, and returns its Resolver. An empty raw returns a Resolver without a
 // public URL, which derives the base URL from each request.
 func Parse(raw string) (Resolver, error) {
 	trimmed := strings.TrimSpace(raw)
@@ -37,9 +37,9 @@ func Parse(raw string) (Resolver, error) {
 	}
 
 	if !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
-		u.RawQuery != "" || u.ForceQuery {
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(trimmed, "#") {
 		return Resolver{}, fmt.Errorf(
-			"%w %q: want an absolute http or https URL with a host and no query",
+			"%w %q: want an absolute http or https URL with a host, no query and no fragment",
 			ErrInvalid,
 			raw,
 		)

@@ -144,9 +144,11 @@ func newContextWorld(t *testing.T) contextWorld {
 		ctxNsOnlyToken: person("nora"),
 		ctxServiceToken: {
 			Subject: "svc-reader", DisplayName: "svc-reader", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		},
 		ctxWorkloadToken: {
 			Subject: "wl-reader", DisplayName: "wl-reader", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		},
 	}}
 
@@ -326,7 +328,8 @@ func onCallObject(r resolvedWire) string {
 }
 
 const (
-	ctxNamespacePath = "/api/context/namespaces/acme"
+	ctxNamespacePath = "/api/dustpan/v1/namespaces/acme"
+	ctxNamespaceDoc  = ctxNamespacePath + "/context"
 	ctxOwnersPatch   = `{"owners":["group:platform"],"onCall":"pager:platform"}`
 )
 
@@ -377,11 +380,11 @@ func TestContextInheritsFromTheNamespace(t *testing.T) {
 
 	w := newContextWorld(t)
 	units := map[string]string{
-		"opentofu workspace": ctxNamespacePath + "/units/opentofu/" + w.workspace,
-		"pulumi stack":       ctxNamespacePath + "/units/pulumi/" + w.stack,
+		"opentofu workspace": ctxNamespacePath + "/units/" + w.workspace + "/context",
+		"pulumi stack":       ctxNamespacePath + "/units/" + w.stack + "/context",
 	}
 
-	w.expectPatch(t, http.StatusOK, ctxNamespacePath, ctxOwnerToken, ctxOwnersPatch)
+	w.expectPatch(t, http.StatusOK, ctxNamespaceDoc, ctxOwnerToken, ctxOwnersPatch)
 
 	for name, path := range units {
 		w.expectOwners(t, name, path, []string{"group:platform"}, "namespace")
@@ -401,9 +404,9 @@ func TestContextUnitOverridesAndClears(t *testing.T) {
 	t.Parallel()
 
 	w := newContextWorld(t)
-	path := ctxNamespacePath + "/units/opentofu/" + w.workspace
+	path := ctxNamespacePath + "/units/" + w.workspace + "/context"
 
-	w.expectPatch(t, http.StatusOK, ctxNamespacePath, ctxOwnerToken, ctxOwnersPatch)
+	w.expectPatch(t, http.StatusOK, ctxNamespaceDoc, ctxOwnerToken, ctxOwnersPatch)
 	w.expectPatch(t, http.StatusOK, path, ctxWriterToken, `{"owners":["group:net"]}`)
 	w.expectOwners(t, "after an override", path, []string{"group:net"}, "unit")
 
@@ -414,7 +417,7 @@ func TestContextUnitOverridesAndClears(t *testing.T) {
 	w.expectDelete(t, http.StatusNoContent, path, ctxWriterToken)
 	w.expectOwners(t, "after a clear", path, []string{"group:platform"}, "namespace")
 	w.expectDelete(t, http.StatusNotFound, path, ctxWriterToken)
-	w.expectDelete(t, http.StatusNoContent, ctxNamespacePath, ctxOwnerToken)
+	w.expectDelete(t, http.StatusNoContent, ctxNamespaceDoc, ctxOwnerToken)
 	w.expectOwners(t, "after the namespace clear", path, nil, "")
 }
 
@@ -445,7 +448,7 @@ func TestContextUnitSurvivesRename(t *testing.T) {
 	t.Parallel()
 
 	w := newContextWorld(t)
-	path := ctxNamespacePath + "/units/pulumi/" + w.stack
+	path := ctxNamespacePath + "/units/" + w.stack + "/context"
 
 	w.expectPatch(t, http.StatusOK, path, ctxWriterToken, `{"owners":["group:web"]}`)
 
@@ -481,7 +484,7 @@ func TestContextWorkspaceSurvivesRename(t *testing.T) {
 	t.Parallel()
 
 	w := newContextWorld(t)
-	path := ctxNamespacePath + "/units/opentofu/" + w.workspace
+	path := ctxNamespacePath + "/units/" + w.workspace + "/context"
 
 	w.expectPatch(t, http.StatusOK, path, ctxWriterToken, `{"owners":["group:net"]}`)
 
@@ -542,61 +545,57 @@ type contextCase struct {
 // of w. A case never changes the context of the workspace, so the cases can
 // run side by side.
 func contextCases(w *contextWorld) []contextCase {
-	unit := ctxNamespacePath + "/units/opentofu/" + w.workspace
-	stack := ctxNamespacePath + "/units/pulumi/" + w.stack
-	other := "/api/context/namespaces/other/units/pulumi/"
+	unit := ctxNamespacePath + "/units/" + w.workspace + "/context"
+	stack := ctxNamespacePath + "/units/" + w.stack + "/context"
+	other := "/api/dustpan/v1/namespaces/other/units/"
 
 	return []contextCase{
 		{"a signed-out caller", http.MethodGet, unit, "", "", http.StatusUnauthorized},
 		{"read a unit without a grant", http.MethodGet, unit, ctxNobodyToken, "", http.StatusNotFound},
-		{"read a namespace without a grant", http.MethodGet, ctxNamespacePath, ctxNobodyToken, "", http.StatusNotFound},
-		{"read through another namespace", http.MethodGet, ctxNamespacePath, ctxOtherToken, "", http.StatusNotFound},
+		{"read a namespace without a grant", http.MethodGet, ctxNamespaceDoc, ctxNobodyToken, "", http.StatusNotFound},
+		{"read through another namespace", http.MethodGet, ctxNamespaceDoc, ctxOtherToken, "", http.StatusNotFound},
 		{"read a unit as a viewer", http.MethodGet, unit, ctxViewerToken, "", http.StatusOK},
 		{
 			"an unknown namespace",
 			http.MethodGet,
-			"/api/context/namespaces/absent",
+			"/api/dustpan/v1/namespaces/absent/context",
 			ctxAdminToken,
 			"",
 			http.StatusNotFound,
 		},
 		{
-			"an unknown unit", http.MethodGet, ctxNamespacePath + "/units/opentofu/ws-absent", ctxAdminToken, "",
+			"an unknown unit", http.MethodGet, ctxNamespacePath + "/units/ws-absent/context", ctxAdminToken, "",
 			http.StatusNotFound,
 		},
 		{
-			"an unknown tool", http.MethodGet, ctxNamespacePath + "/units/chef/" + w.workspace, ctxAdminToken, "",
-			http.StatusNotFound,
-		},
-		{
-			"the right ID with the wrong tool", http.MethodGet, ctxNamespacePath + "/units/pulumi/" + w.workspace,
+			"a unit of another namespace", http.MethodGet, ctxNamespacePath + "/units/" + w.otherStack + "/context",
 			ctxAdminToken, "", http.StatusNotFound,
 		},
 		{
-			"a unit of another namespace", http.MethodGet, ctxNamespacePath + "/units/pulumi/" + w.otherStack,
-			ctxAdminToken, "", http.StatusNotFound,
-		},
-		{
-			"a unit of this namespace through another namespace", http.MethodGet, other + w.stack, ctxOtherToken, "",
+			"a unit of this namespace through another namespace",
+			http.MethodGet,
+			other + w.stack + "/context",
+			ctxOtherToken,
+			"",
 			http.StatusNotFound,
 		},
 		{"set a unit as a viewer", http.MethodPatch, unit, ctxViewerToken, `{"onCall":"x"}`, http.StatusForbidden},
 		{"set a unit without a grant", http.MethodPatch, unit, ctxNobodyToken, `{"onCall":"x"}`, http.StatusNotFound},
 		{"clear a unit as a viewer", http.MethodDelete, unit, ctxViewerToken, "", http.StatusForbidden},
 		{
-			"set a namespace as a writer", http.MethodPatch, ctxNamespacePath, ctxWriterToken, `{"onCall":"x"}`,
+			"set a namespace as a writer", http.MethodPatch, ctxNamespaceDoc, ctxWriterToken, `{"onCall":"x"}`,
 			http.StatusForbidden,
 		},
 		{
 			"clear a namespace as a writer",
 			http.MethodDelete,
-			ctxNamespacePath,
+			ctxNamespaceDoc,
 			ctxWriterToken,
 			"",
 			http.StatusForbidden,
 		},
 		{
-			"set a namespace as its admin", http.MethodPatch, ctxNamespacePath, ctxOwnerToken, `{"summary":"The shop"}`,
+			"set a namespace as its admin", http.MethodPatch, ctxNamespaceDoc, ctxOwnerToken, `{"summary":"The shop"}`,
 			http.StatusOK,
 		},
 		{
@@ -653,13 +652,13 @@ func TestContextOneNotFound(t *testing.T) {
 	bodies := map[string]string{}
 
 	for name, c := range map[string]struct{ target, token string }{
-		"unknown unit":    {ctxNamespacePath + "/units/opentofu/ws-absent", ctxAdminToken},
-		"other namespace": {ctxNamespacePath + "/units/pulumi/" + w.otherStack, ctxAdminToken},
-		"cannot read":     {ctxNamespacePath + "/units/opentofu/" + w.workspace, ctxNobodyToken},
+		"unknown unit":    {ctxNamespacePath + "/units/ws-absent/context", ctxAdminToken},
+		"other namespace": {ctxNamespacePath + "/units/" + w.otherStack + "/context", ctxAdminToken},
+		"cannot read":     {ctxNamespacePath + "/units/" + w.workspace + "/context", ctxNobodyToken},
 		"namespace read only": {
-			ctxNamespacePath + "/units/opentofu/" + w.workspace, ctxNsOnlyToken,
+			ctxNamespacePath + "/units/" + w.workspace + "/context", ctxNsOnlyToken,
 		},
-		"unknown namespace": {"/api/context/namespaces/absent/units/opentofu/" + w.workspace, ctxAdminToken},
+		"unknown namespace": {"/api/dustpan/v1/namespaces/absent/units/" + w.workspace + "/context", ctxAdminToken},
 	} {
 		code, body := w.call(t, http.MethodGet, c.target, c.token, "")
 		if code != http.StatusNotFound {
@@ -682,7 +681,7 @@ func TestContextDeletedUnit(t *testing.T) {
 	t.Parallel()
 
 	w := newContextWorld(t)
-	path := ctxNamespacePath + "/units/pulumi/" + w.stack
+	path := ctxNamespacePath + "/units/" + w.stack + "/context"
 
 	w.expectPatch(t, http.StatusOK, path, ctxWriterToken, `{"onCall":"pager:web"}`)
 
@@ -725,8 +724,8 @@ func TestContextWritesAreAudited(t *testing.T) {
 
 	w := newContextWorld(t)
 
-	w.expectPatch(t, http.StatusOK, ctxNamespacePath, ctxOwnerToken, ctxOwnersPatch)
-	w.expectPatch(t, http.StatusOK, ctxNamespacePath+"/units/pulumi/"+w.stack, ctxWriterToken, `{"onCall":"x"}`)
+	w.expectPatch(t, http.StatusOK, ctxNamespaceDoc, ctxOwnerToken, ctxOwnersPatch)
+	w.expectPatch(t, http.StatusOK, ctxNamespacePath+"/units/"+w.stack+"/context", ctxWriterToken, `{"onCall":"x"}`)
 
 	code, body := w.call(t, http.MethodGet, "/api/audit/entries?organization=acme", ctxAdminToken, "")
 	if code != http.StatusOK {

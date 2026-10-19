@@ -92,6 +92,7 @@ type pgCopyTable struct {
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
+	tables = append(tables, pgCopyCollectionTables()...)
 	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
@@ -212,10 +213,22 @@ func pgCopyScopeTables() []pgCopyTable {
 			orderBy: []string{pgColNamespace, pgColTool, pgColName},
 		},
 		{
+			table:   "inventory_labels",
+			columns: []string{pgColNamespace, pgColUnitID, "label_key", "label_value"},
+			orderBy: []string{pgColUnitID, "label_key"},
+		},
+		{
 			table:   "inventory_deleted",
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
 		},
+	}
+}
+
+// pgCopyCollectionTables holds the COPY columns of the collection, context and
+// blob purge tables, in foreign-key order.
+func pgCopyCollectionTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
 			table: "collections",
 			columns: []string{

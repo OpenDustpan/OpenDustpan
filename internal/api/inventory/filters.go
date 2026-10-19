@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -77,7 +78,10 @@ func (f unitFilter) matches(e coreinventory.Entry, uobj identity.Object) bool {
 func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 	var f unitFilter
 
-	query := r.URL.Query()
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return unitFilter{}, fmt.Errorf("%w: the query string is not valid", errInvalidQuery)
+	}
 
 	rawLabels := query["label"]
 	if len(rawLabels) > maxLabelFilters {

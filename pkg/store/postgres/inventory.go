@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,7 +36,8 @@ func stackUnitName(ref stack.Ref) string {
 }
 
 // publishStackInventory writes the Pulumi entry for ref with the given unit
-// ID and change time, and appends the change log row of the kind kind. Status
+// ID and change time, writes the labels of the unit from the tags of the
+// stack, and appends the change log row of the kind kind. Status
 // and resource count stay unknown: the Pulumi CLI reports no status
 // vocabulary and the server never reads deployments. The lock columns stay
 // untouched: only UpdateInventoryLock changes them, in the same transaction
@@ -49,7 +49,25 @@ func publishStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref, w 
 		return err
 	}
 
+	if err := publishStackLabels(ctx, q, w.unitID); err != nil {
+		return err
+	}
+
 	return appendStackChange(ctx, q, ref, w)
+}
+
+// publishStackLabels replaces the labels of the unit with the tags of the
+// stack that has the same ID. The Pulumi CLI sends stack tags as labels.
+func publishStackLabels(ctx context.Context, q *db.Queries, unitID string) error {
+	if err := q.DeleteInventoryLabels(ctx, unitID); err != nil {
+		return fmt.Errorf("delete inventory labels: %w", err)
+	}
+
+	if err := q.CopyStackTagsToInventoryLabels(ctx, unitID); err != nil {
+		return fmt.Errorf("write inventory labels: %w", err)
+	}
+
+	return nil
 }
 
 // appendStackChange appends the change log row of the stack ref.
@@ -82,8 +100,18 @@ func upsertStackInventory(
 	return nil
 }
 
-// removeStackInventory removes the Pulumi entry for ref.
+// removeStackInventory removes the Pulumi entry for ref and the labels of its
+// unit.
 func removeStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref) error {
+	labelsErr := q.DeleteInventoryLabelsByName(ctx, db.DeleteInventoryLabelsByNameParams{
+		Namespace: ref.Namespace.String(),
+		Tool:      inventoryTool,
+		Name:      stackUnitName(ref),
+	})
+	if labelsErr != nil {
+		return fmt.Errorf("delete inventory labels: %w", labelsErr)
+	}
+
 	err := q.DeleteInventory(ctx, db.DeleteInventoryParams{
 		Namespace: ref.Namespace.String(),
 		Tool:      inventoryTool,
@@ -434,7 +462,7 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 		return nil, fmt.Errorf("select inventory: %w", err)
 	}
 
-	labels, err := stackTagMap(ctx, s.queries, ns.String())
+	labels, err := s.inventoryLabels(ctx, ns)
 	if err != nil {
 		return nil, err
 	}
@@ -443,26 +471,37 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 
 	for i := range rows {
 		entry := inventoryEntry(rows[i])
-		entry.Labels = unitLabels(entry.Tool, entry.UnitID, labels)
+		entry.Labels = labels[entry.UnitID]
+
+		if entry.Labels == nil {
+			entry.Labels = map[string]string{}
+		}
+
 		out = append(out, entry)
 	}
 
 	return out, nil
 }
 
-// unitLabels returns the labels of a unit as a new map. The Pulumi CLI sends
-// stack tags as labels, so the tags of a stack are its labels. A workspace
-// has no label yet.
-func unitLabels(tool, unitID string, stackTags map[string]map[string]string) map[string]string {
-	out := map[string]string{}
-
-	if tool != inventoryTool {
-		return out
+// inventoryLabels reads the labels of every live unit of ns from the
+// projection, keyed by unit ID.
+func (s *Store) inventoryLabels(ctx context.Context, ns namespace.Name) (map[string]map[string]string, error) {
+	rows, err := s.queries.ListInventoryLabels(ctx, ns.String())
+	if err != nil {
+		return nil, fmt.Errorf("select inventory labels: %w", err)
 	}
 
-	maps.Copy(out, stackTags[unitID])
+	out := map[string]map[string]string{}
 
-	return out
+	for _, row := range rows {
+		if out[row.UnitID] == nil {
+			out[row.UnitID] = map[string]string{}
+		}
+
+		out[row.UnitID][row.LabelKey] = row.LabelValue
+	}
+
+	return out, nil
 }
 
 // inventoryEntry converts an inventory row into a domain entry. A null

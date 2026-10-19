@@ -11,11 +11,10 @@ period ends.
 When the retention period of a unit ends, the retention expiry purges the
 unit. An admin can also purge a unit through the API before that time.
 
-The list of deleted units has a path under `/api/dustpan/v1`:
-`GET /api/dustpan/v1/namespaces/<namespace>/deleted-units`. We deprecate the
-paths in this guide under `/api/inventory/`. See
-`docs/reference/inventory-api.md`. The restore and the final delete have no
-path under `/api/dustpan/v1` yet.
+The list of deleted units has a path under `/api/dustpan/v1`. The restore and
+the final delete have no path under `/api/dustpan/v1` yet: they use the paths
+under `/api/inventory/` that this guide shows. See
+`docs/reference/inventory-api.md`.
 
 ## Set the retention period
 
@@ -26,7 +25,7 @@ already deleted keeps its purge time.
 
 ## List the deleted units
 
-`GET /api/inventory/deleted-units?organization=<namespace>` lists one page of
+`GET /api/dustpan/v1/namespaces/<namespace>/deleted-units` lists one page of
 the deleted units of the namespace, ordered by tool, then name, then unit ID.
 It needs the action `namespace:read` on the namespace. The list holds only
 the units that you can read: a grant of `unit:read` on the installation or
@@ -48,7 +47,7 @@ These query values filter and page the list:
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/inventory/deleted-units?organization=acme&tool=pulumi&limit=20"
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/deleted-units?tool=pulumi&limit=20"
 ```
 
 The answer has `units`, `total` and `nextCursor`. Each unit has `tool`,
@@ -159,7 +158,7 @@ namespace, so list each namespace. The list comes in pages: when the answer has 
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/inventory/deleted-units?organization=acme&purgeWithinDays=1"
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/deleted-units?purgeWithinDays=1"
 ```
 
 Then restore each unit that you keep, with the `tool` and the `unitID` of the

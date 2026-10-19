@@ -47,17 +47,74 @@ func newFilterHandler(t *testing.T, authz identity.Authorizer, publicURL string)
 	})
 }
 
+// newFilterHandlerFor is newFilterHandler with no public URL.
+func newFilterHandlerFor(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+	t.Helper()
+
+	return newFilterHandler(t, authz, "")
+}
+
+// newOutsideGrammarHandler returns a handler over one unit in acme with the
+// labels labels, whatever their form.
+func newOutsideGrammarHandler(t *testing.T, labels map[string]string) *apiinventory.Handler {
+	t.Helper()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	seedNamespace(t, nsStore)
+
+	entry := coreinventory.Entry{
+		LastChanged: changeTime(), Namespace: "acme", Tool: "pulumi", Name: "web/prod", UnitID: "stk-1",
+		DisplayName: "web/prod", Status: "", ResourceCount: nil, Lock: nil, Collection: "", Labels: labels,
+	}
+	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{"acme": {entry}}, err: nil}
+
+	return newBehaviorHandlerWith(t, nsStore, reader, selectiveAuthorizer{deny: nil}, behaviorWiring{
+		sessions: nil, lifecycles: testLifecycles(), publicURL: "",
+	})
+}
+
+// getPageFrom fetches the unit list of the namespace ns with the query q and
+// decodes it. A body that is not a page decodes to the zero page.
+func getPageFrom(t *testing.T, handler *apiinventory.Handler, ns, q string) (int, pageBody) {
+	t.Helper()
+
+	target := "/api/dustpan/v1/namespaces/" + ns + "/units"
+	if q != "" {
+		target += "?" + q
+	}
+
+	rec := authorizedGet(t, handler, target, "test-token")
+
+	var page pageBody
+
+	if rec.Code != http.StatusOK {
+		return rec.Code, page
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page: %v (%s)", err, rec.Body.String())
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode page keys: %v", err)
+	}
+
+	_, page.hasNext = raw["nextPageToken"]
+
+	return rec.Code, page
+}
+
 func references(units unitsBody) []string {
 	out := make([]string, 0, len(units.Units))
-	for _, u := range units.Units {
-		out = append(out, u.Reference)
+	for i := range units.Units {
+		out = append(out, units.Units[i].Reference)
 	}
 
 	return out
 }
 
-// TestUnitListFilters checks the label and reference query values, on the path
-// under /api/dustpan/v1 and on the older path.
+// TestUnitListFilters checks the label and reference query values.
 func TestUnitListFilters(t *testing.T) {
 	t.Parallel()
 
@@ -67,7 +124,7 @@ func TestUnitListFilters(t *testing.T) {
 		want  []string
 	}{
 		{name: "no filter", query: "", want: []string{
-			"opentofu:acme/dns", "opentofu:acme/network", "pulumi:acme/web/dev", "pulumi:acme/web/prod",
+			"pulumi:acme/web/dev", "pulumi:acme/web/prod", "opentofu:acme/network", "opentofu:acme/dns",
 		}},
 		{name: "one label", query: "label=app%3Dweb", want: []string{"pulumi:acme/web/dev", "pulumi:acme/web/prod"}},
 		{name: "two labels", query: "label=app%3Dweb&label=tier%3Dprod", want: []string{"pulumi:acme/web/prod"}},
@@ -78,7 +135,7 @@ func TestUnitListFilters(t *testing.T) {
 		{name: "one reference", query: "reference=pulumi:acme/web/dev", want: []string{"pulumi:acme/web/dev"}},
 		{
 			name: "two references", query: "reference=pulumi:acme/web/dev&reference=opentofu:acme/dns",
-			want: []string{"opentofu:acme/dns", "pulumi:acme/web/dev"},
+			want: []string{"pulumi:acme/web/dev", "opentofu:acme/dns"},
 		},
 		{name: "reference of an unknown unit", query: "reference=pulumi:acme/web/none", want: []string{}},
 		{
@@ -88,25 +145,21 @@ func TestUnitListFilters(t *testing.T) {
 		},
 	}
 
-	paths := []string{"/api/dustpan/v1/namespaces/acme/units?", "/api/inventory/units?organization=acme&"}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	for _, path := range paths {
-		for _, tc := range cases {
-			t.Run(path+tc.name, func(t *testing.T) {
-				t.Parallel()
+			handler := newFilterHandler(t, selectiveAuthorizer{deny: nil}, "")
 
-				handler := newFilterHandler(t, selectiveAuthorizer{deny: nil}, "")
+			rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+tc.query, "test-token")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
 
-				rec := authorizedGet(t, handler, path+tc.query, "test-token")
-				if rec.Code != http.StatusOK {
-					t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
-				}
-
-				if got := references(decodeUnits(t, rec)); !slices.Equal(got, tc.want) {
-					t.Fatalf("references = %v, want %v", got, tc.want)
-				}
-			})
-		}
+			if got := references(decodeUnits(t, rec)); !slices.Equal(got, tc.want) {
+				t.Fatalf("references = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -143,6 +196,9 @@ func TestUnitListFilterErrors(t *testing.T) {
 			query: "reference=pulumi:acme/web/dev&reference=pulumi:other/web/dev",
 		},
 		{name: "twenty-one references", query: strings.Join(tooManyRefs, "&")},
+		{name: "reference with a bad escape", query: "reference=%zz"},
+		{name: "label with a bad escape", query: "label=a%zz"},
+		{name: "semicolon in the query", query: "label=a%3Db;label=c%3Dd"},
 		{name: "label with the at value", query: "label=app%3Dweb&at=1"},
 		{name: "reference with the at value", query: "reference=pulumi:acme/web/dev&at=1"},
 	}
@@ -201,6 +257,10 @@ func TestUnitListLabelsAndConsoleURL(t *testing.T) {
 		{
 			name: "public URL with a slash at the end", publicURL: "https://dustpan.example.com/",
 			wantPrefix: "https://dustpan.example.com",
+		},
+		{
+			name: "public URL with a path", publicURL: "https://dustpan.example.com/console/",
+			wantPrefix: "https://dustpan.example.com/console",
 		},
 	}
 
@@ -274,27 +334,18 @@ func checkLabels(t *testing.T, byID map[string]map[string]json.RawMessage) {
 	}
 }
 
-// TestUnitListPathsAnswerAlike checks that the path under /api/dustpan/v1 and
-// the older path answer the same document, and that an unknown namespace and
-// a bad namespace answer as the older path does.
-func TestUnitListPathsAnswerAlike(t *testing.T) {
+// TestUnitListNamespaceErrors checks that an unknown namespace answers 404 and
+// a namespace name that is not valid answers 400.
+func TestUnitListNamespaceErrors(t *testing.T) {
 	t.Parallel()
 
-	handler := newFilterHandler(t, selectiveAuthorizer{deny: nil}, "https://dustpan.example.com")
-
-	next := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units", "test-token")
-	older := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
-
-	if next.Code != http.StatusOK || older.Code != http.StatusOK || next.Body.String() != older.Body.String() {
-		t.Fatalf("answers differ:\n%d %s\n%d %s", next.Code, next.Body.String(), older.Code, older.Body.String())
-	}
+	handler := newFilterHandler(t, selectiveAuthorizer{deny: nil}, "")
 
 	for _, tc := range []struct {
 		target string
 		want   int
 	}{
 		{"/api/dustpan/v1/namespaces/nowhere/units", http.StatusNotFound},
-		{"/api/inventory/units?organization=nowhere", http.StatusNotFound},
 		{"/api/dustpan/v1/namespaces/Bad%20Name/units", http.StatusBadRequest},
 	} {
 		rec := httptest.NewRecorder()

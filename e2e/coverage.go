@@ -1508,7 +1508,7 @@ const deletedUnitCoveringTest = "TestCLIs (pulumiRestoreSteps, tofuRestoreSteps)
 func deletedUnitAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
-			Method: http.MethodGet, Path: "/api/inventory/deleted-units",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/deleted-units",
 			CoveringTest: deletedUnitCoveringTest,
 			Reason: "Console-only: no CLI lists deleted units. The harness " +
 				"steps list them after the CLI deletes a stack and a workspace.",
@@ -1567,7 +1567,7 @@ func auditReadAllowEntries() []AllowEntry {
 func consoleAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
-			Method: http.MethodGet, Path: "/api/inventory/units",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/units",
 			CoveringTest: "TestListUnitsBothTools",
 			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
 		},

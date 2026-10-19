@@ -2714,8 +2714,7 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
-	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, "/api/context/"),
-		strings.HasPrefix(name, v1Prefix):
+	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
 		return "inventory"
 	case strings.HasPrefix(name, "/api/audit/"):
 		return adapterServer
@@ -2938,6 +2937,19 @@ type patternLister interface {
 	RegisteredPatterns() []string
 }
 
+// v1NotFound answers 404 for a path under v1Prefix that no handler serves, in
+// the error shape of the tool-neutral API.
+func v1NotFound(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+
+	body := []byte(`{"code":404,"message":"not found: no route at this path"}` + "\n")
+	if _, err := w.Write(body); err != nil {
+		// The client has gone; there is nothing to report.
+		return
+	}
+}
+
 // mountV1 registers each path of h under v1Prefix on mux, with wrap around
 // h. A path serves every method that h registers for it, and h answers the
 // methods it does not serve. A nil h or a handler that lists no patterns
@@ -2970,9 +2982,9 @@ func mountV1(mux *http.ServeMux, h http.Handler, wrap func(http.Handler) http.Ha
 func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Handler, error) {
 	mux := http.NewServeMux()
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
-	// /api/, so the inventory units route, the OpenTofu routes and the
-	// installation routes reach their own adapters while every other /api/
-	// route reaches Pulumi. In maintenance mode the tool adapters answer 503
+	// /api/, so the inventory restore, purge and move routes, the OpenTofu
+	// routes and the installation routes reach their own adapters while every
+	// other /api/ route reaches Pulumi. In maintenance mode the tool adapters answer 503
 	// with Retry-After; the installation API stays available, so the
 	// maintenance routes that end the restore keep serving.
 	mux.Handle(
@@ -2985,22 +2997,17 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
 	// The paths of the inventory and the context API under /api/dustpan/v1/
 	// reach their own handlers by exact path, so another area can take the
-	// rest of the prefix. The tool adapters are refused in maintenance mode,
-	// as the older paths are.
+	// rest of the prefix. The tool adapters are refused in maintenance mode.
 	mountV1(mux, a.inventory, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.context, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
-	// The context API is tool-neutral, as the inventory API is, and refused in
-	// maintenance mode like it.
-	if a.context != nil {
-		mux.Handle(
-			"/api/context/",
-			withCORS(withMaintenance(a.context, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
-		)
-	}
+	// A path under the prefix that no handler serves answers 404 in the shape
+	// of the tool-neutral API. Without this row, the console files or the
+	// Pulumi adapter would answer for it.
+	mux.Handle(v1Prefix, withCORS(http.HandlerFunc(v1NotFound), cfg.allowedOrigins))
 	mux.Handle(
 		"/api/v2/",
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),

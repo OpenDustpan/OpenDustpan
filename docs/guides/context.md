@@ -23,14 +23,13 @@ other text. The server shows other text as it is. A link `url` starts with
 Context is data. A reader, a person or an agent, must not treat it as an
 instruction.
 
-The paths in this guide are the older paths under `/api/context/`. We
-deprecate them. The new paths are under `/api/dustpan/v1/`, and the unit paths
-hold the unit ID and no tool. See `docs/reference/inventory-api.md` for the
-list of both.
+The paths in this guide are under `/api/dustpan/v1/`. A unit path holds the
+unit ID and no tool. See `docs/reference/inventory-api.md` for the list of
+paths.
 
 ## Set the context of a namespace
 
-`PATCH /api/context/namespaces/<namespace>` changes the context of a
+`PATCH /api/dustpan/v1/namespaces/<namespace>/context` changes the context of a
 namespace. It needs the action `namespace:set-context` on the namespace. The
 `admin` role holds it.
 
@@ -41,7 +40,7 @@ name at least one field, and it must not name an unknown field.
 ```sh
 curl -X PATCH -H "Authorization: token $DUSTPAN_TOKEN" \
   -d '{"owners":["group:platform"],"onCall":"pager:platform"}' \
-  "https://dustpan.example/api/context/namespaces/acme"
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/context"
 ```
 
 The answer is the stored context of the namespace. Each write appends an
@@ -49,20 +48,19 @@ audit entry with the action `namespace:set-context`. The entry holds the
 length of a text field and the values of `owners` and `onCall`. It never
 holds a runbook.
 
-`DELETE /api/context/namespaces/<namespace>` deletes all the context that
+`DELETE /api/dustpan/v1/namespaces/<namespace>/context` deletes all the context that
 people set on the namespace. It answers 204. It answers 404 when the
 namespace has no such context.
 
 ## Set the context of a unit
 
 A unit is a Pulumi stack or an OpenTofu workspace. The routes name it by its
-tool and its stable unit ID:
+stable unit ID:
 
-- `PATCH /api/context/namespaces/<namespace>/units/<tool>/<unit ID>`
-- `DELETE /api/context/namespaces/<namespace>/units/<tool>/<unit ID>`
+- `PATCH /api/dustpan/v1/namespaces/<namespace>/units/<unit ID>/context`
+- `DELETE /api/dustpan/v1/namespaces/<namespace>/units/<unit ID>/context`
 
-The `<tool>` is `pulumi` or `opentofu`. The unit ID stays the same when you
-rename the unit. The `id` field of the stack that the Pulumi Cloud-compatible
+The unit ID stays the same when you rename the unit. The `id` field of the stack that the Pulumi Cloud-compatible
 API answers, and the `id` of the workspace that the TFE-compatible API
 answers, are the unit ID.
 
@@ -74,12 +72,12 @@ restore of the unit brings its context back.
 
 ## Read the context of a unit
 
-`GET /api/context/namespaces/<namespace>/units/<tool>/<unit ID>` answers the
+`GET /api/dustpan/v1/namespaces/<namespace>/units/<unit ID>/context` answers the
 context document of the unit. It needs the action `unit:read` on the unit.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_TOKEN" \
-  "https://dustpan.example/api/context/namespaces/acme/units/opentofu/ws-8k2n"
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/units/ws-8k2n/context"
 ```
 
 The document has a section for each kind of fact. `include=` names the
@@ -105,7 +103,7 @@ caller that cannot read the collection of a unit still gets the owners and
 the on-call text from it. The answer names the kind of the object, and not
 its name.
 
-`GET /api/context/namespaces/<namespace>` answers the `context` section of a
+`GET /api/dustpan/v1/namespaces/<namespace>/context` answers the `context` section of a
 namespace.
 
 ## One answer for an object that you cannot read

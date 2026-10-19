@@ -169,6 +169,7 @@ func purgeStackRows(ctx context.Context, q *db.Queries, ns namespace.Name, id st
 		{del: q.DeleteJournalOfStack, name: "journal"},
 		{del: q.DeleteUpdatesOfStack, name: "updates"},
 		{del: q.DeleteStackTags, name: "tags"},
+		{del: q.DeleteInventoryLabels, name: "labels"},
 		{del: q.DeleteSecretKeysOfStack, name: "data key"},
 	}
 
