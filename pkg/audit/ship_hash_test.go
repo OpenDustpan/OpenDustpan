@@ -111,6 +111,7 @@ func hashEntryWithRealHash(subject, object, userAgent, requestID string) audit.E
 		Hash:         "",
 		Sequence:     7,
 		FenceVersion: 1,
+		Reason:       "",
 	}
 
 	e.Hash = audit.ComputeHash(e, e.PrevHash)
@@ -240,6 +241,7 @@ func checkShippedHash(t *testing.T, body []byte) {
 		Hash:         hash,
 		Sequence:     sequence,
 		FenceVersion: fence,
+		Reason:       "",
 	}
 
 	if got := audit.ComputeStoredHash(rebuilt, prevHash, changesText); got != hash {

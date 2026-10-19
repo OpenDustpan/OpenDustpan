@@ -135,6 +135,7 @@ func entry(object string) audit.Entry {
 		PrevHash:     "",
 		Hash:         "",
 		Sequence:     0,
+		Reason:       "",
 	}
 }
 

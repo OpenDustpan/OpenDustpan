@@ -53,5 +53,6 @@ func SettingsEntry(channel audit.Channel, instanceID string, at time.Time, chang
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }

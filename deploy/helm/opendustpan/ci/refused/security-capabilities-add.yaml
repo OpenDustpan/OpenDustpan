@@ -1,4 +1,5 @@
 # Refused: capabilities other than drop ALL.
+# want: at '/containerSecurityContext/capabilities': additional properties 'add' not allowed
 database:
   existingSecret:
     name: opendustpan-database

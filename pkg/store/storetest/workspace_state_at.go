@@ -331,7 +331,14 @@ func testWorkspaceStateAtFenceTie(t *testing.T, s WorkspaceStateAtStore) {
 	fence := newFenceVersion(t, w.locked, 2, tie)
 	stageFence(t, s, w.ns, fence)
 
-	err := s.FenceAndUnlock(t.Context(), releasedWorkspace(w.locked, tie), fence, v1.ID, w.ns.Fence())
+	err := s.FenceAndUnlock(
+		t.Context(),
+		releasedWorkspace(w.locked, tie),
+		fence,
+		v1.ID,
+		w.ns.Fence(),
+		releaseEntry(w.ns.Name),
+	)
 	if err != nil {
 		t.Fatalf("fence and unlock: %v", err)
 	}

@@ -11,6 +11,7 @@ const (
 	portColCreatedBy    = "created_by"
 	portColNamespace    = "namespace"
 	portColNamespaceID  = "namespace_id"
+	portColReason       = "reason"
 	portTableNamespaces = "namespaces"
 	portColVersion      = "version"
 	portColStackID      = "stack_id"
@@ -178,7 +179,7 @@ func portableSpec() []PortableTable {
 				{Name: portColArrival, Kind: KindInteger},
 				{Name: "sequence_ids", Kind: KindText},
 				{Name: "status", Kind: KindInteger},
-				{Name: "reason", Kind: KindText},
+				{Name: portColReason, Kind: KindText},
 			},
 		},
 		{
@@ -406,6 +407,7 @@ func portableSpec() []PortableTable {
 				{Name: "changes", Kind: KindText},
 				{Name: "object_id", Kind: KindText},
 				{Name: "fence_version", Kind: KindInteger},
+				{Name: portColReason, Kind: KindText},
 			},
 		},
 		{
@@ -465,7 +467,7 @@ func portableSpec() []PortableTable {
 				{Name: portColExpiresAtMs, Kind: KindTime},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColCreatedBy, Kind: KindText},
-				{Name: "reason", Kind: KindText},
+				{Name: portColReason, Kind: KindText},
 				{Name: "ended_at_ms", Kind: KindTime},
 			},
 		},

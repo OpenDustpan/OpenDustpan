@@ -1,0 +1,83 @@
+{{- if .Values.backup.schedule.enabled }}
+{{- with .Values.backup.schedule }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "opendustpan.backupServiceAccountName" $ }}
+  labels:
+    {{- include "opendustpan.backupLabels" $ | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "opendustpan.fullname" $ }}-backup
+  labels:
+    {{- include "opendustpan.backupLabels" $ | nindent 4 }}
+spec:
+  schedule: {{ .cron | quote }}
+  timeZone: {{ .timeZone | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "opendustpan.backupSelectorLabels" $ | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "opendustpan.backupServiceAccountName" $ }}
+          automountServiceAccountToken: false
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: backup
+              image: {{ include "opendustpan.image" $ | quote }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              args:
+                - backup
+                - {{ printf "--server=%s://%s.%s.svc:%v" (lower (include "opendustpan.scheme" $)) (include "opendustpan.fullname" $) $.Release.Namespace (include "opendustpan.servicePort" $) | quote }}
+                {{- if .caSecret.name }}
+                - {{ printf "--ca-file=/ca/%s" .caSecret.key | quote }}
+                {{- end }}
+              env:
+                - name: DUSTPAN_ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .tokenSecret.name | quote }}
+                      key: {{ .tokenSecret.key | quote }}
+              resources:
+                {{- toYaml .resources | nindent 16 }}
+              securityContext:
+                {{- toYaml $.Values.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                {{- if .caSecret.name }}
+                - name: ca
+                  mountPath: /ca
+                  readOnly: true
+                {{- end }}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            {{- if .caSecret.name }}
+            - name: ca
+              secret:
+                secretName: {{ .caSecret.name | quote }}
+                items:
+                  - key: {{ .caSecret.key | quote }}
+                    path: {{ .caSecret.key | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,4 +1,5 @@
 # Refused: a secretKeyRef with no key.
+# want: at '/server/extraEnv/0/valueFrom/secretKeyRef': missing property 'key'
 database:
   existingSecret:
     name: opendustpan-database

@@ -44,6 +44,7 @@ const (
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
+	pgColReason      = "reason"
 	pgColSeq         = "seq"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
@@ -166,7 +167,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "update_journal_refusals",
 			columns: []string{
-				pgColStackID, pgColUpdateID, pgColArrival, "sequence_ids", "status", "reason",
+				pgColStackID, pgColUpdateID, pgColArrival, "sequence_ids", "status", pgColReason,
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
 		},
@@ -307,7 +308,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id", "fence_version",
+				"changes", "object_id", "fence_version", pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
@@ -461,7 +462,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 		{
 			table: backup.TableTempAdmins,
 			columns: []string{
-				pgColPrincipalID, pgColSubject, pgColExpiresAtMs, pgColCreatedAtMs, pgColCreatedBy, "reason",
+				pgColPrincipalID, pgColSubject, pgColExpiresAtMs, pgColCreatedAtMs, pgColCreatedBy, pgColReason,
 				"ended_at_ms",
 			},
 			orderBy: []string{pgColPrincipalID},

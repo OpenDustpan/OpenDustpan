@@ -67,6 +67,7 @@ type AuditEntry struct {
 	Changes      sql.NullString
 	ObjectID     string
 	FenceVersion int64
+	Reason       string
 }
 
 type AuditSinkCursor struct {

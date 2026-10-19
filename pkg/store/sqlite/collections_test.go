@@ -91,6 +91,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 			Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 			Changes: nil, ObjectID: "",
 			FenceVersion: 0,
+			Reason:       "",
 		}
 	}
 

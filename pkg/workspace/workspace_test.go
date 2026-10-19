@@ -55,6 +55,8 @@ type memStore struct {
 	// failFinalize makes the next finalize report err without writing, as a
 	// store failure with an unknown outcome would.
 	failFinalize error
+	// released holds the audit entry of each release, in the order written.
+	released []audit.Entry
 }
 
 type memInventoryKey struct {
@@ -78,6 +80,7 @@ func newMemStore() *memStore {
 		mu:           sync.Mutex{},
 		lostAck:      false,
 		failFinalize: nil,
+		released:     nil,
 	}
 }
 
@@ -551,9 +554,11 @@ func (m *memStore) GetStateVersion(_ context.Context, id workspace.StateVersionI
 // FenceAndUnlock implements workspace.StateStore: it releases the lock of w
 // and makes the fence version current, checking the same guards as the
 // adapters: the fence, a held lock and the revision.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (m *memStore) FenceAndUnlock(
 	_ context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	expect workspace.StateVersionID, fence namespace.Fence,
+	expect workspace.StateVersionID, fence namespace.Fence, e audit.Entry,
 ) error {
 	// The hook runs before the store takes its lock, so a test can land a
 	// write between the caller's read and this fence, as a concurrent
@@ -570,6 +575,10 @@ func (m *memStore) FenceAndUnlock(
 	}
 
 	if err := checkMemFence(m, w, sv, expect); err != nil {
+		return err
+	}
+
+	if err := m.keepReleaseEntry(fence, e); err != nil {
 		return err
 	}
 
@@ -1437,6 +1446,7 @@ func retentionEntry() audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
@@ -1528,7 +1538,7 @@ func TestLocking(t *testing.T) {
 		t.Errorf("unlock by another: %v, want ErrLockedByOther", err)
 	}
 
-	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Errorf("force unlock: %v", err)
 	}
 
@@ -1648,7 +1658,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 		t.Fatalf("forced begin: %v", err)
 	}
 
-	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -1783,7 +1793,7 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		t.Fatalf("begin v5: %v", err)
 	}
 
-	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -1832,7 +1842,7 @@ func TestUploadNeedsTheSameLockAcquisition(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil, forceEntry()); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -4000,8 +4010,11 @@ func (f fencedStates) CreateStateVersion(
 }
 
 // FinalizeStateVersion rejects the write with namespace.ErrFenced.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (f fencedStates) FenceAndUnlock(
 	_ context.Context, _ workspace.Workspace, _ workspace.StateVersion, _ workspace.StateVersionID, _ namespace.Fence,
+	_ audit.Entry,
 ) error {
 	return namespace.ErrFenced
 }
@@ -4894,7 +4907,9 @@ func readSealedBlobBytes(t *testing.T, f fixture, sv workspace.StateVersion) ([]
 
 // ReleaseUnfenced refuses the save unless the forced-write switches of the
 // namespace and of the unit are on (ADR 44, decisions 4 and 6).
-func (m *memStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (m *memStore) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
 	m.mu.Lock()
 	ns, nsOK := m.namespaces[w.Ref.Namespace]
 	stored, ok := m.workspaces[w.ID]
@@ -4909,7 +4924,55 @@ func (m *memStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, f
 		return fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
 	}
 
-	return m.SaveWorkspace(ctx, w, fence)
+	return m.SaveReleased(ctx, w, fence, e)
+}
+
+// SaveReleased saves a released unit like SaveWorkspace and keeps the audit
+// entry of the release, as the adapters append it in the same transaction.
+func (m *memStore) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
+) error {
+	m.mu.Lock()
+	err := m.keepReleaseEntry(fence, e)
+	m.mu.Unlock()
+
+	if err != nil {
+		return err
+	}
+
+	if err := m.SaveWorkspace(ctx, w, fence); err != nil {
+		m.mu.Lock()
+		m.released = m.released[:len(m.released)-1]
+		m.mu.Unlock()
+
+		return err
+	}
+
+	return nil
+}
+
+// keepReleaseEntry validates the audit entry of a release like the adapters
+// and keeps it. The caller holds mu.
+func (m *memStore) keepReleaseEntry(fence namespace.Fence, e audit.Entry) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
+	m.released = append(m.released, e)
+
+	return nil
+}
+
+// releaseEntries returns the audit entries of the releases written so far.
+func (m *memStore) releaseEntries() []audit.Entry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return slices.Clone(m.released)
 }
 
 // checkFence rejects a write to an unknown namespace or a stale failover

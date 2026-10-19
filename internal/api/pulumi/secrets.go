@@ -450,6 +450,7 @@ func (h *Handler) newAuditEntry(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

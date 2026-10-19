@@ -142,7 +142,8 @@ func isProtected(key string) bool {
 		"valueCount",
 		"objectID",
 		"changes",
-		"fenceVersion":
+		"fenceVersion",
+		"reason":
 		return true
 	default:
 		return false

@@ -114,6 +114,7 @@ func entry(scope namespace.Name, action string) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

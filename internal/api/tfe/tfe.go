@@ -92,10 +92,13 @@ type WorkspaceLocker interface {
 	Lock(ctx context.Context, id workspace.ID, holder, reason string) (workspace.Workspace, error)
 	// Unlock releases holder's lock.
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
-	// ForceUnlock releases the lock whoever holds it. The bool result reports
+	// ForceUnlockLock releases the lock whoever holds it, when it matches
+	// expect (see workspace.Service.ForceUnlockLock). The bool result reports
 	// an unfenced release under the forced-write override (ADR 44, decision 4).
-	ForceUnlock(
-		ctx context.Context, id workspace.ID, by string, allow namespace.Overrides, record func() error,
+	// entry holds the request fields of the audit entry of the release.
+	ForceUnlockLock(
+		ctx context.Context, id workspace.ID, expect workspace.Lock, by string, allow namespace.Overrides,
+		record func() error, entry audit.Entry,
 	) (workspace.Workspace, bool, error)
 }
 
@@ -322,7 +325,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	header.Set("Content-Type", jsonAPIMediaType)
 	w.WriteHeader(http.StatusNotFound)
 
-	doc := jsonAPIDocument{Errors: []jsonAPIError{{Status: "404", Title: notFoundTitle, Detail: notFoundTitle}}}
+	doc := jsonAPIDocument{
+		Errors: []jsonAPIError{{Status: "404", Code: "", Title: notFoundTitle, Detail: notFoundTitle}},
+	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
 		h.logger.WarnContext(r.Context(), "write response failed", slog.String("error", err.Error()))

@@ -1,0 +1,16 @@
+OpenDustpan {{ .Chart.AppVersion }} is installed as {{ include "opendustpan.fullname" . }}.
+
+Check the server:
+  kubectl --namespace {{ .Release.Namespace }} rollout status deployment/{{ include "opendustpan.fullname" . }}
+
+Reach it from your computer:
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "opendustpan.fullname" . }} 8080:{{ include "opendustpan.servicePort" . }}
+{{- if eq .Values.backup.target.type "none" }}
+
+This release has no backup target. `opendustpan doctor` warns about it.
+Set backup.target.type to dir or s3.
+{{- end }}
+{{- if not .Values.image.digest }}
+
+Set image.digest for a production install.
+{{- end }}

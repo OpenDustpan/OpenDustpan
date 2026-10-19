@@ -279,6 +279,7 @@ func seedEntry(t *testing.T, store *memAuditStore, ns namespace.Name, subject st
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	})
 	if err != nil {
 		t.Fatalf("seed audit entry: %v", err)

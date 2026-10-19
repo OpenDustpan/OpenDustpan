@@ -1,4 +1,5 @@
 # Refused: a privileged container.
+# want: at '/containerSecurityContext/privileged': value must be false
 database:
   existingSecret:
     name: opendustpan-database

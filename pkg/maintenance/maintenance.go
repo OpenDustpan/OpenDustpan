@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -38,6 +39,10 @@ const (
 // maintenanceSubject names the principal of a force-unlock that maintenance
 // mode makes, so the fence version of each released workspace says where it came from.
 const maintenanceSubject = "maintenance"
+
+// maintenanceReason is the reason in the audit entry of a force-unlock that
+// maintenance mode makes.
+const maintenanceReason = "maintenance mode started"
 
 // DefaultCacheLimit bounds how long a Watcher trusts its read of the
 // installation state. It is short on purpose: the restore apply step of a
@@ -576,7 +581,35 @@ func (s *Service) cancelOne(ctx context.Context, u activeUnit) (string, bool, er
 	// Maintenance holds no override: a client-encrypted state keeps its lock.
 	none := namespace.Overrides{Forced: false, Unlocked: false}
 
-	if _, _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject, none, nil); err != nil {
+	entry := audit.Entry{
+		At:         time.Time{},
+		Namespace:  "",
+		Subject:    "",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     string(identity.ActionUnitWriteForced),
+		Object:     u.reference,
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		Changes:    nil,
+		SourceIP:   "",
+		UserAgent:  "",
+		// ChannelAPI: the request that enters maintenance mode is an API request,
+		// and no channel names the installation as the actor.
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
+		Reason:       maintenanceReason,
+	}
+
+	if _, _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject, none, nil, entry); err != nil {
 		// A client-encrypted state cannot be fenced, so its lock stays. The
 		// enter goes on and does not report the unit as released.
 		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrNotLocked) ||

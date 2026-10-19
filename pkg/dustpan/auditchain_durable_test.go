@@ -325,6 +325,7 @@ func appendPostgresEntry(t *testing.T, st *postgres.Store, ns namespace.Namespac
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	})
 	if err != nil {
 		t.Fatalf("append audit entry: %v", err)

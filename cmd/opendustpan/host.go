@@ -134,6 +134,7 @@ func hostEntry(action string) audit.Entry {
 		PrevHash:     "",
 		Hash:         "",
 		Sequence:     0,
+		Reason:       "",
 	}
 }
 

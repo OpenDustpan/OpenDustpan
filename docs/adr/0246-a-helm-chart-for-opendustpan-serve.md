@@ -1,6 +1,6 @@
 # 246. A Helm chart for `opendustpan serve` with an external PostgreSQL
 
-Status: accepted · 2026-10-19. Decides the Helm chart part of RFC 35. Decides the Helm chart item of ADR 27 decision 8
+Status: accepted · 2026-10-19. Decides the Helm chart part of RFC 35. Decides the Helm chart item of ADR 27 decision 8. Correction 2026-10-19: the metrics path is GET /api/server/metrics.
 
 ## Context
 

@@ -57,7 +57,8 @@ func lockForFence(t *testing.T, f sealFixture) {
 func fenceSealed(t *testing.T, f sealFixture) {
 	t.Helper()
 
-	if _, _, fenceErr := f.sealed.ForceUnlock(t.Context(), f.ws.ID, "admin", noOverrides(), nil); fenceErr != nil {
+	_, _, fenceErr := f.sealed.ForceUnlock(t.Context(), f.ws.ID, "admin", noOverrides(), nil, forceEntry())
+	if fenceErr != nil {
 		t.Fatalf("force unlock: %v", fenceErr)
 	}
 }

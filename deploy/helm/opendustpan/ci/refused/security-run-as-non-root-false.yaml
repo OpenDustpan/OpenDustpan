@@ -1,4 +1,5 @@
 # Refused: runAsNonRoot false.
+# want: at '/containerSecurityContext/runAsNonRoot': value must be true
 database:
   existingSecret:
     name: opendustpan-database

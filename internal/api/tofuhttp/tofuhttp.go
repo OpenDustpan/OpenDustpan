@@ -54,7 +54,7 @@ type WorkspaceService interface {
 	// unfenced release.
 	ForceUnlockLock(
 		ctx context.Context, id workspace.ID, expect workspace.Lock, by string,
-		allow namespace.Overrides, record func() error,
+		allow namespace.Overrides, record func() error, entry audit.Entry,
 	) (workspace.Workspace, bool, error)
 	// Current returns the workspace's current state version, or
 	// workspace.ErrNoState.
