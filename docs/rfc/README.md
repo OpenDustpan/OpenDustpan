@@ -128,4 +128,5 @@ both together.
 | [77](0077-open-points-of-the-gate-model.md) | Open points of the gate model | accepted (ADRs 222 to 230) |
 | [78](0078-localization-open-questions.md) | Localization open questions: translated docs, the translation machine, the server formatter and the edges | discussing; translated docs, the translation agent, the formatter, the product name in chat, `resolvedLanguage` and reports of one string accepted (ADRs 232, 234 and 235) |
 | [79](0079-opt-in-federation-routing-and-geo-replication.md) | Opt-in federation of installations, routing and geo-replication | draft |
+| [80](0080-console-sessions-on-the-tfe-compatible-api.md) | Console sessions on the TFE-compatible API, and fresh authentication for force-unlock and the state download | draft |
 | [82](0082-a-namespace-in-the-blueprint-scope-key.md) | A namespace in the scope key of a blueprint version | discussing |
