@@ -1,0 +1,232 @@
+---
+# Source: opendustpan/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: release-opendustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opendustpan
+      app.kubernetes.io/instance: release
+      app.kubernetes.io/component: server
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - ipBlock:
+            cidr: ::/0
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 443
+---
+# Source: opendustpan/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-opendustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+automountServiceAccountToken: false
+---
+# Source: opendustpan/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: release-opendustpan-blobs
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Source: opendustpan/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-opendustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+# Source: opendustpan/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-opendustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opendustpan
+      app.kubernetes.io/instance: release
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opendustpan
+        app.kubernetes.io/instance: release
+        app.kubernetes.io/component: server
+      annotations:
+    spec:
+      serviceAccountName: release-opendustpan
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: "ghcr.io/opendustpan/opendustpan:0.1.0"
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - --log-level=info
+            - --log-format=json
+            - --console-dir=/console
+            - --blob-dir=/data/blobs
+          env:
+            - name: DUSTPAN_LISTEN
+              value: ":8080"
+            - name: DUSTPAN_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: opendustpan-database
+                  key: database-url
+            - name: DUSTPAN_KEY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: opendustpan-key-encryption-key
+                  key: key-encryption-key
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: HTTP
+            failureThreshold: 60
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: blobs
+              mountPath: /data/blobs
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: release-opendustpan-blobs

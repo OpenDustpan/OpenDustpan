@@ -1,0 +1,66 @@
+{{- if .Values.backup.schedule.enabled }}
+{{- with .Values.backup.schedule }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "opendustpan.backupServiceAccountName" $ }}
+  labels:
+    {{- include "opendustpan.backupLabels" $ | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "opendustpan.fullname" $ }}-backup
+  labels:
+    {{- include "opendustpan.backupLabels" $ | nindent 4 }}
+spec:
+  schedule: {{ .cron | quote }}
+  timeZone: {{ .timeZone | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "opendustpan.backupSelectorLabels" $ | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "opendustpan.backupServiceAccountName" $ }}
+          automountServiceAccountToken: false
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: backup
+              image: {{ include "opendustpan.image" $ | quote }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              args:
+                - backup
+                - --server={{ lower (include "opendustpan.scheme" $) }}://{{ include "opendustpan.fullname" $ }}.{{ $.Release.Namespace }}.svc:{{ include "opendustpan.servicePort" $ }}
+              env:
+                - name: DUSTPAN_ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .tokenSecret.name }}
+                      key: {{ .tokenSecret.key }}
+              resources:
+                {{- toYaml $.Values.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml $.Values.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{{- end }}
+{{- end }}
