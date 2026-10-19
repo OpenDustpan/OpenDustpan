@@ -100,16 +100,25 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 			Admin:                  true,
 			TokenID:                "",
 			TokenExpiresAt:         time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		},
 		deletedViewerToken: {
 			TemporaryAdministrator: false,
 			TemporaryExpiresAt:     time.Time{},
 			Subject:                "nina", DisplayName: "nina", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		},
 		deletedReaderToken: {
 			TemporaryAdministrator: false,
 			TemporaryExpiresAt:     time.Time{},
 			Subject:                "rita", DisplayName: "rita", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			Kind:       "",
+			Credential: "",
+			JobID:      "",
 		},
 	}}
 

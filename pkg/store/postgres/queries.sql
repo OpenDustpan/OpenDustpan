@@ -915,7 +915,7 @@ ORDER BY content_key;
 -- checkpoints. A missing entry matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence = $2;
 
@@ -924,7 +924,7 @@ WHERE namespace = $1 AND sequence = $2;
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -934,15 +934,15 @@ LIMIT 1;
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
     at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-    fence_version, reason
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23);
+    fence_version, reason, principal_kind, job_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -960,7 +960,7 @@ WHERE namespace = $1;
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC

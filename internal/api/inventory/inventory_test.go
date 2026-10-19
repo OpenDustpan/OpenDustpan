@@ -144,6 +144,9 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
+		Kind:           "",
+		Credential:     "",
+		JobID:          "",
 	}, nil
 }
 

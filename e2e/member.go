@@ -33,6 +33,9 @@ func (m memberTokens) AuthenticateToken(ctx context.Context, token string) (iden
 			TokenExpiresAt:         time.Time{},
 			TemporaryAdministrator: false,
 			TemporaryExpiresAt:     time.Time{},
+			Kind:                   "",
+			Credential:             "",
+			JobID:                  "",
 		}, nil
 	}
 

@@ -850,7 +850,7 @@ SET failover_version = failover_version + 1;
 -- checkpoints. A missing entry matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence = ?;
 
@@ -859,7 +859,7 @@ WHERE namespace = ? AND sequence = ?;
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -869,15 +869,15 @@ LIMIT 1;
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
     at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-    fence_version, reason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    fence_version, reason, principal_kind, job_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -895,7 +895,7 @@ WHERE namespace = ?;
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
-       fence_version, reason
+       fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC

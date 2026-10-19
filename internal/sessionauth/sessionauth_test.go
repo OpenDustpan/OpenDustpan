@@ -218,6 +218,10 @@ func checkAlice(t *testing.T, err error, p identity.Principal, caller sessionaut
 		t.Fatalf("principal = %+v, want corp:alice with no admin and no token", p)
 	}
 
+	if p.Kind != identity.KindPerson || p.Credential != identity.CredentialSession || !p.ActsAsPerson() {
+		t.Fatalf("kind, credential = %q, %q; want person, session", p.Kind, p.Credential)
+	}
+
 	if caller.Match.Session.ID != "ses-1" || caller.Secret.Reveal() != secret.Reveal() {
 		t.Fatalf("caller = session %q, want ses-1 with the cookie secret", caller.Match.Session.ID)
 	}

@@ -333,7 +333,7 @@ func gateEntry(ns namespace.Name, action string) audit.Entry {
 		At: gateTime(), Namespace: ns, Subject: "admin", IDPSubject: "", TokenID: "", Action: action,
 		Object: ns.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
 		Reason: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
-		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
 	}
 }
 
