@@ -445,6 +445,24 @@ func refusalCases(aliceID, groupID string) []refusalCase {
 			},
 		},
 		{
+			name: "reserved dev person",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"dev:admin","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "reserved dev prefix, upper case",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"DEV:someone","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
 			name: "two objects",
 			call: apiCall{
 				method: http.MethodPost,

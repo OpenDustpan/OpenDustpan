@@ -1,7 +1,9 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,10 +15,13 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -36,6 +41,8 @@ type devEnv struct {
 	clock   *envClock
 	// code is the text of the one-time code, empty when the handler has none.
 	code string
+	// rebuild makes a handler over the same store, with the parts changed.
+	rebuild func(devParts) *apiserver.Handler
 }
 
 // devEnvOptions are the options of newDevEnv. noCode gives the handler no
@@ -48,6 +55,8 @@ type devEnvOptions struct {
 	// sign-in no bootstrap administrator.
 	noAccess bool
 	noAdmin  bool
+	// grantFails makes each write of a grant fail.
+	grantFails bool
 }
 
 // bootstrapAdmin is the bootstrap administrator that the dev sign-in grants
@@ -63,10 +72,129 @@ var noBootstrapAdmin = identity.Principal{ //nolint:gochecknoglobals // A frozen
 	Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
 }
 
-func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
+// devParts are the parts of a handler that rebuild changes: a test builds a
+// second handler over the same store, as a restart with other settings does.
+type devParts struct {
+	kind installation.Kind
+	// code replaces the one-time code of the handler. Nil keeps the code of
+	// the environment.
+	code *devcode.Code
+	// noAccess, noAdmin and grantFails: see devEnvOptions. grantFails makes
+	// the store of the access service fail each write of a grant.
+	noAccess   bool
+	noAdmin    bool
+	grantFails bool
+	noCode     bool
+}
+
+// errGrantStore is the error of failingGrants.
+var errGrantStore = errors.New("grant store failed")
+
+// failingGrants is an access store that fails each write of a grant.
+type failingGrants struct {
+	access.Store
+}
+
+func (failingGrants) CreateGrant(context.Context, access.Grant, namespace.Fence, audit.Entry, access.GrantCheck) error {
+	return errGrantStore
+}
+
+// devDeps are the services that every handler of a devEnv shares.
+type devDeps struct {
+	st         *sqlite.Store
+	namespaces *namespace.Service
+	policies   *session.Policies
+	sessions   *session.Sessions
+	grants     *access.Service
+	principals *principal.Service
+	tokens     *accesstoken.Service
+	authz      identity.Authorizer
+	limiter    *fakeLimiter
+	code       *devcode.Code
+}
+
+// accessFor returns the access service that parts asks for.
+func (d devDeps) accessFor(t *testing.T, parts devParts) *access.Service {
 	t.Helper()
 
-	clock := &envClock{mu: sync.Mutex{}, now: time.Now().UTC().Truncate(time.Second)}
+	switch {
+	case parts.noAccess:
+		return nil
+	case parts.grantFails:
+		svc, err := access.NewService(access.ServiceConfig{
+			Store: failingGrants{Store: d.st}, Directory: d.st, Namespaces: d.st, Authorizer: d.grants.Authorizer(),
+			Now: nil, NewID: nil, BootstrapAdmins: nil,
+		})
+		if err != nil {
+			t.Fatalf("failing access service: %v", err)
+		}
+
+		return svc
+	default:
+		return d.grants
+	}
+}
+
+// handler builds a handler over the services with the parts.
+func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
+	t.Helper()
+
+	devAdmin := bootstrapAdmin
+	if parts.noAdmin {
+		devAdmin = noBootstrapAdmin
+	}
+
+	handlerCode := d.code
+	if parts.code != nil {
+		handlerCode = parts.code
+	}
+
+	if parts.noCode {
+		handlerCode = nil
+	}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       d.authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       d.namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           d.st,
+		Journal:          d.st,
+		Principals:       d.principals,
+		Access:           d.accessFor(t, parts),
+		Tokens:           d.tokens,
+		Audit:            d.st,
+		IPAllowlists:     nil,
+		SessionPolicy:    d.policies,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     stubSweeper{},
+		TempAdmins:       nil,
+		Now:              nil,
+		AuditSinks:       nil,
+		SignIn: &apiserver.SignIn{
+			Sessions: d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
+			Providers: nil, DevCode: handlerCode, DevAdmin: devAdmin,
+		},
+		InstallationKind: parts.kind,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// newDevDeps builds the services of a devEnv over a new store.
+func newDevDeps(t *testing.T, clock *envClock, code *devcode.Code, authz identity.Authorizer) devDeps {
+	t.Helper()
+
 	st := openRouteTestStore(t)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
@@ -91,10 +219,26 @@ func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
 	}
 
 	grants := seedRouteAccess(t, st)
+	if authz == nil {
+		authz = grants.Authorizer()
+	}
+
+	return devDeps{
+		st: st, namespaces: namespaces, policies: policies, sessions: sessions, grants: grants,
+		principals: seedRoutePrincipals(t, st), tokens: seedRouteTokens(t, st), authz: authz,
+		limiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}, code: code,
+	}
+}
+
+func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
+	t.Helper()
+
+	clock := &envClock{mu: sync.Mutex{}, now: time.Now().UTC().Truncate(time.Second)}
 
 	var (
 		code *devcode.Code
 		text string
+		err  error
 	)
 
 	if !opts.noCode {
@@ -103,59 +247,17 @@ func newDevEnv(t *testing.T, opts devEnvOptions) devEnv {
 		}
 	}
 
-	authz := opts.authz
-	if authz == nil {
-		authz = grants.Authorizer()
-	}
+	deps := newDevDeps(t, clock, code, opts.authz)
 
-	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
-
-	var svc *access.Service
-	if !opts.noAccess {
-		svc = grants
-	}
-
-	devAdmin := bootstrapAdmin
-	if opts.noAdmin {
-		devAdmin = noBootstrapAdmin
-	}
-
-	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       authz,
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           st,
-		Journal:          st,
-		Principals:       seedRoutePrincipals(t, st),
-		Access:           svc,
-		Tokens:           seedRouteTokens(t, st),
-		Audit:            st,
-		IPAllowlists:     nil,
-		SessionPolicy:    policies,
-		CheckpointEpochs: nil,
-		OnAuditFailure:   nil,
-		AuditChain:       nil,
-		DeletedUnits:     stubSweeper{},
-		TempAdmins:       nil,
-		Now:              nil,
-		AuditSinks:       nil,
-		SignIn: &apiserver.SignIn{
-			Sessions: sessions, Limiter: limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
-			Providers: nil, DevCode: code, DevAdmin: devAdmin,
-		},
-		InstallationKind: opts.kind,
+	handler := deps.handler(t, devParts{
+		kind: opts.kind, code: nil, noAccess: opts.noAccess, noAdmin: opts.noAdmin, grantFails: opts.grantFails,
+		noCode: opts.noCode,
 	})
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
 
-	return devEnv{handler: handler, store: st, access: grants, limiter: limiter, clock: clock, code: text}
+	return devEnv{
+		handler: handler, store: deps.st, access: deps.grants, limiter: deps.limiter, clock: clock, code: text,
+		rebuild: func(parts devParts) *apiserver.Handler { return deps.handler(t, parts) },
+	}
 }
 
 // post sends a POST request with body to the dev sign-in.
@@ -224,7 +326,14 @@ func TestDevCodeRejected(t *testing.T) {
 
 			env := newDevEnv(
 				t,
-				devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+				devEnvOptions{
+					authz:      nil,
+					kind:       installation.KindDev,
+					noCode:     false,
+					noAccess:   false,
+					noAdmin:    false,
+					grantFails: false,
+				},
 			)
 
 			checkDevCodeRejected(t, env, env.post(t, tt.body(env.code)))
@@ -268,7 +377,14 @@ func TestDevCodeSignsInOnce(t *testing.T) {
 
 	env := newDevEnv(
 		t,
-		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+		devEnvOptions{
+			authz:      nil,
+			kind:       installation.KindDev,
+			noCode:     false,
+			noAccess:   false,
+			noAdmin:    false,
+			grantFails: false,
+		},
 	)
 
 	first := env.post(t, codeBody(env.code))
@@ -325,44 +441,6 @@ func TestDevCodeSignsInOnce(t *testing.T) {
 	}
 }
 
-// TestDevCodeNeedsAccessAndAdmin proves that the sign-in fails, and makes no
-// session, when the handler cannot give the administrator role: no access
-// service, or no bootstrap administrator to grant as. The code stays unspent.
-func TestDevCodeNeedsAccessAndAdmin(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		opts devEnvOptions
-	}{
-		{
-			name: "no access service",
-			opts: devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: true, noAdmin: false},
-		},
-		{
-			name: "no bootstrap administrator",
-			opts: devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: true},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			env := newDevEnv(t, tt.opts)
-
-			rec := env.post(t, codeBody(env.code))
-			if rec.Code < http.StatusInternalServerError {
-				t.Fatalf("status = %d, want a server error: %s", rec.Code, rec.Body)
-			}
-
-			if cookieOf(rec, apiserver.SessionCookie) != nil {
-				t.Fatal("the failed sign-in set a session cookie")
-			}
-		})
-	}
-}
-
 // TestDevCodeExpires proves that the code stops working when its lifetime
 // ends.
 func TestDevCodeExpires(t *testing.T) {
@@ -370,7 +448,14 @@ func TestDevCodeExpires(t *testing.T) {
 
 	env := newDevEnv(
 		t,
-		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+		devEnvOptions{
+			authz:      nil,
+			kind:       installation.KindDev,
+			noCode:     false,
+			noAccess:   false,
+			noAdmin:    false,
+			grantFails: false,
+		},
 	)
 
 	env.clock.Add(devcode.Lifetime)
@@ -388,7 +473,14 @@ func TestDevCodeRefusedByLimiter(t *testing.T) {
 
 	env := newDevEnv(
 		t,
-		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+		devEnvOptions{
+			authz:      nil,
+			kind:       installation.KindDev,
+			noCode:     false,
+			noAccess:   false,
+			noAdmin:    false,
+			grantFails: false,
+		},
 	)
 	env.limiter.refuse = true
 
@@ -407,7 +499,10 @@ func TestDevCodeRouteNeedsCode(t *testing.T) {
 		t.Run("kind "+kind.String(), func(t *testing.T) {
 			t.Parallel()
 
-			env := newDevEnv(t, devEnvOptions{authz: nil, kind: kind, noCode: true, noAccess: false, noAdmin: false})
+			env := newDevEnv(
+				t,
+				devEnvOptions{authz: nil, kind: kind, noCode: true, noAccess: false, noAdmin: false, grantFails: false},
+			)
 
 			rec := env.post(t, codeBody("anything"))
 			if rec.Code != http.StatusNotFound {
@@ -470,7 +565,14 @@ func TestCapabilities(t *testing.T) {
 
 			env := newDevEnv(
 				t,
-				devEnvOptions{authz: tt.authz, kind: tt.kind, noCode: true, noAccess: false, noAdmin: false},
+				devEnvOptions{
+					authz:      tt.authz,
+					kind:       tt.kind,
+					noCode:     true,
+					noAccess:   false,
+					noAdmin:    false,
+					grantFails: false,
+				},
 			)
 
 			checkCapabilities(t, env.get(t, capabilitiesRoute, tt.token), tt.wantKind)
@@ -515,7 +617,14 @@ func TestCapabilitiesWithDevSession(t *testing.T) {
 
 	env := newDevEnv(
 		t,
-		devEnvOptions{authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false},
+		devEnvOptions{
+			authz:      nil,
+			kind:       installation.KindDev,
+			noCode:     false,
+			noAccess:   false,
+			noAdmin:    false,
+			grantFails: false,
+		},
 	)
 
 	signedIn := env.post(t, codeBody(env.code))
@@ -528,5 +637,326 @@ func TestCapabilitiesWithDevSession(t *testing.T) {
 	rec := env.get(t, capabilitiesRoute, "", cookie)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"installationKind":"dev"`) {
 		t.Fatalf("capabilities with the session: status = %d, body = %s", rec.Code, rec.Body)
+	}
+}
+
+// devWrites reports what the dev sign-in has written to the store: whether
+// the person dev:admin exists, and the count of the grants on the server
+// object.
+func (e devEnv) devWrites(t *testing.T) (bool, int64) {
+	t.Helper()
+
+	_, err := e.store.GetPrincipalBySubject(t.Context(), principal.DevAdminSubject)
+	if err != nil && !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("read the dev person: %v", err)
+	}
+
+	page, listErr := e.access.ListGrants(
+		t.Context(),
+		identity.ServerObject(),
+		access.PageRequest{Cursor: "", Holder: "", Role: "", Limit: 100},
+	)
+	if listErr != nil {
+		t.Fatalf("list grants: %v", listErr)
+	}
+
+	return err == nil, page.Total
+}
+
+// postTo sends a POST request with body to the dev sign-in of handler.
+func postTo(t *testing.T, handler *apiserver.Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, devCodeRoute, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// TestDevCodeRouteNeedsDevKind proves the layer of the route table: a handler
+// that holds a code and has the kind production, or no kind, mounts no dev
+// route, so a request gets 404 and spends nothing.
+func TestDevCodeRouteNeedsDevKind(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []installation.Kind{"", installation.KindProduction, "unknown"} {
+		t.Run("kind "+kind.String(), func(t *testing.T) {
+			t.Parallel()
+
+			env := newDevEnv(t, devEnvOptions{
+				authz: nil, kind: kind, noCode: false, noAccess: false, noAdmin: false, grantFails: false,
+			})
+
+			for _, route := range env.handler.Routes() {
+				if route.Path == devCodeRoute {
+					t.Fatalf("route table holds %s for the kind %q", route.Path, kind)
+				}
+			}
+
+			if rec := env.post(t, codeBody(env.code)); rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", rec.Code)
+			}
+
+			if exists, _ := env.devWrites(t); exists {
+				t.Fatal("the dev person exists after a request to an unmounted route")
+			}
+		})
+	}
+}
+
+// TestDevCodeHandlerRefusesOtherKinds proves the layer of the handler: with
+// the route table out of the way, the handler function alone refuses a
+// right code on a handler of the kind production or no kind. The code stays
+// unspent, nothing is written, and the same code signs in on a dev handler.
+func TestDevCodeHandlerRefusesOtherKinds(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []installation.Kind{"", installation.KindProduction} {
+		t.Run("kind "+kind.String(), func(t *testing.T) {
+			t.Parallel()
+
+			env := newDevEnv(t, devEnvOptions{
+				authz: nil, kind: kind, noCode: false, noAccess: false, noAdmin: false, grantFails: false,
+			})
+
+			_, grantsBefore := env.devWrites(t)
+
+			req := httptest.NewRequestWithContext(
+				t.Context(), http.MethodPost, devCodeRoute, strings.NewReader(codeBody(env.code)),
+			)
+			rec := httptest.NewRecorder()
+			apiserver.DevCodeSignInForTest(env.handler, rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body)
+			}
+
+			if cookieOf(rec, apiserver.SessionCookie) != nil {
+				t.Fatal("the refused request set a session cookie")
+			}
+
+			if exists, grants := env.devWrites(t); exists || grants != grantsBefore {
+				t.Fatalf("person exists = %v, grants = %d (was %d), want nothing written", exists, grants, grantsBefore)
+			}
+
+			dev := env.rebuild(devParts{
+				kind:       installation.KindDev,
+				code:       nil,
+				noAccess:   false,
+				noAdmin:    false,
+				grantFails: false,
+				noCode:     false,
+			})
+
+			if again := postTo(t, dev, codeBody(env.code)); again.Code != http.StatusNoContent {
+				t.Fatalf("code on a dev handler after the refusal: status = %d, want 204: %s", again.Code, again.Body)
+			}
+		})
+	}
+}
+
+// TestDevCodeFailsClosedAndStaysUnspent proves that a handler with no access
+// service, or no bootstrap administrator, refuses before it spends the code
+// and before it writes the person or a grant, and that a valid post works
+// once a handler with both gets the same code.
+func TestDevCodeFailsClosedAndStaysUnspent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		parts devParts
+	}{
+		{name: "no access service", parts: devParts{
+			kind: installation.KindDev, code: nil, noAccess: true, noAdmin: false, grantFails: false, noCode: false,
+		}},
+		{name: "no bootstrap administrator", parts: devParts{
+			kind: installation.KindDev, code: nil, noAccess: false, noAdmin: true, grantFails: false, noCode: false,
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newDevEnv(t, devEnvOptions{
+				authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false,
+				grantFails: false,
+			})
+
+			checkFailsClosed(t, env, tt.parts)
+
+			// The code is unspent: the same code signs in once the handler has both.
+			ok := postTo(t, env.handler, codeBody(env.code))
+			if ok.Code != http.StatusNoContent || cookieOf(ok, apiserver.SessionCookie) == nil {
+				t.Fatalf("valid post after the failure: status = %d, want 204 with a cookie: %s", ok.Code, ok.Body)
+			}
+		})
+	}
+}
+
+// checkFailsClosed proves that a post with a right code to the handler of
+// parts answers a server error, sets no cookie, writes no person and no
+// grant, and spends nothing of the failure budget.
+func checkFailsClosed(t *testing.T, env devEnv, parts devParts) {
+	t.Helper()
+
+	_, grantsBefore := env.devWrites(t)
+
+	rec := postTo(t, env.rebuild(parts), codeBody(env.code))
+	if rec.Code < http.StatusInternalServerError {
+		t.Fatalf("status = %d, want a server error: %s", rec.Code, rec.Body)
+	}
+
+	if cookieOf(rec, apiserver.SessionCookie) != nil {
+		t.Fatal("the failed sign-in set a session cookie")
+	}
+
+	if exists, grants := env.devWrites(t); exists || grants != grantsBefore {
+		t.Fatalf("person exists = %v, grants = %d (was %d), want nothing written", exists, grants, grantsBefore)
+	}
+
+	if got := env.limiter.count(); got != 0 {
+		t.Fatalf("failure budget spent %d times by a failure of the setup, want 0", got)
+	}
+}
+
+// TestDevCodeGrantFails proves what a failed grant leaves: the answer is an
+// error with no session cookie and no grant. The code is spent, because the
+// check of the code comes first. The person dev:admin stays, with no grant
+// and no session, so it can do nothing, and the next sign-in with a new code
+// finds the same person, gives it the role and starts a session.
+func TestDevCodeGrantFails(t *testing.T) {
+	t.Parallel()
+
+	env := newDevEnv(t, devEnvOptions{
+		authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false, grantFails: true,
+	})
+
+	_, grantsBefore := env.devWrites(t)
+
+	rec := env.post(t, codeBody(env.code))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", rec.Code, rec.Body)
+	}
+
+	if cookieOf(rec, apiserver.SessionCookie) != nil {
+		t.Fatal("the failed grant set a session cookie")
+	}
+
+	exists, grants := env.devWrites(t)
+	if !exists || grants != grantsBefore {
+		t.Fatalf(
+			"person exists = %v, grants = %d (was %d), want the person and no new grant",
+			exists,
+			grants,
+			grantsBefore,
+		)
+	}
+
+	first, err := env.store.GetPrincipalBySubject(t.Context(), principal.DevAdminSubject)
+	if err != nil {
+		t.Fatalf("read the dev person: %v", err)
+	}
+
+	if again := env.post(t, codeBody(env.code)); again.Code != http.StatusForbidden {
+		t.Fatalf("spent code: status = %d, want 403", again.Code)
+	}
+
+	code, text, err := devcode.Make(env.clock.Now)
+	if err != nil {
+		t.Fatalf("make code: %v", err)
+	}
+
+	ok := postTo(t, env.rebuild(devParts{
+		kind: installation.KindDev, code: code, noAccess: false, noAdmin: false, grantFails: false, noCode: false,
+	}), codeBody(text))
+	if ok.Code != http.StatusNoContent {
+		t.Fatalf("sign-in with a new code: status = %d, want 204: %s", ok.Code, ok.Body)
+	}
+
+	second, err := env.store.GetPrincipalBySubject(t.Context(), principal.DevAdminSubject)
+	if err != nil || second.ID != first.ID {
+		t.Fatalf("person after the retry = %+v, %v; want the person of the failed grant (%s)", second, err, first.ID)
+	}
+
+	if _, after := env.devWrites(t); after != grantsBefore+1 {
+		t.Fatalf("grants after the retry = %d, want %d", after, grantsBefore+1)
+	}
+}
+
+// TestDevCodeEarlyFailureWritesNothing proves that a sign-in that fails
+// before the person is made writes no person and no grant: a wrong code, an
+// empty body and a refusal of the limiter.
+func TestDevCodeEarlyFailureWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		refuse bool
+		body   func(code string) string
+	}{
+		{name: "wrong code", refuse: false, body: func(string) string { return codeBody("not-the-code") }},
+		{name: "no body", refuse: false, body: func(string) string { return "" }},
+		{name: "limiter refuses", refuse: true, body: codeBody},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newDevEnv(t, devEnvOptions{
+				authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false,
+				grantFails: false,
+			})
+			env.limiter.refuse = tt.refuse
+
+			_, grantsBefore := env.devWrites(t)
+
+			if rec := env.post(t, tt.body(env.code)); rec.Code < http.StatusBadRequest {
+				t.Fatalf("status = %d, want a refusal", rec.Code)
+			}
+
+			if exists, grants := env.devWrites(t); exists || grants != grantsBefore {
+				t.Fatalf("person exists = %v, grants = %d (was %d), want nothing written", exists, grants, grantsBefore)
+			}
+		})
+	}
+}
+
+// TestProductionRefusesDevSession proves the layer of authentication: the
+// session that a dev sign-in made, on a database that a production handler
+// serves later (a restored dev backup), authenticates nothing. The dev
+// handler accepts the same cookie.
+func TestProductionRefusesDevSession(t *testing.T) {
+	t.Parallel()
+
+	env := newDevEnv(t, devEnvOptions{
+		authz: nil, kind: installation.KindDev, noCode: false, noAccess: false, noAdmin: false, grantFails: false,
+	})
+
+	cookie := cookieOf(env.post(t, codeBody(env.code)), apiserver.SessionCookie)
+	if cookie == nil {
+		t.Fatal("the dev sign-in set no session cookie")
+	}
+
+	if rec := env.get(t, "/api/server/principals", "", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("dev handler with its own session: status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+
+	for _, kind := range []installation.Kind{"", installation.KindProduction} {
+		prod := env.rebuild(devParts{
+			kind: kind, code: nil, noAccess: false, noAdmin: false, grantFails: false, noCode: true,
+		})
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/principals", http.NoBody)
+		req.AddCookie(cookie)
+
+		rec := httptest.NewRecorder()
+		prod.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("kind %q with a dev session: status = %d, want 401: %s", kind, rec.Code, rec.Body)
+		}
 	}
 }

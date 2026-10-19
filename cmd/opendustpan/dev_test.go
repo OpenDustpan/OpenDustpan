@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -95,10 +97,11 @@ func (p *devTestProcess) process(home string, started chan<- string) devProcess 
 				flagDir: flagDir, envParent: envParent, goos: "linux",
 			}
 		},
-		started:  func(url string) { started <- url },
-		roots:    func(func(string) (string, bool)) []byte { return []byte(testRoots) },
-		goos:     "linux",
-		terminal: p.terminal,
+		started:      func(url string) { started <- url },
+		roots:        func(func(string) (string, bool)) []byte { return []byte(testRoots) },
+		processStart: processStartTime,
+		goos:         "linux",
+		terminal:     p.terminal,
 	}
 }
 
@@ -930,5 +933,182 @@ func TestDevDeletesStaleAddrBeforeListening(t *testing.T) {
 
 	if _, statErr := os.Stat(stale); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("dev.addr after a start that fails to listen: stat err = %v, want not exist", statErr)
+	}
+}
+
+// busyAddr holds a port until the test ends and answers its address, for a
+// start that must fail to listen.
+func busyAddr(t *testing.T) string {
+	t.Helper()
+
+	busy, err := (&net.ListenConfig{}).Listen( //nolint:exhaustruct_v5 // Defaults only.
+		t.Context(), "tcp", "127.0.0.1:0",
+	)
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+
+	t.Cleanup(func() { _ = busy.Close() }) //nolint:errcheck // The test ends.
+
+	return busy.Addr().String()
+}
+
+// TestDevSecondStartKeepsLiveAddr proves that a second `dev` on the data
+// directory of a running server leaves the live dev.addr in place, also when
+// the second start fails to listen.
+func TestDevSecondStartKeepsLiveAddr(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "trial")
+	home := t.TempDir()
+	proc := newDevTestProcess(false)
+
+	_ = mustStartDev(t, proc, home, "--data-dir", dir, "--listen", "127.0.0.1:0", "--log-format", "text")
+
+	before, err := os.ReadFile(filepath.Join(dir, devAddrName)) //nolint:gosec // A path of the test.
+	if err != nil {
+		t.Fatalf("read the live dev.addr: %v", err)
+	}
+
+	if _, startErr := startDev(t, proc, home, "--data-dir", dir, "--listen", busyAddr(t)); startErr == nil {
+		t.Fatal("the second dev started on a port that is in use")
+	}
+
+	after, err := os.ReadFile(filepath.Join(dir, devAddrName)) //nolint:gosec // A path of the test.
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("dev.addr after the second start = %q, %v; want the live file %q", after, err, before)
+	}
+}
+
+// TestDevKeepsAddrOfForeignDirectory proves that dev deletes no dev.addr in a
+// directory that holds files and no key file of dev: the start refuses the
+// directory and the file stays.
+func TestDevKeepsAddrOfForeignDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "foreign")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("make the directory: %v", err)
+	}
+
+	addr := filepath.Join(dir, devAddrName)
+	for path, text := range map[string]string{addr: "{\"addr\":\"127.0.0.1:1\"}\n", filepath.Join(dir, "notes.txt"): "mine"} {
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	_, err := startDev(t, newDevTestProcess(false), t.TempDir(), "--data-dir", dir, "--listen", "127.0.0.1:0")
+	if !errors.Is(err, errDevForeign) {
+		t.Fatalf("start in a foreign directory: err = %v, want errDevForeign", err)
+	}
+
+	if _, statErr := os.Stat(addr); statErr != nil {
+		t.Fatalf("dev.addr of the foreign directory: %v, want it kept", statErr)
+	}
+}
+
+// TestDevKeepsAddrOfOpenDirectory proves that dev deletes no dev.addr in a
+// data directory that other users can open: the start refuses it and the file
+// stays.
+func TestDevKeepsAddrOfOpenDirectory(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no mode bits to check")
+	}
+
+	dir := filepath.Join(t.TempDir(), "trial")
+	home := t.TempDir()
+	proc := newDevTestProcess(false)
+
+	first := mustStartDev(t, proc, home, "--data-dir", dir, "--listen", "127.0.0.1:0", "--log-format", "text")
+	if err := first.stop(t); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	addr := filepath.Join(dir, devAddrName)
+	if err := os.WriteFile(addr, []byte("{\"addr\":\"127.0.0.1:1\"}\n"), 0o600); err != nil {
+		t.Fatalf("write dev.addr: %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // The test makes the directory open on purpose.
+		t.Fatalf("open the directory: %v", err)
+	}
+
+	if _, err := startDev(t, proc, home, "--data-dir", dir, "--listen", "127.0.0.1:0"); !errors.Is(err, errDevPrivate) {
+		t.Fatalf("start in an open directory: err = %v, want errDevPrivate", err)
+	}
+
+	if _, err := os.Stat(addr); err != nil {
+		t.Fatalf("dev.addr of the open directory: %v, want it kept", err)
+	}
+}
+
+// TestDevDeletesAddrOfDeadProcess proves that dev deletes a dev.addr that
+// names no running process: an ID that no process has, a file that does not
+// parse, and (where the platform gives start times) the ID of a process that
+// started after the server that wrote the file.
+func TestDevDeletesAddrOfDeadProcess(t *testing.T) {
+	t.Parallel()
+
+	_, startErr := processStartTime(os.Getpid())
+	hasStartTimes := startErr == nil
+
+	tests := []struct {
+		name string
+		text string
+		skip bool
+	}{
+		{
+			name: "ID that no process has", skip: false,
+			text: `{"started":"2026-10-19T09:00:00Z","addr":"127.0.0.1:1","pid":2147483646}`,
+		},
+		{name: "file that does not parse", text: "not json", skip: false},
+		{name: "no ID", text: `{"addr":"127.0.0.1:1"}`, skip: false},
+		{
+			name: "ID of a later process", skip: !hasStartTimes,
+			text: fmt.Sprintf(`{"started":"2001-01-01T00:00:00Z","addr":"127.0.0.1:1","pid":%d}`, os.Getpid()),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skip {
+				t.Skip("this platform gives no start time")
+			}
+
+			checkStaleAddrDeleted(t, tt.text)
+		})
+	}
+}
+
+// checkStaleAddrDeleted proves that a start in a dev directory with a
+// dev.addr of the text deletes the file, also when the start fails to listen.
+func checkStaleAddrDeleted(t *testing.T, text string) {
+	t.Helper()
+
+	dir := filepath.Join(t.TempDir(), "trial")
+	home := t.TempDir()
+	proc := newDevTestProcess(false)
+
+	first := mustStartDev(t, proc, home, "--data-dir", dir, "--listen", "127.0.0.1:0", "--log-format", "text")
+	if err := first.stop(t); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	addr := filepath.Join(dir, devAddrName)
+	if err := os.WriteFile(addr, []byte(text), 0o600); err != nil {
+		t.Fatalf("write dev.addr: %v", err)
+	}
+
+	if _, err := startDev(t, proc, home, "--data-dir", dir, "--listen", busyAddr(t)); err == nil {
+		t.Fatal("dev started on a port that is in use")
+	}
+
+	if _, err := os.Stat(addr); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("dev.addr after the start: stat err = %v, want not exist", err)
 	}
 }

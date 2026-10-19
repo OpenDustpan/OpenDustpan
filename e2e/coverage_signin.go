@@ -12,6 +12,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -74,7 +75,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 			DevCode: code, DevAdmin: identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
 		},
 		CheckpointEpochs: nil,
-		InstallationKind: "",
+		InstallationKind: installation.KindDev,
 	})
 	if err != nil {
 		tb.Fatalf("server handler with the sign-in: %v", err)

@@ -19,6 +19,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -51,16 +52,33 @@ type Sessions interface {
 type Checker struct {
 	sessions Sessions
 	origins  []string
+	refuse   bool
+}
+
+// Option changes a Checker.
+type Option func(*Checker)
+
+// RefuseDevSubjects makes the Checker refuse the session of a person whose
+// subject starts with principal.DevSubjectPrefix. A server that is not of
+// the kind dev sets it, so a session that a restored dev database holds
+// authenticates nothing.
+func RefuseDevSubjects() Option {
+	return func(c *Checker) { c.refuse = true }
 }
 
 // New returns a Checker that checks sessions with sessions and lets a
 // request with the cookie come from origins.
-func New(sessions Sessions, origins []string) (*Checker, error) {
+func New(sessions Sessions, origins []string, opts ...Option) (*Checker, error) {
 	if sessions == nil {
 		return nil, errNoSessions
 	}
 
-	return &Checker{sessions: sessions, origins: slices.Clone(origins)}, nil
+	c := &Checker{sessions: sessions, origins: slices.Clone(origins), refuse: false}
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	return c, nil
 }
 
 // Caller is the console session that authenticated a request, and its
@@ -108,6 +126,11 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 
 	if err != nil {
 		return identity.Principal{}, none, fmt.Errorf("check session: %w", err)
+	}
+
+	if c.refuse && principal.IsDevSubject(m.Owner.Subject) {
+		return identity.Principal{}, none, fmt.Errorf("%w: a session of a dev person is not valid on this installation",
+			identity.ErrUnauthenticated)
 	}
 
 	p := identity.Principal{

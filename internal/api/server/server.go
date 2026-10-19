@@ -185,7 +185,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
-	signIn, err := newSignInState(cfg.SignIn)
+	signIn, err := newSignInState(cfg.SignIn, cfg.InstallationKind)
 	if err != nil {
 		return nil, err
 	}

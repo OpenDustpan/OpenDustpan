@@ -722,6 +722,8 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, tempErr
 	}
 
+	wireDevGuard(cfg)
+
 	svc.tempAdmins, err = newTempAdminService(cfg)
 	if err != nil {
 		return nil, err
@@ -779,6 +781,18 @@ func wireTempAdmins(cfg *settings) error {
 	cfg.authenticator = dec
 
 	return nil
+}
+
+// wireDevGuard makes the authenticator refuse a caller with a dev subject
+// (a subject that starts with principal.DevSubjectPrefix) on a server that
+// is not of the kind dev. Only opendustpan dev makes such a person, so one
+// on another installation comes from a restored dev backup.
+func wireDevGuard(cfg *settings) {
+	if cfg.installationKind == installation.KindDev || cfg.authenticator == nil {
+		return
+	}
+
+	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator)
 }
 
 // requestOf answers the client address and the request ID that the server
@@ -916,7 +930,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		signInRequests:   adapters.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, adapters.signIn),
-		kind:             kindState{kind: cfg.installationKind, store: cfg.kindStore},
+		kind:             newKindState(cfg),
 		durable:          cfg.durableStore,
 		durableOwner:     durableOwner(cfg),
 		inactivityEvery:  sweepEvery, deletedEvery: deletedSweepEvery,
@@ -1862,6 +1876,8 @@ func (s *Server) startUp(ctx context.Context) error {
 	if err := s.claimInstallationKind(ctx); err != nil {
 		return err
 	}
+
+	s.warnDevPrincipals(ctx)
 
 	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
 		return err

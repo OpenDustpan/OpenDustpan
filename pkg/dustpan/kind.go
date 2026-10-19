@@ -3,9 +3,11 @@ package dustpan
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // WithInstallationKind sets the installation kind of the server: dev or
@@ -45,7 +47,16 @@ var _ = func() struct{} {
 // claim. The store is nil for a server that claims nothing.
 type kindState struct {
 	store installation.KindStore
-	kind  installation.Kind
+	// principals keeps the principals, or is nil without them. The start
+	// reads it for the warning about the people of opendustpan dev.
+	principals principal.Store
+	kind       installation.Kind
+}
+
+// newKindState returns the installation kind of cfg and the stores that the
+// start reads for it.
+func newKindState(cfg *settings) kindState {
+	return kindState{store: cfg.kindStore, principals: principalStoreOf(cfg), kind: cfg.installationKind}
 }
 
 // checkKindSettings refuses an installation kind that is not known, and a
@@ -84,4 +95,61 @@ func (s *Server) claimInstallationKind(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// maxDevWarned is the count of dev people that the start-up warning names.
+const maxDevWarned = 20
+
+// principalStoreOf returns the principal store of cfg, or nil when the store
+// keeps no principals.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
+func principalStoreOf(cfg *settings) principal.Store {
+	store, ok := cfg.namespaceStore.(principal.Store)
+	if !ok {
+		return nil
+	}
+
+	return store
+}
+
+// warnDevPrincipals logs one warning that names the dev people (principals
+// with a subject that starts with principal.DevSubjectPrefix) of a server
+// that is not of the kind dev. The authenticator refuses them. The warning
+// does not stop the start, and a failed read only logs the failure.
+func (s *Server) warnDevPrincipals(ctx context.Context) {
+	if s.kind.kind == installation.KindDev || s.kind.principals == nil {
+		return
+	}
+
+	svc, err := principal.NewService(principal.Config{
+		TempAdmins: nil, Store: s.kind.principals, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		s.logger.WarnContext(ctx, "dev people check skipped", slog.String("reason", err.Error()))
+
+		return
+	}
+
+	req := principal.PageRequest{Prefix: principal.DevSubjectPrefix, Cursor: "", Limit: maxDevWarned}
+
+	page, err := svc.ListPrincipals(ctx, req, "")
+	if err != nil {
+		s.logger.WarnContext(ctx, "dev people check failed", slog.String("reason", err.Error()))
+
+		return
+	}
+
+	if len(page.Items) == 0 {
+		return
+	}
+
+	subjects := make([]string, 0, len(page.Items))
+	for i := range page.Items {
+		subjects = append(subjects, page.Items[i].Subject)
+	}
+
+	s.logger.WarnContext(ctx,
+		"this installation holds people that opendustpan dev made; the server refuses their sessions and tokens",
+		slog.Int64("count", page.Total), slog.Any("subjects", subjects))
 }

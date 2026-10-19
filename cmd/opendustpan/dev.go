@@ -117,9 +117,12 @@ type devProcess struct {
 	// with the URL of the server.
 	started func(url string)
 	// roots reads the roots that the certificate bundle starts with.
-	roots    func(lookup func(string) (string, bool)) []byte
-	goos     string
-	terminal bool
+	roots func(lookup func(string) (string, bool)) []byte
+	// processStart answers the start time of the process pid, errNoProcess
+	// for an ID that no process has, or errStartUnknown.
+	processStart func(pid int) (time.Time, error)
+	goos         string
+	terminal     bool
 }
 
 // osDevProcess answers the process of the binary.
@@ -131,7 +134,7 @@ func osDevProcess(stderr io.Writer) devProcess {
 
 	return devProcess{
 		lookup: os.LookupEnv, unsetenv: os.Unsetenv, hostname: os.Hostname, now: time.Now, dirs: osDevDirInput,
-		started: nil, goos: runtime.GOOS, terminal: terminal,
+		started: nil, processStart: processStartTime, goos: runtime.GOOS, terminal: terminal,
 		roots: func(lookup func(string) (string, bool)) []byte {
 			return devRoots(devRootsInput{lookup: lookup, files: rootFileCandidates, dirs: rootCertDirs})
 		},
@@ -295,9 +298,15 @@ func (r *devRun) run(ctx context.Context) error {
 
 // deleteStaleAddr deletes dev.addr of the data directory at start, before dev
 // listens: a file that an earlier run left (a crash or a kill) must not tell
-// `health` that a server runs. A new --ephemeral directory has no such file,
-// and a directory that does not exist yet has none. A path error shows later,
-// when prepareDir reads the same path.
+// `health` that a server runs. It first runs the checks of prepareDir that
+// read only: the directory must be a data directory of dev (it holds the key
+// file), private, and owned by the current user. A foreign directory, and a
+// directory with an error, keep their files. The error shows later, when
+// prepareDir reads the same path. It then deletes the file only when the
+// process ID and the start time in it name no running process, so a second
+// `dev` on the directory of a live server leaves the live file in place. A
+// new --ephemeral directory has no such file, and a directory that does not
+// exist yet has none.
 func (r *devRun) deleteStaleAddr(envParent string) error {
 	if r.flags.ephemeral {
 		return nil
@@ -306,6 +315,17 @@ func (r *devRun) deleteStaleAddr(envParent string) error {
 	dir, err := devDirPath(r.proc.dirs(r.flags.dataDir, envParent))
 	if err != nil {
 		return nil //nolint:nilerr // prepareDir reports the same error.
+	}
+
+	if claimed, inspectErr := inspectDevDir(dir); inspectErr != nil || !claimed {
+		return nil //nolint:nilerr // prepareDir reports the same error, and a foreign directory keeps its file.
+	}
+
+	// Defense in depth: the file is deleted only when it names no running
+	// process. A refusal above does not decide it, and the later listen
+	// does not either, so the three checks each stand alone.
+	if addr, ok := readDevAddr(dir); ok && devAddrLive(addr, r.proc.processStart) {
+		return nil
 	}
 
 	return removeDevAddr(dir)

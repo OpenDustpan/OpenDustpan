@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -20,8 +21,8 @@ const devCodePath = "/api/dustpan/v1/sign-in/dev-code"
 // Names of the person that the one-time code signs in. The provider name is
 // part of the subject, as for each other person that a sign-in makes.
 const (
-	devProvider    = "dev"
-	devSubject     = devProvider + ":admin"
+	devProvider    = session.DevProviderID
+	devSubject     = principal.DevAdminSubject
 	devDisplayName = "Dev administrator"
 	// maxDevCodeBody caps the body of a request, in bytes. The code holds
 	// 43 characters.
@@ -35,6 +36,9 @@ var errDevAccess = errors.New("the dev sign-in needs the access service to give 
 
 // errDevAdmin reports a dev sign-in with no bootstrap administrator to grant.
 var errDevAdmin = errors.New("the dev sign-in needs the bootstrap administrator")
+
+// errDevKind reports a dev sign-in on a handler of another installation kind.
+var errDevKind = errors.New("the dev sign-in needs the installation kind dev")
 
 // errDevCode reports a code that is wrong, spent or too old. One text covers
 // the three cases, so an answer tells nothing about the code.
@@ -70,6 +74,22 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 
 	noStore(w)
 
+	// Defense in depth: devSignInRoutes mounts this route only for the kind
+	// dev, and the option of the server refuses a dev sign-in on another
+	// kind. This check stays so that a handler built by another path, or a
+	// change to the route table, never signs in on a production installation.
+	if h.kind != installation.KindDev {
+		h.writeError(ctx, w, errDevKind)
+
+		return
+	}
+
+	if h.signIn == nil || h.signIn.devCode == nil {
+		h.writeError(ctx, w, errDevCode)
+
+		return
+	}
+
 	if err := h.admitSignIn(ctx); err != nil {
 		h.writeError(ctx, w, err)
 
@@ -97,9 +117,10 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 
 	e := signInEntry(r, devSubject, "", session.ActionSignIn)
 
-	p, _, err := h.principals.SignInPrincipal(ctx, e, principal.SignInInput{
-		Subject: devSubject, Source: principal.SourceLocal, Names: []string{devDisplayName}, Create: true,
-	})
+	// A grant that fails after this call leaves the person in place. The
+	// person holds no role and no session, so it can do nothing, and the
+	// next valid sign-in finds it and gives the role.
+	p, _, err := h.principals.SignInDevAdministrator(ctx, e, devDisplayName)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -152,7 +173,10 @@ func (h *Handler) grantDevAdministrator(ctx context.Context, e audit.Entry, id s
 // devSignInRoutes returns the row of the dev sign-in. No code mounts no
 // route.
 func (h *Handler) devSignInRoutes() []Route {
-	if h.signIn == nil || h.signIn.devCode == nil {
+	// Defense in depth: the handler refuses the request on another kind too,
+	// and the option of the server refuses the dev sign-in there. This check
+	// stays so that the route is not even mounted on a production installation.
+	if h.kind != installation.KindDev || h.signIn == nil || h.signIn.devCode == nil {
 		return nil
 	}
 

@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -212,7 +213,7 @@ func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Poli
 		return nil, nil, err
 	}
 
-	if cfg.sessionCookies, err = sessionCookies(signIn); err != nil {
+	if cfg.sessionCookies, err = sessionCookies(signIn, cfg.installationKind); err != nil {
 		return nil, nil, err
 	}
 
@@ -222,12 +223,17 @@ func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Poli
 // sessionCookies returns the session cookie check of the APIs other than
 // the installation API, with the sessions and the origins of in. A nil in
 // gives a nil check: those APIs then take access tokens only.
-func sessionCookies(in *serverapi.SignIn) (*sessionauth.Checker, error) {
+func sessionCookies(in *serverapi.SignIn, kind installation.Kind) (*sessionauth.Checker, error) {
 	if in == nil {
 		return nil, nil //nolint:nilnil // No sign-in is a valid setup: the APIs take access tokens only.
 	}
 
-	c, err := sessionauth.New(in.Sessions, in.Origins)
+	var opts []sessionauth.Option
+	if kind != installation.KindDev {
+		opts = append(opts, sessionauth.RefuseDevSubjects())
+	}
+
+	c, err := sessionauth.New(in.Sessions, in.Origins, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errSignInSetup, err)
 	}
@@ -373,6 +379,10 @@ func signInProvider(
 	if !providerIDPattern.MatchString(p.ID) {
 		return none, fmt.Errorf("%w: provider ID %q is not 1 to 32 lower-case letters, digits and hyphens "+
 			"that start with a letter", errSignInSetup, p.ID)
+	}
+
+	if p.ID == session.DevProviderID {
+		return none, fmt.Errorf("%w: provider ID %q is reserved for the dev sign-in", errSignInSetup, p.ID)
 	}
 
 	if slices.ContainsFunc(earlier, func(e serverapi.SignInProvider) bool { return e.ID == p.ID }) {

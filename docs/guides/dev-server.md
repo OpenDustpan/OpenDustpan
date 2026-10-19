@@ -38,7 +38,11 @@ Without it, the `Sign in` line names the flag.
 At the first start of a data directory, on a terminal, the banner prints a sign-in link.
 The link holds a code of 32 random bytes after the `#`.
 So no request line, access log or `Referer` header holds the code.
-The code signs one browser in as the administrator of the dev installation.
+The code signs one browser in as the person `dev:admin`.
+The bootstrap administrator gives that person the site-administrator role.
+The prefix `dev:` and the provider ID `dev` are reserved.
+No other path makes such a person.
+A server that is not a `dev` server refuses their sessions and tokens.
 It works one time, and it stops 10 minutes after the start or when `dev` stops.
 Open the link at once.
 

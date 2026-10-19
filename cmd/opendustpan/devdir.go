@@ -196,6 +196,39 @@ func claimDevDir(dir string) (bool, error) {
 	return false, checkDevPath(dir, info, privateDir)
 }
 
+// inspectDevDir is claimDevDir without a write. It answers true for a data
+// directory of dev that exists: it holds the key file, it is private and the
+// current user owns it. It answers false and no error for a directory that
+// does not exist or that holds files and no key file, and the error of
+// claimDevDir for a directory that fails its checks.
+func inspectDevDir(dir string) (bool, error) {
+	info, err := os.Stat(dir)
+
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("read the data directory %s: %w", dir, err)
+	case !info.IsDir():
+		return false, fmt.Errorf("%s: %w", dir, errDevNotDir)
+	}
+
+	names, err := devDirNames(dir)
+	if err != nil {
+		return false, err
+	}
+
+	if !slices.Contains(names, devKeyName) {
+		return false, nil
+	}
+
+	if checkErr := checkDevPath(dir, info, privateDir); checkErr != nil {
+		return false, checkErr
+	}
+
+	return true, nil
+}
+
 // devDirNames lists the entries of dir, without lost+found.
 func devDirNames(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)

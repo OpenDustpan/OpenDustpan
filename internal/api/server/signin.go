@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -196,7 +197,7 @@ func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, 
 }
 
 // newSignInState returns the sign-in of cfg, or nil when cfg is nil.
-func newSignInState(cfg *SignIn) (*signInState, error) {
+func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 	if cfg == nil {
 		return nil, nil //nolint:nilnil // No sign-in is a valid configuration.
 	}
@@ -214,7 +215,12 @@ func newSignInState(cfg *SignIn) (*signInState, error) {
 		providers[p.ID] = p
 	}
 
-	checker, err := sessionauth.New(cfg.Sessions, cfg.Origins)
+	var opts []sessionauth.Option
+	if kind != installation.KindDev {
+		opts = append(opts, sessionauth.RefuseDevSubjects())
+	}
+
+	checker, err := sessionauth.New(cfg.Sessions, cfg.Origins, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("session cookie check: %w", err)
 	}
@@ -759,8 +765,8 @@ func classifySignIn(err error) (int, string, bool) {
 		return http.StatusBadRequest, errSignInFailed.Error(), true
 	case errors.Is(err, errNoSession):
 		return http.StatusNotFound, errNoSession.Error(), true
-	case errors.Is(err, errDevCode):
-		return http.StatusForbidden, errDevCode.Error(), true
+	case errors.Is(err, errDevCode), errors.Is(err, errDevKind):
+		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, errSignInRefused), errors.Is(err, errCSRF), errors.Is(err, errOtherSite):
 		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, errFreshParam):
