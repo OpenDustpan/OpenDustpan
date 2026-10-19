@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint helm-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo checks-agent
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint chart-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo checks-agent
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -113,8 +113,8 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
 
-helm-lint: ## Lint and render the Helm chart (helm lint, helm template, kubeconform). Needs helm and kubeconform; not part of check.
-	./scripts/helm-lint.sh
+chart-lint: ## Lint and render the Helm chart (helm lint, helm template, kubeconform). Needs helm and kubeconform; not part of check.
+	./scripts/chart-lint.sh
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
 	go test -race ./...

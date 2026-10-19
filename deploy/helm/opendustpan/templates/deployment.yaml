@@ -48,36 +48,36 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - serve
-            - --log-level={{ .Values.server.logLevel }}
-            - --log-format={{ .Values.server.logFormat }}
+            - {{ printf "--log-level=%s" .Values.server.logLevel | quote }}
+            - {{ printf "--log-format=%s" .Values.server.logFormat | quote }}
             {{- if .Values.console.enabled }}
             - --console-dir=/console
             {{- end }}
             {{- if $s3Blob }}
-            - --blob-store=s3://{{ .Values.blobStore.s3.bucket }}{{ if .Values.blobStore.s3.prefix }}/{{ .Values.blobStore.s3.prefix }}{{ end }}
+            - {{ printf "--blob-store=s3://%s" (list .Values.blobStore.s3.bucket .Values.blobStore.s3.prefix | compact | join "/") | quote }}
             {{- else }}
             - --blob-dir=/data/blobs
             {{- end }}
             {{- if eq .Values.backup.target.type "dir" }}
             - --backup-target=dir:/backups
             {{- else if eq .Values.backup.target.type "s3" }}
-            - --backup-target=s3://{{ .Values.backup.target.s3.bucket }}{{ if .Values.backup.target.s3.prefix }}/{{ .Values.backup.target.s3.prefix }}{{ end }}
+            - {{ printf "--backup-target=s3://%s" (list .Values.backup.target.s3.bucket .Values.backup.target.s3.prefix | compact | join "/") | quote }}
             {{- end }}
             {{- if .Values.s3.endpoint }}
-            - --s3-endpoint={{ .Values.s3.endpoint }}
+            - {{ printf "--s3-endpoint=%s" .Values.s3.endpoint | quote }}
             {{- end }}
             {{- if .Values.s3.region }}
-            - --s3-region={{ .Values.s3.region }}
+            - {{ printf "--s3-region=%s" .Values.s3.region | quote }}
             {{- end }}
             {{- if .Values.server.region }}
-            - --region={{ .Values.server.region }}
+            - {{ printf "--region=%s" .Values.server.region | quote }}
             {{- end }}
             {{- if .Values.server.publicURL }}
-            - --public-url={{ .Values.server.publicURL }}
+            - {{ printf "--public-url=%s" .Values.server.publicURL | quote }}
             {{- end }}
             {{- if .Values.server.trustedProxies }}
-            - --trusted-proxies={{ join "," .Values.server.trustedProxies }}
-            - --trusted-proxy-header={{ .Values.server.trustedProxyHeader }}
+            - {{ printf "--trusted-proxies=%s" (join "," .Values.server.trustedProxies) | quote }}
+            - {{ printf "--trusted-proxy-header=%s" .Values.server.trustedProxyHeader | quote }}
             {{- end }}
           env:
             - name: DUSTPAN_LISTEN

@@ -1,4 +1,5 @@
 # Refused: the image tag latest.
+# want: at '/image/tag': 'not' failed
 database:
   existingSecret:
     name: opendustpan-database

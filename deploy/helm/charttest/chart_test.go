@@ -17,6 +17,10 @@ var update = flag.Bool("update", false, "write the golden files of testdata")
 
 const chartDir = "../opendustpan"
 
+// kubeVersion is the Kubernetes version of the renders. The default of helm
+// template is older than the kubeVersion of Chart.yaml.
+const kubeVersion = "1.35.0"
+
 // result holds the output of one helm run.
 type result struct {
 	stdout string
@@ -49,6 +53,8 @@ func TestTemplateGolden(t *testing.T) {
 				"template",
 				"release",
 				chartDir,
+				"--kube-version",
+				kubeVersion,
 				"--namespace",
 				"dustpan",
 				"--values",
@@ -130,7 +136,7 @@ func TestTemplateRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			args := []string{"template", "release", chartDir}
+			args := []string{"template", "release", chartDir, "--kube-version", kubeVersion}
 			if tc.useBase {
 				args = append(args, base...)
 			}
@@ -157,6 +163,16 @@ func requireHelm(t *testing.T) string {
 	helm, err := exec.LookPath("helm")
 	if err != nil {
 		t.Skip("helm is not on PATH: install it (https://helm.sh/docs/intro/install/) to run the chart tests")
+	}
+
+	//nolint:gosec // The binary is helm from PATH; the arguments are literals.
+	out, err := exec.CommandContext(t.Context(), helm, "version", "--short").Output()
+	if err != nil {
+		t.Skipf("helm version failed: %v: install Helm 3 to run the chart tests", err)
+	}
+
+	if !strings.HasPrefix(strings.TrimSpace(string(out)), "v3.") {
+		t.Skipf("helm version is %q: the chart tests need Helm 3 (v3.x)", strings.TrimSpace(string(out)))
 	}
 
 	return helm

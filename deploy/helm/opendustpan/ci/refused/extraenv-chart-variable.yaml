@@ -1,4 +1,5 @@
 # Refused: a variable that the chart sets.
+# want: at '/server/extraEnv/0/name': 'allOf' failed
 database:
   existingSecret:
     name: opendustpan-database

@@ -85,7 +85,7 @@ internal/              code that is not part of the SDK
   metrics/, token/...  helpers shared across packages
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
-deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make helm-lint)
+deploy/helm/           the Helm chart in opendustpan/ (templates, values, schema, ci/ profiles); charttest/ holds its golden-file tests (make chart-lint)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
 GLOSSARY.md            the project's domain language: one word per concept

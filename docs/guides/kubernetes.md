@@ -39,7 +39,8 @@ Other Secrets are optional:
 | S3 credentials | `s3.credentials.existingSecret` | Access key and secret key. With no Secret, the server uses its default credential chain, for example a role that `serviceAccount.annotations` gives to the pod. |
 | Built-in TLS | `server.tls.existingSecret` | A `kubernetes.io/tls` Secret. |
 | Backup token | `backup.schedule.tokenSecret` | An access token that may start a backup. Do not use a bootstrap admin token. |
-| Metrics token | `metrics.serviceMonitor.tokenSecret` | An access token that may read `/metrics`. Do not use a bootstrap admin token. |
+| Metrics token | `metrics.serviceMonitor.tokenSecret` | An access token that may read `/api/server/metrics`. Do not use a bootstrap admin token. |
+| CA bundle | `backup.schedule.caSecret`, `metrics.serviceMonitor.tlsConfig.caSecret` | The PEM bundle of a private certificate authority, for built-in TLS. |
 
 ## Install
 
@@ -83,11 +84,19 @@ The claim that the chart makes has the annotation `helm.sh/resource-policy: keep
 
 `backup.schedule.enabled: true` adds a CronJob. It runs `opendustpan backup` against the Service of the release, once a day by default, with the token from `backup.schedule.tokenSecret`. The CronJob does not mount the key-encryption key or the database URL, and it gets no S3 credentials. A restore is an API call. The chart has no restore Job. The backup guide shows the restore steps.
 
-The CronJob calls the server through the Service. With built-in TLS, the certificate must be valid for the Service name, or the CronJob cannot connect.
+The CronJob calls the server through the Service. With built-in TLS, the certificate must cover `<fullname>.<namespace>.svc`, or the CronJob cannot connect. When a private certificate authority signed the certificate, put its PEM bundle in a Secret and set `backup.schedule.caSecret.name` and `.key`. The CronJob mounts the Secret and passes `--ca-file`.
+
+Kubernetes stops a backup Job after `backup.schedule.activeDeadlineSeconds`, 6 hours by default. The CronJob container has its own `backup.schedule.resources`: requests of 10m CPU and 32Mi of memory, and a limit of 128Mi of memory.
+
+## Metrics
+
+`metrics.serviceMonitor.enabled: true` makes a ServiceMonitor of the Prometheus Operator for `GET /api/server/metrics`, with the token from `metrics.serviceMonitor.tokenSecret`. The Prometheus Operator CRDs must exist before the install. With built-in TLS and a private certificate authority, set `metrics.serviceMonitor.tlsConfig.caSecret` to the Secret with the PEM bundle. Prometheus reads the Secret from the namespace of the ServiceMonitor. The certificate must cover `<fullname>.<namespace>.svc`. If it covers another host name, set `metrics.serviceMonitor.tlsConfig.serverName` to that name. Add the namespace of Prometheus to `networkPolicy.ingressFrom`, or the NetworkPolicy blocks the scrape.
 
 ## Console, ingress and TLS
 
 The default is plain HTTP inside the cluster and TLS at the ingress. Set `ingress.*` to make an Ingress. Set `server.publicURL` to the URL that users see, and `server.trustedProxies` to the addresses of the proxies in front of the server. OpenTofu needs TLS at the edge that the client sees.
+
+An Ingress in front of built-in TLS needs the annotation of your ingress controller that makes it connect to the backend with HTTPS. For the NGINX ingress controller, this is `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"`. Without it, the controller sends plain HTTP to a TLS port.
 
 With `server.tls.existingSecret`, the server serves TLS itself, and the probes use HTTPS. A certificate renewal needs a restart of the pods.
 
@@ -105,7 +114,10 @@ The pod runs as user and group 65532, with a read-only root filesystem, no privi
 
 The default requests are 100m CPU and 256Mi of memory, and the memory limit is 1Gi. The chart sets no CPU limit. The architecture guide gives values for larger installs.
 
-The chart makes a NetworkPolicy by default. It lets every source reach the server port, unless you set `networkPolicy.ingressFrom`. It allows DNS, TCP port 5432 and TCP port 443 to any address. For a webhook on another port, or for the metadata server, add a rule in `networkPolicy.extraEgress`. Set `networkPolicy.allowAllEgress: true` to allow all egress.
+The chart makes a NetworkPolicy by default. It lets every source reach the server port, unless you set `networkPolicy.ingressFrom`. When you set it, add the namespace of the ingress controller and the namespace of Prometheus. It allows DNS, TCP port 5432 and TCP port 443 to any address. For a webhook on another port, or for the metadata server, add a rule in `networkPolicy.extraEgress`. Set `networkPolicy.allowAllEgress: true` to allow all egress.
+
+- With NodeLocal DNSCache, pods send DNS queries to a node address. Set `networkPolicy.dns` to match that address, or add a rule in `networkPolicy.extraEgress`.
+- An S3 endpoint on a port other than 443 needs a rule in `networkPolicy.extraEgress`.
 
 ## One instance
 
@@ -146,4 +158,6 @@ The project has no down migration. To go back past a migration that cannot be un
 
 ## Check the chart
 
-`make helm-lint` runs `helm lint --strict` and `helm template` through `kubeconform`. It needs `helm` and `kubeconform`, and it does not run in `make check`.
+`make chart-lint` runs `helm lint --strict` and `helm template` through `kubeconform`, for the oldest and the newest supported Kubernetes version. It needs `helm` and `kubeconform`, and it does not run in `make check`. The tests in `deploy/helm/charttest` compare the output of `helm template` with golden files, and they check that the [values reference](../reference/helm-values.md) names each key of `values.yaml`.
+
+`Chart.yaml` sets `kubeVersion` to `>=1.35.0-0`, the oldest minor version that the Kubernetes project supports. The values reference lists every key.

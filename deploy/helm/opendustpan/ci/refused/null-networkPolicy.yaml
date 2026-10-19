@@ -1,4 +1,5 @@
 # Refused: null removes networkPolicy.
+# want: at '': missing property 'networkPolicy'
 database:
   existingSecret:
     name: opendustpan-database

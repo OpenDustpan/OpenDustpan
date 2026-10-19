@@ -1,4 +1,5 @@
 # Refused: null removes console.
+# want: at '': missing property 'console'
 database:
   existingSecret:
     name: opendustpan-database

@@ -170,8 +170,8 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - serve
-            - --log-level=info
-            - --log-format=json
+            - "--log-level=info"
+            - "--log-format=json"
             - --console-dir=/console
             - --blob-dir=/data/blobs
             - --backup-target=dir:/backups
@@ -294,6 +294,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
+      activeDeadlineSeconds: 21600
       template:
         metadata:
           labels:
@@ -318,7 +319,8 @@ spec:
               imagePullPolicy: IfNotPresent
               args:
                 - backup
-                - --server=https://release-opendustpan.dustpan.svc:443
+                - "--server=https://release-opendustpan.dustpan.svc:443"
+                - "--ca-file=/ca/ca.crt"
               env:
                 - name: DUSTPAN_ADMIN_TOKEN
                   valueFrom:
@@ -327,10 +329,10 @@ spec:
                       key: token
               resources:
                 limits:
-                  memory: 1Gi
+                  memory: 128Mi
                 requests:
-                  cpu: 100m
-                  memory: 256Mi
+                  cpu: 10m
+                  memory: 32Mi
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities:
@@ -344,6 +346,55 @@ spec:
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp
+                - name: ca
+                  mountPath: /ca
+                  readOnly: true
           volumes:
             - name: tmp
               emptyDir: {}
+            - name: ca
+              secret:
+                secretName: opendustpan-ca
+                items:
+                  - key: "ca.crt"
+                    path: "ca.crt"
+---
+# Source: opendustpan/templates/servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: release-opendustpan
+  labels:
+    helm.sh/chart: opendustpan-0.1.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/part-of: opendustpan
+    app.kubernetes.io/name: opendustpan
+    app.kubernetes.io/instance: release
+    app.kubernetes.io/component: server
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opendustpan
+      app.kubernetes.io/instance: release
+      app.kubernetes.io/component: server
+  namespaceSelector:
+    matchNames:
+      - dustpan
+  endpoints:
+    - port: http
+      path: /api/server/metrics
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: opendustpan-ca
+            key: ca.crt
+        serverName: "dustpan.example"
+      interval: 30s
+      scrapeTimeout: 10s
+      authorization:
+        type: Bearer
+        credentials:
+          name: opendustpan-metrics-token
+          key: token

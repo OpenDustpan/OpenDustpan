@@ -23,6 +23,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
+      activeDeadlineSeconds: {{ .activeDeadlineSeconds }}
       template:
         metadata:
           labels:
@@ -45,7 +46,10 @@ spec:
               imagePullPolicy: {{ $.Values.image.pullPolicy }}
               args:
                 - backup
-                - --server={{ lower (include "opendustpan.scheme" $) }}://{{ include "opendustpan.fullname" $ }}.{{ $.Release.Namespace }}.svc:{{ include "opendustpan.servicePort" $ }}
+                - {{ printf "--server=%s://%s.%s.svc:%v" (lower (include "opendustpan.scheme" $)) (include "opendustpan.fullname" $) $.Release.Namespace (include "opendustpan.servicePort" $) | quote }}
+                {{- if .caSecret.name }}
+                - {{ printf "--ca-file=/ca/%s" .caSecret.key | quote }}
+                {{- end }}
               env:
                 - name: DUSTPAN_ADMIN_TOKEN
                   valueFrom:
@@ -53,14 +57,27 @@ spec:
                       name: {{ .tokenSecret.name }}
                       key: {{ .tokenSecret.key }}
               resources:
-                {{- toYaml $.Values.resources | nindent 16 }}
+                {{- toYaml .resources | nindent 16 }}
               securityContext:
                 {{- toYaml $.Values.containerSecurityContext | nindent 16 }}
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp
+                {{- if .caSecret.name }}
+                - name: ca
+                  mountPath: /ca
+                  readOnly: true
+                {{- end }}
           volumes:
             - name: tmp
               emptyDir: {}
+            {{- if .caSecret.name }}
+            - name: ca
+              secret:
+                secretName: {{ .caSecret.name }}
+                items:
+                  - key: {{ .caSecret.key | quote }}
+                    path: {{ .caSecret.key | quote }}
+{{- end }}
 {{- end }}
 {{- end }}

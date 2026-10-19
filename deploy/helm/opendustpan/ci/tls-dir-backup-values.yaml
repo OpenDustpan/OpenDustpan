@@ -1,5 +1,5 @@
-# One instance: built-in TLS, blobs and backups on claims, a console
-# configuration and a bootstrap admin token.
+# One instance: built-in TLS with a private authority, blobs and backups on
+# claims, a console configuration and a bootstrap admin token.
 database:
   existingSecret:
     name: opendustpan-database
@@ -26,6 +26,8 @@ backup:
     enabled: true
     tokenSecret:
       name: opendustpan-backup-token
+    caSecret:
+      name: opendustpan-ca
 console:
   runtimeConfig:
     apiBase: https://dustpan.example
@@ -34,3 +36,12 @@ server:
     existingSecret: opendustpan-tls
 networkPolicy:
   allowAllEgress: true
+metrics:
+  serviceMonitor:
+    enabled: true
+    tokenSecret:
+      name: opendustpan-metrics-token
+    tlsConfig:
+      caSecret:
+        name: opendustpan-ca
+      serverName: dustpan.example

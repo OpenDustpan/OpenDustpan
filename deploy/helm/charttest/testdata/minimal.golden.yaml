@@ -158,8 +158,8 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - serve
-            - --log-level=info
-            - --log-format=json
+            - "--log-level=info"
+            - "--log-format=json"
             - --console-dir=/console
             - --blob-dir=/data/blobs
           env:

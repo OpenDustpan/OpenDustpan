@@ -1,4 +1,5 @@
 # Refused: null removes networkPolicy.allowAllEgress.
+# want: at '/networkPolicy': missing property 'allowAllEgress'
 database:
   existingSecret:
     name: opendustpan-database

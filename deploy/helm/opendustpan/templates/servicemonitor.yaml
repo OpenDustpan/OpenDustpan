@@ -18,8 +18,20 @@ spec:
       - {{ $.Release.Namespace }}
   endpoints:
     - port: http
-      path: /metrics
+      path: /api/server/metrics
       scheme: {{ lower (include "opendustpan.scheme" $) }}
+      {{- if or .tlsConfig.caSecret.name .tlsConfig.serverName }}
+      tlsConfig:
+        {{- if .tlsConfig.caSecret.name }}
+        ca:
+          secret:
+            name: {{ .tlsConfig.caSecret.name }}
+            key: {{ .tlsConfig.caSecret.key }}
+        {{- end }}
+        {{- if .tlsConfig.serverName }}
+        serverName: {{ .tlsConfig.serverName | quote }}
+        {{- end }}
+      {{- end }}
       interval: {{ .interval }}
       scrapeTimeout: {{ .scrapeTimeout }}
       authorization:

@@ -169,16 +169,16 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - serve
-            - --log-level=info
-            - --log-format=json
+            - "--log-level=info"
+            - "--log-format=json"
             - --console-dir=/console
-            - --blob-store=s3://dustpan-state/prod
-            - --backup-target=s3://dustpan-backups/prod
-            - --s3-endpoint=https://s3.example
-            - --s3-region=eu-west-1
-            - --public-url=https://dustpan.example
-            - --trusted-proxies=10.0.0.0/8
-            - --trusted-proxy-header=x-forwarded-for
+            - "--blob-store=s3://dustpan-state/prod"
+            - "--backup-target=s3://dustpan-backups/prod"
+            - "--s3-endpoint=https://s3.example"
+            - "--s3-region=eu-west-1"
+            - "--public-url=https://dustpan.example"
+            - "--trusted-proxies=10.0.0.0/8"
+            - "--trusted-proxy-header=x-forwarded-for"
           env:
             - name: DUSTPAN_LISTEN
               value: ":8080"
@@ -282,6 +282,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
+      activeDeadlineSeconds: 21600
       template:
         metadata:
           labels:
@@ -306,7 +307,7 @@ spec:
               imagePullPolicy: IfNotPresent
               args:
                 - backup
-                - --server=http://release-opendustpan.dustpan.svc:80
+                - "--server=http://release-opendustpan.dustpan.svc:80"
               env:
                 - name: DUSTPAN_ADMIN_TOKEN
                   valueFrom:
@@ -315,10 +316,10 @@ spec:
                       key: token
               resources:
                 limits:
-                  memory: 1Gi
+                  memory: 128Mi
                 requests:
-                  cpu: 100m
-                  memory: 256Mi
+                  cpu: 10m
+                  memory: 32Mi
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities:
@@ -391,7 +392,7 @@ spec:
       - dustpan
   endpoints:
     - port: http
-      path: /metrics
+      path: /api/server/metrics
       scheme: http
       interval: 30s
       scrapeTimeout: 10s
