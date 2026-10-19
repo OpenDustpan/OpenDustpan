@@ -43,6 +43,7 @@ func TestTemplateGolden(t *testing.T) {
 		{name: "minimal", values: "ci/minimal-values.yaml"},
 		{name: "s3", values: "ci/s3-values.yaml"},
 		{name: "tls-dir-backup", values: "ci/tls-dir-backup-values.yaml"},
+		{name: "numeric-secret-key", values: "ci/numeric-secret-key-values.yaml"},
 	}
 
 	for _, tc := range tests {

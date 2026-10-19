@@ -181,18 +181,18 @@ spec:
             - name: DUSTPAN_DATABASE
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-database
-                  key: url
+                  name: "opendustpan-database"
+                  key: "url"
             - name: DUSTPAN_KEY_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-key-encryption-key
-                  key: key-encryption-key
+                  name: "opendustpan-key-encryption-key"
+                  key: "key-encryption-key"
             - name: DUSTPAN_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-admin-token
-                  key: admin-token
+                  name: "opendustpan-admin-token"
+                  key: "admin-token"
             - name: DUSTPAN_TLS_CERT
               value: /tls/tls.crt
             - name: DUSTPAN_TLS_KEY
@@ -269,7 +269,7 @@ spec:
             name: release-opendustpan-console
         - name: tls
           secret:
-            secretName: opendustpan-tls
+            secretName: "opendustpan-tls"
             defaultMode: 0440
 ---
 # Source: opendustpan/templates/cronjob-backup.yaml
@@ -325,8 +325,8 @@ spec:
                 - name: DUSTPAN_ADMIN_TOKEN
                   valueFrom:
                     secretKeyRef:
-                      name: opendustpan-backup-token
-                      key: token
+                      name: "opendustpan-backup-token"
+                      key: "token"
               resources:
                 limits:
                   memory: 128Mi
@@ -354,7 +354,7 @@ spec:
               emptyDir: {}
             - name: ca
               secret:
-                secretName: opendustpan-ca
+                secretName: "opendustpan-ca"
                 items:
                   - key: "ca.crt"
                     path: "ca.crt"
@@ -388,13 +388,13 @@ spec:
       tlsConfig:
         ca:
           secret:
-            name: opendustpan-ca
-            key: ca.crt
+            name: "opendustpan-ca"
+            key: "ca.crt"
         serverName: "dustpan.example"
       interval: 30s
       scrapeTimeout: 10s
       authorization:
         type: Bearer
         credentials:
-          name: opendustpan-metrics-token
-          key: token
+          name: "opendustpan-metrics-token"
+          key: "token"

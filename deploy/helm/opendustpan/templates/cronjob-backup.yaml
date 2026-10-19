@@ -54,8 +54,8 @@ spec:
                 - name: DUSTPAN_ADMIN_TOKEN
                   valueFrom:
                     secretKeyRef:
-                      name: {{ .tokenSecret.name }}
-                      key: {{ .tokenSecret.key }}
+                      name: {{ .tokenSecret.name | quote }}
+                      key: {{ .tokenSecret.key | quote }}
               resources:
                 {{- toYaml .resources | nindent 16 }}
               securityContext:
@@ -74,7 +74,7 @@ spec:
             {{- if .caSecret.name }}
             - name: ca
               secret:
-                secretName: {{ .caSecret.name }}
+                secretName: {{ .caSecret.name | quote }}
                 items:
                   - key: {{ .caSecret.key | quote }}
                     path: {{ .caSecret.key | quote }}

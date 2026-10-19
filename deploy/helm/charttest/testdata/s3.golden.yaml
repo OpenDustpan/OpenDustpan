@@ -185,23 +185,23 @@ spec:
             - name: DUSTPAN_DATABASE
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-database
-                  key: database-url
+                  name: "opendustpan-database"
+                  key: "database-url"
             - name: DUSTPAN_KEY_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-key-encryption-key
-                  key: key-encryption-key
+                  name: "opendustpan-key-encryption-key"
+                  key: "key-encryption-key"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-s3
-                  key: AWS_ACCESS_KEY_ID
+                  name: "opendustpan-s3"
+                  key: "AWS_ACCESS_KEY_ID"
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-s3
-                  key: AWS_SECRET_ACCESS_KEY
+                  name: "opendustpan-s3"
+                  key: "AWS_SECRET_ACCESS_KEY"
             - name: DUSTPAN_OIDC_ISSUER
               value: https://idp.example
             - name: DUSTPAN_OIDC_CLIENT_SECRET
@@ -312,8 +312,8 @@ spec:
                 - name: DUSTPAN_ADMIN_TOKEN
                   valueFrom:
                     secretKeyRef:
-                      name: opendustpan-backup-token
-                      key: token
+                      name: "opendustpan-backup-token"
+                      key: "token"
               resources:
                 limits:
                   memory: 128Mi
@@ -399,5 +399,5 @@ spec:
       authorization:
         type: Bearer
         credentials:
-          name: opendustpan-metrics-token
-          key: token
+          name: "opendustpan-metrics-token"
+          key: "token"

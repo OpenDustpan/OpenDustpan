@@ -168,13 +168,13 @@ spec:
             - name: DUSTPAN_DATABASE
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-database
-                  key: database-url
+                  name: "opendustpan-database"
+                  key: "database-url"
             - name: DUSTPAN_KEY_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: opendustpan-key-encryption-key
-                  key: key-encryption-key
+                  name: "opendustpan-key-encryption-key"
+                  key: "key-encryption-key"
           ports:
             - name: http
               containerPort: 8080

@@ -85,20 +85,20 @@ spec:
             - name: DUSTPAN_DATABASE
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.database.existingSecret.name }}
-                  key: {{ .Values.database.existingSecret.key }}
+                  name: {{ .Values.database.existingSecret.name | quote }}
+                  key: {{ .Values.database.existingSecret.key | quote }}
             - name: DUSTPAN_KEY_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.keyEncryptionKey.existingSecret.name }}
-                  key: {{ .Values.keyEncryptionKey.existingSecret.key }}
+                  name: {{ .Values.keyEncryptionKey.existingSecret.name | quote }}
+                  key: {{ .Values.keyEncryptionKey.existingSecret.key | quote }}
             {{- with .Values.adminToken.existingSecret }}
             {{- if .name }}
             - name: DUSTPAN_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .name }}
-                  key: {{ .key }}
+                  name: {{ .name | quote }}
+                  key: {{ .key | quote }}
             {{- end }}
             {{- end }}
             {{- with .Values.s3.credentials.existingSecret }}
@@ -106,13 +106,13 @@ spec:
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ .name }}
-                  key: {{ .accessKeyIDKey }}
+                  name: {{ .name | quote }}
+                  key: {{ .accessKeyIDKey | quote }}
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .name }}
-                  key: {{ .secretAccessKeyKey }}
+                  name: {{ .name | quote }}
+                  key: {{ .secretAccessKeyKey | quote }}
             {{- end }}
             {{- end }}
             {{- if $tls }}
@@ -193,7 +193,7 @@ spec:
         {{- if $tls }}
         - name: tls
           secret:
-            secretName: {{ $tls }}
+            secretName: {{ $tls | quote }}
             defaultMode: 0440
         {{- end }}
       {{- with .Values.nodeSelector }}

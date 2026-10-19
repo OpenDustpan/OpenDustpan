@@ -25,8 +25,8 @@ spec:
         {{- if .tlsConfig.caSecret.name }}
         ca:
           secret:
-            name: {{ .tlsConfig.caSecret.name }}
-            key: {{ .tlsConfig.caSecret.key }}
+            name: {{ .tlsConfig.caSecret.name | quote }}
+            key: {{ .tlsConfig.caSecret.key | quote }}
         {{- end }}
         {{- if .tlsConfig.serverName }}
         serverName: {{ .tlsConfig.serverName | quote }}
@@ -37,7 +37,7 @@ spec:
       authorization:
         type: Bearer
         credentials:
-          name: {{ .tokenSecret.name }}
-          key: {{ .tokenSecret.key }}
+          name: {{ .tokenSecret.name | quote }}
+          key: {{ .tokenSecret.key | quote }}
 {{- end }}
 {{- end }}
