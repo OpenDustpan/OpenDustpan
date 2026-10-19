@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -598,6 +599,19 @@ type serverArgs struct {
 	signIn *signInSetup
 }
 
+// profileStoreOptions returns the option that gives the in-process server the
+// profile store of st.
+func profileStoreOptions(st serverStore) []dustpan.Option {
+	switch s := st.(type) {
+	case *sqlite.Store:
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+	case *postgres.Store:
+		return []dustpan.Option{dustpan.WithProfileStore(s.Profiles())}
+	default:
+		return nil
+	}
+}
+
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
 // the feature on, so the in-process server checks the lists of every
 // namespace, including for the bootstrap admin token.
@@ -647,7 +661,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
-		[]dustpan.Option{
+		append(profileStoreOptions(st), []dustpan.Option{
 			dustpan.WithRegion(region),
 			dustpan.WithNamespaceStore(st),
 			dustpan.WithStackStore(st),
@@ -664,7 +678,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 			dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
 			dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 			dustpan.WithDisablePulumiJournaling(args.disableJournaling),
-		},
+		}...),
 	), args.signIn.options()...)...)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
@@ -1198,7 +1212,11 @@ func (e *Env) ServerAPIStatusFrom(
 // as OpenTofu sends it. It uses the test server's client, which trusts the
 // self-signed certificate OpenTofu gets through SSL_CERT_FILE.
 func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (int, string, error) {
-	return e.tfeStatusAs(ctx, token, tfeCall{method: method, path: path, body: body, userAgent: "", scheme: ""})
+	return e.tfeStatusAs(
+		ctx,
+		token,
+		tfeCall{method: method, path: path, body: body, userAgent: "", scheme: "", headers: nil},
+	)
 }
 
 // tfeCall is one TFE API request. An empty userAgent keeps the client default,
@@ -1211,6 +1229,8 @@ type tfeCall struct {
 	// scheme names the Authorization scheme: "token" for the console scheme, or
 	// empty for "Bearer" (the TFE-compatible and installation scheme).
 	scheme string
+	// headers are extra request headers, for example If-Match.
+	headers map[string]string
 }
 
 // TFEStatusA sends one TFE API request as principal A, the default principal
@@ -1374,51 +1394,14 @@ const authSchemeToken = "token"
 // check rejects the body. A failing step does not stop later steps.
 func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIStepSpec) {
 	t.Helper()
+	e.apiStepWith(ctx, t, token, spec, nil)
+}
 
-	t.Run(spec.Name, func(t *testing.T) {
-		e.Recorder.SetStep(spec.Name)
-
-		var failure string
-
-		var exitCode int
-
-		status, respBody, err := e.tfeStatusAs(ctx, token, tfeCall{
-			method:    spec.Method,
-			path:      spec.Path,
-			body:      spec.Body,
-			userAgent: spec.UserAgent,
-			scheme:    spec.Scheme,
-		})
-
-		switch {
-		case err != nil:
-			failure = err.Error()
-			exitCode = 1
-		case status != spec.Want:
-			failure = fmt.Sprintf("answers %d, want %d: %s", status, spec.Want, respBody)
-			exitCode = 1
-		case spec.Check != nil:
-			if checkErr := spec.Check(respBody); checkErr != nil {
-				failure = checkErr.Error()
-				exitCode = 1
-			}
-		default:
-		}
-
-		e.steps = append(e.steps, StepResult{
-			Name:     spec.Name,
-			Command:  spec.Method + " " + spec.Path,
-			Failure:  failure,
-			Stderr:   clip(respBody),
-			ExitCode: exitCode,
-			Passed:   failure == "",
-			Skipped:  false,
-		})
-
-		if failure != "" {
-			t.Errorf("%s %s: %s", spec.Method, spec.Path, failure)
-		}
-	})
+// APIStepWithHeaders is APIStepA with extra request headers, for example
+// If-Match.
+func (e *Env) APIStepWithHeaders(ctx context.Context, t *testing.T, spec APIStepSpec, headers map[string]string) {
+	t.Helper()
+	e.apiStepWith(ctx, t, e.token, spec, headers)
 }
 
 // APIStepA runs one TFE API request as principal A and records it as a step.
@@ -2537,6 +2520,10 @@ func (e *Env) tfeStatusAs(ctx context.Context, token string, call tfeCall) (int,
 		req.Header.Set("User-Agent", userAgent)
 	}
 
+	for k, v := range call.headers {
+		req.Header.Set(k, v)
+	}
+
 	resp, err := e.client.Do(req)
 	if err != nil {
 		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
@@ -2561,4 +2548,56 @@ func clip(s string) string {
 	}
 
 	return s[:maxShown] + "…"
+}
+
+func (e *Env) apiStepWith(
+	ctx context.Context, t *testing.T, token string, spec APIStepSpec, headers map[string]string,
+) {
+	t.Helper()
+
+	t.Run(spec.Name, func(t *testing.T) {
+		e.Recorder.SetStep(spec.Name)
+
+		var failure string
+
+		var exitCode int
+
+		status, respBody, err := e.tfeStatusAs(ctx, token, tfeCall{
+			method:    spec.Method,
+			path:      spec.Path,
+			body:      spec.Body,
+			userAgent: spec.UserAgent,
+			scheme:    spec.Scheme,
+			headers:   headers,
+		})
+
+		switch {
+		case err != nil:
+			failure = err.Error()
+			exitCode = 1
+		case status != spec.Want:
+			failure = fmt.Sprintf("answers %d, want %d: %s", status, spec.Want, respBody)
+			exitCode = 1
+		case spec.Check != nil:
+			if checkErr := spec.Check(respBody); checkErr != nil {
+				failure = checkErr.Error()
+				exitCode = 1
+			}
+		default:
+		}
+
+		e.steps = append(e.steps, StepResult{
+			Name:     spec.Name,
+			Command:  spec.Method + " " + spec.Path,
+			Failure:  failure,
+			Stderr:   clip(respBody),
+			ExitCode: exitCode,
+			Passed:   failure == "",
+			Skipped:  false,
+		})
+
+		if failure != "" {
+			t.Errorf("%s %s: %s", spec.Method, spec.Path, failure)
+		}
+	})
 }
