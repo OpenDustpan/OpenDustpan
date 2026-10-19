@@ -134,3 +134,4 @@ both together.
 | [84](0084-backstage-plugin-open-questions.md) | Open questions of the Backstage plugin | discussing |
 | [85](0085-gate-rows-of-a-unit-that-a-name-outlives.md) | Gate rows of a unit that its name outlives: key by unit ID, refuse the name, or move the rows to a tombstone key | draft |
 | [86](0086-change-tickets-in-external-change-systems.md) | Change tickets in external change systems, and what the core needs for them | discussing |
+| [87](0087-components-of-the-server-process.md) | Components of the server process, and a start flag that selects them | draft |
