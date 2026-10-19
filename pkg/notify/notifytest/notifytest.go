@@ -10,8 +10,8 @@
 // A reference adapter in memory, in the tests of this package, runs the
 // suite, so each case runs before the first SQL adapter. RunContacts is the
 // suite of notify.Contacts, which the identity package runs; a reference
-// adapter in memory runs it here too. The suite of the Sender port comes
-// with the first sender adapter.
+// adapter in memory runs it here too. RunSender is the suite of notify.Sender,
+// which each sender adapter runs against a test receiver.
 package notifytest
 
 import (
