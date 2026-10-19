@@ -11,6 +11,12 @@ period ends.
 When the retention period of a unit ends, the retention expiry purges the
 unit. An admin can also purge a unit through the API before that time.
 
+The list of deleted units has a path under `/api/dustpan/v1`:
+`GET /api/dustpan/v1/namespaces/<namespace>/deleted-units`. We deprecate the
+paths in this guide under `/api/inventory/`. See
+`docs/reference/inventory-api.md`. The restore and the final delete have no
+path under `/api/dustpan/v1` yet.
+
 ## Set the retention period
 
 `--soft-delete-retention` (`DUSTPAN_SOFT_DELETE_RETENTION`) sets the

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -62,8 +63,13 @@ type Config struct {
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
-	Logger   *slog.Logger
-	Now      func() time.Time
+	// PublicURL is the external base URL of the server, for example
+	// https://dustpan.example.com. It makes the consoleUrl of each unit.
+	// Empty means the installation has no public URL, and the entries have
+	// no consoleUrl.
+	PublicURL string
+	Logger    *slog.Logger
+	Now       func() time.Time
 }
 
 // Handler serves the inventory API under /api/inventory/.
@@ -79,6 +85,7 @@ type Handler struct {
 	authn       identity.Authenticator
 	sessions    *sessionauth.Checker
 	authz       identity.Authorizer
+	publicURL   string
 	logger      *slog.Logger
 	now         func() time.Time
 	mux         *patternMux
@@ -124,6 +131,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
+		publicURL:   strings.TrimRight(cfg.PublicURL, "/"),
 		logger:      cfg.Logger,
 		now:         now,
 		mux:         newPatternMux(),
@@ -179,6 +187,11 @@ type unitEntry struct {
 	// Collection is the name of the collection of the unit, omitted when the
 	// unit has none (ADR 51).
 	Collection string `json:"collection,omitempty"`
+	// Labels are the labels of the unit, omitted when the unit has none.
+	Labels map[string]string `json:"labels,omitempty"`
+	// ConsoleURL is the URL of the page of the unit in the console, omitted
+	// when the installation has no public URL.
+	ConsoleURL string `json:"consoleUrl,omitempty"` //nolint:tagliatelle // The tool-neutral API names this field consoleUrl.
 }
 
 // listUnitsResponse is the answered document of the unit list.
@@ -204,7 +217,7 @@ func toolLabel(code string) string {
 }
 
 // toUnitEntry maps one projection entry to its wire shape.
-func toUnitEntry(e coreinventory.Entry) unitEntry {
+func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 	return unitEntry{
 		Tool:          toolLabel(e.Tool),
 		Reference:     e.Reference(),
@@ -216,7 +229,20 @@ func toUnitEntry(e coreinventory.Entry) unitEntry {
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
 		Collection:    e.Collection,
+		Labels:        e.Labels,
+		ConsoleURL:    h.consoleURL(e.UnitID),
 	}
+}
+
+// consoleURL returns the URL of the page of the unit in the console, or an
+// empty string when the installation has no public URL. The path holds the
+// unit ID, so a rename of the unit keeps the link.
+func (h *Handler) consoleURL(unitID string) string {
+	if h.publicURL == "" {
+		return ""
+	}
+
+	return h.publicURL + "/units/" + url.PathEscape(unitID)
 }
 
 // toLockEntry maps one projection lock to its wire shape, or nil when the
@@ -229,7 +255,8 @@ func toLockEntry(lock *coreinventory.Lock) *lockEntry {
 	return &lockEntry{Holder: lock.Holder, Since: lock.Since.Unix(), Operation: lock.Operation}
 }
 
-// listUnits answers GET /api/inventory/units with the entries of the
+// listUnits answers GET /api/dustpan/v1/namespaces/{namespace}/units, and the
+// older GET /api/inventory/units, with the entries of the
 // namespace that the caller may read. The route wrapper already allowed
 // namespace:read on the namespace; this removes every entry whose unit the
 // caller may not read (unit:read on the reference). An unknown namespace
@@ -247,14 +274,27 @@ func (h *Handler) listUnits(
 		return
 	}
 
+	filter, err := parseUnitFilter(r, ns)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	if hasAt {
+		if filter.active() {
+			h.writeError(ctx, w, errFilterAt)
+
+			return
+		}
+
 		h.listUnitsAt(w, r, p, obj, at)
 
 		return
 	}
 
-	if _, err := h.namespaces.Get(ctx, ns); err != nil {
-		h.writeError(ctx, w, err)
+	if _, nsErr := h.namespaces.Get(ctx, ns); nsErr != nil {
+		h.writeError(ctx, w, nsErr)
 
 		return
 	}
@@ -266,29 +306,46 @@ func (h *Handler) listUnits(
 		return
 	}
 
-	units := make([]unitEntry, 0, len(entries))
+	units, err := h.readableUnits(ctx, p, entries, filter)
+	if err != nil {
+		h.writeError(ctx, w, err)
 
-	for i := range entries {
-		uobj, objErr := unitObject(entries[i])
-		if objErr != nil {
-			h.writeError(ctx, w, objErr)
-
-			return
-		}
-
-		if authErr := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); authErr != nil {
-			if errors.Is(authErr, identity.ErrDenied) {
-				continue
-			}
-
-			h.writeError(ctx, w, authErr)
-
-			return
-		}
-		units = append(units, toUnitEntry(entries[i]))
+		return
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listUnitsResponse{Units: units})
+}
+
+// readableUnits returns the wire entries of the units in entries that pass the
+// filter and that the caller may read (unit:read on the reference). A denied
+// unit is not in the result.
+func (h *Handler) readableUnits(
+	ctx context.Context, p identity.Principal, entries []coreinventory.Entry, filter unitFilter,
+) ([]unitEntry, error) {
+	units := make([]unitEntry, 0, len(entries))
+
+	for i := range entries {
+		uobj, err := unitObject(entries[i])
+		if err != nil {
+			return nil, err
+		}
+
+		if !filter.matches(entries[i], uobj) {
+			continue
+		}
+
+		if err := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); err != nil {
+			if errors.Is(err, identity.ErrDenied) {
+				continue
+			}
+
+			return nil, fmt.Errorf("authorize %s: %w", identity.ActionUnitRead, err)
+		}
+
+		units = append(units, h.toUnitEntry(entries[i]))
+	}
+
+	return units, nil
 }
 
 // unitObject maps one inventory entry to its tool-neutral unit reference. It

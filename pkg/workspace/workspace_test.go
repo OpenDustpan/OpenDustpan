@@ -4942,6 +4942,7 @@ func (m *memStore) publish(w workspace.Workspace) {
 		Status:        "",
 		ResourceCount: nil,
 		Lock:          memLock(w.Lock),
+		Labels:        nil,
 	}
 }
 

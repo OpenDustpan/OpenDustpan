@@ -15,6 +15,12 @@ import (
 // whose inventory store keeps no change log.
 var errNoHistory = errors.New("the inventory store keeps no change log")
 
+// errFilterAt reports a label or reference filter with the at value: the
+// change log keeps no labels.
+var errFilterAt = fmt.Errorf(
+	"%w: the label and reference query values do not work with the at query value", errInvalidQuery,
+)
+
 // unitAtEntry is one unit in the view at a time. The embedded entry is the
 // unit as it was at the time: its name and its last change then. CurrentName
 // is the name of the unit now, or its name before the delete when the unit is
@@ -60,9 +66,9 @@ func atQuery(r *http.Request) (time.Time, bool, error) {
 }
 
 // toUnitAtEntry maps one unit of the view to its wire shape.
-func toUnitAtEntry(u coreinventory.UnitAt) unitAtEntry {
+func (h *Handler) toUnitAtEntry(u coreinventory.UnitAt) unitAtEntry {
 	out := unitAtEntry{
-		unitEntry:   toUnitEntry(u.Entry),
+		unitEntry:   h.toUnitEntry(u.Entry),
 		UnitID:      u.Entry.UnitID,
 		CurrentName: u.CurrentName,
 		Deleted:     u.Deleted(),
@@ -148,7 +154,7 @@ func (h *Handler) listUnitsAt(
 			return
 		}
 
-		units = append(units, toUnitAtEntry(view.Units[i]))
+		units = append(units, h.toUnitAtEntry(view.Units[i]))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listUnitsAtResponse{

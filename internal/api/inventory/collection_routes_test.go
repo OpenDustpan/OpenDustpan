@@ -49,6 +49,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		PublicURL:     "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
@@ -109,6 +110,22 @@ var collectionRouteCases = map[string]collectionRouteCase{ //nolint:gochecknoglo
 		status: http.StatusOK,
 	},
 	http.MethodDelete + " /api/inventory/namespaces/{namespace}/collections/{collection}": {
+		body:   "",
+		status: http.StatusNoContent,
+	},
+	http.MethodGet + " /api/dustpan/v1/namespaces/{namespace}/collections": {
+		body:   "",
+		status: http.StatusOK,
+	},
+	http.MethodPost + " /api/dustpan/v1/namespaces/{namespace}/collections": {
+		body:   `{"name":"platform"}`,
+		status: http.StatusCreated,
+	},
+	http.MethodGet + " /api/dustpan/v1/namespaces/{namespace}/collections/{collection}": {
+		body:   "",
+		status: http.StatusOK,
+	},
+	http.MethodDelete + " /api/dustpan/v1/namespaces/{namespace}/collections/{collection}": {
 		body:   "",
 		status: http.StatusNoContent,
 	},

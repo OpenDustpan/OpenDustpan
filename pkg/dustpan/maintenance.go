@@ -137,7 +137,8 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		path == "/api/server/maintenance" || strings.HasPrefix(path, "/api/server/maintenance/"):
 		return shapePulumi, false
-	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, "/api/context/"):
+	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, "/api/context/"),
+		strings.HasPrefix(path, v1Prefix):
 		return shapeInventory, true
 	case strings.HasPrefix(path, "/api/v2/"), path == "/.well-known/terraform.json":
 		return shapeTFE, true

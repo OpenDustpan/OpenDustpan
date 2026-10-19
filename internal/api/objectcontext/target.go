@@ -60,18 +60,26 @@ func (h *Handler) findNamespace(r *http.Request) (namespace.Namespace, error) {
 // or soft-deleted. A unit of another namespace, an unknown unit and a purged
 // unit answer errNotFound alike.
 func (h *Handler) resolveUnit(r *http.Request) (target, error) {
+	return h.findUnit(r, r.PathValue("tool"), r.PathValue("unit_id"))
+}
+
+// resolveUnitByID finds the unit with the unit ID of the path in the
+// namespace of the path, live or soft-deleted. The unit ID is unique in the
+// installation, so the path holds no tool. The answers for a missing unit are
+// those of resolveUnit.
+func (h *Handler) resolveUnitByID(r *http.Request) (target, error) {
+	return h.findUnit(r, "", r.PathValue("unit_id"))
+}
+
+// findUnit finds the unit with the ID unitID in the namespace of the path.
+// A tool that is not empty must be the tool of the unit.
+func (h *Handler) findUnit(r *http.Request, tool, unitID string) (target, error) {
 	ns, err := h.findNamespace(r)
 	if err != nil {
 		return target{}, err
 	}
 
 	ctx := r.Context()
-	tool, unitID := r.PathValue("tool"), r.PathValue("unit_id")
-	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: tool, ID: unitID})
-
-	if ref.Validate() != nil {
-		return target{}, errNotFound
-	}
 
 	live, err := h.units.ListUnits(ctx, ns.Name)
 	if err != nil {
@@ -79,19 +87,60 @@ func (h *Handler) resolveUnit(r *http.Request) (target, error) {
 	}
 
 	for i := range live {
-		if live[i].Tool != tool || live[i].UnitID != unitID {
+		if live[i].UnitID != unitID || (tool != "" && live[i].Tool != tool) {
 			continue
 		}
 
-		obj, objErr := unitObject(tool, ns.Name, live[i].Name, unitID)
-		if objErr != nil {
-			return target{}, objErr
-		}
-
-		return target{ns: ns, obj: obj, ref: ref, unit: &live[i], deleted: nil}, nil
+		return h.liveTarget(ns, live[i])
 	}
 
-	gone, err := h.deleted.GetDeletedUnit(ctx, ns.Name, tool, unitID)
+	if tool == "" {
+		return h.deletedTargetByID(r, ns, unitID)
+	}
+
+	return h.deletedTarget(r, ns, tool, unitID)
+}
+
+// liveTarget returns the target of the live unit e.
+func (h *Handler) liveTarget(ns namespace.Namespace, e coreinventory.Entry) (target, error) {
+	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: e.Tool, ID: e.UnitID})
+	if ref.Validate() != nil {
+		return target{}, errNotFound
+	}
+
+	obj, err := unitObject(e.Tool, ns.Name, e.Name, e.UnitID)
+	if err != nil {
+		return target{}, err
+	}
+
+	return target{ns: ns, obj: obj, ref: ref, unit: &e, deleted: nil}, nil
+}
+
+// deletedTargetByID returns the target of the soft-deleted unit unitID, or
+// errNotFound.
+func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, unitID string) (target, error) {
+	all, err := h.deleted.ListDeletedUnits(r.Context(), ns.Name)
+	if err != nil {
+		return target{}, fmt.Errorf("list deleted units: %w", err)
+	}
+
+	for i := range all {
+		if all[i].UnitID == unitID {
+			return h.goneTarget(ns, all[i])
+		}
+	}
+
+	return target{}, errNotFound
+}
+
+// deletedTarget returns the target of the soft-deleted unit unitID of tool,
+// or errNotFound.
+func (h *Handler) deletedTarget(r *http.Request, ns namespace.Namespace, tool, unitID string) (target, error) {
+	if objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: tool, ID: unitID}).Validate() != nil {
+		return target{}, errNotFound
+	}
+
+	gone, err := h.deleted.GetDeletedUnit(r.Context(), ns.Name, tool, unitID)
 	if errors.Is(err, coreinventory.ErrNotFound) {
 		return target{}, errNotFound
 	}
@@ -100,7 +149,17 @@ func (h *Handler) resolveUnit(r *http.Request) (target, error) {
 		return target{}, fmt.Errorf("get deleted unit: %w", err)
 	}
 
-	obj, err := unitObject(tool, ns.Name, gone.Name, unitID)
+	return h.goneTarget(ns, gone)
+}
+
+// goneTarget returns the target of the soft-deleted unit gone.
+func (h *Handler) goneTarget(ns namespace.Namespace, gone coreinventory.DeletedEntry) (target, error) {
+	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: gone.Tool, ID: gone.UnitID})
+	if ref.Validate() != nil {
+		return target{}, errNotFound
+	}
+
+	obj, err := unitObject(gone.Tool, ns.Name, gone.Name, gone.UnitID)
 	if err != nil {
 		return target{}, err
 	}

@@ -85,6 +85,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "rename with a stale fence is ErrFenced", test: testRenameStaleFence},
 		{name: "rename keeps tags", test: testRenameKeepsTags},
 		{name: "inventory lists the created stack", test: testInventoryAfterCreate},
+		{name: "inventory lists the labels of a stack", test: testInventoryLabels},
 		{name: "inventory follows a rename", test: testInventoryAfterRename},
 		{name: "inventory drops a deleted stack", test: testInventoryAfterDelete},
 		{name: "inventory follows a tag change", test: testInventoryAfterTagChange},
@@ -1122,6 +1123,48 @@ func testInventoryAfterCreate(t *testing.T, s Store) {
 	}
 
 	assertInventoryEntry(t, entries[0], st, st.UpdatedAt)
+}
+
+// testInventoryLabels checks that the entry of a stack holds its tags as
+// labels, follows a tag change and a rename, and that a stack with no tag
+// reads an empty map that is not nil.
+func testInventoryLabels(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	tagged := newStack(ns.Name, "web", "prod")
+	plain := newStack(ns.Name, "web", "dev")
+	plain.Tags = nil
+
+	for _, st := range []*stack.Stack{&tagged, &plain} {
+		if err := s.CreateStack(t.Context(), *st, ns.Fence()); err != nil {
+			t.Fatalf("create stack: %v", err)
+		}
+	}
+
+	want := map[string]string{"team": "payments", "app": "web"}
+	if err := s.UpdateStackTags(t.Context(), tagged.Ref, want, now().Add(time.Minute), ns.Fence()); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	if err := s.RenameStack(t.Context(), tagged.Ref, "live", ns.Fence()); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	got := map[string]map[string]string{}
+
+	entries := listInventory(t, s, ns.Name)
+	for i := range entries {
+		if entries[i].Labels == nil {
+			t.Fatalf("labels of %q = nil, want a map", entries[i].Name)
+		}
+
+		got[entries[i].Name] = entries[i].Labels
+	}
+
+	if len(got) != 2 || !maps.Equal(got["web/live"], want) || len(got["web/dev"]) != 0 {
+		t.Fatalf("labels = %v, want web/live %v and web/dev empty", got, want)
+	}
 }
 
 // testInventoryAfterRename renames a stack and checks one entry stays, under

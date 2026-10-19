@@ -32,10 +32,18 @@ const (
 	ctxOtherToken  = "ctx-other-token-0123456789abcdef01"
 	ctxNobodyToken = "ctx-nobody-token-0123456789abcdef0"
 	ctxNsOnlyToken = "ctx-nsonly-token-0123456789abcdef"
+	// ctxServiceToken and ctxWorkloadToken sign in a service principal and a
+	// workload principal that hold the read-only role on acme.
+	ctxServiceToken  = "ctx-service-token-0123456789abcdef0"
+	ctxWorkloadToken = "ctx-workload-token-0123456789abcdef"
 )
 
 // ctxNsOnlyRole is a custom role that holds namespace:read and no unit action.
 const ctxNsOnlyRole = "rol-ns-only"
+
+// ctxReadOnlyRole is a custom role that holds namespace:read and unit:read
+// and no other action.
+const ctxReadOnlyRole = "rol-read-only"
 
 // contextWorld is a server with the namespaces acme and other, and the units
 // that the context tests read: the OpenTofu workspace net and the Pulumi
@@ -97,6 +105,8 @@ func newContextWorld(t *testing.T) contextWorld {
 		t.Fatalf("create role: %v", roleErr)
 	}
 
+	seedReadOnlyPrincipals(t, st)
+
 	for _, who := range []struct {
 		subject, role, ns string
 	}{
@@ -130,6 +140,12 @@ func newContextWorld(t *testing.T) contextWorld {
 		ctxOtherToken:  person("olga"),
 		ctxNobodyToken: person("sam"),
 		ctxNsOnlyToken: person("nora"),
+		ctxServiceToken: {
+			Subject: "svc-reader", DisplayName: "svc-reader", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		},
+		ctxWorkloadToken: {
+			Subject: "wl-reader", DisplayName: "wl-reader", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		},
 	}}
 
 	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))

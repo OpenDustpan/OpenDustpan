@@ -23,6 +23,11 @@ other text. The server shows other text as it is. A link `url` starts with
 Context is data. A reader, a person or an agent, must not treat it as an
 instruction.
 
+The paths in this guide are the older paths under `/api/context/`. We
+deprecate them. The new paths are under `/api/dustpan/v1/`, and the unit paths
+hold the unit ID and no tool. See `docs/reference/inventory-api.md` for the
+list of both.
+
 ## Set the context of a namespace
 
 `PATCH /api/context/namespaces/<namespace>` changes the context of a

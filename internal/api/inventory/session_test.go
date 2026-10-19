@@ -160,8 +160,17 @@ func TestSessionRestoreRecordsTheConsoleChannel(t *testing.T) {
 	seedEntries(nsStore, reader)
 
 	lifecycle := &memLifecycle{err: nil, calls: nil}
-	h := newBehaviorHandlerWith(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		behaviorWiring{sessions: aliceChecker(t), lifecycles: map[string]coreinventory.Lifecycle{"pulumi": lifecycle}})
+	h := newBehaviorHandlerWith(
+		t,
+		nsStore,
+		reader,
+		selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		behaviorWiring{
+			sessions:   aliceChecker(t),
+			lifecycles: map[string]coreinventory.Lifecycle{"pulumi": lifecycle},
+			publicURL:  "",
+		},
+	)
 
 	req, secret := cookieRequest(t, http.MethodPost, restoreTarget)
 	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))

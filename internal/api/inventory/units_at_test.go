@@ -116,6 +116,7 @@ func newHistoryHandler(
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		PublicURL:     "",
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

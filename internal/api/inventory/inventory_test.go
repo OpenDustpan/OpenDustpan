@@ -216,6 +216,7 @@ func newBehaviorHandlerWithSessions(
 
 	return newBehaviorHandlerWith(t, nsStore, reader, authz, behaviorWiring{
 		sessions: sessions, lifecycles: testLifecycles(),
+		publicURL: "",
 	})
 }
 
@@ -224,6 +225,7 @@ func newBehaviorHandlerWithSessions(
 type behaviorWiring struct {
 	sessions   *sessionauth.Checker
 	lifecycles map[string]coreinventory.Lifecycle
+	publicURL  string
 }
 
 // newBehaviorHandlerWith is newBehaviorHandlerWithSessions with the
@@ -252,6 +254,7 @@ func newBehaviorHandlerWith(
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Sessions:      wiring.sessions,
+		PublicURL:     wiring.publicURL,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -357,6 +360,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			Labels:        nil,
 		},
 		{
 			Collection:    "",
@@ -369,6 +373,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			Labels:        nil,
 		},
 		{
 			Collection:    "",
@@ -381,6 +386,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Status:        "deployed",
 			ResourceCount: &count,
 			Lock:          nil,
+			Labels:        nil,
 		},
 	}
 }
@@ -617,6 +623,7 @@ func TestListUnitsLockField(t *testing.T) {
 						Holder:    "admin",
 						Operation: "update",
 					},
+					Labels: nil,
 				},
 			},
 		},
@@ -667,6 +674,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 					Status:        "",
 					ResourceCount: nil,
 					Lock:          nil,
+					Labels:        nil,
 				},
 			},
 		},
@@ -724,6 +732,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 						Holder:    "tester",
 						Operation: "lock",
 					},
+					Labels: nil,
 				},
 			},
 		},
@@ -929,6 +938,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		PublicURL:     "",
 	}
 
 	cases := []struct {

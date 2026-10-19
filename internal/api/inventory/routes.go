@@ -56,6 +56,12 @@ type Route struct {
 	Serve RouteHandler
 }
 
+// v1Prefix is the prefix of the tool-neutral REST API. The paths under
+// /api/inventory/ are older aliases of the paths under it. They serve the same
+// handlers with the same actions and are deprecated: a released console still
+// calls them.
+const v1Prefix = "/api/dustpan/v1"
+
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 //
@@ -64,6 +70,27 @@ type Route struct {
 func (h *Handler) buildRoutes() []Route {
 	//nolint:prealloc // The table is one literal; the collection rows are appended only when a collection service is set.
 	routes := []Route{
+		{
+			Method: http.MethodGet,
+			Path:   v1Prefix + "/namespaces/{namespace}/units",
+			// The object is the namespace of the path. The handler then
+			// removes every entry whose unit the caller may not read
+			// (unit:read on the reference).
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveCollectionNamespace,
+			Serve:   h.listUnits,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   v1Prefix + "/namespaces/{namespace}/deleted-units",
+			// The object is the namespace of the path. The handler then
+			// removes every entry whose unit the caller may not read.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveCollectionNamespace,
+			Serve:   h.listDeletedUnits,
+		},
 		{
 			Method: http.MethodGet,
 			Path:   "/api/inventory/units",

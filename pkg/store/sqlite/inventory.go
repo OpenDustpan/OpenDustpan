@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -395,12 +396,35 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 		return nil, fmt.Errorf("select inventory: %w", err)
 	}
 
+	labels, err := stackTagMap(ctx, s.queries, ns.String())
+	if err != nil {
+		return nil, err
+	}
+
 	out := make([]inventory.Entry, 0, len(rows))
+
 	for i := range rows {
-		out = append(out, inventoryEntry(rows[i]))
+		entry := inventoryEntry(rows[i])
+		entry.Labels = unitLabels(entry.Tool, entry.UnitID, labels)
+		out = append(out, entry)
 	}
 
 	return out, nil
+}
+
+// unitLabels returns the labels of a unit as a new map. The Pulumi CLI sends
+// stack tags as labels, so the tags of a stack are its labels. A workspace
+// has no label yet.
+func unitLabels(tool, unitID string, stackTags map[string]map[string]string) map[string]string {
+	out := map[string]string{}
+
+	if tool != inventoryTool {
+		return out
+	}
+
+	maps.Copy(out, stackTags[unitID])
+
+	return out
 }
 
 // inventoryEntry converts an inventory row into a domain entry. A null
@@ -430,6 +454,7 @@ func inventoryEntry(row db.ListInventoryRow) inventory.Entry {
 		ResourceCount: count,
 		Lock:          inventoryLock(row),
 		Collection:    row.Collection,
+		Labels:        nil,
 	}
 }
 

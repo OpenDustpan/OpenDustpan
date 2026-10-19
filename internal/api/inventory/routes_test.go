@@ -94,6 +94,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		PublicURL:     "",
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -128,6 +129,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		PublicURL:     "",
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -282,10 +284,18 @@ func probeRoute(t *testing.T, handler *apiinventory.Handler, route apiinventory.
 func routeRequest(t *testing.T, route apiinventory.Route, token string) *http.Request {
 	t.Helper()
 
-	path := strings.NewReplacer("{tool}", "pulumi", "{unitID}", seededUnitID).Replace(route.Path)
-	target := path + "?organization=acme"
+	path := strings.NewReplacer("{tool}", "pulumi", "{unitID}", seededUnitID, "{namespace}", "acme").Replace(route.Path)
+	target := path
+
+	if !strings.Contains(route.Path, "{namespace}") {
+		target += "?organization=acme"
+	}
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, target, http.NoBody)
+
+	if strings.Contains(route.Path, "{namespace}") {
+		req.SetPathValue("namespace", "acme")
+	}
 
 	if strings.Contains(route.Path, "{unitID}") {
 		req.SetPathValue("tool", "pulumi")
