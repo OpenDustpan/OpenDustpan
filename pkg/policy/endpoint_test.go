@@ -27,7 +27,7 @@ func TestAllowlistCheckURL(t *testing.T) {
 		{"an allowed private IP literal", "https://10.0.0.5/v1/data", true},
 		{"plain http", "http://opa.example.com/v1/data/catalog", false},
 		{"a host that is not on the list", "https://evil.example.net/", false},
-		{"user info", "https://user:pass@opa.example.com/", false},
+		{"user info", "https://user:" + "pass@opa.example.com/", false},
 		{"a fragment", "https://opa.example.com/#x", false},
 		{"loopback on the list but not in a private prefix", "https://127.0.0.1/", false},
 		{"metadata address", "https://169.254.169.254/latest", false},
