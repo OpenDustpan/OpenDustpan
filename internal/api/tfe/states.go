@@ -398,8 +398,9 @@ func (h *Handler) readStateVersion(
 // /api/v2/state-versions/{state_version_id}/download. It streams the state
 // content. The CLI sends its token, so this is a normal authorized route,
 // not a capability. It writes one audit entry before it sends a byte, of the
-// kind reveal for a person and tool-operation for any other caller: a failed append answers 500 with no content, so a
-// download without its entry never reaches the CLI (ADR 41 decision 5).
+// kind reveal for a person and tool-operation for any other caller. A failed
+// append answers 500 with no content, so a download without its entry never
+// reaches the CLI (ADR 41 decision 5).
 func (h *Handler) downloadState(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
@@ -433,7 +434,7 @@ func (h *Handler) downloadState(
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", noStoreValue)
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := io.Copy(w, content); err != nil {
@@ -567,6 +568,8 @@ func (h *Handler) readStateOutput(
 
 				return
 			}
+
+			w.Header().Set("Cache-Control", noStoreValue)
 		}
 
 		h.writeJSON(ctx, w, http.StatusOK, stateVersionOutputDocument{Data: output})

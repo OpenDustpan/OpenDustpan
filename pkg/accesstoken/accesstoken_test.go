@@ -401,7 +401,7 @@ func TestAuthenticate(t *testing.T) {
 // signs in a principal of the kind person and a service token one of the kind
 // service, each with the credential access-token and no job ID, so a state
 // download with a personal token is a reveal and one with a service token is
-// not (ADR 240).
+// not.
 func TestAuthenticateFillsTheKindOfThePrincipal(t *testing.T) {
 	t.Parallel()
 

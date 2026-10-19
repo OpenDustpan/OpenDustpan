@@ -9,14 +9,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// stateRoutes returns the state read row of the address. A read needs
-// unit:read on the unit of the path.
+// stateRoutes returns the state read row of the address. A read answers the
+// whole state with plain secret values, so it needs unit:read and
+// unit:read-secrets on the unit of the path.
 func (h *Handler) stateRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
 			Path:    statePath,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 			Serve:   h.getState,
 		},
 	}
@@ -65,13 +66,13 @@ func (h *Handler) getState(w http.ResponseWriter, r *http.Request, c call) {
 	}
 
 	if err := h.appendDownloadAudit(c.request, c.principal, obj, sv.ID.String()); err != nil {
-		h.logger.ErrorContext(ctx, "audit append failed")
+		h.logger.ErrorContext(ctx, "audit append failed", slog.String("error", err.Error()))
 
 		if h.onAuditFailure != nil {
 			h.onAuditFailure()
 		}
 
-		h.writeError(ctx, w, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 
 		return
 	}

@@ -36,8 +36,7 @@ func (h *Handler) appendToolOperationAudit(
 // appendDownloadAudit writes the audit entry of a state download. A download
 // by a person writes the kind reveal, because a person asked to see every
 // secret value of the state. Any other download writes the kind
-// tool-operation. The principal decides, and the channel header never does
-// (ADR 240 decision 1).
+// tool-operation. The principal decides, and the channel header never does.
 func (h *Handler) appendDownloadAudit(
 	r *http.Request, p identity.Principal, obj identity.Object, version string,
 ) error {
@@ -134,8 +133,8 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		Sequence:      0,
 		FenceVersion:  0,
 		Reason:        "",
-		PrincipalKind: "",
-		JobID:         "",
+		PrincipalKind: string(p.Kind),
+		JobID:         p.JobID,
 	}
 }
 

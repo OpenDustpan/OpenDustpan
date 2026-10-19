@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -120,6 +121,10 @@ func (r TempAdmin) Validate() error {
 // audit log, and it is a valid reason of an audit entry, at most
 // audit.MaxReasonLen characters.
 func ValidateReason(reason string) error {
+	if utf8.RuneCountInString(reason) > audit.MaxReasonLen {
+		return fmt.Errorf("%w: the reason is longer than %d characters", history.ErrInvalidReason, audit.MaxReasonLen)
+	}
+
 	if err := history.ValidateReason(reason); err != nil {
 		return err
 	}

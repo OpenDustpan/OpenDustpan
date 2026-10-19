@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -105,6 +107,85 @@ func runStateDownloadKindScenario(t *testing.T, cli e2e.Install, store e2e.Store
 	}
 
 	checkDownloadNoStore(ctx, t, env, person, unit)
+
+	runStateDownloadHTTPScenario(t, env, cli, person, service)
+}
+
+// runStateDownloadHTTPScenario proves the same for a project with a backend
+// "http" block: a state pull of a person writes a reveal entry and one of a
+// service token writes a tool-operation entry, each with its principal kind,
+// the read answers Cache-Control: no-store, a plan with a token that holds
+// unit:read and unit:read-secrets runs, and a viewer, who holds only
+// unit:read, gets 403.
+func runStateDownloadHTTPScenario(t *testing.T, env *e2e.Env, cli e2e.Install, person, service *refusalPerson) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	dir := filepath.Join(env.Home(), "tofu-reveal-http")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("make %s: %v", dir, err)
+	}
+
+	path := "/tofu/state/" + refusalNamespace + "/web-http"
+	writeTofuHTTPConfig(t, dir, env.URL+path)
+
+	httpEnv := func(p *refusalPerson) []string {
+		return []string{"TF_HTTP_USERNAME=dustpan", "TF_HTTP_PASSWORD=" + p.token.Secret}
+	}
+
+	run := func(p *refusalPerson, args ...string) {
+		t.Helper()
+
+		res, err := env.RunAs(ctx, cli, dir, httpEnv(p), args...)
+		if err != nil || res.ExitCode != 0 {
+			t.Fatalf("tofu %s as %s over the http backend: exit %d, %v:\n%s",
+				args[0], p.name, res.ExitCode, err, res.Stderr)
+		}
+	}
+
+	run(person, "init", "-input=false", "-no-color")
+	run(person, "apply", "-input=false", "-auto-approve", "-no-color")
+	run(person, "plan", "-input=false", "-no-color")
+
+	unit := "opentofu:" + refusalNamespace + "/web-http"
+
+	for _, tc := range []struct {
+		who  *refusalPerson
+		want downloadWant
+	}{
+		{person, downloadWant{subject: e2e.SignInSubject("ann@example.com"), kind: "reveal", principalKind: "person"}},
+		{service, downloadWant{subject: "ci-reader", kind: "tool-operation", principalKind: "service"}},
+	} {
+		before := countKindDownloads(readAuditEntries(ctx, t, env, refusalNamespace), unit, tc.want)
+
+		run(tc.who, "state", "pull")
+
+		entries := readAuditEntries(ctx, t, env, refusalNamespace)
+		if after := countKindDownloads(entries, unit, tc.want); after <= before {
+			t.Fatalf("http state pull as %s left %d entries of the kind %s, want more than the %d before",
+				tc.who.name, after, tc.want.kind, before)
+		}
+
+		checkDownloadPrincipalKind(t, entries, unit, tc.want)
+	}
+
+	read, err := env.TFEStatusHeaders(ctx, person.token.Secret, http.MethodGet, path, "")
+	if err != nil || read.Status != http.StatusOK {
+		t.Fatalf("http backend read answers %d, %v: %s", read.Status, err, read.Body)
+	}
+
+	if got := read.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("http backend read Cache-Control = %q, want no-store", got)
+	}
+
+	viewer := issueRefusalPerson(ctx, t, env, "vi", "viewer")
+
+	denied, err := env.TFEStatusHeaders(ctx, viewer.token.Secret, http.MethodGet, path, "")
+	if err != nil || denied.Status != http.StatusForbidden || strings.Contains(denied.Body, "greeting") {
+		t.Fatalf("http backend read by a viewer answers %d, %v: %s; want 403 with no state",
+			denied.Status, err, denied.Body)
+	}
 }
 
 // issueRefusalService makes a service principal with a role on the namespace
@@ -183,8 +264,6 @@ func checkDownloadPrincipalKind(t *testing.T, entries []auditListItem, unit stri
 	}
 }
 
-// checkDownloadNoStore proves that the download route of a state version
-// answers Cache-Control: no-store.
 // stateVersionDocument reads the ID of a state version document.
 type stateVersionDocument struct {
 	Data stateVersionData `json:"data"`

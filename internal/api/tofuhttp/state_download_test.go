@@ -2,7 +2,7 @@ package tofuhttp_test
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,8 +20,6 @@ import (
 )
 
 const downloadState = `{"version":4,"serial":1}`
-
-var errDownloadAudit = errors.New("audit store failed")
 
 // stateUnits is a fakeUnits that holds one state version.
 type stateUnits struct {
@@ -225,12 +223,14 @@ func checkReadEntry(t *testing.T, store *recordingAudit, want readWant) {
 }
 
 // TestStateReadAnswersNoContentWhenTheEntryIsLost proves that a read whose
-// audit entry cannot be written answers 500 with no state and counts the
-// failure.
+// audit entry cannot be written, here because the namespace is fenced, answers
+// 500 with no state and counts the failure.
 func TestStateReadAnswersNoContentWhenTheEntryIsLost(t *testing.T) {
 	t.Parallel()
 
-	store := &recordingAudit{Store: nil, err: errDownloadAudit, entries: nil, mu: sync.Mutex{}}
+	store := &recordingAudit{
+		Store: nil, err: fmt.Errorf("append: %w", namespace.ErrFenced), entries: nil, mu: sync.Mutex{},
+	}
 
 	var failures int
 
@@ -254,11 +254,52 @@ func TestStateReadAnswersNoContentWhenTheEntryIsLost(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "serial") {
+	if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != "internal error" {
 		t.Fatalf("read answers %d %q, want 500 with no state", rec.Code, rec.Body.String())
 	}
 
 	if failures != 1 {
 		t.Fatalf("failure count = %d, want 1", failures)
+	}
+}
+
+// TestStateReadNeedsTheSecretAction proves that a caller who may read the unit
+// but not its secret values gets 403 and no entry of a read, and that a caller who
+// holds both actions reads the state.
+func TestStateReadNeedsTheSecretAction(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, err: nil, entries: nil, mu: sync.Mutex{}}
+	h := newDownloadHandler(t, downloadPrincipal(identity.KindPerson, identity.CredentialAccessToken, ""), store)
+
+	viewer := downloadPrincipal(identity.KindPerson, identity.CredentialAccessToken, "")
+	viewer.Subject, viewer.Admin = "bob", false
+	viewerHandler, err := tofuhttp.NewHandler(tofuhttp.Config{
+		Authenticator:  kindAuth{p: viewer},
+		Authorizer:     userAuthz{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     stateUnits{fakeUnits: newFakeUnits(true)},
+		Namespaces:     fakeNamespaces{},
+		Audit:          store,
+		Gate:           nil,
+		OnAuditFailure: nil,
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	rec := do(viewerHandler, http.MethodGet, unitPath, "", bearer(adminToken))
+	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "serial") {
+		t.Fatalf("viewer read answers %d %q, want 403 with no state", rec.Code, rec.Body.String())
+	}
+
+	for _, e := range store.entries {
+		if e.Outcome == audit.OutcomeSuccess {
+			t.Fatalf("viewer read left the entry %+v, want none that succeeded", e)
+		}
+	}
+
+	if rec = do(h, http.MethodGet, unitPath, "", bearer(adminToken)); rec.Code != http.StatusOK {
+		t.Fatalf("read with both actions answers %d, want 200", rec.Code)
 	}
 }

@@ -473,6 +473,10 @@ func TestSingleSensitiveOutputWritesToolOperationEntry(t *testing.T) {
 
 	checkSingleSecretShown(t, decodeAuditOutputDoc(t, rec))
 
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("sensitive output Cache-Control = %q, want no-store", got)
+	}
+
 	f.entries.mu.Lock()
 	defer f.entries.mu.Unlock()
 
@@ -494,6 +498,10 @@ func TestSinglePlainOutputWritesNoEntry(t *testing.T) {
 	f.handler.ServeHTTP(rec, auditRequest(t, "/api/v2/state-version-outputs/sv-test123.greeting"))
 
 	checkGreetingOutput(t, decodeAuditOutputDoc(t, rec))
+
+	if got := rec.Header().Get("Cache-Control"); got == "no-store" {
+		t.Fatalf("plain output Cache-Control = %q, want none", got)
+	}
 
 	f.entries.mu.Lock()
 	defer f.entries.mu.Unlock()

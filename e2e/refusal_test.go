@@ -281,6 +281,14 @@ func runTofuHTTPRefusal(t *testing.T, env *e2e.Env, cli e2e.Install, maintainer,
 		return []string{"TF_HTTP_USERNAME=dustpan", "TF_HTTP_PASSWORD=" + p.token.Secret}
 	}
 
+	// A state read over the http backend answers plain secret values, so a
+	// person who runs the CLI needs the role that reveals them besides the
+	// role that writes.
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + refusalNamespace + "/grants",
+		`{"subject":"principal:` + maintainer.principal.ID + `","role":"secret-viewer"}`, http.StatusCreated,
+	}, nil)
+
 	res, err := env.RunAs(ctx, cli, dir, httpEnv(maintainer), "init", "-input=false", "-no-color")
 	if err != nil {
 		t.Fatalf("tofu http init: %v", err)

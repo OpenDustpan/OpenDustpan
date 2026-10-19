@@ -1,7 +1,13 @@
 //nolint:testpackage // The route table is unexported: the test reads it in place.
 package tofuhttp
 
-import "testing"
+import (
+	"net/http"
+	"slices"
+	"testing"
+
+	"opendustpan.org/opendustpan/pkg/identity"
+)
 
 // TestEveryRouteDeclaresItsActions proves no row of the route table serves a
 // request without an action: each row names the actions that the wrapper
@@ -35,6 +41,18 @@ func TestEveryRouteDeclaresItsActions(t *testing.T) {
 
 		if route.Serve == nil {
 			t.Errorf("%s %s has no handler", route.Method, route.Path)
+		}
+	}
+
+	for _, route := range routes {
+		if route.Method != http.MethodGet {
+			continue
+		}
+
+		want := []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets}
+		if !slices.Equal(route.Actions, want) {
+			t.Errorf("GET %s declares %v, want %v: the state holds plain secret values",
+				route.Path, route.Actions, want)
 		}
 	}
 }

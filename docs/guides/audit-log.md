@@ -34,7 +34,10 @@ the principal decides, as the next list says:
   principal record, so its kind is unknown, and the server counts an unknown
   kind as a person. A service token, a token from a trust rule and a job token
   write `tool-operation`. The `Dustpan-Channel` header never decides the kind.
-  Both routes answer `Cache-Control: no-store`.
+  A principal with a kind that the server does not know cannot write an
+  entry, so the download is refused and answers 500 with no content. Both
+  routes need `unit:read` and `unit:read-secrets`, and answer
+  `Cache-Control: no-store`.
 - The OpenTofu route for one output writes one entry with the action
   `unit:read-secrets`, the state version in `version` and the value path
   `/outputs/<name>` when the output is sensitive. A non-sensitive output
