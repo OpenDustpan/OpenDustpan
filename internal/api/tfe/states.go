@@ -40,8 +40,11 @@ const (
 // serial, lineage, MD5 and size the client declared at create, the status,
 // the absolute download URL and, only on the create response, the absolute
 // upload URLs of the capability the content follows through. Holder names who
-// held the lock when the version was declared, force marks a forced version
-// and restored-from names the version a restore copied, empty otherwise.
+// held the lock when the version was declared, force marks a forced version,
+// restored-from names the version a restore copied, empty otherwise,
+// fence-by names the subject of the force-unlock that wrote the version,
+// empty otherwise, and unlocked-write marks a version declared without the
+// lock.
 type stateVersionAttributes struct {
 	CreatedAt          time.Time             `json:"created-at"`                             //nolint:tagliatelle // The TFE wire name; it must not change.
 	DownloadURL        string                `json:"hosted-state-download-url"`              //nolint:tagliatelle // The TFE wire name; it must not change.
@@ -56,7 +59,9 @@ type stateVersionAttributes struct {
 	TerraformVersion   string                `json:"terraform-version"`   //nolint:tagliatelle // The TFE wire name; it must not change.
 	Holder             string                `json:"holder"`
 	Force              bool                  `json:"force"`
-	RestoredFrom       string                `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	RestoredFrom       string                `json:"restored-from"`  //nolint:tagliatelle // The TFE wire name; it must not change.
+	FenceBy            string                `json:"fence-by"`       //nolint:tagliatelle // The TFE wire name; it must not change.
+	UnlockedWrite      bool                  `json:"unlocked-write"` //nolint:tagliatelle // The TFE wire name; it must not change.
 }
 
 // relationshipList is one JSON:API relationship with several targets: the
@@ -354,6 +359,8 @@ func (h *Handler) stateVersionDocument(
 			Holder:             sv.Holder,
 			Force:              sv.Force,
 			RestoredFrom:       sv.RestoredFrom.String(),
+			FenceBy:            sv.FenceBy,
+			UnlockedWrite:      sv.UnlockedWrite,
 		},
 		Relationships: map[string]relationshipList{"outputs": {Data: refs}},
 		Links:         map[string]string{linkSelf: "/api/v2/state-versions/" + sv.ID.String()},
