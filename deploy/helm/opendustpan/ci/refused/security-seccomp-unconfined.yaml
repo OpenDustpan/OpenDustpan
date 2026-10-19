@@ -1,4 +1,5 @@
 # Refused: the seccomp profile Unconfined.
+# want: at '/containerSecurityContext/seccompProfile/type': value must be 'RuntimeDefault'
 database:
   existingSecret:
     name: opendustpan-database

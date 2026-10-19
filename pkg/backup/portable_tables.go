@@ -213,6 +213,16 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "inventory_labels",
+			OrderBy: []string{portColUnitID, "label_key"},
+			Columns: []Column{
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColUnitID, Kind: KindText},
+				{Name: "label_key", Kind: KindText},
+				{Name: "label_value", Kind: KindText},
+			},
+		},
+		{
 			Table:   "inventory_deleted",
 			OrderBy: []string{portColTool, portColUnitID},
 			Columns: []Column{

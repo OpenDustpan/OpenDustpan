@@ -64,13 +64,20 @@ type Route struct {
 }
 
 // buildRoutes returns the route table. It is the single source of the
-// patterns that NewHandler registers and of what each pattern enforces.
+// patterns that NewHandler registers and of what each pattern enforces. The
+// paths hold the unit ID and no tool.
 func (h *Handler) buildRoutes() []Route {
-	const (
-		namespacePath = "/api/context/namespaces/{namespace}"
-		unitPath      = namespacePath + "/units/{tool}/{unit_id}"
+	return h.contextRoutes(
+		"/api/dustpan/v1/namespaces/{namespace}/context",
+		"/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/context",
+		h.resolveUnitByID,
 	)
+}
 
+// contextRoutes returns the six rows of the context routes for one pair of
+// paths: the namespace path and the unit path, whose unit is found by
+// resolveUnit.
+func (h *Handler) contextRoutes(namespacePath, unitPath string, resolveUnit TargetResolver) []Route {
 	nsRead := []identity.Action{identity.ActionNamespaceRead}
 	unitRead := []identity.Action{identity.ActionUnitRead}
 
@@ -91,17 +98,17 @@ func (h *Handler) buildRoutes() []Route {
 		},
 		{
 			Method: http.MethodGet, Path: unitPath, Scope: ScopeAuthorized,
-			Reads: unitRead, Actions: nil, Resolve: h.resolveUnit, Serve: h.readContext,
+			Reads: unitRead, Actions: nil, Resolve: resolveUnit, Serve: h.readContext,
 		},
 		{
 			Method: http.MethodPatch, Path: unitPath, Scope: ScopeAuthorized,
 			Reads: unitRead, Actions: []identity.Action{identity.ActionUnitSetContext},
-			Resolve: h.resolveUnit, Serve: h.patchContext,
+			Resolve: resolveUnit, Serve: h.patchContext,
 		},
 		{
 			Method: http.MethodDelete, Path: unitPath, Scope: ScopeAuthorized,
 			Reads: unitRead, Actions: []identity.Action{identity.ActionUnitSetContext},
-			Resolve: h.resolveUnit, Serve: h.deleteContext,
+			Resolve: resolveUnit, Serve: h.deleteContext,
 		},
 	}
 }

@@ -398,6 +398,35 @@ LIMIT sqlc.arg(page_limit);
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
+-- name: DeleteInventoryLabels :exec
+-- Removes the labels of one unit by its stable ID.
+DELETE FROM inventory_labels
+WHERE unit_id = ?;
+
+-- name: DeleteInventoryLabelsByName :exec
+-- Removes the labels of the unit that the live entry names. It runs before
+-- DeleteInventory removes the entry.
+DELETE FROM inventory_labels
+WHERE unit_id IN (
+    SELECT i.unit_id FROM inventory AS i WHERE i.namespace = ? AND i.tool = ? AND i.name = ?
+);
+
+-- name: CopyStackTagsToInventoryLabels :exec
+-- Writes the tags of one stack as the labels of its unit. The caller removes
+-- the old labels first, in the same transaction.
+INSERT INTO inventory_labels (namespace, unit_id, label_key, label_value)
+SELECT s.namespace, t.stack_id, t.name, t.value
+FROM stack_tags AS t
+JOIN stacks AS s ON s.id = t.stack_id
+WHERE t.stack_id = ?;
+
+-- name: ListInventoryLabels :many
+-- Every label of the live units of a namespace.
+SELECT unit_id, label_key, label_value
+FROM inventory_labels
+WHERE namespace = ?
+ORDER BY unit_id, label_key;
+
 -- name: NextInventoryChangeSeq :one
 -- Takes the next number of the change log of one namespace. The statement runs
 -- last in the transaction of the write, after every other row lock, so the

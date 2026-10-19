@@ -124,8 +124,26 @@ backup:
     tokenSecret:
       name: ""
       key: token
+    # Optional. A Secret with the PEM bundle of the certificate authority
+    # that signed the certificate of the server, for built-in TLS with a
+    # private authority. The CronJob mounts it and passes --ca-file. The
+    # certificate must cover <fullname>.<namespace>.svc. Empty name means the
+    # system trust store of the image.
+    caSecret:
+      name: ""
+      key: ca.crt
     successfulJobsHistoryLimit: 3
     failedJobsHistoryLimit: 3
+    # The time in seconds after which Kubernetes stops a backup Job that is
+    # still running. The default is 6 hours.
+    activeDeadlineSeconds: 21600
+    # The resources of the CronJob container. The client command is small.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
 
 # The web console. The image holds its files in /console.
 console:
@@ -276,7 +294,7 @@ networkPolicy:
   extraEgress: []
 
 metrics:
-  # A ServiceMonitor of the Prometheus Operator for GET /metrics.
+  # A ServiceMonitor of the Prometheus Operator for GET /api/server/metrics.
   serviceMonitor:
     enabled: false
     interval: 30s
@@ -287,6 +305,15 @@ metrics:
     tokenSecret:
       name: ""
       key: token
+    # The TLS settings of the scrape, for built-in TLS with a private
+    # authority. The certificate must cover <fullname>.<namespace>.svc, or
+    # serverName must name a host that it covers. Empty caSecret name and
+    # empty serverName mean the defaults of Prometheus.
+    tlsConfig:
+      caSecret:
+        name: ""
+        key: ca.crt
+      serverName: ""
 
 # The schema refuses the AppArmor and seccomp annotations here.
 podAnnotations: {}

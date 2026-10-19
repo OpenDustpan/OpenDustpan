@@ -42,7 +42,7 @@ type RouteHandler func(w http.ResponseWriter, r *http.Request, p identity.Princi
 type Route struct {
 	// Method is the HTTP method, for example GET.
 	Method string
-	// Path is the ServeMux path pattern, for example /api/inventory/units.
+	// Path is the ServeMux path pattern, for example /api/dustpan/v1/namespaces/{namespace}/units.
 	Path string
 	// Scope names how the route is protected.
 	Scope Scope
@@ -56,6 +56,9 @@ type Route struct {
 	Serve RouteHandler
 }
 
+// v1Prefix is the prefix of the tool-neutral REST API.
+const v1Prefix = "/api/dustpan/v1"
+
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 //
@@ -66,24 +69,23 @@ func (h *Handler) buildRoutes() []Route {
 	routes := []Route{
 		{
 			Method: http.MethodGet,
-			Path:   "/api/inventory/units",
-			// The object is the namespace in the organization query value.
-			// The handler then removes every entry whose unit the caller
-			// may not read (unit:read on the reference).
+			Path:   v1Prefix + "/namespaces/{namespace}/units",
+			// The object is the namespace of the path. The handler then
+			// removes every entry whose unit the caller may not read
+			// (unit:read on the reference).
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
-			Resolve: resolveListUnits,
+			Resolve: resolveCollectionNamespace,
 			Serve:   h.listUnits,
 		},
 		{
 			Method: http.MethodGet,
-			Path:   "/api/inventory/deleted-units",
-			// The object is the namespace in the organization query value.
-			// The handler then removes every entry whose unit the caller
-			// may not read (unit:read on the reference with its ID).
+			Path:   v1Prefix + "/namespaces/{namespace}/deleted-units",
+			// The object is the namespace of the path. The handler then
+			// removes every entry whose unit the caller may not read.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
-			Resolve: resolveListUnits,
+			Resolve: resolveCollectionNamespace,
 			Serve:   h.listDeletedUnits,
 		},
 		{

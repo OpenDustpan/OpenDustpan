@@ -190,7 +190,7 @@ func TestStackLifecycle(t *testing.T) {
 }
 
 // TestInventoryRouting proves dustpan.go mounts the inventory API at
-// /api/inventory/, a pattern more specific than the Pulumi /api/ pattern: the
+// /api/dustpan/v1/, a pattern more specific than the Pulumi /api/ pattern: the
 // unit list serves the inventory envelope, while the Pulumi CLI routes keep
 // their shape.
 func TestInventoryRouting(t *testing.T) {
@@ -199,19 +199,19 @@ func TestInventoryRouting(t *testing.T) {
 	f := newFixture(t)
 	f.createNamespace(t, "acme", region)
 
-	status, body := f.do(t, http.MethodGet, "/api/inventory/units?organization=acme", adminToken, "")
+	status, body := f.do(t, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units", adminToken, "")
 	if status != http.StatusOK || !strings.Contains(body, `"units":[]`) {
 		t.Fatalf("list units: status %d, body %s", status, body)
 	}
 
-	status, body = f.do(t, http.MethodGet, "/api/inventory/units?organization=ghost", adminToken, "")
+	status, body = f.do(t, http.MethodGet, "/api/dustpan/v1/namespaces/ghost/units", adminToken, "")
 	if status != http.StatusNotFound {
 		t.Fatalf("unknown namespace: status %d, want %d (body %s)", status, http.StatusNotFound, body)
 	}
 
-	status, body = f.do(t, http.MethodGet, "/api/inventory/units", adminToken, "")
+	status, body = f.do(t, http.MethodGet, "/api/dustpan/v1/namespaces/Bad%20Name/units", adminToken, "")
 	if status != http.StatusBadRequest {
-		t.Fatalf("missing organization: status %d, want %d (body %s)", status, http.StatusBadRequest, body)
+		t.Fatalf("bad namespace name: status %d, want %d (body %s)", status, http.StatusBadRequest, body)
 	}
 
 	status, body = f.do(t, http.MethodPost, "/api/stacks/acme/web", adminToken, `{"stackName":"prod"}`)
@@ -219,7 +219,7 @@ func TestInventoryRouting(t *testing.T) {
 		t.Fatalf("create stack: status %d, body %s", status, body)
 	}
 
-	status, body = f.do(t, http.MethodGet, "/api/inventory/units?organization=acme", adminToken, "")
+	status, body = f.do(t, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units", adminToken, "")
 	if status != http.StatusOK ||
 		!strings.Contains(body, `"tool":"Pulumi"`) ||
 		!strings.Contains(body, `"reference":"pulumi:acme/web/prod"`) {
@@ -975,6 +975,22 @@ func TestConsoleDir(t *testing.T) {
 		{"missing asset is 404", http.MethodGet, "/missing.js", "", "", http.StatusNotFound},
 		{"writes are rejected", http.MethodPost, "/", "", "", http.StatusMethodNotAllowed},
 		{"api still routed", http.MethodGet, "/api/user", adminToken, "admin", http.StatusOK},
+		{
+			"unknown v1 path is a JSON 404",
+			http.MethodGet,
+			"/api/dustpan/v1/nothing",
+			adminToken,
+			`"code":404`,
+			http.StatusNotFound,
+		},
+		{
+			"unknown v1 write is a JSON 404",
+			http.MethodPost,
+			"/api/dustpan/v1/nothing",
+			adminToken,
+			`"code":404`,
+			http.StatusNotFound,
+		},
 	}
 
 	for _, tc := range cases {

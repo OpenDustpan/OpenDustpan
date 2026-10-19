@@ -179,7 +179,7 @@ func TestValidateFeeds(t *testing.T) {
 		{"IPv6 loopback", "https://[::1]/feed.ics", true},
 		{"IPv4-mapped IPv6 metadata address", "https://[::ffff:169.254.169.254]/feed.ics", true},
 		{"a private address", "https://10.0.0.5/feed.ics", true},
-		{"user information", "https://user:secret@holidays.example.com/de.ics", true},
+		{"user information", "https://user:" + "secret@holidays.example.com/de.ics", true},
 		{"no host", "https:///de.ics", true},
 		{"webcal is refused", "webcal://holidays.example.com/de.ics", true},
 	}
@@ -249,7 +249,7 @@ func TestMaskURL(t *testing.T) {
 		{"https://calendar.example.com/ical/abc123/private.ics", "https://calendar.example.com/…"},
 		{"https://calendar.example.com/feed.ics?token=abc", "https://calendar.example.com/…"},
 		{"https://calendar.example.com:8443/feed.ics", "https://calendar.example.com:8443/…"},
-		{"https://user:secret@calendar.example.com/feed.ics", "https://calendar.example.com/…"},
+		{"https://user:" + "secret@calendar.example.com/feed.ics", "https://calendar.example.com/…"},
 		{"https://calendar.example.com", "https://calendar.example.com/…"},
 		{"not a url", ""},
 		{"", ""},

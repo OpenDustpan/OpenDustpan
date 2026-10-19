@@ -85,6 +85,7 @@ var Tables = []string{
 	"update_journal_refusals",
 	"secret_keys",
 	"inventory",
+	"inventory_labels",
 	"inventory_deleted",
 	"inventory_change_heads",
 	"inventory_changes",

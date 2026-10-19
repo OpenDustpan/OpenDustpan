@@ -221,6 +221,7 @@ func newMoveFixtureWithSessions(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		PublicURL:     "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,

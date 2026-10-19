@@ -211,6 +211,10 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table:   "inventory_labels",
+			columns: []string{backupColNamespace, backupColUnitID, "label_key", "label_value"},
+		},
+		{
 			table: "collections",
 			columns: []string{
 				"id", backupColNamespace, backupColNameKey, backupColName, backupColCreatedAtMs,
