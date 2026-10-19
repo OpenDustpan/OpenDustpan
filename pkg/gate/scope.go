@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"opendustpan.org/opendustpan/pkg/catalog"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -46,6 +46,10 @@ func (l Level) segments() (int, bool) {
 
 // maxSegmentLength bounds a profile name in a scope key, before encoding.
 const maxSegmentLength = 300
+
+// MaxBlueprintNameBytes is the most bytes in the name of a blueprint. It
+// equals the bound of the catalog, which a test of the catalog checks.
+const MaxBlueprintNameBytes = 63
 
 // MaxScopeKeyLength is the length in bytes of the longest scope key: a unit
 // scope with a namespace of 100 bytes, a tool of 100 bytes and a name of 300
@@ -101,10 +105,11 @@ func UnitScope(ns namespace.Name, tool, name string) (Scope, error) {
 }
 
 // BlueprintScope returns the scope of one blueprint version: the blueprint
-// name, which must pass catalog.ValidName, and the version number, from 1.
+// name, which is 1 to MaxBlueprintNameBytes bytes of lowercase letters, digits
+// and '-' with a letter first, and the version number, from 1.
 // The key follows the current decision and holds no namespace.
 func BlueprintScope(name string, version int) (Scope, error) {
-	if !catalog.ValidName(name) || version < 1 {
+	if !ident.ValidSlug(name, MaxBlueprintNameBytes) || version < 1 {
 		return Scope{}, fmt.Errorf("%w: blueprint scope %q version %d", ErrInvalid, name, version)
 	}
 

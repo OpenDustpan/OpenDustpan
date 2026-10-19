@@ -166,6 +166,22 @@ linters:
               desc: SQL belongs in store/, not in the domain.
             - pkg: opendustpan.org/opendustpan/internal/metrics
               desc: Domain code must not import metrics; only dustpan.go and HTTP middleware do.
+        gateleaf:
+          # pkg/gate is a leaf of the domain graph: the owner packages of the
+          # objects that a gate guards import it, so it imports none of them.
+          # The globs match the absolute path of a file.
+          list-mode: strict
+          files:
+            - "**/pkg/gate/*.go"
+            - "!**/*_test.go"
+            - "!**/pkg/gate/gatetest/**"
+          allow:
+            - $gostd
+            - opendustpan.org/opendustpan/internal/ident
+            - opendustpan.org/opendustpan/pkg/namespace
+            - opendustpan.org/opendustpan/pkg/identity
+            - opendustpan.org/opendustpan/pkg/audit
+            - opendustpan.org/opendustpan/pkg/collection
         clientpkg:
           # Client commands live in internal/cli/client and take --server:
           # they never open the database, a blob adapter, a backup target or

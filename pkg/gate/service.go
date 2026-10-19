@@ -91,7 +91,8 @@ type Change struct {
 	// version or the profile that the change uses.
 	Holders []Scope
 	// PlanLock is true at state.write for the lock or the update lease of
-	// the plan of a job, which the job token of its plan phase takes.
+	// the plan of the job in the token. Only the adapter sets it, and only
+	// for that lock or lease.
 	PlanLock bool
 	// BreakGlass is the ID of the audit entry of a break-glass for gates
 	// in error, or empty. It passes only the gates in error.

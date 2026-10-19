@@ -102,6 +102,17 @@ func plannedFacts() gate.Facts {
 	}
 }
 
+func unitRef(t *testing.T) gate.UnitRef {
+	t.Helper()
+
+	obj, ok := unitScope(t).Unit()
+	if !ok {
+		t.Fatal("the unit scope holds no unit")
+	}
+
+	return gate.UnitRef{Object: obj}
+}
+
 func unitScope(t *testing.T) gate.Scope {
 	t.Helper()
 
@@ -127,7 +138,7 @@ func fullRecord(t *testing.T) gate.Record {
 		Schema:   gate.SchemaVersion{Subject: string(gate.PointChangePlanned), Major: 1, Minor: 0},
 		PathSets: []gate.PathSetVersion{{Scope: acme, ID: "network", Version: 3}},
 		Units: []gate.UnitResult{{
-			Unit: unit, Facts: plannedFacts(), Digest: "5e1f",
+			Unit: unitRef(t), Facts: plannedFacts(), Digest: "5e1f",
 			Gates: []gate.PolicyResult{{
 				Policy: gate.PolicyID{Scope: unit, ID: "cost-cap"}, Version: 2, Mode: gate.ModeEnforce,
 				Outcome: gate.ApprovalOutcome("finance"), Matched: true, Error: false, Diagnostic: "",
@@ -231,10 +242,12 @@ func TestTextForms(t *testing.T) {
 		gate.OwnersRequirement("network"),
 		gate.SchemaVersion{Subject: gate.SchemaAccess, Major: 2, Minor: 1},
 		gate.RecordID("gdr-abcdefghij0123456789"),
+		unitRef(t),
 	}
 	texts := []string{
 		`"unit/acme/pulumi/web%2Fprod"`, `"unit/acme/pulumi/web%2Fprod/cost-cap"`, `"owners/network"`,
 		`"access/2.1"`, `"gdr-abcdefghij0123456789"`,
+		`"pulumi:acme/web/prod"`,
 	}
 
 	for i, v := range values {
@@ -255,7 +268,7 @@ func TestTextFormsRefuse(t *testing.T) {
 
 	targets := []any{
 		new(gate.Scope), new(gate.PolicyID), new(gate.RequirementName), new(gate.SchemaVersion),
-		new(gate.RecordID), new(gate.FreshAuth),
+		new(gate.RecordID), new(gate.FreshAuth), new(gate.UnitRef),
 	}
 
 	for _, target := range targets {

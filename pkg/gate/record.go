@@ -66,9 +66,9 @@ type PolicyResult struct {
 
 // UnitResult is the evaluation of one unit.
 type UnitResult struct {
-	// Unit is the unit scope of the unit, so its JSON form is its scope
-	// key.
-	Unit Scope `json:"unit"`
+	// Unit is the reference of the unit, so its JSON form is its wire
+	// form.
+	Unit UnitRef `json:"unit"`
 	// Facts is the fact document of the unit.
 	Facts Facts `json:"facts"`
 	// Digest is the SHA-256 of the fact document, in lowercase hex.

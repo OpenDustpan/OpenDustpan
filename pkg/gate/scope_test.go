@@ -155,7 +155,7 @@ func TestScopeConstructorsRefuse(t *testing.T) {
 
 	for _, name := range []string{"", "Web", "web service", "1web", strings.Repeat("a", 64)} {
 		if _, err := gate.BlueprintScope(name, 1); !errors.Is(err, gate.ErrInvalid) {
-			t.Fatalf("BlueprintScope(%q) = %v, want ErrInvalid: the name must pass catalog.ValidName", name, err)
+			t.Fatalf("BlueprintScope(%q) = %v, want ErrInvalid", name, err)
 		}
 	}
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // maxIDLength is the longest ID: one first character and 62 more.
@@ -308,6 +309,34 @@ func ParseRecordID(s string) (RecordID, error) {
 	return RecordID(s), nil
 }
 
+// UnitRef is the reference of a unit. Its text form is the wire form of the
+// reference.
+type UnitRef struct {
+	identity.Object
+}
+
+// MarshalText returns the wire form of the reference.
+func (u UnitRef) MarshalText() ([]byte, error) {
+	return []byte(u.String()), nil
+}
+
+// UnmarshalText parses text with identity.ParseObject. It returns
+// ErrInvalid when the text is not the reference of a unit.
+func (u *UnitRef) UnmarshalText(text []byte) error {
+	obj, err := identity.ParseObject(string(text))
+	if err != nil {
+		return fmt.Errorf("%w: unit reference %q: %w", ErrInvalid, text, err)
+	}
+
+	if !obj.IsUnit() {
+		return fmt.Errorf("%w: %q is not the reference of a unit", ErrInvalid, text)
+	}
+
+	u.Object = obj
+
+	return nil
+}
+
 // The text forms of the identifiers. A JSON document holds each one as its
 // text.
 var (
@@ -321,4 +350,6 @@ var (
 	_ encoding.TextUnmarshaler = (*SchemaVersion)(nil)
 	_ encoding.TextMarshaler   = RecordID("")
 	_ encoding.TextUnmarshaler = (*RecordID)(nil)
+	_ encoding.TextMarshaler   = UnitRef{Object: identity.Object{}}
+	_ encoding.TextUnmarshaler = (*UnitRef)(nil)
 )

@@ -18,7 +18,7 @@
   ],
   "units": [
     {
-      "unit": "unit/acme/pulumi/web%2Fprod",
+      "unit": "pulumi:acme/web/prod",
       "facts": {
         "budget": {
           "available": true,
