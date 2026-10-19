@@ -182,4 +182,6 @@ func contextScenario(t *testing.T, env *e2e.Env, tool, unitID string) {
 	for _, c := range calls {
 		contextStep(t, env, c)
 	}
+
+	profileScenario(t, env, tool)
 }
