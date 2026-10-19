@@ -22,13 +22,17 @@ const (
 // TestComponentOnlyMatchesReaders in cmd/opendustpan checks each entry
 // against the code that reads the setting.
 //
+// A flag that a process with only the worker component reads too is not in the
+// table: --allowed-origins sets the CORS rule of the metrics route, and
+// --trusted-proxies and --trusted-proxy-header set the client address in the
+// request log of every route. The IP allowlists check the namespace of an
+// object. The metrics route has no namespace, so the allowlists gate no
+// route of a worker-only process.
+//
 //nolint:gochecknoglobals // The table is a fixed declaration list; callers never mutate it.
 var componentOnly = map[string]string{
 	"console-dir":                     ComponentAPI,
-	"allowed-origins":                 ComponentAPI,
 	"public-url":                      ComponentAPI,
-	"trusted-proxies":                 ComponentAPI,
-	"trusted-proxy-header":            ComponentAPI,
 	"ip-allowlists":                   ComponentAPI,
 	"ip-allowlists-include-bootstrap": ComponentAPI,
 	"oidc-issuer":                     ComponentAPI,

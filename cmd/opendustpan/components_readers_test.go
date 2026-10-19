@@ -52,14 +52,18 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 // deleted-object purge, the pruning of sign-in requests and of replay
 // records), the audit shipper and the audit chain check. A function that
 // builds a service for the routes is "api" even though every process builds it.
+// The metrics route of a worker-only process takes the CORS rule, and the
+// request log of that process takes the client address rule, so buildMux and
+// newClientIPResolver are "all". The IP allowlists check the namespace of an
+// object, and the metrics route has none, so wireTokens stays "api".
 var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals // A fixed declaration table.
 	"consoleDir":     {"mountAPI": "api"},
-	"allowedOrigins": {"buildMux": "api", "checkSettings": "api", "mountAPI": "api", "newSignIn": "api"},
+	"allowedOrigins": {"buildMux": "all", "checkSettings": "api", "mountAPI": "api", "newSignIn": "api"},
 	"publicURL": {
 		"checkSettings": "api", "newInventoryHandler": "api", "newRunnerHandler": "api", "newSignIn": "api",
 		"storedSignInReady": "api",
 	},
-	"proxies": {"newClientIPResolver": "api"},
+	"proxies": {"newClientIPResolver": "all"},
 	"ipAllowlists": {
 		"checkTLSAndAllowlist": "api", "newIPAllowlistService": "api", "newPulumiHandler": "api",
 		"newTFEHandler": "api", "wireTokens": "api",

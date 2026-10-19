@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -524,4 +527,131 @@ func waitLive(t *testing.T, base string) {
 	}
 
 	t.Fatal("the server did not answer liveness in time")
+}
+
+// workerMetricsServer starts a server with only the worker component and the
+// extra options, and a debug logger that writes to the returned buffer.
+func workerMetricsServer(t *testing.T, extra ...dustpan.Option) (runningServer, *syncBuffer) {
+	t.Helper()
+
+	logs := &syncBuffer{mu: sync.Mutex{}, buf: strings.Builder{}}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	srv := startComponentServer(t, mustParse(t, "worker"), append(extra, dustpan.WithLogger(logger))...)
+
+	return srv, logs
+}
+
+// getMetrics sends one GET to the metrics route with the admin token and the
+// headers, and answers the response headers.
+func getMetrics(t *testing.T, base string, headers map[string]string) http.Header {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/server/metrics", http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET metrics: %v", err)
+	}
+
+	if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
+		t.Fatalf("read body: %v", copyErr)
+	}
+
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close body: %v", closeErr)
+	}
+
+	return resp.Header
+}
+
+// TestWorkerOnlyAppliesCORSToMetrics proves that a process with only the
+// worker component applies the allowed origins to its metrics route.
+func TestWorkerOnlyAppliesCORSToMetrics(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := workerMetricsServer(t, dustpan.WithAllowedOrigins("https://console.example"))
+
+	allowed := getMetrics(t, srv.base, map[string]string{"Origin": "https://console.example"})
+	if got := allowed.Get("Access-Control-Allow-Origin"); got != "https://console.example" {
+		t.Fatalf("allowed origin: Access-Control-Allow-Origin = %q, want the origin", got)
+	}
+
+	other := getMetrics(t, srv.base, map[string]string{"Origin": "https://other.example"})
+	if got := other.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("other origin: Access-Control-Allow-Origin = %q, want none", got)
+	}
+}
+
+// TestWorkerOnlyAppliesTrustedProxyRule proves that a process with only the
+// worker component reads the client address by the trusted proxy rule: the
+// request log names the forwarded address from a trusted peer, and names the
+// peer when no proxy is trusted.
+func TestWorkerOnlyAppliesTrustedProxyRule(t *testing.T) {
+	t.Parallel()
+
+	forwarded := map[string]string{"X-Forwarded-For": "198.51.100.7"}
+
+	trusted, trustedLogs := workerMetricsServer(t, dustpan.WithTrustedProxies(netip.MustParsePrefix("127.0.0.0/8")))
+	getMetrics(t, trusted.base, forwarded)
+
+	waitLog(t, trustedLogs, "client_ip=198.51.100.7")
+
+	plain, plainLogs := workerMetricsServer(t)
+	getMetrics(t, plain.base, forwarded)
+
+	waitLog(t, plainLogs, "client_ip=127.0.0.1")
+
+	if strings.Contains(plainLogs.String(), "198.51.100.7") {
+		t.Fatalf("no trusted proxy: log names the forwarded address:\n%s", plainLogs.String())
+	}
+}
+
+// waitLog waits until the log holds want. The request log line comes after
+// the response, so the test polls.
+func waitLog(t *testing.T, logs *syncBuffer, want string) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		if strings.Contains(logs.String(), want) {
+			return
+		}
+
+		pause(t, 20*time.Millisecond)
+	}
+
+	t.Fatalf("log lacks %q:\n%s", want, logs.String())
+}
+
+// syncBuffer is a log buffer that the server goroutines and the test share.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+// Write implements io.Writer.
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.Write(p) //nolint:wrapcheck // strings.Builder never fails.
+}
+
+// String answers the text written so far.
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
 }

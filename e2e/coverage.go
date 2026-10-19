@@ -1688,6 +1688,16 @@ func operatorAllowEntries() []AllowEntry {
 			Reason:       "Operator route (ADR 32): no CLI calls it.",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/server/components",
+			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
+			Reason:       "Operator route: no CLI calls it.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/worker",
+			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
+			Reason:       "Operator route: no CLI calls it.",
+		},
+		{
 			Method: http.MethodPost, Path: "/api/server/audit/checkpoint-epochs",
 			CoveringTest: "TestNewCheckpointEpochIsAChange",
 			Reason: "Operator route: no CLI calls it. An administrator starts a new " +

@@ -445,3 +445,37 @@ func (t trackingStore) Extend(ctx context.Context, c durable.Claim, lease time.D
 
 	return claim, nil
 }
+
+// trackingOps is trackingStore for a store that keeps operations only: it
+// records each claim and each renewal in the same way.
+type trackingOps struct {
+	durable.Store
+
+	watch *workerWatch
+}
+
+// Claim records the attempt and claims through the wrapped store.
+func (t trackingOps) Claim(ctx context.Context, req durable.ClaimRequest) (durable.Operation, error) {
+	t.watch.touch()
+	t.watch.beatIfDue(ctx)
+
+	op, err := t.Store.Claim(ctx, req)
+	if err != nil {
+		return op, fmt.Errorf("claim: %w", err)
+	}
+
+	return op, nil
+}
+
+// Extend records the renewal and extends through the wrapped store.
+func (t trackingOps) Extend(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+	t.watch.touch()
+	t.watch.beatIfDue(ctx)
+
+	claim, err := t.Store.Extend(ctx, c, lease)
+	if err != nil {
+		return claim, fmt.Errorf("extend: %w", err)
+	}
+
+	return claim, nil
+}

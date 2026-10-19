@@ -82,6 +82,7 @@ func runBothOnStore(
 	pulumiScenario(t, env)
 
 	checkServerMetrics(t, env)
+	checkServerComponents(t, env)
 	checkReadyWithoutDatabase(t.Context(), t, env)
 }
 
@@ -117,5 +118,38 @@ func checkServerMetrics(t *testing.T, env *e2e.Env) {
 
 	if status != http.StatusUnauthorized {
 		t.Fatalf("get metrics without a token answers %d, want %d: %s", status, http.StatusUnauthorized, body)
+	}
+}
+
+// checkServerComponents proves the component routes: GET /api/server/components
+// and GET /api/server/worker answer 200 with the admin token, which holds
+// server:observe, and 401 without a token.
+func checkServerComponents(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	for _, route := range []struct{ path, field string }{
+		{"/api/server/components", `"components"`},
+		{"/api/server/worker", `"stuck"`},
+	} {
+		status, body, err := env.TFEStatusA(ctx, http.MethodGet, route.path, "")
+		if err != nil {
+			t.Fatalf("get %s: %v", route.path, err)
+		}
+
+		if status != http.StatusOK || !strings.Contains(body, route.field) {
+			t.Fatalf("get %s answers %d %q, want %d with %s", route.path, status, body, http.StatusOK, route.field)
+		}
+
+		status, body, err = env.TFEStatus(ctx, "", http.MethodGet, route.path, "")
+		if err != nil {
+			t.Fatalf("get %s without a token: %v", route.path, err)
+		}
+
+		if status != http.StatusUnauthorized {
+			t.Fatalf("get %s without a token answers %d, want %d: %s",
+				route.path, status, http.StatusUnauthorized, body)
+		}
 	}
 }

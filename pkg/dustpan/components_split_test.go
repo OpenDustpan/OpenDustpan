@@ -127,3 +127,51 @@ func TestWaitingChangeIsInformationInReadiness(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkerBeatsWhileItRunsAChainMigration proves that a worker with a
+// durable store and no job schedule writes its heartbeat when it claims the
+// operation of an audit chain change, and that its readiness stays ready.
+func TestWorkerBeatsWhileItRunsAChainMigration(t *testing.T) {
+	t.Parallel()
+
+	st := openChainStore(t)
+	acme := createChainNamespace(t, st)
+	appendChainEntry(t, st, acme, "req-1")
+
+	api := runChainServer(t, st, audit.ChainOff,
+		dustpan.WithComponents(mustParse(t, "api")),
+		dustpan.WithDurableStore(st.DurableOperations()),
+		dustpan.WithInstanceID("api-1"),
+	)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
+
+	if status, body := api.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+		t.Fatalf("approve through the api process: %d %s, want 202", status, body)
+	}
+
+	if beat, err := st.DurableOperations().LastBeat(t.Context()); err != nil || beat.Owner != "" {
+		t.Fatalf("heartbeat before the worker starts = %+v, %v; want none", beat, err)
+	}
+
+	worker := runChainServer(t, st, audit.ChainOff,
+		dustpan.WithComponents(mustParse(t, "worker")),
+		dustpan.WithDurableStore(st.DurableOperations()),
+		dustpan.WithInstanceID("worker-1"),
+		dustpan.WithOperationLease(time.Minute),
+	)
+
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.State == audit.ChainStateOff && !rec.Pending })
+
+	beat, err := st.DurableOperations().LastBeat(t.Context())
+	if err != nil {
+		t.Fatalf("read heartbeat: %v", err)
+	}
+
+	if beat.Owner != "worker-1" || beat.At.IsZero() {
+		t.Fatalf("heartbeat after the migration = %+v, want one from worker-1", beat)
+	}
+
+	if status, body := worker.do(t, http.MethodGet, "/health/ready"); status != http.StatusOK {
+		t.Fatalf("worker readiness: %d %s, want 200", status, body)
+	}
+}

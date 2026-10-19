@@ -70,7 +70,7 @@ The module switches of the installation apply to each component. The capabilitie
 
 ### Flags that a component does not read
 
-Some flags matter to the `api` component only. For example, `--console-dir`, `--public-url` and `--oidc-*` matter to `api`. A process that runs `worker` without `api` ignores them, and it does not bind the sign-in providers. The `worker` component reads the other flags too. For example, `--soft-delete-retention` sets the end of the retention that `api` records and that `worker` deletes at, and `--audit-sink` names the sinks that `api` lists and `worker` ships to. Give these flags to each process. The start log has one line for each such flag, `setting has no effect: no selected component reads it`. The flag does not stop the start. Give each process the same settings if you want one configuration for all processes.
+Some flags matter to the `api` component only. For example, `--console-dir`, `--public-url` and `--oidc-*` matter to `api`. A process that runs `worker` without `api` ignores them, and it does not bind the sign-in providers. The `worker` component reads the other flags too. For example, `--allowed-origins` sets the CORS rule of the metrics route that a `worker` process serves. `--trusted-proxies` and `--trusted-proxy-header` set the client address in its request log. `--soft-delete-retention` sets the end of the retention that `api` records and that `worker` deletes at. `--audit-sink` names the sinks that `api` lists and `worker` ships to. Give these flags to each process. The start log has one line for each such flag, `setting has no effect: no selected component reads it`. The flag does not stop the start. Give each process the same settings if you want one configuration for all processes.
 
 ### Readiness
 

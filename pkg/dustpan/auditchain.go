@@ -217,7 +217,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		return nil, fmt.Errorf("namespace store keeps no atomic audit chain approval: %w", ErrMissingOption)
 	}
 
-	runner, err := newChainRunner(chain.durableOps, cfg, chain)
+	runner, err := newChainRunner(cfg, chain)
 	if err != nil {
 		return nil, err
 	}
@@ -227,9 +227,16 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 	return chain, nil
 }
 
-// newChainRunner answers the runner that claims migration operations on
-// ops for chain.
-func newChainRunner(ops durable.Store, cfg *settings, chain *auditChain) (*durable.Runner, error) {
+// newChainRunner answers the runner that claims migration operations for
+// chain. Its claims go through the claim recorder of the worker watch, so a
+// worker that runs only a migration still writes its heartbeat, and it takes
+// claims with the configured lease period.
+func newChainRunner(cfg *settings, chain *auditChain) (*durable.Runner, error) {
+	ops := chain.durableOps
+	if cfg.watch != nil {
+		ops = trackingOps{Store: ops, watch: cfg.watch}
+	}
+
 	runner, err := durable.NewRunner(durable.RunnerConfig{
 		Store: ops,
 		Owner: auditChainOwner(cfg),
@@ -241,7 +248,7 @@ func newChainRunner(ops durable.Store, cfg *settings, chain *auditChain) (*durab
 				Steps:      []durable.Step{{Name: auditChainStep, Run: chain.runMigrationStep}},
 			},
 		},
-		Lease:        0,
+		Lease:        cfg.operationLease,
 		RenewEvery:   0,
 		PollEvery:    0,
 		MaxAttempts:  0,
