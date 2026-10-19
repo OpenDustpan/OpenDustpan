@@ -31,10 +31,12 @@ _Avoid_: Namespace key, org ID, UUID
 **Unit**:
 One deployable instance of infrastructure with its own state, in the model of the tool that owns it. A Pulumi stack and an OpenTofu workspace are units.
 _Avoid_: Environment, deployment, target
+_Copy says_: "stack" or "workspace". Both together: "stacks and workspaces". "Unit" stays in code and in the API. Never use it in copy.
 
 **Unit reference**:
 The tool, the namespace and the tool's own name for a unit, written as `<tool>:<namespace>/<name>`, for example `pulumi:acme/web/prod`.
 _Avoid_: Unit ID, path, address
+_Copy says_: the name of the stack or the workspace, with its tool and namespace. `<tool>:<namespace>/<name>` stays in the API.
 
 **State**:
 The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state and may read it. A read masks secret values (ADR 41).
@@ -43,10 +45,12 @@ _Avoid_: State file (except for OpenTofu), snapshot
 **Inventory**:
 The list of all units in a namespace across all tools, with their last change and status. Each tool keeps it current with its own writes.
 _Avoid_: Catalog, registry, index
+_Copy says_: "Inventory" as the console navbar label for the list across all tools (the one short exception). In other copy: "the stacks and workspaces of a namespace".
 
 **Collection**:
 A named set of units in one namespace, from any tool, that a team manages. Each unit is in exactly one collection, and collections do not nest (ADR 51). A collection can be the object of a grant.
 _Avoid_: Group (that is a set of principals), project, folder, system
+_Copy says_: "collection", with the things it holds: "a collection of stacks and workspaces". Do not use "collection" as a plain word for any other set.
 
 **Placement rule**:
 A rule of a namespace that matches a Pulumi project and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61).
@@ -103,10 +107,12 @@ _Avoid_: Breakage, gap
 **Installation**:
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path, and its actions have the area `installation:` (ADR 210). The authorization and audit object of the installation keeps the name `@server`. Write `@server` only for that object, and "installation" in each other place. An installation owns its namespaces. A namespace holds collections, and a collection holds units (ADR 248).
 _Avoid_: Cluster, instance (one server process), deployment
+_Copy says_: "installation", explained once: "one OpenDustpan setup, with its database, its blob store and its key-encryption key". For one program, write "the server".
 
 **Instance**:
 One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
 _Avoid_: Node, replica (alone), host
+_Copy says_: "server process". Never write "instance" in copy.
 
 **Component**:
 A part of the server that a process runs: `api` or `worker` (ADR 249). One process runs one or more components, and a start flag selects the components. All components run by default. A component is a setting of one process. A module switch is a setting of the installation.
@@ -219,6 +225,31 @@ _Avoid_: Tombstone (that is the shred record of a purged unit)
 The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/dustpan/v1/maintenance/enter`. The other state is `normal`.
 _Avoid_: Downtime, freeze
 
+**Forge**:
+The Git host where people review and approve changes, such as GitHub, Forgejo or GitLab. A source of the repository model may sit on one.
+_Avoid_: Provider, platform
+_Copy says_: the name of the host: "GitHub" or "Forgejo". Where the text must cover every kind: "Git host". Never write "forge".
+
+**Review request**:
+The change that OpenDustpan sends to a forge for approval, as a pull request or a merge request.
+_Avoid_: Change request, PR (alone)
+_Copy says_: "pull request" for GitHub and Forgejo, "merge request" for GitLab. Where the text must cover both: "pull request or merge request". Never write "review request".
+
+**Write-back**:
+The act of committing an edit that OpenDustpan received through its API to the Git repository that holds the source.
+_Avoid_: Sync back, push-back
+_Copy says_: "commits to <repo> on GitHub", with the repository and the host named.
+
+**Subject**:
+The identifier of a principal that is unique on the whole installation. For a principal that signs in through a provider, it holds the provider ID and the identity provider subject.
+_Avoid_: User ID, username
+_Copy says_: "the ID of the principal". The API field `subject` keeps its name. Explain it once where it first shows.
+
+**Durable operation**:
+A piece of background work that the database keeps. If the server process that runs it stops, another process can claim it and finish it (ADR 72).
+_Avoid_: Job (alone), task queue item
+_Copy says_: "background task". Name the task in plain words, for example "the backup", not the mechanism. Say the one next step.
+
 ### Federation
 
 **Installation name**:
@@ -256,16 +287,19 @@ _Avoid_: Conflict, lost writes, split brain (as a name of the data)
 **Failover version**:
 A number that increases by one at each promotion of a namespace, and at each restore.
 _Avoid_: Epoch, generation
+_Copy says_: no name. Say the effect and the one next step: "The namespace changed while this write ran. Run the command again." Where a name is needed, write "the number of changes of the namespace by a promotion or a restore".
 
 **Fence**:
 The namespace and failover version that a write carries. A store rejects the write when the failover version is no longer current.
 _Avoid_: Token, guard
+_Copy says_: no name. Say the effect, as for the failover version. Never use "fence" as a plain verb.
 
 ### Identity
 
 **Principal**:
 A caller whose identity OpenDustpan checked: a person, a service or a workload. Each principal has a principal home: the installation or one namespace (ADR 215).
 _Avoid_: User (when the caller can be a machine), actor
+_Copy says_: "principal", explained once where it first shows: "a person, a service or a workload".
 
 **Principal kind**:
 What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload`. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
@@ -289,6 +323,7 @@ _Avoid_: Identity source, IdP connection
 **Installation scope**:
 The scope of a secret value that belongs to the installation and to no namespace, for example the client secret of a sign-in provider. The server binds its data key to `@server`, a name that no namespace can have.
 _Avoid_: Global scope, server namespace
+_Copy says_: "the whole installation".
 
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
@@ -345,6 +380,7 @@ _Avoid_: Permission set, policy
 **Action family**:
 One of four sets of actions that do not overlap: operator, administration, data and delegation. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only. A role on a service principal holds delegation actions only.
 _Avoid_: Permission category, scope
+_Copy says_: "kind of action". Never use "scope" for it.
 
 **Grant**:
 A record that gives one role to a principal or a group on one object. The object is the installation, a namespace, a collection, a unit or a service principal. A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
@@ -369,6 +405,7 @@ _Avoid_: Permission, verb, scope
 **Reach**:
 The set of actions on objects that a principal can do. It comes from the grants of the principal and the grants of its groups. It also holds the grants of each principal it can act as through an act-as edge. One reach covers another when it holds each of its actions on each of its objects.
 _Avoid_: Effective access, permission set
+_Copy says_: "what the principal can do", with the actions named. Never use "reach" as a plain verb.
 
 **Act-as edge**:
 A right that lets one principal use the authority of another. It has two forms: `principal:manage-tokens` on a principal, and the right to write a trust rule that names a principal.
@@ -465,14 +502,17 @@ _Avoid_: Lease
 **Override switch**:
 A setting of a namespace or of a unit that allows an override (ADR 44, decision 6). Both settings are off by default. A unit setting only narrows the setting of its namespace.
 _Avoid_: Flag, toggle
+_Copy says_: "forced-write switch" and "unlocked-write switch". Say where to turn each on. "Override switch" stays in code and in the API.
 
 **Forced write**:
 A state write that skips the lineage and serial checks, as `tofu state push -force` does. It needs the action `unit:write-forced` and both override switches on.
 _Avoid_: Force push, override (alone)
+_Copy says_: "forced write", with the permission (`unit:write-forced`) after the plain words.
 
 **Unlocked write**:
 A state write to a workspace that no principal holds, as `tofu apply -lock=false` does. It needs the action `unit:write-unlocked` and both override switches on.
 _Avoid_: Lockless write
+_Copy says_: "write without the lock", with the permission (`unit:write-unlocked`) after the plain words.
 
 **State version**:
 One immutable copy of the state of a workspace, with a lineage and a serial.
@@ -495,6 +535,7 @@ _Avoid_: Version number, revision
 **Scope**:
 The namespace and the stable identity of a unit that one data key protects.
 _Avoid_: Context, key ID
+_Copy says_: "the secrets of one stack or workspace". Never use "scope" as a plain word for range or limit.
 
 **Data key**:
 The random key that encrypts all secret values of one scope. OpenDustpan stores it only in encrypted form.
@@ -519,6 +560,7 @@ _Avoid_: Key status, KMS state
 **Sealed**:
 Encrypted at rest with the data key of a scope, or with the item key of a history item. The server seals each checkpoint blob, event payload and journal batch of a Pulumi update with the item key of the update (ADR 151). It seals the state blob and the outputs document of an OpenTofu state version with the item key of the state version. The part of the server that seals and opens content is the sealer.
 _Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
+_Copy says_: "encrypted by the server". Do not use "sealed" in copy. It means locked in Vault.
 
 **Secret value**:
 A value in state that the tool marks as secret: a Pulumi secret, or an OpenTofu sensitive output or attribute.
@@ -559,6 +601,7 @@ _Avoid_: Signed head, anchor, checkpoint (alone, outside the audit log)
 **Log sink**:
 An output adapter of the port `pkg/logsink` that delivers structured records to one target: stdout, a file, syslog, a webhook, OTLP logs or object storage. The audit log and the application log use the same port (ADR 60).
 _Avoid_: Log target, log destination, exporter
+_Copy says_: "log output", with the target: a file, syslog or a webhook. Never write "sink" in copy.
 
 **Kind of access**:
 The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The principal kind decides the kind of a state download, never the declared channel (ADR 240). A download with a session or an access token of a principal of the kind `person` writes `reveal`. This includes `tofu state pull` with a personal token or the bootstrap admin token. A download with a service token, a token from a trust rule or a job token writes `tool-operation`. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log). ADR 52 adds `read-access`: a read of the access-review export of an object.
@@ -1320,6 +1363,8 @@ A record of a cyber threat in a namespace, with an ID that has the prefix `thr-`
 _Avoid_: Threat (alone), alert, vulnerability
 
 ## Flagged ambiguities
+
+- **Copy** is every text that a user reads: the console, `README.md`, `docs/guides/`, `docs/reference/`, `docs/explanation/`, CLI output, and the text of API errors and messages. Copy follows ADR 251. Code, API field names, wire values, metrics and logs keep the glossary terms. A `_Copy says_` line gives the word that copy uses instead.
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
 

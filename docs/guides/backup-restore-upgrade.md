@@ -18,7 +18,7 @@ Set a backup target on the server. Use the flag or the variable. An empty target
 DUSTPAN_BACKUP_TARGET=dir:/var/backups/dustpan ./bin/opendustpan serve
 ```
 
-The target holds the layout that the next section describes. The server writes the manifest last. A backup holds sealed OpenTofu state. Protect the target. Use a directory that only the server owner can read.
+The target holds the layout that the next section describes. The server writes the manifest last. A backup holds OpenTofu state that the server encrypted. Protect the target. Use a directory that only the server owner can read.
 
 Start a backup with the backup command. It calls the server and waits until the backup leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
@@ -31,10 +31,10 @@ The command takes only `--server` and `--ca-file`. The command prints the backup
 ```text
 backup bkp-opx3krqgb4d7iqglf5gq succeeded (SQL 163840 bytes)
 A backup cannot decrypt secrets without DUSTPAN_KEY_ENCRYPTION_KEY.
-A backup holds sealed OpenTofu state: protect the target.
+A backup holds OpenTofu state that the server encrypted: protect the target.
 ```
 
-The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds sealed OpenTofu state, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
+The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
 Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
 
@@ -163,7 +163,7 @@ database may be the other kind.
 
 A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
-A restore needs the key-encryption key that sealed every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
+A restore needs the key-encryption key that encrypted every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
 
 ## Upgrade the server
 
