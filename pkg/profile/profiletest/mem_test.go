@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/profile/profiletest"
@@ -25,7 +27,9 @@ func TestMemoryStore(t *testing.T) {
 
 		m := newMem()
 
-		return profiletest.Store{Profiles: m, Namespaces: memNamespaces{m: m}, Audit: memAudit{m: m}}
+		return profiletest.Store{
+			Profiles: m, Namespaces: memNamespaces{m: m}, Audit: memAudit{m: m}, Records: m.records,
+		}
 	})
 }
 
@@ -46,6 +50,7 @@ type mem struct {
 	entries    map[namespace.Name][]audit.Entry
 	// failAppend makes the audit port refuse an Append, for a test.
 	failAppend bool
+	records    idempotency.Store
 }
 
 func newMem() *mem {
@@ -55,6 +60,7 @@ func newMem() *mem {
 		profiles:   map[profile.ID]*memProfile{},
 		entries:    map[namespace.Name][]audit.Entry{},
 		failAppend: false,
+		records:    idempotencytest.NewMemory(),
 	}
 }
 
@@ -122,7 +128,7 @@ func (memAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error
 }
 
 func (m *mem) Create(
-	_ context.Context, p profile.Profile, r profile.Revision, f namespace.Fence, es []audit.Entry,
+	ctx context.Context, p profile.Profile, r profile.Revision, f namespace.Fence, es []audit.Entry,
 ) (profile.Profile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -151,6 +157,10 @@ func (m *mem) Create(
 
 	if count >= profile.MaxProfiles {
 		return profile.Profile{}, profile.ErrLimit
+	}
+
+	if err := m.finish(ctx, profile.Written{Profile: p, Revision: &r}); err != nil {
+		return profile.Profile{}, err
 	}
 
 	m.profiles[p.ID] = &memProfile{Profile: p, revisions: []profile.Revision{r}, deleted: false}
@@ -255,7 +265,7 @@ func (m *mem) Revisions(
 }
 
 func (m *mem) Save(
-	_ context.Context, at profile.Anchor, r profile.Revision, f namespace.Fence, es []audit.Entry,
+	ctx context.Context, at profile.Anchor, r profile.Revision, f namespace.Fence, es []audit.Entry,
 ) (profile.Profile, error) {
 	ns, id, base := at.Namespace, at.ID, at.Latest
 
@@ -279,6 +289,13 @@ func (m *mem) Save(
 		return profile.Profile{}, profile.ErrInvalid
 	}
 
+	updated := p.Profile
+	updated.Latest, updated.UpdatedAt = r.Number, r.CreatedAt
+
+	if finishErr := m.finish(ctx, profile.Written{Profile: updated, Revision: &r}); finishErr != nil {
+		return profile.Profile{}, finishErr
+	}
+
 	p.revisions = append(p.revisions, r)
 	p.Latest = r.Number
 	p.UpdatedAt = r.CreatedAt
@@ -287,7 +304,7 @@ func (m *mem) Save(
 	return p.Profile, nil
 }
 
-func (m *mem) Delete(_ context.Context, at profile.Anchor, f namespace.Fence, es []audit.Entry) error {
+func (m *mem) Delete(ctx context.Context, at profile.Anchor, f namespace.Fence, es []audit.Entry) error {
 	ns, id, ifLatest := at.Namespace, at.ID, at.Latest
 
 	m.mu.Lock()
@@ -304,6 +321,12 @@ func (m *mem) Delete(_ context.Context, at profile.Anchor, f namespace.Fence, es
 
 	if ifLatest > 0 && p.Latest != ifLatest {
 		return profile.ErrConflict
+	}
+
+	var none profile.Written
+
+	if finishErr := m.finish(ctx, none); finishErr != nil {
+		return finishErr
 	}
 
 	p.deleted = true
@@ -350,4 +373,17 @@ func (m *mem) live(ns namespace.Name, id profile.ID) (*memProfile, error) {
 	}
 
 	return p, nil
+}
+
+// finish stores the answer of the Completion that ctx carries, as the SQL
+// stores do in their transaction. It runs after every check of the write.
+func (m *mem) finish(ctx context.Context, w profile.Written) error {
+	c, ok := idempotency.CompletionFrom(ctx)
+	if !ok {
+		return nil
+	}
+
+	return c.Finish(w, func(token string, a idempotency.Answer) error {
+		return m.records.Complete(ctx, c.Ref, token, a)
+	})
 }

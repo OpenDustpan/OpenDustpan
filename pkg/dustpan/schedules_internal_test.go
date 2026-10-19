@@ -154,6 +154,8 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		durableOwner:     owner,
 		inactivityEvery:  scheduleTestEvery,
 		deletedEvery:     scheduleTestEvery,
+		idempotency:      nil,
+		idempotencyEvery: 0,
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
@@ -24,6 +25,9 @@ type Store struct {
 	Profiles   profile.Store
 	Namespaces namespace.Store
 	Audit      audit.Store
+	// Records is the store of replay records that completes in the
+	// transaction of a write.
+	Records idempotency.Store
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -58,6 +62,9 @@ func Run(t *testing.T, newStore Factory) {
 		{"delete on a stale revision is a conflict", testDeleteStale},
 		{"the document is stored byte for byte", testDocumentBytes},
 		{"a namespace holds at most the limit of profiles", testLimit},
+		{"a write stores the answer of its request in its transaction", testCompletionStored},
+		{"a failed write leaves the record of its request pending", testCompletionKeptPending},
+		{"a write whose record is gone changes nothing", testCompletionLost},
 	}
 
 	for _, tc := range cases {
