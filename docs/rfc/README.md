@@ -83,7 +83,7 @@ both together.
 | [32](0032-object-storage.md) | Object storage adapters | accepted; no bucket of the customer (ADR 221) |
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | accepted |
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
-| [35](0035-packaging.md) | Packaging and installation | draft |
+| [35](0035-packaging.md) | Packaging and installation | draft; TLS, binaries and the image accepted (ADR 27), the Helm chart accepted (ADR 246) |
 | [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
 | [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |

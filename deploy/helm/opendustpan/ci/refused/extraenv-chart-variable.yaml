@@ -1,0 +1,11 @@
+# Refused: a variable that the chart sets.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+server:
+  extraEnv:
+    - name: DUSTPAN_DATABASE
+      value: postgres://x
