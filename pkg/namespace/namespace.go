@@ -30,7 +30,7 @@ var (
 	ErrNotHome = errors.New("namespace is not homed in this region")
 	// ErrFenced reports a write rejected because its fence carries a stale
 	// failover version: the namespace was promoted in another region.
-	ErrFenced = errors.New("write fenced: stale namespace failover version")
+	ErrFenced = errors.New(fencedCopy) //nolint:staticcheck // Copy that clients show as sent.
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 	// ErrUnavailable reports that the database does not answer. Adapters
@@ -44,6 +44,10 @@ var (
 	// maxPageLimit.
 	ErrInvalidPage = errors.New("invalid namespace page")
 )
+
+// fencedCopy is the text of ErrFenced. It is copy: clients show it as sent, so
+// it is a sentence with a capital letter and a full stop.
+const fencedCopy = "The server was restored while this write ran. Run the command again."
 
 const maxNameLength = 100
 

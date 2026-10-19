@@ -75,7 +75,7 @@ curl -X POST https://dustpan.example/api/server/sign-in-providers \
 The rules:
 
 - The server needs the public URL with HTTPS, and a key-encryption key
-  (`DUSTPAN_KEY_ENCRYPTION_KEY`). It seals the client secret with that key.
+  (`DUSTPAN_KEY_ENCRYPTION_KEY`). It encrypts the client secret with that key.
   No answer and no audit entry holds the client secret. An answer has
   `clientSecretSet` only.
 - The list also holds the providers of the flags, with the source

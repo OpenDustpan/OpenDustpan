@@ -798,7 +798,10 @@ type pendingDeclare struct {
 // forcedRefusal names the action and the switches that allow a forced write.
 func forcedRefusal() error {
 	return fmt.Errorf(
-		"%w: a forced write needs the unit:write-forced action and both forced-write switches on",
+		"%w: a forced write needs the forced-write switch on for the namespace "+
+			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
+			"and the permission to write forced state (`unit:write-forced`)",
 		ErrOverrideRefused,
 	)
 }
@@ -811,8 +814,10 @@ func unlockedRefusal(lockErr error) error {
 	}
 
 	return fmt.Errorf(
-		"%w: a write without the lock is refused; turn on the unlocked-write switch of the namespace and of the unit, "+
-			"and grant unit:write-unlocked",
+		"%w: a write without the lock needs the unlocked-write switch on for the namespace "+
+			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
+			"and the permission to write without the lock (`unit:write-unlocked`)",
 		lockErr,
 	)
 }

@@ -1,7 +1,7 @@
 # Deleted units
 
 This guide shows how to list, restore and purge deleted units through the
-inventory API. It follows ADR 47.
+inventory API.
 
 A delete is a soft delete. `pulumi stack rm` and `tofu workspace delete`
 take the unit out of every list and free its name at once. OpenDustpan keeps
