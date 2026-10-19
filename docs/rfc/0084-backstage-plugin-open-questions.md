@@ -19,7 +19,7 @@ docs gate, so the plugin does not fit there.
 | --- | --- | --- |
 | A. A new repository `OpenDustpan/backstage-plugins` (proposed) | Own CI, own release, own Backstage version bumps. The same shape as the community plugins repository. | Only the owner can make it. One more repository to keep. |
 | B. A directory in `OpenDustpan/console` | The repository exists, and it already runs npm. | The console and the plugin release on two schedules. The console gate then also gates Backstage bumps. |
-| C. The Backstage community plugins repository from the start | Backstage maintainers bump the Backstage version each month. | Its maintainers then also review our changes. Our gates (ADR 7) do not run there. |
+| C. The Backstage community plugins repository from the start | Backstage maintainers bump the Backstage version each month. | Its maintainers then also review our changes. Our gates (strict linting, nilaway, semgrep, trivy and the license check) do not run there. |
 
 The project manager proposes A now, and C as a later choice when the
 plugin is stable. The answer also says who owns the publish right of the

@@ -1,13 +1,15 @@
 # 247. Works with Backstage: an entity tab that shows the units of a component
 
-Status: accepted · 2026-10-19. Decision 1 is an owner decision. The project manager decided decisions 2 to 12 under the owner's decision rule. RFC 84 holds the questions that only the owner can answer
+Status: accepted · 2026-10-19. Extends ADR 13 (labels and consoleUrl on the inventory entry) and ADR 210 decision 4 (the label and reference filters of the unit list). Accepts part of RFC 51. Opens RFC 84.
 
 ## Context
 
-On 2026-10-17 the project owner decided to build Backstage support now
-(batch 51.1, "build Backstage support now"). The same decision asks for
+On 2026-10-17 the project owner decided to build Backstage support now,
+in the words "build Backstage support now". The same decision asks for
 spikes of Jira and ServiceNow, only to learn the shape of their interfaces.
-This ADR does not cover those spikes.
+This ADR does not cover those spikes. Decision 1 is an owner decision. The
+product manager decided decisions 2 to 13 under the owner's decision rule.
+RFC 84 holds the questions that only the owner can answer.
 
 [RFC 51](../rfc/0051-change-management-integrations.md) lists "a Backstage
 plugin that reads the inventory" as a first idea. ADR 17 names developer
@@ -52,8 +54,7 @@ The facts on `main`:
 - The console has a page for each Pulumi stack and each OpenTofu
   workspace. Its paths use the tool's own names, not the unit ID.
 - The console is in `OpenDustpan/console` with the npm package
-  `@opendustpan/console` (ADR 8). This session can check out only
-  `opendustpan/opendustpan` and `opendustpan/console`.
+  `@opendustpan/console` (ADR 8).
 
 ## Decision
 
@@ -110,8 +111,8 @@ The facts on `main`:
    - `opendustpan.org/units` holds up to 20 unit references. A reference
      uses the lowercase tool code of the glossary. The plugin shows a unit
      that it cannot find, or cannot read, as one row "not found", with the
-     reference. It does not tell the two cases apart, because the server
-     answers 404 for both.
+     reference. It does not tell the two cases apart, because the list
+     answers only the units that the principal can read.
    - `opendustpan.org/unit-labels` holds one or more `key=value` pairs.
      A unit matches when it has each pair. The plugin shows up to 50
      units, and says how many more units match.
@@ -120,6 +121,9 @@ The facts on `main`:
    - A unit reference changes when a person renames a stack or a
      workspace. The "not found" row then shows the reference and the
      annotation to change. A team that renames units uses labels.
+   - A person who can change the labels of a unit can show it on each
+     entity that selects those labels. For a strict mapping, use
+     `opendustpan.org/units`.
    - The annotation keys use the domain `opendustpan.org`.
 
    Benchmark: the Argo CD plugin reads `argocd/app-name` or
@@ -137,22 +141,34 @@ The facts on `main`:
    - The backend plugin serves only the read routes of decision 7. It
      never forwards another path, another method or a query value that it
      does not know.
+   - The frontend sends only the entity reference. The backend plugin gets
+     the entity from the Software Catalog with the credentials of the
+     Backstage user, so the catalog read permission of that user applies,
+     and reads the annotations there. It never takes a unit reference, a
+     namespace or a label from the request.
+   - The backend plugin maps each answer to the types of the common package
+     and drops each other field. The browser gets only the fields of
+     decision 2.
+   - The backend plugin accepts only user credentials (httpAuth with
+     `allow: ['user']`) and refuses a request with none.
    - The plugin does not use the generic proxy of Backstage. The proxy
      forwards each path under its prefix with the token, so a browser
      could call each route that the principal can call.
    - The backend plugin checks the Backstage permission
-     `opendustpan.unit.read` before it answers. When the permission
-     framework of Backstage is off, Backstage allows each request. So an
-     operator who turns it on can show the tab to some Backstage users
-     only.
+     `opendustpan.unit.read` before it answers. It is a resource permission
+     on the resource type `catalog-entity`, checked for the entity of the
+     request. The permission framework of Backstage is off by default, and
+     then Backstage allows each request. So an operator who turns it on can
+     show the tab to some Backstage users only. The guide says this and
+     gives a sample policy.
 
    Benchmark: the backend of the Backstage Kubernetes plugin holds the
    cluster credentials and serves narrowed reads to its frontend. The
    Backstage docs advise a backend plugin over the proxy when a secret
    must stay on the server.
 
-5. **One read-only principal per Backstage installation (product
-   manager).** The backend plugin calls the REST API as one service
+5. **One read-only principal for each Backstage installation and each
+   namespace (product manager).** The backend plugin calls the REST API as one service
    principal, not as the Backstage user.
 
    - The operator makes the service principal and grants it a role with
@@ -166,15 +182,24 @@ The facts on `main`:
      Kubernetes, the backend plugin can use workload identity in its
      place: it exchanges the platform token for a short-lived token
      through a trust rule of each namespace (ADR 54). The docs show
-     workload identity first, as ADR 54 decision 7 asks.
+     workload identity first, as ADR 54 decision 7 asks. With workload
+     identity or in OpenDustpan Cloud, the backend plugin holds one
+     principal for each namespace. G6 tests both kinds, `service` and
+     `workload`.
+   - A required backend setting `opendustpan.namespaces` lists the
+     namespaces that the plugin may read. It has no wildcard default. A
+     reference outside the list shows as "not found".
    - Each Backstage user who can see the tab sees the data that the
      principal can read. This includes the subject of a lock holder and
-     the actors of the changes. The user guide says so, and says that the
-     grants of the principal and the Backstage permission of decision 4
-     are the two limits.
+     the actors of the changes. The setting `opendustpan.showActors`
+     (default true) hides the actors. The user guide says so, and names
+     three limits: the grants of the principal, the Backstage permission of
+     decision 4 and the access limits of ADR 223 (a Cedar forbid on the
+     Backstage principal).
    - Each request of the backend plugin carries the header
-     `User-Agent: opendustpan-backstage/<version>`, so the audit log of
-     OpenDustpan names the client.
+     `User-Agent: opendustpan-backstage/<version>`, so the request logs of
+     OpenDustpan name the client. The subject of the principal names it in
+     the audit log.
    - A token of the Backstage user, through an exchange of its identity,
      is not in this slice. RFC 84 keeps it open.
 
@@ -197,13 +222,13 @@ The facts on `main`:
    the community add entities, and their catalogs then grow by one entity
    per resource.
 
-7. **The API that the plugin reads (product manager).** The plugin is
-   designed against the paths of ADR 210 only. It reads:
+7. **The API that the plugin reads (product manager).** The plugin uses
+   only the paths of ADR 210. It reads:
 
    | Read | Route | Action |
    | --- | --- | --- |
    | units of a namespace, by label | `GET /api/dustpan/v1/namespaces/{namespace}/units?label=...` | `namespace:read`, then `unit:read` on each unit |
-   | units by reference | `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=...` | `namespace:read`, then `unit:read` on each unit |
+   | units by reference | `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=...`, one call for each namespace of the references, with the token of that namespace | `namespace:read`, then `unit:read` on each unit |
    | one unit with its health and changes | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/context?include=identity,health,changes` | `unit:read` |
    | the console link | the field `consoleUrl` of a unit entry | none more |
 
@@ -220,10 +245,10 @@ The facts on `main`:
    | --- | --- |
    | G1 | The move of the inventory and context routes to `/api/dustpan/v1/` (ADR 210 decision 3) ships first. The plugin calls no old path. |
    | G2 | The inventory entry holds the labels of the unit, as `labels`, a map of strings. The tool package publishes them to the projection in the same transaction as each label change (ADR 13). |
-   | G3 | The unit list takes the query value `label=key=value`, one or more times. A unit matches when it has each pair. The list pages as ADR 210 decision 10 says. |
-   | G4 | The unit list takes the query value `reference=<unit reference>`, up to 20 times. It answers the units that the caller can read. So one call resolves the annotation of decision 3. |
-   | G5 | The inventory entry holds `consoleUrl`: the URL of the page of the unit in the console. The server makes it from `--public-url`. The field is empty when the installation has no public URL. The console serves a path by unit ID. That path opens the page of the stack or the workspace, so a rename does not break a link. That path is a change of `OpenDustpan/console`. |
-   | G6 | A principal with the role of decision 5 can read the list and the context. A test shows it for a service token and for a token of a trust rule. The test also shows that such a principal gets 403 on each write route of the inventory and of the context API. |
+   | G3 | The unit list takes the query value `label=key=value`, URL-encoded, at most 10 pairs. The key and the value follow the label grammar of ADR 223. A unit matches when it has each pair. The list pages as ADR 210 decision 10 says. |
+   | G4 | The unit list takes the query value `reference=<unit reference>`, up to 20 times. Each reference names the namespace of the path. A reference in another namespace answers 400. The list answers the units that the caller can read. |
+   | G5 | The inventory entry holds `consoleUrl`: the URL of the page of the unit in the console. The server makes it from `--public-url`. The field is empty when the installation has no public URL. The link is `{public-url}/units/{unit_id}`. The console keeps this path as a contract. It opens the page of the stack or the workspace, so a rename does not break a link. A change of `OpenDustpan/console` ships the path before the plugin. |
+   | G6 | A principal with the role of decision 5 can read the list and the context. A test shows it for a service token and for a token of a trust rule. The test covers both kinds, `service` and `workload`. It also shows that such a principal gets 403 on each write route of the inventory and of the context API. |
 
    Benchmark: Google AIP-160 gives a list a filter in its query. The
    Kubernetes API lists objects by a label selector.
@@ -266,8 +291,10 @@ The facts on `main`:
       list, and more units than the limit.
     - The backend tests use `@backstage/backend-test-utils` against a
       fake OpenDustpan API. They check that the backend plugin forwards
-      only the routes of decision 7, that it refuses another path, and
-      that no answer to the browser holds the token.
+      only the routes of decision 7, that it refuses another path, that a
+      request that holds a unit reference or a namespace gets 400, that
+      no answer to the browser holds the token, and that no answer to the
+      browser holds a field outside those types.
     - One end-to-end test starts a real server with `opendustpan dev`
       (ADR 237). It makes a Pulumi stack with the real Pulumi CLI and an
       OpenTofu workspace with the real OpenTofu CLI, and gives each a
@@ -294,6 +321,15 @@ The facts on `main`:
     Backstage permission). The pages live with the plugin. The user
     documentation of the server links to them (ADR 214).
 
+13. **Cache and limits (product manager).** The backend plugin caches each
+    answer for 60 seconds, keyed by the route, the query and the principal.
+    It makes at most 4 calls to OpenDustpan at a time. The card reads only
+    the unit list (status, lock, last change). Only the tab reads the
+    context of each unit.
+
+    Benchmark: the Argo CD and Kubernetes plugins for Backstage poll their
+    backends with a cache.
+
 ## Not decided here
 
 [RFC 84](../rfc/0084-backstage-plugin-open-questions.md) asks the owner:
@@ -309,11 +345,13 @@ The facts on `main`:
   change of the tool-neutral API, and G1 is already decided by ADR 210.
 - The console gets a path by unit ID (G5). That change is in
   `OpenDustpan/console`.
-- The plugin work cannot start in this session until the owner makes the
-  repository, or chooses another place (RFC 84).
+- The plugin work cannot start until the owner makes the repository, or
+  chooses another place (RFC 84).
 - One read-only principal shows its data to each Backstage user who can
   see the tab. An operator who wants less sets a Backstage permission
-  policy or narrows the grants of the principal.
+  policy, an access limit, or narrows the grants of the principal.
+- An entity owner in Backstage can show any unit of the listed namespaces
+  on the page of the entity.
 - A rename of a unit breaks a reference in an annotation. The label form
   does not break.
 - `GLOSSARY.md` gets no new term. The plugin uses the words of the

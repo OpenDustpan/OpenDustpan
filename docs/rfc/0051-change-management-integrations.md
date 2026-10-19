@@ -29,4 +29,4 @@ plugin.
 
 ## Outcome
 
-None yet.
+In part: [ADR 247](../adr/0247-works-with-backstage-an-entity-tab-of-units.md) accepts the Backstage plugin that reads the inventory.
