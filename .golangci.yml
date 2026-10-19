@@ -148,6 +148,7 @@ linters:
             - "**/pkg/quota/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
+            - "**/pkg/unitimport/*.go"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
           deny:

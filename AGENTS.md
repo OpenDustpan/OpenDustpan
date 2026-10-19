@@ -73,6 +73,7 @@ pkg/                   the public SDK (ADR 35)
   objectcontext/       domain: context on every object and the context read API
   graph/               domain: the unit graph, blast radius and focus view
   unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
+  unitimport/          domain: imports of units from a source, the import ledger and the move check
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
@@ -113,7 +114,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`) never import
+  `unmanaged`, `unitimport`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.
