@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -53,6 +54,12 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 
 	admin := coverageProviderAdmin(tb, st)
 
+	// A one-time code mounts the dev sign-in route, so the route table holds it.
+	code, _, err := devcode.Make(nil)
+	if err != nil {
+		tb.Fatalf("make dev sign-in code: %v", err)
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		TempAdmins:    nil,
 		Now:           nil,
@@ -63,8 +70,10 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		IPAllowlists: nil, SessionPolicy: nil,
 		SignIn: &serverapi.SignIn{
 			Sessions: sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
+			DevCode: code,
 		},
 		CheckpointEpochs: nil,
+		InstallationKind: "",
 	})
 	if err != nil {
 		tb.Fatalf("server handler with the sign-in: %v", err)

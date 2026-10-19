@@ -477,7 +477,7 @@ var keepControlStatements = []string{
 		`SELECT ` + backupColumns + ` FROM live.backups`,
 	`INSERT INTO main.restores (` + restoreColumns + `) ` +
 		`SELECT ` + restoreColumns + ` FROM live.restores`,
-	`INSERT INTO main.installation (id, state) SELECT id, state FROM live.installation`,
+	`INSERT INTO main.installation (id, state, kind) SELECT id, state, kind FROM live.installation`,
 	`INSERT INTO main.runner_claims (` + runnerClaimColumns + `) ` +
 		`SELECT ` + runnerClaimColumns + ` FROM live.runner_claims`,
 	`INSERT INTO main.runner_handoff_tokens (` + runnerHandoffColumns + `) ` +

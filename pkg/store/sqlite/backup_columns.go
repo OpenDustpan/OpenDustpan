@@ -458,6 +458,7 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColState,
+				"kind",
 			},
 		},
 	}
