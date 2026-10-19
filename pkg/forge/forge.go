@@ -1,0 +1,627 @@
+// Package forge holds the Forge port: the one way in which the server uses
+// a forge. A forge is a git hosting service with an API, for example GitHub
+// or GitLab. Through the port, the server reads files and diffs at a
+// commit, commits file changes, opens and merges review requests, posts
+// statuses and comments, gets a short-lived read-only token for one
+// repository, and checks the events that a forge sends.
+//
+// The port is tool-neutral and forge-neutral. No type, method or error in
+// it exists only because one forge or one infrastructure-as-code tool needs
+// it. A forge that cannot do an operation returns ErrUnsupported, and its
+// Capabilities do not list the operation. Needs gives the capabilities that
+// each consumer of the port needs, so the server can refuse a connection
+// for a feature before a job starts.
+//
+// The package imports no adapter, no transport and no driver. An adapter
+// for each forge implements Opener and Forge, and runs the conformance
+// suite in package forgetest.
+package forge
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path"
+	"slices"
+	"strings"
+	"time"
+)
+
+// Sentinel errors returned by the port. An adapter wraps one of them with
+// fmt.Errorf and %w, and never returns an error of its HTTP client or of
+// the forge API alone.
+var (
+	// ErrNotFound reports a repository, a ref, a commit, a file, a review
+	// request or a comment that the forge does not have, or that the
+	// credential of the connection cannot see. The forge APIs answer both
+	// cases the same, so the port does too.
+	ErrNotFound = errors.New("forge object not found")
+	// ErrConflict reports a change whose base moved: a file of a commit
+	// that changed after the base commit, a branch that exists with
+	// another head, or a merge of a review request whose head is not the
+	// expected commit.
+	ErrConflict = errors.New("forge object changed after the base")
+	// ErrRefused reports a change that the forge refused for a rule of the
+	// forge: branch protection, a ruleset, a required check or review, or
+	// a permission that the credential does not have. A retry with the
+	// same request fails again.
+	ErrRefused = errors.New("forge refused the change")
+	// ErrAuth reports a credential that the forge does not accept: expired,
+	// revoked, or for another forge. The server then tries an older
+	// credential set of the connection, if one exists.
+	ErrAuth = errors.New("forge refused the credential")
+	// ErrUnavailable reports a forge that did not answer, answered a server
+	// error, or limited the rate of the connection. A retry with backoff
+	// can pass.
+	ErrUnavailable = errors.New("forge is not available")
+	// ErrTooLarge reports a file, a diff or a request above the limit that
+	// the caller gave or that the forge applies.
+	ErrTooLarge = errors.New("forge object is too large")
+	// ErrUnsupported reports an operation that the forge, or the auth kind
+	// of the connection, cannot do. Capabilities does not list it.
+	ErrUnsupported = errors.New("forge does not support the operation")
+	// ErrSignature reports an event whose signature or token does not
+	// match the secret of the connection.
+	ErrSignature = errors.New("forge event signature does not match")
+	// ErrInvalid reports a request that fails validation before the
+	// adapter calls the forge, or connection parameters that the adapter
+	// cannot use.
+	ErrInvalid = errors.New("invalid forge request")
+)
+
+// Kind names the adapter of a forge connection.
+type Kind string
+
+// The kinds of forge connections. A bridge is a small process that a team
+// runs next to a forge that the server cannot reach, or next to a version
+// control system with no forge API. It speaks one protocol to the server
+// and implements the operations of the port on the far side.
+const (
+	KindGitHub Kind = "github"
+	KindGitLab Kind = "gitlab"
+	KindBridge Kind = "bridge"
+)
+
+// AuthKind names how a connection authenticates to its forge.
+type AuthKind string
+
+// The auth kinds.
+const (
+	// AuthApp is an app installation: a GitHub App with its private key
+	// and installation ID. The adapter mints a short-lived token for each
+	// call, and can limit it to one repository and to read access.
+	AuthApp AuthKind = "app"
+	// AuthToken is one long-lived token of the forge, for example a GitHub
+	// fine-grained token or a GitLab group or project access token.
+	AuthToken AuthKind = "token"
+)
+
+// Connection is a forge connection of a namespace, as the adapter gets it.
+// The credential is not in it. The server keeps the credentials sealed,
+// and gives one set to Opener.Open.
+type Connection struct {
+	// ID is unique in the namespace.
+	ID   string
+	Kind Kind
+	Auth AuthKind
+	// BaseURL is the API address of the forge, for example
+	// https://api.github.com or the address of a GitLab instance.
+	BaseURL string
+	// Params holds the values of the auth kind that are not secret, for
+	// example the app ID and the installation ID of a GitHub App.
+	Params map[string]string
+	// Push is true when the connection may write to repositories. A
+	// connection with no push access reads only.
+	Push bool
+}
+
+// Credential is one credential set of a connection, unsealed for one
+// Open. Secret holds the private key of an app or the token. The adapter
+// never logs it and never returns it in an error.
+type Credential struct {
+	// SetID names the credential set, so that a log line can name the set
+	// that failed without a part of the secret.
+	SetID     string
+	Secret    []byte
+	CreatedAt time.Time
+}
+
+// Opener makes a Forge for one connection and one credential set. Each
+// adapter implements it.
+type Opener interface {
+	// Kind names the forge of the adapter.
+	Kind() Kind
+	// Open returns the Forge of c with the credential cred. It makes no
+	// call to the forge. It returns ErrInvalid for a connection of another
+	// kind, an auth kind that the adapter does not support, a missing
+	// parameter, or a secret that it cannot parse.
+	Open(ctx context.Context, c Connection, cred Credential) (Forge, error)
+}
+
+// Forge is one forge connection with one credential set. Each method takes
+// the repository by its full path on the forge, for example "acme/infra"
+// or "group/subgroup/infra". Each method returns ErrAuth for a credential
+// that the forge refuses, and ErrUnavailable for a forge that does not
+// answer, in addition to the errors that it names.
+type Forge interface {
+	// Capabilities returns what the forge and the auth kind of the
+	// connection can do. It makes no call to the forge.
+	Capabilities() Capabilities
+	// Check calls the forge and returns the account of the credential. A
+	// test of a new connection and a rotation of its credentials call it.
+	Check(ctx context.Context) (Account, error)
+
+	Files
+	Commits
+	Reviews
+	Feedback
+	Tokens
+	Events
+}
+
+// Files reads the code of a repository. Write-back, triggers, the change
+// order review and the request files of the Catalog use it.
+type Files interface {
+	// Head returns the commit at the head of the branch or tag ref. It
+	// returns ErrNotFound for a repository or a ref that does not exist.
+	Head(ctx context.Context, repo, ref string) (Commit, error)
+	// ReadFile returns the file at filePath in commit, which is a full
+	// commit ID. It returns ErrNotFound for a missing repository, commit or
+	// file, and ErrTooLarge for a file above limit bytes.
+	ReadFile(ctx context.Context, repo, commit, filePath string, limit int64) (File, error)
+	// Compare returns the files that changed from base to head, the patch
+	// up to limit bytes, and whether base is an ancestor of head. A patch
+	// above limit answers its first part with Truncated set. It returns
+	// ErrNotFound for a missing repository or commit.
+	Compare(ctx context.Context, repo, base, head string, limit int64) (Comparison, error)
+}
+
+// Commits writes to a repository through the API of the forge, never with
+// a git client. Write-back uses it.
+type Commits interface {
+	// Commit makes one commit with all changes of req on req.Branch, and
+	// returns it. The commit holds every change or none. With
+	// req.NewBranch, it creates the branch at req.Base. It returns
+	// ErrConflict when a file of req.Changes differs at the head of the
+	// branch from req.Base, or when a new branch exists with another
+	// head. It returns ErrRefused when branch protection or a missing
+	// permission stops the commit, and ErrInvalid for a request that
+	// fails ValidateCommit.
+	Commit(ctx context.Context, repo string, req CommitRequest) (Commit, error)
+	// FindCommit returns the newest commit on ref, at or after since,
+	// whose message has the trailer line trailer, for example
+	// "Dustpan-Job: j-123". It returns ErrNotFound when no such commit
+	// exists. A takeover of a write-back calls it before a second commit.
+	FindCommit(ctx context.Context, repo, ref, trailer string, since time.Time) (Commit, error)
+}
+
+// Reviews manages review requests: a pull request of GitHub or a merge
+// request of GitLab. Write-back and review request feedback use it.
+type Reviews interface {
+	// OpenReview opens a review request from req.Branch into req.Target.
+	// When an open review request for req.Branch exists, it returns that
+	// one and opens no second one. It returns ErrNotFound for a missing
+	// branch, and ErrRefused when the forge does not allow the review
+	// request.
+	OpenReview(ctx context.Context, repo string, req ReviewRequest) (Review, error)
+	// ReadReview returns the review request id with its state, its head
+	// commit and, for a merge, the merge time and the merge commit. It
+	// returns ErrNotFound for a review request that does not exist.
+	ReadReview(ctx context.Context, repo, id string) (Review, error)
+	// CloseReview closes the review request id with no merge. A review
+	// request that is closed already returns nil. It returns ErrConflict
+	// for a review request that merged.
+	CloseReview(ctx context.Context, repo, id string) error
+	// MergeReview merges the review request id when its head is the
+	// commit head, and returns it. It returns ErrConflict when the head
+	// moved or the review request cannot merge cleanly, and ErrRefused
+	// when a rule of the forge stops the merge.
+	MergeReview(ctx context.Context, repo, id, head string) (Review, error)
+}
+
+// Feedback posts results to a commit or a review request, and reads the
+// comments that a person writes there. Review request feedback and
+// comment commands use it.
+type Feedback interface {
+	// SetStatus sets the status s.Name on commit to s. A second call with
+	// the same name replaces the status. It returns ErrNotFound for a
+	// missing repository or commit.
+	SetStatus(ctx context.Context, repo, commit string, s Status) error
+	// PutComment writes body as the comment that key names on the review
+	// request reviewID. The first call creates the comment. A later call
+	// with the same key edits the same comment in place. It returns
+	// ErrNotFound for a missing review request.
+	PutComment(ctx context.Context, repo, reviewID, key, body string) (Comment, error)
+	// ReadComment returns the comment id on the review request reviewID,
+	// as the forge holds it now. The server reads a comment again before
+	// it acts on a comment command, because an event is a hint only. It
+	// returns ErrNotFound for a missing or deleted comment.
+	ReadComment(ctx context.Context, repo, reviewID, id string) (Comment, error)
+}
+
+// Tokens gives a short-lived token for the git protocol. The source fetch
+// of the server and the git credential helper of a runner step use it.
+type Tokens interface {
+	// RepoToken returns a token that can only read repo, and that expires
+	// in at most one hour. It returns ErrUnsupported when the auth kind
+	// cannot limit a token to one repository and to read access. The
+	// server never gives a broader token in its place.
+	RepoToken(ctx context.Context, repo string) (Token, error)
+}
+
+// Events checks an event that the forge sent to the server.
+type Events interface {
+	// ParseEvent checks the signature or the token of r with the event
+	// secret of the connection, and returns the event. It returns
+	// ErrSignature for a request that does not match, ErrInvalid for a
+	// body that it cannot parse, and ErrUnsupported for a kind of event
+	// that the port does not name. It makes no call to the forge. An
+	// event is a hint: the server reads the object through the API before
+	// it changes a record.
+	ParseEvent(ctx context.Context, r EventRequest) (Event, error)
+}
+
+// Account is an account of a forge. ID is the stable ID that the forge
+// gives, for example the numeric user ID of GitHub. Login can change, so a
+// link to a principal holds the ID.
+type Account struct {
+	ID    string
+	Login string
+}
+
+// Commit is a commit on the forge. Time is the time that the forge gives
+// for the commit. A write-back records it as the delivery time.
+type Commit struct {
+	ID   string
+	Time time.Time
+}
+
+// File is one file at one commit. BlobID is the ID of the git blob.
+type File struct {
+	Path    string
+	Content []byte
+	BlobID  string
+}
+
+// FileChange is one change of a commit: new content for Path, or a delete
+// of Path.
+type FileChange struct {
+	Path    string
+	Content []byte
+	Delete  bool
+}
+
+// Person is the author of a commit, as the commit shows it.
+type Person struct {
+	Name  string
+	Email string
+}
+
+// Limits of a CommitRequest.
+const (
+	// MaxChanges is the most file changes in one commit.
+	MaxChanges = 64
+	// MaxChangeBytes is the most bytes of content of all changes of one
+	// commit.
+	MaxChangeBytes = 4 << 20
+	// MaxMessageBytes is the most bytes of a commit message.
+	MaxMessageBytes = 64 << 10
+)
+
+// CommitRequest asks for one commit. Base is the full ID of the commit that
+// the changes start from. Author names the person who made the change. The
+// adapter writes it as the git author, or as a Co-authored-by trailer when
+// the forge makes the commit as the account of the connection. The
+// committer is always the connection.
+type CommitRequest struct {
+	Branch    string
+	NewBranch bool
+	Base      string
+	Message   string
+	Author    Person
+	Changes   []FileChange
+}
+
+// ValidateCommit checks req before an adapter calls the forge. It returns
+// an error that wraps ErrInvalid or ErrTooLarge.
+func ValidateCommit(req CommitRequest) error {
+	if err := validateRef(req.Branch); err != nil {
+		return err
+	}
+
+	if req.Base == "" {
+		return fmt.Errorf("%w: the base commit is empty", ErrInvalid)
+	}
+
+	if req.Message == "" {
+		return fmt.Errorf("%w: the commit message is empty", ErrInvalid)
+	}
+
+	if len(req.Message) > MaxMessageBytes {
+		return fmt.Errorf("%w: the commit message has more than %d bytes", ErrTooLarge, MaxMessageBytes)
+	}
+
+	if len(req.Changes) == 0 || len(req.Changes) > MaxChanges {
+		return fmt.Errorf("%w: a commit has 1 to %d file changes, not %d", ErrInvalid, MaxChanges, len(req.Changes))
+	}
+
+	return validateChanges(req.Changes)
+}
+
+func validateChanges(changes []FileChange) error {
+	seen := make(map[string]bool, len(changes))
+	total := 0
+
+	for _, c := range changes {
+		if err := ValidatePath(c.Path); err != nil {
+			return err
+		}
+
+		if seen[c.Path] {
+			return fmt.Errorf("%w: the path %q is in the commit twice", ErrInvalid, c.Path)
+		}
+
+		seen[c.Path] = true
+
+		if c.Delete && len(c.Content) > 0 {
+			return fmt.Errorf("%w: the delete of %q has content", ErrInvalid, c.Path)
+		}
+
+		total += len(c.Content)
+		if total > MaxChangeBytes {
+			return fmt.Errorf("%w: the changes have more than %d bytes", ErrTooLarge, MaxChangeBytes)
+		}
+	}
+
+	return nil
+}
+
+// ValidatePath checks a file path in a repository: relative, clean, with
+// no ".." part and no NUL byte.
+func ValidatePath(p string) error {
+	switch {
+	case p == "", p == ".":
+		return fmt.Errorf("%w: the file path is empty", ErrInvalid)
+	case strings.ContainsRune(p, 0):
+		return fmt.Errorf("%w: the file path has a NUL byte", ErrInvalid)
+	case strings.HasPrefix(p, "/"), path.Clean(p) != p:
+		return fmt.Errorf("%w: the file path %q is not relative and clean", ErrInvalid, p)
+	case p == "..", strings.HasPrefix(p, "../"):
+		return fmt.Errorf("%w: the file path %q leaves the repository", ErrInvalid, p)
+	}
+
+	return nil
+}
+
+func validateRef(ref string) error {
+	if ref == "" || strings.HasPrefix(ref, "refs/") || strings.ContainsAny(ref, " ~^:?*[\\\x00") ||
+		strings.Contains(ref, "..") || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, "/") {
+		return fmt.Errorf("%w: the branch name %q is not valid", ErrInvalid, ref)
+	}
+
+	return nil
+}
+
+// ChangedFile is one file of a Comparison. OldPath is set for a rename.
+type ChangedFile struct {
+	Path    string
+	OldPath string
+	Status  FileStatus
+}
+
+// FileStatus is the change of one file in a Comparison.
+type FileStatus string
+
+// The file statuses.
+const (
+	FileAdded    FileStatus = "added"
+	FileModified FileStatus = "modified"
+	FileDeleted  FileStatus = "deleted"
+	FileRenamed  FileStatus = "renamed"
+)
+
+// Comparison is the answer of Compare. Files lists every changed file,
+// also when Patch is truncated. BaseIsAncestor is true when base is an
+// ancestor of head, or equal to it.
+type Comparison struct {
+	Files          []ChangedFile
+	Patch          []byte
+	Truncated      bool
+	BaseIsAncestor bool
+}
+
+// ReviewRequest asks for a review request from Branch into Target.
+type ReviewRequest struct {
+	Branch string
+	Target string
+	Title  string
+	Body   string
+}
+
+// ReviewState is the state of a review request.
+type ReviewState string
+
+// The review states.
+const (
+	ReviewOpen   ReviewState = "open"
+	ReviewMerged ReviewState = "merged"
+	ReviewClosed ReviewState = "closed"
+)
+
+// Review is a review request on the forge. ID is the number or the ID that
+// the forge gives, as a string. MergedAt and MergeCommit are set when
+// State is ReviewMerged.
+type Review struct {
+	ID          string
+	URL         string
+	State       ReviewState
+	Branch      string
+	Target      string
+	Head        string
+	MergedAt    time.Time
+	MergeCommit string
+}
+
+// StatusState is the state of a commit status.
+type StatusState string
+
+// The status states.
+const (
+	StatusPending StatusState = "pending"
+	StatusSuccess StatusState = "success"
+	StatusFailure StatusState = "failure"
+	StatusError   StatusState = "error"
+)
+
+// Status is a status of a commit. Name is unique on the commit, for
+// example "opendustpan/plan: acme/network". URL links to the console.
+type Status struct {
+	Name        string
+	State       StatusState
+	Description string
+	URL         string
+}
+
+// Comment is a comment on a review request.
+type Comment struct {
+	ID        string
+	ReviewID  string
+	Author    Account
+	Body      string
+	UpdatedAt time.Time
+}
+
+// Token is a short-lived token for the git protocol over HTTPS. Username
+// is the user name that the forge expects with the token.
+type Token struct {
+	Username  string
+	Value     []byte
+	ExpiresAt time.Time
+}
+
+// EventRequest is an event as the HTTP adapter received it: the header and
+// the body. The port has no HTTP type, so the domain imports no transport.
+type EventRequest struct {
+	Header map[string][]string
+	Body   []byte
+}
+
+// EventKind is the kind of a forge event.
+type EventKind string
+
+// The event kinds.
+const (
+	// EventPing is the test event that a forge sends when a person sets
+	// up a webhook.
+	EventPing EventKind = "ping"
+	// EventPush is a push to a branch or a tag.
+	EventPush EventKind = "push"
+	// EventReview is a review request that opened, changed its head,
+	// merged or closed.
+	EventReview EventKind = "review"
+	// EventComment is a new or edited comment on a review request.
+	EventComment EventKind = "comment"
+)
+
+// Event is a forge event. DeliveryID is the ID that the forge gives to the
+// delivery, and stays the same across retries of the forge. Ref, Before
+// and After are set for EventPush. ReviewID is set for EventReview and
+// EventComment. CommentID is set for EventComment.
+type Event struct {
+	DeliveryID string
+	Kind       EventKind
+	Repo       string
+	Ref        string
+	Before     string
+	After      string
+	ReviewID   string
+	CommentID  string
+	Sender     Account
+}
+
+// Capability is one group of operations of the port.
+type Capability string
+
+// The capabilities. Each one names the methods that it covers.
+const (
+	// CapFiles covers Head and ReadFile.
+	CapFiles Capability = "files"
+	// CapCompare covers Compare.
+	CapCompare Capability = "compare"
+	// CapCommit covers Commit and FindCommit.
+	CapCommit Capability = "commit"
+	// CapReview covers OpenReview, ReadReview and CloseReview.
+	CapReview Capability = "review"
+	// CapMerge covers MergeReview.
+	CapMerge Capability = "merge"
+	// CapStatus covers SetStatus.
+	CapStatus Capability = "status"
+	// CapComment covers PutComment and ReadComment.
+	CapComment Capability = "comment"
+	// CapRepoToken covers RepoToken.
+	CapRepoToken Capability = "repo-token"
+	// CapEvents covers ParseEvent.
+	CapEvents Capability = "events"
+)
+
+// Capabilities is the set of capabilities of a forge connection.
+type Capabilities []Capability
+
+// Has reports whether c holds capability.
+func (c Capabilities) Has(capability Capability) bool {
+	return slices.Contains(c, capability)
+}
+
+// Missing returns each capability of need that c does not hold, in the
+// order of need.
+func (c Capabilities) Missing(need Capabilities) Capabilities {
+	var missing Capabilities
+
+	for _, n := range need {
+		if !c.Has(n) {
+			missing = append(missing, n)
+		}
+	}
+
+	return missing
+}
+
+// Consumer is a feature of the server that uses a forge connection.
+type Consumer string
+
+// The consumers.
+const (
+	// ConsumerWriteBack commits a change and, by default, opens a review
+	// request. It watches the review request until the merge or the close.
+	ConsumerWriteBack Consumer = "write-back"
+	// ConsumerSource gets the code of a runner job and gives a read-only
+	// token to the git credential helper of a step.
+	ConsumerSource Consumer = "source"
+	// ConsumerFeedback posts the result of a plan on a review request,
+	// and can merge it after an apply.
+	ConsumerFeedback Consumer = "feedback"
+	// ConsumerTriggers starts a job on a push, a tag or a review request.
+	ConsumerTriggers Consumer = "triggers"
+	// ConsumerCommands runs a command that a person writes in a comment of
+	// a review request.
+	ConsumerCommands Consumer = "commands"
+)
+
+// Needs returns the capabilities that consumer needs from a connection. It
+// returns nil for an unknown consumer.
+func Needs(consumer Consumer) Capabilities {
+	switch consumer {
+	case ConsumerWriteBack:
+		return Capabilities{CapFiles, CapCompare, CapCommit, CapReview}
+	case ConsumerSource:
+		return Capabilities{CapRepoToken}
+	case ConsumerFeedback:
+		return Capabilities{CapStatus, CapComment}
+	case ConsumerTriggers:
+		return Capabilities{CapEvents, CapFiles, CapCompare}
+	case ConsumerCommands:
+		return Capabilities{CapEvents, CapComment, CapReview}
+	}
+
+	return nil
+}

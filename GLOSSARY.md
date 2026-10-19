@@ -144,9 +144,33 @@ _Avoid_: Feature flag, plugin, add-on, module (alone)
 The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 211). `apiVersion` is public, so the console reads it before the sign-in. The module list needs `caller:read`, so the console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
 _Avoid_: Feature list, handshake, capability (alone)
 
+**Forge**:
+A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection (RFC 87, proposed).
+_Avoid_: VCS provider, SCM, git host, VCS (alone)
+
 **Forge connection**:
 The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).
 _Avoid_: VCS integration, VCS provider, app (alone)
+
+**Review request**:
+A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. OpenDustpan approvals add to the approvals of the review request. They never replace them (ADR 103).
+_Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
+
+**Forge capability**:
+One group of operations of the `Forge` port that a forge connection can do, for example `commit`, `review` or `repo-token` (RFC 87, proposed). A method outside the capabilities of a connection returns `ErrUnsupported`. The server checks the capabilities that a feature needs when a person names the connection for it.
+_Avoid_: Feature (alone), scope (that is a token permission of the forge), permission
+
+**Forge bridge**:
+A small process that a team runs next to its version control system (RFC 87, proposed). The server cannot reach that system, or the system has no forge API. The bridge does the operations of the `Forge` port on that side, and connects out to the server.
+_Avoid_: Proxy, relay, gateway, mirror
+
+**Forge event**:
+A signed request that a forge sends to the server: a push, a change of a review request, or a comment (RFC 87, proposed). The server checks its signature, and reads the object through the API of the forge before it changes a record. So an event is a hint, never a fact.
+_Avoid_: Webhook (that is the setting on the forge, or a sink of notifications), callback, hook (alone)
+
+**Comment command**:
+A command that a person writes in a comment of a review request, for example `plan` (RFC 27, RFC 87, proposed). It never approves a change.
+_Avoid_: Chat command, slash command, bot command
 
 **Sensitive setting**:
 A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
