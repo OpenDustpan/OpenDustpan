@@ -60,6 +60,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// noMigrate makes Open apply no migration and refuse a database with
+	// a pending one.
+	noMigrate bool
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -71,6 +74,14 @@ type Option func(*Store)
 // minimum refuses.
 func WithBinaryVersion(version string) Option {
 	return func(s *Store) { s.binaryVersion = version }
+}
+
+// WithoutMigrate makes Open check the schema and apply no migration. Open
+// then refuses a database with a pending migration with
+// schema.ErrMigrationsPending. A command that only writes rows uses it, so
+// the server stays the one process that changes the schema.
+func WithoutMigrate() Option {
+	return func(s *Store) { s.noMigrate = true }
 }
 
 var (
@@ -121,7 +132,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		binaryVersion: "", gate: nil,
+		binaryVersion: "", gate: nil, noMigrate: false,
 	}
 	s.gate = gatestore.New(gateRunner{s: s})
 
@@ -794,7 +805,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		return migrateTx(ctx, tx, all, s.binaryVersion)
+		return migrateTx(ctx, tx, all, migrateRules{binaryVersion: s.binaryVersion, noMigrate: s.noMigrate})
 	})
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -803,10 +814,18 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrateRules holds what migrateTx checks the schema against: the version
+// of the binary, and whether the caller applies no migration.
+type migrateRules struct {
+	binaryVersion string
+	noMigrate     bool
+}
+
 // migrateTx checks the schema and applies pending migrations while holding
 // the advisory lock. A binary below the minimum binary version of the schema
-// gets a *schema.MinimumError and applies nothing.
-func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVersion string) error {
+// gets a *schema.MinimumError and applies nothing. With noMigrate, a pending
+// migration gives schema.ErrMigrationsPending and applies nothing.
+func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules migrateRules) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockID); err != nil {
 		return fmt.Errorf("take migration lock: %w", err)
 	}
@@ -829,9 +848,13 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVe
 		return fmt.Errorf("check schema versions: %w", baselineErr)
 	}
 
-	plan, err := migrate.Check(recorded, all, binaryVersion)
+	plan, err := migrate.Check(recorded, all, rules.binaryVersion)
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
+	}
+
+	if rules.noMigrate && len(plan.Pending) > 0 {
+		return fmt.Errorf("%w: %d", schema.ErrMigrationsPending, len(plan.Pending))
 	}
 
 	for _, m := range plan.Pending {

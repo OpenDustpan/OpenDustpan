@@ -70,6 +70,8 @@ func newAuditChainHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:       nil,
+		Now:              nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: denied},
 		Logger:           slog.New(slog.DiscardHandler),

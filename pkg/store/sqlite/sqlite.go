@@ -234,6 +234,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// noMigrate makes Open apply no migration and refuse a database with
+	// a pending one.
+	noMigrate bool
 	// processGuard holds the lock on the guard file next to the database,
 	// so a second store cannot open the same file. Close releases it.
 	processGuard *processGuard
@@ -275,6 +278,14 @@ func WithBinaryVersion(version string) Option {
 	return func(s *Store) { s.binaryVersion = version }
 }
 
+// WithoutMigrate makes Open check the schema and apply no migration. Open
+// then refuses a database with a pending migration with
+// schema.ErrMigrationsPending. A command that only writes rows uses it, so
+// the server stays the one process that changes the schema.
+func WithoutMigrate() Option {
+	return func(s *Store) { s.noMigrate = true }
+}
+
 // Open opens (creating if needed) the database file at path and migrates it.
 // It locks the file first: a second Open of the same file, in this process
 // or in another one, fails with ErrInUse until Close of the first store. The
@@ -296,12 +307,28 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
+	var probe Store
+	for _, opt := range opts {
+		opt(&probe)
+	}
+
+	if probe.noMigrate {
+		if _, statErr := os.Stat(resolved); statErr != nil {
+			return nil, fmt.Errorf("open database file %s: %w", resolved, statErr)
+		}
+	}
+
 	guard, err := acquireGuard(resolved)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := openDatabase(ctx, resolved)
+	var extra url.Values
+	if probe.noMigrate {
+		extra = url.Values{"mode": {"rw"}}
+	}
+
+	conn, err := openDatabase(ctx, resolved, extra)
 	if err != nil {
 		return nil, errors.Join(err, guard.release())
 	}
@@ -320,6 +347,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		busyWarned:          false,
 		keepAccessHook:      nil,
 		binaryVersion:       "",
+		noMigrate:           false,
 		processGuard:        guard,
 		stepTxBound:         DefaultStepTransactionBound,
 		gate:                nil,
@@ -417,9 +445,13 @@ func followLinkChain(abs string) (string, error) {
 	}
 }
 
-// openDatabase opens the database file at abs with the store pragmas.
-func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
+// openDatabase opens the database file at abs with the store pragmas and
+// the extra URL parameters. The parameter mode=rw opens a file that exists
+// and creates none.
+func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, error) {
 	query := url.Values{}
+	maps.Copy(query, extra)
+
 	query.Set("_txlock", "immediate")
 	query.Add("_pragma", "busy_timeout(10000)")
 	query.Add("_pragma", "journal_mode(wal)")
@@ -1158,8 +1190,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		name    TEXT    NOT NULL
 	) STRICT`
 
-	if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
-		return fmt.Errorf("create schema_migrations: %w", execErr)
+	if !s.noMigrate {
+		if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
+			return fmt.Errorf("create schema_migrations: %w", execErr)
+		}
 	}
 
 	recorded, recordedErr := s.recordedMigrations(ctx)
@@ -1175,6 +1209,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 	if checkErr != nil {
 		return fmt.Errorf("check schema: %w", checkErr)
+	}
+
+	if s.noMigrate && len(plan.Pending) > 0 {
+		return fmt.Errorf("%w: %d", schema.ErrMigrationsPending, len(plan.Pending))
 	}
 
 	for _, m := range plan.Pending {

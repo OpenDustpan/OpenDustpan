@@ -1508,9 +1508,11 @@ func (s *fakeBackupStore) GetStateVersion(
 
 // FinalizeStateVersion implements workspace.StateStore with the lock,
 // lineage and serial checks.
+//
+//nolint:revive // The signature of the workspace.StateStore port.
 func (s *fakeBackupStore) FenceAndUnlock(
 	_ context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	_ workspace.StateVersionID, fence namespace.Fence,
+	_ workspace.StateVersionID, fence namespace.Fence, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2640,7 +2642,16 @@ func (*fakeBackupStore) SetOverrides(context.Context, namespace.Name, namespace.
 }
 
 // ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
-func (s *fakeBackupStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+func (s *fakeBackupStore) ReleaseUnfenced(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
+) error {
+	return s.SaveWorkspace(ctx, w, fence)
+}
+
+// SaveReleased is not used by this fake: it saves like SaveWorkspace.
+func (s *fakeBackupStore) SaveReleased(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
+) error {
 	return s.SaveWorkspace(ctx, w, fence)
 }
 

@@ -113,6 +113,7 @@ func entryFor(action string) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

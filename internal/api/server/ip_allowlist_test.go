@@ -95,6 +95,8 @@ func newIPAllowHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:              nil,
+		TempAdmins:       nil,
 		Authenticator:    cfg.authn,
 		Authorizer:       cfg.authz,
 		Logger:           slog.New(slog.DiscardHandler),
@@ -233,6 +235,7 @@ func seedIPAllowlist(t *testing.T, st *sqlite.Store, ns namespace.Name, cidrs ..
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 
 	fence := namespace.Fence{Namespace: ns, FailoverVersion: 1}

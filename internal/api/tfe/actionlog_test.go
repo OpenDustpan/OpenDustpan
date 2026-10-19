@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -138,11 +139,13 @@ func (lockedActionWorkspaces) GetByID(_ context.Context, id workspace.ID) (works
 	}, nil
 }
 
-func (rlockedActionWorkspaces lockedActionWorkspaces) ForceUnlock(
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (rlockedActionWorkspaces lockedActionWorkspaces) ForceUnlockLock(
 	ctx context.Context,
 	id workspace.ID,
+	_ workspace.Lock,
 	by string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	w, err := rlockedActionWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
@@ -294,7 +297,7 @@ func TestActionLogHidesPathAndQuery(t *testing.T) {
 }
 
 // TestActionLogDeclaresUnitActions proves the logged routes keep their
-// declared actions: force-unlock needs unit:manage and restore needs
+// declared actions: force-unlock needs unit:write-forced and restore needs
 // unit:write.
 func TestActionLogDeclaresUnitActions(t *testing.T) {
 	t.Parallel()
@@ -302,7 +305,7 @@ func TestActionLogDeclaresUnitActions(t *testing.T) {
 	handler := newStateHandler(t, allowAll())
 
 	want := map[string]identity.Action{
-		"POST /api/v2/workspaces/{id}/actions/force-unlock":              identity.ActionUnitManage,
+		"POST /api/v2/workspaces/{id}/actions/force-unlock":              identity.ActionUnitWriteForced,
 		"POST /api/v2/state-versions/{state_version_id}/actions/restore": identity.ActionUnitWrite,
 	}
 

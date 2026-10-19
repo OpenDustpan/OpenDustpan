@@ -49,5 +49,6 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }

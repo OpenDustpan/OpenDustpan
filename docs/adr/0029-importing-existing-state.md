@@ -1,6 +1,6 @@
 # 29. Importing existing state
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11. Decisions 1, 5 and 8 superseded in part by ADR 241. Decision 5 also by ADR 242. Decision 6 extended by ADR 244
 
 ## Context
 

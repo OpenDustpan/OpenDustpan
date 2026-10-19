@@ -86,6 +86,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (iden
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "Tester",
 		Admin:          false,
@@ -384,11 +385,13 @@ func (stubWorkspaces) Unlock(_ context.Context, id workspace.ID, _ string) (work
 	return ws, nil
 }
 
-func (rstubWorkspaces stubWorkspaces) ForceUnlock(
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (rstubWorkspaces stubWorkspaces) ForceUnlockLock(
 	ctx context.Context,
 	id workspace.ID,
+	_ workspace.Lock,
 	by string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	w, err := rstubWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
@@ -1712,11 +1715,13 @@ func (errorWorkspaces) Unlock(
 	return workspace.Workspace{}, errTestInternal
 }
 
-func (rerrorWorkspaces errorWorkspaces) ForceUnlock(
+//nolint:revive // The signature of the workspace port that the handler reads.
+func (rerrorWorkspaces errorWorkspaces) ForceUnlockLock(
 	ctx context.Context,
 	id workspace.ID,
+	_ workspace.Lock,
 	by string,
-	_ namespace.Overrides, _ func() error,
+	_ namespace.Overrides, _ func() error, _ audit.Entry,
 ) (workspace.Workspace, bool, error) {
 	w, err := rerrorWorkspaces.forceUnlockUnfenced(ctx, id, by)
 

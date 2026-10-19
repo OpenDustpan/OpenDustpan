@@ -36,6 +36,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
+	"opendustpan.org/opendustpan/pkg/tempadmin/tempadmintest"
 )
 
 // envURL names the variable holding a PostgreSQL URL for integration tests.
@@ -215,6 +216,22 @@ func TestNamespacePrincipalConformance(t *testing.T) {
 	}
 
 	principaltest.RunNamespace(t, func(t *testing.T) principaltest.NamespaceStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// TestTempAdminConformance runs the temporary administrator store suite.
+func TestTempAdminConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	tempadmintest.Run(t, func(t *testing.T) tempadmintest.Store {
 		t.Helper()
 
 		return open(t, base)
@@ -550,7 +567,8 @@ func tamperAuditColumn(field string) (string, bool) {
 		"source_ip",
 		"user_agent",
 		"channel",
-		"request_id":
+		"request_id",
+		"reason":
 		return field, true
 	default:
 		return "", false

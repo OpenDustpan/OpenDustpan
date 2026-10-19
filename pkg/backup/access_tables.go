@@ -12,6 +12,7 @@ const (
 	TablePrincipals        = "principals"
 	TablePrincipalGroups   = "principal_groups"
 	TableGroupMembers      = "group_members"
+	TableTempAdmins        = "temp_admins"
 	TableAccessTokens      = "access_tokens"
 	TableRoles             = "roles"
 	TableGrants            = "grants"

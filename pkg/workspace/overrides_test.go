@@ -4,7 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -159,6 +161,7 @@ func TestForceUnlockClientEncryptedWithForcedOverride(t *testing.T) {
 		"admin",
 		forcedOnly(),
 		nil,
+		forceEntry(),
 	)
 	if err != nil {
 		t.Fatalf("force unlock with the forced override: %v", err)
@@ -185,6 +188,36 @@ func TestForceUnlockClientEncryptedWithForcedOverride(t *testing.T) {
 // forcedOnly returns the overrides that allow a forced write and no unlocked one.
 func forcedOnly() namespace.Overrides {
 	return namespace.Overrides{Forced: true, Unlocked: false}
+}
+
+// forceEntry returns the audit entry template that a caller passes to a
+// force-unlock: the request fields, a reason, and no field that the service sets.
+func forceEntry() audit.Entry {
+	return audit.Entry{
+		At:           time.Time{},
+		Namespace:    "",
+		Subject:      "",
+		IDPSubject:   "",
+		TokenID:      "tok-1",
+		Action:       "unit:write-forced",
+		Object:       "opentofu:acme/network",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "tofu/1.11.0",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req-1",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
+		Reason:       "the run crashed",
+	}
 }
 
 // noOverrides returns the overrides that allow nothing, the default of a namespace and a unit.
@@ -220,7 +253,7 @@ func TestForceUnlockStopsWhenItsAuditEntryFails(t *testing.T) {
 	errAudit := workspace.ErrConcurrentModification
 	record := func() error { return errAudit }
 
-	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", forcedOnly(), record)
+	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", forcedOnly(), record, forceEntry())
 	if !errors.Is(err, errAudit) {
 		t.Fatalf("force unlock with a failing audit entry: err = %v, want the audit error", err)
 	}

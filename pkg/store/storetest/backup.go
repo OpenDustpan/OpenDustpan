@@ -674,6 +674,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
@@ -833,6 +834,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Hash:         "",
 			Sequence:     0,
 			FenceVersion: 0,
+			Reason:       "",
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)

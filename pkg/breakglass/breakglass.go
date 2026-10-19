@@ -3,8 +3,9 @@
 // on the business calendar. Reminders and escalations go out on the same
 // calendar until the review is done.
 //
-// Two kinds of use need a review: a job that started through an active
-// change freeze, and a session of a break-glass account. The review is the
+// Three kinds of use need a review: a job that started through an active
+// change freeze, a session of a break-glass account, and a temporary
+// administrator that the host command made for recovery. The review is the
 // control after the fact that takes the place of an approval before use,
 // because an approval cannot wait in an emergency.
 //
@@ -75,6 +76,10 @@ const (
 	// KindAccountSession is a session of a break-glass account. Ref is the
 	// session ID. The review covers each action of the session.
 	KindAccountSession Kind = "account-session"
+	// KindTempAdmin is a temporary administrator that the host command
+	// made for recovery. Ref is the principal ID. The review covers each
+	// action of the principal from its create to its end.
+	KindTempAdmin Kind = "temp-admin"
 )
 
 // Use is one break-glass that needs a review.
@@ -100,7 +105,8 @@ type Use struct {
 	// the break-glass account.
 	At time.Time
 	// Until is the time limit of a session of a break-glass account, set
-	// at the sign-in, or zero for a freeze break. The server revokes the
+	// at the sign-in, the end of a temporary administrator (its expiry or
+	// an earlier end), or zero for a freeze break. The server revokes the
 	// session at Until, and a verdict waits until then, so that the review
 	// covers each action of the session. A sign-out before Until writes
 	// nothing to the review.
@@ -134,7 +140,7 @@ func (u Use) validateKind() error {
 				"%w: a freeze break needs the unit and the namespace of its job, and no time limit", ErrInvalid,
 			)
 		}
-	case KindAccountSession:
+	case KindAccountSession, KindTempAdmin:
 		if u.Object != "" || u.Scope != audit.ServerScope || !u.Until.After(u.At) {
 			return fmt.Errorf(
 				"%w: a break-glass session is in the scope %s, with no unit and a time limit after its sign-in",

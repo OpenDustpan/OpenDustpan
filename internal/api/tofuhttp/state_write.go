@@ -175,7 +175,15 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 
 	// The lock the caller saw is the one that must still be held: its ID and its
 	// holder come from the same read (ADR 49, decision 6).
-	_, _, err = h.ws.ForceUnlockLock(ctx, ws.ID, ws.Lock, c.principal.Subject, allow, record)
+	_, _, err = h.ws.ForceUnlockLock(
+		ctx,
+		ws.ID,
+		ws.Lock,
+		c.principal.Subject,
+		allow,
+		record,
+		h.forceUnlockEntry(r, c, obj),
+	)
 	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
 		errors.Is(err, workspace.ErrLockMismatch) {
 		h.writeHeldOrConflict(ctx, w, c, err)

@@ -117,12 +117,14 @@ func newContextWorld(t *testing.T) contextWorld {
 	person := func(subject string) identity.Principal {
 		return identity.Principal{
 			Subject: subject, DisplayName: subject, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		}
 	}
 
 	authn := tokenMapAuthenticator{tokens: map[string]identity.Principal{
 		ctxAdminToken: {
 			Subject: "operator", DisplayName: "operator", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		},
 		ctxOwnerToken:  person("owen"),
 		ctxWriterToken: person("wanda"),
@@ -483,6 +485,7 @@ func TestContextWorkspaceSurvivesRename(t *testing.T) {
 		Object: "acme/net", Version: "", ValuePath: "", ValueCount: nil, SourceIP: "", UserAgent: "",
 		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "", FenceVersion: 0,
+		Reason: "",
 	}
 
 	if err = w.srv.Workspaces().Delete(t.Context(), workspace.Ref{Namespace: "acme", Name: oldName}, e); err != nil {

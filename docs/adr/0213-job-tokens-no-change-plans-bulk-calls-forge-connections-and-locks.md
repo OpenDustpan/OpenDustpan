@@ -1,6 +1,6 @@
 # 213. Job tokens and outputs, plans with no change, the start policy input, bulk calls, the options action, forge connections and locks
 
-Status: accepted · 2026-10-18. Supersedes in part ADR 100 decision 20. Extends ADR 103 decisions 1 and 8, ADR 135 decision 6, ADR 153 decision 4, ADR 20 and ADR 25. Answers an open question of ADR 103, ADR 117 and ADR 141. Accepts part of RFC 18. Decision 4 read by ADR 226 decision 6
+Status: accepted · 2026-10-18. Supersedes in part ADR 100 decision 20. Extends ADR 103 decisions 1 and 8, ADR 135 decision 6, ADR 153 decision 4, ADR 20 and ADR 25. Answers an open question of ADR 103, ADR 117 and ADR 141. Accepts part of RFC 18. Decision 4 read by ADR 226 decision 6. Decision 10 superseded in part by ADRs 241 and 244 for the manual lock of an import
 
 ## Context
 

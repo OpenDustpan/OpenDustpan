@@ -202,12 +202,29 @@ func updatePrincipalRow(ctx context.Context, q *db.Queries, p principal.Principa
 }
 
 // DeletePrincipal implements principal.Store. It ends the principal, its
-// memberships and its grants in the transaction of the entry.
+// memberships and its grants, and removes its temporary administrator
+// record, in the transaction of the entry.
 func (s *Store) DeletePrincipal(ctx context.Context, id string, e audit.Entry) error {
 	return s.endRecord(ctx, e, access.Subject{Kind: access.SubjectPrincipal, ID: id}, ending{
-		record:  func(q *db.Queries, at int64) (int64, error) { return endPrincipal(ctx, q, id, "", at) },
+		record:  func(q *db.Queries, at int64) (int64, error) { return endInstallationPrincipal(ctx, q, id, at) },
 		members: func(q *db.Queries, at int64) error { return endPrincipalMemberships(ctx, q, id, at) },
 	})
+}
+
+// endInstallationPrincipal ends the principal id of the installation at the
+// time at, and removes its temporary administrator record, so a new person
+// with the same subject is not the old temporary administrator.
+func endInstallationPrincipal(ctx context.Context, q *db.Queries, id string, at int64) (int64, error) {
+	n, err := endPrincipal(ctx, q, id, "", at)
+	if err != nil || n == 0 {
+		return n, err
+	}
+
+	if _, err := q.DeleteTempAdmin(ctx, id); err != nil {
+		return 0, fmt.Errorf("delete temporary administrator record: %w", err)
+	}
+
+	return n, nil
 }
 
 // EnablePrincipal implements principal.Store.

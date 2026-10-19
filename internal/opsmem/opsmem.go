@@ -206,5 +206,6 @@ func Entry(scope namespace.Name, subject, action, object string, at time.Time) a
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }

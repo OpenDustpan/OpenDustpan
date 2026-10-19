@@ -37,7 +37,8 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	})
 
 	principals, err := principal.NewService(principal.Config{
-		Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)
@@ -53,6 +54,8 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	admin := coverageProviderAdmin(tb, st)
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		TempAdmins:    nil,
+		Now:           nil,
 		Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{}, Logger: slog.New(slog.DiscardHandler),
 		Namespaces: coverageNamespaces(tb), Backups: nil, Restores: nil, Maintenance: coverageMaintenance{},
 		Metrics: coverageMetrics{}, Version: "test", Schema: coverageSchema{}, Journal: nil, Principals: principals,

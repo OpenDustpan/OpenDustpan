@@ -41,6 +41,8 @@ const (
 
 // Store persists workspaces. Writes carry the namespace fence and fail with
 // namespace.ErrFenced if it is stale.
+//
+//nolint:interfacebloat // One adapter contract for one table set: every workspace write shares its rows and its fence.
 type Store interface {
 	// CreateWorkspace persists a new w. It returns ErrAlreadyExists,
 	// namespace.ErrNotFound if the namespace does not exist, or
@@ -62,7 +64,15 @@ type Store interface {
 	// ErrOverrideRefused unless the forced-write switches of the namespace and of
 	// the unit are on, in the same transaction. It is the unfenced release of a
 	// client-encrypted state under the forced-write override (ADR 44, decision 4).
-	ReleaseUnfenced(ctx context.Context, w Workspace, fence namespace.Fence) error
+	// It appends the audit entry e in the same transaction; if the append fails,
+	// nothing changes. It returns audit.ErrInvalidEntry if e fails validation or
+	// names another namespace.
+	ReleaseUnfenced(ctx context.Context, w Workspace, fence namespace.Fence, e audit.Entry) error
+	// SaveReleased saves a released unit like SaveWorkspace and appends the
+	// audit entry e in the same transaction; if the append fails, nothing
+	// changes. It returns audit.ErrInvalidEntry if e fails validation or names
+	// another namespace.
+	SaveReleased(ctx context.Context, w Workspace, fence namespace.Fence, e audit.Entry) error
 	// DeleteWorkspace soft-deletes the workspace called ref at the time e.At,
 	// in one fenced transaction (ADR 47), and appends the audit entry e to the
 	// chain of the namespace in the same transaction. If the append fails,
@@ -162,9 +172,12 @@ type StateStore interface {
 	// ErrConcurrentModification, and sv.Serial must be one more than its serial,
 	// else ErrStaleSerial. It returns ErrNotFound if the workspace does not
 	// exist, namespace.ErrNotFound if the namespace does not exist, or
-	// namespace.ErrFenced if fence is stale. An error writes nothing.
+	// namespace.ErrFenced if fence is stale. It appends the audit entry e in the
+	// same transaction, and returns audit.ErrInvalidEntry if e fails validation
+	// or names another namespace. An error writes nothing.
 	FenceAndUnlock(
 		ctx context.Context, w Workspace, sv StateVersion, expect StateVersionID, fence namespace.Fence,
+		e audit.Entry,
 	) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
@@ -616,10 +629,17 @@ func checkLockID(w Workspace, expect Lock) error {
 // refused with ErrClientEncrypted and the lock stays held. record runs before
 // an unfenced release and writes its audit entry; a failure stops the release
 // (ADR 41 decision 5). A nil record writes nothing.
+//
+// Each release appends one audit entry of the kind change, in the transaction
+// of the release (see ForceUnlockLock).
+//
+//nolint:revive // ForceUnlockLock takes these arguments and the expected lock; the entry joins them.
 func (s *Service) ForceUnlock(
-	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error,
+	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error, entry audit.Entry,
 ) (Workspace, bool, error) {
-	return s.ForceUnlockLock(ctx, id, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}, by, allow, record)
+	return s.ForceUnlockLock(
+		ctx, id, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}, by, allow, record, entry,
+	)
 }
 
 // ForceUnlockLock is ForceUnlock for the lock expect names. An empty expect.ID
@@ -628,10 +648,25 @@ func (s *Service) ForceUnlock(
 // fence and in the revision the release saves, so a lock taken after the caller
 // read the unit is not released.
 //
-//nolint:revive // The expected lock is one argument beyond the port's other parameters, named at the call.
+// entry holds what the caller knows of the request: the action, the object,
+// the token ID, the source address, the user agent, the channel, the request
+// ID and the reason. A reason that audit.ValidateReason refuses fails the call
+// with audit.ErrInvalidReason before anything changes. The service sets the
+// rest: the time, the namespace, the subject by, the kind change, the unit ID,
+// the new state version when the release writes one, and the lock that the
+// release ends (its holder and its time) in the changes. The store appends the
+// entry in the transaction of the release, so a release without its entry
+// does not happen.
+//
+//nolint:revive // The expected lock and the entry are arguments beyond the port's other parameters, named at the call.
 func (s *Service) ForceUnlockLock(
 	ctx context.Context, id ID, expect Lock, by string, allow namespace.Overrides, record func() error,
+	entry audit.Entry,
 ) (Workspace, bool, error) {
+	if err := audit.ValidateReason(entry.Reason); err != nil {
+		return Workspace{}, false, fmt.Errorf("force-unlock %s: %w", id, err)
+	}
+
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
 		return Workspace{}, false, err
@@ -650,20 +685,14 @@ func (s *Service) ForceUnlockLock(
 	switch {
 	case errors.Is(err, ErrNoState):
 		// A unit without state is a plain release: no override is used.
-		released, changeErr := s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-			if lockErr := checkLockID(w, expect); lockErr != nil {
-				return Workspace{}, lockErr
-			}
+		released, saveErr := s.releaseWithoutState(ctx, w, expect, by, entry)
 
-			return w.forceUnlock(now)
-		})
-
-		return released, false, changeErr
+		return released, false, saveErr
 	case err != nil:
 		return Workspace{}, false, fmt.Errorf("current state of %s: %w", w.Ref, err)
 	}
 
-	released, err := s.releaseWithFence(ctx, w, cur, by)
+	released, err := s.releaseWithFence(ctx, w, cur, by, forceUnlockEntry(entry, w, by, s.clock()))
 	if errors.Is(err, ErrClientEncrypted) && allow.Forced {
 		if record != nil {
 			if recordErr := record(); recordErr != nil {
@@ -671,12 +700,39 @@ func (s *Service) ForceUnlockLock(
 			}
 		}
 
-		unfenced, changeErr := s.releaseUnfenced(ctx, w)
+		unfenced, changeErr := s.releaseUnfenced(ctx, w, forceUnlockEntry(entry, w, by, s.clock()))
 
 		return unfenced, true, changeErr
 	}
 
 	return released, false, err
+}
+
+// forceUnlockEntry returns the audit entry of a force-unlock of w by the
+// principal by, from the entry template that the caller gave. The changes
+// hold the lock that the release ends. The version stays empty until
+// releaseWithFence sets it: a release that writes no state version has none.
+func forceUnlockEntry(template audit.Entry, w Workspace, by string, at time.Time) audit.Entry {
+	e := template
+	e.At = at
+	e.Namespace = w.Ref.Namespace
+	e.Subject = by
+	e.Version = ""
+	e.ObjectID = w.ID.String()
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Changes = []audit.Change{
+		releasedLockChange("lock-holder", w.Lock.Holder),
+		releasedLockChange("locked-at", w.Lock.LockedAt.UTC().Format(time.RFC3339)),
+	}
+
+	return e
+}
+
+// releasedLockChange returns the change of one field of a lock that a
+// force-unlock ends: the value before, and no value after.
+func releasedLockChange(key, old string) audit.Change {
+	return audit.Change{Key: key, Old: &old, New: "", Layer: "", TakesEffect: ""}
 }
 
 // SetOverrides replaces the override switch of the unit.
@@ -1363,6 +1419,41 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
+}
+
+// releaseWithoutState releases the lock of a unit that has no state, and
+// appends the audit entry of the release in the same transaction. The check of
+// the expected lock runs again against the revision that the release saves.
+func (s *Service) releaseWithoutState(
+	ctx context.Context, w Workspace, expect Lock, by string, entry audit.Entry,
+) (Workspace, error) {
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	current, err := s.GetByID(ctx, w.ID)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	if lockErr := checkLockID(current, expect); lockErr != nil {
+		return Workspace{}, lockErr
+	}
+
+	now := s.clock()
+
+	released, err := current.forceUnlock(now)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
+	}
+
+	err = s.workspaces.SaveReleased(ctx, released, fence, forceUnlockEntry(entry, current, by, now))
+	if err != nil {
+		return Workspace{}, fmt.Errorf("save workspace %s: %w", w.ID, err)
+	}
+
+	return released, nil
 }
 
 // answerDuplicateRestore answers the version that a concurrent restore of from
@@ -2312,8 +2403,9 @@ func (s *Service) clock() time.Time {
 	return s.now().UTC()
 }
 
-// releaseUnfenced releases the lock of the unit without writing a version.
-func (s *Service) releaseUnfenced(ctx context.Context, w Workspace) (Workspace, error) {
+// releaseUnfenced releases the lock of the unit without writing a version, and
+// appends the audit entry of the release in the same transaction.
+func (s *Service) releaseUnfenced(ctx context.Context, w Workspace, entry audit.Entry) (Workspace, error) {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
@@ -2324,7 +2416,7 @@ func (s *Service) releaseUnfenced(ctx context.Context, w Workspace) (Workspace, 
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
 
-	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence); err != nil {
+	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence, entry); err != nil {
 		return Workspace{}, fmt.Errorf("release %s: %w", w.ID, err)
 	}
 

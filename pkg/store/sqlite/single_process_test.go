@@ -320,3 +320,32 @@ func divergeSchema(t *testing.T, path string) {
 
 	insertFutureVersion(t, path, newest+1, "")
 }
+
+// TestOpenWithoutMigrateRefusesMissingFile proves that a missing database
+// path is refused and that the open leaves no file behind.
+func TestOpenWithoutMigrateRefusesMissingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mistyped.db")
+
+	st, err := sqlite.Open(t.Context(), path, sqlite.WithoutMigrate())
+	if err == nil {
+		_ = st.Close() //nolint:errcheck // The test fails below; the close only frees the handle.
+
+		t.Fatal("open of a missing path = nil, want an error")
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("open of a missing path = %v, want ErrNotExist", err)
+	}
+
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read directory: %v", readErr)
+	}
+
+	if len(entries) != 0 {
+		t.Fatalf("files after the refused open = %v, want none", entries)
+	}
+}

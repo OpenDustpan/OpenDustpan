@@ -56,6 +56,7 @@ func caller() audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
@@ -90,14 +91,15 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	c := &clock{now: start, mu: sync.Mutex{}}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: c.Now, NewID: nil},
+		principal.Config{TempAdmins: nil, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: c.Now, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: fresh, Authorizer: nil, Logger: nil, Now: c.Now, NewID: nil,
+		TempAdmins: nil,
+		Store:      st, Principals: st, Freshness: fresh, Authorizer: nil, Logger: nil, Now: c.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -130,11 +132,13 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 // the check of principal:manage-tokens.
 func admin() identity.Principal {
 	return identity.Principal{
-		Subject:        "admin",
-		DisplayName:    "admin",
-		Admin:          true,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "admin",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 }
 
@@ -198,7 +202,8 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := accesstoken.NewService(accesstoken.Config{
-		Store: nil, Principals: nil, Freshness: nil, Authorizer: nil, Logger: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      nil, Principals: nil, Freshness: nil, Authorizer: nil, Logger: nil, Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("err = %v, want ErrMissingDependency", err)
@@ -351,11 +356,13 @@ func TestAuthenticate(t *testing.T) {
 	}
 
 	want := identity.Principal{
-		Subject:        "ci-deploy",
-		DisplayName:    "ci-deploy",
-		Admin:          false,
-		TokenID:        tok.ID,
-		TokenExpiresAt: tok.ExpiresAt,
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "ci-deploy",
+		DisplayName:            "ci-deploy",
+		Admin:                  false,
+		TokenID:                tok.ID,
+		TokenExpiresAt:         tok.ExpiresAt,
 	}
 	if got != want {
 		t.Fatalf("principal = %+v, want %+v", got, want)
@@ -401,11 +408,13 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 
 	_, personSecret := f.create(t, f.person, "laptop")
 	admin := identity.Principal{
-		Subject:        "admin",
-		DisplayName:    "",
-		Admin:          true,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -443,11 +452,13 @@ func TestCheckActive(t *testing.T) {
 
 	orphan, _ := f.create(t, f.person, "laptop")
 	admin := identity.Principal{
-		Subject:        "admin",
-		DisplayName:    "",
-		Admin:          true,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -750,11 +761,13 @@ func TestDigest(t *testing.T) {
 // as returns the caller with the subject of p, not an administrator.
 func as(p principal.Principal) identity.Principal {
 	return identity.Principal{
-		Subject:        p.Subject,
-		DisplayName:    p.DisplayName,
-		Admin:          false,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                p.Subject,
+		DisplayName:            p.DisplayName,
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 }
 
@@ -939,7 +952,8 @@ func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *acc
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: f.store, Freshness: nil, Authorizer: authz, Logger: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: authz, Logger: nil,
 		Now: f.clock.Now, NewID: nil,
 	})
 	if err != nil {
@@ -1444,6 +1458,45 @@ func TestPolicyChangeOfAnotherInstanceAppliesAtOnce(t *testing.T) {
 	}
 }
 
+// failingPolicy is a store whose policy read fails.
+type failingPolicy struct {
+	*sqlite.Store
+}
+
+var errPolicyRead = errors.New("policy read failed")
+
+func (failingPolicy) GetPolicy(context.Context) (accesstoken.Policy, error) {
+	return accesstoken.Policy{}, errPolicyRead
+}
+
+// TestPolicyReadErrorFailsClosed proves that the account inactivity check
+// of another sign-in, which reads the policy on its own, answers a failed
+// read with its error.
+func TestPolicyReadErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		TempAdmins: nil,
+		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: nil, Authorizer: nil,
+		Logger: nil,
+		Now:    f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
+	}
+
+	owner := accesstoken.Owner{
+		ActiveAt: f.clock.Now(), DisabledAt: time.Time{}, ID: "pri-reader", Subject: "alice", DisplayName: "Alice",
+		Kind: principal.KindPerson, BreakGlass: false,
+	}
+
+	if _, err := svc.AccountInactive(t.Context(), owner); !errors.Is(err, errPolicyRead) {
+		t.Fatalf("account inactivity with a failed policy read: err = %v, want the read error", err)
+	}
+}
+
 func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	t.Parallel()
 
@@ -1658,7 +1711,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	alice := as(f.person)
 
 	holder, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: reader, Freshness: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
 		Logger:     nil,
 		Now:        f.clock.Now, NewID: nil,
@@ -1668,7 +1722,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	}
 
 	denied, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: reader, Freshness: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
 		Logger:     nil,
 		Now:        f.clock.Now, NewID: nil,

@@ -869,6 +869,7 @@ func TestSinkChangedNotice(t *testing.T) {
 		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0,
+		Reason: "",
 	}
 
 	n := notify.SinkChangedNotice(sub, 4, e)

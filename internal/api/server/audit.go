@@ -56,6 +56,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 

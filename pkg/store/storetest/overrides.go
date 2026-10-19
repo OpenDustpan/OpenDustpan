@@ -271,7 +271,8 @@ func testReleaseUnfencedNeedsForcedSwitches(t *testing.T, s WorkspaceStore) {
 	released.Revision = w.Revision + 1
 	released.UpdatedAt = now().Add(time.Hour)
 
-	if err := s.ReleaseUnfenced(t.Context(), released, ns.Fence()); !errors.Is(err, workspace.ErrOverrideRefused) {
+	err := s.ReleaseUnfenced(t.Context(), released, ns.Fence(), releaseEntry(ns.Name))
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
 		t.Fatalf("release with the switches off: err = %v, want ErrOverrideRefused", err)
 	}
 
@@ -281,7 +282,8 @@ func testReleaseUnfencedNeedsForcedSwitches(t *testing.T, s WorkspaceStore) {
 	released.Revision = on.Revision + 1
 	released.UpdatedAt = now().Add(2 * time.Hour)
 
-	if err := s.ReleaseUnfenced(t.Context(), released, ns.Fence()); err != nil {
+	err = s.ReleaseUnfenced(t.Context(), released, ns.Fence(), releaseEntry(ns.Name))
+	if err != nil {
 		t.Fatalf("release with the switches on: %v", err)
 	}
 
@@ -383,6 +385,7 @@ func testFenceAndUnlockKeepsSwitches(t *testing.T, s WorkspaceStore) {
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
+		releaseEntry(ns.Name),
 	)
 	if err != nil {
 		t.Fatalf("fence and unlock: %v", err)

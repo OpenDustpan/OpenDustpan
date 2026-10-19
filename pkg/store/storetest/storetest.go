@@ -167,6 +167,7 @@ func deleteEntry(ns namespace.Name) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
+		Reason:       "",
 	}
 }
 
