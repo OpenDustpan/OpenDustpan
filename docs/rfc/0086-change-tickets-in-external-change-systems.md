@@ -92,8 +92,8 @@ The spikes must check each fact that has the mark "(spike)".
   instead of a secret. A webhook that the REST API registers expires
   after 30 days, and a `PUT` refreshes it. A webhook with basic
   authentication and a secret comes from the admin route of the site.
-  That route needs the Jira administrator permission (not confirmed;
-  spike).
+  That route needs the Jira administrator permission. Nobody has
+  checked this fact yet (spike).
   Source: <https://developer.atlassian.com/cloud/jira/platform/webhooks/>
 - Authentication: an API token of a user with HTTP basic authentication.
   Source: <https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/>.
