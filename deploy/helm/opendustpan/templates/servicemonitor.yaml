@@ -1,0 +1,43 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- with .Values.metrics.serviceMonitor }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "opendustpan.fullname" $ }}
+  labels:
+    {{- include "opendustpan.labels" $ | nindent 4 }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "opendustpan.selectorLabels" $ | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ $.Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /api/server/metrics
+      scheme: {{ lower (include "opendustpan.scheme" $) }}
+      {{- if or .tlsConfig.caSecret.name .tlsConfig.serverName }}
+      tlsConfig:
+        {{- if .tlsConfig.caSecret.name }}
+        ca:
+          secret:
+            name: {{ .tlsConfig.caSecret.name | quote }}
+            key: {{ .tlsConfig.caSecret.key | quote }}
+        {{- end }}
+        {{- if .tlsConfig.serverName }}
+        serverName: {{ .tlsConfig.serverName | quote }}
+        {{- end }}
+      {{- end }}
+      interval: {{ .interval }}
+      scrapeTimeout: {{ .scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .tokenSecret.name | quote }}
+          key: {{ .tokenSecret.key | quote }}
+{{- end }}
+{{- end }}

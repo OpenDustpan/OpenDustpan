@@ -1,4 +1,5 @@
 # Refused: null removes probes.liveness.
+# want: at '/probes': missing property 'liveness'
 database:
   existingSecret:
     name: opendustpan-database

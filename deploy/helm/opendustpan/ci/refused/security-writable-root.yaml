@@ -1,4 +1,5 @@
 # Refused: a writable root filesystem.
+# want: at '/containerSecurityContext/readOnlyRootFilesystem': value must be true
 database:
   existingSecret:
     name: opendustpan-database

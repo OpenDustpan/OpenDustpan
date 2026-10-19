@@ -8,6 +8,7 @@ type: application
 # without its "v". A release of the binary and the image releases the chart.
 version: 0.1.0
 appVersion: "0.1.0"
+kubeVersion: ">=1.35.0-0"
 home: https://github.com/OpenDustpan/OpenDustpan
 sources:
   - https://github.com/OpenDustpan/OpenDustpan
