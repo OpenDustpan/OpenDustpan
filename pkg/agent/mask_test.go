@@ -48,7 +48,7 @@ func TestMaskJSON(t *testing.T) {
 		{"string value", `{"password":"p@ss\"w"}`, []string{`p@ss"w`}, `{"password":"[secret value]"}`},
 		{
 			"inside a string",
-			`{"url":"https://u:s3cr3t@host"}`,
+			`{"url":"https://u:` + `s3cr3t@host"}`,
 			[]string{"s3cr3t"},
 			`{"url":"https://u:[secret value]@host"}`,
 		},
