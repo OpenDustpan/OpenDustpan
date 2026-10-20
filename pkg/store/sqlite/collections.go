@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -114,7 +115,9 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
-		if lockErr := q.DeleteManualLocksOfObject(ctx, id); lockErr != nil {
+		if lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+			Kind: string(manuallock.KindCollection), ObjectID: id,
+		}); lockErr != nil {
 			return fmt.Errorf("delete manual lock of collection: %w", lockErr)
 		}
 

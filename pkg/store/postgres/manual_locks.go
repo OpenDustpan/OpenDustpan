@@ -166,6 +166,15 @@ func (s *Store) CoveringLock(ctx context.Context, unit collection.UnitRef) (manu
 		}, nil
 	}
 
+	if row.NamespaceHolder.Valid {
+		return manuallock.Lock{
+			Since:  codec.FromMillis(row.NamespaceSinceMs.Int64),
+			Target: manuallock.NamespaceTarget(unit.Namespace),
+			Holder: row.NamespaceHolder.String,
+			Reason: row.NamespaceReason.String,
+		}, nil
+	}
+
 	return manuallock.Lock{}, manuallock.ErrNotLocked
 }
 
@@ -175,6 +184,19 @@ func (s *Store) CoveringLock(ctx context.Context, unit collection.UnitRef) (manu
 func manualLockObject(ctx context.Context, q *db.Queries, t manuallock.Target) (string, error) {
 	if err := t.Valid(); err != nil {
 		return "", err
+	}
+
+	if t.Kind == manuallock.KindNamespace {
+		row, err := q.GetNamespace(ctx, t.Space.String())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("%w: %s", manuallock.ErrTargetNotFound, t)
+		}
+
+		if err != nil {
+			return "", fmt.Errorf("select namespace: %w", err)
+		}
+
+		return row.ID, nil
 	}
 
 	if t.Kind == manuallock.KindCollection {
@@ -257,7 +279,7 @@ func endedLockChanges(l manuallock.Lock) []audit.Change {
 
 // inventoryManualFlag converts the manual lock columns of an inventory row into
 // the flag of the entry. The lock of the unit wins over the lock of its
-// collection. It returns nil when no lock covers the unit.
+// collection, and that wins over the lock of its namespace. It returns nil when no lock covers the unit.
 func inventoryManualFlag(row db.ListInventoryRow) *inventory.ManualLock {
 	switch {
 	case row.UnitManualHolder.Valid:
@@ -275,6 +297,14 @@ func inventoryManualFlag(row db.ListInventoryRow) *inventory.ManualLock {
 			Object: row.Namespace + "/" + row.Collection,
 			Holder: row.CollectionManualHolder.String,
 			Reason: row.CollectionManualReason.String,
+		}
+	case row.NamespaceManualHolder.Valid:
+		return &inventory.ManualLock{
+			Since:  codec.FromMillis(row.NamespaceManualSinceMs.Int64),
+			Kind:   string(manuallock.KindNamespace),
+			Object: row.Namespace,
+			Holder: row.NamespaceManualHolder.String,
+			Reason: row.NamespaceManualReason.String,
 		}
 	default:
 		return nil

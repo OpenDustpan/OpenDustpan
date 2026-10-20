@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -516,7 +517,9 @@ func (s *Store) purgeUnit(
 			return fmt.Errorf("delete collection membership: %w", err)
 		}
 
-		if err := q.DeleteManualLocksOfObject(ctx, u.id); err != nil {
+		if err := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+			Kind: string(manuallock.KindUnit), ObjectID: u.id,
+		}); err != nil {
 			return fmt.Errorf("delete manual lock: %w", err)
 		}
 
