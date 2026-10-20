@@ -75,6 +75,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -606,6 +607,9 @@ type services struct {
 	updates    *stack.Updates
 	secrets    *secret.Service
 	workspaces *workspace.Service
+	// manualLocks is the manual lock service, or nil when the store holds no
+	// manual locks.
+	manualLocks *manuallock.Service
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
@@ -1308,8 +1312,13 @@ func checkStoreOptions(cfg *settings) error {
 // newWorkspaceService builds the OpenTofu workspace service, which seals
 // state with secrets.
 func newWorkspaceService(
-	cfg *settings, namespaces *namespace.Service, secrets *secret.Service,
+	cfg *settings, namespaces *namespace.Service, secrets *secret.Service, manual *manuallock.Service,
 ) (*workspace.Service, error) {
+	var locks workspace.ManualLocks
+	if manual != nil {
+		locks = manual
+	}
+
 	// The workspace service reads through the blob cache when
 	// wrapBlobCache set one.
 	blobs := cfg.workspaceBlobs
@@ -1328,6 +1337,7 @@ func newWorkspaceService(
 		MaxStateBytes:      cfg.maxStateBytes,
 		MaxPendingVersions: 0,
 		Retention:          cfg.softDeleteRetention,
+		ManualLocks:        locks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace service: %w", err)
@@ -1352,10 +1362,16 @@ func clockOf(cfg *settings) func() time.Time {
 // access token started.
 func newUpdateService(
 	cfg *settings, namespaces *namespace.Service, journal *stack.JournalEntries, tokens *accesstoken.Service,
+	manual *manuallock.Service,
 ) (*stack.Updates, error) {
 	var checker stack.TokenChecker
 	if tokens != nil {
 		checker = tokens
+	}
+
+	var locks stack.ManualLocks
+	if manual != nil {
+		locks = manual
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
@@ -1371,6 +1387,7 @@ func newUpdateService(
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
 		Journal:            journal,
 		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
+		ManualLocks:        locks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -1419,7 +1436,12 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	updates, err := newUpdateService(cfg, namespaces, journal, tokens)
+	manual, err := newManualLockService(cfg)
+	if err != nil {
+		return services{}, err
+	}
+
+	updates, err := newUpdateService(cfg, namespaces, journal, tokens, manual)
 	if err != nil {
 		return services{}, err
 	}
@@ -1442,12 +1464,13 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		return services{}, fmt.Errorf("secret service: %w", err)
 	}
 
-	workspaces, err := newWorkspaceService(cfg, namespaces, secrets)
+	workspaces, err := newWorkspaceService(cfg, namespaces, secrets, manual)
 	if err != nil {
 		return services{}, err
 	}
 
 	return services{
+		manualLocks: manual,
 		namespaces:  namespaces,
 		stacks:      stacks,
 		updates:     updates,
@@ -2292,6 +2315,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Collections:   svc.collections,
+		Locks:         svc.manualLocks,
 		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -2554,6 +2578,29 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 	}
 
 	return authz, nil
+}
+
+// newManualLockService builds the manual lock service on the namespace store
+// when that store also holds manual locks. A custom store without them gets no
+// service: the lock routes are not served and the tools take their own locks
+// as before.
+func newManualLockService(cfg *settings) (*manuallock.Service, error) {
+	store, ok := cfg.namespaceStore.(manuallock.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No manual lock service: the store holds no manual locks.
+	}
+
+	svc, err := manuallock.NewService(manuallock.Config{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Authorizer: cfg.authorizer,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("manual lock service: %w", err)
+	}
+
+	return svc, nil
 }
 
 // newCollectionService builds the collection service on the namespace store

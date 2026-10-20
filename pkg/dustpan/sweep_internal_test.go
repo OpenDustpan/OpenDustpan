@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -91,6 +92,9 @@ func newSweepFixture(t *testing.T) sweepFixture {
 	} {
 		opt(cfg)
 	}
+
+	// The manual lock service needs an authorizer, which a started server always has.
+	cfg.authorizer = identity.AdminOnly{}
 
 	svc, err := newServices(cfg, nil)
 	if err != nil {

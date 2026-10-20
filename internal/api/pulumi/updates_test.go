@@ -505,7 +505,7 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
+		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
 	)
 }
 
@@ -514,6 +514,7 @@ func newUpdateFixtureWithCutoff(
 // access token that started an update, and the journal replayer (nil builds
 // no checkpoint).
 type fixtureOptions struct {
+	manual   stack.ManualLocks
 	checker  stack.TokenChecker
 	limit    int
 	cutoff   int
@@ -561,6 +562,7 @@ func newUpdateFixtureWithAuthenticator(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        opts.manual,
 		Updates:            mem,
 		Checkpoints:        mem,
 		Events:             mem,
@@ -2781,6 +2783,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            mem,
 		Checkpoints:        mem,
 		Events:             mem,

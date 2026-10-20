@@ -13,7 +13,9 @@ import (
 	"io"
 	"slices"
 	"strconv"
+	"strings"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -143,16 +145,49 @@ func portableRowValues(table PortableTable, obj map[string]json.RawMessage) ([]a
 			return nil, fmt.Errorf("table %q column %q: %w", table.Table, column.Name, err)
 		}
 
-		if table.Table == portTableNamespaces && column.Name == "id" {
-			if idErr := checkNamespaceID(value); idErr != nil {
-				return nil, idErr
-			}
+		if checkErr := checkPortableValue(table.Table, column.Name, value); checkErr != nil {
+			return nil, checkErr
 		}
 
 		values[i] = value
 	}
 
 	return values, nil
+}
+
+// checkManualLockReason refuses a manual lock row whose reason a person could
+// not have set: empty, longer than the limit, or with a control or format
+// character. A lock tool shows the reason in a terminal, so a restore must not
+// bring such a value in. It returns ErrCorrupt, wrapped with
+// audit.ErrInvalidReason.
+//
+// Defense in depth: the lock service validates a new reason too, and the lock
+// text escapes the reason when it prints it. This check stays so that a
+// restored backup cannot bring in a reason that skips both.
+func checkManualLockReason(value any) error {
+	reason, isText := value.(string)
+	if !isText || strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("manual lock row has no reason: %w", ErrCorrupt)
+	}
+
+	if err := audit.ValidateReason(reason); err != nil {
+		return fmt.Errorf("manual lock row has an invalid reason: %w: %w", err, ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkPortableValue runs the check of the column that has one: the ID of a
+// namespace and the reason of a manual lock.
+func checkPortableValue(table, column string, value any) error {
+	switch {
+	case table == portTableNamespaces && column == "id":
+		return checkNamespaceID(value)
+	case table == portTableManualLocks && column == portColReason:
+		return checkManualLockReason(value)
+	default:
+		return nil
+	}
 }
 
 // checkNamespaceID refuses a namespace row whose id value is not a valid

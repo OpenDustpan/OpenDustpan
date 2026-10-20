@@ -565,11 +565,12 @@ func (m *memBlob) ageAll(d time.Duration) {
 }
 
 type updatesFixture struct {
-	svc   *stack.Updates
-	store *memUpdates
-	blobs blob.Store
-	clock *clock
-	ref   stack.Ref
+	svc        *stack.Updates
+	store      *memUpdates
+	blobs      blob.Store
+	clock      *clock
+	namespaces *namespace.Service
+	ref        stack.Ref
 }
 
 // newClock returns a clock at the fixture start time.
@@ -612,6 +613,7 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
 		Checkpoints:        store,
@@ -636,7 +638,7 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 
 	store.addStack(ref, "stk-test")
 
-	return updatesFixture{svc: svc, store: store, blobs: blobs, clock: clk, ref: ref}
+	return updatesFixture{svc: svc, store: store, blobs: blobs, clock: clk, namespaces: namespaces, ref: ref}
 }
 
 func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Started {

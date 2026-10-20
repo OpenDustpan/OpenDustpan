@@ -67,6 +67,7 @@ func (fakeUnits) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventor
 	}
 
 	return []coreinventory.Entry{{
+		ManualLock:  nil,
 		LastChanged: time.Unix(0, 0), Namespace: ns, Tool: "opentofu", Name: "net", UnitID: testUnitID,
 		DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, Collection: "",
 		Labels: nil,

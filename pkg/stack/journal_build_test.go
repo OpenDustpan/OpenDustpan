@@ -381,6 +381,7 @@ func newBuildFixtureWith(
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            store,
 		Checkpoints:        checkpoints,
 		Events:             store,

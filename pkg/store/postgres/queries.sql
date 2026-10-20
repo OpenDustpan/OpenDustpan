@@ -558,10 +558,15 @@ ORDER BY seq;
 -- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
-       COALESCE(c.name, '') AS collection
+       COALESCE(c.name, '') AS collection,
+       ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
+       cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
+       cl.since_ms AS collection_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
 WHERE i.namespace = $1
 ORDER BY i.tool, i.name;
 
@@ -569,10 +574,15 @@ ORDER BY i.tool, i.name;
 -- One live unit by its stable ID, which is unique in the installation.
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
-       COALESCE(c.name, '') AS collection
+       COALESCE(c.name, '') AS collection,
+       ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
+       cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
+       cl.since_ms AS collection_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
 WHERE i.unit_id = $1;
 
 -- name: ListInventoryUnitLabels :many
@@ -3200,6 +3210,55 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
 
+
+-- name: InsertManualLock :execrows
+-- Records the manual lock of one object. A row that exists for the object is
+-- not written. The caller checks the fence in the same transaction.
+INSERT INTO manual_locks (kind, object_id, namespace, holder, reason, since_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (kind, object_id) DO NOTHING;
+
+-- name: GetManualLock :one
+SELECT holder, reason, since_ms
+FROM manual_locks
+WHERE kind = $1 AND object_id = $2;
+
+-- name: GetManualLockForUpdate :one
+-- Reads the lock and holds a row lock until the transaction ends, so that a
+-- removal and a new lock cannot interleave between the read and the delete.
+SELECT holder, reason, since_ms
+FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+FOR UPDATE;
+
+-- name: DeleteManualLock :execrows
+-- Deletes the lock that the caller read, and no other lock: the holder and the
+-- time must match too.
+DELETE FROM manual_locks
+WHERE kind = $1 AND object_id = $2 AND holder = $3 AND since_ms = $4;
+
+-- name: DeleteManualLocksOfObject :exec
+-- Removes the manual lock of one object by its stable ID. The purge of a unit
+-- and the delete of a collection call it in the same transaction as their own
+-- rows.
+DELETE FROM manual_locks
+WHERE object_id = $1;
+
+-- name: GetCoveringManualLocks :one
+-- The manual locks that can cover one unit: its own lock, and the lock of the
+-- collection it is in now. No row means that the inventory holds no such unit.
+SELECT ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
+       cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3;
+
+
+
 -- name: DeleteExpiredIdempotencyRecord :exec
 -- Deletes the record of the name when it is past its period: a record past
 -- record_ttl_ms, or a pending record past pending_ttl_ms. The time is the
@@ -3282,4 +3341,5 @@ WHERE id = 1 AND wrapped_key = sqlc.arg(old_wrapped_key);
 
 -- name: DeleteAllIdempotencyRecords :exec
 DELETE FROM idempotency_records;
+
 
