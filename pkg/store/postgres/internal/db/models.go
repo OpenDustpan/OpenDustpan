@@ -495,6 +495,7 @@ type Restore struct {
 	StartedAtMs int64
 	EndedAtMs   pgtype.Int8
 	Error       string
+	DevReport   string
 }
 
 type Role struct {

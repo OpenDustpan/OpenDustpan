@@ -165,15 +165,37 @@ type Store struct {
 
 var _ gate.Store = (*Store)(nil)
 
+// Option sets an optional part of a Store.
+type Option func(*options)
+
+type options struct {
+	kinds KindReader
+}
+
+// WithKindReader sets the reader that gives the installation kind to the
+// check of the approvers of a write. Without it, the check treats the
+// installation as a production installation and refuses a dev user.
+func WithKindReader(kinds KindReader) Option {
+	return func(o *options) { o.kinds = kinds }
+}
+
 // New returns the gate.Store over run.
-func New(run Runner) *Store {
+func New(run Runner, opts ...Option) *Store {
+	var o options
+
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	checker := approverChecker(o)
+
 	return &Store{
-		gates:          newObjects[gate.Gate](run),
-		accessLimits:   newObjects[gate.AccessLimit](run),
-		approvalRules:  newObjects[gate.ApprovalRule](run),
-		ownershipRules: newObjects[gate.OwnershipRule](run),
-		pathSets:       newObjects[gate.PathSet](run),
-		settings:       &Settings{run: run},
+		gates:          newObjects[gate.Gate](run, checker),
+		accessLimits:   newObjects[gate.AccessLimit](run, checker),
+		approvalRules:  newObjects[gate.ApprovalRule](run, checker),
+		ownershipRules: newObjects[gate.OwnershipRule](run, checker),
+		pathSets:       newObjects[gate.PathSet](run, checker),
+		settings:       &Settings{run: run, approvers: checker},
 		records:        &Records{run: run},
 		run:            run,
 	}

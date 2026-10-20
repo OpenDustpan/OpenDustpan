@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -50,6 +52,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,
+		Kinds:       stores.registry,
 		Registry:    stores.registry,
 		Blobs:       stores.live,
 		StateOpener: nil,
@@ -74,8 +77,11 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Region:      "test",
 		AfterApply:  nil,
 		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+
+		AllowDevBackups: false,
+		AllowDevHint:    "",
+		Now:             nil,
+		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -286,15 +292,22 @@ func TestRestoreRoutesDeclareRestoreAction(t *testing.T) {
 	}
 }
 
-// gatedRestoreTarget wraps a blob store and blocks every Get until gate
-// closes, so a test holds a restore before it reads the backup target. It
-// honors ctx, so a test that never opens the gate still ends.
+// gatedRestoreTarget wraps a blob store and blocks every Get except the first
+// until gate closes, so a test holds a restore before it reads the backup
+// target. The first Get is the read of the manifest at the start of the
+// restore, which refuses a dev backup at once. It honors ctx, so a test that
+// never opens the gate still ends.
 type gatedRestoreTarget struct {
 	inner blob.Store
 	gate  chan struct{}
+	reads atomic.Int32
 }
 
 func (g *gatedRestoreTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if g.reads.Add(1) == 1 {
+		return g.inner.Get(ctx, key)
+	}
+
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("read gated target: %w", ctx.Err())
@@ -342,7 +355,11 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 		}
 	}()
 
-	fix := newRestoreFixtureOver(t, stores, &gatedRestoreTarget{inner: stores.target, gate: gate})
+	fix := newRestoreFixtureOver(
+		t,
+		stores,
+		&gatedRestoreTarget{inner: stores.target, gate: gate, reads: atomic.Int32{}},
+	)
 
 	status, startBody := serveRestore(
 		t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"bkp-missing000000000001"}`,
@@ -838,6 +855,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,
+		Kinds:       stores.registry,
 		Registry:    stores.registry,
 		Blobs:       stores.live,
 		StateOpener: nil,
@@ -862,8 +880,11 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		Region:      "test",
 		AfterApply:  nil,
 		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+
+		AllowDevBackups: false,
+		AllowDevHint:    "",
+		Now:             nil,
+		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -951,6 +972,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,
+		Kinds:       stores.registry,
 		Registry:    stores.registry,
 		Blobs:       stores.live,
 		StateOpener: nil,
@@ -975,8 +997,11 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		Region:      "test",
 		AfterApply:  nil,
 		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+
+		AllowDevBackups: false,
+		AllowDevHint:    "",
+		Now:             nil,
+		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1080,4 +1105,121 @@ func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want 
 	}
 
 	t.Fatalf("no audit entry names restore %s with %q", id, want)
+}
+
+// TestStartRestoreRefusesADevBackupWith409 sends a restore of a backup whose
+// manifest says dev to a production installation: the answer is 409 with the
+// refusal text, and no restore row exists (layer 1b through the API).
+func TestStartRestoreRefusesADevBackupWith409(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	fix := newRestoreFixtureOver(t, stores, stores.target)
+
+	backupID := backup.ID("bkp-dev000000000000001")
+	if _, err := fix.backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup %s: %v", backupID, err)
+	}
+
+	// The manifest is not authenticated: a person who can write to the
+	// target changes the kind.
+	key, err := blob.ParseKey("backups/" + backupID.String() + "/manifest.json")
+	if err != nil {
+		t.Fatalf("manifest key: %v", err)
+	}
+
+	raw := readTarget(t, stores.target, key)
+	edited := strings.Replace(raw, `"installationKind":"production"`, `"installationKind":"dev"`, 1)
+
+	if edited == raw {
+		t.Fatalf("manifest %s holds no production kind", raw)
+	}
+
+	if delErr := stores.target.Delete(t.Context(), key); delErr != nil {
+		t.Fatalf("delete manifest: %v", delErr)
+	}
+
+	if putErr := stores.target.Put(t.Context(), key, strings.NewReader(edited)); putErr != nil {
+		t.Fatalf("put manifest: %v", putErr)
+	}
+
+	for _, body := range []string{
+		`{"backupID":"` + backupID.String() + `"}`,
+		`{"backupID":"` + backupID.String() + `","checkOnly":true}`,
+	} {
+		status, resp := serveRestore(t, fix.handler, http.MethodPost, "/api/server/restores", body)
+		if status != http.StatusConflict {
+			t.Fatalf("POST restores %s answers %d, want 409 (%s)", body, status, resp)
+		}
+
+		for _, want := range []string{"production installation", "dev installation", "We do not recommend this restore."} {
+			if !strings.Contains(resp, want) {
+				t.Fatalf("refusal %q does not hold %q", resp, want)
+			}
+		}
+	}
+
+	status, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	if status != http.StatusOK || strings.Contains(listBody, backupID.String()) {
+		t.Fatalf("restores list = %d %s, want no row for the refused backup", status, listBody)
+	}
+}
+
+// TestRestoreAnswersCarryWarnings checks that the answers of the restore
+// routes hold a warnings list, empty for a restore with no dev data, and no
+// dev data summary.
+func TestRestoreAnswersCarryWarnings(t *testing.T) {
+	t.Parallel()
+
+	fix := newRestoreFixture(t)
+
+	backupID := backup.ID("bkp-warn000000000000001")
+	if _, err := fix.backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup %s: %v", backupID, err)
+	}
+
+	status, resp := serveRestore(
+		t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"`+backupID.String()+`"}`,
+	)
+	if status != http.StatusAccepted || !strings.Contains(resp, `"warnings":[]`) {
+		t.Fatalf("POST restores = %d %s, want 202 with an empty warnings list", status, resp)
+	}
+
+	var doc startRestoreDoc
+	if err := json.Unmarshal([]byte(resp), &doc); err != nil {
+		t.Fatalf("decode start answer: %v", err)
+	}
+
+	waitRestoreState(t, fix.handler, doc.ID, "succeeded")
+
+	status, resp = serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores/"+doc.ID, "")
+	if status != http.StatusOK || !strings.Contains(resp, `"warnings":[]`) || strings.Contains(resp, "devData") {
+		t.Fatalf("GET restore = %d %s, want an empty warnings list and no dev data", status, resp)
+	}
+
+	status, resp = serveRestore(t, fix.handler, http.MethodGet, "/api/server/restores", "")
+	if status != http.StatusOK || !strings.Contains(resp, `"warnings":[]`) {
+		t.Fatalf("GET restores = %d %s, want a warnings list in each row", status, resp)
+	}
+}
+
+// readTarget reads one object of the backup target as text.
+func readTarget(t *testing.T, target *blobfs.Store, key blob.Key) string {
+	t.Helper()
+
+	reader, err := target.Get(t.Context(), key)
+	if err != nil {
+		t.Fatalf("get %s: %v", key, err)
+	}
+
+	data, readErr := io.ReadAll(reader)
+	if closeErr := reader.Close(); closeErr != nil {
+		t.Fatalf("close %s: %v", key, closeErr)
+	}
+
+	if readErr != nil {
+		t.Fatalf("read %s: %v", key, readErr)
+	}
+
+	return string(data)
 }

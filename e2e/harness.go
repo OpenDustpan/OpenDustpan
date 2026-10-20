@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -659,6 +660,17 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	// Server.Run get the same check at start.
 	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
 		tb.Fatalf("check key wrapper: %v", checkErr)
+	}
+
+	// The harness serves the handler directly, so it claims the installation
+	// kind that Server.Run claims at start. The backup records it.
+	claimer, ok := st.(installation.KindStore)
+	if !ok {
+		tb.Fatal("the store cannot claim an installation kind")
+	}
+
+	if _, claimErr := claimer.ClaimKind(ctx, installation.KindProduction); claimErr != nil {
+		tb.Fatalf("claim the installation kind: %v", claimErr)
 	}
 
 	blobs := openTestBlobStore(ctx, tb, args.dbPath)

@@ -60,7 +60,7 @@ func (s *checkLiveStore) PeekPortableKey(
 }
 
 func (s *checkLiveStore) StagePortable(
-	_ context.Context, open backup.PortableOpener, _ backup.Summary, files []backup.PortableFile,
+	_ context.Context, open backup.PortableOpener, _ backup.Summary, files []backup.PortableFile, _ backup.StageOptions,
 ) (backup.Summary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -218,11 +218,13 @@ func (s *checkSetup) check(t *testing.T, key secret.Wrapper, region string) (bac
 	t.Helper()
 
 	return backup.CheckRestore(t.Context(), backup.CheckInput{
-		Target: s.target,
-		Live:   s.live,
-		Key:    key,
-		ID:     s.id,
-		Region: region,
+		Target:     s.target,
+		Live:       s.live,
+		Key:        key,
+		ID:         s.id,
+		Region:     region,
+		Stage:      backup.StageOptions{BackupKind: "", AllowDev: false},
+		AfterStage: nil,
 	})
 }
 

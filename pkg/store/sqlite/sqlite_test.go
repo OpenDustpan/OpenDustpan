@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -744,6 +745,27 @@ func TestPortableExportConformance(t *testing.T) {
 	})
 }
 
+func TestDevDataConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunDevData(t, func(t *testing.T, kind installation.Kind) storetest.DevDataStore {
+		t.Helper()
+
+		store, ok := openBackup(t).(storetest.DevDataStore)
+		if !ok {
+			t.Fatal("the SQLite store does not hold the dev data ports")
+		}
+
+		if kind != "" {
+			if _, err := store.ClaimKind(t.Context(), kind); err != nil {
+				t.Fatalf("claim the installation kind: %v", err)
+			}
+		}
+
+		return store
+	})
+}
+
 func TestRestoreConformance(t *testing.T) {
 	t.Parallel()
 
@@ -848,6 +870,25 @@ func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The cap
 // IdempotencyStore implements storetest.IdempotencyHolder.
 func (s *backupStore) IdempotencyStore() idempotency.Store { //nolint:ireturn // The capability returns the port.
 	return s.Idempotency(idempotencytest.TestWrapper(s.t, 1))
+}
+
+// EraseKindForTest implements storetest.KindEraser: it sets the stored
+// installation kind back to NULL through a second handle, behind the port.
+func (s *backupStore) EraseKindForTest(ctx context.Context) error {
+	raw, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		return fmt.Errorf("open the database file: %w", err)
+	}
+
+	defer func() {
+		_ = raw.Close() //nolint:errcheck // Test-only handle.
+	}()
+
+	if _, err := raw.ExecContext(ctx, `UPDATE installation SET kind = NULL`); err != nil {
+		return fmt.Errorf("erase the kind: %w", err)
+	}
+
+	return nil
 }
 
 // CurrentStagingID implements storetest.StagingWitness: the path of the

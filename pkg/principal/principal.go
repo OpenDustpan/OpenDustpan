@@ -351,10 +351,28 @@ const (
 	DevAdminSubject = DevSubjectPrefix + "admin"
 )
 
-// IsDevSubject reports whether s starts with DevSubjectPrefix, without regard
-// to case.
+// IsDevSubject reports whether the first 4 bytes of s equal DevSubjectPrefix
+// when the ASCII letters ignore case. Only the ASCII letters fold: a
+// character that Unicode case folding maps to an ASCII letter, such as U+017F
+// or U+212A, does not match. The SQL match of each store adapter uses the
+// same rule.
 func IsDevSubject(s string) bool {
-	return len(s) >= len(DevSubjectPrefix) && strings.EqualFold(s[:len(DevSubjectPrefix)], DevSubjectPrefix)
+	if len(s) < len(DevSubjectPrefix) {
+		return false
+	}
+
+	for i := range len(DevSubjectPrefix) {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+
+		if c != DevSubjectPrefix[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // subjectPattern is the form of a subject made through the API.

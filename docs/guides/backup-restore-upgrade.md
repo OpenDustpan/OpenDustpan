@@ -54,7 +54,7 @@ A backup is a set of objects under the target:
 - `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
 - `blobs/<key>` holds each blob that the SQL data names, such as an OpenTofu state version or a Pulumi checkpoint.
 
-The manifest records the backup format (`format`: 2) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the home regions and the wrapper IDs.
+The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the home regions and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
 For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5.
 
@@ -181,6 +181,42 @@ database may be the other kind.
 A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
 A restore needs the key-encryption key that encrypted every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
+
+## Restore a backup of a dev installation
+
+A backup of an installation that `opendustpan dev` made has the kind `dev`. It holds the person `dev:admin`, with the role of the site administrator, and maybe its sessions and tokens. A dev backup in a production installation brings these into it.
+
+Three layers stop that:
+
+- A production installation refuses to restore a backup of the kind `dev`. The restore answers status 409, before it enters maintenance mode, and it changes nothing:
+
+  ```text
+  This installation is a production installation. The backup is from a dev installation. We do not recommend this restore. To restore it, start the server with `--unsafe-allow-restoring-dev-installation-backups-into-production`.
+  ```
+
+  A check-only restore gets the same refusal. A dev installation restores a dev backup as before. A dev installation also restores a production backup. The answer then carries the warning `production-backup-into-dev`: the tokens and sessions of the backup are now in a dev data directory.
+- A restore into a production installation deletes the dev data from the staged data before it swaps, whatever the manifest says. The manifest is not signed, so the staged data decides. The restore deletes the people with the subject prefix `dev:` in any letter case, and their grants, group memberships, sessions, tokens and open sign-in requests. It deletes the sign-in provider with the ID `dev`. It deletes the dev subjects from the approvers of approval rules, approval defaults and ownership rules. A backup that holds such data and is not allowed is refused, and the live data stays as it was.
+- A production server refuses a session or a token of a person with the prefix `dev:`.
+
+To restore a dev backup into a production installation, start the server with the flag `--unsafe-allow-restoring-dev-installation-backups-into-production`. The flag has no environment variable and no configuration file key, and no API sets it. The server writes one warning to the log at each start with the flag. The restore then goes on and deletes the dev data. The answer of the restore carries the warning `dev-backup-into-production`:
+
+```text
+This restore deleted the dev users and their grants. Things that depend on them may break. We do not recommend this restore.
+```
+
+A check-only restore carries the warning `dev-backup-would-remove`. Its text says that the restore would delete the dev users, and that the check changed no data.
+
+An approval rule can lose its last approver. The restore then writes the value `!no-approver` as its approver. Nobody can meet that rule, and the gate refuses the change that it covers until a person changes the rule.
+
+`opendustpan restore` reads the manifest first. It prints a notice before it starts the restore of a dev backup. The answer of a restore lists the warnings, and the answer of a check-only restore also shows the dev data that the restore would delete:
+
+```text
+restore rst-aaa succeeded
+warning: This restore deleted the dev users and their grants. Things that depend on them may break. We do not recommend this restore.
+dev data: 1 principals; grants 1, principals 1, sessions 1
+```
+
+The restore stores a report of the deletion in its record. It writes one audit entry for each deleted principal, up to 100, and one entry for the other principals. It writes one entry for each class of data that no principal owns. If an audit entry cannot be written, the restore still ends as finished, and the answer carries the warning `audit-append-failed`. The audit log keeps its entries: the restore deletes no audit entry.
 
 ## Upgrade the server
 

@@ -141,3 +141,5 @@ both together.
 | [92](0092-opentelemetry-for-jobs.md) | OpenTelemetry for jobs, with job traces, fleet metrics and OTLP export to the operator's collector | draft |
 | [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | draft |
 | [94](0094-ci-shim-secrets-at-run-time-out-of-state.md) | The CI shim, which gives secrets to a tool in a team's own CI at run time and keeps them out of state | draft |
+| [95](0095-day-two-actions-outside-state.md) | Day-two actions outside state, which change the world but not the state, and how OpenDustpan records, shows and gates them | draft |
+| [96](0096-follow-ups-after-an-apply.md) | Follow-ups after an apply, which start an AWX job template or send a signed webhook with selected outputs | draft |

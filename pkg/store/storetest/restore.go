@@ -117,6 +117,7 @@ func newRestoreRecord(id backup.RestoreID, backupID backup.ID, startedAt time.Ti
 		RequestedBy: "admin",
 		Error:       "",
 		State:       backup.RestoreChecking,
+		DevReport:   nil,
 	}
 }
 
@@ -392,7 +393,7 @@ func testRestoreThenBackup(t *testing.T, newStore RestoreFactory) {
 
 	sink, sum, files := exportPortable(t, ps.src)
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage a snapshot with a running backup and a checking restore: %v", err)
 	}
 
@@ -501,7 +502,7 @@ func applySnapshot(t *testing.T, ps portableStores) {
 
 	sink, sum, files := exportPortable(t, ps.src)
 
-	if _, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage the snapshot: %v", err)
 	}
 
@@ -679,7 +680,7 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 
 	other := newNamespace(t, pdst, "other")
 
-	staged, err := pdst.StagePortable(ctx, sink.read, sum, files)
+	staged, err := pdst.StagePortable(ctx, sink.read, sum, files, StageAs(t, pdst))
 	if err != nil {
 		t.Fatalf("stage restore: %v", err)
 	}
@@ -798,7 +799,7 @@ func testRestoreKeepsInstallationState(t *testing.T, newStore RestoreFactory) {
 
 		sink, sum, files := exportPortable(t, ps.src)
 
-		if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 			t.Fatalf("stage restore: %v", err)
 		}
 
@@ -1108,7 +1109,7 @@ func restoreChain(
 
 	sink, sum, files := exportPortable(t, ps.src)
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage restore: %v", err)
 	}
 
@@ -1187,7 +1188,7 @@ func testRestoreApplyReRecordsBackup(t *testing.T, newStore RestoreFactory) {
 
 	newNamespace(t, pdst, "other")
 
-	if _, stageErr := pdst.StagePortable(ctx, sink.read, sum, files); stageErr != nil {
+	if _, stageErr := pdst.StagePortable(ctx, sink.read, sum, files, StageAs(t, pdst)); stageErr != nil {
 		t.Fatalf("stage restore: %v", stageErr)
 	}
 

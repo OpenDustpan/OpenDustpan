@@ -19,6 +19,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // Static test errors. The suite injects them as target and export failures.
@@ -359,6 +360,16 @@ type fixture struct {
 func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *fixture {
 	t.Helper()
 
+	return newFixtureKind(t, exporter, fixedKind(installation.KindProduction), maxSQL)
+}
+
+// newFixtureKind is newFixture with the reader that gives the installation
+// kind of the database.
+func newFixtureKind(
+	t *testing.T, exporter backup.PortableExporter, kinds backup.KindReader, maxSQL int64,
+) *fixture {
+	t.Helper()
+
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	registry := newFakeRegistry()
 	source := newMemStore()
@@ -366,6 +377,7 @@ func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *f
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Kinds:       kinds,
 		Registry:    registry,
 		Blobs:       source,
 		StateOpener: nil,
@@ -521,6 +533,8 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 		RowCounts:     map[string]int64{"namespaces": 1},
 		SQLFormat:     backup.PortableFormat,
 		SQLFiles:      files,
+
+		InstallationKind: installation.KindProduction,
 	}
 }
 
@@ -566,6 +580,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 		"format",
 		"homeRegions",
 		"id",
+		"installationKind",
 		"rowCounts",
 		"schemaVersion",
 		"sqlFiles",
@@ -615,9 +630,9 @@ func assertManifestBlobKeys(t *testing.T, raw map[string]any) {
 func TestManifestFormatIsPinned(t *testing.T) {
 	t.Parallel()
 
-	if backup.FormatVersion != 2 {
+	if backup.FormatVersion != 3 {
 		t.Fatalf(
-			"format version = %d, want 2: the portable format of ADR 42 is the manifest format, and it changes only with a new ADR",
+			"format version = %d, want 3: the portable format is the manifest format, and it changes only with a new decision",
 			backup.FormatVersion,
 		)
 	}
@@ -911,6 +926,7 @@ func TestRunFinishesTableFilesTheExporterLeavesOpen(t *testing.T) {
 
 			service, err := backup.NewService(backup.Config{
 				Exporter:    &openExporter{data: []byte("a part of a table file"), err: tc.err},
+				Kinds:       fixedKind(installation.KindProduction),
 				Registry:    registry,
 				Blobs:       newMemStore(),
 				StateOpener: nil,
@@ -1038,6 +1054,7 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 		{name: "no registry", change: func(cfg *backup.Config) { cfg.Registry = nil }},
 		{name: "no blob store", change: func(cfg *backup.Config) { cfg.Blobs = nil }},
 		{name: "no target", change: func(cfg *backup.Config) { cfg.Target = nil }},
+		{name: "no kind reader", change: func(cfg *backup.Config) { cfg.Kinds = nil }},
 	}
 
 	for _, tc := range cases {
@@ -1046,6 +1063,7 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 
 			cfg := backup.Config{
 				Exporter:    exporter,
+				Kinds:       fixedKind(installation.KindProduction),
 				Registry:    registry,
 				Blobs:       source,
 				StateOpener: nil,
@@ -1070,4 +1088,12 @@ func TestCheckRefusesNoTarget(t *testing.T) {
 	if err := backup.Check(t.Context(), nil, "bkp-aaa"); !errors.Is(err, backup.ErrMissingDependency) {
 		t.Fatalf("check without a target: err = %v, want ErrMissingDependency", err)
 	}
+}
+
+// count returns the number of objects in the store.
+func (m *memStore) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return len(m.objects)
 }

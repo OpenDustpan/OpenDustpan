@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // PortableStore is a store that exports the portable format: the backup store
@@ -233,7 +234,7 @@ func testPortableStages(t *testing.T, newStore PortableFactory) {
 
 	sink, sum, files := exportPortable(t, s)
 
-	staged, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	staged, err := s.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, s))
 	if err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
@@ -263,7 +264,7 @@ func testPortableStageRefusesCorrupt(t *testing.T, newStore PortableFactory) {
 	raw := data.Bytes()
 	raw[len(raw)/2] ^= 0xff
 
-	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, s))
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage a corrupt table file: err = %v, want ErrCorrupt", err)
 	}
@@ -280,7 +281,7 @@ func testPortableStageRefusesVersion(t *testing.T, newStore PortableFactory) {
 	sink, sum, files := exportPortable(t, s)
 	sum.SchemaVersion++
 
-	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, s))
 	if !errors.Is(err, backup.ErrSchemaMismatch) {
 		t.Fatalf("stage another schema version: err = %v, want ErrSchemaMismatch", err)
 	}
@@ -297,7 +298,7 @@ func testPortableStageRefusesBaseline(t *testing.T, newStore PortableFactory) {
 	sink, sum, files := exportPortable(t, s)
 	sum.SchemaVersion = backup.BaselineSchemaVersion - 1
 
-	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, s))
 	if !errors.Is(err, backup.ErrSchemaBeforeBaseline) {
 		t.Fatalf("stage a backup from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
@@ -659,7 +660,7 @@ func assertStageRefused(
 ) {
 	t.Helper()
 
-	_, err := s.StagePortable(t.Context(), sink.read, export.sum, export.files)
+	_, err := s.StagePortable(t.Context(), sink.read, export.sum, export.files, StageAs(t, s))
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage a bad files list: err = %v, want ErrCorrupt", err)
 	}
@@ -730,7 +731,7 @@ func testPortableStageRefusesForeignKeys(t *testing.T, newStore PortableFactory)
 
 	dst := newStore(t)
 
-	_, err := dst.StagePortable(t.Context(), PortableOpener(tampered), want, tamperedFiles)
+	_, err := dst.StagePortable(t.Context(), PortableOpener(tampered), want, tamperedFiles, StageAs(t, dst))
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage stacks without their namespace: err = %v, want ErrCorrupt", err)
 	}
@@ -767,7 +768,7 @@ func testPortableStageRefusesBrokenStream(t *testing.T, newStore PortableFactory
 
 	dst := newStore(t)
 
-	_, err := dst.StagePortable(t.Context(), PortableOpener(raw), sum, files)
+	_, err := dst.StagePortable(t.Context(), PortableOpener(raw), sum, files, StageAs(t, dst))
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage a corrupt stream: err = %v, want ErrCorrupt", err)
 	}
@@ -796,7 +797,7 @@ func testPortableStageRefusesBlobs(t *testing.T, newStore PortableFactory) {
 
 	dst := newStore(t)
 
-	_, err := dst.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := dst.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, dst))
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage wrong blob references: err = %v, want ErrCorrupt", err)
 	}
@@ -847,4 +848,22 @@ func testPortablePendingNamesNoBlob(t *testing.T, newStore PortableFactory) {
 	}
 
 	t.Fatalf("export names %+v, want the finalized key %q", sum.Blobs, finalized.Content)
+}
+
+// StageAs returns the options of a stage call for a backup of a production
+// installation, with the setting that allows a dev backup off. The suites that
+// do not test the dev data rules stage with it. The restore ports read the kind
+// of the store that they stage into, and a server claims its kind at start. So
+// StageAs claims the kind production in s when s can claim one and holds none
+// yet, and leaves a kind that s holds as it is.
+func StageAs(t *testing.T, s any) backup.StageOptions {
+	t.Helper()
+
+	if claimer, ok := s.(installation.KindStore); ok {
+		if _, err := claimer.ClaimKind(t.Context(), installation.KindProduction); err != nil {
+			t.Fatalf("claim the installation kind: %v", err)
+		}
+	}
+
+	return backup.StageOptions{BackupKind: installation.KindProduction, AllowDev: false}
 }

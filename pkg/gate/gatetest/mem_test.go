@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // errNotInFake reports a port method that the store in memory does not
@@ -22,6 +23,8 @@ type memDB struct {
 	mu      sync.Mutex
 	fences  map[namespace.Name]int64
 	entries []audit.Entry
+	// dev is true for the store of a dev installation.
+	dev bool
 }
 
 // memStore is a gate.Store in memory. It holds the rules of gate.Objects
@@ -36,7 +39,11 @@ type memStore struct {
 }
 
 func newMemStore() *memStore {
-	db := &memDB{mu: sync.Mutex{}, fences: map[namespace.Name]int64{}, entries: nil}
+	return newMemStoreOfKind(false)
+}
+
+func newMemStoreOfKind(dev bool) *memStore {
+	db := &memDB{mu: sync.Mutex{}, fences: map[namespace.Name]int64{}, entries: nil, dev: dev}
 
 	return &memStore{
 		db:             db,
@@ -147,7 +154,8 @@ func (m *memObjects[T]) Put(
 	defer m.db.mu.Unlock()
 
 	ref := obj.Ref()
-	if err := m.db.check(ref.Scope, fence, e); err != nil {
+
+	if err := checkWrite(m.db, obj, fence, e); err != nil {
 		return 0, err
 	}
 
@@ -278,4 +286,29 @@ func withVersion[T gate.Object](obj T, v int64) T {
 	}
 
 	return typed
+}
+
+// checkApprovers applies the rule of the users of the approvers to obj.
+func (db *memDB) checkApprovers(obj any) error {
+	var approvers gate.Approvers
+
+	switch v := obj.(type) {
+	case gate.ApprovalRule:
+		approvers = v.Approvers
+	case gate.OwnershipRule:
+		approvers = v.Approvers
+	default:
+		return nil
+	}
+
+	return gate.ApproverPolicy{Production: !db.dev, IsDev: principal.IsDevSubject}.Validate(approvers)
+}
+
+// checkWrite checks the approvers, the fence and the entry of a write of obj.
+func checkWrite[T gate.Object](db *memDB, obj T, fence namespace.Fence, e audit.Entry) error {
+	if err := db.checkApprovers(obj); err != nil {
+		return err
+	}
+
+	return db.check(obj.Ref().Scope, fence, e)
 }
