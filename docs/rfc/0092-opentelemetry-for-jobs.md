@@ -92,9 +92,13 @@ alone), or a state write from a team's own CI with no job.
   again) when its name, compared with the case ignored, starts with
   `OTEL_`, `TG_TELEMETRY_`, `TERRAGRUNT_TELEMETRY_` or `PULUMI_OTEL_`, or is
   `TRACEPARENT` or `TRACESTATE`. The rule holds whether or not the launcher
-  sets the variable for this step. So a step can never turn tracing on, or
-  point it to a target, by itself. A step cannot hide a rule change behind a
-  new tool release either. ADR 101 decision 7 lists the rule, and ADR 134
+  sets the variable for this step. So a step variable cannot override a
+  value of the launcher. This is the only effect of the set. Job code can
+  still export `OTEL_*` variables in its own process, pass
+  `--otel-traces` or `--tracing` to a tool, or run its own exporter. The
+  only control on that is egress (ADR 137 decision 6, and the egress proxy
+  of RFC 16). This RFC adds no new path out of the job: the relay listens
+  on loopback and sends only through the job session. ADR 101 decision 7 lists the rule, and ADR 134
   decision 6 says that the launcher checks it again. Both ADRs change.
 - ADR 101 decision 7: `OTEL_EXPORTER_OTLP_HEADERS` and
   `OTEL_EXPORTER_OTLP_TRACES_HEADERS` can hold an authorization header.
@@ -106,9 +110,13 @@ alone), or a state write from a team's own CI with no job.
   The recommended option (a reader of our own) needs no amendment.
 - ADR 132 decisions 5 and 7: **no amendment.** A new path inside
   `/runner/v1` is an addition, and an ignorable field in the assignment
-  ("trace this step") does not change what a step does. So this RFC needs
+  ("trace this step") does not change what a step does: it only adds
+  telemetry variables and a listener, and the commands, the credentials
+  and the result of the step stay the same. So this RFC needs
   no `/runner/v2` and no new assignment version. A launcher that does not
-  know the field ignores it, and gets no tool spans (A1.4).
+  know the field ignores it, and gets no tool spans (A1.4). It also skips
+  the second check of the reserved set, so only the check at the start
+  applies to it.
 
 ## Facts from primary sources
 
@@ -279,19 +287,38 @@ phase that wrote it.
    `PUT /runner/v1/session/steps/{step}/spans/{seq}`, with a body of at
    most 1 MiB and the header `Dustpan-Content-SHA256`, like a log chunk
    (ADR 131 decision 10). Its object is the step of the live claim, and
-   the session key of that claim authorizes it. As for the log chunk path,
-   a runner key alone cannot call it, and it has no policy action,
-   because the caller is a session and not a principal. The route test
-   (CLAUDE.md) lists it with the other session paths.
+   the session key of that claim authorizes it. The route declares the
+   same action and the same object as the log chunk route: the credential
+   action of the session (for example `runner:claim`) on the step of the
+   live claim. A runner key alone cannot call it. The route test
+   (CLAUDE.md) finds the action on the route, and the route is not on the
+   public list. The route calls one port of the job domain, for example
+   `AppendStepSpans(claim, step, seq, sha256, body)`, which needs
+   conformance tests before an adapter implements it. A retry with the
+   same `seq` and the same hash changes nothing and answers 204. The same
+   `seq` with another hash fails with `conflict`. The limits are in the
+   style of ADR 131 decision 14. One step has at most 2,000 spans, 256
+   requests and 8 MiB. One phase has at most 10,000 spans, 1,024 requests
+   and 32 MiB. A
+   request above a cap fails with `invalid` and changes nothing, and the
+   server answers `rate-limited` to a session above 50 requests each
+   second.
 3. **To a file.** Only for a tool that writes spans to a file: the Pulumi
    CLI with `--otel-traces file://...` writes OTLP JSON. The launcher
    reads the file after the step and sends the spans as in 2. Nothing
    listens on a port. The reader is a security reader (section F):
-   - The file path is under a directory of the step. The launcher opens it
-     with `os.Root`, never by a path string that the step could replace
-     with a link.
+   - The file is in `spans/` under the scratch directory of the step, on
+     the disk of the runner. It is not in the memory-backed volume of the
+     secrets. That directory has a quota of 64 MiB, or the launcher
+     passes a limit that stops the growth of the file. If the tool cannot
+     write the file (the path is not writable, or the quota is full), the
+     step still succeeds and gets no tool spans.
+   - The launcher opens the file with `os.Root`, never by a path string
+     that the step could replace with a link.
    - A size limit of 64 MiB for the file. The launcher checks it while it
-     reads, not from the file size alone.
+     reads, not from the file size alone. A file over the limit is read
+     up to the limit, the rest is dropped and counted, and the step is not
+     affected.
    - It reads a stream of JSON documents (the CLI appends one document for
      each export), one at a time, with a limit for each document of 1 MiB.
      It never reads the whole file into memory.
@@ -363,15 +390,16 @@ variable of the step. This is acceptable for four reasons:
 - A process that can reach the relay runs next to the tool, with the same
   trust as the step. All it can do is send spans, which pass the checks of
   section F, and which the job could send anyway.
-- Where the check can be made, the relay compares the user ID of the peer
-  with its own (`SO_PEERCRED` on Linux) and drops other users. This is a
-  further layer, and it does not replace the others.
+- The relay does not check the user of the peer. `SO_PEERCRED` works only
+  on Unix sockets, and the relay listens on TCP. The tool also runs as a
+  separate step user (ADR 134 decision 11), so a same-user check would drop
+  the spans of the tool. No layer is listed that cannot run. The checks of
+  section F apply to each request, whoever sends it.
 
 **The Kubernetes case.** In a pod, a sidecar container shares the network
 namespace of the pod. A sidecar (for example a service mesh proxy, or an
 agent) can then reach the relay, and so can any other container of the
-pod. The peer user check works only when the containers share the user ID
-space, so it does not stop a sidecar. The accepted risk is the same:
+pod. No check of the peer user stops a sidecar. The accepted risk is the same:
 a sidecar can send spans, and the checks of section F apply. The pool
 documentation says this. An operator who cannot accept it uses A1.4 for
 that pool, or A1.3 (the file) for the Pulumi CLI.
@@ -538,7 +566,11 @@ RFC 46 owns how these values look.
   Metrics stay on `/metrics` for a collector to scrape.
 - **TLS:** `https` is required, except for a loopback address. A plain
   `http` endpoint on another host needs an explicit `insecure` setting,
-  and the server logs a warning at start. Options for the CA file and a
+  and the server logs a warning at start. `insecure` and "allow private
+  ranges" reduce security. Recommendation: both are static-only (start
+  flag or environment variable), and a `PATCH` of them answers 409. The
+  other option: the API may set them, with a fresh MFA step (ADR 212
+  decision 3), and the whole `PATCH` needs the step. Options for the CA file and a
   client certificate (mTLS). No redirect is followed. The connection
   checks the resolved IP address against the denied ranges of the egress
   client, unless the operator allows private ranges for this target (a
@@ -596,15 +628,27 @@ sends hostile input to that layer with the other layers skipped.
      and the 32 attributes for each span) and each length against the
      bytes that remain, **before** it allocates. A field that is not in the
      trace messages is skipped by its length, never stored.
-   - The trace ID must be the trace ID of the job. The parent span must be
-     in the trace of the job.
+   - The trace ID must be the trace ID of the job.
+   - The parent of a tool span must be the step span or a tool span of the
+     same step. Other parents drop the span.
+   - A span ID that equals a span ID of the server or of the launcher, or
+     that repeats a span ID already received for the job, drops the span.
+   - A span with a start or end time outside the window of the step (with
+     a tolerance of 5 seconds) drops the span.
+   - No key that starts with `dustpan.` is ever on the allowlist of a
+     tool. The server sets `dustpan.span.source` after the filter, so a
+     tool cannot forge it.
    - A span name must be on the allowlist of the tool. Else the span gets
      the name `tool.span`.
    - An attribute must be on the allowlist of keys of the tool, with its
      type and a limit of 256 bytes. The check drops all other attributes
      and all span events.
    - Our own OTel resource replaces the resource of the tool.
-   - Test: one test for each rule, and a fuzz test of the whole path:
+   - Test: one test for each rule. For the rules above: a span with the ID
+     of a server span, a repeated span ID, a parent in another step, a
+     parent that is a server span, a time before the step starts and after
+     it ends, a `dustpan.span.source=server` attribute from a tool, and a
+     `dustpan.` key of any other name. And a fuzz test of the whole path:
      decompress, then parse, then check. The fuzz test includes a gzip
      bomb, a deep nest and a huge repeated count.
 2. **Encode or contain at use.**
