@@ -25,9 +25,9 @@ type DevSubjectMatcher func(subject string) bool
 // dev subject, and then each check refuses: fail closed.
 type ApproverPolicy struct {
 	// Production is true for an installation of the kind production.
-	Production bool
+	Production bool `json:"-"`
 	// IsDev is the matcher of dev subjects.
-	IsDev DevSubjectMatcher
+	IsDev DevSubjectMatcher `json:"-"`
 }
 
 // Validate returns an error that wraps ErrInvalid when an entry of a.Users
