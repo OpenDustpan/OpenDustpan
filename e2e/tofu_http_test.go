@@ -525,16 +525,7 @@ func runTofuHTTPUnlockedPushUnderManualLock(t *testing.T, env *e2e.Env, backendE
 	overrideSwitches(t, env, "http backend: turn on the unit switches", unitSwitches, on)
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: func(r e2e.Result) error {
-			out := r.Stdout + r.Stderr
-			for _, want := range []string{"manual lock", e2e.Subject, lockReasonText} {
-				if !strings.Contains(out, want) {
-					return fmt.Errorf("%w: unlocked push output lacks %q: %s", errUnexpected, want, out)
-				}
-			}
-
-			return nil
-		},
+		Check:  checkTofuHTTPUnlockedPushRefused(env),
 		Name:   "http backend: state push without a lock under the manual lock",
 		Args:   []string{"state", "push", "-lock=false", "-"},
 		Env:    backendEnv,
@@ -546,4 +537,34 @@ func runTofuHTTPUnlockedPushUnderManualLock(t *testing.T, env *e2e.Env, backendE
 	overrideSwitches(t, env, "http backend: turn off the unit switches", unitSwitches, off)
 	overrideSwitches(t, env, "http backend: turn off the namespace switches", nsSwitches,
 		`{"allowForcedWrites":false,"allowUnlockedWrites":false}`)
+}
+
+// checkTofuHTTPUnlockedPushRefused checks a state push without a lock ID that a
+// manual lock stopped. The CLI prints the status only, so the answer of the
+// server is the proof: the POST answered 423 with lock info that names the
+// holder and the reason.
+func checkTofuHTTPUnlockedPushRefused(env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if out := r.Stdout + r.Stderr; !strings.Contains(out, "423") {
+			return fmt.Errorf("%w: push output lacks the status 423: %s", errUnexpected, out)
+		}
+
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			e := &entries[i]
+			if e.Method != http.MethodPost || e.Status != http.StatusLocked {
+				continue
+			}
+
+			for _, want := range []string{e2e.Subject, lockReasonText} {
+				if !strings.Contains(e.ResponseBody, want) {
+					return fmt.Errorf("%w: 423 body lacks %q: %s", errUnexpected, want, e.ResponseBody)
+				}
+			}
+
+			return nil
+		}
+
+		return fmt.Errorf("%w: no POST answered %d", errUnexpected, http.StatusLocked)
+	}
 }
