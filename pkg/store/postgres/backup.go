@@ -59,6 +59,8 @@ const (
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
 	pgColKind        = "kind"
+	pgColTarget      = "target"
+	pgColObject      = "object"
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
@@ -320,7 +322,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table: "audit_entries",
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
-				"object", pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
+				pgColObject, pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 				"changes", "object_id", "fence_version", "principal_kind", "job_id", pgColReason,
 			},
@@ -371,8 +373,18 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{"source", "window_end_ms"},
 		},
 		{
+			table:   backup.TableAuditChainCheck,
+			columns: []string{"id", "checked_at_ms", "invalid"},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableAuditChainMark,
+			columns: []string{"scope", "epoch", "sequence", "marked_at_ms"},
+			orderBy: []string{"scope"},
+		},
+		{
 			table:   backup.TableBackups,
-			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
+			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, pgColTarget, "error"},
 			orderBy: []string{"id"},
 		},
 		{
@@ -386,6 +398,11 @@ func pgControlTables() []pgCopyTable {
 		{
 			table:   backup.TableInstallation,
 			columns: []string{"id", pgColState, "kind"},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableMaintenanceRevocations,
+			columns: []string{"id", pgColKind, pgColTarget, "end_reason", "actor", pgColObject, "at_ms"},
 			orderBy: []string{"id"},
 		},
 	}
@@ -545,7 +562,7 @@ func pgCopyGrantTables() []pgCopyTable {
 		{
 			table: backup.TableGrants,
 			columns: []string{
-				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
+				"id", pgColSubject, "subject_kind", "subject_id", "role", pgColObject, "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
 			},
 			orderBy: []string{"id"},

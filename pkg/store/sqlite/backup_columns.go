@@ -41,6 +41,8 @@ const (
 	backupColObjectKind  = "object_kind"
 	backupColObjectID    = "object_id"
 	backupColAtMs        = "at_ms"
+	backupColTarget      = "target"
+	backupColObject      = "object"
 	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
@@ -365,7 +367,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"idp_subject",
 				"token_id",
 				"action",
-				"object",
+				backupColObject,
 				backupColVersion,
 				"value_path",
 				backupColAtMs,
@@ -432,13 +434,21 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{"source", "window_end_ms", "count"},
 		},
 		{
+			table:   backup.TableAuditChainCheck,
+			columns: []string{"id", "checked_at_ms", "invalid"},
+		},
+		{
+			table:   backup.TableAuditChainMark,
+			columns: []string{"scope", "epoch", "sequence", "marked_at_ms"},
+		},
+		{
 			table: backup.TableBackups,
 			columns: []string{
 				"id",
 				backupColState,
 				backupColStartedAtMs,
 				backupColEndedAtMs,
-				"target",
+				backupColTarget,
 				"error",
 			},
 		},
@@ -466,7 +476,26 @@ func sqliteControlTables() []sqliteBackupTable {
 		},
 	}
 
-	return slices.Concat(core, sqliteRunnerControlTables())
+	return slices.Concat(core, sqliteRevocationControlTables(), sqliteRunnerControlTables())
+}
+
+// sqliteRevocationControlTables lists the column list of the control table that
+// holds the journal of revocations made in maintenance mode.
+func sqliteRevocationControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableMaintenanceRevocations,
+			columns: []string{
+				"id",
+				backupColKind,
+				backupColTarget,
+				"end_reason",
+				"actor",
+				backupColObject,
+				backupColAtMs,
+			},
+		},
+	}
 }
 
 // sqliteEmptiedTables lists the column list of every table of
@@ -662,7 +691,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"subject_kind",
 				"subject_id",
 				"role",
-				"object",
+				backupColObject,
 				"target",
 				"object_kind",
 				backupColNamespace,

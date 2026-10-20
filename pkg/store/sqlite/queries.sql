@@ -821,6 +821,21 @@ UPDATE installation
 SET state = ?
 WHERE id = 1 AND state = ?;
 
+-- name: RecordMaintenanceRevocation :exec
+-- Journals one write that only reduces access, when the installation is in
+-- maintenance mode, and nothing otherwise. A restore applies the journal
+-- again after the swap.
+INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+SELECT sqlc.arg('kind'), sqlc.arg('target'), sqlc.arg('end_reason'), sqlc.arg('actor'), sqlc.arg('object'),
+       CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE (SELECT state FROM installation WHERE id = 1) = 'maintenance';
+
+-- name: ClearMaintenanceRevocationsOnEnter :exec
+-- Starts a new stay in maintenance mode: it clears the journal when the stored
+-- state is not maintenance yet. Run it before the state changes.
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance';
+
 -- name: GetInstallationKind :one
 -- The installation kind: dev, production or NULL before the first claim. The
 -- migration seeds the one row; a missing row is a fault.
@@ -2028,6 +2043,13 @@ WHERE principal_id = ? AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
 UPDATE temp_admins SET ended_at_ms = ?
 WHERE principal_id = ? AND ended_at_ms IS NULL;
 
+-- name: DisablePrincipal :execrows
+-- Disables the principal. A principal that is disabled or ended stays as it
+-- is. The write only narrows access.
+UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('disabled_at_ms') AS INTEGER),
+  updated_at_ms = CAST(sqlc.arg('disabled_at_ms') AS INTEGER)
+WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
+
 -- name: DisablePrincipalForExpiry :execrows
 -- Disables the principal at the expiry of its temporary administrator
 -- record. A principal that is already disabled stays as it is.
@@ -2095,6 +2117,15 @@ SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client
     email_claim = sqlc.arg('email_claim'),
     updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
 WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
+
+-- name: DisableSignInProvider :execrows
+-- Disables the provider. The update applies only to the version that the
+-- change read, and changes nothing but the flag, the update time and the
+-- version. The write only narrows access.
+UPDATE sign_in_providers
+SET enabled = 0, updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER),
+    version = CAST(sqlc.arg('version') AS INTEGER) + 1
+WHERE provider_id = sqlc.arg('provider_id') AND version = CAST(sqlc.arg('version') AS INTEGER);
 
 -- name: CountSignInProvider :one
 SELECT COUNT(*) FROM sign_in_providers WHERE provider_id = ?;
@@ -3154,3 +3185,29 @@ WHERE id = 1 AND wrapped_key = sqlc.arg(old_wrapped_key);
 DELETE FROM idempotency_records;
 
 
+
+-- name: GetAuditChainCheck :one
+-- The stored result of the scheduled audit chain check. No row means no check
+-- ran.
+SELECT checked_at_ms, invalid FROM audit_chain_check WHERE id = 1;
+
+-- name: SaveAuditChainCheckResult :exec
+-- Stores the count of scopes that did not match, with the time of the clock
+-- of the store.
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid)
+VALUES (1, sqlc.arg('now_ms'), sqlc.arg('invalid'))
+ON CONFLICT (id) DO UPDATE SET checked_at_ms = excluded.checked_at_ms, invalid = excluded.invalid;
+
+-- name: ListAuditChainMarks :many
+-- The marks of checkpoint mismatches, one for each scope.
+SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope;
+
+-- name: SaveAuditChainMark :exec
+-- Stores the mark of a checkpoint mismatch of one scope. The first mark of a
+-- scope in an epoch stays, and a mark of a newer epoch replaces the older
+-- one.
+INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms)
+VALUES (sqlc.arg('scope'), sqlc.arg('epoch'), sqlc.arg('sequence'), sqlc.arg('now_ms'))
+ON CONFLICT (scope) DO UPDATE SET epoch = excluded.epoch, sequence = excluded.sequence,
+    marked_at_ms = excluded.marked_at_ms
+WHERE audit_chain_mark.epoch < excluded.epoch;

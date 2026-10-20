@@ -33,6 +33,19 @@ type AccessTokenPolicy struct {
 	UpdatedAtMs       int64
 }
 
+type AuditChainCheck struct {
+	ID          int16
+	CheckedAtMs int64
+	Invalid     int64
+}
+
+type AuditChainMark struct {
+	Scope      string
+	Epoch      int64
+	Sequence   int64
+	MarkedAtMs int64
+}
+
 type AuditChainState struct {
 	ID                 int16
 	State              string
@@ -372,6 +385,16 @@ type InventoryLabel struct {
 	UnitID     string
 	LabelKey   string
 	LabelValue string
+}
+
+type MaintenanceRevocation struct {
+	ID        int64
+	Kind      string
+	Target    string
+	EndReason string
+	Actor     string
+	Object    string
+	AtMs      int64
 }
 
 type ManualLock struct {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -69,9 +70,10 @@ func (stubSealer) OpenOutputs(
 // cross-instance write lands first and the conditional write loses, as one
 // UPDATE would against a committed concurrent write.
 type fakeStateStore struct {
-	state   maintenance.State
-	onSet   func()
-	onSetIf func()
+	state    maintenance.State
+	onSet    func()
+	onSetIf  func()
+	setIfErr error
 }
 
 func (f *fakeStateStore) GetState(context.Context) (maintenance.State, error) {
@@ -103,6 +105,10 @@ func (f *fakeStateStore) SetStateIf(_ context.Context, expected, next maintenanc
 
 	if f.onSetIf != nil {
 		f.onSetIf()
+	}
+
+	if f.setIfErr != nil {
+		return f.setIfErr
 	}
 
 	if f.state != expected {
@@ -500,7 +506,7 @@ func newFixtureWith(
 	}
 
 	f := &fixture{
-		state:        &fakeStateStore{state: maintenance.StateNormal, onSet: nil, onSetIf: nil},
+		state:        &fakeStateStore{state: maintenance.StateNormal, onSet: nil, onSetIf: nil, setIfErr: nil},
 		updates:      &fakeUpdates{updates: map[stack.UpdateID]stack.Update{}},
 		workspaces:   &fakeWorkspaces{workspaces: map[workspace.ID]workspace.Workspace{}, released: nil},
 		stacks:       &fakeStacks{stacks: nil},
@@ -1242,11 +1248,12 @@ func TestEnterCatchesRacedStart(t *testing.T) {
 	}
 }
 
-// TestForceEnterRefusesRacedStart proves the re-check after the write with
+// TestForceEnterRetriesRacedStart proves the re-check after the write with
 // force: maintenance mode refuses the cancel of an update that starts between
-// the enter check and the write, so the enter moves back to normal and names
-// it. The next force enter cancels it before the write and succeeds.
-func TestForceEnterRefusesRacedStart(t *testing.T) {
+// the enter check and the write, so the attempt moves back to normal. The
+// forced enter tries again, cancels the new update before the write, and
+// answers both the update of the first attempt and the new one.
+func TestForceEnterRetriesRacedStart(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
@@ -1268,23 +1275,93 @@ func TestForceEnterRefusesRacedStart(t *testing.T) {
 		}
 	}
 
-	_, err = f.service.Enter(ctx, true)
-	if !errors.Is(err, maintenance.ErrActiveWork) || !strings.Contains(err.Error(), "pulumi:acme/web/staging") {
-		t.Fatalf("force enter with a raced start: err = %v, want ErrActiveWork naming pulumi:acme/web/staging", err)
-	}
-
-	assertState(t, f, maintenance.StateNormal)
-
 	res, err := f.service.Enter(ctx, true)
 	if err != nil {
-		t.Fatalf("second force enter: %v", err)
+		t.Fatalf("force enter with a raced start: %v", err)
 	}
 
-	if len(res.Canceled) != 1 || res.Canceled[0] != "pulumi:acme/web/staging" {
-		t.Fatalf("second force enter canceled = %v, want [pulumi:acme/web/staging]", res.Canceled)
+	want := []string{"pulumi:acme/web/prod", "pulumi:acme/web/staging"}
+	if !slices.Equal(res.Canceled, want) {
+		t.Fatalf("force enter canceled = %v, want %v", res.Canceled, want)
 	}
 
 	assertState(t, f, maintenance.StateMaintenance)
+}
+
+// TestForceEnterGivesUpAfterBoundedRetries proves that a writer which keeps
+// starting work cannot hold a forced enter in a loop: after the bounded
+// attempts the enter answers ErrActiveWork, leaves the state normal, and the
+// error names the work that blocked it and every unit that the attempts
+// canceled.
+func TestForceEnterGivesUpAfterBoundedRetries(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	seedRunningUpdate(t, f, mustRef(t))
+
+	starts := 0
+
+	f.state.onSetIf = func() {
+		if f.state.state != maintenance.StateNormal {
+			return
+		}
+
+		starts++
+
+		name := fmt.Sprintf("racer%d", starts)
+
+		ref, err := stack.ParseRef("acme", "web", name)
+		if err != nil {
+			t.Errorf("parse stack reference: %v", err)
+
+			return
+		}
+
+		addRunningUpdate(
+			f,
+			ref,
+			stack.UpdateID(fmt.Sprintf("u%d", starts+1)),
+			stack.ID(fmt.Sprintf("stk-test%014d", starts+1)),
+		)
+	}
+
+	_, err := f.service.Enter(ctx, true)
+	if !errors.Is(err, maintenance.ErrActiveWork) {
+		t.Fatalf("force enter against a steady writer: err = %v, want ErrActiveWork", err)
+	}
+
+	var blocked *maintenance.ActiveWorkError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("force enter error %v is not an *ActiveWorkError", err)
+	}
+
+	if len(blocked.Work) != 1 || blocked.Work[0] != "pulumi:acme/web/racer3" {
+		t.Fatalf("blocking work = %v, want [pulumi:acme/web/racer3]", blocked.Work)
+	}
+
+	wantCanceled := []string{"pulumi:acme/web/prod", "pulumi:acme/web/racer1", "pulumi:acme/web/racer2"}
+	if !slices.Equal(blocked.Canceled, wantCanceled) {
+		t.Fatalf("canceled work = %v, want %v", blocked.Canceled, wantCanceled)
+	}
+
+	assertState(t, f, maintenance.StateNormal)
+}
+
+// TestNonForceEnterReportsNoCanceledWork proves that a plain enter that is
+// refused names the blocking work and no canceled work.
+func TestNonForceEnterReportsNoCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	seedRunningUpdate(t, f, mustRef(t))
+
+	_, err := f.service.Enter(t.Context(), false)
+
+	var blocked *maintenance.ActiveWorkError
+	if !errors.As(err, &blocked) || len(blocked.Canceled) != 0 {
+		t.Fatalf("enter without force: err = %v, want an *ActiveWorkError with no canceled work", err)
+	}
 }
 
 // assertState fails the test when the stored state is not want.
@@ -1531,4 +1608,53 @@ func (f *fakeWorkspaces) SaveReleased(
 	f.released = append(f.released, e)
 
 	return f.SaveWorkspace(ctx, w, fence)
+}
+
+// TestForceEnterNamesCanceledWorkOnOtherFailures proves that a forced enter
+// which canceled work and then failed on an error other than ErrActiveWork
+// still names what it canceled, and that the error keeps its class: the
+// cancel stays, so the caller must be able to tell the operator what stopped.
+func TestForceEnterNamesCanceledWorkOnOtherFailures(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	seedRunningUpdate(t, f, mustRef(t))
+
+	f.state.setIfErr = maintenance.ErrUnavailable
+
+	_, err := f.service.Enter(t.Context(), true)
+	if !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("force enter against a failing store: err = %v, want ErrUnavailable", err)
+	}
+
+	var failed *maintenance.CanceledError
+	if !errors.As(err, &failed) {
+		t.Fatalf("force enter error %v is not a *CanceledError", err)
+	}
+
+	if want := []string{"pulumi:acme/web/prod"}; !slices.Equal(failed.Canceled, want) {
+		t.Fatalf("canceled work = %v, want %v", failed.Canceled, want)
+	}
+
+	if !strings.Contains(err.Error(), "pulumi:acme/web/prod") {
+		t.Fatalf("error text %q does not name the canceled unit", err.Error())
+	}
+
+	assertState(t, f, maintenance.StateNormal)
+}
+
+// TestPlainEnterFailureCarriesNoCanceledWork proves that a plain enter which
+// fails has canceled nothing and returns the bare error.
+func TestPlainEnterFailureCarriesNoCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.state.setIfErr = maintenance.ErrUnavailable
+
+	_, err := f.service.Enter(t.Context(), false)
+
+	var failed *maintenance.CanceledError
+	if !errors.Is(err, maintenance.ErrUnavailable) || errors.As(err, &failed) {
+		t.Fatalf("plain enter against a failing store: err = %v, want a bare ErrUnavailable", err)
+	}
 }

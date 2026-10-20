@@ -430,6 +430,18 @@ func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOp
 	return err
 }
 
+const clearMaintenanceRevocationsOnEnter = `-- name: ClearMaintenanceRevocationsOnEnter :exec
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance'
+`
+
+// Starts a new stay in maintenance mode: it clears the journal when the stored
+// state is not maintenance yet. Run it before the state changes.
+func (q *Queries) ClearMaintenanceRevocationsOnEnter(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearMaintenanceRevocationsOnEnter)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?
@@ -2872,6 +2884,27 @@ func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInac
 	return items, nil
 }
 
+const disablePrincipal = `-- name: DisablePrincipal :execrows
+UPDATE principals SET disabled_at_ms = CAST(?1 AS INTEGER),
+  updated_at_ms = CAST(?1 AS INTEGER)
+WHERE id = ?2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+`
+
+type DisablePrincipalParams struct {
+	DisabledAtMs int64
+	ID           string
+}
+
+// Disables the principal. A principal that is disabled or ended stays as it
+// is. The write only narrows access.
+func (q *Queries) DisablePrincipal(ctx context.Context, arg DisablePrincipalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, disablePrincipal, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const disablePrincipalForExpiry = `-- name: DisablePrincipalForExpiry :execrows
 UPDATE principals SET disabled_at_ms = CAST(?1 AS INTEGER)
 WHERE id = ?2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
@@ -2886,6 +2919,30 @@ type DisablePrincipalForExpiryParams struct {
 // record. A principal that is already disabled stays as it is.
 func (q *Queries) DisablePrincipalForExpiry(ctx context.Context, arg DisablePrincipalForExpiryParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, disablePrincipalForExpiry, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const disableSignInProvider = `-- name: DisableSignInProvider :execrows
+UPDATE sign_in_providers
+SET enabled = 0, updated_at_ms = CAST(?1 AS INTEGER),
+    version = CAST(?2 AS INTEGER) + 1
+WHERE provider_id = ?3 AND version = CAST(?2 AS INTEGER)
+`
+
+type DisableSignInProviderParams struct {
+	UpdatedAtMs int64
+	Version     int64
+	ProviderID  string
+}
+
+// Disables the provider. The update applies only to the version that the
+// change read, and changes nothing but the flag, the update time and the
+// version. The write only narrows access.
+func (q *Queries) DisableSignInProvider(ctx context.Context, arg DisableSignInProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, disableSignInProvider, arg.UpdatedAtMs, arg.Version, arg.ProviderID)
 	if err != nil {
 		return 0, err
 	}
@@ -3431,6 +3488,24 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 		&i.DisableBreakGlass,
 		&i.UpdatedAtMs,
 	)
+	return i, err
+}
+
+const getAuditChainCheck = `-- name: GetAuditChainCheck :one
+SELECT checked_at_ms, invalid FROM audit_chain_check WHERE id = 1
+`
+
+type GetAuditChainCheckRow struct {
+	CheckedAtMs int64
+	Invalid     int64
+}
+
+// The stored result of the scheduled audit chain check. No row means no check
+// ran.
+func (q *Queries) GetAuditChainCheck(ctx context.Context) (GetAuditChainCheckRow, error) {
+	row := q.db.QueryRowContext(ctx, getAuditChainCheck)
+	var i GetAuditChainCheckRow
+	err := row.Scan(&i.CheckedAtMs, &i.Invalid)
 	return i, err
 }
 
@@ -7317,6 +7392,39 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 	return items, nil
 }
 
+const listAuditChainMarks = `-- name: ListAuditChainMarks :many
+SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope
+`
+
+// The marks of checkpoint mismatches, one for each scope.
+func (q *Queries) ListAuditChainMarks(ctx context.Context) ([]AuditChainMark, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditChainMarks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditChainMark
+	for rows.Next() {
+		var i AuditChainMark
+		if err := rows.Scan(
+			&i.Scope,
+			&i.Epoch,
+			&i.Sequence,
+			&i.MarkedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
@@ -11086,6 +11194,37 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 	return items, nil
 }
 
+const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec
+INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+SELECT ?1, ?2, ?3, ?4, ?5,
+       CAST(?6 AS INTEGER)
+WHERE (SELECT state FROM installation WHERE id = 1) = 'maintenance'
+`
+
+type RecordMaintenanceRevocationParams struct {
+	Kind      string
+	Target    string
+	EndReason string
+	Actor     string
+	Object    string
+	AtMs      int64
+}
+
+// Journals one write that only reduces access, when the installation is in
+// maintenance mode, and nothing otherwise. A restore applies the journal
+// again after the swap.
+func (q *Queries) RecordMaintenanceRevocation(ctx context.Context, arg RecordMaintenanceRevocationParams) error {
+	_, err := q.db.ExecContext(ctx, recordMaintenanceRevocation,
+		arg.Kind,
+		arg.Target,
+		arg.EndReason,
+		arg.Actor,
+		arg.Object,
+		arg.AtMs,
+	)
+	return err
+}
+
 const rejoinRunner = `-- name: RejoinRunner :exec
 UPDATE runners
 SET kind = ?1, isolation = ?2, labels = ?3, release = ?4,
@@ -11779,6 +11918,52 @@ func (q *Queries) RunningUpdateAt(ctx context.Context, arg RunningUpdateAtParams
 	var version int64
 	err := row.Scan(&version)
 	return version, err
+}
+
+const saveAuditChainCheckResult = `-- name: SaveAuditChainCheckResult :exec
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid)
+VALUES (1, ?1, ?2)
+ON CONFLICT (id) DO UPDATE SET checked_at_ms = excluded.checked_at_ms, invalid = excluded.invalid
+`
+
+type SaveAuditChainCheckResultParams struct {
+	NowMs   int64
+	Invalid int64
+}
+
+// Stores the count of scopes that did not match, with the time of the clock
+// of the store.
+func (q *Queries) SaveAuditChainCheckResult(ctx context.Context, arg SaveAuditChainCheckResultParams) error {
+	_, err := q.db.ExecContext(ctx, saveAuditChainCheckResult, arg.NowMs, arg.Invalid)
+	return err
+}
+
+const saveAuditChainMark = `-- name: SaveAuditChainMark :exec
+INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT (scope) DO UPDATE SET epoch = excluded.epoch, sequence = excluded.sequence,
+    marked_at_ms = excluded.marked_at_ms
+WHERE audit_chain_mark.epoch < excluded.epoch
+`
+
+type SaveAuditChainMarkParams struct {
+	Scope    string
+	Epoch    int64
+	Sequence int64
+	NowMs    int64
+}
+
+// Stores the mark of a checkpoint mismatch of one scope. The first mark of a
+// scope in an epoch stays, and a mark of a newer epoch replaces the older
+// one.
+func (q *Queries) SaveAuditChainMark(ctx context.Context, arg SaveAuditChainMarkParams) error {
+	_, err := q.db.ExecContext(ctx, saveAuditChainMark,
+		arg.Scope,
+		arg.Epoch,
+		arg.Sequence,
+		arg.NowMs,
+	)
+	return err
 }
 
 const saveSensitiveMarks = `-- name: SaveSensitiveMarks :execrows

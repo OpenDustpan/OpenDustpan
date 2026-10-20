@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -226,6 +228,40 @@ func (s *Store) UpdateProviderConfig(ctx context.Context, p session.ProviderConf
 		}
 
 		return appendProviderEntry(ctx, q, e)
+	})
+}
+
+// DisableProviderConfig implements session.ProviderConfigStore. It runs on the
+// control path, so it works in maintenance mode, and the transaction
+// journals it there. It cannot enable a provider or change its issuer or
+// client: it sets one flag.
+func (s *Store) DisableProviderConfig(
+	ctx context.Context, id string, version int64, updatedAt time.Time, e audit.Entry,
+) error {
+	rev := revocation{kind: maintenance.RevokedProvider, target: id, endReason: string(session.ReasonEnded)}
+
+	return s.inRevokingTxOf(ctx, &e, rev, func(q *db.Queries) error {
+		n, err := q.DisableSignInProvider(ctx, db.DisableSignInProviderParams{
+			UpdatedAtMs: codec.Millis(updatedAt), Version: version, ProviderID: id,
+		})
+		if err != nil {
+			return fmt.Errorf("disable sign-in provider: %w", err)
+		}
+
+		if n == 0 {
+			return missingOrChanged(ctx, q, id)
+		}
+
+		ended, err := q.EndSessionsWithSubjectPrefix(ctx, db.EndSessionsWithSubjectPrefixParams{
+			AtMs: codec.Millis(e.At), EndReason: string(session.ReasonEnded), Prefix: session.SubjectPrefix(id),
+		})
+		if err != nil {
+			return fmt.Errorf("end sessions of sign-in provider: %w", err)
+		}
+
+		e = session.WithSessionsEnded(e, ended)
+
+		return nil
 	})
 }
 

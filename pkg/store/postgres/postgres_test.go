@@ -33,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -181,6 +182,31 @@ func TestSignInFailuresConformance(t *testing.T) {
 
 		return storetest.SignInFailureHarness{
 			Open: func(t *testing.T, _ time.Duration) authgate.FailureCounter {
+				t.Helper()
+
+				return openURL(t, schemaURL)
+			},
+		}
+	})
+}
+
+// TestAuditCheckConformance runs the shared suite of the audit chain check
+// state: both handles open one schema, as two servers open one database.
+func TestAuditCheckConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunAuditCheck(t, func(t *testing.T) storetest.AuditCheckHarness {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return storetest.AuditCheckHarness{
+			Open: func(t *testing.T) audit.CheckStore {
 				t.Helper()
 
 				return openURL(t, schemaURL)
@@ -2002,4 +2028,81 @@ func BenchmarkAuthorizer(b *testing.B) {
 	}
 
 	accesstest.Bench(b, open(b, base))
+}
+
+// revocationStore adds to the store the two hooks of the revocation suite: the
+// runner pools of the store, and a write to the revocation journal that the
+// CHECK constraint of the table does not stop.
+type revocationStore struct {
+	*postgres.Store
+
+	url string
+}
+
+var _ storetest.RevocationStore = (*revocationStore)(nil)
+
+// RunnerPools implements storetest.RevocationStore.
+//
+//nolint:ireturn // The method implements storetest.RevocationStore, which returns the port.
+func (s *revocationStore) RunnerPools() runner.PoolStore {
+	return s.Runners()
+}
+
+// KeepsUnknownKinds implements storetest.RevocationStore. The journal lives in
+// the control schema, which the swap never copies, so a row of an unknown
+// kind reaches the replay.
+func (s *revocationStore) KeepsUnknownKinds() bool { return true }
+
+// InsertRawRevocation implements storetest.RevocationStore. It drops the CHECK
+// constraint of the kind in the schema of this store, as a write to the
+// database with another tool could, and then inserts the row.
+func (s *revocationStore) InsertRawRevocation(ctx context.Context, row storetest.RawRevocation) (err error) {
+	u, err := url.Parse(s.url)
+	if err != nil {
+		return fmt.Errorf("parse the schema URL: %w", err)
+	}
+
+	table := pgx.Identifier{u.Query().Get("search_path") + "_control", "maintenance_revocations"}.Sanitize()
+
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close: %w", closeErr))
+		}
+	}()
+
+	drop := "ALTER TABLE " + table + " DROP CONSTRAINT IF EXISTS maintenance_revocations_kind"
+	if _, err = conn.Exec(ctx, drop); err != nil {
+		return fmt.Errorf("drop the check constraint: %w", err)
+	}
+
+	insert := "INSERT INTO " + table + " (kind, target, end_reason, actor, object, at_ms) VALUES ($1, $2, '', $3, $4, $5)"
+	if _, err = conn.Exec(ctx, insert, row.Kind, row.Target, row.Actor, row.Object, row.AtMs); err != nil {
+		return fmt.Errorf("insert the raw revocation: %w", err)
+	}
+
+	return nil
+}
+
+// TestRevocationConformance runs the suite of the writes that only reduce
+// access: they run in maintenance mode, and a restore keeps them.
+func TestRevocationConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunRevocations(t, func(t *testing.T) storetest.RevocationStore {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return &revocationStore{Store: openURL(t, schemaURL), url: schemaURL}
+	})
 }
