@@ -1390,7 +1390,7 @@ Branding that an operator sets for the whole installation, for example the palet
 _Avoid_: Scheme, theme (for branding)
 
 **Preferences**:
-The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. They also hold the language, the formatting locale and the digits (ADR 181). They hold the clock (`hourCycle`), the date style, the first day of the week and the time zone too. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme. The server stores only the settings that a person changed, and a field that the person never set has its default. A `PATCH` is a JSON merge patch, and one that changes nothing writes no audit entry. A row belongs to a person, not to a namespace.
 _Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user settings
 
 

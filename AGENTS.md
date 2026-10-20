@@ -77,6 +77,7 @@ pkg/                   the public SDK (ADR 35)
   trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
   cron/                helper: the 5-field UTC cron parser and the schedule presets, standard library only
   savedview/           domain: saved views, a named query of the unit list (RFC 100)
+  preferences/         domain: the preferences of a person (theme, language, formats, time zone), the merge patch and its checks
   registry/            domain: the private registry, with the address, the release and the store port (RFC 101)
   unitimport/          domain: imports of units from a source, the import ledger and the move check
   gate/                domain: gates, access limits, approval rules, facts and decision records
@@ -128,7 +129,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`, `drift`, `trigger`, `savedview`, `registry`, `unitimport`, `gate`, `forge`) never import
+  `unmanaged`, `drift`, `trigger`, `savedview`, `registry`, `unitimport`, `preferences`, `gate`, `forge`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.

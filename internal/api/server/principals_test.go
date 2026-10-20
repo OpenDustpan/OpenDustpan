@@ -100,6 +100,7 @@ func newAuditedPrincipalHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -941,6 +942,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Backups:          nil,
@@ -1027,6 +1029,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Backups:          nil,

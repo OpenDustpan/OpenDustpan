@@ -151,6 +151,7 @@ var Tables = []string{
 	"profiles",
 	"profile_revisions",
 	"manual_locks",
+	TablePersonPreferences,
 	"saved_views",
 }
 

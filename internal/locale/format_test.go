@@ -72,8 +72,10 @@ func TestDefaultDigits(t *testing.T) {
 			}
 		})
 	}
-	if _, err := locale.DefaultDigits("not a tag"); !errors.Is(err, locale.ErrInvalidFormattingLocale) {
-		t.Fatalf("DefaultDigits(bad) = %v, want ErrInvalidFormattingLocale", err)
+	for _, bad := range []string{"not a tag", "", "ar-u-nu-latn", "ar-EG-u-nu-latn", "en-x-private", "x-private"} {
+		if got, err := locale.DefaultDigits(bad); !errors.Is(err, locale.ErrInvalidFormattingLocale) || got != "" {
+			t.Fatalf("DefaultDigits(%q) = %q, %v, want ErrInvalidFormattingLocale", bad, got, err)
+		}
 	}
 }
 

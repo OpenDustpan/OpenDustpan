@@ -476,6 +476,12 @@ type OidcProvider struct {
 	CreatedAtMs int64
 }
 
+type PersonPreference struct {
+	PrincipalID string
+	Document    string
+	UpdatedAtMs int64
+}
+
 type Principal struct {
 	ID             string
 	Subject        string

@@ -290,7 +290,21 @@ type ending struct {
 // endPrincipal ends the principal id of the namespace ns ("" for the
 // installation) at the time at.
 func endPrincipal(ctx context.Context, q *db.Queries, id string, ns namespace.Name, at int64) (int64, error) {
-	return q.DeletePrincipal(ctx, db.DeletePrincipalParams{DeletedAtMs: nullMillis(at), ID: id, Namespace: ns.String()})
+	n, err := q.DeletePrincipal(
+		ctx,
+		db.DeletePrincipalParams{DeletedAtMs: nullMillis(at), ID: id, Namespace: ns.String()},
+	)
+	if err != nil || n == 0 {
+		return n, err
+	}
+
+	// The preferences of a person go away with the person, in the same
+	// transaction.
+	if err := q.DeletePersonPreferences(ctx, id); err != nil {
+		return 0, fmt.Errorf("delete preferences of the principal: %w", err)
+	}
+
+	return n, nil
 }
 
 func endPrincipalMemberships(ctx context.Context, q *db.Queries, id string, at int64) error {

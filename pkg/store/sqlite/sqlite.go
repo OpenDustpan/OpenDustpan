@@ -268,9 +268,10 @@ var ErrInUse = errors.New("another process holds the SQLite database file")
 // none get the defaults.
 type Option func(*Store)
 
-// WithLogger sets the logger that records the write-ahead log guard warning.
-// The default is a discard logger, so the guard stays silent unless the
-// caller passes a logger.
+// WithLogger sets the logger that records the write-ahead log guard warning
+// and the warning for a stored preference that fails its check. The default is
+// a discard logger, so the store stays silent unless the caller passes a
+// logger.
 func WithLogger(logger *slog.Logger) Option {
 	return func(s *Store) {
 		if logger != nil {

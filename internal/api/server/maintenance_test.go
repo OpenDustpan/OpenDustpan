@@ -76,6 +76,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -468,6 +469,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
