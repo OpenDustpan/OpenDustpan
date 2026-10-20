@@ -671,6 +671,14 @@ _Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
 The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
 _Avoid_: Drift policy (a policy alone names no object), drift trigger
 
+**Registry release**:
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+_Avoid_: Package, artifact (that is a plan or a log of a job)
+
+**Registry address**:
+The name of a provider or module in a namespace: the namespace, the kind and the name, with the system for a module. The host of the address is the host of the server (RFC 101).
+_Avoid_: Source address (that is the field of OpenTofu), package name
+
 **Catalog**:
 The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
 _Avoid_: Service catalog, marketplace, portal, inventory

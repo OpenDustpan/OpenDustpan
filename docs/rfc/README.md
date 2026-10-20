@@ -146,3 +146,4 @@ both together.
 | [97](0097-test-reports-on-stacks-and-workspaces.md) | Test reports on stacks and workspaces, an extension of RFC 90 to test results | draft |
 | [98](0098-chat-sinks-one-sender-a-renderer-for-each-platform.md) | Chat sinks, with one sender and a renderer for each chat platform (ADR 262) | discussing |
 | [99](0099-the-api-description-and-the-generated-sdks.md) | The API description and the generated SDKs (ADR 264) | discussing |
+| [101](0101-a-private-registry-for-opentofu-providers-and-modules.md) | A private registry for OpenTofu providers and modules (ADR 269) | discussing |
