@@ -124,7 +124,7 @@ func (d *dropAfterManifest) Put(ctx context.Context, key blob.Key, r io.Reader) 
 			return err
 		}
 
-		return d.memStore.Delete(ctx, dropKey)
+		return d.Delete(ctx, dropKey)
 	}
 
 	return nil

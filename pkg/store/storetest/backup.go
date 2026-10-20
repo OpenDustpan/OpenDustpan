@@ -2031,7 +2031,7 @@ func testBackupFailEndedExpiredClaim(t *testing.T, newStore BackupFactory) {
 	select {
 	case <-time.After(3 * lease):
 	case <-t.Context().Done():
-		t.Fatalf("test ended while the claim expired")
+		t.Fatal("test ended while the claim expired")
 	}
 
 	requireRunningAfterFailEnded(t, s, r, "operation with an expired claim")
