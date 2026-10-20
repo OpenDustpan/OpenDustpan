@@ -199,8 +199,35 @@ func endedBackupOperation(t *testing.T, c *servertest.Cluster, i int) durable.Op
 	}
 }
 
-// splitSets returns server 0 with every component and server 1 with the api
-// component only.
+// waitSurvivorClaim polls the backup operation until server survivor holds its
+// claim, and returns the time from since to that observation. A claim that is
+// already released (the operation ended) counts when the operation shows a
+// second attempt.
+func waitSurvivorClaim(t *testing.T, c *servertest.Cluster, survivor int, since time.Time) time.Duration {
+	t.Helper()
+
+	deadline := time.Now().Add(4*backupLease + 10*time.Second)
+
+	for {
+		op := backupOperation(t, c, survivor)
+		if op.Claim.Owner == servertest.InstanceID(survivor) || (op.State.Terminal() && op.Attempt >= 2) {
+			return time.Since(since)
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("the survivor did not claim the operation: state %s, owner %q", op.State, op.Claim.Owner)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("wait for the claim of the survivor: %v", t.Context().Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// splitSets returns servers 0 and 2 with every component and server 1 with the
+// api component only.
 func splitSets(t *testing.T) []dustpan.Components {
 	t.Helper()
 
@@ -209,13 +236,14 @@ func splitSets(t *testing.T) []dustpan.Components {
 		t.Fatal(err)
 	}
 
-	return []dustpan.Components{dustpan.AllComponents(), api}
+	return []dustpan.Components{dustpan.AllComponents(), api, dustpan.AllComponents()}
 }
 
 // TestBackupSurvivesStartOfAnotherInstance proves that a start of one
 // instance does not fail the live backup of another: server 0 runs a backup
-// and server 1 restarts during it. The backup ends succeeded, and both
-// servers answer the same state while it runs.
+// and server 1 restarts during it. A restart of the second instance that has
+// every component, and so a worker, does not fail it either. The backup ends
+// succeeded, and all servers answer the same state while it runs.
 func TestBackupSurvivesStartOfAnotherInstance(t *testing.T) {
 	t.Parallel()
 
@@ -226,7 +254,7 @@ func TestBackupSurvivesStartOfAnotherInstance(t *testing.T) {
 	id := startBackup(t, c, 1)
 	target.waitEntered(t, c)
 
-	for i := range 2 {
+	for i := range 3 {
 		if got := readBackup(t, c, i, id); got.State != string(backup.StateRunning) {
 			t.Fatalf("server %d: state %q while the backup runs, want running", i, got.State)
 		}
@@ -235,15 +263,30 @@ func TestBackupSurvivesStartOfAnotherInstance(t *testing.T) {
 	c.Kill(t, 1)
 	c.Restart(t, 1)
 
-	for i := range 2 {
+	for i := range 3 {
 		if got := readBackup(t, c, i, id); got.State != string(backup.StateRunning) {
 			t.Fatalf("server %d: state %q after the restart of server 1, want running", i, got.State)
 		}
 	}
 
+	// Restart the instance with a worker that does not hold the claim.
+	idle := 0
+	if backupOperation(t, c, 0).Claim.Owner == servertest.InstanceID(0) {
+		idle = 2
+	}
+
+	c.Kill(t, idle)
+	c.Restart(t, idle)
+
+	for i := range 3 {
+		if got := readBackup(t, c, i, id); got.State != string(backup.StateRunning) {
+			t.Fatalf("server %d: state %q after the restart of server %d, want running", i, got.State, idle)
+		}
+	}
+
 	target.release()
 
-	for i := range 2 {
+	for i := range 3 {
 		if got := waitBackup(t, c, i, id, 30*time.Second); got.State != string(backup.StateSucceeded) {
 			t.Fatalf("server %d: backup ended %q (%s), want succeeded", i, got.State, got.Error)
 		}
@@ -281,6 +324,14 @@ func TestBackupTakeoverAfterKill(t *testing.T) {
 
 	c.Kill(t, victim)
 	target.release()
+
+	// The survivor claims the operation after the claim of the victim
+	// expires and the survivor polls: one lease period, one poll, and slack
+	// for a loaded machine.
+	claimedAfter := waitSurvivorClaim(t, c, survivor, killedAt)
+	if limit := backupLease + durable.DefaultPollEvery + 2*time.Second; claimedAfter > limit {
+		t.Fatalf("the survivor claimed the operation %v after the kill, want within %v", claimedAfter, limit)
+	}
 
 	// The claim expires one lease period after its last renewal. The
 	// survivor polls for work each second, and runs the backup at once.

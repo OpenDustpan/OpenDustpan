@@ -800,7 +800,8 @@ UPDATE backups
 SET state = 'failed',
     error = COALESCE(NULLIF((
         SELECT o.last_error FROM durable_operations AS o
-        WHERE o.start_key = sqlc.arg('prefix') || backups.id), ''), sqlc.arg('fallback')),
+        WHERE o.start_key = sqlc.arg('prefix') || backups.id
+          AND o.kind = sqlc.arg('kind')), ''), sqlc.arg('fallback')),
     ended_at_ms = sqlc.arg('ended_at_ms')
 WHERE state = 'running'
   AND EXISTS (

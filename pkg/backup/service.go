@@ -268,6 +268,18 @@ func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
 	}
 
 	for {
+		// An operation that ended with no finish write (a step that
+		// panicked, too many holders) leaves its row running. When no worker
+		// runs, nothing else marks it failed, so the loop does it before it
+		// reads the row.
+		if _, err := s.registry.FailEndedBackups(ctx, s.now().UTC()); err != nil {
+			if ctx.Err() != nil {
+				return Record{}, fmt.Errorf("wait for backup %s: %w", id, ctx.Err())
+			}
+
+			return Record{}, fmt.Errorf("fail ended backups while backup %s runs: %w", id, err)
+		}
+
 		row, err := s.registry.GetBackup(ctx, id)
 		if err != nil {
 			return Record{}, fmt.Errorf("read backup %s: %w", id, err)
@@ -587,7 +599,18 @@ func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key)
 		keys = slices.Insert(keys, 0, manifestKey)
 	}
 
+	prefix := "backups/" + id.String() + "/"
+
 	for _, key := range keys {
+		// Defense in depth: List filters by prefix, but a target whose List
+		// matches "backups/<id>" as a plain string prefix also returns the
+		// keys of another backup (for example "backups/<id>0/..."). This
+		// check stays so that a List that is too wide never deletes the files
+		// of another backup. It does not rely on the List layer.
+		if !strings.HasPrefix(key.String(), prefix) {
+			return fmt.Errorf("refuse to delete object %s outside %s of backup %s: %w", key, prefix, id, ErrCorrupt)
+		}
+
 		if err := s.target.Delete(ctx, key); err != nil {
 			return fmt.Errorf("delete object %s of backup %s: %w", key, id, err)
 		}
@@ -622,6 +645,18 @@ func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byt
 		return nil, err
 	}
 
+	// A holder that lost its claim can still run clearPartial late and delete
+	// files of the backup that the survivor completed. The row would then
+	// read succeeded with files missing, so the step checks the files first
+	// and fails the backup closed.
+	if presentErr := s.checkPresent(ctx, in.ID); presentErr != nil {
+		if ctx.Err() != nil {
+			return nil, presentErr
+		}
+
+		return nil, s.failRow(ctx, sc.Fence, in.ID, presentErr)
+	}
+
 	_, finishErr := s.registry.FinishBackup(ctx, sc.Fence, in.ID, StateSucceeded, "", s.now().UTC())
 
 	switch {
@@ -632,6 +667,41 @@ func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byt
 	default:
 		return nil, durable.Permanent(fmt.Errorf("finish backup %s: %w", in.ID, finishErr))
 	}
+}
+
+// checkPresent lists the objects under backups/<id>/ and compares them to the
+// manifest: the manifest and each table file it names must exist. A missing
+// file reports ErrCorrupt.
+func (s *Service) checkPresent(ctx context.Context, id ID) error {
+	manifest, err := s.ReadManifest(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	listed, err := s.target.List(ctx, "backups/"+id.String())
+	if err != nil {
+		return fmt.Errorf("list objects of backup %s: %w", id, err)
+	}
+
+	have := make(map[string]struct{}, len(listed))
+	for _, obj := range listed {
+		have[obj.Key.String()] = struct{}{}
+	}
+
+	want := make([]string, 0, len(manifest.SQLFiles)+1)
+	want = append(want, "backups/"+id.String()+"/manifest.json")
+
+	for _, file := range manifest.SQLFiles {
+		want = append(want, "backups/"+id.String()+"/"+file.Path)
+	}
+
+	for _, key := range want {
+		if _, ok := have[key]; !ok {
+			return fmt.Errorf("backup %s lost the object %s before it finished: %w", id, key, ErrCorrupt)
+		}
+	}
+
+	return nil
 }
 
 // backup exports the SQL part, copies the named blobs, and writes the

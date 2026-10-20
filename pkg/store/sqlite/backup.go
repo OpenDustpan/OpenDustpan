@@ -110,6 +110,14 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 		return err
 	}
 
+	// Defense in depth: the service builds the request from the backup ID.
+	// This check stays so that no caller can start the row of one backup
+	// with the operation of another kind or key.
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return fmt.Errorf("start backup %s: operation %q of kind %q: %w",
+			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -200,7 +208,7 @@ func ownsBackup(ctx context.Context, q *db.Queries, f durable.StepFence, id back
 		return fmt.Errorf("select operation of the fence: %w", err)
 	}
 
-	if op.StartKey != backup.OperationKey(id) {
+	if op.Kind != string(backup.OperationKind) || op.StartKey != backup.OperationKey(id) {
 		return durable.ErrClaimLost
 	}
 

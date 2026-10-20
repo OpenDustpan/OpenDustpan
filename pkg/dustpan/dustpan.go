@@ -1575,6 +1575,9 @@ func newSessionPolicyService(cfg *settings) (*session.Policies, error) {
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
+// Handler serves requests only. A backup that a request starts waits for a
+// worker. An SDK user who serves Handler without Run must call Work on the
+// service that Backups returns, or no instance runs the backup.
 func (s *Server) Handler() http.Handler {
 	return s.handler
 }

@@ -275,7 +275,7 @@ func (f *frozenStore) Extend(ctx context.Context, c durable.Claim, lease time.Du
 func TestTakeoverAfterTheHolderStopsWithoutRelease(t *testing.T) {
 	t.Parallel()
 
-	const lease = 200 * time.Millisecond
+	const lease = 2 * time.Second
 
 	setup := newDurableSetup()
 	id := backup.ID("bkp-takeover")
@@ -305,7 +305,10 @@ func TestTakeoverAfterTheHolderStopsWithoutRelease(t *testing.T) {
 
 	row := waitRow(t, setup.reg, id, backup.StateSucceeded)
 
-	op, _ := findOperation(t, setup.reg.ops, id)
+	// The runner's Complete lands after the row reads succeeded.
+	op := waitOperation(t, setup.reg.ops, id, "the operation succeeded", func(o durable.Operation) bool {
+		return o.State == durable.StateSucceeded
+	})
 	if op.State != durable.StateSucceeded || op.Attempt != 2 || op.Expiries != 1 {
 		t.Fatalf(
 			"operation = state %s, attempt %d, expiries %d, want succeeded, 2, 1",
@@ -369,7 +372,7 @@ func assertCompleteBackup(t *testing.T, target *memStore, id backup.ID) {
 func TestTakeoverKeepsTheBlobCopies(t *testing.T) {
 	t.Parallel()
 
-	const lease = 200 * time.Millisecond
+	const lease = 2 * time.Second
 
 	setup := newDurableSetup()
 	id := backup.ID("bkp-takeover-blob")

@@ -106,6 +106,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "starting a backup stores the row and the operation together", test: testBackupStart},
 		{name: "a refused start leaves no operation", test: testBackupStartRefused},
 		{name: "a start with an invalid request stores no row", test: testBackupStartInvalid},
+		{name: "a start with a foreign key or kind stores no row", test: testBackupStartForeign},
 		{name: "finishing a backup records the step in the same call", test: testBackupFinishRecordsStep},
 		{name: "a stale claim cannot finish a backup", test: testBackupFinishStaleClaim},
 		{name: "a canceled operation cannot finish a backup", test: testBackupFinishCanceled},
@@ -114,6 +115,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "ended operations fail their running rows", test: testBackupFailEndedFailed},
 		{name: "canceled operations fail their running rows", test: testBackupFailEndedCanceled},
 		{name: "live operations keep their running rows", test: testBackupFailEndedLive},
+		{name: "an expired claim keeps its running row", test: testBackupFailEndedExpiredClaim},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
 	}
 
@@ -1626,10 +1628,7 @@ func testBackupStartRefused(t *testing.T, newStore BackupFactory) {
 
 	requireNoBackupOperation(t, s, second.ID)
 
-	taken := backupStartRequest(first.ID)
-	taken.Key = backup.OperationKey(backup.ID(ident.NewID("bkp-")))
-
-	if err := s.StartBackup(ctx, first, taken); !errors.Is(err, backup.ErrAlreadyExists) {
+	if err := s.StartBackup(ctx, first, backupStartRequest(first.ID)); !errors.Is(err, backup.ErrAlreadyExists) {
 		t.Fatalf("start with a taken ID: err = %v, want ErrAlreadyExists", err)
 	}
 
@@ -1639,6 +1638,35 @@ func testBackupStartRefused(t *testing.T, newStore BackupFactory) {
 
 	if got := mustGetBackup(t, s, first.ID); got != first {
 		t.Fatalf("backup after refused starts = %+v, want %+v", got, first)
+	}
+}
+
+// testBackupStartForeign refuses a start whose request carries the key of
+// another backup or another kind, and stores no row and no operation.
+func testBackupStartForeign(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	r := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
+
+	foreignKey := backupStartRequest(r.ID)
+	foreignKey.Key = backup.OperationKey(backup.ID(ident.NewID("bkp-")))
+
+	foreignKind := backupStartRequest(r.ID)
+	foreignKind.Kind = durable.Kind("other")
+
+	for name, req := range map[string]durable.StartRequest{"key": foreignKey, "kind": foreignKind} {
+		if err := s.StartBackup(t.Context(), r, req); !errors.Is(err, durable.ErrKeyConflict) {
+			t.Fatalf("start with a foreign %s: err = %v, want durable.ErrKeyConflict", name, err)
+		}
+	}
+
+	if _, err := s.GetBackup(t.Context(), r.ID); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("row of a foreign start: err = %v, want ErrNotFound", err)
+	}
+
+	if ops := backupOperations(t, s); len(ops) != 0 {
+		t.Fatalf("operations after foreign starts = %+v, want none", ops)
 	}
 }
 
@@ -1985,6 +2013,28 @@ func testBackupFailEndedLive(t *testing.T, newStore BackupFactory) {
 	}
 
 	requireRunningAfterFailEnded(t, s, r, "operation that waits for a retry")
+}
+
+// testBackupFailEndedExpiredClaim lets the claim of a running operation
+// expire and does not claim the operation again. The operation stays running
+// for the next worker, so FailEndedBackups changes no row.
+func testBackupFailEndedExpiredClaim(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	r := mustStartBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+
+	const lease = 200 * time.Millisecond
+
+	claimBackupOperation(t, s, r.ID, "test", lease)
+
+	select {
+	case <-time.After(3 * lease):
+	case <-t.Context().Done():
+		t.Fatalf("test ended while the claim expired")
+	}
+
+	requireRunningAfterFailEnded(t, s, r, "operation with an expired claim")
 }
 
 // requireRunningAfterFailEnded checks that FailEndedBackups changes nothing

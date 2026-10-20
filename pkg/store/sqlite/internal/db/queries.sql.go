@@ -3127,21 +3127,22 @@ UPDATE backups
 SET state = 'failed',
     error = COALESCE(NULLIF((
         SELECT o.last_error FROM durable_operations AS o
-        WHERE o.start_key = ?1 || backups.id), ''), ?2),
-    ended_at_ms = ?3
+        WHERE o.start_key = ?1 || backups.id
+          AND o.kind = ?2), ''), ?3),
+    ended_at_ms = ?4
 WHERE state = 'running'
   AND EXISTS (
       SELECT 1 FROM durable_operations AS o
       WHERE o.start_key = ?1 || backups.id
-        AND o.kind = ?4
+        AND o.kind = ?2
         AND o.state IN ('failed', 'canceled'))
 `
 
 type FailEndedBackupsParams struct {
 	Prefix    string
+	Kind      string
 	Fallback  string
 	EndedAtMs int64
-	Kind      string
 }
 
 // Marks failed each running backup whose operation ended failed or canceled
@@ -3150,9 +3151,9 @@ type FailEndedBackupsParams struct {
 func (q *Queries) FailEndedBackups(ctx context.Context, arg FailEndedBackupsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, failEndedBackups,
 		arg.Prefix,
+		arg.Kind,
 		arg.Fallback,
 		arg.EndedAtMs,
-		arg.Kind,
 	)
 	if err != nil {
 		return 0, err
