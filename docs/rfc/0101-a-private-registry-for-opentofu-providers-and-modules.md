@@ -126,7 +126,7 @@ provider mirror with an allowlist of SHA-256 sums second.
 
 ### B. Where the code lives
 
-1. **A domain package `registry` with the model and the ports; the wire
+1. **A domain package `registry` with the model and the ports, and the wire
    formats in `internal/api/tfe/` (recommended).** The package holds the
    address, the version, the release record and the store port. It knows no
    file layout of OpenTofu except the names of the archive set that ADR 177
@@ -215,7 +215,7 @@ the prefix of the namespace ID: `namespaces/<namespace ID>/registry/sha256/<hash
 port, which refuses every key outside the prefix with `blob.ErrOutOfScope`.
 `pkg/blob` does not have the view yet. Until it exists, the namespace-ID
 prefix of the key is the only guard. Two releases in one namespace that hold the same
-bytes share one blob. A purge of a namespace removes its blobs. The upload
+bytes share one blob. A purge of a namespace deletes its blobs. The upload
 writes to `namespaces/<namespace ID>/registry/staging/<token>` first, and a
 blob is readable only through a published release (section F).
 
@@ -241,7 +241,7 @@ content key.
    platform that the address and the request give. A mismatch is refused.
 5. Only then does the server move the blobs from the staging keys to the
    content keys and call `Store.Publish`. A staging blob that no publish
-   moved is removed by a sweeper after a grace period.
+   moved is deleted by a sweeper after a grace period.
 
 The first slice serves only `zh:` hashes: the SHA-256 of the zip archive,
 which the server computed in check 3. The server does not unpack a provider
@@ -278,7 +278,7 @@ The open point is the OpenPGP library for check 1:
    - Rejected option: the frozen `golang.org/x/crypto/openpgp`. The Go team
      froze it and marked it deprecated. It gets no new features and no fixes
      to the format, and the adapter needs the algorithm limits below.
-2. **Verify with `gpg` as a process.** The server image needs `gpg`, and the
+2. **Check with `gpg` as a process.** The server image needs `gpg`, and the
    process is a new attack surface. Not recommended.
 3. **No signature check in the first slice, the checksums only.** This does
    not follow ADR 269.
@@ -306,9 +306,9 @@ proposals and are not in code. The shared file `pkg/identity` has one owner.
 
 | Action | Object | What it allows |
 | --- | --- | --- |
-| `registry:read` | the address | list and read a release, and fetch its archives |
+| `registry:read` | the address | list and read a release, and get its archives |
 | `registry:publish` | the address | upload a release of an address |
-| `registry:manage-keys` | the namespace | register and remove a trusted signing key |
+| `registry:manage-keys` | the namespace | register and delete a trusted signing key |
 | `namespace:read-registry` | the namespace | list the addresses of a namespace |
 
 The object of a read is the address `namespace/kind/name`, so a role can
@@ -368,7 +368,7 @@ writes a blob needs it.
 | PCI DSS v4.0, requirement 6.3.2 (not verified) | An inventory of custom software and third-party components. | The list of addresses and versions of a namespace, with the publisher. |
 | SOC 2, CC8.1 change management (not verified) | Changes are authorized, tested and approved. | A record of who published each version. |
 | ISO 27001:2022, A.5.21 ICT supply chain (not verified) | Manage the security of the supply chain. | A known list of software sources. |
-| DORA (Regulation (EU) 2022/2554), Article 8, identification: 8(1), 8(4) and 8(6) (the article number is from a review, the text of the paragraphs is not verified) | Identify and document the ICT assets and the sources of ICT risk. | The list of software sources of a plan, and a record that does not change. |
+| DORA (Regulation (EU) 2022/2554), Article 8, identification: 8(1), 8(4) and 8(6) (the article number is from a review, and the text is not verified) | Identify and document the ICT assets and the sources of ICT risk. | The list of software sources of a plan, and a record that does not change. |
 
 None of these gives a certificate to the feature. A control is met by the
 whole system of a customer, not by one route.
