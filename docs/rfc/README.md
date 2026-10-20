@@ -72,7 +72,7 @@ both together.
 | [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing; MFA, sign-in methods, MFA freshness and break-glass accepted (ADR 46, ADR 55, ADR 56, ADR 57) |
 | [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entries (ADR 212) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
-| [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
+| [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | discussing; a trigger starts a plan through the job service (ADR 266) |
 | [25](0025-drift-detection.md) | Drift detection and remediation | discussing; a person approves a remediation by a built-in gate (ADR 258); detection is a plan-only refresh job (ADR 263) |
 | [26](0026-unit-status.md) | Unit status in the inventory | draft; a lock is a flag, with manual locks (ADR 213) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
