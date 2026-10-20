@@ -230,7 +230,12 @@ These entries use the limit of the previous section, with a window of 1 hour.
 The server writes at most 1 entry for each dev person for each hour.
 It counts each other refusal of that person in the hour.
 The count goes out in the first entry of the next hour.
-When the person stops, the first denial of any principal after the hour writes an entry with the key `signin/server` as `object` and the count (`N further refusals in the last window were not recorded one by one`).
+When the table of the limiter is full, a dev refusal uses the overflow slot.
+The overflow slot has a window of 1 minute.
+Then the limit of 1 entry for each person for each hour does not hold.
+When the refusals of the person stop, the first denial of any principal after the hour writes an entry.
+The `object` of this entry is the key `signin/server`.
+The entry holds the count (`N further refusals in the last window were not recorded one by one`).
 When the server stops with a signal, it writes the counts that it still holds.
 A dev installation, and a person whose subject does not start with `dev:`, write no such entry.
 

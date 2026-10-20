@@ -2,8 +2,10 @@ package dustpan
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,8 +13,10 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -107,7 +111,7 @@ func (w *devRefusalWorld) entries(t *testing.T, subject string) []audit.Entry {
 func (w *devRefusalWorld) flush(t *testing.T) {
 	t.Helper()
 
-	refusal.New(nil, w.st, nil, w.cfg.logger, nil).WithLimiter(w.cfg.denialLimiter).Flush(t.Context())
+	w.cfg.devRefusal.recorder(w.cfg).Flush(t.Context())
 }
 
 // TestDevRefusalFirstWritesEntry proves that the first refusal of a dev person writes an entry that holds no token.
@@ -196,8 +200,8 @@ func TestDevRefusalShutdownFlush(t *testing.T) {
 	}
 
 	// The flush entry names the key kind of the limiter.
-	if len(got) == 0 || got[0].Object != "signin/server" {
-		t.Fatalf("flush entry object = %q, want signin/server", got[0].Object)
+	if !slices.ContainsFunc(got, func(e audit.Entry) bool { return e.Object == "signin/server" }) {
+		t.Fatalf("entries = %+v, want a flush entry with the object signin/server", got)
 	}
 }
 
@@ -262,4 +266,160 @@ func hasCount(entries []audit.Entry, text string) bool {
 	}
 
 	return false
+}
+
+// TestDevRefusalHostileSubject proves that the entry holds a cleaned subject:
+// no CR, LF or NUL, and at most the bound of the backup report.
+func TestDevRefusalHostileSubject(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		subject string
+	}{
+		{name: "CR", subject: "dev:a\rb"},
+		{name: "LF", subject: "dev:a\nb"},
+		{name: "NUL", subject: "dev:a\x00b"},
+		{name: "long", subject: "dev:" + strings.Repeat("x", 10000)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newDevRefusalWorld(t, installation.KindProduction)
+			w.refuse(t, tc.subject)
+
+			list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 100})
+			if err != nil {
+				t.Fatalf("list installation entries: %v", err)
+			}
+
+			if len(list.Entries) != 1 {
+				t.Fatalf("entries = %d, want 1", len(list.Entries))
+			}
+
+			got := list.Entries[0].Subject
+			if strings.ContainsAny(got, "\r\n\x00") || len(got) > backup.MaxReportedSubjectBytes ||
+				!strings.HasPrefix(got, "dev:") {
+				t.Fatalf("subject = %q (%d bytes), want a cleaned dev subject within the bound", got, len(got))
+			}
+		})
+	}
+}
+
+// TestDevRefusalFloodBounds proves the flood limits: 1000 refusals of one
+// person in one hour write one entry with the count after the hour, and
+// refusals of many distinct people keep the limiter at its size cap.
+func TestDevRefusalFloodBounds(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one person", func(t *testing.T) {
+		t.Parallel()
+
+		w := newDevRefusalWorld(t, installation.KindProduction)
+
+		for range 1000 {
+			w.refuse(t, "dev:admin")
+		}
+
+		if got := w.entries(t, "dev:admin"); len(got) != 1 {
+			t.Fatalf("entries within the hour = %d, want 1", len(got))
+		}
+
+		w.now = w.now.Add(time.Hour + time.Minute)
+		w.refuse(t, "dev:admin")
+
+		got := w.entries(t, "dev:admin")
+		if len(got) != 2 || !hasCount(got, "999 further refusals since the last entry") {
+			t.Fatalf("entries after the hour = %+v, want a second with a count of 999", got)
+		}
+	})
+
+	t.Run("many people", func(t *testing.T) {
+		t.Parallel()
+
+		const maxKeys = 8
+
+		w := newDevRefusalWorld(t, installation.KindProduction)
+		w.cfg.denialLimiter = denylimit.New(denylimit.Config{
+			Window:              time.Minute,
+			MaxKeys:             maxKeys,
+			MaxFlush:            0,
+			MaxKeysPerPrincipal: 0,
+			Now:                 func() time.Time { return w.now },
+		})
+
+		for i := range 200 {
+			w.refuse(t, fmt.Sprintf("dev:p%d", i))
+		}
+
+		if n := w.cfg.denialLimiter.Len(); n > maxKeys {
+			t.Fatalf("limiter holds %d keys, want at most %d", n, maxKeys)
+		}
+
+		list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 500})
+		if err != nil {
+			t.Fatalf("list installation entries: %v", err)
+		}
+
+		if len(list.Entries) > maxKeys+1 {
+			t.Fatalf("entries = %d, want at most %d", len(list.Entries), maxKeys+1)
+		}
+	})
+}
+
+// TestDevRefusalFlushesNamespaceKey proves that the recorder of the dev
+// refusals writes the held count of a key in a namespace into that namespace:
+// the shared limiter holds the keys of every adapter.
+func TestDevRefusalFlushesNamespaceKey(t *testing.T) {
+	t.Parallel()
+
+	w := newDevRefusalWorld(t, installation.KindProduction)
+
+	err := w.st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: w.now, Name: "team", HomeRegion: "local", FailoverVersion: 1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	})
+	if err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: w.st, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	failures := 0
+
+	w.cfg.devRefusal.bind(namespaces, func() { failures++ })
+
+	// Another adapter holds the count of a key in the namespace.
+	other := refusal.New(nil, w.st, namespaces, w.cfg.logger, nil).WithLimiter(w.cfg.denialLimiter)
+	bo := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "bo@example.com",
+		DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind: identity.KindPerson, Credential: "", JobID: "",
+	}
+
+	for range 3 {
+		other.Record(t.Context(), nil, bo, refusal.Denial{
+			Action: identity.ActionUnitWrite, Object: identity.NamespaceObject("team"), Reason: "denied", Window: 0,
+		})
+	}
+
+	w.now = w.now.Add(2 * time.Hour)
+	// A dev refusal triggers the sweep, and its recorder writes the flush entry.
+	w.refuse(t, "dev:admin")
+
+	list, err := w.st.List(t.Context(), namespace.Name("team"), audit.Page{Number: 1, Size: 100})
+	if err != nil {
+		t.Fatalf("list namespace entries: %v", err)
+	}
+
+	if !hasCount(list.Entries, "2 further refusals in the last window") {
+		t.Fatalf("namespace entries = %+v, want the flush entry with a count of 2", list.Entries)
+	}
+
+	if failures != 0 {
+		t.Fatalf("audit failures = %d, want 0", failures)
+	}
 }

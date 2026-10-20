@@ -3,6 +3,7 @@ package principal_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -243,7 +244,7 @@ func TestDevGuardOnRefused(t *testing.T) {
 			t.Errorf("subject %q: refused = %t, want %t", tc.subject, refused, len(tc.want) > 0)
 		}
 
-		if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+		if !slices.Equal(got, tc.want) {
 			t.Errorf("subject %q: hook got %v, want %v", tc.subject, got, tc.want)
 		}
 	}

@@ -70,8 +70,8 @@ func RefuseDevSubjects() Option {
 }
 
 // OnDevRefused makes the Checker call f with the subject of each dev person
-// whose session it refuses (see RefuseDevSubjects). f must not block, and it
-// must not put the cookie or any request data in a record.
+// whose session it refuses (see RefuseDevSubjects). f returns within a bounded
+// time, and it must not put the cookie or any request data in a record.
 func OnDevRefused(f func(ctx context.Context, subject string)) Option {
 	return func(c *Checker) { c.onRefused = f }
 }

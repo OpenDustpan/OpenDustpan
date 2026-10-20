@@ -27,7 +27,7 @@ func RefuseDevSubjects(next identity.Authenticator) DevGuard {
 
 // OnRefused returns a copy of g that calls f with the context and the subject
 // of each caller that g refuses. The call comes before g returns the error. f
-// must not block, and it must not put the token or any request data in a
+// returns within a bounded time, and it must not put the token or any request data in a
 // record.
 func (g DevGuard) OnRefused(f func(ctx context.Context, subject string)) DevGuard {
 	g.onRefused = f
