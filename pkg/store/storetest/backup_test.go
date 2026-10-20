@@ -1982,13 +1982,15 @@ func (s *fakeBackupStore) FinishBackup(
 		return backup.Record{}, errFakeClosed
 	}
 
+	// The check runs before the domain write: the write holds the lock of the
+	// durable store while its hook runs, and the check reads that store.
+	if !s.fenceOwnsRow(ctx, f, id) {
+		return backup.Record{}, durable.ErrClaimLost
+	}
+
 	var out backup.Record
 
 	finish := func() error {
-		if !s.fenceOwnsRow(ctx, f, id) {
-			return durable.ErrClaimLost
-		}
-
 		r, ok := s.data.backups[id.String()]
 		if !ok {
 			return backup.ErrNotFound

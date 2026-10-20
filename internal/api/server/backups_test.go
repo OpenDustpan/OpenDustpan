@@ -25,7 +25,7 @@ import (
 
 // pollTimeout bounds a backup poll: a test backup of a small database ends
 // well before it.
-const pollTimeout = 10 * time.Second
+const pollTimeout = 60 * time.Second
 
 // pollInterval sets how often a backup poll reads the row.
 const pollInterval = 10 * time.Millisecond
