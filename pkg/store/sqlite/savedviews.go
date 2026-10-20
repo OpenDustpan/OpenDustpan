@@ -141,7 +141,8 @@ func (v savedViews) List(ctx context.Context, ns namespace.Name, owner string) (
 	return out, nil
 }
 
-// Delete implements savedview.Store.
+// Delete implements savedview.Store. When ctx carries an idempotency
+// completion, the transaction also stores its answer.
 func (v savedViews) Delete(
 	ctx context.Context, ns namespace.Name, id savedview.ID, owner string, fence namespace.Fence, e audit.Entry,
 ) error {
@@ -162,7 +163,9 @@ func (v savedViews) Delete(
 			return savedview.ErrNotFound
 		}
 
-		return nil
+		// When ctx carries an idempotency completion, the answer of the delete
+		// is stored in this transaction.
+		return finishCompletion(ctx, q, id)
 	})
 }
 

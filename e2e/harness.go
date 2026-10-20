@@ -680,7 +680,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
-		append(slices.Concat(profileStoreOptions(st, wrapper), jobStoreOptions(st)), []dustpan.Option{
+		append(slices.Concat(profileStoreOptions(st, wrapper), jobStoreOptions(st), savedViewStoreOptions(st)), []dustpan.Option{
 			dustpan.WithRegion(region),
 			dustpan.WithNamespaceStore(st),
 			dustpan.WithStackStore(st),
