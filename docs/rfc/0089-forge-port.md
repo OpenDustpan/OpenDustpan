@@ -1,18 +1,21 @@
 ---
 rfc: 89
 title: The Forge port, what each consumer needs from a forge, and the forge connection API
-status: proposed answers; waiting for owner acceptance
+status: owner decisions of 2026-10-20 for Q3, Q8, Q9, Q10 and the GitHub App scope, with Q1, Q2, Q5 and Q6 open
 created: 2026-10-19
 ---
 
 # RFC 89. The Forge port, what each consumer needs from a forge, and the forge connection API
 
-Status: proposed answers; waiting for owner acceptance. An agent wrote this RFC for issue #886 under the
+Status: the owner decided Q3, Q8, Q9, Q10 and the GitHub App scope on 20
+October 2026 (see "Owner decisions of 20 October 2026"). Q1, Q2, Q5 and Q6
+wait for the owner. Q4 and Q11 have proposed answers. An agent wrote this RFC for issue #886 under the
 direction of the project manager. It proposes the shape of the `Forge` port
 before the GitHub adapter. The pull request of this RFC also adds the port
 as Go interfaces in `pkg/forge` and an empty conformance suite in
 `pkg/forge/forgetest`. It adds no adapter, no SQL and no route. The
-proposals have the label "(proposed)". The owner answers the questions at
+proposals have the label "(proposed)". A decision of the owner has the
+label "(owner decision, 2026-10-20)". The owner answers the other questions at
 the end. The Go interface holds only the methods that an accepted decision
 needs today. The methods that only RFC 12, RFC 24 and RFC 27 need are in
 this RFC as proposals, and they enter the Go interface with their
@@ -56,10 +59,37 @@ consumer, and nothing tests that the adapters agree.
 - **Forge credentials are sealed credentials of the namespace** (ADR 213
   decision 7): sealed with a data key that the key-encryption key wraps,
   never answered, rotated with two active sets, with a WARN log line and
-  the metric `git_host_credential_fallback_total` for a fallback.
+  the metric `git_host_credential_fallback_total` for a fallback. The
+  GitHub App scope of 20 October 2026 amends this for the installation-level
+  app (see "The GitHub App scope").
 - **A namespace can have many forge connections and one default** (ADR
   213 decision 8). The removal of the default fails until another
   connection is the default.
+
+### Owner decisions of 20 October 2026
+
+Each decision below has the label "(owner decision, 2026-10-20)" where the
+RFC uses it.
+
+- **Q3. No Git host credential reaches a runner for the source of its
+  job.** The source comes only as the pack that the server builds (ADR 135).
+  The capability `repo-token` stays only for the git credential mode `forge`
+  of ADR 130 decision 11, for other live fetches.
+- **Q8. Comment commands.** `dustpan apply` applies the exact plan of the
+  summary comment, with four conditions. `unlock` stays a command. A comment
+  never approves (rule 8).
+- **Q9. The person or IaC gives the event secret.** The server never answers
+  it.
+- **Q10. C: 204 and the poll**, with the condition of "Webhook hostname and
+  federation": forwarding of webhook events is part of the definition of done
+  of the forwarding effort (#1054).
+- **The GitHub App scope** (was old Q7, amends ADR 213 decision 7). One
+  installation-level GitHub App for each OpenDustpan installation is the
+  default. A per-namespace GitHub App is an option.
+- **The webhook hostname.** The hook URL uses a stable hostname that each
+  federation member accepts, never the FQDN of one member.
+- **Documentation.** The GitHub setup guide and the federation setup guide
+  document the GitHub App scope and the webhook hostname (see "Consequences").
 
 ### Accepted decisions that limit the port
 
@@ -87,7 +117,7 @@ consumer, and nothing tests that the adapters agree.
    page. Each
    command runs as the linked principal with its actions (owner decision of
    19 October 2026: an approval needs the plan on screen; ADR 146 decision
-   8). Q8 proposes a command list.
+   8). Q8 gives the command list (owner decision, 2026-10-20).
 
 ## The consumers, and what each needs from a forge
 
@@ -97,11 +127,11 @@ consumer, and nothing tests that the adapters agree.
 | Write-back, review request (`write-back-review`, ADR 101, ADR 100 decision 15) | The same, and the review watcher | The same, and a review request that a second open call does not duplicate. The state of the review request, with the merge time and the merge commit. A close with no merge. | The same, and `OpenReview`, `ReadReview`, `CloseReview` | `files`, `compare`, `commit`, `review` |
 | Catalog request files (`catalog`, ADR 116) | A render of a request in git | One file at one commit. | `ReadFile` | `files` |
 | Change order cause diff (`cause-diff`, ADR 196) | Each read of the review | The file diff from base to head, with a byte limit, and an ancestor check. | `Compare` | `compare` |
-| Source fetch (`fetch`, ADR 135) | The `source.fetch` operation, in the server | A credential for the git protocol. The token can be the long-lived token of the connection: it stays in the server. | `RepoToken` | `git-access` |
-| Runner git (`runner-git`, ADR 130 decision 11) | A runner step in the git credential mode `forge` | A token that reads one repository only and expires soon. The runner path refuses a token with `Scoped` not set. | `RepoToken` | `repo-token` |
+| Source fetch (`fetch`, ADR 135) | The `source.fetch` operation, in the server, for the source of each job and each auth kind (app, token, deploy key) | A credential for the git protocol. The token can be the long-lived token of the connection: it stays in the server. A runner gets the source only as the pack that the server builds (owner decision, 2026-10-20). | `RepoToken` | `git-access` |
+| Runner git (`runner-git`, ADR 130 decision 11) | A runner step in the git credential mode `forge`. Only for a live fetch other than the source of the job, for example a private Git module source. | A token that reads one repository only and expires soon. The runner path refuses a token with `Scoped` not set. Never a long-lived token. | `RepoToken` | `repo-token` |
 | Triggers (RFC 24) (proposed, no Go constant yet) | A push, a tag, a review request that opens or changes its head | Signed events. The changed paths from the old head to the new head, to find the affected units. | `ParseEvent`, `Compare`, `Head` | `events`, `files`, `compare` |
 | Review request feedback (RFC 27) (proposed, no Go constant yet) | After a plan, and after an apply | A status on the head commit for each unit. One summary comment that the server edits in place. A merge at an expected head, for "apply before merge" (RFC 12). | `SetStatus`, `PutComment`, `MergeReview` (proposed) | `status`, `comment`, `merge` (proposed) |
-| Comment commands (RFC 27) (proposed, no Go constant yet) | A new comment on a review request | A signed event. A read of the comment through the API, with the stable ID of its author, before the server acts. A reply. | `ParseEvent`, `ReadComment`, `PutComment`, `ReadReview` | `events`, `comment`, `review` (proposed) |
+| Comment commands (RFC 27, Q8) (owner decision, 2026-10-20, no Go constant yet) | A new comment on a review request | A signed event. A read of the comment through the API, with the stable ID of its author, before the server acts. A read of the review request with its head and whether the Git host lets it merge. A reply. | `ParseEvent`, `ReadComment`, `PutComment`, `ReadReview` | `events`, `comment`, `review` (proposed) |
 
 `forge.Needs` holds the same map in code, as capabilities (below), for the
 rows that have a constant. `TestNeeds` in `pkg/forge` lists the same rows,
@@ -161,7 +191,8 @@ decision). No registration type exists in Go yet, so `ParseEvent` takes the
 active event secrets as an argument: the intake reads them for the hook ID
 and gives them all to the call. An event is valid when it matches any one of
 them, which is how two active secrets work during a rotation. Who makes the
-event secret is Q9.
+event secret is Q9: the person or IaC gives it, and the server never answers
+it (owner decision, 2026-10-20).
 
 Every adapter implements every method. A method that the forge, or the
 auth kind of the connection, cannot do returns `ErrUnsupported`, and
@@ -179,7 +210,7 @@ The capabilities:
 | `commit` | `Commit`, `FindCommit` |
 | `review` | `OpenReview`, `ReadReview`, `CloseReview` |
 | `git-access` | `RepoToken`: a token for the git protocol, scoped or not |
-| `repo-token` | `RepoToken` with `Token.Scoped` set: one repository, read only, at most 1 hour |
+| `repo-token` | `RepoToken` with `Token.Scoped` set: one repository, read only, at most 1 hour. Only for the git credential mode `forge` of a runner step, never for the source of a job (owner decision, 2026-10-20). |
 | `events` | `ParseEvent` |
 
 With `Push` not set, the list has no `commit` and no `review`. The
@@ -206,7 +237,7 @@ answer, a server error or a rate limit). The adapter wraps a sentinel with
 | `OpenReview(repo, req)` | A review request from `req.Branch` into `req.Target`. An open review request of the same branch and the same target is returned, not duplicated. | `ErrNotFound` for a missing branch, `ErrRefused` |
 | `ReadReview(repo, id)` | The state (`open`, `merged`, `closed`), the head, and the merge time and merge commit after a merge. | `ErrNotFound` |
 | `CloseReview(repo, id)` | Closes with no merge. A closed one returns nil. | `ErrNotFound` for a missing one, `ErrConflict` for a merged one |
-| `RepoToken(repo)` | A token for the git protocol. An app connection answers a token that reads only `repo` and expires in at most 1 hour, with `Scoped` set. A `token` connection answers its own token with `Scoped` not set. | `ErrUnsupported` when the auth kind has no token for the git protocol. `ErrNotFound` for a missing repository. The runner path refuses a token with `Scoped` not set, so the long-lived token never leaves the server. |
+| `RepoToken(repo)` | A token for the git protocol. An app connection answers a token that reads only `repo` and expires in at most 1 hour, with `Scoped` set. A `token` connection answers its own token with `Scoped` not set. | `ErrUnsupported` when the auth kind has no token for the git protocol. `ErrNotFound` for a missing repository. The runner path refuses a token with `Scoped` not set, so the long-lived token never leaves the server. A runner never gets a token for the source of its job (owner decision, 2026-10-20). |
 | `ParseEvent(r, secrets)` | Checks the signature or token of an event against each active event secret of the registration, and returns a forge-neutral event: `ping` or `review` (`push` and `comment` wait for their consumers), with the delivery ID and, for an app, the installation ID. No call to the forge. | `ErrSignature`, `ErrInvalid`, `ErrUnsupported` for another kind |
 
 The sentinels are `ErrNotFound`, `ErrConflict`, `ErrRefused`, `ErrAuth`,
@@ -344,9 +375,10 @@ access token. Its owner limits it to repositories and permissions when
 they make it. The adapter cannot make a narrower token from it. So
 `RepoToken` answers the token itself with `Scoped` not set, and
 `Capabilities` lists `git-access` and not `repo-token`. The source fetch
-of the server works: the token stays in the server. The runner path refuses
-the token, so a pool in the git credential mode `forge` cannot use the
-connection (Q3).
+of the server works: the token stays in the server, and the runner gets the
+source as the pack that the server builds. The runner path refuses the
+token, so a pool in the git credential mode `forge` cannot use the
+connection for other live fetches (Q3, owner decision, 2026-10-20).
 
 **GitHub, the commit.** Two APIs make a commit of many files with no
 clone (Q4):
@@ -370,9 +402,9 @@ Checks API needs a GitHub App, so the port does not use it in the first
 version. Events carry `X-Hub-Signature-256` (HMAC-SHA256 of the body) and
 `X-GitHub-Delivery`. GitHub does not send a failed delivery again by itself.
 So the review watcher keeps its poll (ADR 100 decision 15), and triggers
-need one too (Q2). A GitHub App has one webhook URL for all its
-installations, and each event carries the installation ID; see the intake
-below. Source:
+need one too (Q2). A GitHub App has one webhook URL and one webhook secret
+for all its installations, and each event carries the installation ID. See
+"The GitHub App scope" below. Source:
 <https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries>.
 
 **GitHub Enterprise Server** is the same adapter with another API address.
@@ -389,8 +421,9 @@ secret in plain text, not a signature of the body (spike: newer GitLab
 releases may sign webhooks). GitLab has no call that makes a token for
 one repository and read access from a group access token (spike). So
 `RepoToken` answers the token of the connection with `Scoped` not set, and
-`repo-token` needs a second, read-only project access token, or stays off
-(Q3). Sources:
+`repo-token` needs a second, read-only project access token, or stays off.
+This affects only the git credential mode `forge` of a runner step. The
+source of a job comes as the pack that the server builds (Q3). Sources:
 <https://docs.gitlab.com/api/commits/>,
 <https://docs.gitlab.com/api/merge_requests/>,
 <https://docs.gitlab.com/user/project/integrations/webhooks/>.
@@ -456,21 +489,22 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   know the word may read the URL. The hook ID names its source, an app
   registration today. Other inbound sources, for example chat, can use the
   same route with their own hook IDs.
-- The server gives each connection a random hook ID when a person creates
-  it. The hook ID is unique in the installation. A read of the connection
-  answers it. A GitHub App has one webhook URL for all its installations,
-  so the hook ID belongs to an app registration: the connections of one
-  namespace with the same app ID share one hook ID and one event secret.
-  The event secret belongs to the app registration, not to a connection (PM
-  decision). The registration holds the app ID, the hook ID and the sealed
-  event secrets, two during a rotation. A `token` connection has a
-  registration of its own, with one connection. The create call refuses with
-  409 an app ID that a connection of another namespace uses.
-  `ParseEvent` puts the installation ID of the event in `Event`, and the
-  server maps it to the connection whose installation ID parameter matches.
-  An event for an installation that no connection names is dropped with 204
-  and counted in `git_host_event_rejected_total` with the reason
-  `unknown-installation`.
+- The server gives each registration a random hook ID when it makes the
+  registration. The hook ID is unique in the installation. A read of the
+  registration and of each of its connections answers it. A GitHub App has
+  one webhook URL for all its installations, so the hook ID belongs to an
+  app registration, not to a connection. The event secret also belongs to
+  the app registration (PM decision). The registration holds the app ID,
+  the hook ID and the sealed event secrets, two during a rotation. A `token`
+  connection has a registration of its own, with one connection. The two
+  kinds of app registration are in "The GitHub App scope" below.
+- `ParseEvent` puts the installation ID of the event in `Event`. For an
+  installation-level app, the server finds the namespace in the
+  installation-to-namespace map, and then the connection of that namespace
+  whose installation ID parameter matches. For a per-namespace app, it finds
+  the connection of that namespace directly. An event for an installation
+  that no map entry or connection names is dropped with 204 and counted in
+  `git_host_event_rejected_total` with the reason `unknown-installation`.
 - The route reads at most 2 MiB of body (proposed), finds the registration
   by the hook ID, and calls `ParseEvent` with the active event secrets of
   that hook ID. The intake checks the event against those secrets before it
@@ -495,8 +529,67 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   component: the reads through the API, the review watcher, the start of a
   trigger. An `api` process never claims an operation.
 - The event secret is part of the app registration, not of the credential
-  set. Who makes it, and whether the server answers it, is Q9. Where the events go
-  after a promotion, or at a replica that does not forward, is Q10.
+  set. The person or IaC gives it, and the server never answers it (Q9, owner
+  decision, 2026-10-20). Where the events go after a promotion, or at a
+  member that does not hold the primary of the namespace, is in "Webhook
+  hostname and federation" below (Q10).
+
+### The GitHub App scope (owner decision, 2026-10-20)
+
+This amends ADR 213 decision 7, which gave each namespace its own app. It
+was old Q7.
+
+**Why.** A GitHub App has exactly one webhook URL and one webhook secret for
+all its installations. GitHub sends each event of each installation of the
+app to that one URL, signed with that one secret. So the URL and the secret
+cannot belong to one namespace when the installations of the app serve many
+namespaces. The decision puts the app where its URL and its secret are: at
+the level of the OpenDustpan installation.
+
+- **Default: one installation-level GitHub App for each OpenDustpan
+  installation.** The operator registers it one time. Its private key and
+  its webhook secret are sealed credentials of the installation, not of a
+  namespace. The operator assigns each GitHub App installation (by its
+  installation ID) to one namespace. The installation-to-namespace map is
+  installation-wide data, not namespace data. A namespace backup does not
+  hold it. A connection of a namespace names the installation ID that the
+  operator assigned to that namespace (proposed: the connection then holds
+  no credential set of its own, and the operator rotates the private key on
+  the installation-level registration).
+- **Option: a per-namespace GitHub App.** A namespace registers its own app.
+  Its private key and its webhook secret are sealed credentials of the
+  namespace (ADR 213 decision 7), and they travel with the namespace backup.
+- **The 409 rule applies only to a per-namespace app.** The create call
+  refuses with 409 an app ID of a per-namespace app that a connection of
+  another namespace uses. An installation-level app serves many namespaces
+  by design, so the rule does not apply to it. (proposed: the create call
+  also refuses with 409 a per-namespace app with the app ID of the
+  installation-level app, because the two cannot share one webhook URL.)
+- The routes of the installation-level app and of the map are routes of the
+  installation API, with an installation-level action (proposed: the
+  implementation pull request names them).
+
+### Webhook hostname and federation (owner decision, 2026-10-20)
+
+- **A stable hostname.** The hook URL uses a stable hostname that each
+  federation member accepts, for example with DNS failover or a global load
+  balancer. It never uses the FQDN of one member. So a promotion (ADR 248)
+  does not change the URL that the Git host stores.
+- **Shared installation-level hooks.** An operator can configure the members
+  of a federation to share the installation-level hooks: the same app
+  registration, hook ID and event secret on each member. GitHub needs this to
+  work with no break, because one app has one webhook URL.
+- **An event for a namespace of another member.** A member that receives an
+  event for a namespace whose primary installation is another member answers
+  204 and drops the event. The poll of each consumer catches the change.
+- **The 204 is accepted for now only.** Forwarding of webhook events is part
+  of the definition of done of the forwarding effort (#1054). When forwarding
+  is done, the member forwards the event to the primary installation.
+- **A move between separate installations.** A move of a namespace between
+  installations that are not one federation remaps the installation-level
+  app: the operator of the target assigns the GitHub App installation to the
+  namespace there. A per-namespace app moves with the namespace, because its
+  credentials are in the namespace backup.
 
 ## The forge connection REST API
 
@@ -509,7 +602,7 @@ entry with no part of a credential (ADR 213 decision 7).
 | --- | --- | --- | --- |
 | `GET .../git-host-connections` | Lists the connections: ID, kind, auth kind, API address, parameters that are not secret, push flag, default flag, hook ID, and for each credential set its ID and creation time. Never a secret. | `namespace:read-git-host-connections` | the namespace |
 | `GET .../git-host-connections/{id}` | Reads one connection, as in the list. | `namespace:read-git-host-connections` | the namespace |
-| `POST .../git-host-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). Fails with 409 for an app ID that a connection of another namespace uses. | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). Fails with 409 for the app ID of a per-namespace app that a connection of another namespace uses. A connection of the installation-level app names an installation ID that the operator assigned to the namespace. | `namespace:manage-git-host-connections` | the namespace |
 | `PATCH .../git-host-connections/{id}` | Changes the API address, the parameters or the push flag. Never a credential. | `namespace:manage-git-host-connections` | the namespace |
 | `DELETE .../git-host-connections/{id}` | Deletes the connection and all its credential sets. Fails with 409 for the default connection (ADR 213 decision 8), and for a connection that a code location, a Catalog request home or a job that is not terminal names. | `namespace:manage-git-host-connections` | the namespace |
 | `POST .../git-host-connections/{id}/make-default` | Makes this connection the default. A custom method (ADR 210 decision 5). | `namespace:manage-git-host-connections` | the namespace |
@@ -528,7 +621,8 @@ Q6.
 
 ## Open questions for the owner
 
-Q7 is not here: ADR 213 decision 7 decided it (see "Not in this RFC").
+Old Q7 (the GitHub App scope) has an owner decision: see "The GitHub App
+scope". The owner decided Q3, Q8, Q9 and Q10 on 20 October 2026.
 
 **Q1. Where does the port live?**
 
@@ -570,10 +664,21 @@ of anomalies (SOC 2 CC7.2). This is a comparison, not a compliance claim.
 
 **Q3. What does a connection with no `repo-token` give to a runner?**
 
+**Owner decision, 2026-10-20: the question is moot as framed.** ADR 135
+already decides that the server clones and streams the fetch-pack to object
+storage, and that a runner puts the pack together again and checks it out.
+This is true for each auth kind (app, token, deploy key). So no Git host
+credential reaches a runner for its source. The source comes only through
+the pack that the server builds. The git credential mode `forge` of ADR 130
+decision 11 is for other live fetches, for example private Git module
+sources. It keeps its rule: never a long-lived token to a runner. The
+capability `repo-token` stays only for that mode. The options below are the
+history of the question.
+
 - A. Nothing. `RepoToken` answers the connection token with `Scoped` not
   set, the source fetch of the server uses it, and the runner path refuses
   it. A pool in the git credential mode `forge` cannot use the connection,
-  and the console says why. (proposed)
+  and the console says why.
 - B. Give the long-lived token of the connection to the step. ADR 130
   decision 11 excludes this: the `forge` mode answers a short-lived
   read-only token.
@@ -638,9 +743,43 @@ a service, in addition to the action on the service. The built-in
 
 **Q8. Who can run a comment command?**
 
+**Owner decision, 2026-10-20.** The commands are `dustpan apply` and
+`unlock`.
+
+`dustpan apply` in a comment on a pull request or a merge request applies
+the exact plan of the summary comment when all of these conditions are true:
+
+1. The feature is on for the code location. It is opt-in and off by
+   default.
+2. The pull request or merge request can merge under the rules that
+   OpenDustpan and the Git host apply. The approval can be on the Git host,
+   or on OpenDustpan, or neither can ask for an approval.
+3. The commenter is a linked account (as for chat, ADR 146), and its
+   principal can apply the unit.
+
+When the unit has approval rules that are not yet satisfied, the comment
+does not approve. The job waits for an approval on the plan page of the
+console.
+
+When the stack asks for a second factor for an apply, the console setting
+for the comment apply is off and cannot be changed, and a message says why.
+
+A `dustpan apply` comment that cannot run gets a reply comment on the pull
+request or merge request. The reply refuses, says why, and links to the
+apply in the console. Two causes are:
+
+- The unit asks for a second factor for an apply.
+- The approval rules ask for a second factor for this specific change.
+
+`unlock` stays a command. It runs as the linked principal, with the action
+`workspace:unlock`.
+
+Rule 8 stays: a comment never approves, never makes an approve link and
+never confirms a gate. The options below are the history of the question.
+
 - A. Only a forge account that a person linked to a principal from a
   console session, as for chat (ADR 146). The server then checks the
-  actions of that principal. (proposed)
+  actions of that principal.
 - B. Each account with write access to the repository on the forge, as
   Atlantis does.
 - C. B and A together.
@@ -649,13 +788,18 @@ Recommendation: A. In each option, a comment command never approves, never
 makes an approval intent or an approve link, and never confirms a gate. The
 summary comment can link to the console page of the job, where the plan is on
 screen. Each command runs as the linked principal with its actions (rule 8 of the
-accepted decisions above). The command list is limited to commands that
-start a plan or show a status (proposed). This drops `apply` and `unlock`
-from RFC 27. RFC 89 answers this question for RFC 27. Benchmark: SOC 2 CC6.1 asks for
+accepted decisions above). RFC 89 answers this question for RFC 27. Benchmark: SOC 2 CC6.1 asks for
 authentication and authorization by the system that acts. Atlantis trusts
 the permission of the forge, and adds a team allowlist as an option.
 
 **Q9. Who makes the event secret, and how does it rotate?**
+
+**Owner decision, 2026-10-20: B.** The person or IaC gives the webhook
+secret. The server never answers it. The documentation offers a generator
+in the browser and the command `openssl rand -hex 32`. The reason: IaC can
+make one secret and give it to OpenDustpan and to the provider of the Git
+host. Then no secret passes through the hands of a person, and a rotation is
+a plan that a person reviews.
 
 The event secret is in the app registration. ADR 213 decision 7 says that the
 server never answers a credential.
@@ -666,7 +810,7 @@ server never answers a credential.
   answers". A replay of the create with the same `Idempotency-Key` answers
   409 (ADR 210 decision 6).
 - B. The person gives the secret with the credentials, as the person gives the
-  webhook secret of a GitHub App. The server never answers it. (proposed)
+  webhook secret of a GitHub App. The server never answers it.
 - C. A mix: B for an app, A for a `token` connection.
 
 Rotation is the same for each option: a new event secret is added to the
@@ -683,6 +827,13 @@ decides if A is worth an exception.
 **Q10. Where do the events go after a promotion, or at a replica that does
 not forward?**
 
+**Owner decision, 2026-10-20: C**, with the condition of "Webhook hostname
+and federation": the 204 is accepted for now only, and forwarding of webhook
+events is part of the definition of done of the forwarding effort (#1054).
+The hook URL uses a stable hostname that each federation member accepts, so
+the URL does not change at a promotion. The options below are the history of
+the question.
+
 After a promotion (ADR 248), the webhook URL of the forge still names the old
 primary installation. A replica without request forwarding answers 421 to a
 write (ADR 248 decision 7).
@@ -691,7 +842,6 @@ write (ADR 248 decision 7).
   forwarding is on.
 - B. The operator changes the webhook URL in the forge at the promotion.
 - C. The replica drops the event with 204 and the poll catches the change.
-  (proposed)
 
 Recommendation: C for the first version, because an event is a hint and each
 consumer that must not miss an event has a poll (Q2). A later, when
@@ -754,6 +904,22 @@ the kind (`github`, `gitlab`, `forgejo`) stays.
 - A comment command and a chat message follow the same approval rule, so
   the two surfaces cannot differ.
 - ADR 213 decision 7 names the metric `forge_credential_fallback_total`. A follow-up ADR note gives the new name `git_host_credential_fallback_total`.
+- ADR 213 decision 7 needs an amendment ADR for the GitHub App scope: one
+  installation-level GitHub App by default, the installation-to-namespace
+  map as installation-wide data, and a per-namespace app as an option.
+- The implementation pull requests must document the GitHub App scope and
+  the webhook hostname clearly, in the GitHub setup guide and in the
+  federation setup guide. Each guide covers: the installation-level app and
+  the per-namespace option, the assignment of an installation ID to a
+  namespace, the stable hostname that each member accepts, the shared
+  installation-level hooks of a federation, the 204 for a namespace of
+  another member, and a move between separate installations.
+- The API takes the event secret as a write-only input. An OpenDustpan
+  Terraform or Pulumi provider must mark it write-only and sensitive.
+- The forwarding effort (#1054) adds the forwarding of webhook events to its
+  definition of done.
+- RFC 27 keeps `apply` and `unlock` as comment commands, with the conditions
+  of Q8.
 - Follow-up: rename the value `forge` of the git credential mode of a runner
   pool before the first release. It is a wire value in the runner reference,
   so it needs its own pull request.
@@ -767,24 +933,21 @@ the kind (`github`, `gitlab`, `forgejo`) stays.
 - **One hook ID for each app registration.** The hook ID is in the stored
   address of each webhook, so it does not change after the first webhook
   stores it.
-
-## Not in this RFC
-
-- **An operator-wide GitHub App (was Q7).** ADR 213 decision 7 decides it:
-  each namespace registers its own app, and the private key is a sealed
-  credential of the namespace. An operator-wide app needs an RFC against ADR
-  213 decision 7 and ADR 220, when an operator asks for it.
+- **The hostname of the hook URL.** The Git host stores it, so it must stay
+  stable across a promotion. It is never the FQDN of one member.
 
 ## Proposed answers (PM)
 
-One line for each open question, with its benchmark. The owner decides.
+One line for each question, with its benchmark. The owner decided Q3, Q8,
+Q9 and Q10 on 20 October 2026.
 
 - **Q1: A.** The Google Go style guide puts an interface in the package that
   uses it.
 - **Q2: A.** GitHub does not send a failed delivery again, so the server
   fetches the object through the API (the pattern of ADR 100 decision 15).
-- **Q3: A, C later.** ADR 130 decision 11. GitHub Actions gives each job a
-  `GITHUB_TOKEN` that reaches only its own repository.
+- **Q3: moot (owner decision, 2026-10-20).** The source comes only as the
+  pack that the server builds (ADR 135). `repo-token` stays only for the git
+  credential mode `forge`.
 - **Q4: B, if a spike confirms signed commits from a fine-grained token.**
   GitHub signs the commits that it makes for an app. The person is in the
   trailer and in the audit entry.
@@ -792,10 +955,12 @@ One line for each open question, with its benchmark. The owner decides.
   outbound connections.
 - **Q6: B, with `maintainer` by default.** AWS asks for `iam:PassRole` in
   addition to the action on the service.
-- **Q8: A.** Linked accounts only. A comment never approves.
-- **Q9: B.** GitHub takes the app webhook secret from the person. This needs
-  no exception to ADR 213 decision 7.
-- **Q10: C.** Events are hints with a poll (ADR 248).
+- **Q8: `dustpan apply` and `unlock` (owner decision, 2026-10-20).** Linked
+  accounts only, opt-in for each code location. A comment never approves.
+- **Q9: B (owner decision, 2026-10-20).** The person or IaC gives the
+  secret. The server never answers it.
+- **Q10: C (owner decision, 2026-10-20).** 204 and the poll, until the
+  forwarding effort forwards webhook events.
 - **Q11: A, deferred to RFC 12.** GitHub offers `merge_method`. A merge commit
   keeps the check of `job.verify` exact.
 

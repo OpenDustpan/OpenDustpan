@@ -256,7 +256,10 @@ type Reviews interface {
 }
 
 // Tokens gives a token for the git protocol. The source fetch of the server
-// and the git credential helper of a runner step use it.
+// and the git credential helper of a runner step use it. A runner never gets
+// a token for the source of its job: it gets the source only as the pack
+// that the server fetched. The git credential helper serves other git
+// fetches of a step, for example a private Git module source.
 type Tokens interface {
 	// RepoToken returns a token for the git protocol over HTTPS for repo.
 	// An app connection answers a token that reads only repo and expires in
@@ -589,8 +592,10 @@ const (
 	ConsumerWriteBackReview Consumer = "write-back-review"
 	// ConsumerFetch gets the code of a job with a git fetch in the server.
 	ConsumerFetch Consumer = "fetch"
-	// ConsumerRunnerGit gives a read-only token to the git credential helper
-	// of a runner step.
+	// ConsumerRunnerGit gives a read-only, short-lived token to the git
+	// credential helper of a runner step, for a git fetch other than the
+	// source of the job, for example a private Git module source. It never
+	// gives a long-lived token.
 	ConsumerRunnerGit Consumer = "runner-git"
 	// ConsumerCatalog reads the request files of the Catalog.
 	ConsumerCatalog Consumer = "catalog"
