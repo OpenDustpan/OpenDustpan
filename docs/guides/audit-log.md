@@ -159,10 +159,12 @@ allows only the two kinds.
 The server writes one entry of the kind `security` and the outcome `denied`
 when it stops an access that crosses a namespace boundary. Today this is a
 read, a write or a delete of an item key blob with a blob key of another
-namespace. The action is `blob:out-of-scope`. The scope is `@server`, the
+namespace, or with a key of its own namespace that is outside the item-keys
+directory. The action is `blob:out-of-scope`. The scope is `@server`, the
 subject is `server`, and the object is the ID of the namespace of the call.
-The reason names the operation. The entry never holds the blob key that
-the call used.
+The reason names the operation. It also says whether the key was outside the
+namespace or outside the item-keys directory of the namespace. The entry
+never holds the blob key that the call used.
 
 ## Denial entries
 

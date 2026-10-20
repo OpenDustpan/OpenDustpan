@@ -116,8 +116,9 @@ var (
 
 // refusal is one call of a recorder.
 type refusal struct {
-	op string
-	ns namespace.ID
+	op    string
+	where secret.OutOfScopeWhere
+	ns    namespace.ID
 }
 
 // fakeRecorder is an OutOfScopeRecorder that keeps its calls.
@@ -127,11 +128,13 @@ type fakeRecorder struct {
 	mu    sync.Mutex
 }
 
-func (f *fakeRecorder) RecordOutOfScope(_ context.Context, ns namespace.ID, op string) error {
+func (f *fakeRecorder) RecordOutOfScope(
+	_ context.Context, ns namespace.ID, op string, where secret.OutOfScopeWhere,
+) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, refusal{ns: ns, op: op})
+	f.calls = append(f.calls, refusal{ns: ns, op: op, where: where})
 
 	return f.err
 }
@@ -322,6 +325,76 @@ func TestItemKeyBlobsVersions(t *testing.T) {
 	}
 }
 
+// TestItemKeyBlobsVersionsOrder proves that the versions come in the order of
+// the version number. The order of the key text puts v10 before v2.
+func TestItemKeyBlobsVersionsOrder(t *testing.T) {
+	t.Parallel()
+
+	b, _, _ := newItemKeyBlobs(t)
+	id := secret.NewItemKeyID()
+
+	var want []blob.Key
+
+	for _, version := range []int{1, 2, 3, 9, 10, 11, 100} {
+		key := mustKey(t, b, nsA, id, version)
+		want = append(want, key)
+	}
+
+	// Write them in a mixed order, so the order of the writes does not help.
+	for _, i := range []int{4, 0, 6, 2, 5, 1, 3} {
+		if err := b.Put(t.Context(), nsA, want[i], []byte("k")); err != nil {
+			t.Fatalf("put %s: %v", want[i], err)
+		}
+	}
+
+	got, err := b.Versions(t.Context(), nsA, id)
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("versions = %v, %v, want %v", got, err, want)
+	}
+}
+
+// TestItemKeyBlobsVersionsRefuseABadListing proves that a listing which holds a
+// key that is not a version of the item key is an error, and not a key for the
+// purge. The fault is a key that sits under the prefix of the item key in the
+// store.
+func TestItemKeyBlobsVersionsRefuseABadListing(t *testing.T) {
+	t.Parallel()
+
+	id := secret.NewItemKeyID()
+	dir := "namespaces/" + string(nsA) + "/item-keys/" + string(id) + "/"
+
+	for name, bad := range map[string]string{
+		"a version with a leading zero": dir + "v01",
+		"a version with no number":      dir + "v",
+		"a name that is not a version":  dir + "notes",
+		"a deeper key":                  dir + "v1/extra",
+		"version zero":                  dir + "v0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			b, store, _ := newItemKeyBlobs(t)
+
+			if err := b.Put(t.Context(), nsA, mustKey(t, b, nsA, id, 1), []byte("k")); err != nil {
+				t.Fatalf("put: %v", err)
+			}
+
+			if err := store.Put(t.Context(), blob.Key(bad), strings.NewReader("x")); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			keys, err := b.Versions(t.Context(), nsA, id)
+			if !errors.Is(err, secret.ErrInvalidItemRef) {
+				t.Fatalf("versions = %v, %v, want ErrInvalidItemRef", keys, err)
+			}
+
+			if len(keys) != 0 {
+				t.Errorf("versions returned %v with the error, want none", keys)
+			}
+		})
+	}
+}
+
 func TestItemKeyBlobsSizeLimits(t *testing.T) {
 	t.Parallel()
 
@@ -354,24 +427,33 @@ func TestItemKeyBlobsSizeLimits(t *testing.T) {
 	}
 }
 
+// foreignKey is a key that a call in nsA must refuse, and the place that the
+// refusal names: outside the namespace, or inside it and outside its item-keys
+// directory.
+type foreignKey struct {
+	key   blob.Key
+	where secret.OutOfScopeWhere
+}
+
 // foreignKeys returns keys that a call in nsA must refuse, with a name for
 // each. Each key is a plain conversion, so no check of ParseKey ran on it.
-func foreignKeys(id secret.ItemKeyID) map[string]blob.Key {
+func foreignKeys(id secret.ItemKeyID) map[string]foreignKey {
 	a, other, tail := string(nsA), string(nsB), "/item-keys/"+string(id)+"/v1"
+	outside, inside := secret.OutsideNamespace, secret.OutsideItemKeys
 
-	return map[string]blob.Key{
-		"the item key of another namespace":       blob.Key("namespaces/" + other + tail),
-		"a later version in another namespace":    blob.Key("namespaces/" + other + "/item-keys/" + string(id) + "/v9"),
-		"a string prefix of the namespace":        blob.Key("namespaces/" + a + "x" + tail),
-		"the parent of the namespace":             blob.Key("namespaces" + tail),
-		"the old layout":                          blob.Key("item-keys/" + string(id)),
-		"the old layout with a version":           blob.Key("item-keys/" + string(id) + "/v1"),
-		"another directory of the namespace":      blob.Key("namespaces/" + a + "/tofu/ws-1/sv-1/1"),
-		"a parent segment out of the namespace":   blob.Key("namespaces/" + a + "/../" + other + tail),
-		"the item-keys directory without a slash": blob.Key("namespaces/" + a + "/item-keys"),
-		"an empty key":                            "",
-		"a key with a line break":                 blob.Key("namespaces/" + other + "/item-keys/ik-x\n/v1"),
-		"a key in upper case":                     blob.Key("NAMESPACES/" + other + "/ITEM-KEYS/" + string(id) + "/v1"),
+	return map[string]foreignKey{
+		"the item key of another namespace":       {blob.Key("namespaces/" + other + tail), outside},
+		"a later version in another namespace":    {blob.Key("namespaces/" + other + "/item-keys/" + string(id) + "/v9"), outside},
+		"a string prefix of the namespace":        {blob.Key("namespaces/" + a + "x" + tail), outside},
+		"the parent of the namespace":             {blob.Key("namespaces" + tail), outside},
+		"the old layout":                          {blob.Key("item-keys/" + string(id)), outside},
+		"the old layout with a version":           {blob.Key("item-keys/" + string(id) + "/v1"), outside},
+		"another directory of the namespace":      {blob.Key("namespaces/" + a + "/tofu/ws-1/sv-1/1"), inside},
+		"a parent segment out of the namespace":   {blob.Key("namespaces/" + a + "/../" + other + tail), outside},
+		"the item-keys directory without a slash": {blob.Key("namespaces/" + a + "/item-keys"), inside},
+		"an empty key":                            {"", outside},
+		"a key with a line break":                 {blob.Key("namespaces/" + other + "/item-keys/ik-x\n/v1"), outside},
+		"a key in upper case":                     {blob.Key("NAMESPACES/" + other + "/ITEM-KEYS/" + string(id) + "/v1"), outside},
 	}
 }
 
@@ -402,7 +484,7 @@ func TestItemKeyBlobsRefuseAKeyOfAnotherNamespace(t *testing.T) {
 	id := secret.NewItemKeyID()
 
 	for opName, call := range itemKeyOps() {
-		for keyName, key := range foreignKeys(id) {
+		for keyName, foreign := range foreignKeys(id) {
 			t.Run(opName+" with "+keyName, func(t *testing.T) {
 				t.Parallel()
 
@@ -415,9 +497,9 @@ func TestItemKeyBlobsRefuseAKeyOfAnotherNamespace(t *testing.T) {
 				}
 
 				before := store.callCount()
-				err := call(t.Context(), b, key)
+				err := call(t.Context(), b, foreign.key)
 
-				assertRefusal(t, err, rec, opName)
+				assertRefusal(t, err, rec, refusal{ns: nsA, op: opName, where: foreign.where})
 
 				if n := store.callCount(); n != before {
 					t.Errorf("%s reached the store %d times, want 0", opName, n-before)
@@ -427,26 +509,18 @@ func TestItemKeyBlobsRefuseAKeyOfAnotherNamespace(t *testing.T) {
 	}
 }
 
-// assertRefusal checks that err is a refusal and that the recorder holds one
-// call for op in nsA. A malformed key of the namespace itself is not a
-// refusal: it gives ErrInvalidItemRef and no record.
-func assertRefusal(t *testing.T, err error, rec *fakeRecorder, op string) {
+// assertRefusal checks that err is blob.ErrOutOfScope and that the recorder
+// holds exactly the one refusal want. There is no other way out: a foreign key
+// that gave ErrInvalidItemRef or no record would fail here.
+func assertRefusal(t *testing.T, err error, rec *fakeRecorder, want refusal) {
 	t.Helper()
 
-	if errors.Is(err, secret.ErrInvalidItemRef) {
-		if n := len(rec.refusals()); n != 0 {
-			t.Errorf("a malformed key is not a refusal, recorder called %d times", n)
-		}
-
-		return
-	}
-
 	if !errors.Is(err, blob.ErrOutOfScope) {
-		t.Fatalf("%s err = %v, want ErrOutOfScope", op, err)
+		t.Fatalf("%s err = %v, want ErrOutOfScope", want.op, err)
 	}
 
-	if got := rec.refusals(); !slices.Equal(got, []refusal{{ns: nsA, op: op}}) {
-		t.Errorf("refusals = %v, want one for %s in %s", got, op, nsA)
+	if got := rec.refusals(); !slices.Equal(got, []refusal{want}) {
+		t.Errorf("refusals = %v, want exactly %v", got, want)
 	}
 
 	if strings.Contains(err.Error(), string(nsB)) {
@@ -637,13 +711,13 @@ func TestAuditOutOfScope(t *testing.T) {
 	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.UTC)
 	store := &fakeServerStore{err: nil, entries: nil}
 
-	rec, err := secret.NewAuditOutOfScope(store, func() time.Time { return at })
+	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelConsole, func() time.Time { return at })
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
 	for _, op := range []string{"put", "get", "delete", "list"} {
-		if recErr := rec.RecordOutOfScope(t.Context(), nsA, op); recErr != nil {
+		if recErr := rec.RecordOutOfScope(t.Context(), nsA, op, secret.OutsideNamespace); recErr != nil {
 			t.Fatalf("record %s: %v", op, recErr)
 		}
 	}
@@ -654,6 +728,72 @@ func TestAuditOutOfScope(t *testing.T) {
 
 	for _, e := range store.entries {
 		checkSecurityEntry(t, e, at)
+	}
+}
+
+// TestAuditOutOfScopeReasonAndChannel proves that the reason of the entry names
+// where the key was, and that the channel is the one that the caller gave.
+func TestAuditOutOfScopeReasonAndChannel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		where   secret.OutOfScopeWhere
+		channel audit.Channel
+		reason  string
+	}{
+		{secret.OutsideNamespace, audit.ChannelAPI, "item key blob get refused: key outside the namespace"},
+		{secret.OutsideItemKeys, audit.ChannelConsole, "item key blob get refused: key outside the item-keys directory of the namespace"},
+	}
+
+	for _, tc := range tests {
+		store := &fakeServerStore{err: nil, entries: nil}
+
+		rec, err := secret.NewAuditOutOfScope(store, tc.channel, nil)
+		if err != nil {
+			t.Fatalf("new: %v", err)
+		}
+
+		if recErr := rec.RecordOutOfScope(t.Context(), nsA, "get", tc.where); recErr != nil {
+			t.Fatalf("record %s: %v", tc.where, recErr)
+		}
+
+		if len(store.entries) != 1 {
+			t.Fatalf("%s: entries = %d, want 1", tc.where, len(store.entries))
+		}
+
+		if got := store.entries[0]; got.Reason != tc.reason || got.Channel != tc.channel {
+			t.Errorf("%s: reason %q on channel %q, want %q on %q", tc.where, got.Reason, got.Channel, tc.reason, tc.channel)
+		}
+	}
+}
+
+// TestAuditOutOfScopeRefusesAWrongChannelOrPlace proves that the recorder fails
+// closed: a channel that is not api or console, and a place that it does not
+// know, write nothing.
+func TestAuditOutOfScopeRefusesAWrongChannelOrPlace(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeServerStore{err: nil, entries: nil}
+
+	for _, channel := range []audit.Channel{"", "startup", "config-file", "api\nforged", "API"} {
+		if _, err := secret.NewAuditOutOfScope(store, channel, nil); !errors.Is(err, secret.ErrInvalidChannel) {
+			t.Errorf("channel %q: err = %v, want ErrInvalidChannel", channel, err)
+		}
+	}
+
+	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, nil)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	for _, where := range []secret.OutOfScopeWhere{"", "elsewhere", "namespace\nforged"} {
+		if recErr := rec.RecordOutOfScope(t.Context(), nsA, "get", where); !errors.Is(recErr, secret.ErrInvalidItemRef) {
+			t.Errorf("place %q: err = %v, want ErrInvalidItemRef", where, recErr)
+		}
+	}
+
+	if len(store.entries) != 0 {
+		t.Errorf("entries = %d, want 0", len(store.entries))
 	}
 }
 
@@ -683,17 +823,17 @@ func TestAuditOutOfScopeRefusesHostileInput(t *testing.T) {
 
 	store := &fakeServerStore{err: nil, entries: nil}
 
-	rec, err := secret.NewAuditOutOfScope(store, nil)
+	rec, err := secret.NewAuditOutOfScope(store, audit.ChannelAPI, nil)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	opErr := rec.RecordOutOfScope(t.Context(), nsA, "get\nforged entry")
+	opErr := rec.RecordOutOfScope(t.Context(), nsA, "get\nforged entry", secret.OutsideNamespace)
 	if !errors.Is(opErr, secret.ErrInvalidItemRef) {
 		t.Errorf("hostile op err = %v, want ErrInvalidItemRef", opErr)
 	}
 
-	if recErr := rec.RecordOutOfScope(t.Context(), "ns-A\nx", "get"); !errors.Is(recErr, namespace.ErrInvalidID) {
+	if recErr := rec.RecordOutOfScope(t.Context(), "ns-A\nx", "get", secret.OutsideNamespace); !errors.Is(recErr, namespace.ErrInvalidID) {
 		t.Errorf("hostile namespace err = %v, want ErrInvalidID", recErr)
 	}
 
@@ -703,11 +843,11 @@ func TestAuditOutOfScopeRefusesHostileInput(t *testing.T) {
 
 	store.err = errAppendFailed
 
-	if recErr := rec.RecordOutOfScope(t.Context(), nsA, "get"); !errors.Is(recErr, errAppendFailed) {
+	if recErr := rec.RecordOutOfScope(t.Context(), nsA, "get", secret.OutsideNamespace); !errors.Is(recErr, errAppendFailed) {
 		t.Errorf("append failure err = %v, want the store error", recErr)
 	}
 
-	if _, newErr := secret.NewAuditOutOfScope(nil, nil); !errors.Is(newErr, secret.ErrMissingDependency) {
+	if _, newErr := secret.NewAuditOutOfScope(nil, audit.ChannelAPI, nil); !errors.Is(newErr, secret.ErrMissingDependency) {
 		t.Errorf("nil store err = %v, want ErrMissingDependency", newErr)
 	}
 }
@@ -719,7 +859,7 @@ func TestItemKeyBlobsAuditEndToEnd(t *testing.T) {
 
 	entries := &fakeServerStore{err: nil, entries: nil}
 
-	rec, err := secret.NewAuditOutOfScope(entries, nil)
+	rec, err := secret.NewAuditOutOfScope(entries, audit.ChannelAPI, nil)
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}

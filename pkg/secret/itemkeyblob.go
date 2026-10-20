@@ -2,10 +2,12 @@ package secret
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,10 +31,24 @@ const maxItemKeyVersion = 1 << 20
 // can name another namespace, and it can hold text that an attacker chose.
 type OutOfScopeRecorder interface {
 	// RecordOutOfScope records one refusal in the namespace ns, for the
-	// operation op ("put", "get" or "delete"). It returns an error when it
-	// cannot record the refusal.
-	RecordOutOfScope(ctx context.Context, ns namespace.ID, op string) error
+	// operation op ("put", "get", "delete" or "list"). Where says how far the
+	// key was out of scope. It returns an error when it cannot record the
+	// refusal.
+	RecordOutOfScope(ctx context.Context, ns namespace.ID, op string, where OutOfScopeWhere) error
 }
+
+// OutOfScopeWhere says where a refused key was: outside the namespace of the
+// call, or inside the namespace and outside its item-keys directory.
+type OutOfScopeWhere string
+
+// The places of a refused key.
+const (
+	// OutsideNamespace is a key that is not inside the namespace of the call.
+	OutsideNamespace OutOfScopeWhere = "namespace"
+	// OutsideItemKeys is a key inside the namespace of the call and outside
+	// its item-keys directory, for example the key of a checkpoint.
+	OutsideItemKeys OutOfScopeWhere = "item-keys"
+)
 
 // ItemKeyBlobs reads and writes the wrapped item key blobs. It builds a
 // *blob.Scoped for each call, from the namespace ID that the caller took from
@@ -171,7 +187,7 @@ func (b *ItemKeyBlobs) Put(ctx context.Context, ns namespace.ID, key blob.Key, w
 	}
 
 	if err := v.Put(ctx, key, bytes.NewReader(wrapped)); err != nil {
-		return b.refuse(ctx, ns, "put", fmt.Errorf("put item key blob: %w", err))
+		return b.refuse(ctx, ns, "put", fmt.Errorf("put item key blob: %w", err), OutsideNamespace)
 	}
 
 	return nil
@@ -189,7 +205,7 @@ func (b *ItemKeyBlobs) Get(ctx context.Context, ns namespace.ID, key blob.Key) (
 
 	rc, err := v.Get(ctx, key)
 	if err != nil {
-		return nil, b.refuse(ctx, ns, "get", mapItemKeyBlobError(err))
+		return nil, b.refuse(ctx, ns, "get", mapItemKeyBlobError(err), OutsideNamespace)
 	}
 
 	return readWrappedKey(rc)
@@ -224,14 +240,16 @@ func (b *ItemKeyBlobs) Delete(ctx context.Context, ns namespace.ID, key blob.Key
 	}
 
 	if err := v.Delete(ctx, key); err != nil {
-		return b.refuse(ctx, ns, "delete", fmt.Errorf("delete item key blob: %w", err))
+		return b.refuse(ctx, ns, "delete", fmt.Errorf("delete item key blob: %w", err), OutsideNamespace)
 	}
 
 	return nil
 }
 
 // Versions returns the blob keys of every version of the item key id in the
-// namespace ns, ordered, for a purge or a sweep.
+// namespace ns, in the order of the version number, for a purge or a sweep. It
+// returns ErrInvalidItemRef when the listing holds a key that is not a version
+// of the item key id.
 func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKeyID) ([]blob.Key, error) {
 	if _, err := ParseItemKeyID(string(id)); err != nil {
 		return nil, err
@@ -244,12 +262,37 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 
 	objects, err := v.List(ctx, v.Prefix()+itemKeyDir+string(id)+"/")
 	if err != nil {
-		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err))
+		return nil, b.refuse(ctx, ns, "list", fmt.Errorf("list item key blobs: %w", err), OutsideNamespace)
 	}
 
-	keys := make([]blob.Key, 0, len(objects))
+	// Defense in depth: the view lists only under the prefix of the item key.
+	// Each key is checked again, and it must name this namespace and this item
+	// key, so a listing fault of an adapter never gives the purge a key of
+	// another item key.
+	parsed := make([]ItemKeyBlob, 0, len(objects))
+
 	for i := range objects {
-		keys = append(keys, objects[i].Key)
+		part, parseErr := ParseItemKeyBlobKey(objects[i].Key)
+		if parseErr != nil || part.Namespace != ns || part.ID != id {
+			return nil, fmt.Errorf("%w: the listing holds a key that is not a version of the item key", ErrInvalidItemRef)
+		}
+
+		parsed = append(parsed, part)
+	}
+
+	// The order is the order of the version number: v2 comes before v10, which
+	// the order of the key text does not give.
+	slices.SortFunc(parsed, func(a, b ItemKeyBlob) int { return cmp.Compare(a.Version, b.Version) })
+
+	keys := make([]blob.Key, 0, len(parsed))
+
+	for _, part := range parsed {
+		key, keyErr := b.Key(ns, part.ID, part.Version)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+
+		keys = append(keys, key)
 	}
 
 	return keys, nil
@@ -281,7 +324,7 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 
 	rest, ok := strings.CutPrefix(key.String(), v.Prefix()+itemKeyDir)
 	if !ok {
-		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope)
+		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, whereOf(v, key))
 	}
 
 	if !validItemKeyRest(rest) {
@@ -289,6 +332,18 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 	}
 
 	return v, nil
+}
+
+// whereOf says where the refused key is. A key that a valid key of the view
+// would be, in the namespace of the view, is outside the item-keys directory.
+// Every other key is outside the namespace: another namespace, a parent
+// segment, an empty key or a key that is not a valid key at all.
+func whereOf(v *blob.Scoped, key blob.Key) OutOfScopeWhere {
+	if _, err := blob.ParseKey(key.String()); err == nil && strings.HasPrefix(key.String(), v.Prefix()) {
+		return OutsideItemKeys
+	}
+
+	return OutsideNamespace
 }
 
 // validItemKeyRest reports whether rest, the part of a key after the item-keys
@@ -311,12 +366,14 @@ func validItemKeyRest(rest string) bool {
 // refuse writes the refusal to the recorder when err is blob.ErrOutOfScope. It
 // returns err, joined with the error of the recorder when the record fails, so
 // the caller still sees the refusal. Any other error passes through.
-func (b *ItemKeyBlobs) refuse(ctx context.Context, ns namespace.ID, op string, err error) error {
+func (b *ItemKeyBlobs) refuse(
+	ctx context.Context, ns namespace.ID, op string, err error, where OutOfScopeWhere,
+) error {
 	if !errors.Is(err, blob.ErrOutOfScope) {
 		return err
 	}
 
-	if recErr := b.refusals.RecordOutOfScope(ctx, ns, op); recErr != nil {
+	if recErr := b.refusals.RecordOutOfScope(ctx, ns, op, where); recErr != nil {
 		return errors.Join(blob.ErrOutOfScope, fmt.Errorf("record the refusal: %w", recErr))
 	}
 
@@ -345,32 +402,56 @@ const (
 // kind security in the scope @server.
 type AuditOutOfScope struct {
 	entries audit.ServerStore
+	channel audit.Channel
 	now     func() time.Time
 }
 
 var _ OutOfScopeRecorder = (*AuditOutOfScope)(nil)
 
-// NewAuditOutOfScope returns an OutOfScopeRecorder that appends to entries. now
-// may be nil; it then is time.Now.
-func NewAuditOutOfScope(entries audit.ServerStore, now func() time.Time) (*AuditOutOfScope, error) {
+// ErrInvalidChannel reports a channel that an out-of-scope record cannot have.
+var ErrInvalidChannel = errors.New("audit channel of a refusal is not api or console")
+
+// NewAuditOutOfScope returns an OutOfScopeRecorder that appends to entries. The
+// caller gives the channel of its requests: audit.ChannelAPI or
+// audit.ChannelConsole. now may be nil; it then is time.Now.
+func NewAuditOutOfScope(
+	entries audit.ServerStore, channel audit.Channel, now func() time.Time,
+) (*AuditOutOfScope, error) {
 	if entries == nil {
 		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
+	}
+
+	if channel != audit.ChannelAPI && channel != audit.ChannelConsole {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidChannel, channel)
 	}
 
 	if now == nil {
 		now = time.Now
 	}
 
-	return &AuditOutOfScope{entries: entries, now: now}, nil
+	return &AuditOutOfScope{entries: entries, channel: channel, now: now}, nil
 }
 
 // RecordOutOfScope appends the entry. The object is the ID of the namespace of
 // the call, and the reason names op. The entry never holds the refused key.
-func (a *AuditOutOfScope) RecordOutOfScope(ctx context.Context, ns namespace.ID, op string) error {
+func (a *AuditOutOfScope) RecordOutOfScope(
+	ctx context.Context, ns namespace.ID, op string, where OutOfScopeWhere,
+) error {
 	switch op {
 	case "put", "get", "delete", "list":
 	default:
 		return fmt.Errorf("%w: operation %q", ErrInvalidItemRef, op)
+	}
+
+	var place string
+
+	switch where {
+	case OutsideNamespace:
+		place = "outside the namespace"
+	case OutsideItemKeys:
+		place = "outside the item-keys directory of the namespace"
+	default:
+		return fmt.Errorf("%w: place %q", ErrInvalidItemRef, where)
 	}
 
 	if _, err := namespace.ParseID(ns.String()); err != nil {
@@ -391,7 +472,7 @@ func (a *AuditOutOfScope) RecordOutOfScope(ctx context.Context, ns namespace.ID,
 		Changes:       nil,
 		SourceIP:      "",
 		UserAgent:     "",
-		Channel:       audit.ChannelAPI,
+		Channel:       a.channel,
 		Kind:          audit.KindSecurity,
 		Outcome:       audit.OutcomeDenied,
 		RequestID:     "",
@@ -402,7 +483,7 @@ func (a *AuditOutOfScope) RecordOutOfScope(ctx context.Context, ns namespace.ID,
 		FenceVersion:  0,
 		PrincipalKind: "",
 		JobID:         "",
-		Reason:        "item key blob " + op + " refused: key outside the namespace",
+		Reason:        "item key blob " + op + " refused: key " + place,
 	}
 
 	if _, err := a.entries.AppendServer(ctx, entry); err != nil {
