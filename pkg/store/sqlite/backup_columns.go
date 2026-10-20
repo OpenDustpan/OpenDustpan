@@ -474,6 +474,15 @@ func sqliteControlTables() []sqliteBackupTable {
 				"kind",
 			},
 		},
+	}
+
+	return slices.Concat(core, sqliteRevocationControlTables(), sqliteRunnerControlTables())
+}
+
+// sqliteRevocationControlTables lists the column list of the control table that
+// holds the journal of revocations made in maintenance mode.
+func sqliteRevocationControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
 		{
 			table: backup.TableMaintenanceRevocations,
 			columns: []string{
@@ -487,8 +496,6 @@ func sqliteControlTables() []sqliteBackupTable {
 			},
 		},
 	}
-
-	return slices.Concat(core, sqliteRunnerControlTables())
 }
 
 // sqliteEmptiedTables lists the column list of every table of
