@@ -84,6 +84,7 @@ internal/              code that is not part of the SDK
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
   api/objectcontext/   HTTP adapter for the tool-neutral context API (also used by the console)
+  api/jobs/            HTTP adapter for the tool-neutral jobs API
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, token/...  helpers shared across packages
