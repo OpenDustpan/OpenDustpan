@@ -181,7 +181,7 @@ These refusals write an entry:
 - An OpenTofu `UNLOCK` that names a lock that is not the current lock, and an `UNLOCK` that finds the lock changed or held by another principal. The `action` is `unit:lock`.
 - The removal of a manual lock by a principal that is not the holder, and a removal that finds the lock changed. The `action` is the action of the route: `unit:lock` for the removal, `unit:manage` for the force-unlock.
 - A grant or a role that gives more than the principal who makes it holds. The `action` is the action of the route, and the `reason` is `grant gives more than the granter holds`.
-- A state write or a force-unlock that the workspace refuses because the forced-write or unlocked-write switch is off or not granted. The `action` is `unit:write-forced` or `unit:write-unlocked`, the `kind` is `override` and the `reason` is `override refused`.
+- A state write or a force-unlock that the workspace refuses because the forced-write or unlocked-write switch is off or not granted. A write without the lock to a workspace that no one has locked is such a refusal when the switch is off or the principal lacks `unit:write-unlocked`. The client still gets its lock conflict. A write that is refused only because another principal holds the lock writes no entry here. The `action` is `unit:write-forced` or `unit:write-unlocked`, the `kind` is `override` and the `reason` is `override refused`.
 
 The `reason` says which refusal it was.
 A manual lock that is already held answers 409. A manual lock that does not exist answers 404. Neither writes an entry, because they report the state of the object.

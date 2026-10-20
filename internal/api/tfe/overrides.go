@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -110,8 +109,10 @@ func (h *Handler) recordOverrideRefusal(
 		return
 	}
 
+	// The action comes from the typed refusal, never from its text. A refusal
+	// without a type is a forced write.
 	action := identity.ActionUnitWriteForced
-	if strings.Contains(err.Error(), "unlocked-write") {
+	if override, ok := workspace.RefusedOverride(err); ok && override == workspace.OverrideUnlocked {
 		action = identity.ActionUnitWriteUnlocked
 	}
 
