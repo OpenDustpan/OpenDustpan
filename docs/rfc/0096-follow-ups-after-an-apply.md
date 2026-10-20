@@ -279,9 +279,10 @@ The recommendation: no coalescing in the first slice.
 
 **Retries.** The schedule of ADR 145 decision 18. Retry only when the
 target cannot have acted: a refused connection, a failed TLS handshake,
-`429`, or `503` with `Retry-After`. A timeout after the request was sent,
-`500`, `502` and `504` make the outcome `unknown`, because AWX has no
-idempotency key and `500` may come after AWX made the job. An `unknown` call
+or `429`. A timeout after the request was sent, `500`, `502`, `503` and
+`504` make the outcome `unknown`, because AWX has no idempotency key, `500`
+may come after AWX made the job, and a proxy in front of AWX can answer
+`503` after it forwarded the request. An `unknown` call
 does not retry by itself. `egress.ErrRefused` and other `4xx` stop at once
 (`abandoned`). A `400` is the class `awx-input-refused` (section D).
 
@@ -350,7 +351,7 @@ sender refuses. The options:
   token never enters a launcher sandbox or the secrets directory of a claim
   that runs team code. The runner opens it for one request in a separate
   process of the runner, and no step of a claim reads it. ADR 130 and ADR
-  134 are amended by this rule (one paragraph each).
+  134 would be amended by this rule (one paragraph each).
 
 **Recommendation: E3 in the first slice, and E4 later for installations with
 `--egress-public-only`.** On a multitenant installation, the operator keeps
@@ -374,7 +375,8 @@ create, because the person typed it.
 **The credential is bound to its target and its data.** At seal time, the
 server binds the credential to the origin of the target (scheme, host and
 port), the template ID, the fixed inventory ID, the fixed `limit`, the unit
-filter, and the full mapping: each output, variable, type and pattern, and
+filter, the setting `fireOn`, the minimum interval, the API path, and the
+full mapping: each output, variable, type and pattern, and
 the allowed ranges and suffixes of the types `ip-list` and `host-name`. The
 binding is
 part of the sealed item, in the way ADR 145 decision 13 binds the secrets of
@@ -612,7 +614,7 @@ form.
 
 1. The notification type `unit.applied`, for OpenTofu final state versions
    only, and the fire rule `output-change`.
-2. Follow-ups of the AWX kind only, for one unit or a collection, with
+2. Follow-ups of the AWX kind only, for one unit or a fixed list of units, with
    polling.
 3. The purpose `follow-up` on the installation allowlist, the namespace
    target list with its own action, and the sealed credential bound to its
