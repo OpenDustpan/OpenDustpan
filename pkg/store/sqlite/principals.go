@@ -162,7 +162,7 @@ func listPage[R, T any](ctx context.Context, s *Store, pq principal.Query, r pag
 		total int64
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
 		rows, err := r.list(ctx, q, pq)
 		if err != nil {
 			return fmt.Errorf("select page: %w", err)
@@ -624,7 +624,7 @@ func (s *Store) ListMembers(
 		total int64
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
 		_, err := q.GroupSource(ctx, groupID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return principal.ErrNotFound
@@ -688,7 +688,7 @@ func (s *Store) ListGroupsOf(
 		total int64
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
 		principals, err := q.PrincipalExists(ctx, principalID)
 		if err != nil {
 			return fmt.Errorf("count principals: %w", err)

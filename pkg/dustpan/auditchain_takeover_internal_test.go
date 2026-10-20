@@ -216,6 +216,7 @@ func runTakeoverChainRunner(t *testing.T, chain *auditChain) *atomic.Int32 {
 		Backoff:      durable.Backoff{Base: 0, Max: 0},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
 		WriteTimeout: 0,
+		Deferred:     nil,
 		Logger:       nil,
 		Rand:         func() float64 { return 0 },
 	})

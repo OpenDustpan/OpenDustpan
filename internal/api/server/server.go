@@ -389,12 +389,20 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
+// maintenanceRetryAfter is the Retry-After value, in seconds, of an
+// installation API write that maintenance mode refused.
+const maintenanceRetryAfter = "30"
+
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+	}
+
+	if errors.Is(err, maintenance.ErrInMaintenance) {
+		w.Header().Set("Retry-After", maintenanceRetryAfter)
 	}
 
 	if errors.Is(err, namespace.ErrFenced) {
@@ -572,6 +580,8 @@ func classifyMaintenance(err error) (int, string, bool) {
 		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
 	case errors.Is(err, audit.ErrChainNeedsPerson):
 		return http.StatusForbidden, audit.ErrChainNeedsPerson.Error(), true
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later", true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
 	default:

@@ -26,7 +26,7 @@ func (s *Store) ChainRecord(ctx context.Context) (audit.ChainRecord, error) {
 
 // SaveChainRecord implements audit.ChainStore.
 func (s *Store) SaveChainRecord(ctx context.Context, rec audit.ChainRecord) error {
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		return saveChainRecord(ctx, q, rec)
 	})
 }
@@ -63,7 +63,7 @@ func (s *Store) ApproveChainChange(
 
 	var out durable.Operation
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := checkChainApprovalWait(ctx, q); err != nil {
 			return err
 		}
@@ -221,9 +221,9 @@ func (s *Store) appendChainMarker(
 
 	var err error
 	if fence.Namespace == audit.ServerScope {
-		err = s.inTx(ctx, run)
+		err = s.inControlTx(ctx, run)
 	} else {
-		err = s.inFencedTx(ctx, fence, run)
+		err = s.inControlFencedTx(ctx, fence, run)
 	}
 
 	if err != nil {
