@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -40,6 +41,10 @@ type Config struct {
 	EntryReader   audit.EntryReader
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it. Entries is the store of the
+	// entries of the refusals.
+	OnAuditFailure func()
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
@@ -54,6 +59,7 @@ type Handler struct {
 	authn      identity.Authenticator
 	sessions   *sessionauth.Checker
 	authz      identity.Authorizer
+	guard      *refusal.Recorder
 	logger     *slog.Logger
 	mux        *patternMux
 	routes     []Route
@@ -82,6 +88,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
 		authz:      cfg.Authorizer,
+		guard:      refusal.New(cfg.Authorizer, cfg.Entries, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure),
 		logger:     cfg.Logger,
 		mux:        newPatternMux(),
 		routes:     nil,

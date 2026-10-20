@@ -49,6 +49,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Audit: nil, OnAuditFailure: nil,
 		PublicURL:     "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

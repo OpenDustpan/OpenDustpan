@@ -1,0 +1,42 @@
+package refusal
+
+import (
+	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+// Clean returns s with each control character (Cc), format character (Cf),
+// line separator, paragraph separator and byte that is not valid UTF-8
+// written as \uXXXX, cut to at most limit bytes at a rune boundary. A value
+// that comes from a request goes through Clean before it enters an audit
+// entry, a log line or a reason. Clean changes the text to make it safe to
+// store; it is not an input check, and the caller still validates the input.
+func Clean(s string, limit int) string {
+	var b strings.Builder
+
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+
+		var piece string
+
+		switch {
+		case r == utf8.RuneError && size <= 1:
+			piece = `�`
+		case unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp):
+			piece = fmt.Sprintf(`\u%04x`, r)
+		default:
+			piece = string(r)
+		}
+
+		if b.Len()+len(piece) > limit {
+			break
+		}
+
+		b.WriteString(piece)
+	}
+
+	return b.String()
+}

@@ -20,7 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -59,8 +61,14 @@ type Config struct {
 
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	Sessions      *sessionauth.Checker
-	Logger        *slog.Logger
+	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
+	// writes none.
+	Audit audit.Store
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it.
+	OnAuditFailure func()
+	Sessions       *sessionauth.Checker
+	Logger         *slog.Logger
 
 	// Release is the release of this server. A runner of another release
 	// than the skew allows gets version-unsupported.
@@ -87,6 +95,7 @@ type Handler struct {
 	operations durable.Store
 	authn      identity.Authenticator
 	authz      identity.Authorizer
+	guard      *refusal.Recorder
 	sessions   *sessionauth.Checker
 	logger     *slog.Logger
 	release    runner.Release
@@ -134,6 +143,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces: cfg.Namespaces, pools: cfg.Pools, members: cfg.Members, handoffs: cfg.Handoffs,
 		claimer: cfg.Claimer, sweeps: cfg.Sweeps, operations: cfg.Operations,
 		authn: cfg.Authenticator, authz: cfg.Authorizer, sessions: cfg.Sessions, logger: cfg.Logger,
+		guard:   refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure),
 		release: cfg.Release, serverURL: cfg.ServerURL, now: now, interval: interval, polls: sync.Map{},
 		mux: newPatternMux(), routes: nil,
 	}

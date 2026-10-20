@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
@@ -37,7 +38,12 @@ func WithJobClaimer(c job.Claimer) Option {
 // or returns nil when the server has no runner stores or no public URL. The
 // join challenge names the public URL without a trailing slash, so a runner
 // cannot join without it.
-func newRunnerHandler(cfg *settings, svc services) (http.Handler, error) {
+func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handler, error) {
+	var neutralAudit audit.Store
+	if st, ok := cfg.namespaceStore.(audit.Store); ok {
+		neutralAudit = st
+	}
+
 	publicURL := strings.TrimRight(strings.TrimSpace(cfg.publicURL), "/")
 	if cfg.runners == nil || publicURL == "" {
 		return nil, nil //nolint:nilnil // No runner protocol: the server has no runner stores or no public URL.
@@ -55,6 +61,7 @@ func newRunnerHandler(cfg *settings, svc services) (http.Handler, error) {
 		Claimer: cfg.jobClaimer, Sweeps: nil, Operations: cfg.durableStore, Authenticator: cfg.authenticator,
 		Authorizer: cfg.authorizer, Sessions: cfg.sessionCookies, Logger: cfg.logger, Release: release,
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
+		Audit: neutralAudit, OnAuditFailure: onFailure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)

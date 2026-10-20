@@ -999,7 +999,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	neutral, err := newNeutralHandlers(svc, cfg)
+	neutral, err := newNeutralHandlers(svc, cfg, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -1051,27 +1051,29 @@ type neutralHandlers struct {
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
 // context API.
-func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
-	units, err := newInventoryHandler(svc, cfg)
+func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMetrics) (neutralHandlers, error) {
+	onFailure := func() { observed.IncAuditAppendFailure() }
+
+	units, err := newInventoryHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
-	entries, err := newAuditHandler(svc, cfg)
+	entries, err := newAuditHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
-	contexts, err := newContextHandler(svc, cfg)
+	contexts, err := newContextHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
-	runners, err := newRunnerHandler(cfg, svc)
+	runners, err := newRunnerHandler(cfg, svc, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
-	profiles, err := newProfileHandler(svc, cfg)
+	profiles, err := newProfileHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1964,7 +1966,7 @@ func newPulumiHandler(
 // service and the audit store. The store comes from the namespace store:
 // every SQL adapter serves all ports from one database connection. A custom
 // store that keeps no audit entries fails here with a clear error.
-func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
+func newAuditHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
 	entries, ok := cfg.namespaceStore.(audit.Store)
 	if !ok {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
@@ -1985,6 +1987,8 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
+
+		OnAuditFailure: onFailure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("audit api: %w", err)
@@ -1997,7 +2001,14 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 // when that store also keeps context. A custom store without context gets no
 // context API: its routes are not served and the rest of the API works as
 // before.
-func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
+func newContextHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+	// A namespace store that keeps no audit entries gives a nil store, and a
+	// refusal then writes no entry.
+	var neutralAudit audit.Store
+	if st, ok := cfg.namespaceStore.(audit.Store); ok {
+		neutralAudit = st
+	}
+
 	store, ok := cfg.namespaceStore.(objectcontext.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No context API: the store keeps no context.
@@ -2028,6 +2039,9 @@ func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
+
+		Audit:          neutralAudit,
+		OnAuditFailure: onFailure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("context api: %w", err)
@@ -2038,7 +2052,7 @@ func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
 
 // newProfileHandler builds the profile API, or returns nil when no profile
 // store is set.
-func newProfileHandler(svc services, cfg *settings) (http.Handler, error) {
+func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
 	if cfg.profileStore == nil {
 		return nil, nil //nolint:nilnil // No profile API: no profile store is set.
 	}
@@ -2073,6 +2087,9 @@ func newProfileHandler(svc services, cfg *settings) (http.Handler, error) {
 		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
 		Now:           cfg.now,
+
+		Audit:          entries,
+		OnAuditFailure: onFailure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("profile api: %w", err)
@@ -2151,7 +2168,14 @@ func checkRetention(d time.Duration) error {
 // tool (ADR 47). Every SQL adapter also reads the deleted units through the
 // inventory reader. A custom reader that keeps no deleted units fails here
 // with a clear error.
-func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
+func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+	// A namespace store that keeps no audit entries gives a nil store, and a
+	// refusal then writes no entry.
+	var neutralAudit audit.Store
+	if st, ok := cfg.namespaceStore.(audit.Store); ok {
+		neutralAudit = st
+	}
+
 	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
 	if !ok {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
@@ -2193,6 +2217,9 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		PublicURL:     strings.TrimSpace(cfg.publicURL),
 		Logger:        cfg.logger,
 		Now:           cfg.now,
+
+		Audit:          neutralAudit,
+		OnAuditFailure: onFailure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)

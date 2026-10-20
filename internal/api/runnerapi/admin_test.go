@@ -70,6 +70,7 @@ func handlerWith(t *testing.T, actions ...identity.Action) http.Handler {
 	members := s.Runners()
 
 	h, err := runnerapi.NewHandler(runnerapi.Config{
+		Audit: nil, OnAuditFailure: nil,
 		Namespaces: service, Pools: members, Members: members, Handoffs: members, Claimer: nil, Sweeps: nil,
 		Operations: nil, Authenticator: adminAuthenticator{}, Authorizer: holdsOnly{actions: actions}, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL, Now: nil,

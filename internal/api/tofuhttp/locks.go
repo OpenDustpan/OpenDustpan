@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -152,10 +153,10 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 
 // writeHeld answers a refused LOCK with the lock that holds the workspace now.
 // A lock that cannot be read answers with the refusal.
-func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, refusal error) {
+func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, refused error) {
 	current, err := h.ws.Get(ctx, c.ref)
 	if err != nil || !current.Lock.Locked() {
-		h.writeError(ctx, w, refusal)
+		h.writeError(ctx, w, refused)
 
 		return
 	}
@@ -217,6 +218,10 @@ func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call
 	}
 
 	if !ws.Lock.Locked() || ws.Lock.ID != info.ID {
+		if ws.Lock.Locked() {
+			h.recordLockRefusal(ctx, r, c, "unlock names a lock that is not the current lock")
+		}
+
 		h.writeConflict(w, ws.Lock)
 
 		return
@@ -231,6 +236,7 @@ func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call
 	_, err = h.ws.UnlockLock(ctx, ws.ID, info.ID, c.principal.Subject)
 	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
 		errors.Is(err, workspace.ErrLockMismatch) {
+		h.recordLockRefusal(ctx, r, c, "the lock changed or is held by another principal")
 		h.writeHeldOrConflict(ctx, w, c, err)
 
 		return
@@ -243,6 +249,20 @@ func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// recordLockRefusal writes the audit entry of an UNLOCK that the workspace
+// refused, here and not in the middleware, because the middleware has allowed
+// the request. The entry names the action of the lock call and the unit.
+func (h *Handler) recordLockRefusal(ctx context.Context, r *http.Request, c call, reason string) {
+	obj, err := unitObject(c.ref)
+	if err != nil {
+		h.logger.WarnContext(ctx, "audit of a lock refusal skipped: no unit object")
+
+		return
+	}
+
+	h.guard.Record(ctx, r, c.principal, refusal.Denial{Action: identity.ActionUnitManage, Object: obj, Reason: reason})
 }
 
 // writeConflict answers 409 with the current lock info, or with no body when
@@ -262,10 +282,10 @@ func (h *Handler) writeConflict(w http.ResponseWriter, held workspace.Lock) {
 
 // writeHeldOrConflict answers a refused UNLOCK with the lock that holds the
 // workspace now, as 409.
-func (h *Handler) writeHeldOrConflict(ctx context.Context, w http.ResponseWriter, c call, refusal error) {
+func (h *Handler) writeHeldOrConflict(ctx context.Context, w http.ResponseWriter, c call, refused error) {
 	current, err := h.ws.Get(ctx, c.ref)
 	if err != nil {
-		h.writeError(ctx, w, refusal)
+		h.writeError(ctx, w, refused)
 
 		return
 	}

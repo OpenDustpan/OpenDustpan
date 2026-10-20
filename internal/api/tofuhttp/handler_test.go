@@ -699,3 +699,43 @@ func TestFencedWriteStatuses(t *testing.T) {
 		t.Fatalf("fenced POST: status %d, want %d; body %q", rec.Code, http.StatusConflict, rec.Body.String())
 	}
 }
+
+// TestLockRefusalsAreAudited proves the domain layer of the denial audit: an
+// UNLOCK that the middleware allows but the workspace refuses writes a denied
+// entry with the reason, and the answer stays 409.
+func TestLockRefusalsAreAudited(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, err: nil, entries: nil, mu: sync.Mutex{}}
+
+	h, err := tofuhttp.NewHandler(tofuhttp.Config{
+		Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
+		Workspaces: newFakeUnits(true), Namespaces: fakeNamespaces{}, Audit: store,
+		Gate: nil, OnAuditFailure: nil,
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	if rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+		t.Fatalf("LOCK: status %d, want 200", rec.Code)
+	}
+
+	rec := do(h, "UNLOCK", unitPath, lockBody("lock-two", "alice"), bearer(adminToken))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("UNLOCK with another lock ID: status %d, want 409", rec.Code)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if len(store.entries) != 1 {
+		t.Fatalf("entries = %+v, want one denied entry", store.entries)
+	}
+
+	e := store.entries[0]
+	if e.Outcome != audit.OutcomeDenied || !strings.HasPrefix(e.Reason, "unlock names a lock") ||
+		e.Object != "opentofu:acme/net" {
+		t.Fatalf("entry = %+v, want denied, the unit and the reason of the lock refusal", e)
+	}
+}

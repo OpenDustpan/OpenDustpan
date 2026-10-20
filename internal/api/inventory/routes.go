@@ -277,7 +277,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 			return
 		}
 
-		if err := h.authorizeRoute(ctx, route, p, obj); err != nil {
+		if err := h.authorizeRoute(ctx, r, route, p, obj); err != nil {
 			h.writeError(ctx, w, err)
 
 			return
@@ -291,10 +291,10 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 // namespace of obj, then Actions on obj. For a route with DeniedAsNotFound,
 // a denial gives the error of an unknown object.
 func (h *Handler) authorizeRoute(
-	ctx context.Context, route Route, p identity.Principal, obj identity.Object,
+	ctx context.Context, r *http.Request, route Route, p identity.Principal, obj identity.Object,
 ) error {
 	check := func(action identity.Action, target identity.Object) error {
-		err := h.authz.Authorize(ctx, p, action, target)
+		err := h.guard.Authorize(ctx, r, p, action, target)
 		if err == nil {
 			return nil
 		}

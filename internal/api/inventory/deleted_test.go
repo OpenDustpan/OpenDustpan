@@ -179,6 +179,7 @@ func buildDeletedFixture(
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Audit: nil, OnAuditFailure: nil,
 		PublicURL:  "",
 		Moves:      nil,
 		Namespaces: namespaces,

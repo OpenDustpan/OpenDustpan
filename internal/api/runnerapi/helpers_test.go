@@ -244,6 +244,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 	claimer := &opsClaimer{ops: s.operations, lease: opts.lease, released: atomic.Int64{}}
 
 	h, err := runnerapi.NewHandler(runnerapi.Config{
+		Audit: nil, OnAuditFailure: nil,
 		Namespaces: service, Pools: s.runners, Members: s.runners, Handoffs: s.runners, Claimer: claimer, Sweeps: nil,
 		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: opts.authz,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL,

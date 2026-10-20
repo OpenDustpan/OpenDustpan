@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -149,6 +150,7 @@ type JournalReporter interface {
 type Handler struct {
 	authn          identity.Authenticator
 	authz          identity.Authorizer
+	guard          *denials.Recorder
 	logger         *slog.Logger
 	namespaces     *namespace.Service
 	backups        *backup.Service
@@ -190,9 +192,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
+	// The audit store keeps the entries of refused requests when it also keeps
+	// the entries of each namespace. Otherwise denialStore stays nil and a
+	// refusal writes no entry.
+	var denialStore audit.Store
+	if st, ok := cfg.Audit.(audit.Store); ok {
+		denialStore = st
+	}
+
 	h := &Handler{
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
+		guard:          denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure),
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		backups:        cfg.Backups,

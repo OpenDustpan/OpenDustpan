@@ -154,6 +154,40 @@ lock that it finds. Each release writes one `change` entry with the action
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.
 
+## Denial entries
+
+Each request that the server refuses because the principal does not hold the action writes one entry with the outcome `denied`.
+Every API writes it. These are the Pulumi Cloud-compatible API, the TFE-compatible API, the OpenTofu HTTP backend, the inventory, context, audit, profile and runner APIs, and the installation API.
+The entry is in the scope of the object. An object with no namespace, or with a namespace that does not exist, writes the entry in the scope `@server`.
+A request with no valid credential answers 401 and writes no entry, because it has no principal.
+
+- `subject`, `tokenID`, `principalKind` and `jobID`: the principal that was refused.
+- `action` and `object`: the action that the route needs, and the object that it needs it on.
+- `reason`: `denied by policy on` and the route, for example `denied by policy on GET /api/audit/entries`. The route is the matched pattern, or the method and the path. It never holds the query.
+- `kind`: `reveal` for a refused read of secret values, `override` for a refused forced write, `tool-operation` for a refused read, else `change`.
+
+An entry holds no request body, no header value and no secret.
+The server escapes each control character, format character and line break in the subject, the object and the reason as `\uXXXX`.
+It cuts the subject to 255 bytes and the object to 512 bytes.
+
+A refusal that a domain package decides also writes an entry, in the place where it happens.
+An example is an OpenTofu `UNLOCK` that names a lock that is not the current lock.
+Another example is an `UNLOCK` that finds the lock changed or held by another principal.
+The `reason` says which refusal it was.
+
+If the server cannot write the entry, the request still answers 403. The server logs the failure and counts it in `dustpan_audit_append_failures_total` (see "Alert on failed logging").
+
+### The limit on repeated denials
+
+A principal that sends many refused requests must not fill the log.
+For each principal, action, kind of object and scope, the server writes the first denial in a window of 1 minute.
+It counts each other denial of that key in the window and writes nothing for it.
+The count goes out in the `reason` of the first entry of the next window (`N further refusals since the last entry`).
+When the principal stops, the first denial of any principal after the window writes one entry with the action and the count.
+The server tracks at most 4096 keys. A denial of a new key beyond that bound adds to one aggregate.
+The aggregate writes one entry for each window in the scope `@server`. The entry has the action `denials:suppressed` and the subject `denial-limiter`.
+The server starts no background task for the limit, so the count of a quiet key waits for the next denial.
+
 ## Settings entries
 
 Each server process writes entries about its own settings in the scope

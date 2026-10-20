@@ -214,6 +214,7 @@ func buildFixture(
 	idem := middleware(t, store, clock)
 
 	handler, err := apiprofile.NewHandler(apiprofile.Config{
+		Audit: nil, OnAuditFailure: nil,
 		Profiles: svc, Authenticator: testAuthn{}, Authorizer: authz, Sessions: nil, Idempotency: idem,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,
 	})
@@ -795,6 +796,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiprofile.NewHandler(apiprofile.Config{
+		Audit: nil, OnAuditFailure: nil,
 		Profiles: nil, Authenticator: nil, Authorizer: nil, Sessions: nil, Idempotency: nil, Logger: nil, Now: nil,
 	})
 	if err == nil {

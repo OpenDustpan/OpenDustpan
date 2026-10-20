@@ -701,7 +701,7 @@ func (h *Handler) resolveGrantObject(_ http.ResponseWriter, r *http.Request) (id
 		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, identity.ErrUnauthenticated)
 	}
 
-	if authErr := h.authz.Authorize(r.Context(), p, actions.read, g.Object); authErr != nil {
+	if authErr := h.guard.Authorize(r.Context(), r, p, actions.read, g.Object); authErr != nil {
 		if errors.Is(authErr, identity.ErrDenied) {
 			return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
 		}
