@@ -24,9 +24,13 @@ import (
 
 const (
 	adminToken = "admin-token-0123456789"
-	userToken  = "user-token-0123456789"
-	unitPath   = "/tofu/state/acme/net"
-	lockOne    = "lock-one"
+	// jobToken authenticates the job job-1 with a job token.
+	jobToken = "job-token-0123456789"
+	// jobIDOnAccessToken authenticates an access token whose principal names a job.
+	jobIDOnAccessToken = "access-with-job-0123456789"
+	userToken          = "user-token-0123456789"
+	unitPath           = "/tofu/state/acme/net"
+	lockOne            = "lock-one"
 )
 
 // unlockedLock returns the lock of a unit that no principal holds.
@@ -44,8 +48,10 @@ type fakeUnits struct {
 	createErr error
 	// writeErr, when set, is what WriteState answers.
 	writeErr error
-	// lockErr, when set, is what LockWithID answers.
+	// lockErr, when set, is what LockWithIDForJob answers.
 	lockErr error
+	// lockJobs holds the job ID of each lock request.
+	lockJobs []string
 	// forced holds the audit entry template of each force-unlock.
 	forced []audit.Entry
 }
@@ -71,6 +77,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 		createErr: nil,
 		writeErr:  nil,
 		lockErr:   nil,
+		lockJobs:  nil,
 		forced:    nil,
 	}
 }
@@ -112,14 +119,18 @@ func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref) (workspace.Worksp
 	return f.ws, nil
 }
 
-// LockWithID takes the lock under lockID, or answers ErrLocked.
-func (f *fakeUnits) LockWithID(
+// LockWithIDForJob takes the lock under lockID, or answers ErrLocked. It keeps
+// the job ID of the request.
+func (f *fakeUnits) LockWithIDForJob(
 	_ context.Context,
 	_ workspace.ID,
-	holder, reason, lockID string,
+	req workspace.LockRequest,
 ) (workspace.Workspace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	holder, reason, lockID := req.Holder, req.Reason, req.LockID
+	f.lockJobs = append(f.lockJobs, req.JobID)
 
 	if f.lockErr != nil {
 		return workspace.Workspace{}, f.lockErr
@@ -248,6 +259,24 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Kind:           "",
 			Credential:     "",
 			JobID:          "",
+		}, nil
+	case jobToken, jobIDOnAccessToken:
+		cred := identity.CredentialJobToken
+		if token == jobIDOnAccessToken {
+			// A principal that carries a job ID with another credential.
+			cred = identity.CredentialAccessToken
+		}
+
+		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Subject:        "alice",
+			DisplayName:    "",
+			Admin:          true,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+			Kind:           "",
+			Credential:     cred,
+			JobID:          "job-1",
 		}, nil
 	case userToken:
 		return identity.Principal{
