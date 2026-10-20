@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -103,7 +104,9 @@ func (s *Store) ExpireTempAdmin(ctx context.Context, principalID string, e audit
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	rev := revocation{kind: maintenance.RevokedTempAdmin, target: principalID, endReason: ""}
+
+	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
 		return expireTempAdminTx(ctx, q, principalID, e)
 	})
 }

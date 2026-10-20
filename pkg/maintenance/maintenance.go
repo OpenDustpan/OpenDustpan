@@ -181,6 +181,53 @@ func NewService(cfg Config) (*Service, error) {
 // ErrMissingDependency reports a Config without a required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
 
+// maxForceAttempts bounds the attempts of a forced Enter. Work that starts
+// between the cancel and the write of the state makes an attempt end with
+// ErrActiveWork. A forced Enter tries again, and each new attempt cancels
+// that work. A writer that keeps starting work then fails the call after
+// this many attempts instead of looping without end.
+const maxForceAttempts = 3
+
+// ActiveWorkError is the ErrActiveWork answer. It names the work that blocked
+// the enter and, for a forced enter, the work that the attempts canceled
+// before the enter gave up.
+type ActiveWorkError struct {
+	// Work holds the unit references of the work that blocked the enter, in
+	// a stable order.
+	Work []string
+	// Canceled holds the unit references that a forced enter canceled
+	// before it gave up, in a stable order. It is empty without force.
+	Canceled []string
+}
+
+// Error returns the sentinel text with the unit references of Work.
+func (e *ActiveWorkError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrActiveWork, strings.Join(e.Work, ", "))
+}
+
+// Unwrap lets errors.Is match ErrActiveWork.
+func (e *ActiveWorkError) Unwrap() error { return ErrActiveWork }
+
+// CanceledError wraps a failure of a forced enter, other than ErrActiveWork,
+// that came after the enter canceled work. The cancel stays: the error names
+// the units so that the caller can tell the operator what stopped. It
+// unwraps to Err.
+type CanceledError struct {
+	// Err is the failure of the enter.
+	Err error
+	// Canceled holds the unit references that the forced enter canceled
+	// before it failed, in a stable order.
+	Canceled []string
+}
+
+// Error returns the text of Err and the unit references of Canceled.
+func (e *CanceledError) Error() string {
+	return fmt.Sprintf("%v (canceled before the failure: %s)", e.Err, strings.Join(e.Canceled, ", "))
+}
+
+// Unwrap returns Err, so errors.Is and errors.As reach the failure.
+func (e *CanceledError) Unwrap() error { return e.Err }
+
 // EnterResult names the work that entering maintenance mode canceled. Each
 // entry is a unit reference, for example "pulumi:acme/web/prod".
 type EnterResult struct {
@@ -210,19 +257,52 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 // leave or a rollback landed in between), the enter tries again from the
 // fresh state. After the write, Enter lists the active work again: an update
 // or a run that started between the first check and the write is still
-// active during maintenance. In that case, with or without force, Enter
-// moves back to normal and reports ErrActiveWork naming it. With force a
-// retry then cancels it before the write. A start after the second check meets the tool adapters, which answer
-// 503.
+// active during maintenance. In that case Enter moves back to normal and
+// reports ErrActiveWork naming it. With force Enter then tries again and the
+// new attempt cancels that work, up to maxForceAttempts attempts. When
+// writers keep starting work, the last attempt reports an *ActiveWorkError
+// that names the work and every unit that the attempts canceled. A start
+// after the second check meets the tool adapters, which answer 503.
+//
+//nolint:revive // The force flag is the API: it picks the bounded retry, and the route maps it from the request body.
 func (s *Service) Enter(ctx context.Context, force bool) (EnterResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for {
+	var canceled []string
+
+	for attempt := 1; ; attempt++ {
 		retry, res, err := s.enterAttempt(ctx, force)
-		if !retry {
-			return res, err
+		canceled = append(canceled, res.Canceled...)
+
+		if retry {
+			continue
 		}
+
+		blocked, isBlocked := errors.AsType[*ActiveWorkError](err)
+		isBlocked = isBlocked && blocked != nil
+
+		if force && attempt < maxForceAttempts && isBlocked {
+			continue
+		}
+
+		if err == nil {
+			slices.Sort(canceled)
+
+			return EnterResult{Canceled: canceled}, nil
+		}
+
+		if len(canceled) > 0 {
+			slices.Sort(canceled)
+
+			if isBlocked {
+				blocked.Canceled = canceled
+			} else {
+				err = &CanceledError{Err: err, Canceled: canceled}
+			}
+		}
+
+		return EnterResult{Canceled: nil}, err
 	}
 }
 
@@ -297,7 +377,8 @@ func (s *Service) enterAttempt(ctx context.Context, force bool) (bool, EnterResu
 	setErr := s.setStateIf(ctx, StateNormal, StateMaintenance)
 	if setErr != nil {
 		if !errors.Is(setErr, ErrStateChanged) {
-			return false, EnterResult{Canceled: nil}, setErr
+			// The cancel stays: the result names it, and Enter attaches it to the error.
+			return false, EnterResult{Canceled: canceled}, setErr
 		}
 
 		return s.enterRaced(ctx, canceled)
@@ -311,12 +392,11 @@ func (s *Service) enterAttempt(ctx context.Context, force bool) (bool, EnterResu
 		already = active
 	}
 
-	res, racedErr := s.refuseRaced(ctx, already)
-	if racedErr == nil {
-		res = EnterResult{Canceled: canceled}
-	}
+	// The result holds what this attempt canceled also when work raced the
+	// write: a forced Enter that gives up names it in the error.
+	_, racedErr := s.refuseRaced(ctx, already)
 
-	return false, res, racedErr
+	return false, EnterResult{Canceled: canceled}, racedErr
 }
 
 // enterRaced answers a lost compare-and-set: another instance changed the
@@ -376,7 +456,7 @@ func (s *Service) refuseRaced(ctx context.Context, already activeWork) (EnterRes
 
 // activeWorkError reports ErrActiveWork naming each unit of work.
 func activeWorkError(work activeWork) error {
-	return fmt.Errorf("%w: %s", ErrActiveWork, strings.Join(work.names(), ", "))
+	return &ActiveWorkError{Work: work.names(), Canceled: nil}
 }
 
 // setStateIf stores next only when the stored state is expected.

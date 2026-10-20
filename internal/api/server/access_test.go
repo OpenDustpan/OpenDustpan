@@ -820,6 +820,46 @@ func TestEnableNeedsGrantActions(t *testing.T) {
 	}
 }
 
+// TestDisableNeedsGrantActions proves that the disable route needs every
+// action that the grants of the principal give: an account administrator
+// cannot disable a site administrator, but a site administrator that is not
+// a bootstrap admin can.
+func TestDisableNeedsGrantActions(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seed(t, "boss", access.RoleSiteAdministrator, identity.ServerObject())
+	f.seed(t, "sam", access.RoleSiteAdministrator, identity.ServerObject())
+
+	f.as(t, "ann", apiCall{
+		method: http.MethodPost, path: "/api/server/principals/prn-boss/disable", body: "",
+		want: http.StatusForbidden,
+	}, nil)
+
+	boss, err := f.store.GetPrincipal(t.Context(), "prn-boss")
+	if err != nil {
+		t.Fatalf("get boss: %v", err)
+	}
+
+	if !boss.DisabledAt.IsZero() {
+		t.Fatal("boss is disabled after a refused disable, want enabled")
+	}
+
+	f.as(t, "sam", apiCall{
+		method: http.MethodPost, path: "/api/server/principals/prn-boss/disable", body: "",
+		want: http.StatusOK,
+	}, nil)
+
+	boss, err = f.store.GetPrincipal(t.Context(), "prn-boss")
+	if err != nil {
+		t.Fatalf("get boss: %v", err)
+	}
+
+	if boss.DisabledAt.IsZero() {
+		t.Fatal("boss is enabled after an allowed disable, want disabled")
+	}
+}
+
 // TestGrantListNamesHoldersAndFilters lists the grants on acme with the
 // holder of each, and with the holder and role filters.
 func TestGrantListNamesHoldersAndFilters(t *testing.T) {

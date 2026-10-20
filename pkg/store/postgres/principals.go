@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -249,6 +250,34 @@ func (s *Store) EnablePrincipal(ctx context.Context, id string, e audit.Entry) e
 		}
 
 		return principal.ErrNotDisabled
+	})
+}
+
+// DisablePrincipal implements principal.Store. It runs on the control path, so
+// it works in maintenance mode, and the transaction journals it there.
+func (s *Store) DisablePrincipal(ctx context.Context, id string, e audit.Entry) error {
+	rev := revocation{kind: maintenance.RevokedPrincipal, target: id, endReason: ""}
+
+	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
+		n, err := q.DisablePrincipal(ctx, db.DisablePrincipalParams{DisabledAtMs: codec.Millis(e.At), ID: id})
+		if err != nil {
+			return fmt.Errorf("disable principal: %w", err)
+		}
+
+		if n == 1 {
+			return nil
+		}
+
+		live, err := q.CountLivePrincipal(ctx, id)
+		if err != nil {
+			return fmt.Errorf("select principal: %w", err)
+		}
+
+		if live == 0 {
+			return principal.ErrNotFound
+		}
+
+		return principal.ErrDisabled
 	})
 }
 

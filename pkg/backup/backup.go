@@ -70,6 +70,10 @@ const (
 	TableBackups      = "backups"
 	TableRestores     = "restores"
 	TableInstallation = "installation"
+	// TableMaintenanceRevocations journals the writes that only reduce access
+	// and that ran in maintenance mode. A restore applies them again after
+	// the swap.
+	TableMaintenanceRevocations = "maintenance_revocations"
 )
 
 // Tables lists every table that an export covers, in foreign-key order, so an
