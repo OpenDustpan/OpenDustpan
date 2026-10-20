@@ -7,8 +7,8 @@ import "slices"
 // all of them and picks no winner. The values are the stable wire strings.
 // They are tool-neutral. A page of one tool shows the tool's own words.
 //
-// No code stores or serves a State yet. The spelling of every value except
-// StateAwaitingApproval is proposed and can change.
+// No code stores or serves a State yet. The values are fixed. A change to a
+// value, or to the word set, needs a new decision.
 type State string
 
 // The unit states.

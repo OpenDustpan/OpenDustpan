@@ -1,16 +1,17 @@
 ---
 rfc: 26
 title: Unit status in the inventory
-status: discussing
+status: accepted in part (ADR 265)
 created: 2026-10-10
 ---
 
 # RFC 26. Unit status in the inventory
 
-Status: discussing. The owner decided the words and the badge rule on 18
-October 2026. [ADR 265](../adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md)
-records them. This text holds the open questions, with options and a
-recommendation for each. No code writes a state yet.
+Status: accepted in part. [ADR 265](../adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md)
+records the decisions: the words and the badge rule (owner, 2026-10-18), and
+the answers to all ten questions below (product manager, under the owner's
+delegation of 20 October 2026). No question is open. No code writes a state
+yet.
 
 ## Problem
 
@@ -18,8 +19,8 @@ recommendation for each. No code writes a state yet.
 inventory has a status for each unit, with no defined values. `Entry.Status`
 is a free string, and no tool sets it. Competitors show a small vocabulary.
 Terramate has healthy, failed and drifted. Harness has "apply needed". HCP
-Terraform and env zero lead with "needs attention". The console's unit list
-and its badges depend on this vocabulary.
+Terraform and env0 put "needs attention" first. The console's unit list and
+its badges depend on this vocabulary.
 
 ## Decided
 
@@ -35,7 +36,10 @@ and its badges depend on this vocabulary.
   the drift statuses are `drifted`, `in-sync` and `unknown`. The drift
   result of a unit sets them.
 
-## Options and proposal
+## Questions and answers
+
+The product manager decided each answer under the owner's delegation of 20
+October 2026. ADR 265 holds the text of each decision.
 
 ### 1. How does `locked` meet ADR 213 decision 9?
 
@@ -49,15 +53,15 @@ vocabulary holds no `locked` value.
   draws the lock badge from them. A filter by `locked` reads the flags.
 - C. Store `locked` as a state. This contradicts ADR 213 decision 9.
 
-Recommendation: A. The badge set is one list for the console and the filter
-(decision 26.2). The flag stays the only source, so ADR 213 decision 9 holds
-for storage. The owner needs to confirm that it holds for the read model too.
+Answer: A (ADR 265 decision 5). The badge set is one list for the console and
+the filter (decision 26.2). The flag stays the only source, so no stored state
+holds `locked`.
 
 ### 2. What are the wire values?
 
-Recommendation: kebab case, like ADR 263 and `awaiting-approval`:
-`in-sync`, `running`, `queued`, `locked`, `awaiting-approval`,
-`apply-needed`, `drifted`, `failed`, `unknown`. The values are stable
+Answer: kebab case, like ADR 263 and `awaiting-approval`: `in-sync`,
+`running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`,
+`drifted`, `failed`, `unknown` (ADR 265 decision 6). The values are stable
 strings. A table test holds them. The console and the docs show each tool's
 own words (ADR 12, ADR 251).
 
@@ -68,17 +72,20 @@ own words (ADR 12, ADR 251).
 | `locked` | the inventory | the lock and the manual lock |
 | `drifted`, `in-sync`, `unknown` | the drift package | the drift result (ADR 263) |
 | `running`, `queued`, `awaiting-approval` | the job model | the jobs of the unit, when the job store writes them |
-| `failed` | the job model | the latest job of the unit |
-| `apply-needed` | no source | see question 5 |
+| `failed` | the job model, and the `stack` package for a Pulumi CLI update | the latest change job or update of the unit |
+| `apply-needed` | the job model | a stored plan with changes that nobody applied (question 5) |
 
 Options: A: the inventory stores the set of states of a unit, and each owner
 writes its own states in the transaction of its own write (ADR 13). B: the
 inventory builds the set at read time from the tables of each owner.
 
-Recommendation: A for the states that change on a write, B only for `locked`,
-which the inventory already holds. A stored set makes the filter one indexed
-read. B makes every list read join the job and drift tables. Each state has
-one owner, and no owner writes the state of another.
+Answer: A for the states that change on a write, and B only for `locked`
+(ADR 265 decision 7). A stored set makes the filter one indexed read. B makes
+every list read join the job and drift tables. Each write of a state carries
+the `namespace.Fence`, and the store checks it in the same transaction. Each
+state has one owner, and no owner writes the state of another. A Pulumi CLI
+update that ends failed sets `failed`, because the `stack` package owns the
+update cycle. The next successful update clears it.
 
 ### 4. When do `in-sync` and `unknown` show?
 
@@ -89,68 +96,74 @@ badge.
   result. A unit without the setting shows no drift state.
 - B. Every unit always shows one of the three drift states.
 
-Recommendation: A. `in-sync` shows when the latest result has no difference.
-An empty set of states means that nothing needs attention.
+Answer: A (ADR 265 decision 8). `in-sync` shows when the latest result has no
+difference. An empty set of states means that nothing needs attention.
 
 ### 5. Where does `apply-needed` come from?
 
 A unit with no runner has no job to apply. RFC 12 names "the main branch is
-ahead of what the runner applied" as the case.
+ahead of what the runner applied" as one case.
 
-Recommendation: keep the word in the vocabulary, with no source. The job
-model sets it when a person approves a plan with changes and nobody
-applies it, or when
-the code location is ahead of the applied version. A separate slice builds
-the source. Until then the state never appears.
+Answer: `apply-needed` has one first source: a stored plan with changes that
+nobody applied (ADR 265 decision 9). The case "code ahead of applied" stays
+with RFC 12.
 
 ### 6. What does `failed` mean, and when does it clear?
 
 ADR 263 decision 11 says that a failed drift check shows as a failed job and
 does not change the drift result.
 
-Recommendation: `failed` means that the latest change job of the unit ended
-failed. A failed drift check does not set it. It clears when a later change
-job succeeds or when a person acknowledges it.
+Answer: `failed` means that the latest change job of the unit ended failed
+(ADR 265 decision 10). A change job is an apply or a destroy. A plan-only job
+and a drift check are not change jobs. `failed` clears only on the next
+successful change job. There is no acknowledge action.
 
 ### 7. In what order are the badges?
 
-Recommendation: the response lists the states in a fixed order, by the
-severity that a person needs first: `failed`, `awaiting-approval`,
-`apply-needed`, `drifted`, `running`, `queued`, `locked`, `unknown`,
-`in-sync`. The order is only the order of the badges. It picks no winner.
+Answer: the response lists the states in a fixed order (ADR 265 decision 11):
+`failed`, `awaiting-approval`, `apply-needed`, `drifted`, `running`,
+`queued`, `locked`, `unknown`, `in-sync`. The order is only the order of the
+badges. It picks no winner. The code holds the order in exactly one place.
 
 ### 8. What shape does a state have on the wire?
 
-Recommendation: `states` is an array of objects. Each has `state`, `since`
-and a `detail` object with fixed keys for that state. For `locked`, the keys
-are the holder, the time and the operation. The API gives no text for the
-tooltip, because the console writes it in the language of the person.
+Answer: `states` is an array of objects. Each has `state` and `since`
+(ADR 265 decision 12). There is no `detail` field. For `locked`, `since` is the
+earlier of the time of the lock and the time of the manual lock. Later data
+for one state comes only as typed, optional fields that hold IDs only and
+have a size limit. The API gives no text for the tooltip, because the console
+writes it in the language of the person.
 
-Open: the existing `lock` and `manualLock` fields stay or go. Recommendation:
-they stay, because they carry the flags that ADR 213 decision 9 keeps, and
-`states` repeats them for the badge.
+The `lock` and `manualLock` fields stay. They carry the flags that ADR 213
+decision 9 keeps, and they hold the holder and the operation. `states`
+repeats the fact for the badge.
 
 ### 9. How does a filter work?
 
-Recommendation: the query parameter `state` can repeat. A unit matches when it
-has any of the named states. An unknown value answers 400 and names the valid
-values. This is the style of the existing label filter.
+Answer: the query parameter `state` can repeat (ADR 265 decision 13). A unit
+matches when it has any of the named states. This is the style of the
+reference filter. The label filter is different: a unit must have all the
+named labels. The `state` filter adds to the other filters with AND. The
+match is exact, with no normalization. The server removes duplicate values. A
+request has at most 9 values. An unknown value answers 400 and names the valid
+values. `inventory.ParseState` returns the sentinel `ErrUnknownState`.
 
 ### 10. Which slice comes first?
 
-Recommendation: `locked`, as soon as question 1 has an answer. The server
-knows it today, so the slice needs no new writer. `drifted` waits for the
-drift store. The job states wait for the job store.
+Answer: `locked` (ADR 265 decision 14). The server knows it today, so the slice
+needs no new writer. `drifted` waits for the drift store. The job states wait
+for the job store. The first slice also removes `Entry.Status` and the API
+field `status`, because no code sets them and no released console version
+reads them.
 
 ## Open questions
 
-Questions 1 to 10 above need the answer of the owner. Question 1 is the one
-that blocks the first slice.
+None.
 
 ## Outcome
 
 Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
 decision 9 on 2026-10-18: a lock is a flag, not a status. Accepted in part as
 [ADR 265](../adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md)
-on 2026-10-20: the words, the badge rule and the wire value `awaiting-approval`.
-The rest stays open.
+on 2026-10-20: the words, the badge rule, the wire values and the answers to
+questions 1 to 10. The slices that build the code stay open as issues.

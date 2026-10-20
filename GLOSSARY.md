@@ -66,7 +66,7 @@ A key and a value on a unit, for views and filters. A label never grants access 
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
 **Unit state**:
-One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The `locked` state follows the unit lock, which stays the source (ADR 213 decision 9). The drift statuses are three of the states.
+One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The server derives `locked` at read time from the unit lock, which stays the only source (ADR 265 decision 5). The drift statuses are three of the states.
 _Avoid_: Unit status (for the set), winning status, health
 _Copy says_: the tool's own words on its own pages. "Approval wait" is the human word for `awaiting-approval`.
 
