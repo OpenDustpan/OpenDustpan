@@ -96,6 +96,7 @@ func newAuditChainHandler(
 		SignIn:           nil,
 		Journal:          nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 	})

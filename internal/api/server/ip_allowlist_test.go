@@ -116,6 +116,7 @@ func newIPAllowHandler(
 		Audit:            nil,
 		OnAuditFailure:   nil,
 		IPAllowlists:     svc,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,

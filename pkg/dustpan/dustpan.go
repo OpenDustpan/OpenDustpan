@@ -2532,6 +2532,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	gates, err := newGateConfigService(cfg, deps.services.namespaces)
+	if err != nil {
+		return nil, err
+	}
+
 	var sinks serverapi.AuditSinkSource
 	if cfg.auditShipper != nil {
 		sinks = cfg.auditShipper
@@ -2553,6 +2558,7 @@ func newServerHandler(
 		Access:           grants,
 		Tokens:           deps.services.tokens,
 		IPAllowlists:     allow,
+		Gates:            gatesPort(gates),
 		SessionPolicy:    deps.policies,
 		Audit:            serverAuditOf(cfg.namespaceStore),
 		CheckpointEpochs: checkpointEpochsOf(deps.chain),

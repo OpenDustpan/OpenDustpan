@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unicode/utf8"
 )
 
 // The limits of one scope and of one object. Above a limit, a save fails
@@ -36,8 +37,13 @@ const AccessRefusalWindow = 60 * time.Second
 // The bounds of an approval count, an approval timeout and a fresh
 // authentication window.
 const (
-	MinApprovalCount    = 1
-	MaxApprovalCount    = 10
+	MinApprovalCount = 1
+	MaxApprovalCount = 10
+	// MaxApproverEntries is the most groups, and the most users, in the
+	// approvers of one rule or default.
+	MaxApproverEntries = 100
+	// MaxApproverBytes is the most bytes in the name of one approver.
+	MaxApproverBytes    = 256
 	MinApprovalTimeout  = time.Hour
 	MaxApprovalTimeout  = 30 * 24 * time.Hour
 	DefaultApprovalWait = 7 * 24 * time.Hour
@@ -151,6 +157,29 @@ func (a Approvers) Empty() bool {
 	return len(a.Groups) == 0 && len(a.Users) == 0 && !a.UnitOwners
 }
 
+// Validate returns an error that wraps ErrInvalid for approvers that name an
+// empty or a too long entry, or more than MaxApproverEntries groups or
+// users. It does not check that the approvers are not empty: a default may
+// name none.
+func (a Approvers) Validate() error {
+	for _, l := range []struct {
+		kind string
+		list []string
+	}{{"group", a.Groups}, {"user", a.Users}} {
+		if len(l.list) > MaxApproverEntries {
+			return fmt.Errorf("%w: %d %ss: give at most %d", ErrInvalid, len(l.list), l.kind, MaxApproverEntries)
+		}
+
+		for _, name := range l.list {
+			if name == "" || len(name) > MaxApproverBytes || !utf8.ValidString(name) {
+				return fmt.Errorf("%w: a %s name is empty, too long, or not UTF-8", ErrInvalid, l.kind)
+			}
+		}
+	}
+
+	return nil
+}
+
 // ApprovalRule says who may approve and how many people must approve. A
 // gate names it in its outcome as approval:<ID>. The server resolves the
 // ID at the scope of the gate, then at each wider scope, never at a
@@ -177,6 +206,67 @@ func (r ApprovalRule) Ref() ObjectRef {
 	return ObjectRef{Scope: r.Scope, ID: r.ID, Version: r.Version}
 }
 
+// validateCount returns an error that wraps ErrInvalid for a count outside
+// MinApprovalCount to MaxApprovalCount.
+func validateCount(count int) error {
+	if count < MinApprovalCount || count > MaxApprovalCount {
+		return fmt.Errorf("%w: count %d: give %d to %d", ErrInvalid, count, MinApprovalCount, MaxApprovalCount)
+	}
+
+	return nil
+}
+
+// validateFresh returns an error that wraps ErrInvalid for a window that
+// ParseFreshAuth refuses.
+func validateFresh(f FreshAuth) error {
+	if !f.Set {
+		return nil
+	}
+
+	_, err := ParseFreshAuth(f.Seconds)
+
+	return err
+}
+
+// Validate returns an error that wraps ErrInvalid for a rule that holds no
+// approver, a count outside 1 to 10, a window that ParseFreshAuth refuses, a
+// timeout outside MinApprovalTimeout to MaxApprovalTimeout (zero takes the
+// default), or an ID that ParseRuleID refuses. Each write path calls it, in
+// the service and in the store.
+func (r ApprovalRule) Validate() error {
+	if _, err := ParseRuleID(string(r.ID)); err != nil {
+		return err
+	}
+
+	if r.Approvers.Empty() {
+		return fmt.Errorf("%w: an approval rule names at least one group, user or unitOwners", ErrInvalid)
+	}
+
+	if err := r.Approvers.Validate(); err != nil {
+		return err
+	}
+
+	if err := validateCount(r.Count); err != nil {
+		return err
+	}
+
+	if err := validateFresh(r.FreshAuth); err != nil {
+		return err
+	}
+
+	if r.Timeout != 0 && (r.Timeout < MinApprovalTimeout || r.Timeout > MaxApprovalTimeout) {
+		return fmt.Errorf(
+			"%w: timeout %s: give %s to %s",
+			ErrInvalid,
+			r.Timeout,
+			MinApprovalTimeout,
+			MaxApprovalTimeout,
+		)
+	}
+
+	return nil
+}
+
 // ApprovalDefault is the requirement that a namespace, a collection or a
 // unit sets for each change below it, with no gate. With none set, no
 // change needs an approval. Each default holds on its own.
@@ -195,6 +285,22 @@ type ApprovalDefault struct {
 	Unless string
 	// Reads holds the IDs of the path sets that Unless reads.
 	Reads []ID
+}
+
+// Validate returns an error that wraps ErrInvalid for a default with a count
+// outside 1 to 10, a window that ParseFreshAuth refuses, or approvers that
+// Approvers.Validate refuses. Each write path calls it, in the service and in
+// the store.
+func (d ApprovalDefault) Validate() error {
+	if err := validateCount(d.Count); err != nil {
+		return err
+	}
+
+	if err := validateFresh(d.FreshAuth); err != nil {
+		return err
+	}
+
+	return d.Approvers.Validate()
 }
 
 // OwnershipRule names who owns a part of a change. It needs no gate. Each

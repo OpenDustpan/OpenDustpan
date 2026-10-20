@@ -77,6 +77,7 @@ pkg/                   the public SDK (ADR 35)
   unitimport/          domain: imports of units from a source, the import ledger and the move check
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
+  gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)

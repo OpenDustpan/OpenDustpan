@@ -70,7 +70,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Namespaces: coverageNamespaces(tb), Backups: nil, Restores: nil, Maintenance: coverageMaintenance{},
 		Metrics: coverageMetrics{}, Version: "test", Schema: coverageSchema{}, Journal: nil, Principals: principals,
 		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil, AuditChain: nil,
-		IPAllowlists: nil, SessionPolicy: nil,
+		IPAllowlists: nil, Gates: nil, SessionPolicy: nil,
 		SignIn: &serverapi.SignIn{
 			OnDevRefused: nil,
 			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,

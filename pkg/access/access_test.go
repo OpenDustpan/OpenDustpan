@@ -1583,3 +1583,45 @@ func mustUnit(t *testing.T, ns namespace.Name, name string) identity.Object {
 
 	return obj
 }
+
+// TestBuiltInRolesHoldTheGateActions proves that each role that reads
+// namespaces can read the gate configuration, so that a person whom a rule
+// gates can read that rule, and that only the roles of the data family and
+// above can change it.
+func TestBuiltInRolesHoldTheGateActions(t *testing.T) {
+	t.Parallel()
+
+	read, manage := identity.ActionNamespaceReadGates, identity.ActionNamespaceManageGates
+
+	tests := []struct {
+		role       string
+		wantRead   bool
+		wantManage bool
+	}{
+		{access.RoleViewer, true, false},
+		{access.RoleSecretViewer, true, false},
+		{access.RoleAuditor, true, false},
+		{access.RoleWriter, true, false},
+		{access.RoleMaintainer, true, false},
+		{access.RoleAdmin, true, true},
+		{access.RoleAccountAdministrator, true, true},
+		{access.RoleSiteAdministrator, true, true},
+		{access.RoleTokenManager, false, false},
+		{access.RoleInstallationOperator, false, false},
+	}
+
+	for _, tt := range tests {
+		r, ok := access.BuiltInRole(tt.role)
+		if !ok {
+			t.Fatalf("no built-in role %q", tt.role)
+		}
+
+		if got := slices.Contains(r.Actions, read); got != tt.wantRead {
+			t.Errorf("%s holds %s = %t, want %t", tt.role, read, got, tt.wantRead)
+		}
+
+		if got := slices.Contains(r.Actions, manage); got != tt.wantManage {
+			t.Errorf("%s holds %s = %t, want %t", tt.role, manage, got, tt.wantManage)
+		}
+	}
+}
