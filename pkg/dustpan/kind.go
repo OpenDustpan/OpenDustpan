@@ -124,7 +124,13 @@ func (s *Server) warnDevPrincipals(ctx context.Context) {
 	}
 
 	svc, err := principal.NewService(principal.Config{
-		TempAdmins: nil, Store: s.kind.principals, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      s.kind.principals,
+		Guard:      principal.AdminOnlyGuard{},
+		Namespaces: nil,
+		Tokens:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		s.logger.WarnContext(ctx, "dev people check skipped", slog.String("reason", err.Error()))
