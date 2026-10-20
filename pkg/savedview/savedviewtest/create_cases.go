@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/savedview"
@@ -150,30 +149,15 @@ func testNamespaceCap(t *testing.T, h Harness) {
 	fence := h.Namespace(t, "acme")
 	owners := savedview.MaxPerNamespace / savedview.MaxPerOwner
 
-	var wg sync.WaitGroup
-
-	errs := make(chan error, owners)
-
+	// One writer: a store that serializes its writes must not time out.
 	for o := range owners {
-		wg.Go(func() {
-			for i := range savedview.MaxPerOwner {
-				v := newView("acme", ownerN(o), fmt.Sprintf("view %03d", i))
+		for i := range savedview.MaxPerOwner {
+			v := newView("acme", ownerN(o), fmt.Sprintf("view %03d", i))
 
-				err := h.Store.Create(t.Context(), v, fence, auditEntry("acme", "create"))
-				if err != nil {
-					errs <- fmt.Errorf("owner %d view %d: %w", o, i, err)
-
-					return
-				}
+			if err := h.Store.Create(t.Context(), v, fence, auditEntry("acme", "create")); err != nil {
+				t.Fatalf("fill the namespace: owner %d view %d: %v", o, i, err)
 			}
-		})
-	}
-
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		t.Fatalf("fill the namespace: %v", err)
+		}
 	}
 
 	fresh := newView("acme", ownerA, "Payments")
