@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -623,11 +624,11 @@ func TestRestoreCountsDroppedTempAdmins(t *testing.T) {
 func TestRestoreLogsOneWarningForEachClass(t *testing.T) {
 	t.Parallel()
 
-	var logs bytes.Buffer
+	logs := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
 		cfg.AllowDevBackups = true
-		cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+		cfg.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	})
 	setup.live.dev.detect = dirtyReport()
 	setup.live.dev.remove = dirtyReport()
