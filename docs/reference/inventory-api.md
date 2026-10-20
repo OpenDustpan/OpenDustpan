@@ -27,6 +27,11 @@ page is relative to that prefix.
 | `GET /namespaces/{namespace}/lock` | `namespace:read` | The manual lock of the namespace |
 | `DELETE /namespaces/{namespace}/lock` | `unit:lock`, and the caller holds the lock | No body |
 | `POST /namespaces/{namespace}/lock/force-unlock` | `unit:manage` | No body |
+| `POST /namespaces/{namespace}/views` | `view:create`, and the caller is a person | A new saved view |
+| `GET /namespaces/{namespace}/views` | `view:read`, and the caller is a person | The saved views of the caller |
+| `GET /namespaces/{namespace}/views/{view_id}` | `view:read`, and the caller is a person | One saved view of the caller |
+| `DELETE /namespaces/{namespace}/views/{view_id}` | `view:delete`, and the caller is a person | No body |
+| `GET /namespaces/{namespace}/views/{view_id}/units` | `view:read` and `namespace:read`, then `unit:read` on each unit | One page of the units of the view |
 | `GET /namespaces/{namespace}/context` | `namespace:read` | The context of the namespace |
 | `PATCH /namespaces/{namespace}/context` | `namespace:set-context` | The new context |
 | `DELETE /namespaces/{namespace}/context` | `namespace:set-context` | No body |
@@ -53,6 +58,8 @@ These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 - `POST /api/inventory/unit-lock/force-unlock?unit={unit reference}`, `unit:manage`: end the lock of another person.
 
 The [manual locks guide](../guides/manual-locks.md) describes the lock routes.
+
+The [saved views guide](../guides/saved-views.md) describes the view routes.
 
 ## The unit list
 
