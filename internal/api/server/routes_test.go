@@ -23,6 +23,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -760,9 +762,9 @@ func newRouteTestBackups(
 	t.Helper()
 
 	service, err := backup.NewService(backup.Config{
-		Exporter:    st,
-		Kinds:       st,
-		Registry:    st,
+		Exporter: st,
+		Kinds:    st,
+		Registry: st, Operations: st.DurableOperationsPort(), Owner: "", Lease: 0, Logger: nil,
 		Blobs:       live,
 		StateOpener: nil,
 		Target:      target,
@@ -1510,8 +1512,9 @@ type stubBackupRegistry struct{}
 
 func (stubBackupRegistry) CreateBackup(_ context.Context, _ backup.Record) error { return nil }
 
+//nolint:revive // argument-limit: the stub has the signature of the port.
 func (stubBackupRegistry) FinishBackup(
-	_ context.Context, _ backup.ID, _ backup.State, _ string, _ time.Time,
+	_ context.Context, _ durable.StepFence, _ backup.ID, _ backup.State, _ string, _ time.Time,
 ) (backup.Record, error) {
 	return backup.Record{
 		StartedAt: time.Time{},
@@ -1529,8 +1532,12 @@ func (stubBackupRegistry) GetBackup(_ context.Context, _ backup.ID) (backup.Reco
 
 func (stubBackupRegistry) ListBackups(_ context.Context) ([]backup.Record, error) { return nil, nil }
 
-func (stubBackupRegistry) FailRunningBackups(_ context.Context, _ time.Time, _ string) error {
+func (stubBackupRegistry) StartBackup(_ context.Context, _ backup.Record, _ durable.StartRequest) error {
 	return nil
+}
+
+func (stubBackupRegistry) FailEndedBackups(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
 }
 
 // TestNewHandlerKeepsBackupService proves the backup service passes through
@@ -1565,6 +1572,10 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Exporter:    stubBackupExporter{},
 		Kinds:       productionKind{},
 		Registry:    stubBackupRegistry{},
+		Operations:  durabletest.NewMem().Store(),
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 		Blobs:       live,
 		StateOpener: nil,
 		Target:      target,

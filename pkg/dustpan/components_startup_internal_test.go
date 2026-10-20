@@ -56,19 +56,11 @@ func TestApiOnlyStartLeavesTheMigrationPending(t *testing.T) {
 
 // registrySpy records the calls that the start-up steps make.
 type registrySpy struct {
-	backup.Registry
 	backup.RestoreRegistry
 
-	failedBackups  int
 	failedRestores int
 	fenced         int
 	fenceErr       error
-}
-
-func (r *registrySpy) FailRunningBackups(context.Context, time.Time, string) error {
-	r.failedBackups++
-
-	return nil
 }
 
 func (r *registrySpy) FailRunningRestores(context.Context, time.Time, string) error {
@@ -90,11 +82,10 @@ func (r *registrySpy) BumpFailoverVersions(context.Context) (int64, error) {
 	return 1, r.fenceErr
 }
 
-// TestStartFailsBackupsAndRestoresOnlyWithAPI proves that a process without
-// the api component, which takes no backup and no restore, leaves the running
-// backups and restores of the api processes alone at start, and fences no
-// namespace.
-func TestStartFailsBackupsAndRestoresOnlyWithAPI(t *testing.T) {
+// TestStartFailsRestoresOnlyWithAPI proves that a process without the api
+// component, which takes no restore, leaves the running restores of the api
+// processes alone at start, and fences no namespace.
+func TestStartFailsRestoresOnlyWithAPI(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
@@ -109,23 +100,16 @@ func TestStartFailsBackupsAndRestoresOnlyWithAPI(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			spy := &registrySpy{
-				Registry: nil, RestoreRegistry: nil, failedBackups: 0, failedRestores: 0, fenced: 0, fenceErr: nil,
-			}
+			spy := &registrySpy{RestoreRegistry: nil, failedRestores: 0, fenced: 0, fenceErr: nil}
 			srv := testServer(nil, "a")
-			srv.components, srv.now, srv.backupRegistry, srv.restoreRegistry = tc.set, time.Now, spy, spy
-
-			if err := srv.failStoppedBackups(t.Context()); err != nil {
-				t.Fatalf("fail stopped backups: %v", err)
-			}
+			srv.components, srv.now, srv.restoreRegistry = tc.set, time.Now, spy
 
 			if err := srv.failStoppedRestores(t.Context()); err != nil {
 				t.Fatalf("fail stopped restores: %v", err)
 			}
 
-			if spy.failedBackups != tc.want || spy.failedRestores != tc.want || spy.fenced != tc.want {
-				t.Fatalf("failed backups %d, failed restores %d, fences %d; want %d of each",
-					spy.failedBackups, spy.failedRestores, spy.fenced, tc.want)
+			if spy.failedRestores != tc.want || spy.fenced != tc.want {
+				t.Fatalf("failed restores %d, fences %d; want %d of each", spy.failedRestores, spy.fenced, tc.want)
 			}
 		})
 	}
