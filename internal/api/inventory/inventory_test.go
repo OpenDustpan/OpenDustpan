@@ -486,6 +486,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			States:        []stateBody{},
 		},
 		{
 			Tool:          "Pulumi",
@@ -497,6 +498,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			Status:        "deployed",
 			ResourceCount: &count,
 			Lock:          nil,
+			States:        []stateBody{},
 		},
 		{
 			Tool:          "OpenTofu",
@@ -508,6 +510,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			States:        []stateBody{},
 		},
 	}
 

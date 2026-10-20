@@ -15,16 +15,17 @@ import (
 )
 
 // stateTimes are the two lock times of the state tests: early is before late.
-func stateTimes() (time.Time, time.Time) {
+func stateTimes() [2]time.Time {
 	early := time.Date(2026, time.October, 1, 8, 0, 0, 0, time.UTC)
 
-	return early, early.Add(48 * time.Hour)
+	return [2]time.Time{early, early.Add(48 * time.Hour)}
 }
 
 // lockCombinationEntries returns four units in acme, one for each combination
 // of the lock and the manual lock. The manual lock of "both" is the later one.
 func lockCombinationEntries() []coreinventory.Entry {
-	early, late := stateTimes()
+	times := stateTimes()
+	early, late := times[0], times[1]
 	lock := &coreinventory.Lock{Since: late, Holder: "u", Operation: "lock"}
 	manual := &coreinventory.ManualLock{Since: early, Kind: "unit", Object: "o", Holder: "u", Reason: "r"}
 
@@ -70,7 +71,8 @@ func statesByUnit(units []unitBody) map[string][]stateBody {
 func TestUnitListStatesLocked(t *testing.T) {
 	t.Parallel()
 
-	early, late := stateTimes()
+	times := stateTimes()
+	early, late := times[0], times[1]
 	lockedEarly := []stateBody{{State: "locked", Since: early.Format("2006-01-02T15:04:05Z")}}
 	lockedLate := []stateBody{{State: "locked", Since: late.Format("2006-01-02T15:04:05Z")}}
 
@@ -268,9 +270,13 @@ func TestUnitListStateFilterPageToken(t *testing.T) {
 		t.Errorf("token without the state filter: status = %d, want 400", rec.Code)
 	}
 
-	code, next := getPageFrom(t, handler, "acme", "state=locked&pageSize=1&pageToken="+url.QueryEscape(page.NextPageToken))
+	code, next := getPageFrom(
+		t,
+		handler,
+		"acme",
+		"state=locked&pageSize=1&pageToken="+url.QueryEscape(page.NextPageToken),
+	)
 	if code != http.StatusOK || len(next.Units) != 1 {
 		t.Errorf("token with the same filter: status = %d, units = %d, want 200 and 1", code, len(next.Units))
 	}
-
 }

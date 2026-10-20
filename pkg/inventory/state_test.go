@@ -134,21 +134,32 @@ func TestEntryLockedState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			e := inventory.Entry{Lock: tt.lock, ManualLock: tt.manual}
-			if got := e.StatesOf(); !slices.Equal(got, tt.want) || got == nil {
-				t.Errorf("StatesOf() = %v, want %v", got, tt.want)
+			e := inventory.Entry{
+				LastChanged: time.Time{}, Namespace: "", Tool: "", Name: "", UnitID: "", DisplayName: "",
+				Status: "", ResourceCount: nil, Lock: tt.lock, ManualLock: tt.manual, Collection: "", Labels: nil,
 			}
 
-			wantLocked := tt.lock != nil || tt.manual != nil
-			if got := e.HasState(inventory.StateLocked); got != wantLocked {
-				t.Errorf("HasState(locked) = %v, want %v", got, wantLocked)
-			}
+			checkDerivedStates(t, e, tt.want)
 
-			for _, s := range inventory.States() {
-				if s != inventory.StateLocked && e.HasState(s) {
-					t.Errorf("HasState(%q) = true, want false: no other state is derived", s)
-				}
+			if got, want := e.HasState(inventory.StateLocked), tt.lock != nil || tt.manual != nil; got != want {
+				t.Errorf("HasState(locked) = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// checkDerivedStates checks the states that e derives: the list
+// and that no other state is derived.
+func checkDerivedStates(t *testing.T, e inventory.Entry, want []inventory.StateSince) {
+	t.Helper()
+
+	if got := e.StatesOf(); !slices.Equal(got, want) || got == nil {
+		t.Errorf("StatesOf() = %v, want %v", got, want)
+	}
+
+	for _, s := range inventory.States() {
+		if s != inventory.StateLocked && e.HasState(s) {
+			t.Errorf("HasState(%q) = true, want false: no other state is derived", s)
+		}
 	}
 }

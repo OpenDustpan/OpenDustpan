@@ -139,10 +139,12 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 		f.references[obj.String()] = struct{}{}
 	}
 
-	f.states, err = parseStateFilter(query["state"])
-	if err != nil {
-		return unitFilter{}, err
+	states, stateErr := parseStateFilter(query["state"])
+	if stateErr != nil {
+		return unitFilter{}, stateErr
 	}
+
+	f.states = states
 
 	return f, nil
 }
