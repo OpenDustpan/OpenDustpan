@@ -31,6 +31,7 @@ func newGateHandler(t *testing.T, units tofuhttp.WorkspaceService, gate *bodygat
 		Audit:          nil,
 		Gate:           gate,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

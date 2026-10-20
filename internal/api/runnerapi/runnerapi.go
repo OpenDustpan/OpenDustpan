@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -67,8 +68,12 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each refusal whose entry could not
 	// be written, so the server can count it.
 	OnAuditFailure func()
-	Sessions       *sessionauth.Checker
-	Logger         *slog.Logger
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
+	Sessions      *sessionauth.Checker
+	Logger        *slog.Logger
 
 	// Release is the release of this server. A runner of another release
 	// than the skew allows gets version-unsupported.
@@ -140,12 +145,26 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		namespaces: cfg.Namespaces, pools: cfg.Pools, members: cfg.Members, handoffs: cfg.Handoffs,
-		claimer: cfg.Claimer, sweeps: cfg.Sweeps, operations: cfg.Operations,
-		authn: cfg.Authenticator, authz: cfg.Authorizer, sessions: cfg.Sessions, logger: cfg.Logger,
-		guard:   refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure),
-		release: cfg.Release, serverURL: cfg.ServerURL, now: now, interval: interval, polls: sync.Map{},
-		mux: newPatternMux(), routes: nil,
+		namespaces: cfg.Namespaces,
+		pools:      cfg.Pools,
+		members:    cfg.Members,
+		handoffs:   cfg.Handoffs,
+		claimer:    cfg.Claimer,
+		sweeps:     cfg.Sweeps,
+		operations: cfg.Operations,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		sessions:   cfg.Sessions,
+		logger:     cfg.Logger,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter),
+		release:   cfg.Release,
+		serverURL: cfg.ServerURL,
+		now:       now,
+		interval:  interval,
+		polls:     sync.Map{},
+		mux:       newPatternMux(),
+		routes:    nil,
 	}
 
 	h.routes = h.buildRoutes()

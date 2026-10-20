@@ -8,11 +8,11 @@ import (
 )
 
 // Clean returns s with each control character (Cc), format character (Cf),
-// line separator, paragraph separator and byte that is not valid UTF-8
-// written as \uXXXX, cut to at most limit bytes at a rune boundary. A value
-// that comes from a request goes through Clean before it enters an audit
-// entry, a log line or a reason. Clean changes the text to make it safe to
-// store; it is not an input check, and the caller still validates the input.
+// line separator and paragraph separator written as \uXXXX, and each byte that
+// is not valid UTF-8 replaced by U+FFFD, cut to at most limit bytes at a rune
+// boundary. A value that comes from a request goes through Clean before it
+// enters an audit entry, a log line or a reason. Clean changes the text to make
+// it safe to store; it is not an input check, and the caller still validates the input.
 func Clean(s string, limit int) string {
 	var b strings.Builder
 

@@ -220,9 +220,24 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 	logger := slog.New(slog.DiscardHandler)
 
 	units, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Audit: nil, OnAuditFailure: nil, Locks:     nil, PublicURL: "", Moves: nil, Namespaces: namespaces, Units: st, Collections: collections, Deleted: st,
-		History: nil, Lifecycles: map[string]coreinventory.Lifecycle{"pulumi": nil}, ReadScope: allReadable{},
-		Authenticator: authn, Authorizer: identity.AdminOnly{}, Sessions: nil, Logger: logger, Now: nil,
+		Audit:          nil,
+		OnAuditFailure: nil,
+		Locks:          nil,
+		PublicURL:      "",
+		Moves:          nil,
+		Namespaces:     namespaces,
+		Units:          st,
+		Collections:    collections,
+		Deleted:        st,
+		History:        nil,
+		Lifecycles:     map[string]coreinventory.Lifecycle{"pulumi": nil},
+		ReadScope:      allReadable{},
+		Authenticator:  authn,
+		Authorizer:     identity.AdminOnly{},
+		Sessions:       nil,
+		Logger:         logger,
+		Now:            nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)
@@ -232,6 +247,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 		Audit: nil, OnAuditFailure: nil,
 		Namespaces: namespaces, Units: st, Deleted: st, Collections: collections, Entries: st, Writer: writer,
 		Authenticator: authn, Authorizer: identity.AdminOnly{}, Sessions: nil, Logger: logger,
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("context handler: %v", err)

@@ -1,6 +1,7 @@
 package refusal_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // person returns an authenticated principal with the subject.
@@ -130,7 +132,13 @@ func TestFloodWritesOneEntryAndCountsTheRest(t *testing.T) {
 
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	lim := denylimit.New(
-		denylimit.Config{Window: time.Minute, MaxKeys: 0, MaxFlush: 0, Now: func() time.Time { return now }},
+		denylimit.Config{
+			Window:              time.Minute,
+			MaxKeys:             0,
+			MaxFlush:            0,
+			Now:                 func() time.Time { return now },
+			MaxKeysPerPrincipal: 0,
+		},
 	)
 	store, failures := newFakeStore(nil), 0
 	rec := newRecorder(t, store, lim, &failures)
@@ -167,7 +175,13 @@ func TestQuietPrincipalIsFlushed(t *testing.T) {
 
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	lim := denylimit.New(
-		denylimit.Config{Window: time.Minute, MaxKeys: 0, MaxFlush: 0, Now: func() time.Time { return now }},
+		denylimit.Config{
+			Window:              time.Minute,
+			MaxKeys:             0,
+			MaxFlush:            0,
+			Now:                 func() time.Time { return now },
+			MaxKeysPerPrincipal: 0,
+		},
 	)
 	store, failures := newFakeStore(nil), 0
 	rec := newRecorder(t, store, lim, &failures)
@@ -203,7 +217,13 @@ func TestOverflowWritesOneAggregate(t *testing.T) {
 
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	lim := denylimit.New(
-		denylimit.Config{Window: time.Minute, MaxKeys: 4, MaxFlush: 0, Now: func() time.Time { return now }},
+		denylimit.Config{
+			Window:              time.Minute,
+			MaxKeys:             4,
+			MaxFlush:            0,
+			Now:                 func() time.Time { return now },
+			MaxKeysPerPrincipal: 0,
+		},
 	)
 	store, failures := newFakeStore(nil), 0
 	rec := newRecorder(t, store, lim, &failures)
@@ -304,5 +324,178 @@ func checkClean(t *testing.T, e audit.Entry) {
 
 	if len(e.Subject) > 255 {
 		t.Fatalf("subject has %d bytes, want at most 255", len(e.Subject))
+	}
+}
+
+// everyNamespace knows every namespace that it is asked for.
+type everyNamespace struct{}
+
+func (everyNamespace) Get(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{
+		CreatedAt: time.Time{}, ID: "", Name: name, HomeRegion: "", FailoverVersion: 1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}, nil
+}
+
+// TestFloodOfNamespacesDoesNotHideAnotherPrincipal checks the bound on keys: one
+// principal that names many namespaces holds at most MaxKeysPerPrincipal keys
+// and one aggregate key, so that a second principal is still recorded, with its
+// own name. The table stays bounded.
+func TestFloodOfNamespacesDoesNotHideAnotherPrincipal(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	lim := denylimit.New(denylimit.Config{
+		Window: time.Minute, MaxKeys: 8, MaxFlush: 0, MaxKeysPerPrincipal: 3, Now: func() time.Time { return now },
+	})
+	store, failures := newFakeStore(nil), 0
+	rec := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, store, everyNamespace{},
+		slog.New(slog.DiscardHandler), func() { failures++ }).WithLimiter(lim)
+
+	for i := range 2000 {
+		deny(t, rec, request(t, "/api/x"), person("bo@example.com"),
+			identity.NamespaceObject(namespace.Name(fmt.Sprintf("ns%d", i))))
+	}
+
+	if lim.Len() > 4 {
+		t.Fatalf("tracked keys = %d, want at most 3 and the aggregate key", lim.Len())
+	}
+
+	before := len(store.entries)
+
+	deny(t, rec, request(t, "/api/x"), person("ann@example.com"), identity.NamespaceObject("ns-ann"))
+
+	if len(store.entries) != before+1 || store.entries[before].Subject != "ann@example.com" {
+		t.Fatalf("entries after ann = %+v, want one more that names ann", store.entries[before:])
+	}
+
+	for i := range store.entries[:before] {
+		if store.entries[i].Subject != "bo@example.com" {
+			t.Fatalf("entry %d names %q, want bo@example.com", i, store.entries[i].Subject)
+		}
+	}
+
+	if failures != 0 {
+		t.Fatalf("counted %d failures, want 0", failures)
+	}
+}
+
+// TestUnknownNamespacesAreOneScope checks that a flood of names of namespaces
+// that do not exist holds one key for each action and object kind.
+func TestUnknownNamespacesAreOneScope(t *testing.T) {
+	t.Parallel()
+
+	lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	store, failures := newFakeStore(nil), 0
+	rec := newRecorder(t, store, lim, &failures)
+
+	for i := range 500 {
+		deny(t, rec, request(t, "/api/x"), person("bo@example.com"),
+			identity.NamespaceObject(namespace.Name(fmt.Sprintf("gone%d", i))))
+	}
+
+	if lim.Len() != 1 || len(store.entries) != 1 {
+		t.Fatalf("tracked keys = %d and entries = %d, want 1 and 1", lim.Len(), len(store.entries))
+	}
+
+	if e := store.entries[0]; e.Namespace != audit.ServerScope || !strings.Contains(e.Reason, "does not exist") {
+		t.Fatalf("entry = %+v, want the installation scope and the missing namespace in the reason", e)
+	}
+}
+
+// TestFlushWritesHeldCounts checks that Flush writes the counts that no entry
+// carries and empties the limiter, so a second Flush writes nothing.
+func TestFlushWritesHeldCounts(t *testing.T) {
+	t.Parallel()
+
+	lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	store, failures := newFakeStore(nil), 0
+	rec := newRecorder(t, store, lim, &failures)
+
+	for range 6 {
+		deny(t, rec, request(t, "/api/x"), person("bo@example.com"), identity.NamespaceObject("team"))
+	}
+
+	rec.Flush(t.Context())
+
+	if len(store.entries) != 2 || !strings.Contains(store.entries[1].Reason, "5 further refusals") ||
+		store.entries[1].Subject != "bo@example.com" {
+		t.Fatalf("entries = %+v, want the first refusal and a flush entry with the count 5", store.entries)
+	}
+
+	rec.Flush(t.Context())
+
+	if len(store.entries) != 2 || lim.Len() != 0 {
+		t.Fatalf("second flush: entries = %d and keys = %d, want 2 and 0", len(store.entries), lim.Len())
+	}
+}
+
+// TestCanceledRequestStillWritesTheEntry checks that a request context that is
+// done does not lose the entry of the refusal.
+func TestCanceledRequestStillWritesTheEntry(t *testing.T) {
+	t.Parallel()
+
+	store, failures := newFakeStore(nil), 0
+	rec := newRecorder(t, store, nil, &failures)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := rec.Authorize(ctx, request(t, "/api/x"), person("bo@example.com"), identity.ActionUnitWrite,
+		identity.NamespaceObject("team"))
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Authorize answers %v, want %v", err, identity.ErrDenied)
+	}
+
+	if len(store.entries) != 1 || failures != 0 {
+		t.Fatalf("wrote %d entries and counted %d failures, want 1 and 0", len(store.entries), failures)
+	}
+}
+
+// TestAuthorizerFailureIsRecordedWithoutItsText checks that an error of the
+// Authorizer that is not a refusal writes an entry with a fixed reason, and the
+// error text stays out of it.
+func TestAuthorizerFailureIsRecordedWithoutItsText(t *testing.T) {
+	t.Parallel()
+
+	store, failures := newFakeStore(nil), 0
+	rec := refusal.New(fakeAuthorizer{err: errStoreDown}, store, fakeNamespaces{},
+		slog.New(slog.DiscardHandler), func() { failures++ })
+
+	err := rec.Authorize(t.Context(), request(t, "/api/x"), person("bo@example.com"), identity.ActionUnitWrite,
+		identity.NamespaceObject("team"))
+	if !errors.Is(err, errStoreDown) {
+		t.Fatalf("Authorize answers %v, want %v", err, errStoreDown)
+	}
+
+	if len(store.entries) != 1 || !strings.HasPrefix(store.entries[0].Reason, refusal.ReasonFailed) ||
+		strings.Contains(store.entries[0].Reason, "store down") {
+		t.Fatalf(
+			"entries = %+v, want one entry with the reason %q and no error text",
+			store.entries,
+			refusal.ReasonFailed,
+		)
+	}
+}
+
+// TestRecordWithNoRequest checks that a caller with no request gets a valid
+// entry with no address and no user agent.
+func TestRecordWithNoRequest(t *testing.T) {
+	t.Parallel()
+
+	store, failures := newFakeStore(nil), 0
+	rec := newRecorder(t, store, nil, &failures)
+
+	rec.Record(t.Context(), nil, person("bo@example.com"), refusal.Denial{
+		Action: identity.ActionUnitManage, Object: identity.NamespaceObject("team"), Reason: "not the holder",
+	})
+
+	if len(store.entries) != 1 {
+		t.Fatalf("wrote %d entries, want 1", len(store.entries))
+	}
+
+	e := store.entries[0]
+	if err := e.Validate(); err != nil || e.SourceIP != "" || e.UserAgent != "" {
+		t.Fatalf("entry = %+v, validate = %v, want a valid entry with no address and no user agent", e, err)
 	}
 }

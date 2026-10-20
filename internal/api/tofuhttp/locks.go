@@ -228,7 +228,7 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 // writeHeld answers a refused LOCK with the lock that holds the workspace now.
 // A lock that cannot be read answers with the refusal.
 func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, refused error) {
-	if manual, ok := errors.AsType[*manuallock.LockedError](refusal); ok {
+	if manual, ok := errors.AsType[*manuallock.LockedError](refused); ok {
 		h.writeManualLocked(w, manual)
 
 		return
@@ -342,7 +342,7 @@ func (h *Handler) recordLockRefusal(ctx context.Context, r *http.Request, c call
 		return
 	}
 
-	h.guard.Record(ctx, r, c.principal, refusal.Denial{Action: identity.ActionUnitManage, Object: obj, Reason: reason})
+	h.guard.Record(ctx, r, c.principal, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: reason})
 }
 
 // writeConflict answers 409 with the current lock info, or with no body when

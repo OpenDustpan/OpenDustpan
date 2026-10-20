@@ -179,7 +179,7 @@ func buildDeletedFixture(
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Audit: nil, OnAuditFailure: nil, Locks:      nil, PublicURL:  "",
+		Audit: nil, OnAuditFailure: nil, Locks: nil, PublicURL: "",
 		Moves:      nil,
 		Namespaces: namespaces,
 		Units:      &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
@@ -196,6 +196,7 @@ func buildDeletedFixture(
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

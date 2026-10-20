@@ -317,6 +317,7 @@ func newTestHandler(t *testing.T) *apitaudit.Handler {
 		Authorizer:     stubAuthorizer{},
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -360,6 +361,7 @@ func newEnforcingHandlerWithSessions(
 		Authorizer:     authz,
 		Sessions:       sessions,
 		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -576,6 +578,7 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 		Sessions:       nil,
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

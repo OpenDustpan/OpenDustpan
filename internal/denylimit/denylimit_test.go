@@ -42,7 +42,9 @@ func TestOneEntryForEachKeyAndWindow(t *testing.T) {
 	t.Parallel()
 
 	c := newClock()
-	l := denylimit.New(denylimit.Config{Window: time.Minute, MaxKeys: 0, MaxFlush: 0, Now: c.now})
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 0, MaxFlush: 0, Now: c.now, MaxKeysPerPrincipal: 0},
+	)
 
 	writes, suppressed := 0, 0
 
@@ -77,7 +79,9 @@ func TestQuietKeyIsFlushedByTheNextCall(t *testing.T) {
 	t.Parallel()
 
 	c := newClock()
-	l := denylimit.New(denylimit.Config{Window: time.Minute, MaxKeys: 0, MaxFlush: 0, Now: c.now})
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 0, MaxFlush: 0, Now: c.now, MaxKeysPerPrincipal: 0},
+	)
 
 	for range 11 {
 		l.Allow(key("bo"))
@@ -99,7 +103,9 @@ func TestOverflowAggregatesAndStaysBounded(t *testing.T) {
 	t.Parallel()
 
 	c := newClock()
-	l := denylimit.New(denylimit.Config{Window: time.Minute, MaxKeys: 4, MaxFlush: 0, Now: c.now})
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 4, MaxFlush: 0, Now: c.now, MaxKeysPerPrincipal: 0},
+	)
 
 	count := overflowCount{written: 0, held: 0}
 
@@ -130,7 +136,9 @@ func TestFlushIsBounded(t *testing.T) {
 	t.Parallel()
 
 	c := newClock()
-	l := denylimit.New(denylimit.Config{Window: time.Minute, MaxKeys: 100, MaxFlush: 3, Now: c.now})
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 100, MaxFlush: 3, Now: c.now, MaxKeysPerPrincipal: 0},
+	)
 
 	for i := range 50 {
 		l.Allow(key(fmt.Sprintf("p%d", i)))
@@ -158,7 +166,7 @@ func TestFlushIsBounded(t *testing.T) {
 func TestConcurrentUse(t *testing.T) {
 	t.Parallel()
 
-	l := denylimit.New(denylimit.Config{Window: time.Minute, MaxKeys: 8, MaxFlush: 0, Now: nil})
+	l := denylimit.New(denylimit.Config{Window: time.Minute, MaxKeys: 8, MaxFlush: 0, Now: nil, MaxKeysPerPrincipal: 0})
 
 	var wg sync.WaitGroup
 
@@ -189,5 +197,79 @@ func (c *overflowCount) add(d denylimit.Decision) {
 	case d.Overflow:
 		c.held++
 	default:
+	}
+}
+
+func TestPerPrincipalBoundUsesTheAggregateKey(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 100, MaxFlush: 0, MaxKeysPerPrincipal: 3, Now: c.now},
+	)
+
+	writes := 0
+
+	for i := range 50 {
+		d := l.Allow(denylimit.Key{Principal: "bo", Action: "unit:write", Kind: "unit", Scope: fmt.Sprintf("ns%d", i)})
+		if d.Write {
+			writes++
+		}
+	}
+
+	// Three keys of their own, and the first denial of the aggregate key.
+	if writes != 4 || l.Len() != 4 {
+		t.Fatalf("writes = %d and keys = %d, want 4 and 4", writes, l.Len())
+	}
+
+	if d := l.Allow(key("ann")); !d.Write || d.Overflow {
+		t.Fatalf("decision of a second principal = %+v, want a write that is not an overflow", d)
+	}
+
+	c.advance(time.Minute)
+
+	d := l.Allow(denylimit.Key{Principal: "bo", Action: "unit:write", Kind: "unit", Scope: "late"})
+	if !d.Write || len(d.Flush) != 1 || d.Flush[0].Suppressed != 46 || d.Flush[0].Key.Principal != "bo" ||
+		d.Flush[0].Key.Scope != denylimit.AggregateMark {
+		t.Fatalf("first denial of the next window = %+v, want a write and the flush of 46 for bo", d)
+	}
+}
+
+func TestDrainReturnsTheHeldCountsAndEmptiesTheLimiter(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	l := denylimit.New(
+		denylimit.Config{Window: time.Minute, MaxKeys: 2, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: c.now},
+	)
+
+	for range 4 {
+		l.Allow(key("bo"))
+	}
+
+	for range 3 {
+		l.Allow(key("ann"))
+	}
+
+	// The table is full: this principal goes into the overflow aggregate.
+	for range 3 {
+		l.Allow(key("cy"))
+	}
+
+	got := l.Drain()
+
+	total := 0
+
+	for _, p := range got {
+		total += p.Suppressed
+	}
+
+	// bo 3 held, ann 2 held, overflow 2 held.
+	if len(got) != 3 || total != 7 {
+		t.Fatalf("drain = %+v, want 3 items that hold 7 denials", got)
+	}
+
+	if l.Len() != 0 || len(l.Drain()) != 0 {
+		t.Fatalf("limiter holds %d keys after drain, want 0", l.Len())
 	}
 }

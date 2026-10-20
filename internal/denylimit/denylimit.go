@@ -6,9 +6,13 @@
 // later denial in the same window is counted and writes nothing. The count
 // goes out with the first entry of the next window of that key, or, when the
 // key stays quiet, with a flush entry that the first call after the window
-// returns. A Limiter tracks at most MaxKeys keys. A denial of a new key beyond
-// that bound goes into one aggregate: one entry for each window, with the
-// count of the denials that it stands for. The Limiter starts no goroutine.
+// returns. A Limiter tracks at most MaxKeys keys, and at most MaxKeysPerPrincipal
+// keys for each principal. A denial of a new key of a principal beyond its bound
+// goes into the aggregate key of that principal, so its entry still names the
+// principal and one principal cannot use the room of the others. A denial of a
+// new key beyond MaxKeys goes into one aggregate for all principals: one entry
+// for each window, with the count of the denials that it stands for. The
+// Limiter starts no goroutine.
 package denylimit
 
 import (
@@ -22,7 +26,14 @@ const (
 	DefaultWindow   = time.Minute
 	DefaultMaxKeys  = 4096
 	DefaultMaxFlush = 32
+	// DefaultMaxKeysPerPrincipal is the number of keys that one principal may
+	// hold. The aggregate key of the principal is not in the count.
+	DefaultMaxKeysPerPrincipal = 64
 )
+
+// AggregateMark is the value of the Action, Kind and Scope of the aggregate key
+// of a principal.
+const AggregateMark = "*"
 
 // Key names one stream of denials.
 type Key struct {
@@ -62,6 +73,8 @@ type Config struct {
 	Window   time.Duration
 	MaxKeys  int
 	MaxFlush int
+	// MaxKeysPerPrincipal bounds the keys of one principal.
+	MaxKeysPerPrincipal int
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -76,10 +89,12 @@ type Limiter struct {
 	window   time.Duration
 	maxKeys  int
 	maxFlush int
+	perPrin  int
 	now      func() time.Time
 
 	mu        sync.Mutex
 	keys      map[Key]*slot
+	perCount  map[string]int
 	overflow  slot
 	lastSweep time.Time
 }
@@ -90,9 +105,11 @@ func New(cfg Config) *Limiter {
 		window:    cfg.Window,
 		maxKeys:   cfg.MaxKeys,
 		maxFlush:  cfg.MaxFlush,
+		perPrin:   cfg.MaxKeysPerPrincipal,
 		now:       cfg.Now,
 		mu:        sync.Mutex{},
 		keys:      make(map[Key]*slot),
+		perCount:  make(map[string]int),
 		overflow:  slot{start: time.Time{}, suppressed: 0},
 		lastSweep: time.Time{},
 	}
@@ -107,6 +124,10 @@ func New(cfg Config) *Limiter {
 
 	if l.maxFlush <= 0 {
 		l.maxFlush = DefaultMaxFlush
+	}
+
+	if l.perPrin <= 0 {
+		l.perPrin = DefaultMaxKeysPerPrincipal
 	}
 
 	if l.now == nil {
@@ -125,20 +146,26 @@ func (l *Limiter) Allow(key Key) Decision {
 	d := Decision{Write: false, Suppressed: 0, Overflow: false, Flush: l.sweep(now, key)}
 
 	if s, ok := l.keys[key]; ok {
-		if now.Sub(s.start) < l.window {
-			s.suppressed++
+		return l.touch(d, s, now)
+	}
 
-			return d
+	// A principal at its bound counts a new key in its own aggregate key. The
+	// entry of the aggregate still names the principal.
+	if l.perCount[key.Principal] >= l.perPrin {
+		key = aggregateKey(key.Principal)
+
+		if s, ok := l.keys[key]; ok {
+			return l.touch(d, s, now)
 		}
-
-		d.Write, d.Suppressed = true, s.suppressed
-		s.start, s.suppressed = now, 0
-
-		return d
 	}
 
 	if len(l.keys) < l.maxKeys {
 		l.keys[key] = &slot{start: now, suppressed: 0}
+
+		if !isAggregate(key) {
+			l.perCount[key.Principal]++
+		}
+
 		d.Write = true
 
 		return d
@@ -157,6 +184,46 @@ func (l *Limiter) Allow(key Key) Decision {
 	l.overflow = slot{start: now, suppressed: 0}
 
 	return d
+}
+
+// aggregateKey returns the key that holds the denials of a principal beyond its
+// bound of keys.
+func aggregateKey(principal string) Key {
+	return Key{Principal: principal, Action: AggregateMark, Kind: AggregateMark, Scope: AggregateMark}
+}
+
+// isAggregate reports whether key is the aggregate key of its principal.
+func isAggregate(key Key) bool {
+	return key == aggregateKey(key.Principal)
+}
+
+// Drain removes every key and returns the counts that no entry carries yet, with
+// no bound on their number except MaxKeys. The server calls it once at
+// shutdown, so that a count is not lost. The Limiter is empty afterward.
+func (l *Limiter) Drain() []Pending {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var out []Pending
+
+	for k, s := range l.keys {
+		if s.suppressed > 0 {
+			out = append(out, Pending{Key: k, Suppressed: s.suppressed, Overflow: false})
+		}
+	}
+
+	if l.overflow.suppressed > 0 {
+		out = append(out, Pending{
+			Key:        Key{Principal: "", Action: "", Kind: "", Scope: ""},
+			Suppressed: l.overflow.suppressed, Overflow: true,
+		})
+	}
+
+	l.keys = make(map[Key]*slot)
+	l.perCount = make(map[string]int)
+	l.overflow = slot{start: time.Time{}, suppressed: 0}
+
+	return out
 }
 
 // Len returns the number of tracked keys. It never exceeds MaxKeys.
@@ -188,7 +255,7 @@ func (l *Limiter) sweep(now time.Time, current Key) []Pending {
 		}
 
 		if s.suppressed == 0 {
-			delete(l.keys, k)
+			l.forget(k)
 
 			continue
 		}
@@ -201,7 +268,7 @@ func (l *Limiter) sweep(now time.Time, current Key) []Pending {
 
 		out = append(out, Pending{Key: k, Suppressed: s.suppressed, Overflow: false})
 
-		delete(l.keys, k)
+		l.forget(k)
 	}
 
 	if !l.overflow.start.IsZero() && now.Sub(l.overflow.start) >= l.window && l.overflow.suppressed > 0 &&
@@ -218,4 +285,36 @@ func (l *Limiter) sweep(now time.Time, current Key) []Pending {
 	}
 
 	return out
+}
+
+// touch counts a denial of a key that the table holds, or opens its next window.
+func (l *Limiter) touch(d Decision, s *slot, now time.Time) Decision {
+	if now.Sub(s.start) < l.window {
+		s.suppressed++
+
+		return d
+	}
+
+	d.Write, d.Suppressed = true, s.suppressed
+	s.start, s.suppressed = now, 0
+
+	return d
+}
+
+// forget removes key from the table and from the count of its principal. The
+// caller holds l.mu.
+func (l *Limiter) forget(key Key) {
+	delete(l.keys, key)
+
+	if isAggregate(key) {
+		return
+	}
+
+	if l.perCount[key.Principal] <= 1 {
+		delete(l.perCount, key.Principal)
+
+		return
+	}
+
+	l.perCount[key.Principal]--
 }

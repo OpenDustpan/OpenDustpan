@@ -249,6 +249,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		Operations: s.operations, Authenticator: adminAuthenticator{}, Authorizer: opts.authz,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Release: serverRelease(), ServerURL: serverURL,
 		Now: opts.now, PollInterval: 20 * time.Millisecond,
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

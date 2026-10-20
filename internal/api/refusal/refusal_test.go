@@ -45,7 +45,11 @@ type fakeStore struct {
 	fenceSeen namespace.Fence
 }
 
-func (s *fakeStore) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+func (s *fakeStore) Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append: %w", err)
+	}
+
 	s.fenceSeen = fence
 
 	if s.failWith != nil {
@@ -57,7 +61,11 @@ func (s *fakeStore) Append(_ context.Context, fence namespace.Fence, e audit.Ent
 	return e, nil
 }
 
-func (s *fakeStore) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+func (s *fakeStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append: %w", err)
+	}
+
 	if s.failWith != nil {
 		return audit.Entry{}, s.failWith
 	}
@@ -141,13 +149,13 @@ func TestAuthorizeRecordsRefusals(t *testing.T) {
 			inServerScope: false,
 		},
 		{
-			name:          "error that is not a refusal writes nothing",
+			name:          "error that is not a refusal writes an entry",
 			authz:         errStoreDown,
 			subject:       "bo@example.com",
 			obj:           identity.NamespaceObject("team"),
 			store:         newFakeStore(nil),
 			wantErr:       errStoreDown,
-			wantEntry:     false,
+			wantEntry:     true,
 			wantFailed:    false,
 			inServerScope: false,
 		},

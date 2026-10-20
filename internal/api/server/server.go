@@ -17,6 +17,7 @@ import (
 	"time"
 
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -101,6 +102,10 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter. Nil means a limiter of this handler
+	// only.
+	DenialLimiter *denylimit.Limiter
 	// AuditChain reads the state of the audit chain and approves a waiting
 	// change. Nil means the store keeps no audit chain: the audit chain
 	// routes answer 501.
@@ -206,9 +211,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		authn:          cfg.Authenticator,
-		authz:          cfg.Authorizer,
-		guard:          denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure),
+		authn: cfg.Authenticator,
+		authz: cfg.Authorizer,
+		guard: denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter),
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		backups:        cfg.Backups,

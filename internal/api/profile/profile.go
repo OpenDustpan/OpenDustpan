@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -48,6 +49,10 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each refusal whose entry could not
 	// be written, so the server can count it.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
@@ -88,7 +93,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		profiles: cfg.Profiles,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
-		guard:    refusal.New(cfg.Authorizer, cfg.Audit, nil, cfg.Logger, cfg.OnAuditFailure),
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, nil, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter),
 		sessions: cfg.Sessions,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,

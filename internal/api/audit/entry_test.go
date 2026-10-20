@@ -148,6 +148,7 @@ func TestReadOneEntryWithoutReader(t *testing.T) {
 		Authorizer:     &recordingAuthorizer{calls: nil},
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -225,6 +226,7 @@ func TestReadOneEntryOfAnUnknownNamespaceAnswers404(t *testing.T) {
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -256,6 +258,7 @@ func newReaderHandler(t *testing.T, reader audit.EntryReader) http.Handler {
 		Authorizer:     &recordingAuthorizer{calls: nil},
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

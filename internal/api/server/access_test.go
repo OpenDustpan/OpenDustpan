@@ -176,6 +176,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -49,6 +49,7 @@ import (
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
@@ -56,6 +57,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
@@ -143,6 +145,9 @@ const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
+	// denialLimiter is the one limiter of the audit entries of refused requests.
+	// Every adapter gets it, so its bound on keys holds for the whole server.
+	denialLimiter   *denylimit.Limiter
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -570,6 +575,9 @@ type Server struct {
 	tempAdmins  *tempadmin.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
+	// flushDenials writes the counts of refused requests that the limiter still
+	// holds. Run calls it once at shutdown.
+	flushDenials func(ctx context.Context)
 	// deleted runs the retention sweep of the deleted units on a schedule.
 	deleted *deletedSweeper
 	// signInRequests deletes the expired sign-in requests on a schedule, or
@@ -632,6 +640,9 @@ type services struct {
 // defaultSettings answers the settings of a server before its options.
 func defaultSettings() *settings {
 	return &settings{
+		denialLimiter: denylimit.New(denylimit.Config{
+			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
+		}),
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -919,8 +930,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	backupRegistry, restoreRegistry := registriesOf(cfg.namespaceStore)
 
 	srv := &Server{
-		handler:          handlers.served,
-		ungated:          handlers.ungated,
+		flushDenials: denialFlusher(cfg, svc, observed),
+		handler:      handlers.served, ungated: handlers.ungated,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
 		listener:         cfg.listener,
@@ -1168,6 +1179,7 @@ func newTofuHTTPHandler(
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
+		DenialLimiter: cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1239,6 +1251,7 @@ func newTFEHandler(
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
+		DenialLimiter: cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -1628,6 +1641,7 @@ func (s *Server) Run(ctx context.Context) error {
 	waitShipper := s.workerOnly(func() func() { return s.startAuditShipper(shipCtx) })
 
 	defer func() {
+		s.flushDenialCounts(ctx)
 		stopCheck()
 		waitCheck()
 		stopShipper()
@@ -1638,6 +1652,37 @@ func (s *Server) Run(ctx context.Context) error {
 
 	return s.serveUntilDone(ctx, srv, ln)
 }
+
+// flushDenialCounts writes the counts of refused requests that no entry carries
+// yet. It uses a fresh context with a timeout, because ctx is done at shutdown.
+func (s *Server) flushDenialCounts(ctx context.Context) {
+	if s.flushDenials == nil {
+		return
+	}
+
+	flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushTimeout)
+	defer cancel()
+
+	s.flushDenials(flushCtx)
+}
+
+// denialFlusher returns the function that writes the counts that the shared
+// limiter still holds. It uses the audit store of the namespace store, like the
+// adapters.
+func denialFlusher(cfg *settings, svc services, observed *metrics.ServerMetrics) func(context.Context) {
+	var entries audit.Store
+	if st, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = st
+	}
+
+	rec := refusal.New(nil, entries, svc.namespaces, cfg.logger, func() { observed.IncAuditAppendFailure() }).
+		WithLimiter(cfg.denialLimiter)
+
+	return rec.Flush
+}
+
+// flushTimeout bounds the write of the counts of refused requests at shutdown.
+const flushTimeout = 5 * time.Second
 
 // workerOnly runs start when the process runs the worker component, and
 // answers the function that waits for what start began. Without the worker
@@ -2081,6 +2126,7 @@ func newPulumiHandler(
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
+		DenialLimiter:           cfg.denialLimiter,
 		CheckpointDeltaCutoff:   cfg.checkpointDeltaCutoff,
 		DisablePulumiJournaling: cfg.disablePulumiJournaling,
 	})
@@ -2118,6 +2164,7 @@ func newAuditHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 		Logger:        cfg.logger,
 
 		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("audit api: %w", err)
@@ -2171,6 +2218,7 @@ func newContextHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 
 		Audit:          neutralAudit,
 		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("context api: %w", err)
@@ -2219,6 +2267,7 @@ func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 
 		Audit:          entries,
 		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("profile api: %w", err)
@@ -2350,6 +2399,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 
 		Audit:          neutralAudit,
 		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
@@ -2458,13 +2508,14 @@ func newServerHandler(
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
-		DeletedUnits: deps.services.deleted,
-		TempAdmins:   tempReaderOf(cfg.namespaceStore),
-		Now:          cfg.now,
-		AuditChain:   auditChainPort(deps.chain),
-		AuditSinks:   sinks,
-		Workers:      cfg.watch,
-		SignIn:       deps.signIn,
+		DenialLimiter: cfg.denialLimiter,
+		DeletedUnits:  deps.services.deleted,
+		TempAdmins:    tempReaderOf(cfg.namespaceStore),
+		Now:           cfg.now,
+		AuditChain:    auditChainPort(deps.chain),
+		AuditSinks:    sinks,
+		Workers:       cfg.watch,
+		SignIn:        deps.signIn,
 
 		InstallationKind: cfg.installationKind,
 	})

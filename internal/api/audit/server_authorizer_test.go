@@ -123,6 +123,7 @@ func TestServerScopeWithBuiltInRoles(t *testing.T) {
 		Authorizer:     authz,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("audit handler: %v", err)

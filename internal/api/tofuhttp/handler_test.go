@@ -314,6 +314,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		Audit:          nil,
 		Gate:           nil,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -712,6 +713,7 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 		Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
 		Workspaces: newFakeUnits(true), Namespaces: fakeNamespaces{}, Audit: store,
 		Gate: nil, OnAuditFailure: nil,
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -735,7 +737,7 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 
 	e := store.entries[0]
 	if e.Outcome != audit.OutcomeDenied || !strings.HasPrefix(e.Reason, "unlock names a lock") ||
-		e.Object != "opentofu:acme/net" {
-		t.Fatalf("entry = %+v, want denied, the unit and the reason of the lock refusal", e)
+		e.Object != "opentofu:acme/net" || e.Action != string(identity.ActionUnitLock) {
+		t.Fatalf("entry = %+v, want denied, the unit, the lock action and the reason of the lock refusal", e)
 	}
 }

@@ -1,11 +1,25 @@
 package dustpan_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // deniedEntryWire is the part of an audit entry that the denial test reads.
@@ -151,4 +165,164 @@ func (w *contextWorld) callAs(t *testing.T, c deniedCall, token string) (int, st
 	w.srv.Handler().ServeHTTP(rec, req)
 
 	return rec.Code, rec.Body.String()
+}
+
+// chainStore is the part of a SQL store that the limiter entry test uses.
+type chainStore interface {
+	audit.Store
+	audit.ServerStore
+	namespace.Store
+}
+
+// denyEverything refuses every action.
+type denyEverything struct{}
+
+func (denyEverything) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return identity.ErrDenied
+}
+
+func (denyEverything) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+}
+
+// TestLimiterEntriesPassTheStores writes the entries of the flood limit (the
+// count of a quiet key, the aggregate of too many keys, the count of the
+// shutdown flush, and the entry of a namespace that does not exist) through the
+// SQL stores. Each store must accept them with a valid hash chain in the
+// namespace and in the installation scope.
+func TestLimiterEntriesPassTheStores(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sqlite", func(t *testing.T) {
+		t.Parallel()
+
+		st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if closeErr := st.Close(); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
+		})
+
+		checkLimiterEntries(t, st)
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		t.Parallel()
+
+		base := os.Getenv(postgresURLEnv)
+		if base == "" {
+			t.Skipf("set %s to run the PostgreSQL limiter entry test", postgresURLEnv)
+		}
+
+		checkLimiterEntries(t, openPostgresChainStore(t, base))
+	})
+}
+
+// checkLimiterEntries runs the flood of the test through st and checks the
+// chains.
+func checkLimiterEntries(t *testing.T, st chainStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.Now(), Name: "acme", HomeRegion: region, FailoverVersion: 1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := st.CreateNamespace(ctx, ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	svc, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	now := time.Now()
+	lim := denylimit.New(denylimit.Config{
+		Window: time.Minute, MaxKeys: 3, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: func() time.Time { return now },
+	})
+	failures := 0
+	rec := refusal.New(denyEverything{}, st, svc, slog.New(slog.DiscardHandler), func() { failures++ }).
+		WithLimiter(lim)
+
+	deny := func(subject, ns string) {
+		p := identity.Principal{
+			Subject: subject, TokenID: "", DisplayName: "", Admin: false, TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		}
+
+		err := rec.Authorize(ctx, nil, p, identity.ActionUnitWrite, identity.NamespaceObject(namespace.Name(ns)))
+		if !errors.Is(err, identity.ErrDenied) {
+			t.Fatalf("Authorize answers %v, want %v", err, identity.ErrDenied)
+		}
+	}
+
+	// A quiet key: 5 refusals, then silence past the window.
+	for range 5 {
+		deny("bo", "acme")
+	}
+
+	// A namespace that does not exist.
+	deny("bo", "gone")
+
+	// Too many principals: the aggregate entry.
+	for i := range 20 {
+		deny(fmt.Sprintf("p%d", i), "acme")
+	}
+
+	now = now.Add(2 * time.Minute)
+
+	// The next refusal flushes the counts of the window that ended.
+	deny("late", "acme")
+
+	// The shutdown flush writes what is left.
+	rec.Flush(ctx)
+
+	if failures != 0 {
+		t.Fatalf("counted %d failed appends, want 0", failures)
+	}
+
+	for _, scope := range []namespace.Name{"acme", audit.ServerScope} {
+		res, checkErr := st.Check(ctx, scope)
+		if checkErr != nil || !res.Valid || res.Checked == 0 {
+			t.Fatalf("check %s = %+v, %v, want a valid chain with entries", scope, res, checkErr)
+		}
+	}
+
+	checkLimiterScopes(t, st)
+}
+
+// checkLimiterScopes checks that the scopes hold the entries of the flood
+// limit.
+func checkLimiterScopes(t *testing.T, st chainStore) {
+	t.Helper()
+
+	var aggregate, flushed, missing bool
+
+	for _, scope := range []namespace.Name{"acme", audit.ServerScope} {
+		list, err := st.List(t.Context(), scope, audit.Page{Number: 1, Size: 100})
+		if err != nil {
+			t.Fatalf("list %s: %v", scope, err)
+		}
+
+		for i := range list.Entries {
+			e := list.Entries[i]
+			if e.Outcome != audit.OutcomeDenied {
+				t.Fatalf("entry %+v has the outcome %q, want denied", e, e.Outcome)
+			}
+
+			aggregate = aggregate || e.Action == "denials:suppressed"
+			flushed = flushed || strings.Contains(e.Reason, "further refusals in the last window")
+			missing = missing || strings.Contains(e.Reason, "does not exist")
+		}
+	}
+
+	if !aggregate || !flushed || !missing {
+		t.Fatalf("aggregate = %v, flush = %v, missing namespace = %v, want all true", aggregate, flushed, missing)
+	}
 }
