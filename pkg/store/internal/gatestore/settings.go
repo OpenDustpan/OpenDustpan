@@ -72,6 +72,13 @@ func (s *Settings) PutApprovalDefault(
 		return 0, err
 	}
 
+	// Defense in depth: the service validates the default too; this check
+	// stays so that a new caller of the port cannot store a default with a
+	// count of 0.
+	if err := d.Validate(); err != nil {
+		return 0, err
+	}
+
 	if err := s.approvers.check(ctx, d.Approvers); err != nil {
 		return 0, err
 	}

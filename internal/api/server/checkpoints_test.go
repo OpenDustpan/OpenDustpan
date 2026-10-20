@@ -72,6 +72,7 @@ func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite
 		Access:           nil,
 		Audit:            st,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		CheckpointEpochs: epochs,
 		OnAuditFailure:   nil,

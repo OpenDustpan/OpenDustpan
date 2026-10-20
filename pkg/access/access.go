@@ -136,6 +136,8 @@ var families = map[identity.Action]Family{
 	identity.ActionNamespaceReadAccess:            FamilyData,
 	identity.ActionNamespaceManagePrincipals:      FamilyData,
 	identity.ActionNamespaceManagePrincipalTokens: FamilyData,
+	identity.ActionNamespaceReadGates:             FamilyData,
+	identity.ActionNamespaceManageGates:           FamilyData,
 	identity.ActionCollectionRead:                 FamilyData,
 	identity.ActionCollectionCreate:               FamilyData,
 	identity.ActionCollectionUpdate:               FamilyData,
