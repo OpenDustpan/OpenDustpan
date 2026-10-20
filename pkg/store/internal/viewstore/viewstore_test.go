@@ -16,7 +16,7 @@ func TestViewRefusesTextAfterTheQuery(t *testing.T) {
 	t.Parallel()
 
 	for _, query := range []string{`{}}`, `{}]`, `{} {}`, `{}x`, `{"labels":[]}}`} {
-		_, err := viewstore.View(viewstore.Row{QueryJSON: query})
+		_, err := viewstore.View(viewstore.Row{ID: "", Namespace: "", Owner: "", Name: "", QueryJSON: query, CreatedAtMs: 0})
 		if !errors.Is(err, viewstore.ErrCorrupt) {
 			t.Errorf("query %q: err = %v, want ErrCorrupt", query, err)
 
