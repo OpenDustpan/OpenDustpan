@@ -11,6 +11,20 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
+// requireRefusedOverride fails the test unless err matches ErrOverrideRefused and
+// carries the typed refusal of want.
+func requireRefusedOverride(t *testing.T, err error, want workspace.Override) {
+	t.Helper()
+
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
+		t.Fatalf("err = %v, want ErrOverrideRefused", err)
+	}
+
+	if got, ok := workspace.RefusedOverride(err); !ok || got != want {
+		t.Fatalf("RefusedOverride = %v, %v, want %v", got, ok, want)
+	}
+}
+
 // TestUnlockedDeclareNeedsTheSwitches proves a declare on an unlocked unit is
 // refused unless the caller may use the unlocked-write override. The refusal
 // stays ErrNotLocked, and an allowed declare finalizes without a lock (ADR 44,
@@ -31,6 +45,9 @@ func TestUnlockedDeclareNeedsTheSwitches(t *testing.T) {
 		t.Fatalf("refusal does not name the action: %v", err)
 	}
 
+	// The refusal also carries the typed signal that the adapters record.
+	requireRefusedOverride(t, err, workspace.OverrideUnlocked)
+
 	// The action alone is not enough: the switches must be on too, and the
 	// store refuses the declare while either is off (ADR 44, decision 6).
 	_, err = f.svc.BeginState(
@@ -43,6 +60,8 @@ func TestUnlockedDeclareNeedsTheSwitches(t *testing.T) {
 	if !errors.Is(err, workspace.ErrOverrideRefused) {
 		t.Fatalf("declare with the action but no switches: err = %v, want ErrOverrideRefused", err)
 	}
+
+	requireRefusedOverride(t, err, workspace.OverrideUnlocked)
 
 	_, err = f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, namespace.Overrides{Unlocked: true, Forced: false})
 	if err != nil {

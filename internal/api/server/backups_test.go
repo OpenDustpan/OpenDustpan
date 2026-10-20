@@ -159,6 +159,7 @@ func newBackupFixture(
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -581,6 +582,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

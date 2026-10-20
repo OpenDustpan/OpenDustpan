@@ -184,6 +184,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -244,6 +245,7 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -292,6 +294,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -371,6 +374,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -431,6 +435,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		AuditSinks:       nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	}
 
 	if journaled >= 0 {

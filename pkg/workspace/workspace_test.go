@@ -4947,7 +4947,10 @@ func (m *memStore) ReleaseUnfenced(
 	case !nsOK:
 		return namespace.ErrNotFound
 	case !ns.Overrides.Forced || !stored.Overrides.Forced:
-		return fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+		return workspace.NewOverrideRefusedError(
+			workspace.OverrideForced,
+			"write refused: the forced-write switch is off",
+		)
 	}
 
 	return m.SaveReleased(ctx, w, fence, e)
@@ -5045,7 +5048,10 @@ func (m *memStore) checkUnlockedSwitches(w workspace.Workspace) error {
 	}
 
 	if !ns.Overrides.Unlocked || !w.Overrides.Unlocked {
-		return fmt.Errorf("%w: the unlocked-write switch is off", workspace.ErrOverrideRefused)
+		return workspace.NewOverrideRefusedError(
+			workspace.OverrideUnlocked,
+			"write refused: the unlocked-write switch is off",
+		)
 	}
 
 	return nil
@@ -5060,7 +5066,10 @@ func (m *memStore) checkForcedSwitches(w workspace.Workspace) error {
 	}
 
 	if !ns.Overrides.Forced || !w.Overrides.Forced {
-		return fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+		return workspace.NewOverrideRefusedError(
+			workspace.OverrideForced,
+			"write refused: the forced-write switch is off",
+		)
 	}
 
 	return nil
