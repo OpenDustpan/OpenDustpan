@@ -1,22 +1,22 @@
 ---
 rfc: 89
 title: The Forge port, what each consumer needs from a forge, and the forge connection API
-status: owner decisions of 2026-10-20 for Q3, Q8, Q9, Q10 and the GitHub App scope, with Q1, Q2, Q5 and Q6 open
+status: accepted, except Q4 (spike) and Q11 (RFC 12)
 created: 2026-10-19
 ---
 
 # RFC 89. The Forge port, what each consumer needs from a forge, and the forge connection API
 
-Status: the owner decided Q3, Q8, Q9, Q10 and the GitHub App scope on 20
-October 2026 (see "Owner decisions of 20 October 2026"). Q1, Q2, Q5 and Q6
-wait for the owner. Q4 and Q11 have proposed answers. An agent wrote this RFC for issue #886 under the
+Status: accepted, except Q4 (spike) and Q11 (RFC 12). The owner decided
+each other question on 20 October 2026 (see "Decisions"). Q4 waits for the
+signing spike. RFC 12 owns Q11. An agent wrote this RFC for issue #886 under the
 direction of the project manager. It proposes the shape of the `Forge` port
 before the GitHub adapter. The pull request of this RFC also adds the port
 as Go interfaces in `pkg/forge` and an empty conformance suite in
 `pkg/forge/forgetest`. It adds no adapter, no SQL and no route. The
 proposals have the label "(proposed)". A decision of the owner has the
-label "(owner decision, 2026-10-20)". The owner answers the other questions at
-the end. The Go interface holds only the methods that an accepted decision
+label "(owner decision, 2026-10-20)". A decision of the project manager
+has the label "(PM decision, 2026-10-20)". The Go interface holds only the methods that an accepted decision
 needs today. The methods that only RFC 12, RFC 24 and RFC 27 need are in
 this RFC as proposals, and they enter the Go interface with their
 consumers.
@@ -71,6 +71,12 @@ consumer, and nothing tests that the adapters agree.
 Each decision below has the label "(owner decision, 2026-10-20)" where the
 RFC uses it.
 
+- **Q1, Q2, Q5 and Q6: as proposed.** The port lives in `pkg/forge` (Q1 A).
+  An event is a hint, with a poll for each consumer that must not miss an
+  event (Q2 A). A bridge dials out and long-polls (Q5 A). The action
+  `namespace:use-git-host-connection` is necessary to name a connection
+  (Q6 B).
+
 - **Q3. No Git host credential reaches a runner for the source of its
   job.** The source comes only as the pack that the server builds (ADR 135).
   The capability `repo-token` stays only for the git credential mode `forge`
@@ -78,8 +84,8 @@ RFC uses it.
 - **Q8. Comment commands.** `dustpan apply` applies the exact plan of the
   summary comment, with three conditions. `unlock` stays a command. A comment
   never approves (rule 8).
-- **Q9. The person or IaC gives the event secret.** The server never answers
-  it.
+- **Q9. The person or IaC gives the event secret.** A person can set it in
+  a write-only field of the console form. The server never answers it.
 - **Q10. C: 204 and the poll**, with the condition of "Webhook hostname and
   federation": forwarding of webhook events is part of the definition of done
   of the forwarding effort (#1054).
@@ -90,6 +96,9 @@ RFC uses it.
   federation member accepts, never the FQDN of one member.
 - **Documentation.** The GitHub setup guide and the federation setup guide
   document the GitHub App scope and the webhook hostname (see "Consequences").
+
+The project manager decided two details of the GitHub App scope on the same
+day. They have the label "(PM decision, 2026-10-20)".
 
 ### Accepted decisions that limit the port
 
@@ -142,7 +151,7 @@ three rows wait for the RFCs that need them.
 
 ## The proposed port
 
-### Where it lives (proposed)
+### Where it lives (owner decision, 2026-10-20)
 
 A new tool-neutral domain package, `pkg/forge`. It owns the forge
 connections of a namespace: their store port, the sealed credential sets,
@@ -152,8 +161,8 @@ the newest credential set that works, and falls back to an older set
 The internal wiring implements the narrow ports that exist
 (`catalog.RequestFiles`, `changeorder.CauseDiffs`, `source.Fetcher`) and
 the write-back executor over the service. So a consumer never imports an
-adapter, and an adapter implements one port for all consumers. Q1 asks
-the owner.
+adapter, and an adapter implements one port for all consumers. This is
+Q1 A.
 
 The package is in the `domain` rule of depguard. It imports no
 `net/http`, no SQL and no adapter. The adapters live in
@@ -352,7 +361,7 @@ checks each error text and each field of each event. The case "parse event of an
 
 ## How the auth kinds map to the port
 
-A connection has a kind (`github` or `gitlab`; a bridge kind waits for Q5), an auth kind
+A connection has a kind (`github` or `gitlab`, and later a bridge kind that enters Go with the bridge adapter), an auth kind
 (`app` or `token`), the API address of the forge, parameters that are not
 secret, and a push flag. The credential sets are sealed (ADR 213 decision
 7). `Opener.Open` gets one unsealed set, and the service tries the next
@@ -437,16 +446,16 @@ access token has scopes for each kind of object, not for each
 repository, so `repo-token` stays off and `git-access` is on. Source:
 <https://forgejo.org/docs/latest/user/api-usage/>.
 
-**A forge bridge (proposed, not in the Go port yet).** A bridge is a small
+**A forge bridge (owner decision, 2026-10-20, Q5 A, not in the Go port yet).** A bridge is a small
 process that a team runs next to its version control system. It would
 implement the operations of the port on that side, and speak one protocol of
 OpenDustpan to the server. The server would have one adapter for it,
 `pkg/forge/bridge`. The bridge dials out to the server, and asks for work
 with long polling, as a runner does (ADR 131). So a network that allows no
 traffic into it can still use write-back, and the server needs no route to
-the version control system. `forge.Kind` has no bridge value until Q5 has an
-answer; the bridge question is open, and the Go code does not hold a name for
-it. A bridge in front of a plain git server can use a git client on its own
+the version control system. `forge.Kind` gets its bridge value in the pull
+request that adds the bridge adapter. The Go code does not hold a name for it
+yet. A bridge in front of a plain git server can use a git client on its own
 side: rule 1 above is about the server, and the bridge is the API of that
 system. A plain git server has no review request, so a bridge for it lists no
 `review`, and write-back can only push directly.
@@ -474,7 +483,7 @@ when its version control system has the feature.
 The spike of Forgejo fills the column with facts, and adds a row for each
 essential that the port does not have.
 
-## Webhook intake (proposed: parse in the port, the route outside it)
+## Webhook intake (owner decision, 2026-10-20: parse in the port, the route outside it)
 
 The port holds `ParseEvent`, because each forge signs its events in its
 own way. The HTTP route is in the internal API adapter, not in the port.
@@ -516,7 +525,7 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   change that it announced.
 - The server drops a delivery ID that it saw for the same connection in
   the last 24 hours.
-- **An event is a hint** (proposed). The server reads the object through
+- **An event is a hint** (owner decision, 2026-10-20, Q2 A). The server reads the object through
   the API before it changes a record: `ReadReview` before the review
   watcher records a merge, `ReadComment` (proposed) before a comment
   command, `Head` before a trigger starts a job. So a forged or replayed
@@ -553,18 +562,19 @@ the level of the OpenDustpan installation.
   installation ID) to one namespace. The installation-to-namespace map is
   installation-wide data, not namespace data. A namespace backup does not
   hold it. A connection of a namespace names the installation ID that the
-  operator assigned to that namespace (proposed: the connection then holds
-  no credential set of its own, and the operator rotates the private key on
-  the installation-level registration).
+  operator assigned to that namespace. The connection holds no credential
+  set of its own. The operator holds the private key and rotates it on the
+  installation-level registration (PM decision, 2026-10-20).
 - **Option: a per-namespace GitHub App.** A namespace registers its own app.
   Its private key and its webhook secret are sealed credentials of the
   namespace (ADR 213 decision 7), and they travel with the namespace backup.
 - **The 409 rule applies only to a per-namespace app.** The create call
   refuses with 409 an app ID of a per-namespace app that a connection of
   another namespace uses. An installation-level app serves many namespaces
-  by design, so the rule does not apply to it. (proposed: the create call
-  also refuses with 409 a per-namespace app with the app ID of the
-  installation-level app, because the two cannot share one webhook URL.)
+  by design, so the rule does not apply to it. The create call also refuses
+  with 409 a per-namespace app with the app ID of the installation-level
+  app. One app ID has one owner, as for the 409 rule, and the two cannot
+  share one webhook URL (PM decision, 2026-10-20).
 - The routes of the installation-level app and of the map are routes of the
   installation API, with an installation-level action (proposed: the
   implementation pull request names them).
@@ -598,6 +608,11 @@ All routes are under `/api/dustpan/v1/namespaces/{namespace}/git-host-connection
 decision 6). Each write checks the namespace fence and writes an audit
 entry with no part of a credential (ADR 213 decision 7).
 
+The webhook secret is a write-only input of the create call and of the call
+that adds a credential set (Q9, owner decision, 2026-10-20). No read answers
+it. A read answers only that a secret is set, with its set ID and its
+creation time. The console form and IaC use these same routes (ADR 17).
+
 | Method and path | Does | Action | Object |
 | --- | --- | --- | --- |
 | `GET .../git-host-connections` | Lists the connections: ID, kind, auth kind, API address, parameters that are not secret, push flag, default flag, hook ID, and for each credential set its ID and creation time. Never a secret. | `namespace:read-git-host-connections` | the namespace |
@@ -609,26 +624,29 @@ entry with no part of a credential (ADR 213 decision 7).
 | `POST .../git-host-connections/{id}/credentials` | Adds a credential set. The server calls `Check` with it first, and refuses a set that fails. Answers the set ID, never the secret. | `namespace:manage-git-host-connections` | the namespace |
 | `DELETE .../git-host-connections/{id}/credentials/{set ID}` | Removes a credential set. Fails with 409 for the last set. | `namespace:manage-git-host-connections` | the namespace |
 | `POST .../git-host-connections/{id}/check` | Calls `Check` with each active set. Answers the account, the capabilities, and the missing capabilities for each consumer (`forge.Needs`). | `namespace:manage-git-host-connections` | the namespace |
-| `POST` or `PATCH` of a code location or a Catalog request home that names a connection (proposed, Q6) | Names the connection. The call also needs its own action on the unit. | `namespace:use-git-host-connection` | the connection (`namespace:<ns>/git-host-connection:<id>`) |
+| `POST` or `PATCH` of a code location or a Catalog request home that names a connection (owner decision, 2026-10-20, Q6 B) | Names the connection. The call also needs its own action on the unit. | `namespace:use-git-host-connection` | the connection (`namespace:<ns>/git-host-connection:<id>`) |
 | `POST /webhooks/{hook ID}` | Webhook intake, above. | none (public list) | none |
 
 The built-in roles: `admin` gets both actions. `maintainer` gets
 `namespace:read-git-host-connections` and, by default,
-`namespace:use-git-host-connection` (proposed, Q6). `namespace:manage-git-host-connections`
-follows the pattern of `namespace:manage-runners` and
-`namespace:read-runners`. Who can name a connection in a code location is
-Q6.
+`namespace:use-git-host-connection` (owner decision, 2026-10-20, Q6 B).
+`namespace:manage-git-host-connections` follows the pattern of
+`namespace:manage-runners` and `namespace:read-runners`.
 
-## Open questions for the owner
+## Questions and their answers
 
 Old Q7 (the GitHub App scope) has an owner decision: see "The GitHub App
-scope". The owner decided Q3, Q8, Q9 and Q10 on 20 October 2026.
+scope". The owner decided each question except Q4 and Q11 on 20 October
+2026. Q4 waits for the signing spike. RFC 12 owns Q11.
 
 **Q1. Where does the port live?**
 
+**Owner decision, 2026-10-20: A, as proposed.** The options below are the
+history of the question.
+
 - A. In a new domain package `pkg/forge`, which owns the connections and
   is the consumer of the port. The wiring implements the narrow ports of
-  `catalog`, `changeorder`, `source` and `job` over it. (proposed)
+  `catalog`, `changeorder`, `source` and `job` over it.
 - B. No shared port. Each consumer package keeps its own narrow port, and
   each adapter implements all of them.
 - C. The port in `pkg/job`, because write-back is the first consumer.
@@ -643,6 +661,9 @@ package.
 **Q2. Do triggers and comment commands use webhooks, and is an event a
 hint only?**
 
+**Owner decision, 2026-10-20: A, as proposed.** The options below are the
+history of the question.
+
 ADR 100 decision 15 already decides this for the review watcher: a forge
 webhook gives the merge or the close, and the `job.review-watch` operation
 polls the forge as the fallback for a lost webhook. The question is about
@@ -651,7 +672,6 @@ triggers (RFC 24) and comment commands (RFC 27).
 - A. `ParseEvent` in the port, the route in the API adapter, each event a
   hint that the server checks with a read through the API, and a poll for
   each consumer that must not miss an event, as for the review watcher.
-  (proposed)
 - B. Events are facts: the server acts on the body of a valid event with
   no read.
 - C. No webhooks. The server polls only.
@@ -711,10 +731,13 @@ already lets the adapter choose (`CommitRequest.Author` says so).
 
 **Q5. Which way does a forge bridge connect?**
 
+**Owner decision, 2026-10-20: A, as proposed.** The options below are the
+history of the question.
+
 - A. The bridge dials out to the server and long-polls for work, as a
   runner does (ADR 131). It authenticates as runners do (ADR 133). The
   identity of the bridge is scoped to one namespace, as the identity of a
-  runner pool is. (proposed)
+  runner pool is.
 - B. The server calls the bridge over HTTPS. The bridge serves a REST API
   that mirrors the port.
 - C. Both.
@@ -727,11 +750,14 @@ connections. B adds a route from the server into the network of the team.
 **Q6. Who can name a forge connection in a code location or a Catalog
 request home?**
 
+**Owner decision, 2026-10-20: B, as proposed, with `maintainer` by
+default.** The options below are the history of the question.
+
 - A. Each person who can change the unit (`unit:manage`), for each
   connection of the namespace.
 - B. A new action `namespace:use-git-host-connection` on the object
   `namespace:<ns>/git-host-connection:<id>`, which is needed in addition to
-  the action on the unit. The route table lists it. (proposed)
+  the action on the unit. The route table lists it.
 - C. Each connection holds a list of repositories, and a code location can
   only name one of them.
 
@@ -800,6 +826,18 @@ in the browser and the command `openssl rand -hex 32`. The reason: IaC can
 make one secret and give it to OpenDustpan and to the provider of the Git
 host. Then no secret passes through the hands of a person, and a rotation is
 a plan that a person reviews.
+
+A person can also set the webhook secret in the console (owner
+clarification, 2026-10-20). The console form of a connection has a
+write-only secret field on create and on "add a credential set" (rotate):
+
+- The input is masked.
+- A "generate" button makes a random secret in the browser.
+- A hint gives the command `openssl rand -hex 32`.
+
+After the save, the console shows only that a secret is set, with its set ID
+and its creation time. It never shows the value. The console uses the same
+REST API as IaC (ADR 17).
 
 The event secret is in the app registration. ADR 213 decision 7 says that the
 server never answers a credential.
@@ -936,35 +974,42 @@ the kind (`github`, `gitlab`, `forgejo`) stays.
 - **The hostname of the hook URL.** The Git host stores it, so it must stay
   stable across a promotion. It is never the FQDN of one member.
 
-## Proposed answers (PM)
+## Decisions
 
-One line for each question, with its benchmark. The owner decided Q3, Q8,
-Q9 and Q10 on 20 October 2026.
+One line for each question.
 
-- **Q1: A.** The Google Go style guide puts an interface in the package that
-  uses it.
-- **Q2: A.** GitHub does not send a failed delivery again, so the server
-  fetches the object through the API (the pattern of ADR 100 decision 15).
+- **Q1: A (owner decision, 2026-10-20).** The port lives in `pkg/forge`,
+  which owns the connections. The consumers keep their narrow ports.
+- **Q2: A (owner decision, 2026-10-20).** `ParseEvent` in the port, the
+  route in the API adapter. An event is a hint, with a poll for each
+  consumer that must not miss an event.
 - **Q3: moot (owner decision, 2026-10-20).** The source comes only as the
   pack that the server builds (ADR 135). `repo-token` stays only for the git
   credential mode `forge`.
-- **Q4: B, if a spike confirms signed commits from a fine-grained token.**
-  GitHub signs the commits that it makes for an app. The person is in the
-  trailer and in the audit entry.
-- **Q5: A.** GitHub self-hosted runners and HCP Terraform agents only make
-  outbound connections.
-- **Q6: B, with `maintainer` by default.** AWS asks for `iam:PassRole` in
-  addition to the action on the service.
+- **Q4: open.** The proposed answer is B, if a spike confirms signed commits
+  from a fine-grained token. It waits for the signing spike.
+- **Q5: A (owner decision, 2026-10-20).** The bridge dials out and
+  long-polls, as a runner does.
+- **Q6: B (owner decision, 2026-10-20).** The action
+  `namespace:use-git-host-connection`, with `maintainer` by default.
+- **Old Q7, the GitHub App scope (owner decision, 2026-10-20).** One
+  installation-level app by default, a per-namespace app as an option. Two
+  details are PM decisions of the same day.
 - **Q8: `dustpan apply` and `unlock` (owner decision, 2026-10-20).** Linked
   accounts only, opt-in for each code location. A comment never approves.
-- **Q9: B (owner decision, 2026-10-20).** The person or IaC gives the
-  secret. The server never answers it.
+- **Q9: B (owner decision, 2026-10-20).** The person, the console form or
+  IaC gives the secret. The server never answers it.
 - **Q10: C (owner decision, 2026-10-20).** 204 and the poll, until the
-  forwarding effort forwards webhook events.
-- **Q11: A, deferred to RFC 12.** GitHub offers `merge_method`. A merge commit
-  keeps the check of `job.verify` exact.
+  forwarding effort forwards webhook events. The hook URL uses a stable
+  hostname.
+- **Q11: deferred to RFC 12.** The proposed answer is A: the code location
+  sets the merge method, with a merge commit as the default.
 
 ## Outcome
 
-Empty until the owner accepts the RFC (an ADR records the port shape, as
-issue #886 asks before the GitHub adapter merges) or drops it.
+The owner accepted this RFC on 20 October 2026, except Q4 (it waits for the
+signing spike) and Q11 (RFC 12 owns it). "Decisions" lists each answer.
+
+A next ADR records the port shape, as issue #886 asks before the GitHub
+adapter merges. The same ADR, or one next to it, amends ADR 213 decision 7
+for the GitHub App scope. This pull request does not write the ADR.
