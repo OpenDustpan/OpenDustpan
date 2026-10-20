@@ -84,5 +84,5 @@ entity to manage ICT changes in a controlled way.
   break-glass session. The user documentation of drift says this.
 - This ADR extends two earlier decisions. ADR 226 decision 7 gets a third
   built-in gate, and the gate has a wider scope than the two gates that
-  decision names. The phase table of ADR 205 gets a plan phase for a
-  scheduled job of the operation `refresh`.
+  decision names. The phase table of ADR 100 decision 4 gets a plan phase
+  for a scheduled job of the operation `refresh`.

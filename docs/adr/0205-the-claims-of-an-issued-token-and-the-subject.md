@@ -1,6 +1,6 @@
 # 205. The claims of an issued token, and the subject
 
-Status: accepted · 2026-10-18 · part of ADR 200. Phase table extended by ADR 258
+Status: accepted · 2026-10-18 · part of ADR 200
 
 ## Context
 
