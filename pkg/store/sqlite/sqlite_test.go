@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -1441,6 +1442,69 @@ func BenchmarkAuthorizer(b *testing.B) {
 	accesstest.Bench(b, s)
 }
 
+// revocationStore adds to the store the two hooks of the revocation suite: the
+// runner pools of the store, and a write to the revocation journal that the
+// CHECK constraint of the table does not stop.
+type revocationStore struct {
+	*sqlite.Store
+
+	path string
+}
+
+var _ storetest.RevocationStore = (*revocationStore)(nil)
+
+// RunnerPools implements storetest.RevocationStore.
+//
+//nolint:ireturn // The method implements storetest.RevocationStore, which returns the port.
+func (s *revocationStore) RunnerPools() runner.PoolStore {
+	return s.Runners()
+}
+
+// KeepsUnknownKinds implements storetest.RevocationStore. The restore copies
+// the live journal into the staged file, whose table holds the CHECK on the
+// kind, so a row of an unknown kind fails the copy and the restore.
+func (s *revocationStore) KeepsUnknownKinds() bool { return false }
+
+// InsertRawRevocation implements storetest.RevocationStore. It turns off the
+// CHECK constraints for its own connection, as a write to the database file
+// with another tool could.
+func (s *revocationStore) InsertRawRevocation(ctx context.Context, row storetest.RawRevocation) (err error) {
+	raw, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := raw.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	conn, err := raw.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open raw connection: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw connection: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		return fmt.Errorf("turn off the check constraints: %w", err)
+	}
+
+	const insert = `INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+VALUES (?, ?, '', ?, ?, ?)`
+
+	if _, err = conn.ExecContext(ctx, insert, row.Kind, row.Target, row.Actor, row.Object, row.AtMs); err != nil {
+		return fmt.Errorf("insert the raw revocation: %w", err)
+	}
+
+	return nil
+}
+
 // TestRevocationConformance runs the suite of the writes that only reduce
 // access: they run in maintenance mode, and a restore keeps them.
 func TestRevocationConformance(t *testing.T) {
@@ -1449,6 +1513,21 @@ func TestRevocationConformance(t *testing.T) {
 	storetest.RunRevocations(t, func(t *testing.T) storetest.RevocationStore {
 		t.Helper()
 
-		return open(t)
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return &revocationStore{Store: s, path: path}
 	})
 }

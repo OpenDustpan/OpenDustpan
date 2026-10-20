@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -289,11 +290,40 @@ func (a *ProviderAdmin) Update(
 	}
 
 	entry := providerEntry(e, at, id, changes)
-	if err := a.store.UpdateProviderConfig(ctx, p, entry); err != nil {
-		return ProviderConfig{}, fmt.Errorf("update sign-in provider: %w", err)
+
+	// A change that only disables the provider takes the narrowing write,
+	// which works in maintenance mode. Any other change, also one that
+	// disables and changes a setting, takes the general write.
+	var storeErr error
+	if disablesOnly(old, p, c) {
+		storeErr = a.store.DisableProviderConfig(ctx, id, old.Version, p.UpdatedAt, entry)
+	} else {
+		storeErr = a.store.UpdateProviderConfig(ctx, p, entry)
+	}
+
+	if storeErr != nil {
+		return ProviderConfig{}, fmt.Errorf("update sign-in provider: %w", storeErr)
 	}
 
 	return p, nil
+}
+
+// disablesOnly reports whether the change from old to p, made by c, sets the
+// provider to disabled and nothing else: p equals old except for the flag,
+// the update time and the version, and the change holds no new client secret.
+// It compares the whole record, so a field that a later version adds counts
+// as a change and the general write stays in charge of it.
+func disablesOnly(old, p ProviderConfig, c ProviderChange) bool {
+	if p.Enabled || c.ClientSecret != nil {
+		return false
+	}
+
+	same := p
+	same.Enabled = old.Enabled
+	same.UpdatedAt = old.UpdatedAt
+	same.Version = old.Version
+
+	return reflect.DeepEqual(same, old)
 }
 
 // checkChange refuses c when old has another version than the change

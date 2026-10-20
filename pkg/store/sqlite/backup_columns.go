@@ -42,6 +42,7 @@ const (
 	backupColObjectID    = "object_id"
 	backupColAtMs        = "at_ms"
 	backupColTarget      = "target"
+	backupColObject      = "object"
 	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
@@ -366,7 +367,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"idp_subject",
 				"token_id",
 				"action",
-				"object",
+				backupColObject,
 				backupColVersion,
 				"value_path",
 				backupColAtMs,
@@ -465,8 +466,16 @@ func sqliteControlTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table:   backup.TableMaintenanceRevocations,
-			columns: []string{"id", backupColKind, backupColTarget, "end_reason", backupColAtMs},
+			table: backup.TableMaintenanceRevocations,
+			columns: []string{
+				"id",
+				backupColKind,
+				backupColTarget,
+				"end_reason",
+				"actor",
+				backupColObject,
+				backupColAtMs,
+			},
 		},
 	}
 
@@ -666,7 +675,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"subject_kind",
 				"subject_id",
 				"role",
-				"object",
+				backupColObject,
 				"target",
 				"object_kind",
 				backupColNamespace,

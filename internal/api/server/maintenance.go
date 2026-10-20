@@ -124,12 +124,20 @@ func (h *Handler) enterMaintenance(
 	})
 }
 
-// writeEnterError answers a failed enter. A forced enter that gave up names
-// the work it canceled in the answer, so the caller knows what stopped; any
-// other error uses the common answer.
+// writeEnterError answers a failed enter. A forced enter that canceled work
+// before it failed names that work in the answer, whether it gave up with
+// work that kept starting or failed on another error, so the caller knows
+// what stopped; any other error uses the common answer.
 func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, err error) {
-	blocked, ok := errors.AsType[*maintenance.ActiveWorkError](err)
-	if !ok || len(blocked.Canceled) == 0 {
+	var canceled []string
+
+	if blocked, ok := errors.AsType[*maintenance.ActiveWorkError](err); ok {
+		canceled = blocked.Canceled
+	} else if failed, ok := errors.AsType[*maintenance.CanceledError](err); ok {
+		canceled = failed.Canceled
+	}
+
+	if len(canceled) == 0 {
 		h.writeError(ctx, w, err)
 
 		return
@@ -137,7 +145,7 @@ func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, er
 
 	status, message := classify(err)
 
-	h.writeJSON(ctx, w, status, enterRefusedResponse{Code: status, Message: message, Canceled: blocked.Canceled})
+	h.writeJSON(ctx, w, status, enterRefusedResponse{Code: status, Message: message, Canceled: canceled})
 }
 
 // parseEnterRequest decodes the enter body: the whole body must be one JSON

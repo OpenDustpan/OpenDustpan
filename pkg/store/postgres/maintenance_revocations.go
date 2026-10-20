@@ -6,8 +6,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -16,10 +18,10 @@ import (
 // while the installation is in maintenance mode, so a restore can apply it
 // again after the swap.
 type revocation struct {
-	// kind is one of maintenance.RevokedSession, RevokedToken and
-	// RevokedPrincipal.
+	// kind is one of the maintenance.Revoked constants.
 	kind string
-	// target is the ID of the session, the token or the principal.
+	// target is the ID of the session, token, principal, grant, join token or
+	// provider.
 	target string
 	// endReason is the end reason of a session, empty for the other kinds.
 	endReason string
@@ -39,8 +41,63 @@ type revocation struct {
 // schema, never in the one that the swap drops. Then it takes the advisory
 // lock of the scope, as every audited change does.
 func (s *Store) inRevokingTx(ctx context.Context, e audit.Entry, rev revocation, fn func(q *db.Queries) error) error {
-	if err := validServerEntry(e); err != nil {
+	return s.inRevokingTxOf(ctx, &e, rev, fn)
+}
+
+// inRevokingTxOf is inRevokingTx with an entry that fn may change before the
+// append, for example to add changes that only the transaction can read. It
+// checks the entry again after fn.
+func (s *Store) inRevokingTxOf(
+	ctx context.Context,
+	e *audit.Entry,
+	rev revocation,
+	fn func(q *db.Queries) error,
+) error {
+	if err := validServerEntry(*e); err != nil {
 		return err
+	}
+
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		if err := journalRevocation(ctx, q, rev, *e); err != nil {
+			return err
+		}
+
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		if err := fn(q); err != nil {
+			return err
+		}
+
+		if err := validServerEntry(*e); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// inRevokingFencedTx is inRevokingTx for a revocation in the namespace of
+// fence: it appends e to the chain of that namespace and checks the fence
+// with the namespace row held FOR UPDATE, as inLockedFencedAuditedTx does,
+// with no installation state check. It takes the advisory lock of @server
+// first, so a revocation orders with the writes of the installation, then
+// the namespace row. No transaction takes the lock after a namespace row.
+func (s *Store) inRevokingFencedTx(
+	ctx context.Context, fence namespace.Fence, e audit.Entry, rev revocation, fn func(q *db.Queries) error,
+) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q",
+			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
 	}
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
@@ -50,6 +107,10 @@ func (s *Store) inRevokingTx(ctx context.Context, e audit.Entry, rev revocation,
 
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		if err := checkFenceForUpdate(ctx, q, fence); err != nil {
+			return err
 		}
 
 		if err := fn(q); err != nil {
@@ -68,7 +129,8 @@ func (s *Store) inRevokingTx(ctx context.Context, e audit.Entry, rev revocation,
 // installation is in maintenance mode. In normal operation it writes nothing.
 func journalRevocation(ctx context.Context, q *db.Queries, rev revocation, e audit.Entry) error {
 	err := q.RecordMaintenanceRevocation(ctx, db.RecordMaintenanceRevocationParams{
-		Kind: rev.kind, Target: rev.target, EndReason: rev.endReason, AtMs: codec.Millis(e.At),
+		Kind: rev.kind, Target: rev.target, EndReason: rev.endReason, Actor: e.Subject, Object: e.Object,
+		AtMs: codec.Millis(e.At),
 	})
 	if err != nil {
 		return fmt.Errorf("journal revocation: %w", err)
@@ -96,33 +158,218 @@ func revocationJournal(live string) string {
 	return pgIdent(live+"_control") + ".maintenance_revocations"
 }
 
-// replayRevocations applies the journal to the restored schema live, in tx.
-// Each statement only ends a session, revokes a token or disables a
-// principal, and only where the restored row is still live, so a replay
-// never grants access and a second replay changes nothing. A target that the
-// backup does not hold matches no row.
-func replayRevocations(ctx context.Context, tx pgx.Tx, live string) error {
-	schema := pgIdent(live)
-	journal := revocationJournal(live)
+// replayStep is one statement of the replay of a revocation. The parameters
+// are $1 the target and $2 the time in Unix milliseconds. A statement that
+// names $3 sets third to say what it is: the actor or the end reason.
+type replayStep struct {
+	sql   string
+	third thirdParam
+}
 
-	stmts := []string{
-		"UPDATE " + schema + ".sessions s SET ended_at_ms = r.at_ms, end_reason = r.end_reason FROM " + journal +
-			" r WHERE r.kind = '" + maintenance.RevokedSession + "' AND s.id = r.target AND s.ended_at_ms IS NULL",
-		"UPDATE " + schema + ".access_tokens t SET revoked_at_ms = r.at_ms FROM " + journal +
-			" r WHERE r.kind = '" + maintenance.RevokedToken + "' AND t.id = r.target AND t.revoked_at_ms IS NULL",
-		"UPDATE " + schema + ".principals p SET disabled_at_ms = r.at_ms FROM " + journal +
-			" r WHERE r.kind = '" + maintenance.RevokedPrincipal + "' AND p.id = r.target" +
-			" AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL",
-		"UPDATE " + schema + ".access_tokens t SET revoked_at_ms = r.at_ms FROM " + journal +
-			" r WHERE r.kind = '" + maintenance.RevokedPrincipal + "' AND t.principal_id = r.target" +
-			" AND t.revoked_at_ms IS NULL AND t.disabled_at_ms IS NULL",
+// thirdParam selects the value of the parameter $3 of a replay statement.
+type thirdParam int
+
+// The values of the parameter $3.
+const (
+	thirdNone thirdParam = iota
+	thirdActor
+	thirdEndReason
+)
+
+// args returns the parameters of the step for the journal row r.
+func (st replayStep) args(r maintenance.Revocation) []any {
+	args := []any{r.Target, codec.Millis(r.At)}
+
+	if st.third == thirdActor {
+		args = append(args, r.Actor)
 	}
 
-	for _, stmt := range stmts {
-		if _, err := tx.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("replay revocations: %w", err)
+	if st.third == thirdEndReason {
+		args = append(args, r.EndReason)
+	}
+
+	return args
+}
+
+// replayPlan returns the statements that apply a revocation of kind to the
+// schema live, or false for an unknown kind. The first statement is the one
+// that tells whether the restored data held a live row: the replay writes an
+// audit entry only when it changed that row. Every statement only ends,
+// revokes or disables, and only where the restored row is still live, so a
+// replay never grants access and a second replay changes nothing. A target
+// that the backup does not hold matches no row.
+func replayPlan(live, kind string) ([]replayStep, bool) {
+	schema := pgIdent(live)
+
+	switch kind {
+	case maintenance.RevokedSession:
+		return []replayStep{
+			{sql: "UPDATE " + schema + ".sessions SET ended_at_ms = $2, end_reason = $3 " +
+				"WHERE id = $1 AND ended_at_ms IS NULL", third: thirdEndReason},
+		}, true
+	case maintenance.RevokedToken:
+		return []replayStep{
+			{sql: "UPDATE " + schema + ".access_tokens SET revoked_at_ms = $2 " +
+				"WHERE id = $1 AND revoked_at_ms IS NULL", third: thirdNone},
+		}, true
+	case maintenance.RevokedPrincipal:
+		return []replayStep{
+			{sql: "UPDATE " + schema + ".principals SET disabled_at_ms = $2, updated_at_ms = $2 " +
+				"WHERE id = $1 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL", third: thirdNone},
+		}, true
+	case maintenance.RevokedTempAdmin:
+		return tempAdminPlan(schema), true
+	case maintenance.RevokedGrant:
+		return []replayStep{
+			{sql: "UPDATE " + schema + ".grants SET revoked_at_ms = $2, revoked_by = $3 " +
+				"WHERE id = $1 AND revoked_at_ms IS NULL", third: thirdActor},
+		}, true
+	case maintenance.RevokedJoinToken:
+		return []replayStep{
+			{sql: "UPDATE " + schema + ".runner_join_tokens SET revoked_at_ms = $2 " +
+				"WHERE id = $1 AND revoked_at_ms = 0 AND used_at_ms = 0", third: thirdNone},
+		}, true
+	case maintenance.RevokedProvider:
+		return []replayStep{
+			{sql: "UPDATE " + schema + ".sign_in_providers SET enabled = FALSE, updated_at_ms = $2, " +
+				"version = version + 1 WHERE provider_id = $1 AND enabled", third: thirdNone},
+			{
+				sql: "UPDATE " + schema + ".sessions SET ended_at_ms = $2, end_reason = $3 " +
+					"WHERE ended_at_ms IS NULL AND principal_id IN " +
+					"(SELECT id FROM " + schema + ".principals WHERE starts_with(subject, $1::text || ':'))",
+				third: thirdEndReason,
+			},
+		}, true
+	default:
+		return nil, false
+	}
+}
+
+// tempAdminPlan returns the statements of the replay of the expiry of a
+// temporary administrator: the whole expiry, as ExpireTempAdmin does it.
+func tempAdminPlan(schema string) []replayStep {
+	return []replayStep{
+		{sql: "UPDATE " + schema + ".temp_admins SET ended_at_ms = $2 " +
+			"WHERE principal_id = $1 AND ended_at_ms IS NULL", third: thirdNone},
+		{sql: "UPDATE " + schema + ".principals SET disabled_at_ms = $2 " +
+			"WHERE id = $1 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL", third: thirdNone},
+		{sql: "UPDATE " + schema + ".grants SET revoked_at_ms = $2, revoked_by = $3 " +
+			"WHERE subject_kind = '" + string(access.SubjectPrincipal) + "' AND subject_id = $1 " +
+			"AND revoked_at_ms IS NULL", third: thirdActor},
+		{sql: "UPDATE " + schema + ".group_members SET removed_at_ms = $2 " +
+			"WHERE principal_id = $1 AND removed_at_ms IS NULL", third: thirdNone},
+		{
+			sql: "UPDATE " + schema + ".access_tokens SET revoked_at_ms = $2 " +
+				"WHERE principal_id = $1 AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $2",
+			third: thirdNone,
+		},
+	}
+}
+
+// readJournal returns the rows of the revocation journal in the order they
+// were written.
+func readJournal(ctx context.Context, tx pgx.Tx, live string) ([]maintenance.Revocation, error) {
+	query := "SELECT id, kind, target, end_reason, actor, object, at_ms FROM " + revocationJournal(
+		live,
+	) + " ORDER BY id"
+
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("read revocation journal: %w", err)
+	}
+
+	defer rows.Close()
+
+	var out []maintenance.Revocation
+
+	for rows.Next() {
+		var (
+			r  maintenance.Revocation
+			ms int64
+		)
+
+		if err := rows.Scan(&r.ID, &r.Kind, &r.Target, &r.EndReason, &r.Actor, &r.Object, &ms); err != nil {
+			return nil, fmt.Errorf("read revocation journal: %w", err)
+		}
+
+		r.At = codec.FromMillis(ms)
+		out = append(out, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read revocation journal: %w", err)
+	}
+
+	return out, nil
+}
+
+// replayRevocations applies the journal to the restored schema live, in tx,
+// and appends one audit entry in the scope @server for each revocation that
+// changed a restored row. The restored log replaces the live log, so the
+// entries of the original revocations are gone from it. A row of the journal
+// that fails its checks (an unknown kind, a target that is not an ID) changes
+// nothing and gets an entry with the outcome denied. The entries follow the
+// chain state that the swap kept.
+func (s *Store) replayRevocations(ctx context.Context, tx pgx.Tx, live string) error {
+	journal, err := readJournal(ctx, tx, live)
+	if err != nil {
+		return err
+	}
+
+	q := s.queries.WithTx(tx)
+
+	for _, r := range journal {
+		entry, err := replayRevocation(ctx, tx, live, r)
+		if err != nil {
+			return err
+		}
+
+		if entry == nil {
+			continue
+		}
+
+		if _, err := appendAuditEntry(ctx, q, *entry); err != nil {
+			return fmt.Errorf("append replay audit entry: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// replayRevocation applies one journal row in tx. It returns the audit entry
+// to append, or nil when the restored data held nothing live to change.
+func replayRevocation(ctx context.Context, tx pgx.Tx, live string, r maintenance.Revocation) (*audit.Entry, error) {
+	if err := r.Validate(); err != nil {
+		denied := r.ReplayEntry(err)
+
+		return &denied, nil
+	}
+
+	plan, known := replayPlan(live, r.Kind)
+	if !known {
+		denied := r.ReplayEntry(fmt.Errorf("%w: unknown kind %q", maintenance.ErrInvalidRevocation, r.Kind))
+
+		return &denied, nil
+	}
+
+	applied := false
+
+	for i, step := range plan {
+		tag, err := tx.Exec(ctx, step.sql, step.args(r)...)
+		if err != nil {
+			return nil, fmt.Errorf("replay revocation %d (%s): %w", r.ID, r.Kind, err)
+		}
+
+		if i == 0 && tag.RowsAffected() > 0 {
+			applied = true
+		}
+	}
+
+	if !applied {
+		return nil, nil //nolint:nilnil // No restored row changed: the caller appends no entry.
+	}
+
+	entry := r.ReplayEntry(nil)
+
+	return &entry, nil
 }

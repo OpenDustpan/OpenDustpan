@@ -314,6 +314,35 @@ func TestEnterMaintenanceListsCanceledWorkWhenForceGivesUp(t *testing.T) {
 	}
 }
 
+func TestEnterMaintenanceListsCanceledWorkOnOtherFailures(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeMaintenance(maintenance.StateNormal)
+	fake.enterErr = fmt.Errorf("enter: %w", &maintenance.CanceledError{
+		Err: maintenance.ErrUnavailable, Canceled: []string{"pulumi:acme/web/prod"},
+	})
+	handler := newMaintenanceHandler(t, fake)
+
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", `{"force":true}`)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("POST forced enter that failed answers %d, want %d (%s)", status, http.StatusInternalServerError, body)
+	}
+
+	var doc struct {
+		Code     int      `json:"code"`
+		Canceled []string `json:"canceled"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode error of POST enter: %v (%s)", err, body)
+	}
+
+	if doc.Code != http.StatusInternalServerError || len(doc.Canceled) != 1 ||
+		doc.Canceled[0] != "pulumi:acme/web/prod" {
+		t.Fatalf("POST enter error = %+v, want code 500 naming the canceled work", doc)
+	}
+}
+
 func TestEnterMaintenanceRejectsBadBody(t *testing.T) {
 	t.Parallel()
 

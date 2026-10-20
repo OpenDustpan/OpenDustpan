@@ -260,6 +260,20 @@ func (s *Service) EnablePrincipal(
 	return nil
 }
 
+// DisablePrincipal disables the principal with the ID id, with the entry e. It
+// only narrows access: the grants of the principal stay and it cannot use
+// them until EnablePrincipal clears the disable, so the Guard has nothing to
+// check. The write works in maintenance mode, as a revocation does. It
+// returns ErrNotFound when no such principal exists and ErrDisabled when it
+// is disabled.
+func (s *Service) DisablePrincipal(ctx context.Context, e audit.Entry, id string) error {
+	if err := s.store.DisablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
+		return fmt.Errorf("disable principal %q: %w", id, err)
+	}
+
+	return nil
+}
+
 // GroupInput names the fields of a new group.
 type GroupInput struct {
 	Name        string

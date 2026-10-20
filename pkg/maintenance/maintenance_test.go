@@ -70,9 +70,10 @@ func (stubSealer) OpenOutputs(
 // cross-instance write lands first and the conditional write loses, as one
 // UPDATE would against a committed concurrent write.
 type fakeStateStore struct {
-	state   maintenance.State
-	onSet   func()
-	onSetIf func()
+	state    maintenance.State
+	onSet    func()
+	onSetIf  func()
+	setIfErr error
 }
 
 func (f *fakeStateStore) GetState(context.Context) (maintenance.State, error) {
@@ -104,6 +105,10 @@ func (f *fakeStateStore) SetStateIf(_ context.Context, expected, next maintenanc
 
 	if f.onSetIf != nil {
 		f.onSetIf()
+	}
+
+	if f.setIfErr != nil {
+		return f.setIfErr
 	}
 
 	if f.state != expected {
@@ -501,7 +506,7 @@ func newFixtureWith(
 	}
 
 	f := &fixture{
-		state:        &fakeStateStore{state: maintenance.StateNormal, onSet: nil, onSetIf: nil},
+		state:        &fakeStateStore{state: maintenance.StateNormal, onSet: nil, onSetIf: nil, setIfErr: nil},
 		updates:      &fakeUpdates{updates: map[stack.UpdateID]stack.Update{}},
 		workspaces:   &fakeWorkspaces{workspaces: map[workspace.ID]workspace.Workspace{}, released: nil},
 		stacks:       &fakeStacks{stacks: nil},
@@ -1603,4 +1608,53 @@ func (f *fakeWorkspaces) SaveReleased(
 	f.released = append(f.released, e)
 
 	return f.SaveWorkspace(ctx, w, fence)
+}
+
+// TestForceEnterNamesCanceledWorkOnOtherFailures proves that a forced enter
+// which canceled work and then failed on an error other than ErrActiveWork
+// still names what it canceled, and that the error keeps its class: the
+// cancel stays, so the caller must be able to tell the operator what stopped.
+func TestForceEnterNamesCanceledWorkOnOtherFailures(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	seedRunningUpdate(t, f, mustRef(t))
+
+	f.state.setIfErr = maintenance.ErrUnavailable
+
+	_, err := f.service.Enter(t.Context(), true)
+	if !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("force enter against a failing store: err = %v, want ErrUnavailable", err)
+	}
+
+	var failed *maintenance.CanceledError
+	if !errors.As(err, &failed) {
+		t.Fatalf("force enter error %v is not a *CanceledError", err)
+	}
+
+	if want := []string{"pulumi:acme/web/prod"}; !slices.Equal(failed.Canceled, want) {
+		t.Fatalf("canceled work = %v, want %v", failed.Canceled, want)
+	}
+
+	if !strings.Contains(err.Error(), "pulumi:acme/web/prod") {
+		t.Fatalf("error text %q does not name the canceled unit", err.Error())
+	}
+
+	assertState(t, f, maintenance.StateNormal)
+}
+
+// TestPlainEnterFailureCarriesNoCanceledWork proves that a plain enter which
+// fails has canceled nothing and returns the bare error.
+func TestPlainEnterFailureCarriesNoCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.state.setIfErr = maintenance.ErrUnavailable
+
+	_, err := f.service.Enter(t.Context(), false)
+
+	var failed *maintenance.CanceledError
+	if !errors.Is(err, maintenance.ErrUnavailable) || errors.As(err, &failed) {
+		t.Fatalf("plain enter against a failing store: err = %v, want a bare ErrUnavailable", err)
+	}
 }

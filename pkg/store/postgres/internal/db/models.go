@@ -379,6 +379,8 @@ type MaintenanceRevocation struct {
 	Kind      string
 	Target    string
 	EndReason string
+	Actor     string
+	Object    string
 	AtMs      int64
 }
 

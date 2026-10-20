@@ -104,7 +104,7 @@ func (s *Store) ExpireTempAdmin(ctx context.Context, principalID string, e audit
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rev := revocation{kind: maintenance.RevokedPrincipal, target: principalID, endReason: ""}
+	rev := revocation{kind: maintenance.RevokedTempAdmin, target: principalID, endReason: ""}
 
 	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
 		return expireTempAdminTx(ctx, q, principalID, e)

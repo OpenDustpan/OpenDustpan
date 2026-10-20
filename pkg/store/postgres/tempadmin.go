@@ -91,7 +91,7 @@ func (s *Store) ListTempAdmins(ctx context.Context) ([]tempadmin.TempAdmin, erro
 // still denied. A record that already ended answers tempadmin.ErrExpired
 // and writes no second entry.
 func (s *Store) ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error {
-	rev := revocation{kind: maintenance.RevokedPrincipal, target: principalID, endReason: ""}
+	rev := revocation{kind: maintenance.RevokedTempAdmin, target: principalID, endReason: ""}
 
 	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
 		return expireTempAdminTx(ctx, q, principalID, e)

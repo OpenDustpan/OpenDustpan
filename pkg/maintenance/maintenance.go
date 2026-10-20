@@ -98,22 +98,6 @@ func ParseState(s string) (State, error) {
 	}
 }
 
-// The kinds of access-reducing write that a store journals while the
-// installation is in maintenance mode (see Store.SetState). A restore
-// applies the journal again after the swap, so a revocation made during
-// maintenance mode survives a restore of older access data.
-const (
-	// RevokedSession is the end of a session. The target is the session ID.
-	RevokedSession = "session"
-	// RevokedToken is the revocation of an access token or a service token.
-	// The target is the token ID.
-	RevokedToken = "token"
-	// RevokedPrincipal is the disable of a principal. The target is the
-	// principal ID. The restore also revokes the live tokens of the
-	// principal.
-	RevokedPrincipal = "principal"
-)
-
 // Store is the persistence port for the installation state. It describes the
 // installation, not one namespace, so its rows carry no fence, as with the
 // backup registry. Every SQL adapter serves it from one database connection.
@@ -224,6 +208,26 @@ func (e *ActiveWorkError) Error() string {
 // Unwrap lets errors.Is match ErrActiveWork.
 func (e *ActiveWorkError) Unwrap() error { return ErrActiveWork }
 
+// CanceledError wraps a failure of a forced enter, other than ErrActiveWork,
+// that came after the enter canceled work. The cancel stays: the error names
+// the units so that the caller can tell the operator what stopped. It
+// unwraps to Err.
+type CanceledError struct {
+	// Err is the failure of the enter.
+	Err error
+	// Canceled holds the unit references that the forced enter canceled
+	// before it failed, in a stable order.
+	Canceled []string
+}
+
+// Error returns the text of Err and the unit references of Canceled.
+func (e *CanceledError) Error() string {
+	return fmt.Sprintf("%v (canceled before the failure: %s)", e.Err, strings.Join(e.Canceled, ", "))
+}
+
+// Unwrap returns Err, so errors.Is and errors.As reach the failure.
+func (e *CanceledError) Unwrap() error { return e.Err }
+
 // EnterResult names the work that entering maintenance mode canceled. Each
 // entry is a unit reference, for example "pulumi:acme/web/prod".
 type EnterResult struct {
@@ -288,9 +292,14 @@ func (s *Service) Enter(ctx context.Context, force bool) (EnterResult, error) {
 			return EnterResult{Canceled: canceled}, nil
 		}
 
-		if isBlocked && len(canceled) > 0 {
+		if len(canceled) > 0 {
 			slices.Sort(canceled)
-			blocked.Canceled = canceled
+
+			if isBlocked {
+				blocked.Canceled = canceled
+			} else {
+				err = &CanceledError{Err: err, Canceled: canceled}
+			}
 		}
 
 		return EnterResult{Canceled: nil}, err
@@ -368,7 +377,8 @@ func (s *Service) enterAttempt(ctx context.Context, force bool) (bool, EnterResu
 	setErr := s.setStateIf(ctx, StateNormal, StateMaintenance)
 	if setErr != nil {
 		if !errors.Is(setErr, ErrStateChanged) {
-			return false, EnterResult{Canceled: nil}, setErr
+			// The cancel stays: the result names it, and Enter attaches it to the error.
+			return false, EnterResult{Canceled: canceled}, setErr
 		}
 
 		return s.enterRaced(ctx, canceled)

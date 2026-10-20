@@ -259,7 +259,7 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("move staged schema live: %w", err)
 		}
 
-		return finishSwap(ctx, tx, live, previous, staging)
+		return s.finishSwap(ctx, tx, live, previous, staging)
 	})
 }
 
@@ -270,7 +270,7 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 // (see fenceRestored). The installation, backups, restores and revocation
 // journal tables live in the control schema, which the swap never renames,
 // so they stay across the swap with no copy.
-func finishSwap(ctx context.Context, tx pgx.Tx, live, previous, staging string) error {
+func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, live, previous, staging string) error {
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func finishSwap(ctx context.Context, tx pgx.Tx, live, previous, staging string) 
 	// The restored access tables come from the backup. Apply again the
 	// revocations that ran in this stay in maintenance mode, so the swap does not
 	// bring back a session or a token that an operator ended.
-	if err := replayRevocations(ctx, tx, live); err != nil {
+	if err := s.replayRevocations(ctx, tx, live); err != nil {
 		return err
 	}
 

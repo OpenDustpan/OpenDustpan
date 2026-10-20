@@ -1,33 +1,67 @@
 package storetest
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
+// RawRevocation is one row of the revocation journal for a raw write.
+type RawRevocation struct {
+	Kind   string
+	Target string
+	Actor  string
+	Object string
+	AtMs   int64
+}
+
 // RevocationStore is every port the revocation suite uses: the stores of
-// sessions, access tokens, principals and temporary administrators that it
-// revokes through, the audit store that it reads the entries from, and the
-// portable export and stage that the restore cases swap through.
+// sessions, sign-in providers, access tokens, principals, grants, namespaces,
+// runner pools and temporary administrators that it revokes through, the
+// audit store that it reads the entries from, and the portable export and
+// stage that the restore cases swap through.
+//
+//nolint:interfacebloat // One contract for the suite: each embedded port is a write that the suite revokes through or reads back.
 type RevocationStore interface {
 	PortableStore
 	backup.Applier
 	audit.Store
 	session.Store
+	session.ProviderConfigStore
 	accesstoken.Store
 	principal.RecordStore
 	tempadmin.Store
+	access.GrantStore
+	namespace.Store
+
+	// RunnerPools returns the pool port of the same store.
+	RunnerPools() runner.PoolStore
+	// InsertRawRevocation writes one row of the revocation journal with no
+	// check of the kind, as a write to the database itself would. The hostile
+	// journal case uses it to send a row that the store never writes.
+	InsertRawRevocation(ctx context.Context, row RawRevocation) error
+	// KeepsUnknownKinds reports whether a row of an unknown kind survives
+	// until the swap. It does not when the restore copies the journal into a
+	// table that holds the CHECK on the kind: the copy fails, and so does the
+	// restore, before any replay.
+	KeepsUnknownKinds() bool
 }
 
 // RevocationFactory returns a fresh, empty store for one subtest.
@@ -49,6 +83,8 @@ func RunRevocations(t *testing.T, newStore RevocationFactory) {
 		{name: "a revocation refuses hostile input in maintenance mode", test: testRevocationsHostileInput},
 		{name: "a revocation made in maintenance mode survives a restore", test: testRevocationSurvivesRestore},
 		{name: "a restore applies only the revocations of its own stay", test: testRevocationStayIsBounded},
+		{name: "a restore refuses hostile journal rows and applies the rest", test: testReplayRefusesHostileRows},
+		{name: "the sweep of temporary administrators expires in maintenance mode", test: testTempAdminSweepRuns},
 	}
 
 	for _, tc := range cases {
@@ -77,7 +113,26 @@ const (
 	revServiceToken  = "tok-service"
 	revTempToken     = "tok-temp"
 	revKeepToken     = "tok-keep"
+	revIdpPerson     = "prn-idp"
+	revSessionIdp    = "ses-idp"
+	revProvider      = "corp-idp"
+	revNamespace     = namespace.Name("acme")
+	revGrantServer   = "grt-server"
+	revGrantSpace    = "grt-space"
 )
+
+// revNoFence returns the zero fence of a write on the installation.
+func revNoFence() namespace.Fence {
+	return namespace.Fence{Namespace: "", FailoverVersion: 0}
+}
+
+// revFixture holds the rows of the suite that the store names: the fence of
+// the namespace, the pool and the join token.
+type revFixture struct {
+	fence     namespace.Fence
+	pool      runner.Pool
+	joinToken runner.JoinToken
+}
 
 // revAt is a fixed, millisecond-precision instant of the suite: stores keep
 // milliseconds.
@@ -197,9 +252,11 @@ func revMustToken(t *testing.T, s RevocationStore, tok accesstoken.Token, n int)
 }
 
 // seedAccess creates the access data of the suite: a person with two
-// sessions and a personal token, a service principal with a service token,
-// and a person who is a temporary administrator and holds a token.
-func seedAccess(t *testing.T, s RevocationStore) {
+// sessions and a personal token, a service principal with a service token, a
+// person who is a temporary administrator and holds a token, a person of the
+// identity provider revProvider with a session, a grant on the installation
+// and one in the namespace revNamespace, and a join token of a runner pool.
+func seedAccess(t *testing.T, s RevocationStore) revFixture {
 	t.Helper()
 
 	revMustPrincipal(t, s, revPerson, principal.KindPerson)
@@ -226,6 +283,125 @@ func seedAccess(t *testing.T, s RevocationStore) {
 	if err := s.CreateTempAdmin(t.Context(), record, revEntry(tempadmin.Ref(revTempAdmin), revAt(2))); err != nil {
 		t.Fatalf("create temporary administrator: %v", err)
 	}
+
+	revMustProvider(t, s)
+
+	fence := revMustNamespace(t, s)
+
+	revMustGrant(t, s, revGrantServer, identity.ServerObject(), revNoFence())
+	revMustGrant(t, s, revGrantSpace, identity.NamespaceObject(revNamespace), fence)
+
+	pool, token := revMustJoinToken(t, s, fence)
+
+	return revFixture{fence: fence, pool: pool, joinToken: token}
+}
+
+// revEntryIn returns revEntry in the audit scope ns.
+func revEntryIn(ns namespace.Name, object string, when time.Time) audit.Entry {
+	e := revEntry(object, when)
+	e.Namespace = ns
+
+	return e
+}
+
+// revMustProvider creates the sign-in provider revProvider, a person of it and
+// a session of the person.
+func revMustProvider(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	p := session.ProviderConfig{
+		CreatedAt: revAt(0), UpdatedAt: revAt(0), ID: revProvider, Mode: session.ModeOIDC,
+		Issuer: "https://corp-idp.idp.example", DisplayName: "Corporate", ClientID: "dustpan-corp",
+		SealedSecret: []byte("sealed secret"), Scopes: []string{"profile", "email"},
+		OAuth: session.OAuthSettings{
+			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "",
+			UsernameClaim: "", EmailClaim: "",
+		},
+		Version: 1, AutoCreate: true, Enabled: true,
+	}
+
+	e := revEntry("sign-in-provider:"+revProvider, revAt(0))
+	e.Action = "server:manage-sign-in"
+
+	if err := s.CreateProviderConfig(t.Context(), p, e); err != nil {
+		t.Fatalf("create sign-in provider: %v", err)
+	}
+
+	person := principal.Principal{
+		CreatedAt: revAt(0), UpdatedAt: revAt(0), DisabledAt: time.Time{}, ID: revIdpPerson,
+		Subject: revProvider + ":sam", DisplayName: "Sam", Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if err := s.CreatePrincipal(t.Context(), person, revEntry(principal.Ref(revIdpPerson), revAt(0))); err != nil {
+		t.Fatalf("create principal %q: %v", revIdpPerson, err)
+	}
+
+	revMustSession(t, s, revSessionIdp, revIdpPerson, 7)
+}
+
+// revMustNamespace creates the namespace revNamespace and returns its fence.
+func revMustNamespace(t *testing.T, s RevocationStore) namespace.Fence {
+	t.Helper()
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: revAt(0), Name: revNamespace, HomeRegion: "eu-west", FailoverVersion: 1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	return ns.Fence()
+}
+
+// revMustGrant gives the person revPerson the role writer on obj.
+func revMustGrant(t *testing.T, s RevocationStore, id string, obj identity.Object, fence namespace.Fence) {
+	t.Helper()
+
+	g := access.Grant{
+		CreatedAt: revAt(0), Condition: nil, Object: obj, ID: id, Role: access.RoleWriter, CreatedBy: "admin",
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: revPerson},
+	}
+
+	e := revEntryIn(fence.Namespace, obj.String(), revAt(0))
+	if fence.Namespace == "" {
+		e.Namespace = audit.ServerScope
+	}
+
+	if err := s.CreateGrant(t.Context(), g, fence, e, nil); err != nil {
+		t.Fatalf("create grant %q: %v", id, err)
+	}
+}
+
+// revMustJoinToken creates a runner pool and one join token of it in the
+// namespace of fence.
+func revMustJoinToken(t *testing.T, s RevocationStore, fence namespace.Fence) (runner.Pool, runner.JoinToken) {
+	t.Helper()
+
+	ctx := t.Context()
+	entries := []audit.Entry{revEntryIn(fence.Namespace, "namespace:"+fence.Namespace.String(), revAt(3))}
+
+	pool, err := s.RunnerPools().CreatePool(ctx, runner.Pool{
+		ID: "", Namespace: fence.Namespace, Name: "prod", Purpose: runner.PurposeJobs, Lease: 0, Concurrency: 0,
+		Isolation: nil, GitCredentials: runner.GitCredentials{Mode: "", Helper: ""}, CreatedAt: revAt(3),
+		UpdatedAt: revAt(3),
+	}, fence, entries)
+	if err != nil {
+		t.Fatalf("create runner pool: %v", err)
+	}
+
+	sum := sha256.Sum256([]byte(runner.JoinTokenPrefix + "revocation suite"))
+	token, err := s.RunnerPools().CreateJoinToken(ctx, runner.JoinToken{
+		ID: "", Pool: pool.ID, SHA256: hex.EncodeToString(sum[:]), CreatedBy: "alice", CreatedAt: revAt(3),
+		ExpiresAt: revAt(3).Add(time.Hour), UsedAt: time.Time{}, UsedBy: "", RevokedAt: time.Time{},
+	}, fence, entries)
+	if err != nil {
+		t.Fatalf("create join token: %v", err)
+	}
+
+	return pool, token
 }
 
 // revEnter moves the installation to maintenance mode.
@@ -250,12 +426,46 @@ func revLeave(t *testing.T, s RevocationStore) {
 func revAuditTotal(t *testing.T, s RevocationStore) int64 {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 1})
+	return revAuditTotalIn(t, s, audit.ServerScope)
+}
+
+// revAuditTotalIn returns the count of the entries in the scope ns.
+func revAuditTotalIn(t *testing.T, s RevocationStore, ns namespace.Name) int64 {
+	t.Helper()
+
+	listing, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: 1})
 	if err != nil {
-		t.Fatalf("list the server audit entries: %v", err)
+		t.Fatalf("list the audit entries of %q: %v", ns, err)
 	}
 
 	return listing.Total
+}
+
+// revReplayEntries returns the entries that a restore wrote for the
+// revocations that it applied again, in the scope @server, in order.
+func revReplayEntries(t *testing.T, s RevocationStore) []audit.Entry {
+	t.Helper()
+
+	var out []audit.Entry
+
+	for page := 1; ; page++ {
+		listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
+		if err != nil {
+			t.Fatalf("list the server audit entries: %v", err)
+		}
+
+		for i := range listing.Entries {
+			if listing.Entries[i].Action == maintenance.ActionReplayRevocation {
+				out = append(out, listing.Entries[i])
+			}
+		}
+
+		if len(listing.Entries) < audit.MaxPageSize {
+			slices.SortFunc(out, func(a, b audit.Entry) int { return int(a.Sequence - b.Sequence) })
+
+			return out
+		}
+	}
 }
 
 // revSessionEnded fails the test unless the session id has ended with reason.
@@ -343,48 +553,129 @@ func revPrincipalEnabled(t *testing.T, s RevocationStore, id string) {
 }
 
 // revocationCase is one write that only reduces access, with a check of its
-// effect.
+// effect. scope is the audit scope that holds its entry.
 type revocationCase struct {
-	run   func(t *testing.T, s RevocationStore) error
-	check func(t *testing.T, s RevocationStore)
+	run   func(t *testing.T, s RevocationStore, f revFixture) error
+	check func(t *testing.T, s RevocationStore, f revFixture)
 	name  string
+	scope namespace.Name
+}
+
+// revGrantRevoked fails the test unless the grant id is revoked.
+func revGrantRevoked(t *testing.T, s RevocationStore, id string) {
+	t.Helper()
+
+	if _, err := s.GetGrant(t.Context(), id); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("get revoked grant %q: err = %v, want ErrNotFound", id, err)
+	}
+}
+
+// revGrantLive fails the test unless the grant id is current.
+func revGrantLive(t *testing.T, s RevocationStore, id string) {
+	t.Helper()
+
+	if _, err := s.GetGrant(t.Context(), id); err != nil {
+		t.Fatalf("get live grant %q: %v", id, err)
+	}
+}
+
+// revJoinToken returns the one join token of the pool of f.
+func revJoinToken(t *testing.T, s RevocationStore, f revFixture) runner.JoinToken {
+	t.Helper()
+
+	tokens, err := s.RunnerPools().JoinTokens(t.Context(), f.pool.ID)
+	if err != nil || len(tokens) != 1 {
+		t.Fatalf("join tokens = %+v, %v, want one token", tokens, err)
+	}
+
+	return tokens[0]
+}
+
+// revJoinTokenRevoked fails the test unless the join token of f is revoked.
+func revJoinTokenRevoked(t *testing.T, s RevocationStore, f revFixture) {
+	t.Helper()
+
+	if revJoinToken(t, s, f).RevokedAt.IsZero() {
+		t.Fatal("join token is live, want it revoked")
+	}
+}
+
+// revJoinTokenLive fails the test when the join token of f is revoked.
+func revJoinTokenLive(t *testing.T, s RevocationStore, f revFixture) {
+	t.Helper()
+
+	if got := revJoinToken(t, s, f).RevokedAt; !got.IsZero() {
+		t.Fatalf("join token was revoked at %v, want it live", got)
+	}
+}
+
+// revProviderConfig reads the sign-in provider revProvider.
+func revProviderConfig(t *testing.T, s RevocationStore) session.ProviderConfig {
+	t.Helper()
+
+	p, err := s.GetProviderConfig(t.Context(), revProvider)
+	if err != nil {
+		t.Fatalf("get sign-in provider: %v", err)
+	}
+
+	return p
+}
+
+// revProviderDisabled fails the test unless the provider revProvider is
+// disabled at the version version.
+func revProviderDisabled(t *testing.T, s RevocationStore, version int64) {
+	t.Helper()
+
+	if p := revProviderConfig(t, s); p.Enabled || p.Version != version {
+		t.Fatalf("provider = enabled %v at version %d, want disabled at version %d", p.Enabled, p.Version, version)
+	}
+}
+
+// revProviderEnabledAt fails the test unless the provider revProvider is
+// enabled at the version version.
+func revProviderEnabledAt(t *testing.T, s RevocationStore, version int64) {
+	t.Helper()
+
+	if p := revProviderConfig(t, s); !p.Enabled || p.Version != version {
+		t.Fatalf("provider = enabled %v at version %d, want enabled at version %d", p.Enabled, p.Version, version)
+	}
 }
 
 // revocationCases lists every write that only reduces access.
 func revocationCases() []revocationCase {
 	return []revocationCase{
 		{
-			name: "sign-out ends the session",
-			run: func(t *testing.T, s RevocationStore) error {
+			name: "sign-out ends the session", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
 				t.Helper()
 
 				e := revEntry(session.FullRef(revPerson, revSessionOne), revAt(10))
 
 				return s.EndSession(t.Context(), revSessionOne, session.ReasonSignOut, e)
 			},
-			check: func(t *testing.T, s RevocationStore) {
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
 				t.Helper()
 				revSessionEnded(t, s, revSessionOne, session.ReasonSignOut)
 				revSessionActive(t, s, revSessionTwo)
 			},
 		},
 		{
-			name: "an administrator ends the session",
-			run: func(t *testing.T, s RevocationStore) error {
+			name: "an administrator ends the session", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
 				t.Helper()
 
 				e := revEntry(session.FullRef(revPerson, revSessionOne), revAt(10))
 
 				return s.EndSession(t.Context(), revSessionOne, session.ReasonEnded, e)
 			},
-			check: func(t *testing.T, s RevocationStore) {
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
 				t.Helper()
 				revSessionEnded(t, s, revSessionOne, session.ReasonEnded)
 			},
 		},
 		{
-			name: "revoking an access token",
-			run: func(t *testing.T, s RevocationStore) error {
+			name: "revoking an access token", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
 				t.Helper()
 
 				return s.RevokeToken(
@@ -393,15 +684,15 @@ func revocationCases() []revocationCase {
 					revEntry(accesstoken.Ref(revPersonalToken), revAt(10)),
 				)
 			},
-			check: func(t *testing.T, s RevocationStore) {
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
 				t.Helper()
 				revTokenRevoked(t, s, revPersonalToken)
 				revTokenActive(t, s, revKeepToken)
 			},
 		},
 		{
-			name: "revoking a service token",
-			run: func(t *testing.T, s RevocationStore) error {
+			name: "revoking a service token", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
 				t.Helper()
 
 				return s.RevokeToken(
@@ -410,23 +701,101 @@ func revocationCases() []revocationCase {
 					revEntry(accesstoken.Ref(revServiceToken), revAt(10)),
 				)
 			},
-			check: func(t *testing.T, s RevocationStore) {
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
 				t.Helper()
 				revTokenRevoked(t, s, revServiceToken)
 			},
 		},
 		{
-			name: "disabling a principal",
-			run: func(t *testing.T, s RevocationStore) error {
+			name: "disabling a principal", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
+				t.Helper()
+
+				return s.DisablePrincipal(t.Context(), revPerson, revEntry(principal.Ref(revPerson), revAt(10)))
+			},
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
+				t.Helper()
+				revPrincipalDisabled(t, s, revPerson)
+				revPrincipalEnabled(t, s, revService)
+				// The disable keeps the grants and the tokens: only the enable
+				// gives the principal their use again.
+				revTokenActive(t, s, revPersonalToken)
+				revGrantLive(t, s, revGrantServer)
+			},
+		},
+		{
+			name: "expiring a temporary administrator", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
 				t.Helper()
 
 				return s.ExpireTempAdmin(t.Context(), revTempAdmin, revEntry(tempadmin.Ref(revTempAdmin), revAt(10)))
 			},
-			check: func(t *testing.T, s RevocationStore) {
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
 				t.Helper()
 				revPrincipalDisabled(t, s, revTempAdmin)
 				revTokenRevoked(t, s, revTempToken)
 				revPrincipalEnabled(t, s, revPerson)
+			},
+		},
+		{
+			name: "revoking a grant on the installation", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
+				t.Helper()
+
+				e := revEntry(identity.ServerObject().String(), revAt(10))
+
+				return s.RevokeGrant(t.Context(), revGrantServer, revNoFence(), e, nil)
+			},
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
+				t.Helper()
+				revGrantRevoked(t, s, revGrantServer)
+				revGrantLive(t, s, revGrantSpace)
+			},
+		},
+		{
+			name: "revoking a grant in a namespace", scope: revNamespace,
+			run: func(t *testing.T, s RevocationStore, f revFixture) error {
+				t.Helper()
+
+				e := revEntryIn(revNamespace, identity.NamespaceObject(revNamespace).String(), revAt(10))
+
+				return s.RevokeGrant(t.Context(), revGrantSpace, f.fence, e, nil)
+			},
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
+				t.Helper()
+				revGrantRevoked(t, s, revGrantSpace)
+				revGrantLive(t, s, revGrantServer)
+			},
+		},
+		{
+			name: "revoking a join token", scope: revNamespace,
+			run: func(t *testing.T, s RevocationStore, f revFixture) error {
+				t.Helper()
+
+				e := []audit.Entry{revEntryIn(revNamespace, "namespace:"+revNamespace.String(), revAt(10))}
+
+				return s.RunnerPools().RevokeJoinToken(t.Context(), f.joinToken.ID, f.fence, e)
+			},
+			check: func(t *testing.T, s RevocationStore, f revFixture) {
+				t.Helper()
+				revJoinTokenRevoked(t, s, f)
+			},
+		},
+		{
+			name: "disabling an identity provider", scope: audit.ServerScope,
+			run: func(t *testing.T, s RevocationStore, _ revFixture) error {
+				t.Helper()
+
+				e := revEntry("sign-in-provider:"+revProvider, revAt(10))
+				e.Action = "server:manage-sign-in"
+
+				return s.DisableProviderConfig(t.Context(), revProvider, 1, revAt(10), e)
+			},
+			check: func(t *testing.T, s RevocationStore, _ revFixture) {
+				t.Helper()
+				revProviderDisabled(t, s, 2)
+				revSessionEnded(t, s, revSessionIdp, session.ReasonEnded)
+				revSessionActive(t, s, revSessionOne)
 			},
 		},
 	}
@@ -434,23 +803,33 @@ func revocationCases() []revocationCase {
 
 // testRevocationRuns proves that one write that only reduces access runs in
 // maintenance mode, changes the row, and appends its audit entry in the same
-// transaction: one entry.
+// transaction: one entry in its scope, and none in another.
 func testRevocationRuns(t *testing.T, s RevocationStore, tc revocationCase) {
 	t.Helper()
 
-	seedAccess(t, s)
+	f := seedAccess(t, s)
 	revEnter(t, s)
 
-	before := revAuditTotal(t, s)
+	other := revNamespace
+	if tc.scope == revNamespace {
+		other = audit.ServerScope
+	}
 
-	if err := tc.run(t, s); err != nil {
+	before := revAuditTotalIn(t, s, tc.scope)
+	beforeOther := revAuditTotalIn(t, s, other)
+
+	if err := tc.run(t, s, f); err != nil {
 		t.Fatalf("%s in maintenance mode: %v", tc.name, err)
 	}
 
-	tc.check(t, s)
+	tc.check(t, s, f)
 
-	if got := revAuditTotal(t, s); got != before+1 {
-		t.Fatalf("%s in maintenance mode: audit entries = %d, want %d", tc.name, got, before+1)
+	if got := revAuditTotalIn(t, s, tc.scope); got != before+1 {
+		t.Fatalf("%s in maintenance mode: audit entries in %q = %d, want %d", tc.name, tc.scope, got, before+1)
+	}
+
+	if got := revAuditTotalIn(t, s, other); got != beforeOther {
+		t.Fatalf("%s in maintenance mode: audit entries in %q = %d, want %d", tc.name, other, got, beforeOther)
 	}
 }
 
@@ -462,11 +841,13 @@ type grantAttempt struct {
 
 // testGrantsRefused proves that the writes which grant or widen access stay
 // checked: in maintenance mode each answers maintenance.ErrInMaintenance and
-// changes nothing.
+// changes nothing. The writes that could widen access under a limit or a
+// forbid rule stay checked too: the removal of a member, the delete of a
+// principal and the inactivity sweep.
 func testGrantsRefused(t *testing.T, s RevocationStore) {
 	t.Helper()
 
-	seedAccess(t, s)
+	f := seedAccess(t, s)
 
 	// A disabled principal to enable: a temporary administrator that expired.
 	expire := revEntry(tempadmin.Ref(revTempAdmin), revAt(5))
@@ -519,6 +900,66 @@ func testGrantsRefused(t *testing.T, s RevocationStore) {
 				return s.EnablePrincipal(t.Context(), revTempAdmin, revEntry(principal.Ref(revTempAdmin), revAt(20)))
 			},
 		},
+		{
+			name: "create a grant",
+			run: func(t *testing.T, s RevocationStore) error {
+				t.Helper()
+
+				g := access.Grant{
+					CreatedAt: revAt(20), Condition: nil, Object: identity.ServerObject(), ID: "grt-new",
+					Role: access.RoleWriter, CreatedBy: "admin",
+					Subject: access.Subject{Kind: access.SubjectPrincipal, ID: revService},
+				}
+
+				return s.CreateGrant(
+					t.Context(),
+					g,
+					revNoFence(),
+					revEntry(identity.ServerObject().String(), revAt(20)),
+					nil,
+				)
+			},
+		},
+		{
+			name: "update an identity provider, which can enable it",
+			run: func(t *testing.T, s RevocationStore) error {
+				t.Helper()
+
+				p, err := s.GetProviderConfig(t.Context(), revProvider)
+				if err != nil {
+					return err
+				}
+
+				p.Version++
+
+				e := revEntry("sign-in-provider:"+revProvider, revAt(20))
+				e.Action = "server:manage-sign-in"
+
+				return s.UpdateProviderConfig(t.Context(), p, e)
+			},
+		},
+		{
+			name: "delete a principal, which ends a limit that it holds",
+			run: func(t *testing.T, s RevocationStore) error {
+				t.Helper()
+
+				return s.DeletePrincipal(t.Context(), revService, revEntry(principal.Ref(revService), revAt(20)))
+			},
+		},
+		{
+			name: "sweep the inactive records",
+			run: func(t *testing.T, s RevocationStore) error {
+				t.Helper()
+
+				_, err := s.SweepInactive(
+					t.Context(),
+					accesstoken.Sweep{Inactivity: time.Hour, Tokens: true, Accounts: true},
+					func(at time.Time, object string) audit.Entry { return revEntry(object, at) },
+				)
+
+				return err
+			},
+		},
 	}
 
 	before := revAuditTotal(t, s)
@@ -538,6 +979,9 @@ func testGrantsRefused(t *testing.T, s RevocationStore) {
 	}
 
 	revPrincipalDisabled(t, s, revTempAdmin)
+	revPrincipalEnabled(t, s, revService)
+	revProviderEnabledAt(t, s, 1)
+	revJoinTokenLive(t, s, f)
 
 	if got := revAuditTotal(t, s); got != before {
 		t.Fatalf("audit entries after the refused writes = %d, want %d", got, before)
@@ -551,7 +995,7 @@ func testGrantsRefused(t *testing.T, s RevocationStore) {
 func testRevocationsHostileInput(t *testing.T, s RevocationStore) {
 	t.Helper()
 
-	seedAccess(t, s)
+	f := seedAccess(t, s)
 	revEnter(t, s)
 
 	ctx := t.Context()
@@ -610,6 +1054,90 @@ func testRevocationsHostileInput(t *testing.T, s RevocationStore) {
 			},
 			want: tempadmin.ErrNotFound,
 		},
+		{
+			name: "a principal that does not exist",
+			run: func() error {
+				return s.DisablePrincipal(ctx, "prn-none", revEntry(principal.Ref("prn-none"), revAt(10)))
+			},
+			want: principal.ErrNotFound,
+		},
+		{
+			name: "a grant that does not exist",
+			run: func() error {
+				return s.RevokeGrant(ctx, "grt-none", revNoFence(), revEntry("server", revAt(10)), nil)
+			},
+			want: access.ErrNotFound,
+		},
+		{
+			name: "a grant of the namespace through the fence of the installation",
+			run: func() error {
+				return s.RevokeGrant(ctx, revGrantSpace, revNoFence(), revEntry("server", revAt(10)), nil)
+			},
+			want: access.ErrNotFound,
+		},
+		{
+			name: "a grant of the installation through the fence of a namespace",
+			run: func() error {
+				e := revEntryIn(revNamespace, "namespace:acme", revAt(10))
+
+				return s.RevokeGrant(ctx, revGrantServer, f.fence, e, nil)
+			},
+			want: access.ErrNotFound,
+		},
+		{
+			name: "a grant through a stale fence",
+			run: func() error {
+				stale := namespace.Fence{Namespace: revNamespace, FailoverVersion: f.fence.FailoverVersion + 1}
+				e := revEntryIn(revNamespace, "namespace:acme", revAt(10))
+
+				return s.RevokeGrant(ctx, revGrantSpace, stale, e, nil)
+			},
+			want: namespace.ErrFenced,
+		},
+		{
+			name: "a join token that does not exist",
+			run: func() error {
+				e := []audit.Entry{revEntryIn(revNamespace, "namespace:acme", revAt(10))}
+
+				return s.RunnerPools().RevokeJoinToken(ctx, "rjt-none", f.fence, e)
+			},
+			want: runner.ErrNotFound,
+		},
+		{
+			name: "a join token without an audit entry",
+			run:  func() error { return s.RunnerPools().RevokeJoinToken(ctx, f.joinToken.ID, f.fence, nil) },
+			want: audit.ErrInvalidEntry,
+		},
+		{
+			name: "a join token through a stale fence",
+			run: func() error {
+				stale := namespace.Fence{Namespace: revNamespace, FailoverVersion: f.fence.FailoverVersion + 1}
+				e := []audit.Entry{revEntryIn(revNamespace, "namespace:acme", revAt(10))}
+
+				return s.RunnerPools().RevokeJoinToken(ctx, f.joinToken.ID, stale, e)
+			},
+			want: namespace.ErrFenced,
+		},
+		{
+			name: "a provider that does not exist",
+			run: func() error {
+				return s.DisableProviderConfig(ctx, "none", 1, revAt(10), revEntry("sign-in-provider:none", revAt(10)))
+			},
+			want: session.ErrProviderNotFound,
+		},
+		{
+			name: "a provider at another version",
+			run: func() error {
+				return s.DisableProviderConfig(
+					ctx,
+					revProvider,
+					7,
+					revAt(10),
+					revEntry("sign-in-provider:x", revAt(10)),
+				)
+			},
+			want: session.ErrProviderChanged,
+		},
 	}
 
 	for _, tc := range cases {
@@ -620,6 +1148,10 @@ func testRevocationsHostileInput(t *testing.T, s RevocationStore) {
 
 	revSessionActive(t, s, revSessionOne)
 	revTokenActive(t, s, revPersonalToken)
+	revGrantLive(t, s, revGrantServer)
+	revGrantLive(t, s, revGrantSpace)
+	revJoinTokenLive(t, s, f)
+	revProviderEnabledAt(t, s, 1)
 
 	if got := revAuditTotal(t, s); got != before {
 		t.Fatalf("audit entries after the refused writes = %d, want %d", got, before)
@@ -638,6 +1170,21 @@ func testRevocationsHostileInput(t *testing.T, s RevocationStore) {
 
 	if got := revAuditTotal(t, s); got != again {
 		t.Fatalf("audit entries after the second end = %d, want %d", got, again)
+	}
+
+	// A second disable of one principal is refused and appends no entry.
+	disable := revEntry(principal.Ref(revPerson), revAt(12))
+	if err := s.DisablePrincipal(ctx, revPerson, disable); err != nil {
+		t.Fatalf("disable the principal: %v", err)
+	}
+
+	again = revAuditTotal(t, s)
+	if err := s.DisablePrincipal(ctx, revPerson, disable); !errors.Is(err, principal.ErrDisabled) {
+		t.Fatalf("disable the principal twice: err = %v, want ErrDisabled", err)
+	}
+
+	if got := revAuditTotal(t, s); got != again {
+		t.Fatalf("audit entries after the second disable = %d, want %d", got, again)
 	}
 }
 
@@ -671,37 +1218,115 @@ func revTakeExport(t *testing.T, s RevocationStore) revExport {
 	return revExport{sink: sink, sum: sum, files: files}
 }
 
-// testRevocationSurvivesRestore proves the restore interaction. A backup
-// holds the access data from before the incident. An operator then enters
-// maintenance mode and revokes a session, a token and a principal. The
-// restore swaps in the older access data, and the swap applies the revocations
-// of the stay again: the restored rows end, are revoked or are disabled,
-// and the rows that nobody revoked stay as the backup holds them.
-func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
+// revJournaled is one revocation of a stay, with the entry that a restore
+// writes for it.
+type revJournaled struct {
+	run    func(t *testing.T, s RevocationStore, f revFixture)
+	kind   string
+	object string
+}
+
+// revStayRevocations lists one revocation of each kind, as an operator makes
+// them in a stay in maintenance mode.
+func revStayRevocations() []revJournaled {
+	return []revJournaled{
+		{
+			kind: maintenance.RevokedSession, object: session.FullRef(revPerson, revSessionOne),
+			run: revStayEndSession,
+		},
+		{kind: maintenance.RevokedToken, object: accesstoken.Ref(revServiceToken), run: revStayRevokeToken},
+		{kind: maintenance.RevokedTempAdmin, object: tempadmin.Ref(revTempAdmin), run: revStayExpire},
+		{kind: maintenance.RevokedPrincipal, object: principal.Ref(revService), run: revStayDisablePrincipal},
+		{kind: maintenance.RevokedGrant, object: identity.ServerObject().String(), run: revStayRevokeServerGrant},
+		{
+			kind: maintenance.RevokedGrant, object: identity.NamespaceObject(revNamespace).String(),
+			run: revStayRevokeSpaceGrant,
+		},
+		{
+			kind: maintenance.RevokedJoinToken, object: "namespace:" + revNamespace.String(),
+			run: revStayRevokeJoinToken,
+		},
+		{kind: maintenance.RevokedProvider, object: "sign-in-provider:" + revProvider, run: revStayDisableProvider},
+	}
+}
+
+func revStayEndSession(t *testing.T, s RevocationStore, _ revFixture) {
 	t.Helper()
 
-	seedAccess(t, s)
-
-	export := revTakeExport(t, s)
-
-	revEnter(t, s)
-
-	endSession := revEntry(session.FullRef(revPerson, revSessionOne), revAt(30))
-	if err := s.EndSession(t.Context(), revSessionOne, session.ReasonEnded, endSession); err != nil {
+	e := revEntry(session.FullRef(revPerson, revSessionOne), revAt(30))
+	if err := s.EndSession(t.Context(), revSessionOne, session.ReasonEnded, e); err != nil {
 		t.Fatalf("end the session in maintenance mode: %v", err)
 	}
+}
 
-	revoke := revEntry(accesstoken.Ref(revServiceToken), revAt(31))
-	if err := s.RevokeToken(t.Context(), revServiceToken, revoke); err != nil {
+func revStayRevokeToken(t *testing.T, s RevocationStore, _ revFixture) {
+	t.Helper()
+
+	e := revEntry(accesstoken.Ref(revServiceToken), revAt(31))
+	if err := s.RevokeToken(t.Context(), revServiceToken, e); err != nil {
 		t.Fatalf("revoke the token in maintenance mode: %v", err)
 	}
+}
 
-	expire := revEntry(tempadmin.Ref(revTempAdmin), revAt(32))
-	if err := s.ExpireTempAdmin(t.Context(), revTempAdmin, expire); err != nil {
+func revStayExpire(t *testing.T, s RevocationStore, _ revFixture) {
+	t.Helper()
+
+	e := revEntry(tempadmin.Ref(revTempAdmin), revAt(32))
+	if err := s.ExpireTempAdmin(t.Context(), revTempAdmin, e); err != nil {
+		t.Fatalf("expire the temporary administrator in maintenance mode: %v", err)
+	}
+}
+
+func revStayDisablePrincipal(t *testing.T, s RevocationStore, _ revFixture) {
+	t.Helper()
+
+	e := revEntry(principal.Ref(revService), revAt(33))
+	if err := s.DisablePrincipal(t.Context(), revService, e); err != nil {
 		t.Fatalf("disable the principal in maintenance mode: %v", err)
 	}
+}
 
-	revStageAndApply(t, s, export)
+func revStayRevokeServerGrant(t *testing.T, s RevocationStore, _ revFixture) {
+	t.Helper()
+
+	e := revEntry(identity.ServerObject().String(), revAt(34))
+	if err := s.RevokeGrant(t.Context(), revGrantServer, revNoFence(), e, nil); err != nil {
+		t.Fatalf("revoke the grant of the installation in maintenance mode: %v", err)
+	}
+}
+
+func revStayRevokeSpaceGrant(t *testing.T, s RevocationStore, f revFixture) {
+	t.Helper()
+
+	e := revEntryIn(revNamespace, identity.NamespaceObject(revNamespace).String(), revAt(35))
+	if err := s.RevokeGrant(t.Context(), revGrantSpace, f.fence, e, nil); err != nil {
+		t.Fatalf("revoke the grant of the namespace in maintenance mode: %v", err)
+	}
+}
+
+func revStayRevokeJoinToken(t *testing.T, s RevocationStore, f revFixture) {
+	t.Helper()
+
+	e := []audit.Entry{revEntryIn(revNamespace, "namespace:"+revNamespace.String(), revAt(36))}
+	if err := s.RunnerPools().RevokeJoinToken(t.Context(), f.joinToken.ID, f.fence, e); err != nil {
+		t.Fatalf("revoke the join token in maintenance mode: %v", err)
+	}
+}
+
+func revStayDisableProvider(t *testing.T, s RevocationStore, _ revFixture) {
+	t.Helper()
+
+	e := revEntry("sign-in-provider:"+revProvider, revAt(37))
+	if err := s.DisableProviderConfig(t.Context(), revProvider, 1, revAt(37), e); err != nil {
+		t.Fatalf("disable the provider in maintenance mode: %v", err)
+	}
+}
+
+// revCheckRestored fails the test unless every revocation of the stay shows
+// in the restored rows, and the rows that nobody revoked stay as the backup
+// holds them.
+func revCheckRestored(t *testing.T, s RevocationStore, f revFixture) {
+	t.Helper()
 
 	revSessionEnded(t, s, revSessionOne, session.ReasonEnded)
 	revSessionActive(t, s, revSessionTwo)
@@ -710,10 +1335,152 @@ func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
 	revTokenActive(t, s, revKeepToken)
 	revPrincipalDisabled(t, s, revTempAdmin)
 	revTokenRevoked(t, s, revTempToken)
+	revPrincipalDisabled(t, s, revService)
 	revPrincipalEnabled(t, s, revPerson)
+	revGrantRevoked(t, s, revGrantServer)
+	revGrantRevoked(t, s, revGrantSpace)
+	revJoinTokenRevoked(t, s, f)
+	revProviderDisabled(t, s, 2)
+	revSessionEnded(t, s, revSessionIdp, session.ReasonEnded)
+}
+
+// testRevocationSurvivesRestore proves the restore interaction. A backup
+// holds the access data from before the incident. An operator then enters
+// maintenance mode and makes every kind of revocation. The restore swaps in
+// the older access data, and the swap applies the revocations of the stay
+// again: the restored rows end, are revoked or are disabled, the rows that
+// nobody revoked stay as the backup holds them, and the swap writes one audit
+// entry for each revocation that it applied, after the log of the backup.
+func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	f := seedAccess(t, s)
+
+	export := revTakeExport(t, s)
+
+	revEnter(t, s)
+
+	stay := revStayRevocations()
+	for _, r := range stay {
+		r.run(t, s, f)
+	}
+
+	revStageAndApply(t, s, export)
+
+	revCheckRestored(t, s, f)
 
 	if got, err := s.GetState(t.Context()); err != nil || got != maintenance.StateMaintenance {
 		t.Fatalf("installation state after the restore = %q, %v, want maintenance without error", got, err)
+	}
+
+	entries := revReplayEntries(t, s)
+	if len(entries) != len(stay) {
+		t.Fatalf("replay audit entries = %d, want %d (one for each revocation)", len(entries), len(stay))
+	}
+
+	for i, r := range stay {
+		e := entries[i]
+		if e.Subject != "alice" || e.Object != r.object || e.Outcome != audit.OutcomeSuccess ||
+			e.Namespace != audit.ServerScope || e.ValuePath != "/maintenance/revocations/"+r.kind {
+			t.Fatalf("replay entry %d = %+v, want the subject alice, the object %q and the kind %q",
+				i, e, r.object, r.kind)
+		}
+	}
+}
+
+// replayOutcomes counts the replay entries by outcome.
+type replayOutcomes struct {
+	applied int
+	denied  int
+}
+
+// revCountReplayOutcomes returns the count of the replay entries that applied
+// a revocation and the count of those that refused a row. It fails the test
+// for an entry with another outcome, and for an entry that names the actor of
+// a hostile row.
+func revCountReplayOutcomes(t *testing.T, entries []audit.Entry) replayOutcomes {
+	t.Helper()
+
+	var out replayOutcomes
+
+	for i := range entries {
+		switch entries[i].Outcome {
+		case audit.OutcomeSuccess:
+			out.applied++
+		case audit.OutcomeDenied:
+			out.denied++
+		case audit.OutcomeFailure:
+			t.Fatalf("replay entry %d has the outcome failure", i)
+		default:
+			t.Fatalf("replay entry %d has the unknown outcome %q", i, entries[i].Outcome)
+		}
+
+		if entries[i].Subject == "mallory" {
+			t.Fatalf("replay entry %d = %+v, names the actor of a hostile row", i, entries[i])
+		}
+	}
+
+	return out
+}
+
+// testReplayRefusesHostileRows proves that the replay checks each journal row
+// as if every layer before it had failed. The CHECK constraint of the journal
+// and the typed writes of the store keep these rows out; the case writes them
+// with the raw insert. A row of an unknown kind, and a row whose target is
+// not an ID, change nothing and get an audit entry with the outcome denied.
+// The valid revocation of the same stay is applied, and the restore does not
+// fail.
+func testReplayRefusesHostileRows(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	f := seedAccess(t, s)
+	export := revTakeExport(t, s)
+
+	revEnter(t, s)
+
+	valid := revEntry(session.FullRef(revPerson, revSessionOne), revAt(30))
+	if err := s.EndSession(t.Context(), revSessionOne, session.ReasonEnded, valid); err != nil {
+		t.Fatalf("end the session in maintenance mode: %v", err)
+	}
+
+	hostile := []struct {
+		kind, target string
+	}{
+		{maintenance.RevokedToken, revKeepToken + "%"},
+		{maintenance.RevokedToken, "' OR '1'='1"},
+		{maintenance.RevokedToken, ""},
+		{maintenance.RevokedSession, revSessionTwo + "\n"},
+		{maintenance.RevokedPrincipal, "../" + revPerson},
+	}
+
+	if s.KeepsUnknownKinds() {
+		hostile = append(hostile, struct{ kind, target string }{"wipe", revKeepToken})
+	}
+
+	for _, h := range hostile {
+		row := RawRevocation{
+			Kind: h.kind, Target: h.target, Actor: "mallory", Object: "token:x", AtMs: revAt(31).UnixMilli(),
+		}
+
+		if err := s.InsertRawRevocation(t.Context(), row); err != nil {
+			t.Fatalf("insert the hostile row %q %q: %v", h.kind, h.target, err)
+		}
+	}
+
+	revStageAndApply(t, s, export)
+
+	revSessionEnded(t, s, revSessionOne, session.ReasonEnded)
+	revSessionActive(t, s, revSessionTwo)
+	revTokenActive(t, s, revKeepToken)
+	revTokenActive(t, s, revPersonalToken)
+	revPrincipalEnabled(t, s, revPerson)
+	revGrantLive(t, s, revGrantServer)
+	revJoinTokenLive(t, s, f)
+
+	got := revCountReplayOutcomes(t, revReplayEntries(t, s))
+
+	if got.applied != 1 || got.denied != len(hostile) {
+		t.Fatalf("replay entries: %d applied and %d denied, want 1 and %d", got.applied, got.denied, len(hostile))
 	}
 }
 
@@ -750,4 +1517,42 @@ func testRevocationStayIsBounded(t *testing.T, s RevocationStore) {
 
 	revTokenActive(t, s, revPersonalToken)
 	revSessionActive(t, s, revSessionOne)
+
+	if entries := revReplayEntries(t, s); len(entries) != 0 {
+		t.Fatalf("replay audit entries = %d, want none for revocations outside the stay", len(entries))
+	}
+}
+
+// testTempAdminSweepRuns proves the expiry through the service that runs it
+// at the fixed time: the sweep of the temporary administrators ends the
+// record in maintenance mode, with the same effects and one audit entry. The
+// sweep logs a failed expiry and goes on, so a refusal would show only in its
+// result.
+func testTempAdminSweepRuns(t *testing.T, s RevocationStore) {
+	t.Helper()
+
+	seedAccess(t, s)
+	revEnter(t, s)
+
+	expiry := revAt(2).Add(tempadmin.Lifetime)
+	svc, err := tempadmin.NewService(tempadmin.Config{
+		Store: s, Reviews: nil, Now: func() time.Time { return expiry.Add(time.Minute) }, Logger: nil,
+	})
+	if err != nil {
+		t.Fatalf("temporary administrator service: %v", err)
+	}
+
+	before := revAuditTotal(t, s)
+
+	done, err := svc.Sweep(t.Context(), revEntry(tempadmin.Ref(revTempAdmin), revAt(10)))
+	if err != nil || len(done) != 1 || done[0] != revTempAdmin {
+		t.Fatalf("sweep in maintenance mode = %v, %v, want the expiry of %q", done, err, revTempAdmin)
+	}
+
+	revPrincipalDisabled(t, s, revTempAdmin)
+	revTokenRevoked(t, s, revTempToken)
+
+	if got := revAuditTotal(t, s); got != before+1 {
+		t.Fatalf("audit entries after the sweep = %d, want %d", got, before+1)
+	}
 }

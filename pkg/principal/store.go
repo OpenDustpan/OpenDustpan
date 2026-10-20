@@ -55,6 +55,14 @@ type RecordStore interface {
 	// id and sets its update time to e.At. It returns ErrNotFound when no
 	// such principal exists, and ErrNotDisabled when it is not disabled.
 	EnablePrincipal(ctx context.Context, id string, e audit.Entry) error
+	// DisablePrincipal sets the disable time of the principal with the ID id
+	// to e.At and sets its update time to e.At. It only narrows access: the
+	// grants, memberships and tokens of the principal stay, and the principal
+	// cannot use them until EnablePrincipal clears the disable time. The
+	// write runs in maintenance mode, as a revocation does. It returns
+	// ErrNotFound when no such principal exists, and ErrDisabled when it is
+	// disabled.
+	DisablePrincipal(ctx context.Context, id string, e audit.Entry) error
 }
 
 // NamespaceRecordStore keeps the records of the principals of a namespace.

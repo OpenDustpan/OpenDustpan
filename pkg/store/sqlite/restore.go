@@ -511,7 +511,7 @@ const (
 
 // revocationColumns lists every column of maintenance_revocations, for the
 // copy of the control tables.
-const revocationColumns = `id, kind, target, end_reason, at_ms`
+const revocationColumns = `id, kind, target, end_reason, actor, object, at_ms`
 
 // signInFailureColumns lists every column of sign_in_failures, for the copy
 // of the control tables.
