@@ -294,6 +294,7 @@ type serveFlags struct {
 	backupTarget                 string
 	logLevel                     string
 	logFormat                    string
+	components                   string
 	keyFile                      string
 	generateKey                  bool
 	maxCheckpointBytes           int64
@@ -333,6 +334,10 @@ func (f *serveFlags) kind() installation.Kind {
 // Serve runs it at start and on each reload of the configuration file.
 func (f *serveFlags) check() error {
 	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+		return err
+	}
+
+	if _, err := dustpan.ParseComponents(f.components); err != nil {
 		return err
 	}
 
@@ -459,6 +464,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 
 // registerNet registers the network and console flags.
 func (f *serveFlags) registerNet(fs *flag.FlagSet) {
+	cli.ByFlag("components").String(fs, &f.components)
 	cli.ByFlag("listen").String(fs, &f.listen)
 	cli.ByFlag("console-dir").String(fs, &f.consoleDir)
 	cli.ByFlag("allowed-origins").String(fs, &f.origins)
@@ -512,7 +518,9 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	cli.LogResolved(ctx, logger, f.resolved)
 
 	f.instanceID = instance.NewID()
-	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
+	if err := f.logComponents(ctx, logger); err != nil {
+		return err
+	}
 
 	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
 		return dbErr
@@ -1121,6 +1129,26 @@ func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
 	}
 }
 
+// logComponents logs the components of the process with the instance, and one
+// line for each setting that no selected component reads. The settings stay
+// set and the start goes on.
+func (f *serveFlags) logComponents(ctx context.Context, logger *slog.Logger) error {
+	set, err := dustpan.ParseComponents(f.components)
+	if err != nil {
+		return fmt.Errorf("--components: %w", err)
+	}
+
+	logger.LogAttrs(ctx, slog.LevelInfo, "instance",
+		slog.String("instance_id", f.instanceID), slog.String("components", set.String()))
+
+	for _, name := range cli.UnreadFlags(f.resolved, set.Strings()) {
+		logger.LogAttrs(ctx, slog.LevelInfo, "setting has no effect: no selected component reads it",
+			slog.String("key", name), slog.String("components", set.String()))
+	}
+
+	return nil
+}
+
 // serverOptions returns the NewServer options for the opened store, blob
 // store, authenticator, key wrapper and logger, with the audit chain
 // setting and the signed audit checkpoints.
@@ -1190,12 +1218,26 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
 
+	tail, tailErr := f.storeOptions(st, wrapper)
+
+	return append(opts, tail...), tailErr
+}
+
+// storeOptions returns the options of the components and of the stores that
+// the store may or may not keep: the durable operations, the runners and the
+// profiles.
+func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.Option, error) {
+	set, err := dustpan.ParseComponents(f.components)
+	if err != nil {
+		return nil, fmt.Errorf("--components: %w", err)
+	}
+
+	opts := []dustpan.Option{dustpan.WithComponents(set)}
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
-	opts = append(opts, profileStoreOption(st, wrapper)...)
 	opts = append(opts, dustpan.WithInstallationKind(f.kind()), dustpan.WithInstallationKindStore(st))
 
-	return opts, nil
+	return append(opts, profileStoreOption(st, wrapper)...), nil
 }
 
 // durableStoreOption returns the durable schedule store option for st, or nil

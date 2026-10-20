@@ -40,6 +40,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -999,6 +1000,10 @@ func classifySecret(err error) (int, string) {
 // classifyUpdate maps the errors of the update cycle to an HTTP status and a
 // message safe to show callers.
 func classifyUpdate(err error) (int, string) {
+	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
+		return http.StatusConflict, manual.Error()
+	}
+
 	switch {
 	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),

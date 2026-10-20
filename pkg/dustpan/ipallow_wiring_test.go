@@ -41,6 +41,13 @@ func TestIPAllowlistsNeedStore(t *testing.T) {
 func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 	t.Helper()
 
+	return newIPAllowlistServerWith(t, includeBootstrap)
+}
+
+// newIPAllowlistServerWith is newIPAllowlistServer with more options.
+func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dustpan.Option) *dustpan.Server {
+	t.Helper()
+
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -128,7 +135,7 @@ func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 		t.Fatalf("set list: %v", setErr)
 	}
 
-	srv, err := dustpan.NewServer(
+	opts := []dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -146,7 +153,9 @@ func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 		dustpan.WithIPAllowlistsIncludeBootstrap(includeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
-	)
+	}
+
+	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

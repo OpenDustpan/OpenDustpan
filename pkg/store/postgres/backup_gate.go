@@ -3,6 +3,7 @@ package postgres
 // Column names that the gate tables share with other tables of the backup.
 const (
 	pgColAtMs     = "at_ms"
+	pgColOwner    = "owner"
 	pgColScopeKey = "scope_key"
 )
 

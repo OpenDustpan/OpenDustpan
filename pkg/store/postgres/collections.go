@@ -103,6 +103,10 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
+		if lockErr := q.DeleteManualLocksOfObject(ctx, id); lockErr != nil {
+			return fmt.Errorf("delete manual lock of collection: %w", lockErr)
+		}
+
 		removed, gateErr := purgeCollectionGate(ctx, q, ref, audit.MaxChanges-len(e.Changes))
 		if gateErr != nil {
 			return gateErr

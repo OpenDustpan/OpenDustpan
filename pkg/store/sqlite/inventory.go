@@ -522,6 +522,7 @@ func inventoryEntry(row db.ListInventoryRow) inventory.Entry {
 		Status:        row.Status,
 		ResourceCount: count,
 		Lock:          inventoryLock(row),
+		ManualLock:    inventoryManualFlag(row),
 		Collection:    row.Collection,
 		Labels:        nil,
 	}

@@ -220,6 +220,11 @@ const (
 	// ActionUnitRestore allows bringing back a deleted unit before its
 	// retention period ends (ADR 47). Its object is a unit.
 	ActionUnitRestore Action = "unit:restore"
+	// ActionUnitLock allows putting a manual lock with a reason on an object,
+	// and removing a manual lock that the caller holds. Its object is a unit,
+	// a collection or a namespace. Removing the lock of another principal
+	// needs ActionUnitManage on the same object.
+	ActionUnitLock Action = "unit:lock"
 	// ActionUnitPurge allows the final delete of a deleted unit before its
 	// retention period ends (ADR 47). It cannot be undone. Its object is a
 	// unit.

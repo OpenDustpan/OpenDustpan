@@ -55,6 +55,7 @@ func newSealFixture(t *testing.T) sealFixture {
 	}
 
 	sealed, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              blobs,

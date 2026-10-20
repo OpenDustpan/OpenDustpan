@@ -60,6 +60,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 
 	secrets := newMemSealer(t, namespaces)
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              rec,

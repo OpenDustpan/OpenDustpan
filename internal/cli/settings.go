@@ -124,6 +124,15 @@ var Settings = []*Setting{
 		"`local`",
 	).WithFile("region"),
 	stringSetting(
+		"components", "DUSTPAN_COMPONENTS", "all",
+		"components this process runs: all, or a comma-separated list of api and worker (DUSTPAN_COMPONENTS)",
+		"`all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts "+
+			"durable operations, but never claims one. `worker` runs the durable operations, the schedules, "+
+			"the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 "+
+			"on each route except the probes and the metrics route. An unknown name stops the start. "+
+			"See the several instances guide (docs/guides/several-instances.md)",
+	).WithFile("components"),
+	stringSetting(
 		"listen", "DUSTPAN_LISTEN", ":8080",
 		"listen address of the server (DUSTPAN_LISTEN)",
 		"`:8080`",
