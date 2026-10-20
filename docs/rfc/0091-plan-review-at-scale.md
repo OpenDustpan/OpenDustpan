@@ -24,7 +24,6 @@ modules in each environment. Most of the lines are noise:
 - one diagnostic that repeats for each orphaned resource.
 
 A search for "must be replaced" misses a destroy that is not a
-replacement, and it misses an attribute change that forces a later
 replacement. Teams build local tools for this. A local tool must rebuild
 its context each time. The server already holds the units, the stored
 plans, the state version that each plan read, the change orders and the
@@ -67,9 +66,31 @@ This RFC builds on these decisions. It does not change them.
 - **Collections** (ADR 51). A named set of units in one namespace. Each unit
   is in exactly one collection. A collection can be the scope of a gate.
 
-So this RFC adds four things on top: a view that collapses repeats that are
-similar but not identical, set and diagnostic handling, noise rules, and
-the binding of a signature to the noise rules that rendered the view.
+This RFC adds, on top: set and diagnostic handling, noise rules, the
+binding of a signature to the view that the signer saw, and a later
+view of similar changes.
+
+## ADRs this RFC would amend
+
+This RFC changes some decisions. If the owner accepts it, an ADR must
+record each change below. A change that the owner does not want is
+dropped from the RFC.
+
+- **ADR 102 decision 2.** A stored plan gets one new optional part,
+  `plan-diagnostics` (section D). With option C1 it gets a second one,
+  `provider-schema`.
+- **ADR 191.** A signature also holds a `viewBasis`. The approve request
+  names it. A new error, `ErrViewChanged`, replaces `ErrPlanChanged` when
+  only the view basis is stale (section F).
+- **ADR 194 decision 1.** The order of the sections gets one new section,
+  the error diagnostics, after "Needs attention" (section A).
+- **ADR 194 decision 3.** The change kinds get `forget`, `import` and
+  `refresh`. A resource change gets the field `movedFrom` (section A).
+- **ADR 194 decision 4.** "Needs attention" also holds each `forget`, each
+  `import` and each move.
+
+The resume of a multi-unit apply (ADR 190 decision 7) is not in this
+list. It is an open question (question 8).
 
 ## Facts from primary sources
 
@@ -96,13 +117,13 @@ Source: <https://opentofu.org/docs/internals/json-format/>.
   `replace_because_cannot_update`, `replace_by_request`,
   `replace_by_triggers`, `delete_because_no_resource_config`,
   `delete_because_count_index`, `delete_because_each_key` and
-  `read_because_config_unknown`. The docs say these are display hints, and
+  `read_because_config_unknown`. The docs say these are hints only, and
   a consumer must treat an unknown value as unspecified.
 - **Unknowns.** `after_unknown` has the shape of `after`, with `true` at
   each unknown leaf.
 - **Sensitive values.** `before_sensitive` and `after_sensitive` have
-  `true` at each sensitive leaf. The docs say they "should be combined with
-  "before" and "after" to prevent accidental display of sensitive values".
+  `true` at each sensitive leaf. The docs say a consumer must combine them
+  with "before" and "after", so that no sensitive value leaks by accident.
   So the values are in `before` and `after`, and masking is the job of the
   reader (ADR 41).
 - **Sets.** "lists, sets, and tuples all lower to JSON arrays". The docs
@@ -117,13 +138,12 @@ Source: <https://opentofu.org/docs/internals/json-format/>.
   The same stream has `planned_change` with an `action` and a `reason`.
   A diagnostic has `severity` (`error` or `warning`), `summary`, `detail`,
   an optional `range` (`filename`, `start` and `end` with `line`, `column`
-  and `byte`) and an optional `snippet` of the source
-  (<https://opentofu.org/docs/cli/commands/validate/>).
+  and `byte`) and an optional `snippet` of the source. The same page gives this shape.
 
 ### Pulumi CLI preview JSON (`pulumi preview --json`)
 
 Sources: <https://www.pulumi.com/docs/iac/cli/commands/pulumi_preview/>,
-and the source of `pulumi/pulumi` on `master`: `pkg/display/json.go`,
+and the source of `pulumi/pulumi` on `master`, read on 2026-10-20:
 `pkg/backend/display/json.go`, `sdk/go/common/apitype/events.go`,
 `sdk/go/common/apitype/history.go`, `sdk/go/common/apitype/core.go` and
 `pkg/resource/stack/deployment.go`.
@@ -147,18 +167,20 @@ and the source of `pulumi/pulumi` on `master`: `pkg/display/json.go`,
   forces a replacement has its own kind.
 - **Unknowns.** A computed value serializes as the string
   `04da6b54-80e4-46f7-96ec-b56ff0331ba9` (`computedValuePlaceholder`).
-- **Secrets.** The JSON display replaces each secret property with the
-  string `[secret]` (`MassageSecrets`). The CLI masks before the server
-  sees the part.
+- **Secrets.** `MassageSecrets` in `pkg/backend/display/json.go` replaces
+  each secret property with the string `[secret]` when `showSecrets` is
+  false. The flag `--show-secrets` of the CLI sets it to true, so the
+  runner must never pass it (section G).
 - **Diagnostics** (`PreviewDiagnostic`): `urn`, `prefix`, `message` and
   `severity`. There is no source location. The streaming
   `DiagnosticEvent` adds `color`, `streamID` and `ephemeral`. The summary
   drops ephemeral and debug messages.
-- **Policy events.** The source says: "At this point in time, we don't
-  handle policy events in JSON serialization". RFC 90 covers them.
+- **Policy events.** The same file has the comment "At this point in time,
+  we don't handle policy events in JSON serialization". RFC 90 covers
+  them.
 - **`hideDiffs`.** A resource option that "specifies a list of property
-  paths whose diff details Pulumi compacts in CLI output". It "does not
-  affect what resources are updated, only how those updates are displayed"
+  paths whose diff details Pulumi compacts in CLI output". It does not change which resources
+  Pulumi updates, only how the CLI prints the diff
   (<https://www.pulumi.com/docs/iac/concepts/resources/options/hidediffs/>).
   The state of a resource holds it as `hideDiff`. This is a noise rule in
   the code of the program, which the author of the change controls.
@@ -175,33 +197,90 @@ sorts.
 2. **Add tool-neutral fields that each reader fills.** Each value path gets
    a `forcesReplace` flag, an `unknownAfter` flag and a `secret` flag. Each
    resource change gets the tool's own action and reason as opaque strings
-   (`toolAction`, `toolReason`) for display only.
+   (`toolAction`, `toolReason`) for labels only. Each resource change
+   also gets `movedFrom`, the previous key of the resource, which is empty
+   when there was no move.
    - OpenTofu: `forcesReplace` from `replace_paths`, `unknownAfter` from
      `after_unknown`, `secret` from `before_sensitive` or
-     `after_sensitive`, `toolReason` from `action_reason`.
+     `after_sensitive`, `toolReason` from `action_reason`, `movedFrom`
+     from `previous_address`.
    - Pulumi: `forcesReplace` from `replaceReasons` and the `*-replace` diff
      kinds, `unknownAfter` from the placeholder string, `secret` from
-     `[secret]`, `toolAction` from `op`.
+     `[secret]`, `toolAction` from `op`, `movedFrom` from an `oldState`
+     whose URN differs from the URN of the step.
 3. **A tool-specific view for each tool.** The console renders each tool's
    own model. Shared views (change groups across tools) do not exist.
 
 **Recommendation: A2.** The core never parses a plan (ADR 194 decision 3),
-and the core gets only flags it can act on. User-facing text keeps the
-words of each tool: "preview" and "replace" for Pulumi, "plan" and
-"must be replaced" for OpenTofu (ADR 195). `toolAction` and `toolReason`
-are display strings, never input to a rule.
+and the core gets only flags and kinds it can act on. `movedFrom` and the
+kind `forget` are tool-neutral, so no field in the core exists for one tool
+only (ADR 12). User-facing text keeps the words of each tool: "preview" and
+"replace" for Pulumi, "plan" and "must be replaced" for OpenTofu (ADR 195).
+`toolAction` and `toolReason` are labels, never input to a rule.
+An unknown `action_reason` shows as "unrecognized reason", with the raw
+string escaped. It is never an error.
+
+**The map from tool actions to change kinds.** ADR 194 has the kinds
+`create`, `update`, `replace`, `delete` and `read`. This RFC adds `forget`,
+`import`, `refresh` and `move`. A kind that is not in the table below
+fails closed: the reader marks the plan `unreadable` (`ErrPlanFormat`), and
+the unit goes to "Needs attention" as a whole, as ADR 194 decision 6
+gives. An unknown value of the tool's own action or operation is
+different from an unknown `action_reason`, which is only a hint.
+
+| Tool value | Kind | Where it shows |
+| --- | --- | --- |
+| OpenTofu `["create"]`, `["update"]`, `["read"]` | `create`, `update`, `read` | the other changes |
+| OpenTofu `["delete"]` | `delete` | Needs attention |
+| OpenTofu `["forget"]` | `forget` | Needs attention |
+| OpenTofu `["delete", "create"]` and `["create", "delete"]` | `replace` | Needs attention |
+| OpenTofu `["no-op"]` with `previous_address` | `move` | Needs attention |
+| OpenTofu `["no-op"]` without it | none | not in the summary |
+| Pulumi `same` | none | not in the summary |
+| Pulumi `create`, `update`, `read` | `create`, `update`, `read` | the other changes |
+| Pulumi `delete`, `delete-replaced`, `discard-replaced`, `remove-pending-replace` | `delete` | Needs attention |
+| Pulumi `replace`, `create-replacement`, `read-replacement`, `import-replacement` | `replace` | Needs attention |
+| Pulumi `import` | `import` | Needs attention |
+| Pulumi `discard` | `forget` | Needs attention |
+| Pulumi `refresh` | `refresh` | the other changes, never in a group |
+| any other string | unreadable | Needs attention, whole unit |
+
+- A Pulumi replace has two or more steps with one URN, for example
+  `create-replacement` and `delete-replaced`. The reader joins them in one
+  resource change of kind `replace`. A step with no partner keeps the kind
+  of the table.
+- The resource options `replaceOnChanges` and `deleteBeforeReplace` of
+  Pulumi appear in the preview as replace operations. They are
+  `replace` in the view like any other replace.
+- A resource change that has `movedFrom`, with any action, goes to
+  "Needs attention" and never joins a change group.
+
+**Needs attention keys on actions, not on paths.** The section holds each
+change of kind `delete`, `replace`, `forget` or `import`, each change with
+`movedFrom`, and each unit with `errored: true` or an unreadable summary.
+The reader never decides this from `replace_paths` or `forcesReplace`.
+OpenTofu leaves `replace_paths` out when the cause is
+`replace_because_tainted` or `replace_by_request`, and such a replace must
+still show. The flag `forcesReplace` is for a label on a value path and for
+the limits of noise rules (section E).
+
+**Sensitive values.** A `true` in `before_sensitive` or `after_sensitive`
+at any level covers the whole subtree under that node. The reader marks
+each path under it `secret`, also when the paths below are not listed.
 
 **The order of the view** (an extension of ADR 194 decision 1):
 
-1. Needs attention: each `delete`, each `replace`, and (new) each
-   `update` with a path that has `forcesReplace` in a later step, each
-   OpenTofu `forget`, each `previous_address` (a move), and each unit with
-   `errored: true`.
-2. Error diagnostics (section D).
-3. Change groups and similar changes (section B), largest first.
-4. The other changes, by unit, then by resource address or URN, then by
+1. The cause diff.
+2. The summary: for each unit, the count of each change kind. It counts
+   every change, also the collapsed ones.
+3. Needs attention.
+4. Error diagnostics (section D).
+5. Change groups (ADR 194 decision 5).
+6. The other changes, by unit, then by resource address or URN, then by
    value path.
-5. Warning diagnostics, counted.
+7. Warning diagnostics, counted.
+8. The blast radius (ADR 194 decision 7).
+9. The policy results (ADR 194 decision 8).
 
 ### B. One view of the same change across N units
 
@@ -218,7 +297,7 @@ Options for "the same change":
 1. **Exact only** (ADR 194 as it is). Simple, and safe. A tag with a
    different value in each environment gives one group for each value.
 2. **Same shape.** Same tool, same type, same set of value paths, and the
-   same kind of change on each path (add, remove, update). The values can
+   same kind of change on each path (add, delete, update). The values can
    differ. The view shows one row "similar change", with the distinct
    value pairs and the count of each, for example `prod` (10), `dev` (10),
    `stage` (10).
@@ -227,23 +306,22 @@ Options for "the same change":
    a placeholder before an exact compare.
 4. **Do nothing.** Each unit shows its own list.
 
-**Recommendation: B1 and B2 together.** Exact change groups stay as ADR 194
-gives them. A similar change holds two or more exact change groups, or
-single changes, of the same shape. B3 is not recommended: a wrong guess of
-a token makes two different changes look the same.
+**Recommendation: B1 in version 1. B2 later, as a read-only row.** Exact
+change groups stay as ADR 194 gives them. A similar change in a later
+version is a row that the view computes at each read. It has no content
+key, it is not stored, and a thread cannot anchor on it. So it adds no
+one-way door. B3 is not recommended: a wrong guess of a token makes two
+different changes look the same.
 
-Rules for a similar change:
+Rules for a similar change, when it is built:
 
-- It never holds a `create`, `delete`, `replace`, `read` or `forget`, or a
-  path with `forcesReplace` or `secret`. This is the rule of ADR 194
-  decision 5, applied again.
+- It never holds a `create`, `delete`, `replace`, `read`, `forget`,
+  `import` or `move`, a change with `movedFrom`, or a path with
+  `forcesReplace` or `secret`. This is the rule of ADR 194 decision 5,
+  applied again.
 - An unknown value is the token `(known after apply)` in the list of
   values. Two unknowns are never an exact match, so they never join an
   exact change group. They can join a similar change.
-- Its key is a content key, as for a change group, with a new prefix (for
-  example `cos-`) and the same HMAC key of the namespace. The key covers
-  the tool, the type and the sorted pairs of path and change kind. **One-way
-  door** once a thread can anchor on it (question 4).
 - **Limits** (proposal): at most 20 distinct value pairs show in the row,
   then "and N more values", with a link to the full list. At most 10,000
   members in one similar change. A larger set splits by unit.
@@ -308,63 +386,118 @@ text:
 
 - OpenTofu: `summary` and `detail`. Each distinct `range.filename` with
   `range.start.line` counts as one location.
-- Pulumi: `message` with the URN removed from the text, and `prefix`. The
+- Pulumi: `message` with no URN in the text, and `prefix`. The
   Pulumi CLI gives no source location, so each distinct URN counts as one
   location, and the row says "by resource".
 - The row shows the count, the count of distinct locations, the count of
-  units, and the first 20 locations, then "and N more".
+  units, and the first 20 locations (proposal), then "and N more".
 - An error diagnostic is never in a count only. Each error group is in its
-  own section, before the change groups.
+  own section, after "Needs attention" and before the change groups.
+- The text of a diagnostic is a value. It follows the rules for values in
+  section E: a unit without `job:read-plans` adds no text, only counts.
 
 ### E. Noise rules
 
-A **noise rule** is data of a namespace that folds a part of the view.
+A **noise rule** is data of a namespace that collapses a part of the view.
 It never changes the plan, the apply, the digest or a fact.
 
 **Fields** (proposal): `id`, `scope` (namespace, collection or unit),
 `tool`, `match`, `owner` (a person or a group), `reason` (required),
-`expiresAt` (required, at most 90 days after the create, as a proposal),
-`createdBy`, `createdAt`, `version`.
+`expiresAt` (required, at most 90 days after the create or the last
+renewal), `createdBy`, `createdAt`, `version`.
 
-**What a rule can never fold.** The server refuses a rule at save that can
-match only these, and the reader ignores a match on these at render:
+**What a rule can never collapse.** The server refuses a rule at save that
+can match only these, and the reader ignores a match on these at render:
 
-- a `delete`, a `replace`, an OpenTofu `forget`, or a move,
+- a `delete`, a `replace`, a `forget`, an `import`, a move, or any change
+  that is in "Needs attention",
 - a path with `forcesReplace`,
 - a path with `secret` (a masked value has no value to read, so a value
   condition cannot be checked on it),
+- a path with `unknownAfter`: a path rule must not hide a value that is
+  known only after the apply,
 - an error diagnostic,
-- a whole resource. A rule folds paths. A resource whose every changed path
-  is folded shows as one row "only folded changes (N paths)", and it still
-  counts in the summary.
+- a whole resource. A rule collapses paths. A resource whose every changed
+  path is collapsed shows as one row "only collapsed changes (N paths)",
+  and it still counts in the summary.
 
-**Expiry.** At `expiresAt`, the rule stops folding. The view then shows the
-paths with the mark "rule X expired on <date>". An expired rule stays as a
-record until a person removes it, so the mark can name it.
+**What the server refuses at save** (proposal). The save fails with
+`ErrInvalid` for a rule that:
+
+- names no literal resource type (a wildcard type is not allowed),
+- has a value path pattern with no literal segment before `**`,
+- is above the count limit: at most 200 active rules in a namespace,
+- has no reason, no owner or no expiry, or has an expiry above the limit.
+
+The check runs at save and again at each render. A stored rule that fails
+it at render collapses nothing.
+
+**Expiry.** At `expiresAt`, the rule stops collapsing. The view then shows
+the paths with the mark "rule X expired on <date>". An expired rule stays
+as a record until a person deletes it, so the mark can name it.
 
 **Fail open (show more).** When a rule cannot be evaluated (an unknown
 match kind after a downgrade, a parse error of a stored rule, a value
-condition on an unknown value, a timeout), the reader folds nothing for
-that rule, and the view marks it "rule X not applied: <reason>".
+condition on an unknown value, a timeout), the reader collapses nothing
+for that rule, and the view marks it "rule X not applied: <reason>".
 
-**The explain view.** For each revision, a list of each folded path: unit,
-resource, path, the rule ID and version, its owner, its reason and its
-expiry. It needs the same actions as the view. It also lists each path that
-a Pulumi `hideDiffs` option names (section "Pulumi CLI preview JSON"). The
-view does not apply `hideDiffs`: the author of the change controls it, so
-it is not a rule of the reviewer. The explain view lists it as "hidden by
-the program" and the path shows.
+**Values and permissions.** The values of a unit need `job:read-plans` on
+that unit (ADR 194 decision 9). The rule below applies to each unit on its
+own, in every output:
+
+- A unit without `job:read-plans` adds no value and no value path to a
+  list of values, to a count per value, to the explain view or to the
+  Markdown. The row shows the mark "values hidden (N units)".
+- A rule never lets a reader infer a hidden value. A count per value
+  counts only the units that the reader may read.
+- Markdown that the CI shim posts to a forge holds no value and no value
+  path. It holds change kinds, counts and the link to the view
+  (**recommendation**). A forge comment has an audience that the server
+  does not control.
+
+**The explain view.** For each revision, a list of each collapsed path:
+unit, resource, path, the rule ID and version, its owner, its reason and
+its expiry. It needs the same actions as the view, and the rule above for
+values. It also lists each path that a Pulumi `hideDiffs` option names
+(section "Pulumi CLI preview JSON"). The view does not apply `hideDiffs`:
+the author of the change controls it, so it is not a rule of the reviewer.
+The explain view lists it as "hidden by the program" and the path shows.
+
+**Rules of the author and rules that came late** (**recommendation**).
+A noise rule can make a reviewer read less. So:
+
+- A rule that the author of the change order created or changed collapses
+  nothing in that change order. The server compares the author with
+  `createdBy` and with the last person who changed the rule.
+- A rule created or changed after a revision was attached collapses
+  nothing in that revision. The view marks it "new since attach". The
+  author can attach a new revision to use it.
+- A person whose own rule collapses at least one row of a revision cannot
+  sign that revision. The server refuses it with `ErrPolicyDenied` and
+  writes an audit entry.
 
 **Authorization and audit.**
 
-- A new action to create a rule, apart from the actions of gates and change
-  orders, for example `noiserule:create` on the scope. A change, a renewal
-  and a removal need it too. A read needs `changeorder:read` on the scope.
-- No built-in role gets `noiserule:create` except the namespace
-  administrator, as a proposal (question 5).
-- Each create, change, renewal and removal writes one audit entry with the
+- Actions, separate for create, change and delete, as the gate
+  configuration has them (ADR 230). Proposals, with the namespace as the
+  object: `namespace:create-noise-rule`, `namespace:change-noise-rule`,
+  `namespace:delete-noise-rule` and `namespace:read-noise-rules`. A
+  collection scope or a unit scope is a field of the rule. The action
+  names follow the style of ADR 210 and must be checked against the
+  action lists of ADR 210 and ADR 230 when an ADR records them. A read of
+  the view needs `changeorder:read` on the units.
+- No built-in role gets the create, change or delete action except the
+  namespace administrator, as a proposal (question 4).
+- Each rule write carries a `namespace.Fence` and the store checks it in
+  the same transaction, as for every write in a namespace.
+- The rules are a new table. It goes in the table list of the backup
+  domain, so a backup holds the rules and a restore brings them back.
+- Each create, change, renewal and deletion writes one audit entry with the
   rule, the old and the new version, and the reason. An expiry writes one
   audit entry with the actor `@server`.
+- **Renewal cap** (**recommendation**): a renewal sets a new expiry at most
+  90 days from the renewal. A rule can be renewed at most 3 times. After
+  that, a person creates a new rule with a new reason.
 - An agent never creates a rule, as an agent never resolves a thread
   (ADR 190).
 
@@ -379,8 +512,8 @@ the program" and the path shows.
 3. **Cedar conditions,** as gates use (ADR 224).
 4. **A general expression language.**
 
-**Recommendation: E2.** E1 cannot say "fold a timestamp tag, but show any
-other value of that tag". E3 and E4 are hard to explain in the explain
+**Recommendation: E2.** E1 cannot say "collapse a timestamp tag, but show
+any other value of that tag". E3 and E4 are hard to explain in the explain
 view, and they can read values. E2 has no user-written regular expression,
 so the cost of an evaluation stays bounded.
 
@@ -390,9 +523,9 @@ other order". No set is on by default. A person turns a set on for a
 scope, and that act is a rule record with an owner, a reason and an expiry,
 as above. An upgrade that changes a built-in set gives it a new version.
 A scope keeps the version it turned on until a person moves it, so an
-upgrade never folds more on its own.
+upgrade never collapses more on its own.
 
-### F. The approval binds to the stored plan and to the rule set version
+### F. The approval binds to the stored plan and to the view basis
 
 The signature already binds to the digest of the stored plans (ADR 191).
 The view is not the plan, so the server never signs a rendering. The
@@ -401,12 +534,10 @@ question is how the signature also records which rules rendered the view.
 1. **Add the rule set version to `cho-digest`** as a new encoding
    `cho-digest/2`. Each change of a rule in the scope then changes the
    digest and voids each signature. **One-way door.**
-2. **A second value in the signature, the view basis.** The view answers a
-   `viewBasis`: the SHA-256 of a canonical list of the rule ID and version
-   of each rule that applied, with a version name such as `cho-view/1`. The
-   approve request names the digest and the view basis. A view basis that
-   is not the current one fails with a new error, for example
-   `ErrViewChanged`, and records nothing. The signature keeps it.
+2. **A second value in the signature, the view basis.** The approve request
+   names the digest and the view basis. A view basis that is not the
+   current one fails with `ErrViewChanged` and records nothing. The
+   signature keeps it.
 3. **Record nothing about the view.**
 
 **Recommendation: F2.** The plan stays the only thing that the apply reads.
@@ -415,48 +546,56 @@ plan did not change and the signer saw the rules of that time. The audit
 shows what each signer saw. A rule change before a signature makes the
 signer read the new view.
 
+**The view basis (definition).** The view basis is the SHA-256 of a
+canonical list that holds, in this order:
+
+1. the ID and the version of each active noise rule that is in scope for
+   the revision. A rule is in scope when its scope holds a unit of the
+   revision, and the rule is not expired at that time,
+2. the ID and the version of each built-in rule set that a scope of the
+   revision turned on,
+3. the version name of the view encoding (for example `cho-view/1`) and the
+   version of the reader of each tool in the revision.
+
+The view answers the `viewBasis` with each `GET` of the view. The rules
+for the basis:
+
+- The query `rules=none` answers the view with no collapse. Its basis is
+  the hash of parts 3 only, with empty lists for parts 1 and 2. **An
+  approve request always accepts the basis of `rules=none`**, because that
+  view shows every change.
+- The server computes the current basis at the instant of the approve
+  request, in the transaction that records the signature. It never trusts
+  a basis that the client computed.
+- A rule can expire between the `GET` and the approve request. The current
+  basis then differs from the one in the request, and the approve fails
+  with `ErrViewChanged`. The signer reads the view again. The same happens
+  for a rule change, a new built-in set version, or a reader upgrade.
+- The signature keeps the basis that it accepted, and the audit entry
+  shows it.
+
 **The apply runs exactly that stored plan.** Nothing new: the apply job
 names its stored plan, `job.CheckPlan` runs at the dispatch, and the runner
 refuses a part with another hash (ADRs 102, 190). The view, the rules and
-the folds are never input to a job.
-
-**Resume of a multi-unit apply.** A change order ends `partially-applied`
-when some apply jobs fail (ADR 190 decision 7). Options:
-
-- **R1. As decided:** the author attaches a new revision for the units that
-  did not apply, and the reviewers sign again.
-- **R2. Resume in the same revision:** the server dispatches again the apply
-  job of each unit whose apply job changed nothing (it ended before the
-  runner started the apply step, for example after the loss of a runner),
-  with the same stored plan, when `job.CheckPlan` still passes. A unit
-  that ended `plan-stale` cannot pass that check, so it needs R3. No new
-  signature, because the digest is the same. A unit whose apply started
-  is never resumed this way.
-- **R3. A resume revision with pinned commits:** as R1, but the attach takes
-  the commit of each code location from the approved revision, and
-  refuses a unit plan of another commit with `ErrInvalid`. So the new
-  plans never mix commits.
-
-**Recommendation: R3, with R2 for the narrow case of an apply that changed
-nothing.** R3 keeps "one commit for each code location in one revision".
-R2 saves a review round when a runner was lost before the apply started.
+the collapses are never input to a job.
 
 ### G. Plan JSON is untrusted input (ADR 250)
 
 The part `plan-display` comes from a runner that ran code of the team. The
 code can write any string into a resource name, a tag, a value or a
-diagnostic.
+diagnostic. All limits below that this RFC adds are proposals.
 
 | Layer | What it does | Its test |
 | --- | --- | --- |
-| Check at the boundary | The reader streams the part with a decoder that has limits. The part has at most `job.MaxPlanPart` bytes (256 MiB). The nesting depth is at most 64, and a string has at most 1 MiB. A plan has at most 100,000 resource changes (ADR 196 decision 4), and a resource at most 10,000 paths. The reader checks the schema. For OpenTofu, `format_version` must have the major version `1`. For Pulumi, the fields must be the known fields of `PreviewDigest`. An unknown major version, a bad type or a limit gives `ErrPlanFormat`. The reader never changes a document to make it valid. | Fuzz each reader. One test for each limit at the limit and at the limit plus one. |
-| Encode at use | The console escapes each string. The Markdown output escapes Markdown and HTML. It removes CR and LF from a table cell, puts each value in a code span, and breaks `@` mentions and links. Logs remove CR and LF. Bidirectional control characters show as escapes. SQL takes placeholders only. | A hostile name, path and value through each renderer, with the reader checks skipped. |
-| Limit the effect | The analysis runs in the durable operation of ADR 194 decision 6, with a time limit and a memory limit. The server parses a part once and keeps the summary. A rule has a bounded cost (no user regular expression). | A plan at each limit, and a rule set at its count limit. |
-| Authorize at use | Values need `job:read-plans` on each unit (ADR 194 decision 9). The explain view and the Markdown output need the same actions as the view. The store checks the action of a rule on its scope in the transaction of the write. | A rule write with a token of another scope, and a view read of a unit with no `job:read-plans`, with the route check skipped. |
-| Fail closed and record | A plan that the reader cannot read is `unreadable` and blocks approval (ADR 194 decision 6). A rule that cannot be evaluated folds nothing (fail open for display, which is the safe side). Each refused rule write writes an audit entry. | An unreadable plan gives no signature. A broken rule shows each path. |
+| Check at the boundary | The reader streams the part with a decoder that has limits. The part has at most `job.MaxPlanPart` bytes (256 MiB). The nesting depth is at most 64 (proposal), and a string has at most 1 MiB (proposal). A plan has at most 100,000 resource changes (ADR 196 decision 4), and a resource at most 10,000 paths (proposal). The reader checks the schema. For OpenTofu, `format_version` must have the major version `1`. For Pulumi, the fields must be the known fields of `PreviewDigest`. An unknown major version, a bad type, an unknown action or operation, or a limit gives `ErrPlanFormat`. The reader never changes a document to make it valid. | Fuzz each reader. One test for each limit at the limit and at the limit plus one. One test for each unknown action and operation string. |
+| Encode at use | The console escapes each string. The Markdown output escapes Markdown and HTML. It strips CR and LF from a table cell. It puts each value in a code span. It breaks `@` mentions and links. Logs strip CR and LF. Bidirectional control characters show as escapes. SQL takes placeholders only. | A hostile name, path and value through each renderer, with the reader checks skipped. |
+| Plan strings to an assistant | Text of a plan can go to the built-in assistant or to an MCP tool (a name, a value, a diagnostic). It goes in a delimited field that is marked as untrusted data. It is never an instruction (the same rule as RFC 90 has for finding text). | A hostile string with an instruction in a plan, through the assistant output, with the reader checks skipped. |
+| Limit the effect | The analysis runs in the durable operation of ADR 194 decision 6, with a time limit and a memory limit. The server parses a part once and keeps the summary. A rule has a bounded cost (no user regular expression). The runner never runs `pulumi preview` with `--show-secrets`, and it refuses a plan step whose arguments hold that flag. So the part holds `[secret]`, not the value, even if the reader check fails. | A plan at each limit, and a rule set at its count limit. A plan step with `--show-secrets` is refused by the runner. |
+| Authorize at use | Values need `job:read-plans` on each unit (ADR 194 decision 9), for each output. A unit without it adds no value and no path. This holds for a list of values, a count per value, the explain view and the Markdown. The row says "values hidden (N units)". The store checks the action of a rule on its scope in the transaction of the write. | A rule write with a token of another scope. A view read, an explain read and a Markdown read of a change order with one unit that the reader may not read. No value or path of that unit appears in any output. The route check is skipped. |
+| Fail closed and record | A plan that the reader cannot read is `unreadable` and blocks approval (ADR 194 decision 6). A rule that cannot be evaluated collapses nothing (fail open for the view, which is the safe side). Each refused rule write writes an audit entry. | An unreadable plan gives no signature. A broken rule shows each path. |
 
 **Masking is kept.** The reader masks before it computes a fingerprint, a
-group or a fold. A rule never unmasks. A literal value `[secret]` in an
+group or a collapse. A rule never unmasks. A literal value `[secret]` in an
 OpenTofu plan is a plain string, and the reader does not treat it as a
 mark. The `plan-diagnostics` part drops `snippet`, because an excerpt of
 the source can hold a value.
@@ -468,95 +607,129 @@ proposals:
 
 - `GET .../namespaces/{namespace}/change-orders/{id}/revisions/{rev}/view`
   gets the new sections and `viewBasis`. The query `rules=none` answers the
-  view with no fold. Folds never apply to the facts of a gate.
+  view with no collapse. Collapses never apply to the facts of a gate.
 - `GET .../revisions/{rev}/view/explain`: the explain view.
 - `GET .../revisions/{rev}/view` with `Accept: text/markdown`: a Markdown
-  rendering with a size limit and a link to the full view. The CI shim
-  theme (#1091) posts it as a comment. Markdown is a rendering. It is never
-  a basis of a signature.
+  rendering with a link to the full view. The CI shim theme (#1091) posts
+  it as a comment. It holds no value and no value path
+  (section E). It is at most 65,536 characters (**recommendation**), the
+  largest comment that a forge accepts, and it ends with "truncated" and
+  the link when the view is longer. Markdown is a rendering. It is never a
+  basis of a signature.
 - `GET`, `POST .../namespaces/{namespace}/noise-rules`, and `GET`, `PATCH`,
   `DELETE .../noise-rules/{id}`. A collection scope or a unit scope is a
   field of the rule, as for gates (ADR 230).
 
-The console shows the view in the order of section A, with "folded by
-rule X" on each folded row and a switch "show folded changes".
+The console shows the view in the order of section A, with "collapsed by
+rule X" on each collapsed row and a switch "show collapsed changes".
 
 ### I. The first slice
 
-**Persona.** A platform engineer adds a common tag to the default tags of
-one shared module. The change order holds 30 OpenTofu workspaces. In one
-workspace, the same change also replaces one resource.
+**What exists today.** The package `pkg/changeorder` is not on `main`.
+The change order store, its plan jobs and its revisions do not exist yet.
+So the first slice is smaller than a view of a change order.
 
-**What the slice holds:**
+**The first slice:**
 
-1. The OpenTofu `PlanReader` with the flags of A2.
-2. The view of ADR 194 with exact change groups across units, the "by
-   unit" list, and section A order. No similar changes, no noise rules, no
-   new parts.
-3. The route `GET .../revisions/{rev}/view`.
+1. The OpenTofu `PlanReader` with the flags, the kinds and the map of
+   section A, and the checks of section G.
+2. The route `GET .../jobs/{job_id}/plan/view` for one stored plan of one
+   job. It answers the summary, "Needs attention", and the exact change
+   groups of that one plan, with masked values for a reader who has
+   `job:read-plans`.
+3. The Pulumi reader follows in a second slice with its own e2e step.
 
-**The e2e step.** The e2e suite drives the real OpenTofu CLI. It makes 3
-workspaces from one module (not 30, for the run time of the suite), plans
-the tag change in a change order, and reads the view. It checks that the
-view has one change group with 3 units, and no other change. It then adds
-a change that forces a replace in one workspace, attaches a new revision,
-and checks that "Needs attention" comes first and holds that one resource
-with its `replace_paths`.
+The view of a whole change order (the cause diff, the cross-unit groups,
+the section order, `viewBasis`) comes when the change order store is on
+`main`. Noise rules, similar changes and the new parts come after that.
 
-This slice needs the change order store and its plan jobs. If they are not
-on `main` before this slice, a smaller first slice is the reader and the
-view of one stored plan of one job (`GET .../jobs/{job_id}/plan/view`),
-with the same e2e step on one workspace.
+**The e2e step.** The e2e suite drives the real OpenTofu CLI. It needs no
+cloud account: the workspace uses the built-in `terraform_data` resource,
+which needs no provider download.
+
+1. A workspace has `terraform_data` with `count = 3` and one `input`
+   value. The step changes the `input` of all three to the same new value,
+   plans, and reads the view. It checks one change group with 3 resources,
+   and nothing in "Needs attention".
+2. The step changes `triggers_replace` of one resource and plans again.
+   It checks that "Needs attention" comes first, holds that one resource
+   as `replace` with its `replace_paths`, and that the other two stay in
+   the change group.
+3. The step runs `tofu taint` on another resource and plans again. OpenTofu
+   leaves `replace_paths` out for a tainted resource
+   (`replace_because_tainted`). The step checks that this resource is in
+   "Needs attention" as `replace`, with no value path.
 
 ## Open questions
 
-1. Is this its own theme, or part of the plans theme? The author proposes
-   its own theme, because it adds a new kind of data (noise rules) with its
-   own action and audit, and because the plans theme is mostly decided.
-2. Is a similar change (B2) worth its cost in version 1, or do exact change
-   groups (ADR 194) cover the common-tag case well enough?
-3. Does a signature record the view basis (F2), or does the digest cover the
-   rules (F1)?
-4. Can a thread anchor on a similar change? If yes, its key encoding is a
-   one-way door.
-5. Who can create a noise rule: only a namespace administrator, or also a
-   holder of `changeorder:approve`? Can a person approve a change order that
-   a rule of their own folds?
-6. What is the longest expiry of a rule: 30, 90 or 180 days? Can a person
-   renew a rule, and how many times?
-7. Does a noise rule also apply to the facts of a gate, for example to not
-   count a folded update in `plan.change`? The author proposes no: facts
+Each question has a recommendation of the author. The owner decides.
+
+1. Is this its own theme, or part of the plans theme? **Recommendation:**
+   its own theme. It adds a new kind of data (noise rules) with its own
+   actions, table and audit, and the plans theme is mostly decided.
+2. Are similar changes (B2) in version 1? **Recommendation:** no. Version 1
+   has exact change groups only (ADR 194). A later version adds similar
+   changes as a read-only row, with no content key and no thread anchor, so
+   no one-way door is opened.
+3. Does a signature record the view basis (F2), or does the digest cover
+   the rules (F1)? **Recommendation:** F2, with the view basis as section F
+   defines it, including the rule that the basis of `rules=none` is always
+   accepted.
+4. Who can create a noise rule? **Recommendation:** only a namespace
+   administrator. A rule that the author of a change order created or
+   changed, or that was created or changed after a revision was attached,
+   collapses nothing in that revision. A person whose own rule collapses a
+   row of a revision cannot sign it.
+5. What is the longest expiry of a rule: 30, 90 or 180 days?
+   **Recommendation:** 90 days, with at most 3 renewals of 90 days each.
+6. Does a noise rule also apply to the facts of a gate, for example to not
+   count a collapsed update in `plan.change`? **Recommendation:** no. Facts
    count every change.
-8. Is the part `plan-diagnostics` worth a second command in each OpenTofu
+7. Is the part `plan-diagnostics` worth a second command in each OpenTofu
    plan step, or can the plan step run `tofu plan -json` once and keep both
-   the stream and the plan file?
+   the stream and the plan file? **Recommendation:** run it once, if the
+   e2e suite shows that the plan file from the same run applies without
+   change. Else keep the second command.
+8. The resume of a multi-unit apply is out of this theme. ADR 190 decision
+   7 says that the author attaches a new revision for the units that did
+   not apply. Other options exist: resume in the same revision for a unit
+   whose apply never started, or a resume revision that pins the commit of
+   each code location. **Recommendation:** take this to its own RFC. If an
+   option for a resume in the same revision is chosen there, it must rest
+   on a fact that the server recorded (the apply job ended before the
+   runner started the apply step), and it must run `job.CheckPlan`. Its
+   guard `ErrPlanStale` already refuses a plan that read another state
+   version than the current one.
 9. Does the server ship built-in rule sets, or only an example in the docs?
+   **Recommendation:** ship the three sets of section E as data, none on by
+   default.
 10. Is a collection view with no change order (S2) wanted later?
+    **Recommendation:** not now. Decide when the change order view is in
+    use.
 11. Does the Pulumi reader read the streaming engine events instead of the
     summary, to get `diffKind` with `*-replace` on each path? The summary
-    gives `replaceReasons` only as keys.
-12. What is the size limit of the Markdown rendering?
+    gives `replaceReasons` only as keys. **Recommendation:** no in version
+    1. The summary has `detailedDiff`, and Needs attention does not depend
+    on the paths.
 
 ## Proposed glossary lines
 
 **Noise rule**:
-Data of a namespace, a collection or a unit that folds matching value paths
+Data of a namespace, a collection or a unit that collapses matching value paths
 in the review view of a change order. It has an owner, a reason and an
-expiry. It never folds a delete, a replace, a path that forces a replace, a
-secret path or an error diagnostic. It never changes the plan, the digest or
-a fact.
-_Avoid_: Suppression, filter, ignore rule (that is of Sweep), exemption
-(that is of a gate), exception (that is of a scanner finding)
-
-**Similar change**:
-Two or more in-place changes in a plan revision with the same tool, type,
-value paths and kind of change on each path, and values that can differ. It
-holds exact change groups and single changes.
-_Avoid_: Fuzzy group, near duplicate
+expiry. It never collapses a delete, a replace, a forget, an import, a move, a
+path that forces a replace, a secret path, a path that is unknown after the
+apply, or an error diagnostic. It never changes the plan, the digest or a
+fact.
+_Avoid_: Suppression, filter, fold (that is of the focus view), ignore rule
+(that is of Sweep), exemption (that is of a gate), exception (that is of a
+scanner finding)
 
 **View basis**:
-The SHA-256 of the list of noise rules, with their versions, that rendered
-the review view that a signer saw. A signature holds it.
+The SHA-256 of the list of active noise rules, the built-in rule sets, and the
+view encoding and reader versions that rendered the review view that a signer
+saw. The server computes it again at the approve request. A signature holds
+it.
 _Avoid_: Render hash, view hash
 
 ## Outcome
