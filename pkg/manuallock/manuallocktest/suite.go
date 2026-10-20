@@ -89,6 +89,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a unit that leaves a locked collection is not covered", test: testLeaveNotCovered},
 		{name: "a move out of a locked collection needs the right to end the lock", test: testLeaveNeedsEndsLock},
 		{name: "a restore under a manual lock is refused and rolled back", test: testRestoreUnderLock},
+		{name: "a soft delete under a manual lock is refused and rolled back", test: testDeleteUnderLock},
+		{name: "a lock and a delete at the same time never delete a unit under the lock", test: testDeleteLockRace},
 		{name: "the lock of the unit wins over the lock of its collection", test: testUnitLockWins},
 		{name: "a lock does not cross a namespace", test: testNamespaceIsolation},
 		{name: "a deleted collection takes its lock with it", test: testCollectionDeleteDropsLock},

@@ -178,7 +178,9 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 // closed): it frees the name, keeps the state versions
 // and the wrapped data key, and moves the inventory entry to the deleted
 // units. It returns
-// ErrLocked while the workspace is locked, ErrPendingState while it has a
+// ErrLocked while the workspace is locked (this includes a manual lock on the
+// workspace, its collection or its namespace, which also matches
+// manuallock.ErrLocked), ErrPendingState while it has a
 // pending state version, and ErrNotFound if no live
 // workspace has ref. The transaction holds the write lock from the start, so a
 // concurrent lock of the workspace either runs before the check or waits
@@ -202,6 +204,10 @@ func (s *Store) DeleteWorkspace(
 
 		if getErr != nil {
 			return fmt.Errorf("select workspace: %w", getErr)
+		}
+
+		if lockErr := refuseWorkspaceDeleteUnderLock(ctx, q, ref); lockErr != nil {
+			return lockErr
 		}
 
 		if busyErr := refuseBusyWorkspace(ctx, q, row.LockID, row.ID); busyErr != nil {

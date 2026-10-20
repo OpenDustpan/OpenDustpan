@@ -881,7 +881,8 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // the transaction. A guard naming another checkpoint returns
 // ErrConcurrentModification so the service recounts once. It returns
 // ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
-// mutating update of the stack runs.
+// mutating update of the stack runs. While a manual lock covers the stack,
+// its collection or its namespace, the error also matches manuallock.ErrLocked.
 // The transaction holds the write lock from the start, so a concurrent start
 // or finish of an update either runs before the checks or waits until the
 // delete commits.
@@ -903,6 +904,10 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
+			return err
+		}
+
 		if err := refuseRunningStack(ctx, q, stackID); err != nil {
 			return err
 		}
@@ -920,7 +925,8 @@ func (s *Store) DeleteStack(
 // ForceDeleteStack implements stack.Store. It soft-deletes the stack as
 // DeleteStack does, even when the latest checkpoint manages resources. It
 // returns ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
-// mutating update of the stack runs.
+// mutating update of the stack runs. While a manual lock covers the stack,
+// its collection or its namespace, the error also matches manuallock.ErrLocked.
 func (s *Store) ForceDeleteStack(
 	ctx context.Context, ref stack.Ref, fence namespace.Fence, d inventory.Deletion,
 ) error {
@@ -932,6 +938,10 @@ func (s *Store) ForceDeleteStack(
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
+			return err
+		}
+
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
 			return err
 		}
 
