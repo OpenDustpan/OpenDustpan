@@ -43,9 +43,10 @@ A tool that already holds its own lock on the stack or workspace keeps it. The
 lock holder can still write state and release the lock. A request that is in
 progress at the moment of the lock can pass: the check and the request run in
 separate transactions. The next request meets the lock. This holds for the lock
-requests of the tools and for the removal, the rename and the move of a stack or
-workspace out of a collection. The check of a move out of a collection and the
-check of a restore run in the transaction of the write, so a lock taken before
+requests of the tools and for the rename and the move of a stack or workspace out of a
+collection. The check of the removal of a stack or workspace, the check of a
+move out of a collection and the check of a restore run in the transaction of
+the write, so a lock taken before
 the write commits is seen.
 
 ## Jobs

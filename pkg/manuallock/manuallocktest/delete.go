@@ -215,9 +215,15 @@ func deleteUnderLock(t *testing.T, f *fixture, scope lockScope, tool deleteTool,
 
 	f.lock(t, target, alice, testReason)
 
+	before := auditEntryCount(t, f)
+
 	err := unit.remove(t.Context(), auditFor(f.ns.Fence()))
 	if !errors.Is(err, manuallock.ErrLocked) || !errors.Is(err, tool.sentinel) {
 		t.Fatalf("delete under the %s lock: err = %v, want ErrLocked and %v", scope.name, err, tool.sentinel)
+	}
+
+	if after := auditEntryCount(t, f); after != before {
+		t.Errorf("audit entries after the refused delete = %d, want %d", after, before)
 	}
 
 	if !unit.live(t.Context()) {
@@ -233,6 +239,18 @@ func deleteUnderLock(t *testing.T, f *fixture, scope lockScope, tool deleteTool,
 	if unit.live(t.Context()) {
 		t.Error("the unit is live after the delete")
 	}
+}
+
+// auditEntryCount returns the number of audit entries of the namespace.
+func auditEntryCount(t *testing.T, f *fixture) int {
+	t.Helper()
+
+	listing, err := f.s.List(t.Context(), f.ns.Name, audit.Page{Number: 1, Size: auditPageSize})
+	if err != nil {
+		t.Fatalf("List audit: %v", err)
+	}
+
+	return len(listing.Entries)
 }
 
 // deleteWithOtherLock checks that a lock that covers a different unit does not
