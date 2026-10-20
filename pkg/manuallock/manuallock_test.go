@@ -524,7 +524,7 @@ func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 		},
 		{
 			name: "a tool that sets no noun", target: manuallock.UnitTarget(webUnit()), noun: "", object: "acme/web",
-			want: "object acme/web has a manual lock " + detail,
+			want: "stack or workspace acme/web has a manual lock " + detail,
 		},
 	}
 

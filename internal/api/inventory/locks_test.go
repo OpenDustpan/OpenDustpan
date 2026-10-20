@@ -450,7 +450,7 @@ func TestLockRoutesNeedTheirActions(t *testing.T) {
 }
 
 // checkDenied sends the request of tc with the action of tc denied, and checks
-// that the answer is 403 and that the lock and the audit log stay as they were.
+// that the answer is 403 and that the lock stays as it was.
 func checkDenied(t *testing.T, obj lockObject, tc deniedCase) {
 	t.Helper()
 

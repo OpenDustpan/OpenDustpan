@@ -42,19 +42,19 @@ var (
 	ErrNotLocked = errors.New("object has no manual lock")
 	// ErrNotHolder reports a removal by a principal that does not hold the
 	// lock. Only a force-unlock removes the lock of another principal.
-	ErrNotHolder = errors.New("manual lock is held by another principal: " +
-		"ask the holder to remove it, or force-unlock it with unit:manage")
+	ErrNotHolder = errors.New("another person holds this manual lock: " +
+		"ask the holder to remove it, or force-unlock it (`unit:manage`)")
 	// ErrLockChanged reports a removal that found the lock changed since it
 	// read it: another principal ended the lock and took a new one. The new
 	// lock stays. Read the lock again and decide again.
 	ErrLockChanged = errors.New("manual lock changed during the removal: read the lock again")
 	// ErrTargetNotFound reports that the unit or the collection to lock does
 	// not exist.
-	ErrTargetNotFound = errors.New("object to lock not found")
+	ErrTargetNotFound = errors.New("stack, workspace or collection to lock not found")
 	// ErrReasonRequired reports a lock without a reason.
 	ErrReasonRequired = errors.New("a manual lock needs a reason: provide a reason of 1 to 500 characters")
 	// ErrInvalidTarget reports a target that names no unit and no collection.
-	ErrInvalidTarget = errors.New("invalid manual lock object")
+	ErrInvalidTarget = errors.New("invalid manual lock: name a stack, workspace or collection")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -192,7 +192,7 @@ type LockedError struct {
 func (e *LockedError) Error() string {
 	noun := e.Noun
 	if noun == "" {
-		noun = "object"
+		noun = "stack or workspace"
 	}
 
 	noun, name := SafeText(noun), SafeText(e.Name)
