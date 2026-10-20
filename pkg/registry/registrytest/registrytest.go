@@ -73,9 +73,9 @@ func provider(name, version string) registry.Release {
 		Version:         version,
 		SumsFile:        "terraform-provider-" + name + "_" + version + "_SHA256SUMS",
 		SumsSHA256:      sumA,
-		SignatureFile:   "",
-		SignatureSHA256: "",
-		KeyFingerprint:  "",
+		SignatureFile:   "terraform-provider-" + name + "_" + version + "_SHA256SUMS.sig",
+		SignatureSHA256: sumB,
+		KeyFingerprint:  fingerprint,
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
 		Archives: []registry.Archive{{
@@ -146,6 +146,7 @@ func storeCases() []storeCase {
 		{"an identical repeat writes no audit entry", testAuditOnRepeat},
 		{"get returns a copy", testGetCopy},
 		{"a signature is kept and counts as content", testSignature},
+		{"an unsigned provider is refused", testUnsignedProvider},
 		{"list orders by semantic version precedence", testListOrder},
 		{"addresses lists each address once", testAddresses},
 		{"addresses with a bad kind", testAddressesBadKind},
@@ -460,9 +461,6 @@ func testSignature(t *testing.T, h Harness) {
 
 	f := h.Namespace(t, acme)
 	signed := provider("payments", v100)
-	signed.SignatureFile = signed.SumsFile + ".sig"
-	signed.SignatureSHA256 = sumB
-	signed.KeyFingerprint = fingerprint
 	mustPublish(t, h, signed, f)
 
 	got, err := h.Store.Get(t.Context(), signed.Address, v100)
@@ -476,6 +474,22 @@ func testSignature(t *testing.T, h Harness) {
 
 	if err := h.Store.Publish(t.Context(), other, f, entry(acme)); !errors.Is(err, registry.ErrVersionExists) {
 		t.Fatalf("Publish with another signature = %v, want ErrVersionExists", err)
+	}
+}
+
+func testUnsignedProvider(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, acme)
+	r := provider("payments", v100)
+	r.SignatureFile, r.SignatureSHA256, r.KeyFingerprint = "", "", ""
+
+	if err := h.Store.Publish(t.Context(), r, f, entry(acme)); !errors.Is(err, registry.ErrInvalid) {
+		t.Fatalf("Publish of an unsigned provider = %v, want ErrInvalid", err)
+	}
+
+	if _, err := h.Store.Get(t.Context(), r.Address, v100); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("Get after a refused publish = %v, want ErrNotFound", err)
 	}
 }
 

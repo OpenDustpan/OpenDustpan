@@ -23,9 +23,9 @@ func provider() registry.Release {
 		Version:         "1.2.3",
 		SumsFile:        "terraform-provider-payments_1.2.3_SHA256SUMS",
 		SumsSHA256:      sum,
-		SignatureFile:   "",
-		SignatureSHA256: "",
-		KeyFingerprint:  "",
+		SignatureFile:   "terraform-provider-payments_1.2.3_SHA256SUMS.sig",
+		SignatureSHA256: sum,
+		KeyFingerprint:  strings.Repeat("CD", 20),
 		PublishedBy:     "user-1",
 		PublishedAt:     time.UnixMilli(1_800_000_000_000).UTC(),
 		Archives: []registry.Archive{
@@ -192,7 +192,8 @@ func TestValidateVersion(t *testing.T) {
 	t.Parallel()
 
 	for v, ok := range map[string]bool{
-		"1.2.3": true, "0.0.1": true, "1.0.0-rc.1": true,
+		"1.2.3": true, "0.0.1": true, "1.0.0-rc.1": true, "1.0.0-0": true, "1.0.0-rc.0": true, "1.0.0-a01": true,
+		"1.0.0-01": false, "1.0.0-rc.01": false, "1.0.0-00": false,
 		"1.2": false, "99999999999999999999.0.0": false, "v1.2.3": false, "01.2.3": false, "1.2.3+build": false, "": false, "1.2.3\n": false, "../1.2.3": false,
 	} {
 		err := registry.ValidateVersion(v)
@@ -251,6 +252,11 @@ func TestReleaseValidate(t *testing.T) {
 			false,
 		},
 		{signed, "signed", true},
+		{
+			func(r *registry.Release) { r.SignatureFile, r.SignatureSHA256, r.KeyFingerprint = "", "", "" },
+			"unsigned provider",
+			false,
+		},
 		{func(r *registry.Release) { signed(r); r.SignatureFile = "" }, "fingerprint without signature file", false},
 		{func(r *registry.Release) { signed(r); r.SignatureSHA256 = "" }, "fingerprint without signature hash", false},
 		{func(r *registry.Release) { signed(r); r.KeyFingerprint = "" }, "signature without fingerprint", false},

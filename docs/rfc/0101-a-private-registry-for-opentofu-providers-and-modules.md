@@ -211,8 +211,10 @@ is no upstream.
 
 Each archive is one blob in the blob store, addressed by its SHA-256 under
 the prefix of the namespace ID: `namespaces/<namespace ID>/registry/sha256/<hash>`
-(ADR 220). The service gets the scoped view of the blob port, which refuses
-every key outside the prefix. Two releases in one namespace that hold the same
+(ADR 220). ADR 220 requires that the service gets a scoped view of the blob
+port, which refuses every key outside the prefix with `blob.ErrOutOfScope`.
+`pkg/blob` does not have the view yet. Until it exists, the namespace-ID
+prefix of the key is the only guard. Two releases in one namespace that hold the same
 bytes share one blob. A purge of a namespace removes its blobs. The upload
 writes to `namespaces/<namespace ID>/registry/staging/<token>` first, and a
 blob is readable only through a published release (section F).
@@ -250,7 +252,7 @@ number of files and the paths, and an `H1` field in `Archive` that
 `pkg/registry/releasecheck`, which holds the checks above. It gets its own
 test suite, with hostile input for each check.
 
-The open point is the OpenPGP library for check 4:
+The open point is the OpenPGP library for check 1:
 
 1. **Add `github.com/ProtonMail/go-crypto` after the review of ADR 7
    (recommended).** The license is BSD-3-Clause. It is the standard library
@@ -261,8 +263,13 @@ The open point is the OpenPGP library for check 4:
      is more than the two weeks that ADR 7 asks for. v1.5.1 is from 2026-09-23.
    - Its `go.mod` asks for `github.com/cloudflare/circl` v1.6.3,
      `golang.org/x/crypto` v0.41.0 and `golang.org/x/sys` v0.35.0 (indirect).
-     `cloudflare/circl` is a new transitive dependency. The build keeps the
-     higher `golang.org/x/crypto` version if this project already has one.
+     This project has no `golang.org/x/crypto`, so the change adds three new
+     modules: `go-crypto` v1.5.2, `circl` v1.6.3 and `golang.org/x/crypto`.
+     `golang.org/x/sys` v0.48.0 is already in `go.mod`. The change pins
+     `golang.org/x/crypto` to v0.56.0 or later, because v0.41.0 has 19 open
+     entries in `x/crypto/ssh` in the Go vulnerability database. v0.56.0 was
+     published on 2026-09-02, which is more than the two weeks that ADR 7
+     asks for. v0.58.0 is too new today.
    - Vulnerability history (the Go vulnerability database): no entry for
      `github.com/ProtonMail/go-crypto` itself. `cloudflare/circl` has four
      entries (GO-2023-1765, GO-2024-2453, GO-2025-3754, GO-2026-4550), fixed
@@ -343,6 +350,13 @@ one version, the copy that a read returns and the order by semantic version. The
 skips until an adapter and a key fixture exist. No route, no SQL, no
 dependency.
 
+A provider release is signed. `Release.Validate` refuses a provider without
+the signature file, its hash and the key fingerprint (fail closed).
+
+The upload slice does not merge before the scoped view of the blob port
+exists in `pkg/blob` (section E). The first registry slice that reads or
+writes a blob needs it.
+
 ## Benchmark
 
 | Source | What it does | What we take |
@@ -395,6 +409,9 @@ The owner decided question 1 (ADR 269). The product manager decided questions
 - The `h1:` hash of a provider archive, with the unpacking limits and the
   `H1` field.
 - A registry slug for each namespace, for a namespace with an unsafe name.
+- The scoped view of the blob port and `blob.ErrOutOfScope`, with `blobtest`
+  cases (ADR 220). It blocks the first registry slice that reads or writes a
+  blob.
 - A test of `registry.BlobKey` against the scoped view of the blob port, when
   the view exists.
 - A SQL adapter and its migration for the store.
@@ -403,12 +420,12 @@ The owner decided question 1 (ADR 269). The product manager decided questions
 ## Proposed glossary lines
 
 **Registry release**:
-One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish.
-_Avoid_: Package (RFC 93 uses it for a vetted copy of a public package), artifact (that is a plan or a log of a job), upload (that is the act)
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+_Avoid_: Package, artifact (that is a plan or a log of a job)
 
 **Registry address**:
-The name of a provider or module in a namespace: the namespace, the kind and the name, with the system for a module.
-_Avoid_: Source address (that is the OpenTofu field), package name
+The name of a provider or module in a namespace: the namespace, the kind and the name, with the system for a module. The host of the address is the host of the server (RFC 101).
+_Avoid_: Source address (that is the field of OpenTofu), package name
 
 ## Outcome
 

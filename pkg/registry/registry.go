@@ -1,6 +1,7 @@
-// Package registry is the tool-neutral model of the private registry: the
-// address of a provider or module that a team publishes, one immutable
-// release of it, and the ports that store releases and check signatures.
+// Package registry is the model of the private registry; the address and the
+// ports are tool-neutral. It holds the address of a provider or module that a
+// team publishes, one immutable release of it, and the ports that store
+// releases and check signatures.
 //
 // A release is the archive set of a provider (the zip archives, the checksums
 // file and its detached signature) or the archive of a module. The package
@@ -168,8 +169,10 @@ type Archive struct {
 
 // BlobKey returns the content key of the bytes with the given SHA-256 in the
 // namespace with ID id: "namespaces/<id>/registry/sha256/<hash>". The key
-// starts with the prefix of the namespace, so the scoped view of the blob
-// port serves it and refuses the key of another namespace.
+// starts with the prefix of the namespace. The scoped view of the blob port
+// must serve it and refuse the key of another namespace. The blob port does
+// not have that view yet, so until it exists the namespace-ID prefix is the
+// only guard.
 //
 // A blob under this key exists only after a publish passed every check, and
 // a caller reads it only through a published release. The upload writes to
@@ -223,15 +226,14 @@ type Release struct {
 	// SumsSHA256 is the SHA-256 of the checksums file. It is empty for a module.
 	SumsSHA256 string
 	// SignatureFile is the name of the detached signature file of the
-	// checksums file. It is required on a provider when KeyFingerprint is set,
-	// and empty otherwise.
+	// checksums file. It is required on a provider and empty on a module.
 	SignatureFile string
 	// SignatureSHA256 is the SHA-256 of the signature file. It is required on
-	// a provider when KeyFingerprint is set, and empty otherwise.
+	// a provider and empty on a module.
 	SignatureSHA256 string
 	// KeyFingerprint is the fingerprint of the primary key that made the
-	// verified signature, in uppercase hex. It is empty when the release has
-	// no signature.
+	// verified signature, in uppercase hex. It is required on a provider and
+	// empty on a module.
 	KeyFingerprint string
 	// PublishedBy is the ID of the principal that published the release.
 	PublishedBy string
@@ -239,8 +241,8 @@ type Release struct {
 }
 
 // Validate reports whether r is complete and allowed. A provider needs at
-// least one archive with a platform, and the checksums file. A provider with
-// a KeyFingerprint needs the signature file and its hash too. A module needs
+// least one archive with a platform, the checksums file, and a verified
+// signature: the signature file, its hash and the key fingerprint. A module needs
 // exactly one archive with no platform. It returns ErrInvalid otherwise.
 func (r Release) Validate() error {
 	if err := r.Address.Validate(); err != nil {
@@ -320,10 +322,7 @@ func (r Release) validateProvider() error {
 		return err
 	}
 
-	seenName := map[string]bool{r.SumsFile: true}
-	if r.SignatureFile != "" {
-		seenName[r.SignatureFile] = true
-	}
+	seenName := map[string]bool{r.SumsFile: true, r.SignatureFile: true}
 
 	seenPlatform := map[string]bool{}
 
@@ -350,17 +349,13 @@ func (r Release) validateProvider() error {
 }
 
 // validateSignature checks the signature fields of a provider. The file, its
-// hash and the fingerprint are all set or all empty, because a stored
-// signature names the key that verified it.
+// hash and the fingerprint are all required, because an unsigned provider
+// release is refused (fail closed) and a stored signature names the key that
+// verified it.
 func (r Release) validateSignature() error {
-	set := r.SignatureFile != "" || r.SignatureSHA256 != "" || r.KeyFingerprint != ""
-	if !set {
-		return nil
-	}
-
 	if !fileNameRE.MatchString(r.SignatureFile) || len(r.SignatureFile) > MaxFileNameLength ||
 		!sha256RE.MatchString(r.SignatureSHA256) || !fingerprintRE.MatchString(r.KeyFingerprint) {
-		return fmt.Errorf("%w: signature file, hash and key fingerprint are all required together", ErrInvalid)
+		return fmt.Errorf("%w: a provider needs a signature file, its hash and a key fingerprint", ErrInvalid)
 	}
 
 	if r.SignatureFile == r.SumsFile {
@@ -424,6 +419,14 @@ func splitVersion(v string) ([3]uint64, string, bool) {
 	}
 
 	core, pre, _ := strings.Cut(v, "-")
+
+	// A numeric pre-release identifier has no leading zero (SemVer 2.0.0,
+	// section 9). The pattern cannot say it, so the check is here.
+	for id := range strings.SplitSeq(pre, ".") {
+		if len(id) > 1 && id[0] == '0' && strings.Trim(id, "0123456789") == "" {
+			return nums, "", false
+		}
+	}
 
 	for i, part := range strings.Split(core, ".") {
 		n, err := strconv.ParseUint(part, 10, 64)

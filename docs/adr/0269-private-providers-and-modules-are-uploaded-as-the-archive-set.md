@@ -1,6 +1,6 @@
 # 269. Private providers and modules: own providers first, uploaded as the archive set
 
-Status: accepted · 2026-10-18 · decisions 1 and 2 by the project owner, decisions 3 to 11 by the product manager (2026-10-20). One design question is open in RFC 101
+Status: accepted · 2026-10-18 · decisions 1 to 3 by the project owner, decisions 4 to 11 by the product manager (2026-10-20). One design question is open in RFC 101
 
 ## Context
 
@@ -14,9 +14,9 @@ Those ADRs do not say which artifacts come first, or how an artifact gets
 into OpenDustpan. The project owner decided both on 2026-10-18. The decisions
 are in the section "Decided" of issue 949.
 
-Decisions 1 and 2 are the owner's. Decisions 3 to 11 answer the questions of
-RFC 101 that the product manager decided under the owner's delegation of 20
-October 2026. This ADR does not decide the routes, the authorization actions,
+Decisions 1 to 3 are owner decisions. Decisions 4 to 11 are decided by the
+product manager under the owner's delegation of 20 October 2026. They answer
+questions of RFC 101. This ADR does not decide the routes, the authorization actions,
 the limits or the OpenPGP library. RFC 101 holds those questions, and the
 library stays open for the owner.
 
@@ -37,7 +37,8 @@ library stays open for the owner.
 3. **Order of the slices.** The first slice serves providers by upload.
    Decided by the owner (RFC 101 question 1).
 
-Decisions 4 to 11 are decided by the product manager under the owner's delegation of 20 October 2026.
+Decisions 4 to 11 are decided by the product manager under the owner's
+delegation of 20 October 2026.
 
 4. **Address host.** A private address has the host of the server and the
    namespace of OpenDustpan. The adapter refuses every host except the

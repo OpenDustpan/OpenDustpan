@@ -10,8 +10,10 @@ import (
 // Store keeps the releases of the private registry. A SQL adapter serves it
 // from the database of the namespace. Every write carries the fence of the
 // namespace, and the store checks it in the transaction of the write. The
-// bytes of the archives are blobs in the blob port, under BlobKey in the
-// scoped view of the namespace.
+// bytes of the archives are blobs in the blob port, under BlobKey. The blob
+// port must give the registry a scoped view of the namespace. It does not
+// have the view yet, so until it exists the namespace-ID prefix of BlobKey is
+// the only guard.
 //
 // The publish flow is fixed. The upload streams each file to a StagingKey,
 // and the server computes the SHA-256 while it writes. It checks the
