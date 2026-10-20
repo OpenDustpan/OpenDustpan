@@ -93,8 +93,8 @@ func (f storeMoveFixture) wantOneMoveOutRefusal(t *testing.T) {
 
 	var reasons []string
 
-	for _, e := range l.Entries {
-		if e.Outcome == audit.OutcomeDenied {
+	for i := range l.Entries {
+		if e := &l.Entries[i]; e.Outcome == audit.OutcomeDenied {
 			reasons = append(reasons, e.Action+": "+e.Reason)
 		}
 	}
