@@ -314,3 +314,27 @@ func testConfirmationStored(t *testing.T, h Harness) {
 		t.Fatalf("GatesStatus of the stored job = %s, want open", s)
 	}
 }
+
+func testCreateLocked(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	lockUnit(t, h, f, "alice", "change window closed")
+
+	for _, op := range []job.Operation{job.OperationRefresh, job.OperationPlan} {
+		j := newJob(f.unit, op, "")
+		if _, _, err := h.Jobs.Create(t.Context(), *j, dispatchOf(j), f.fence, nil); !errors.Is(err, job.ErrLocked) {
+			t.Fatalf("Create of %s with a dispatch on a locked unit = %v, want ErrLocked", op, err)
+		}
+
+		// The service then creates the job with no dispatch, queued with the
+		// reason locked.
+		j.Wait = job.WaitLocked
+
+		stored := create(t, h, f, j, nil)
+		if stored.State != job.StateQueued || stored.Wait != job.WaitLocked || stored.Phases[0].Operation != "" {
+			t.Fatalf("Create of %s with no dispatch = %s, wait %q, operation %q; want queued, locked, no operation",
+				op, stored.State, stored.Wait, stored.Phases[0].Operation)
+		}
+	}
+}

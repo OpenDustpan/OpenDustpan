@@ -71,10 +71,13 @@ type Store interface {
 	// Create persists j as queued with its wait reason j.Wait, with e, and
 	// returns it. When dispatch is not nil, the job starts dispatched and
 	// the store starts the durable operation in the same transaction, with
-	// the checks of a dispatch in Apply: ErrUnitBusy and ErrFrozen. Such an
-	// error stores nothing. Service.Start then calls Create again with no
-	// dispatch and j.Wait set to WaitUnitBusy, and the reconcile schedule
-	// dispatches the job when the unit is free. A second create with the
+	// the checks of a dispatch in Apply: ErrLocked, ErrUnitBusy and
+	// ErrFrozen. Such an error stores nothing. Service.Start then calls
+	// Create again with no dispatch and j.Wait set to WaitLocked for
+	// ErrLocked or WaitUnitBusy for ErrUnitBusy, and the reconcile schedule
+	// dispatches the job when the unit is free. A create with no dispatch
+	// stores the job whatever manual lock covers the unit: the lock stops
+	// the dispatch, not the queue. A second create with the
 	// key of j returns the first job and created false, when the spec is
 	// equal. It returns ErrKeyConflict when the key names a job with
 	// another spec, and ErrLimit when the unit has MaxOpenPerUnit jobs that
@@ -89,6 +92,14 @@ type Store interface {
 	// ErrNotFound for an unknown job, ErrConflict when the job is not at
 	// c.Version, and the error of Next for an event that the state does not
 	// allow. It checks these rules in the transaction of the change:
+	//   - EventDispatch of any phase, also a plan phase: ErrLocked while a
+	//     manual lock covers the unit (its own lock, the lock of its
+	//     collection now, or the lock of its namespace). Break-glass does not
+	//     pass it. The adapter reads the lock in the transaction of the
+	//     change, with the same coverage as manuallock.Store.CoveringLock. The
+	//     job stays queued and keeps its queue timeout: EventExpire still
+	//     ends it. No other event is refused for a lock, so a phase that
+	//     runs when the lock arrives claims, writes and ends as before.
 	//   - EventDispatch of a phase that changes resources: ErrUnitBusy when
 	//     another job holds the unit, and ErrFrozen when a freeze of the
 	//     namespace is active and the job has no break-glass.
@@ -209,7 +220,9 @@ type Service interface {
 	// gates of PolicyGates. When the
 	// first phase has no gate, it creates the job with a dispatch. When that
 	// create fails with ErrUnitBusy, it creates the job again with no
-	// dispatch, queued with WaitUnitBusy, and returns it with no error. It
+	// dispatch, queued with WaitUnitBusy, and returns it with no error. For
+	// ErrLocked it does the same with WaitLocked, also for a job with
+	// break-glass, and for a plan phase. It
 	// returns ErrInvalid for a request that is not valid, ErrUnsupported
 	// for an operation that the executor cannot do, ErrPolicyDenied with
 	// the reason of the policy, ErrFrozen when a freeze is active and req
