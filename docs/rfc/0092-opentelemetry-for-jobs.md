@@ -52,6 +52,16 @@ alone), or a state write from a team's own CI with no job.
   only to targets that the operator names. Decision 4: metrics, logs and
   traces are observability, not telemetry, and go only to targets that the
   operator configures.
+- **RFC 34** (accepted by ADR 32) left tracing open. This RFC takes over
+  that question. When an ADR accepts this RFC, it also closes the tracing
+  item of RFC 34 (the text "Tracing stays open"). If the owner drops this
+  RFC, tracing stays open in RFC 34.
+- **RFC 46 and ADR 147 decision 12:** RFC 46 (insights) is a stub and owns
+  the dashboards and the delivery metrics. ADR 147 decision 12 made the
+  incident links so that RFC 46 can read them. This RFC defines only the
+  data and the REST values of the change-delivery metrics (section D). RFC
+  46 owns how they look and the reports. If RFC 46 changes a definition, it
+  changes this section by a new RFC, not in parallel.
 - **ADR 100:** a job is a list of phases, each phase is one durable
   operation, and the job states hold the waits (`queued` with the wait
   reason `unit-busy` or `frozen`, `awaiting-approval`). Decision 20: the
@@ -77,13 +87,28 @@ alone), or a state write from a team's own CI with no job.
 
 - ADR 32 decision 1 ("The server does not use OpenTelemetry now"). An ADR
   that accepts this RFC supersedes that sentence.
-- ADR 134 decision 6: new launcher variables for the tool step (`OTEL_*`
-  and `TRACEPARENT`). They do not start with `DUSTPAN_`, so the rule
-  "a step variable that a variable of the launcher also sets fails the
-  step" must cover them.
-- ADR 101 decision 7: the credential-variable rule. `OTEL_EXPORTER_OTLP_HEADERS`
-  and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` can hold an authorization header,
-  and today the rule does not match them (no listed suffix). Add them.
+- ADR 134 decision 6 and ADR 101 decision 7: the **reserved variable set**.
+  A step variable fails the step (the server at start, and the launcher
+  again) when its name, compared with the case ignored, starts with
+  `OTEL_`, `TG_TELEMETRY_`, `TERRAGRUNT_TELEMETRY_` or `PULUMI_OTEL_`, or is
+  `TRACEPARENT` or `TRACESTATE`. The rule holds whether or not the launcher
+  sets the variable for this step. So a step can never turn tracing on, or
+  point it to a target, by itself. A step cannot hide a rule change behind a
+  new tool release either. ADR 101 decision 7 lists the rule, and ADR 134
+  decision 6 says that the launcher checks it again. Both ADRs change.
+- ADR 101 decision 7: `OTEL_EXPORTER_OTLP_HEADERS` and
+  `OTEL_EXPORTER_OTLP_TRACES_HEADERS` can hold an authorization header.
+  The reserved set above covers them, and `job.IsCredentialEnv` also gets
+  them as names, so a code path that uses only that rule stays safe.
+- ADR 134 decision 1 and ADR 139: only if the owner picks the second
+  option of F1 (a protobuf library in the launcher). The launcher then
+  links a module outside the standard library, which decision 1 forbids.
+  The recommended option (a reader of our own) needs no amendment.
+- ADR 132 decisions 5 and 7: **no amendment.** A new path inside
+  `/runner/v1` is an addition, and an ignorable field in the assignment
+  ("trace this step") does not change what a step does. So this RFC needs
+  no `/runner/v2` and no new assignment version. A launcher that does not
+  know the field ignores it, and gets no tool spans (A1.4).
 
 ## Facts from primary sources
 
@@ -108,6 +133,15 @@ branch of each project.
   so the standard OTLP exporter variables apply: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS` and
   `OTEL_EXPORTER_OTLP_INSECURE`. The docs name the endpoint and `INSECURE`.
+- **Protocol.** `autoexport` accepts `grpc` and `http/protobuf` for
+  `OTEL_EXPORTER_OTLP_PROTOCOL`. It does **not** accept `http/json`
+  (checked at the released tags of `autoexport` that OpenTofu uses). So
+  OpenTofu always sends protobuf.
+- **Backend API calls.** OpenTofu does **not** send `traceparent` on the
+  calls to a state backend. The `cloud` and `remote` backends use go-tfe,
+  which has no OpenTelemetry. The `http` backend uses a plain
+  `retryablehttp` client. Only `internal/httpclient` (the registry and the
+  provider downloads) wraps `otelhttp`.
 - **`TRACEPARENT`.** `init.go` reads `TRACEPARENT` and `TRACESTATE` and
   extracts them with the W3C Trace Context propagator, so the spans of
   OpenTofu join the parent trace. The code is in the v1.10 and v1.11
@@ -147,11 +181,13 @@ branch of each project.
   "Use file:// for local JSON files, grpc:// or https:// for remote
   collectors". The schemes are `file`, `grpc`, `grpcs`, `http` and
   `https`. HTTP sends `application/x-protobuf`. 3.255.0 added `https`.
-  No environment variable turns it on: it is a flag only.
+  No environment variable turns it on: it is a flag only. The `file://`
+  scheme writes OTLP JSON.
 - **`TRACEPARENT`.** From 3.229.0: "Allow TRACEPARENT to be set for CLI
   invocations, parenting the pulumi spans under an existing parent span".
-  It works only with `--otel-traces`. From 3.268.0 the CLI sends the W3C
-  `traceparent` header on its API calls when `--otel-traces` is set.
+  The CLI reads it only with `--otel-traces`. It does not read
+  `TRACESTATE`. From 3.268.0 the CLI sends the W3C `traceparent` header on
+  its API calls when `--otel-traces` is set.
 - **Plugins.** The CLI runs a local OTLP receiver and passes its address to
   plugins (`PULUMI_OTEL_EXPORTER_OTLP_ENDPOINT`), so provider spans join
   the trace of the CLI.
@@ -168,8 +204,9 @@ branch of each project.
   (`internal/telemetry/tracer.go`), and sets `TRACEPARENT` in the
   environment of each command that it runs, OpenTofu included
   (`internal/shell/run_cmd.go`).
-- **Version.** The theme issue says 0.72.0. We did not check the first
-  version. The latest tag is v1.1.6.
+- **Version.** OpenTelemetry first came in v0.55.5, with the variables
+  `TERRAGRUNT_TELEMETRY_*`. The names `TG_TELEMETRY_*` came later and are
+  the current ones. The latest tag is v1.1.6.
 - **Sensitive data.** The docs give no warning. The examples show command
   arguments and directory paths as attributes.
 
@@ -181,8 +218,10 @@ branch of each project.
   `google.golang.org/protobuf`, `cenkalti/backoff/v5` and `go-logr/logr`.
   Indirect: `grpc-gateway/v2`, `genproto` (`googleapis/api`,
   `googleapis/rpc`), `x/net` and others. Code that is not a test links
-  gRPC through `internal/otlpconfig`. The HTTP exporter sends
-  `application/x-protobuf` only.
+  gRPC through `internal/otlpconfig`. Version 1.46.0 of `otlptracehttp`
+  added the JSON encoding (`WithEncoding`, `EncodingJSON`). It still links
+  gRPC through `internal/otlpconfig`, and it still needs protobuf, so the
+  JSON encoding does not remove the dependency set.
 - OTLP/HTTP accepts "Protobuf payloads encoded either in binary format or
   in JSON format", at `/v1/traces` on port 4318 by default
   (<https://opentelemetry.io/docs/specs/otlp/>).
@@ -194,13 +233,17 @@ branch of each project.
   the status "Release Candidate". The key is `TRACEPARENT` in uppercase.
 
 **What these facts mean here.** All three tools read `TRACEPARENT`, so a
-job can join their spans to its trace (option A2). But OpenTofu and the
-Pulumi CLI send OTLP as protobuf, not JSON, so a relay that receives their
-spans must read protobuf (question 3). The Pulumi CLI can also write
-JSON files, so a file path (option A1.3) works for it. No tool documents
-which attributes can hold sensitive values, and the OpenTofu output is not
-a committed interface. So the attribute allowlist must be tested against
-each pinned CLI version.
+job can join their spans to its trace (option A2). The Pulumi CLI reads it
+only with `--otel-traces`, and no tool needs `TRACESTATE`. OpenTofu always
+sends protobuf (`http/json` is not available), and the Pulumi CLI sends
+protobuf over HTTP. So a relay that receives their spans must read
+protobuf (question 3). The Pulumi CLI can also write OTLP JSON files, so a
+file path (option A1.3) works for it. OpenTofu sends no `traceparent` to a
+backend, so option (d) of section B helps the Pulumi CLI from 3.268.0
+only. No tool documents which attributes can hold sensitive values, and
+the OpenTofu output is not a committed interface. So the attribute
+allowlist must be tested against each pinned CLI version.
+
 ## Options and recommendations
 
 ### A. The job trace and the trace context in the tool
@@ -228,29 +271,110 @@ phase that wrote it.
    (ADR 134 decision 8), and sends them to the server through its job
    session. The server checks them again, scrubs them and exports them.
    No collector credential and no collector address reach the job. The
-   cost: one receiver in the launcher and one route of the runner
-   protocol, which needs a new protocol version (ADR 132).
+   cost: one receiver in the launcher and one new path in the runner
+   protocol. Per ADR 132 decisions 5 and 7, a new path inside `/runner/v1`
+   and an ignorable "trace this step" field of the assignment need no new
+   protocol version and no new assignment version. A launcher that does
+   not know the field sends no spans. The new route is
+   `PUT /runner/v1/session/steps/{step}/spans/{seq}`, with a body of at
+   most 1 MiB and the header `Dustpan-Content-SHA256`, like a log chunk
+   (ADR 131 decision 10). Its object is the step of the live claim, and
+   the session key of that claim authorizes it. As for the log chunk path,
+   a runner key alone cannot call it, and it has no policy action,
+   because the caller is a session and not a principal. The route test
+   (CLAUDE.md) lists it with the other session paths.
 3. **To a file.** Only for a tool that writes spans to a file: the Pulumi
-   CLI with `--otel-traces file://...` writes JSON. The launcher reads the
-   file after the step and sends the spans as in 2. Nothing listens on a
-   port.
+   CLI with `--otel-traces file://...` writes OTLP JSON. The launcher
+   reads the file after the step and sends the spans as in 2. Nothing
+   listens on a port. The reader is a security reader (section F):
+   - The file path is under a directory of the step. The launcher opens it
+     with `os.Root`, never by a path string that the step could replace
+     with a link.
+   - A size limit of 64 MiB for the file. The launcher checks it while it
+     reads, not from the file size alone.
+   - It reads a stream of JSON documents (the CLI appends one document for
+     each export), one at a time, with a limit for each document of 1 MiB.
+     It never reads the whole file into memory.
+   - Each document goes through the same checks as a request of the relay.
 4. **Do nothing.** The job trace has the server and launcher spans only.
+
+**Source of a span.** Every span from a tool gets the attribute
+`dustpan.span.source=tool`. Spans that the server or the launcher makes
+get `server` or `launcher`. No metric, no gate, no inventory value and no
+decision (an approval, a freeze or a policy fact) is ever derived from a
+tool span. The tool is untrusted, and its output is not a committed
+interface. The console may show tool spans as text. Section C uses the
+job record only.
+
+**Telemetry never fails the job.** The launcher sets only `OTEL_*`,
+`TG_TELEMETRY_*` and `TRACEPARENT` values that the tool accepts, and the
+step planner of the Pulumi tool adds only a flag value that the pinned CLI
+accepts. A value that a tool rejects at start could fail the step, so the
+step planner has a table of the accepted values for each pinned version,
+and a test for it. An OpenTelemetry exporter in OpenTofu and in the Pulumi
+CLI exports in the background: an endpoint that is not reachable gives a
+log line or an ignored error, not an exit. The first slice does not rely on
+this reading of the code: the e2e step (G) runs `plan` and `apply` with
+an endpoint that nobody listens on, and with a relay that has stopped, and
+both must succeed. If a pinned release fails this test, that release gets
+A1.4 (no tool spans).
 
 **How each tool is turned on.** OpenTofu and Terragrunt read the `OTEL_*`
 or `TG_TELEMETRY_*` variables, which the launcher sets for the tool step.
 The Pulumi CLI has a flag only (`--otel-traces`), so the step planner of
 the Pulumi tool adds the flag with the address of the relay or the file.
 Neither value is a credential. A Pulumi CLI older than 3.226.0 has no flag,
-and gets A1.4.
+and gets A1.4. The launcher sets `TRACEPARENT` and never `TRACESTATE`,
+because no tool needs it.
 
-**The encoding.** OpenTofu (through `autoexport`) and the Pulumi CLI (over
-HTTP) send OTLP as protobuf. So a relay must read protobuf, or the launcher
-must ask for JSON: `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`. Whether the
-`autoexport` of OpenTofu accepts `http/json` is not checked (question 3).
+**The encoding.** OpenTofu (through `autoexport`, which accepts only
+`grpc` and `http/protobuf`) and the Pulumi CLI (over HTTP) send OTLP as
+protobuf. `http/json` does not work with OpenTofu. So the relay must read
+protobuf. The launcher stays on the standard library (ADR 134 decision 1,
+ADR 139), so there are two ways to read it:
+
+1. **A reader of our own** for the trace messages only
+   (`ExportTraceServiceRequest` down to the span, its attributes and its
+   status). It is small, because the launcher needs about ten message types
+   and the wire format has five field types. It has limits that the
+   generic library does not have (F). It has fuzz tests. Recommended.
+2. **`google.golang.org/protobuf`** in the launcher. The launcher then
+   links a module outside the standard library. This amends ADR 134
+   decision 1 and the module boundary of ADR 139 (see "ADRs this RFC would
+   amend"). It is a mature parser, but its allocations are not bounded by
+   our limits, and it adds to the attack surface of the one binary that
+   runs next to untrusted code.
+
+**Recommendation.** Option 1, with fuzz tests (F1).
 
 **Recommendation.** A1.2 for OpenTofu and Terragrunt. A1.3 for the Pulumi
-CLI from 3.226.0, because the file is JSON and needs no listener. A1.4 for
+CLI from 3.226.0, because the file is JSON and needs no listener. Both come
+after the first slice (G). A1.4 for
 a tool or a version with no OTLP (see "When the tool has no OTLP" below).
+
+**The relay has no authentication.** The step is the only process that
+can reach it, and a request with a token would put the token in a
+variable of the step. This is acceptable for four reasons:
+
+- The relay binds the literal address `127.0.0.1:0` (never `localhost`
+  and never `0.0.0.0`), and it listens only while the tool step runs.
+- On the machine coordinator, each sandbox has its own network namespace
+  (ADR 137 decision 6), so loopback reaches only that sandbox.
+- A process that can reach the relay runs next to the tool, with the same
+  trust as the step. All it can do is send spans, which pass the checks of
+  section F, and which the job could send anyway.
+- Where the check can be made, the relay compares the user ID of the peer
+  with its own (`SO_PEERCRED` on Linux) and drops other users. This is a
+  further layer, and it does not replace the others.
+
+**The Kubernetes case.** In a pod, a sidecar container shares the network
+namespace of the pod. A sidecar (for example a service mesh proxy, or an
+agent) can then reach the relay, and so can any other container of the
+pod. The peer user check works only when the containers share the user ID
+space, so it does not stop a sidecar. The accepted risk is the same:
+a sidecar can send spans, and the checks of section F apply. The pool
+documentation says this. An operator who cannot accept it uses A1.4 for
+that pool, or A1.3 (the file) for the Pulumi CLI.
 
 **A2. The trace context.** The launcher sets `TRACEPARENT` for the tool
 step from the span of the step: version `00`, the trace ID of the job, the
@@ -308,6 +432,20 @@ section F dropped some), so a missing part of the trace is visible.
    sweep).
 4. Store and blob calls. Not in v1: they add many spans and few answers.
 
+**Several instances, and a crash.** The job record holds the trace ID,
+the times of each transition, and nothing else. Any instance can build a
+span from it. The instance that makes a transition exports the span of
+that transition (a phase, a wait) at that time. The instance that ends the
+job exports the root span, with the start time from the record. So
+delivery is **at most once**: an instance that crashes before it exports
+loses the spans in its queue, and the spans are not rebuilt later. Until
+the root span ends, the child spans in the collector have a parent that the
+collector has not seen. A trace viewer shows them as orphans, which is
+right for a job that is still running. A job whose last instance crashes
+never gets a root span. This is accepted for v1: the collector is
+observability, not a record, and the job record holds the truth. A later
+design can add an outbox table if the owner wants at-least-once delivery.
+
 **Incoming `traceparent` on an API request.** A client of the API can send
 `traceparent`. The options:
 
@@ -319,18 +457,20 @@ section F dropped some), so a missing part of the trace is visible.
   authenticates with the job token of a live job, and the trace ID is the
   trace ID of that job.
 
-OpenTofu (through `otelhttp`) and the Pulumi CLI (from 3.268.0) send
-`traceparent` on their API calls when tracing is on, so with A2 the state
-reads and writes of a job carry the trace of the job. Recommendation: (d).
-A client cannot then put server spans into a trace of its choice, because
-the server checks the trace ID against the job of the credential. Every
-other request gets the link of (c).
+Only the Pulumi CLI (from 3.268.0, with `--otel-traces`) sends
+`traceparent` on its API calls. OpenTofu sends none to a state backend
+(see the facts), so (d) helps the Pulumi CLI only. For OpenTofu, the state
+writes of a job join the job trace through the phase span: the server sets
+the parent of the state-write span from the job of the job token, not from
+a header. Recommendation: (d). A client cannot then put server spans into
+a trace of its choice, because the server checks the trace ID against the
+job of the credential. Every other request gets the link of (c).
 
 **The code (CLAUDE.md: ask before a dependency).**
 
 | Option | What it adds | License | Cost |
 | --- | --- | --- | --- |
-| B1. OpenTelemetry Go SDK | `otel`, `otel/sdk`, `otel/trace`, `otel/metric`, `otlptrace`, `otlptracehttp`, `proto/otlp`, plus gRPC, protobuf, `grpc-gateway`, `genproto` and `backoff` | Apache-2.0 for the OTel modules. The others, as their license files give them: gRPC and `genproto` Apache-2.0, protobuf and `grpc-gateway` BSD-3-Clause, `backoff` MIT. To check with `make licenses`. | The module set grows from 7 direct dependencies, and gRPC is linked even for the HTTP exporter. The growth of the binary is not measured (question 2). Every module in the set is under the age gate of `make lint`, the license check and `govulncheck`. |
+| B1. OpenTelemetry Go SDK | `otel`, `otel/sdk`, `otel/trace`, `otel/metric`, `otlptrace`, `otlptracehttp` (from 1.46.0 it has the JSON encoding, and it still links gRPC through `internal/otlpconfig`), `proto/otlp`, plus gRPC, protobuf, `grpc-gateway`, `genproto` and `backoff` | Apache-2.0 for the OTel modules. The others, as their license files give them: gRPC and `genproto` Apache-2.0, protobuf and `grpc-gateway` BSD-3-Clause, `backoff` MIT. To check with `make licenses`. | The module set grows from 7 direct dependencies, and gRPC is linked even for the HTTP exporter. The growth of the binary is not measured (question 2). Every module in the set is under the age gate of `make lint`, the license check and `govulncheck`. |
 | B2. A small exporter of our own: OTLP/HTTP with the JSON encoding, the standard library only | one internal package, likely below 1,000 lines: a span type, a bounded batch queue, the JSON encoding, the HTTP client with TLS | ours | We own the encoding. The precedent is the `otlp` sink of ADR 60 decision 12, which can share the HTTP client and the TLS settings. |
 | B3. None. Export only through the collector, which scrapes `/metrics` | nothing | none | No traces at all. Metrics only. |
 
@@ -376,7 +516,7 @@ because a collection label has no bound.
 
 | Metric | Definition from data we hold | What we lack |
 | --- | --- | --- |
-| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89), or the commit time from the source snapshot. A commit time is set by the author, so it is untrusted and can be wrong. |
+| Lead time from merge to apply | the end of the apply phase that wrote a final state version, minus the time of the merge of its commit | the merge time. A job holds the commit, not the merge. Options: the push event of the Git host (RFC 89, a draft pull request), or the commit time from the source snapshot. A commit time is set by the author, so it is untrusted and can be wrong. |
 | Change failure rate | apply jobs that a person linked to an incident as `cause` (ADR 147 decision 12), divided by all succeeded apply jobs | links only exist where people make them. Option: also count an apply that failed after it wrote state. |
 | Time to restore | for an incident linked to a unit of the collection: resolved time minus detection time (ADR 147 decision 1) | nothing for incidents. Option: also the time from a failed apply to the next succeeded apply of the same unit, with no incident. |
 | Deployment frequency | succeeded apply jobs, and state writes with no job | nothing |
@@ -387,7 +527,8 @@ values that the shim sends.
 
 **Recommendation.** Incident-based definitions only, with the fallbacks as
 separate, named values. The merge time from the push event of the Git
-host when RFC 89 lands. Until then, no lead time (question 7).
+host, when a push event is recorded. Until then, no lead time (question 7).
+RFC 46 owns how these values look.
 
 ### E. Export to the operator's collector
 
@@ -404,6 +545,18 @@ host when RFC 89 lands. Until then, no lead time (question 7).
   collector is often on a private network).
 - **Auth:** a header (for example `Authorization: Bearer ...`) from an
   environment variable or a file only (ADR 60 decision 15).
+- **The endpoint and its header are one unit.** If the API could change
+  the endpoint and keep the static header, an administrator with
+  `installation:manage-settings` could set the endpoint to a host they
+  control, and the server would send the static header (a token for the
+  real collector) to that host. So: **when a static header is set, the
+  endpoint is also static-only**, and a `PATCH` of it answers 409. When no
+  header is set, the endpoint may change by the API. As a second layer, the
+  server code never attaches a static header to an endpoint that came from
+  the database, whatever the order of the layers. Test: a `PATCH` of the
+  endpoint with a static header set answers 409 and changes nothing, and a
+  unit test of the exporter builder gives no header for an endpoint from
+  the database even if the header value is set.
 - **Configuration.** Start flags (`--trace-export-endpoint`,
   `--trace-export-ca-file`, `--trace-export-header-file`,
   `--trace-export-sample-ratio`) and their environment variables are the
@@ -434,7 +587,15 @@ sends hostile input to that layer with the other layers skipped.
 
 1. **Check at the boundary.**
    - The relay, the file reader and the server accept only OTLP, with a
-     limit of 1 MiB for each request or file part.
+     limit of 1 MiB for each request or file part. This limit is on the
+     **decompressed** bytes, counted while the data is read, not from a
+     header. The relay accepts the content encodings `identity` and `gzip`
+     only, and answers 415 to others. The server route does the same.
+   - The protobuf reader checks the depth of nesting (at most 8 levels),
+     the count of repeated fields (at most 1,024 spans for each request,
+     and the 32 attributes for each span) and each length against the
+     bytes that remain, **before** it allocates. A field that is not in the
+     trace messages is skipped by its length, never stored.
    - The trace ID must be the trace ID of the job. The parent span must be
      in the trace of the job.
    - A span name must be on the allowlist of the tool. Else the span gets
@@ -443,7 +604,9 @@ sends hostile input to that layer with the other layers skipped.
      type and a limit of 256 bytes. The check drops all other attributes
      and all span events.
    - Our own OTel resource replaces the resource of the tool.
-   - Test: one test for each rule, and a fuzz test of the reader.
+   - Test: one test for each rule, and a fuzz test of the whole path:
+     decompress, then parse, then check. The fuzz test includes a gzip
+     bomb, a deep nest and a huge repeated count.
 2. **Encode or contain at use.**
    - The exporter writes JSON with an encoder, never by string
      concatenation.
@@ -453,12 +616,15 @@ sends hostile input to that layer with the other layers skipped.
 3. **Limit the effect.**
    - At most 10,000 spans for each job, 2,000 for each step and 32
      attributes for each span.
+   - A total budget of 32 MiB of span bytes for each job, and a rate limit
+     of 50 requests for each second for each relay (and 200 for each
+     second for each job on the server). Over a limit: drop and count.
    - The export queue has a bound. When it is full, it drops the oldest
      batch.
    - An export request has a timeout of 10 seconds.
    - The relay listens on loopback only, and only while the tool step runs.
-   - Test: a job at each limit plus one, and a relay request after the step
-     ends.
+   - Test: a job at each limit plus one, a job over the byte budget and
+     the rate limit, and a relay request after the step ends.
 4. **Authorize at use.**
    - The span upload route checks that the job session is live, and that
      the phase and the step belong to the claim. It is the same check as
@@ -483,14 +649,28 @@ known to either mask, so the allowlist is the layer that stops it. The
 allowlist never holds a key whose value is a resource attribute.
 
 **Telemetry never fails a job.** A failure of the relay, the upload or the
-export is logged and counted, and the job goes on. This is fail open for
+export is logged and counted, and the job goes on. A tool that gets an
+endpoint that is not reachable must not exit with an error (see A1, "Telemetry
+never fails the job"), and the e2e step of the first slice proves it. This is fail open for
 the job and fail closed for the data: a span that cannot be checked is
 dropped, not sent. The audit log gets no entry for each dropped span,
 because one bad job could flood it. The counter and the phase attribute
 hold the drops.
 
 **Cardinality caps.** Section C: no unit, namespace, user or token label.
-A new label value outside the fixed lists goes to `other`.
+A new label value outside the fixed lists goes to `other`. ADR 32 has no
+`other` bucket today, so this rule is new, and an ADR that accepts this RFC
+adds it to ADR 32.
+
+**The number of families.** ADR 32 decision 2 says that a new ADR can
+change the format when the set grows past about 15 families. `main` already
+has about 25. Section C adds five (`dustpan_job_phase_duration_seconds`,
+`dustpan_job_wait_seconds`, `dustpan_jobs_total`,
+`dustpan_lock_conflicts_total` and `dustpan_trace_spans_dropped_total`).
+So the count passes the line of ADR 32 for a second time, and the ADR that
+accepts this RFC says that the hand-written text format stays for the
+count of about 30 (or moves to a library: another dependency question,
+which this RFC does not ask).
 
 ### G. The first slice
 
@@ -515,12 +695,16 @@ after.
    span for each request, with the route pattern, the adapter and the
    status. It checks that no canary value of ADR 32 decision 7 (a token, a
    state value, a path) is in any span. It then stops the receiver and runs
-   `tofu plan` again: the plan succeeds and the drop counter goes up. An
-   endpoint of `http://` on a host that is not loopback refuses to start
-   without `insecure`.
+   `tofu plan` again: the plan succeeds and the drop counter goes up. It
+   also starts the server with an endpoint that nobody listens on, and runs
+   `tofu plan`, `tofu apply` and `pulumi up`: all succeed. An endpoint of
+   `http://` on a host that is not loopback refuses to start without
+   `insecure`. When the relay comes (A1.2), the same step runs with a relay
+   that has stopped and with a bad `OTEL_EXPORTER_OTLP_ENDPOINT`, and plan
+   and apply still succeed.
 
 Later: job traces from the job record (section A, and item 2 of "What the
-server traces"), the launcher relay with its runner protocol version
+server traces"), the launcher relay with its new path in `/runner/v1`
 (A1.2), the Pulumi file (A1.3), the CI shim trace ID (A4.1), the fleet
 metrics of C, and the change-delivery metrics of D.
 
@@ -532,16 +716,19 @@ The owner keeps these. Each recommendation is the author's.
    Recommendation: yes, traces only, export off by default.
 2. The code: B1 (OpenTelemetry Go SDK), B2 (our own OTLP/HTTP JSON
    exporter) or B3 (none)? A measure of the binary size with B1 is the
-   first step if the owner considers B1. Recommendation: B2, the same choice as the
-   `otlp` sink of ADR 60.
+   first step if the owner considers B1. Recommendation: B2, and so
+   supersede ADR 32 decision 1, with a stdlib exporter as in ADR 60
+   decision 12.
 3. Spans of the tool: through the launcher relay (A1.2) and the Pulumi
-   file (A1.3), with a new runner protocol version and a span upload route,
-   or not at all in v1? OpenTofu sends protobuf. If `http/json` does not
-   work with its `autoexport`, the relay must read protobuf: a small reader
-   of our own for the trace messages only, or `google.golang.org/protobuf`
-   in the runner module (ADR 139). Recommendation: the relay after slice
-   1, and a check of `http/json` against the pinned OpenTofu in e2e
-   first.
+   file (A1.3), with a new span upload path in `/runner/v1` (no new
+   protocol version), or not at all in v1? OpenTofu sends protobuf only
+   (`http/json` does not work with its `autoexport`), so the relay must
+   read protobuf: a small reader of our own for the trace messages, or
+   `google.golang.org/protobuf` in the launcher, which amends ADR 134.
+   Recommendation: tool spans never go from the job straight to the
+   collector. The Pulumi CLI uses the file (A1.3). OpenTofu and Terragrunt
+   use the relay (A1.2) with a protobuf reader of our own and fuzz tests.
+   Both come after slice 1.
 4. The Pulumi CLI has `--otel-traces` only from 3.226.0 (March 2026). Which
    is the oldest Pulumi CLI version that gets tool spans, and does an older
    one get step spans only, or a conversion of its `--tracing file:`
@@ -556,13 +743,16 @@ The owner keeps these. Each recommendation is the author's.
    wants. Recommendation: IDs by default, names behind a setting.
 7. Lead time: the merge time from the push event of the Git host only, or
    also the commit time as a fallback? Recommendation: the push event only.
+   No lead time is shown until a push event is recorded (RFC 89 is a draft
+   pull request while this RFC is a draft).
 8. Trace export for each namespace (a tenant of a hosted installation sends
    its own job traces to its own collector)? Recommendation: not in v1. The
    installation target only.
 9. An incoming `traceparent` on an API request: ignored (a), a parent (b),
    a link (c), or a parent only for the job token of the same job (d)?
-   Recommendation: (d). Whether OpenTofu sends `traceparent` to a remote
-   backend through `otelhttp` is likely, but not checked.
+   Recommendation: (d). OpenTofu sends no `traceparent` to a state backend,
+   so (d) helps the Pulumi CLI from 3.268.0 only. The server sets the
+   parent of the state-write span of an OpenTofu job from its job token.
 10. Sampling: a ratio by trace ID, or always on for failed jobs too (tail
     sampling)? Recommendation: a ratio only. Tail sampling belongs to the
     collector.
