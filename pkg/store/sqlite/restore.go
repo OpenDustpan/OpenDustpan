@@ -323,7 +323,8 @@ func attachLiveDatabase(ctx context.Context, conn *sql.DB, live string) error {
 }
 
 // applyStagedFence fences the staged namespaces, writes the bookkeeping row,
-// resets the runtime rows and copies the control tables, in one transaction.
+// resets the runtime rows, copies the control tables and applies the journaled
+// revocations again, in one transaction.
 func applyStagedFence(ctx context.Context, conn *sql.DB, keep bookkeeping) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -345,6 +346,13 @@ func applyStagedFence(ctx context.Context, conn *sql.DB, keep bookkeeping) error
 	}
 
 	if err := copyControlTables(ctx, tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+
+	// The staged access tables come from the backup. Apply again the
+	// revocations that ran in this stay in maintenance mode, so the swap does not
+	// bring back a session or a token that an operator ended.
+	if err := replayRevocations(ctx, tx); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 
@@ -472,6 +480,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.runner_handoff_tokens`,
 	`DELETE FROM main.runner_sessions`,
 	`DELETE FROM main.runner_nonces`,
+	`DELETE FROM main.maintenance_revocations`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
@@ -497,6 +506,8 @@ var keepControlStatements = []string{
 		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions`,
 	`INSERT INTO main.runner_nonces (` + runnerNonceColumns + `) ` +
 		`SELECT ` + runnerNonceColumns + ` FROM live.runner_nonces`,
+	`INSERT INTO main.maintenance_revocations (` + revocationColumns + `) ` +
+		`SELECT ` + revocationColumns + ` FROM live.maintenance_revocations`,
 }
 
 // The columns of the control tables of the runner protocol, for the copy of
@@ -508,6 +519,10 @@ const (
 	runnerSessionColumns = `id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms`
 	runnerNonceColumns   = `subject, nonce, expires_at_ms`
 )
+
+// revocationColumns lists every column of maintenance_revocations, for the
+// copy of the control tables.
+const revocationColumns = `id, kind, target, end_reason, actor, object, at_ms`
 
 // signInFailureColumns lists every column of sign_in_failures, for the copy
 // of the control tables.

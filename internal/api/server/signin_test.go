@@ -554,6 +554,42 @@ func TestSignInSessionRequests(t *testing.T) {
 	}
 }
 
+// TestSignOutRunsInMaintenanceMode proves that a sign-out answers 204 while the
+// installation is in maintenance mode, through the route, the service and the
+// store, and that the session is over afterwards.
+func TestSignOutRunsInMaintenanceMode(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	sess := e.signIn(t)
+
+	_, body := e.readSession(t, sess)
+
+	if err := e.store.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/sign-out", http.NoBody)
+	req.AddCookie(sess)
+	req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
+	req.Header.Set("Origin", consoleOrigin)
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("sign-out in maintenance mode = %d %s, want 204", rec.Code, rec.Body.String())
+	}
+
+	if err := e.store.SetState(t.Context(), maintenance.StateNormal); err != nil {
+		t.Fatalf("leave maintenance mode: %v", err)
+	}
+
+	if code, _ := e.readSession(t, sess); code != http.StatusUnauthorized {
+		t.Fatalf("session after the sign-out in maintenance mode = %d, want 401", code)
+	}
+}
+
 func TestSignInHeaderWinsOverCookie(t *testing.T) {
 	t.Parallel()
 

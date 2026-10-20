@@ -2,9 +2,8 @@ package maintenance_test
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
-	"strings"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -145,33 +144,35 @@ func (r *realStack) wantState(t *testing.T, label string, want maintenance.State
 
 // TestForceEnterWithRacedStartOnTheRealStore proves, with the checked writes
 // of a real store, that a forced enter whose write raced an update start
-// does not fail on a refused cancel: it moves back to normal, names the
-// update, and the next forced enter cancels it before the write.
+// does not fail on a refused cancel: the attempt moves back to normal, the
+// next attempt cancels the new update before the write, and the answer names
+// both updates.
 func TestForceEnterWithRacedStartOnTheRealStore(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
 	rs := newRealStack(t)
-	state := &racingState{Store: rs.st, beforeSetIf: func() { rs.startUpdate(t, "staging") }}
+	raced := false
+	state := &racingState{Store: rs.st, beforeSetIf: func() {
+		if !raced {
+			raced = true
+
+			rs.startUpdate(t, "staging")
+		}
+	}}
 	service := rs.service(t, state)
 
 	rs.startUpdate(t, "prod")
 
-	_, err := service.Enter(ctx, true)
-	if !errors.Is(err, maintenance.ErrActiveWork) || !strings.Contains(err.Error(), "pulumi:acme/web/staging") {
-		t.Fatalf("force enter with a raced start: err = %v, want ErrActiveWork naming pulumi:acme/web/staging", err)
-	}
-
-	rs.wantState(t, "after the refused enter", maintenance.StateNormal)
-
 	res, err := service.Enter(ctx, true)
 	if err != nil {
-		t.Fatalf("second force enter: %v", err)
+		t.Fatalf("force enter with a raced start: %v", err)
 	}
 
-	if len(res.Canceled) != 1 || res.Canceled[0] != "pulumi:acme/web/staging" {
-		t.Fatalf("second force enter canceled = %v, want [pulumi:acme/web/staging]", res.Canceled)
+	want := []string{"pulumi:acme/web/prod", "pulumi:acme/web/staging"}
+	if !slices.Equal(res.Canceled, want) {
+		t.Fatalf("force enter canceled = %v, want %v", res.Canceled, want)
 	}
 
-	rs.wantState(t, "after the second enter", maintenance.StateMaintenance)
+	rs.wantState(t, "after the enter", maintenance.StateMaintenance)
 }

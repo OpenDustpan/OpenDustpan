@@ -63,7 +63,8 @@ var errNoPrincipalStore = errors.New("the store of this server keeps no principa
 // is local, ldap or scim (ADR 55). GroupCount is the count of its current
 // memberships: its groups come from their own paged route. A null
 // disabledAt means that the inactivity disable did not end the principal
-// (ADR 53); POST /api/server/principals/{id}/enable clears it.
+// (ADR 53); POST /api/server/principals/{id}/disable sets it and POST
+// /api/server/principals/{id}/enable clears it.
 // TemporaryAdministrator is true for a temporary administrator that still
 // works, with its fixed expiry in TemporaryExpiresAt, so the console shows
 // a banner for it. Both stay empty for every other principal.
@@ -462,6 +463,14 @@ func (h *Handler) principalRoutes() []Route {
 			Resolve: resolveServer, ActionsFor: nil,
 			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, enablePrincipal),
 		},
+		{
+			Method:  http.MethodPost,
+			Path:    principalPath + "/disable",
+			Scope:   ScopeAuthorized,
+			Actions: manage,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, disablePrincipal),
+		},
 	}
 }
 
@@ -734,6 +743,29 @@ func enablePrincipal(
 	return ok(http.StatusOK, principalOf(p), object), nil
 }
 
+// disablePrincipal serves POST /api/server/principals/{id}/disable: it
+// disables a principal and answers 200 with the principal. The write only
+// narrows access, so it works in maintenance mode. The caller must hold every
+// action that the grants of the principal give. A principal that is disabled
+// answers 409.
+func disablePrincipal(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
+) (principalResult, error) {
+	id := r.PathValue("id")
+	object := principal.Ref(id)
+
+	if err := svc.DisablePrincipal(r.Context(), e, caller, id); err != nil {
+		return failed(object), err
+	}
+
+	p, err := svc.GetPrincipal(r.Context(), id)
+	if err != nil {
+		return failed(object), err
+	}
+
+	return ok(http.StatusOK, principalOf(p), object), nil
+}
+
 // listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one
 // page, ordered by name.
 func listGroupsOfPrincipal(
@@ -941,7 +973,7 @@ func classifyPrincipal(err error) (int, string, bool) {
 	case errors.Is(err, errBodyTooLarge):
 		return http.StatusRequestEntityTooLarge, err.Error(), true
 	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory),
-		errors.Is(err, principal.ErrNotDisabled):
+		errors.Is(err, principal.ErrNotDisabled), errors.Is(err, principal.ErrDisabled):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, principal.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true

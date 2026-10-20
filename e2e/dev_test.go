@@ -38,6 +38,9 @@ const (
 	devProject   = "demo"
 	// devCommandTimeout bounds one CLI command.
 	devCommandTimeout = 2 * time.Minute
+	// devBannerEnd is the text of the last line of the banner of dev. It has no
+	// line end, because the pseudo terminal writes CR LF.
+	devBannerEnd = "For production, run: opendustpan serve --help"
 )
 
 // devPulumiProject is a project with no resource and one output, so up needs
@@ -86,13 +89,25 @@ var (
 type ptyBuffer struct {
 	buf bytes.Buffer
 	mu  sync.Mutex
+	// changed is closed at each write, so that a waiter wakes when the output
+	// grows and does not poll.
+	changed chan struct{}
+}
+
+func newPtyBuffer() *ptyBuffer {
+	return &ptyBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}, changed: make(chan struct{})}
 }
 
 func (b *ptyBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.buf.Write(p) //nolint:wrapcheck // A transparent wrapper: callers see the original error.
+	n, err := b.buf.Write(p)
+
+	close(b.changed)
+	b.changed = make(chan struct{})
+
+	return n, err //nolint:wrapcheck // A transparent wrapper: callers see the original error.
 }
 
 func (b *ptyBuffer) String() string {
@@ -100,6 +115,26 @@ func (b *ptyBuffer) String() string {
 	defer b.mu.Unlock()
 
 	return b.buf.String()
+}
+
+// waitFor waits until the output holds want, or until ctx ends. It answers the
+// output and whether it holds want.
+func (b *ptyBuffer) waitFor(ctx context.Context, want string) (string, bool) {
+	for {
+		b.mu.Lock()
+		text, changed := b.buf.String(), b.changed
+		b.mu.Unlock()
+
+		if strings.Contains(text, want) {
+			return text, true
+		}
+
+		select {
+		case <-ctx.Done():
+			return text, false
+		case <-changed:
+		}
+	}
 }
 
 // devAddrFile is the content of dev.addr.
@@ -141,7 +176,7 @@ func startDevServer(t *testing.T, bin, dir string, env []string, args ...string)
 		words = append(words, shellQuote(arg))
 	}
 
-	out := &ptyBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
+	out := newPtyBuffer()
 
 	//nolint:gosec // The test runs the binary that it built, with arguments that it chose.
 	cmd := exec.CommandContext(
@@ -619,10 +654,7 @@ func devEphemeral(t *testing.T, bin string) {
 		t.Fatalf("the temporary directory holds %v, %v, want one directory\n%s", entries, err, cmd.out.String())
 	}
 
-	banner := cmd.waitBanner(t, "dev deletes this directory at stop")
-	if !strings.Contains(banner, "dev deletes this directory at stop") {
-		t.Fatalf("the banner does not say that a stop deletes the data:\n%s", banner)
-	}
+	cmd.waitBanner(t, "dev deletes this directory at stop")
 
 	if stopErr := cmd.stop(t); stopErr != nil {
 		t.Fatalf("dev did not stop clean: %v\n%s", stopErr, cmd.out.String())
@@ -640,7 +672,7 @@ func startEphemeral(t *testing.T, bin, tmp string) *devServer {
 	t.Helper()
 
 	words := strings.Join([]string{shellQuote(bin), "dev", "--ephemeral", "--listen", "127.0.0.1:0"}, " ")
-	out := &ptyBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
+	out := newPtyBuffer()
 
 	//nolint:gosec // The test runs the binary that it built.
 	cmd := exec.CommandContext(context.WithoutCancel(t.Context()), "script", "-qefc", words, "/dev/null")
@@ -808,17 +840,17 @@ func serveMadeDatabase(t *testing.T, bin string) string {
 	)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "DUSTPAN_ADMIN_TOKEN=" + serveToken}
 
-	var out ptyBuffer
+	out := newPtyBuffer()
 
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	cmd.Stdout = out
+	cmd.Stderr = out
 	cmd.WaitDelay = devStopLimit
 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start serve: %v", err)
 	}
 
-	waitReady(t, "http://"+addr, &out)
+	waitReady(t, "http://"+addr, out)
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("stop serve: %v", err)
@@ -881,25 +913,25 @@ func waitReady(t *testing.T, base string, out *ptyBuffer) {
 	t.Fatalf("the server at %s was not ready:\n%s", base, out.String())
 }
 
-// waitBanner waits until the output of dev holds want. The pseudo terminal
-// copies the output on its own goroutine, so the output can lag behind the
-// address file that the test waits for first.
+// waitBanner waits until the whole banner of dev is in the output, and fails
+// the test when the banner does not hold want. The banner is one write of dev,
+// but the pseudo terminal copies it on its own goroutine, so a read can see a
+// part of it, or none of it, even after dev.addr exists. The last line of the
+// banner shows that all of it came. The wait ends at devReadyLimit.
 func (d *devServer) waitBanner(t *testing.T, want string) string {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), devReadyLimit)
 	defer cancel()
 
-	tick := time.NewTicker(20 * time.Millisecond)
-	defer tick.Stop()
-
-	for !strings.Contains(d.out.String(), want) {
-		select {
-		case <-ctx.Done():
-			return d.out.String()
-		case <-tick.C:
-		}
+	banner, complete := d.out.waitFor(ctx, devBannerEnd)
+	if !complete {
+		t.Fatalf("dev did not write the whole banner in %s:\n%s", devReadyLimit, banner)
 	}
 
-	return d.out.String()
+	if !strings.Contains(banner, want) {
+		t.Fatalf("the banner lacks %q:\n%s", want, banner)
+	}
+
+	return banner
 }

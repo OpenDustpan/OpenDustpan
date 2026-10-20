@@ -243,6 +243,21 @@ func newServiceBackedHandler(
 ) *apiserver.Handler {
 	t.Helper()
 
+	handler, _ := newServiceBackedHandlerOf(t, authn, authz, seeds...)
+
+	return handler
+}
+
+// newServiceBackedHandlerOf is newServiceBackedHandler that also returns the
+// store under the handler, so a test can change the installation state.
+func newServiceBackedHandlerOf(
+	t *testing.T,
+	authn identity.Authenticator,
+	authz identity.Authorizer,
+	seeds ...backup.Record,
+) (*apiserver.Handler, *sqlite.Store) {
+	t.Helper()
+
 	st := openRouteTestStore(t)
 	live := openRouteTestBlobs(t)
 	target := openRouteTestBlobs(t)
@@ -330,7 +345,7 @@ func newServiceBackedHandler(
 		t.Fatalf("handler: %v", err)
 	}
 
-	return handler
+	return handler, st
 }
 
 // Principal, group and token IDs that the handler builders seed, so the
@@ -347,11 +362,14 @@ const (
 	testCallerID         = "prn-routes0000000000003"
 	// testNamespacePrincipalID is a service principal of testNamespace.
 	testNamespacePrincipalID = "prn-routes0000000000004"
-	testGroupID              = "grp-routes0000000000001"
-	testTokenID              = "tok-routes0000000000001"
-	testServiceTokenID       = "tok-routes0000000000002"
-	testOwnTokenID           = "tok-routes0000000000003"
-	testRoleID               = "rol-routes0000000000001"
+	// testDisablePrincipalID is a service principal that the disable route
+	// disables. The sweep of the seed keeps it: only persons are inactive.
+	testDisablePrincipalID = "prn-routes0000000000005"
+	testGroupID            = "grp-routes0000000000001"
+	testTokenID            = "tok-routes0000000000001"
+	testServiceTokenID     = "tok-routes0000000000002"
+	testOwnTokenID         = "tok-routes0000000000003"
+	testRoleID             = "rol-routes0000000000001"
 )
 
 // allowAll allows every action, so the token service passes its own check
@@ -607,6 +625,18 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 			ID:          testOtherPrincipalID,
 			Subject:     "ci-deploy",
 			DisplayName: "CI deploy",
+			Kind:        principal.KindService,
+			Source:      principal.SourceLocal,
+			Namespace:   "",
+			GroupCount:  0, BreakGlass: false,
+		},
+		{
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			DisabledAt:  time.Time{},
+			ID:          testDisablePrincipalID,
+			Subject:     "ci-disable",
+			DisplayName: "CI disable",
 			Kind:        principal.KindService,
 			Source:      principal.SourceLocal,
 			Namespace:   "",
@@ -1023,6 +1053,10 @@ type routeOwner struct {
 func routePrincipalIDs(path string) routeOwner {
 	if strings.HasPrefix(path, "/api/server/namespaces/{namespace}/principals") {
 		return routeOwner{principal: testPrincipalID, id: testNamespacePrincipalID, ofOne: true}
+	}
+
+	if path == "/api/server/principals/{id}/disable" {
+		return routeOwner{principal: testPrincipalID, id: testDisablePrincipalID, ofOne: true}
 	}
 
 	if !strings.HasPrefix(path, "/api/server/principals/{principal}/") {

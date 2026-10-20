@@ -19,10 +19,11 @@ type memProviderConfigs struct {
 	providers map[string]session.ProviderConfig
 	entries   []audit.Entry
 	inUse     []string
+	disables  int
 }
 
 func newMemProviderConfigs() *memProviderConfigs {
-	return &memProviderConfigs{providers: map[string]session.ProviderConfig{}, entries: nil, inUse: nil}
+	return &memProviderConfigs{providers: map[string]session.ProviderConfig{}, entries: nil, inUse: nil, disables: 0}
 }
 
 func (m *memProviderConfigs) CreateProviderConfig(_ context.Context, p session.ProviderConfig, e audit.Entry) error {
@@ -73,6 +74,26 @@ func (m *memProviderConfigs) UpdateProviderConfig(_ context.Context, p session.P
 	p.CreatedAt = old.CreatedAt
 	m.providers[p.ID] = p
 	m.entries = append(m.entries, e)
+
+	return nil
+}
+
+func (m *memProviderConfigs) DisableProviderConfig(
+	_ context.Context, id string, version int64, updatedAt time.Time, e audit.Entry,
+) error {
+	old, ok := m.providers[id]
+
+	switch {
+	case !ok:
+		return session.ErrProviderNotFound
+	case old.Version != version:
+		return session.ErrProviderChanged
+	}
+
+	old.Enabled, old.UpdatedAt, old.Version = false, updatedAt, version+1
+	m.providers[id] = old
+	m.entries = append(m.entries, e)
+	m.disables++
 
 	return nil
 }
@@ -414,5 +435,80 @@ func TestProviderAdminCreateWithNoKeyBindsNothing(t *testing.T) {
 
 	if _, err := store.GetProviderConfig(t.Context(), "corp"); !errors.Is(err, session.ErrProviderNotFound) {
 		t.Fatalf("get after a failed create = %v, want ErrProviderNotFound", err)
+	}
+}
+
+// TestProviderAdminDisableOnlyTakesTheNarrowingWrite proves which store write
+// a change takes: only a change that disables and changes nothing else takes
+// the write that works in maintenance mode. A change that also sets another
+// field, a new secret or the enabled flag to true takes the general write.
+func TestProviderAdminDisableOnlyTakesTheNarrowingWrite(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	f := newAdminFixture(t)
+
+	if _, err := f.admin.Create(ctx, sessionCallerEntry(), corpInput()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	off, on, name, secret := false, true, "Corp SSO", "new-secret"
+
+	cases := []struct {
+		change       session.ProviderChange
+		name         string
+		wantNarrowed bool
+	}{
+		{
+			name: "disable only",
+			change: session.ProviderChange{
+				Mode: nil, Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil,
+				OAuth: noOAuthChange(), AutoCreate: nil, Enabled: &off, Version: 0,
+			},
+			wantNarrowed: true,
+		},
+		{
+			name: "disable and rename",
+			change: session.ProviderChange{
+				Mode: nil, Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: nil, Scopes: nil,
+				OAuth: noOAuthChange(), AutoCreate: nil, Enabled: &off, Version: 0,
+			},
+			wantNarrowed: false,
+		},
+		{
+			name: "disable and a new secret",
+			change: session.ProviderChange{
+				Mode: nil, Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: &secret, Scopes: nil,
+				OAuth: noOAuthChange(), AutoCreate: nil, Enabled: &off, Version: 0,
+			},
+			wantNarrowed: false,
+		},
+		{
+			name: "enable",
+			change: session.ProviderChange{
+				Mode: nil, Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil,
+				OAuth: noOAuthChange(), AutoCreate: nil, Enabled: &on, Version: 0,
+			},
+			wantNarrowed: false,
+		},
+	}
+
+	for _, tc := range cases {
+		before := f.store.disables
+
+		stored, err := f.admin.Get(ctx, "corp")
+		if err != nil {
+			t.Fatalf("%s: get: %v", tc.name, err)
+		}
+
+		tc.change.Version = stored.Version
+
+		if _, err := f.admin.Update(ctx, sessionCallerEntry(), "corp", tc.change); err != nil {
+			t.Fatalf("%s: update: %v", tc.name, err)
+		}
+
+		if got := f.store.disables - before; (got == 1) != tc.wantNarrowed {
+			t.Fatalf("%s: narrowing writes = %d, want narrowed = %v", tc.name, got, tc.wantNarrowed)
+		}
 	}
 }
