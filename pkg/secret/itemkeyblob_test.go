@@ -805,15 +805,8 @@ func TestAuditOutOfScopeRefusesAWrongChannelOrPlace(t *testing.T) {
 	}
 
 	for _, where := range []secret.OutOfScopeWhere{"", "elsewhere", "namespace\nforged"} {
-		if recErr := rec.RecordOutOfScope(
-			t.Context(),
-			nsA,
-			"get",
-			where,
-		); !errors.Is(
-			recErr,
-			secret.ErrInvalidItemRef,
-		) {
+		recErr := rec.RecordOutOfScope(t.Context(), nsA, "get", where)
+		if !errors.Is(recErr, secret.ErrInvalidItemRef) {
 			t.Errorf("place %q: err = %v, want ErrInvalidItemRef", where, recErr)
 		}
 	}
@@ -859,15 +852,8 @@ func TestAuditOutOfScopeRefusesHostileInput(t *testing.T) {
 		t.Errorf("hostile op err = %v, want ErrInvalidItemRef", opErr)
 	}
 
-	if recErr := rec.RecordOutOfScope(
-		t.Context(),
-		"ns-A\nx",
-		"get",
-		secret.OutsideNamespace,
-	); !errors.Is(
-		recErr,
-		namespace.ErrInvalidID,
-	) {
+	recErr := rec.RecordOutOfScope(t.Context(), "ns-A\nx", "get", secret.OutsideNamespace)
+	if !errors.Is(recErr, namespace.ErrInvalidID) {
 		t.Errorf("hostile namespace err = %v, want ErrInvalidID", recErr)
 	}
 
@@ -877,26 +863,13 @@ func TestAuditOutOfScopeRefusesHostileInput(t *testing.T) {
 
 	store.err = errAppendFailed
 
-	if recErr := rec.RecordOutOfScope(
-		t.Context(),
-		nsA,
-		"get",
-		secret.OutsideNamespace,
-	); !errors.Is(
-		recErr,
-		errAppendFailed,
-	) {
+	recErr = rec.RecordOutOfScope(t.Context(), nsA, "get", secret.OutsideNamespace)
+	if !errors.Is(recErr, errAppendFailed) {
 		t.Errorf("append failure err = %v, want the store error", recErr)
 	}
 
-	if _, newErr := secret.NewAuditOutOfScope(
-		nil,
-		audit.ChannelAPI,
-		nil,
-	); !errors.Is(
-		newErr,
-		secret.ErrMissingDependency,
-	) {
+	_, newErr := secret.NewAuditOutOfScope(nil, audit.ChannelAPI, nil)
+	if !errors.Is(newErr, secret.ErrMissingDependency) {
 		t.Errorf("nil store err = %v, want ErrMissingDependency", newErr)
 	}
 }
