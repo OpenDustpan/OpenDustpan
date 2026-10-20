@@ -32,10 +32,13 @@ func arabicIndicRegion(region string) bool {
 // Arabic tag such as ar-EG, so this function holds the rule and the
 // Formatter always names the digits it wants.
 func DefaultDigits(formattingLocale string) (Digits, error) {
-	tag, ok := checkTag(formattingLocale)
-	if !ok {
-		return "", ErrInvalidFormattingLocale
+	// Defense in depth: the code that stores a formatting locale checks it
+	// too. This check stays, and it is the one that NewFormatter makes, so a
+	// tag with a -u- or -x- extension never gets a result from here.
+	if err := ValidateFormattingLocale(formattingLocale); err != nil {
+		return "", err
 	}
+	tag, _ := checkTag(formattingLocale)
 	return digitsOf(tag), nil
 }
 

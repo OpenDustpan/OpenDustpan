@@ -147,6 +147,13 @@ func DevTokenRow(id, principalID string) map[string]any {
 	}
 }
 
+// DevPreferencesRow returns a person_preferences row.
+func DevPreferencesRow(principalID string) map[string]any {
+	return map[string]any{
+		"principal_id": principalID, "document": `{"language":"ar"}`, "updated_at_ms": 1,
+	}
+}
+
 // DevGroupRow returns a principal_groups row.
 func DevGroupRow(id string) map[string]any {
 	return map[string]any{

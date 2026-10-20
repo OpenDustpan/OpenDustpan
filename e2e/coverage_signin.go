@@ -63,6 +63,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Preferences:   nil,
 		Workers:       nil,
 		TempAdmins:    nil,
 		Now:           nil,

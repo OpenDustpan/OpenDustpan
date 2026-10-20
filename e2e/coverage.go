@@ -1152,6 +1152,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},
@@ -1298,6 +1299,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
 		jobAllowEntries(),
+		preferencesAllowEntries(),
 		savedViewAllowEntries(),
 	)
 }

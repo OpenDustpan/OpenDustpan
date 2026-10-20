@@ -116,6 +116,8 @@ const (
 	RemovedSessions DevRemovalClass = "sessions"
 	// RemovedAccessTokens counts access tokens of a removed principal.
 	RemovedAccessTokens DevRemovalClass = "access-tokens"
+	// RemovedPreferences counts the preferences rows of a removed principal.
+	RemovedPreferences DevRemovalClass = "preferences"
 	// RemovedSignInRequests counts open sign-in requests that name the
 	// reserved provider ID. A sign-in request holds no principal, so the class
 	// has no principal.
@@ -155,8 +157,8 @@ type DevRemoval struct {
 	SubjectCut bool `json:"subjectCut"`
 	// Counts holds the count of removed rows for each class that a principal
 	// owns: RemovedGrants, RemovedGroupMembers, RemovedSessions,
-	// RemovedAccessTokens and RemovedTempAdmins. The other classes are not in
-	// it.
+	// RemovedAccessTokens, RemovedPreferences and RemovedTempAdmins. The other
+	// classes are not in it.
 	Counts map[DevRemovalClass]int64 `json:"counts"`
 }
 

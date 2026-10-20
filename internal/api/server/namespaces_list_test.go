@@ -382,6 +382,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -499,6 +500,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
