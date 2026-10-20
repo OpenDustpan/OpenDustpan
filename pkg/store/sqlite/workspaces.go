@@ -204,6 +204,10 @@ func (s *Store) DeleteWorkspace(
 			return fmt.Errorf("select workspace: %w", getErr)
 		}
 
+		if lockErr := refuseWorkspaceDeleteUnderLock(ctx, q, ref); lockErr != nil {
+			return lockErr
+		}
+
 		if busyErr := refuseBusyWorkspace(ctx, q, row.LockID, row.ID); busyErr != nil {
 			return busyErr
 		}

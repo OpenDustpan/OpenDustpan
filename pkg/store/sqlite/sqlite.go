@@ -903,6 +903,10 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
+			return err
+		}
+
 		if err := refuseRunningStack(ctx, q, stackID); err != nil {
 			return err
 		}
@@ -932,6 +936,10 @@ func (s *Store) ForceDeleteStack(
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
+			return err
+		}
+
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
 			return err
 		}
 

@@ -535,6 +535,10 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
+			return err
+		}
+
 		if err := refuseRunningStack(ctx, q, locked.ID); err != nil {
 			return err
 		}
@@ -565,6 +569,10 @@ func (s *Store) ForceDeleteStack(
 		}
 
 		if err != nil {
+			return err
+		}
+
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
 			return err
 		}
 
