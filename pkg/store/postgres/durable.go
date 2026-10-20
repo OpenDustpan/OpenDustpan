@@ -60,7 +60,7 @@ func (d *DurableOperations) Start(ctx context.Context, req durable.StartRequest)
 		created bool
 	)
 
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		var startErr error
 
 		op, created, startErr = startOperation(ctx, q, req)
@@ -196,7 +196,7 @@ func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 
 	// No work is not an error of the transaction: the end of the canceled
 	// operations commits also when no operation can run.
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		ended := db.EndExpiredCanceledDurableOperationsParams{Kinds: kinds, MaxVersions: maxVersions}
 		if err := q.EndExpiredCanceledDurableOperations(ctx, ended); err != nil {
 			return fmt.Errorf("end canceled operations: %w", err)
@@ -256,7 +256,7 @@ func (d *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 	var out durable.Claim
 
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := lockLive(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err
@@ -287,7 +287,7 @@ func (d *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 // RecordStep implements durable.Store.
 func (d *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence, result []byte) error {
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		return recordStep(ctx, q, f, result)
 	})
 	if err != nil {
@@ -388,46 +388,53 @@ func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 
 // Cancel implements durable.Store.
 func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
-		row, err := q.LockDurableOperation(ctx, string(id))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return durable.ErrNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("lock operation: %w", err)
-		}
-
-		params := db.CancelDurableOperationParams{
-			State: row.State, CancelRequested: row.CancelRequested, NowMs: 0, ID: row.ID,
-		}
-
-		switch durable.State(row.State) {
-		case durable.StatePending:
-			params.State = string(durable.StateCanceled)
-		case durable.StateRunning:
-			params.CancelRequested = true
-		case durable.StateSucceeded, durable.StateFailed:
-			return durable.ErrFinished
-		case durable.StateCanceled:
-			return nil
-		default:
-			return fmt.Errorf("%w: state %q", errUnknownDurableState, row.State)
-		}
-
-		params.NowMs, err = q.DatabaseNowMs(ctx)
-		if err != nil {
-			return fmt.Errorf("read the database clock: %w", err)
-		}
-
-		if err := q.CancelDurableOperation(ctx, params); err != nil {
-			return fmt.Errorf("cancel operation: %w", err)
-		}
-
-		return nil
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
+		return cancelDurable(ctx, q, id)
 	})
 	if err != nil {
 		return fmt.Errorf("cancel durable operation %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// cancelDurable applies the rules of durable.Store.Cancel to the operation id
+// in the transaction of q. A domain write that cancels an operation in its
+// own transaction calls it.
+func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
+	row, err := q.LockDurableOperation(ctx, string(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return durable.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("lock operation: %w", err)
+	}
+
+	params := db.CancelDurableOperationParams{
+		State: row.State, CancelRequested: row.CancelRequested, NowMs: 0, ID: row.ID,
+	}
+
+	switch durable.State(row.State) {
+	case durable.StatePending:
+		params.State = string(durable.StateCanceled)
+	case durable.StateRunning:
+		params.CancelRequested = true
+	case durable.StateSucceeded, durable.StateFailed:
+		return durable.ErrFinished
+	case durable.StateCanceled:
+		return nil
+	default:
+		return fmt.Errorf("%w: state %q", errUnknownDurableState, row.State)
+	}
+
+	params.NowMs, err = q.DatabaseNowMs(ctx)
+	if err != nil {
+		return fmt.Errorf("read the database clock: %w", err)
+	}
+
+	if err := q.CancelDurableOperation(ctx, params); err != nil {
+		return fmt.Errorf("cancel operation: %w", err)
 	}
 
 	return nil
@@ -441,7 +448,7 @@ func (d *DurableOperations) end(
 	c durable.Claim,
 	next func(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error),
 ) error {
-	return d.store.inTx(ctx, func(q *db.Queries) error {
+	return d.store.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := lockLive(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err

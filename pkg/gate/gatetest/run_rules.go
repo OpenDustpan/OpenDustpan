@@ -19,6 +19,7 @@ func ruleRunners() map[string]runner {
 		"final-gate-weaker-needs-reason":      once(caseFinalWeaker),
 		"gate-state-not-stored":               once(caseGateState),
 		"rule-of-wider-scope-shadow":          once(caseRuleWiderShadow),
+		"rule-fields-must-be-valid":           once(caseRuleFieldsValid),
 		"rule-over-narrower-rule":             once(caseRuleOverNarrower),
 		"rule-named-by-gate-delete":           once(caseRuleNamedDelete),
 		"rule-of-final-gate-needs-reason":     once(caseRuleOfFinalGate),
@@ -610,4 +611,44 @@ func caseDefaultResolves(t *testing.T, e *env) {
 
 	_, err = e.h.Store.Settings().PutApprovalDefault(t.Context(), d, 0, e.acme, entry("acme"))
 	mustNil(t, "PutApprovalDefault(path set of a wider scope)", err)
+}
+
+func caseRuleFieldsValid(t *testing.T, e *env) {
+	t.Helper()
+
+	tests := []struct {
+		name   string
+		mutate func(r *gate.ApprovalRule)
+	}{
+		{"count zero", func(r *gate.ApprovalRule) { r.Count = 0 }},
+		{"count above ten", func(r *gate.ApprovalRule) { r.Count = gate.MaxApprovalCount + 1 }},
+		{
+			"no approver",
+			func(r *gate.ApprovalRule) { r.Approvers = gate.Approvers{Groups: nil, Users: nil, UnitOwners: false} },
+		},
+		{"empty approver name", func(r *gate.ApprovalRule) {
+			r.Approvers = gate.Approvers{Groups: []string{""}, Users: nil, UnitOwners: false}
+		}},
+		{"window below 60", func(r *gate.ApprovalRule) { r.FreshAuth = gate.FreshAuth{Set: true, Seconds: 59} }},
+		{"window above 900", func(r *gate.ApprovalRule) { r.FreshAuth = gate.FreshAuth{Set: true, Seconds: 901} }},
+		{"timeout below an hour", func(r *gate.ApprovalRule) { r.Timeout = gate.MinApprovalTimeout - 1 }},
+		{"timeout above 30 days", func(r *gate.ApprovalRule) { r.Timeout = gate.MaxApprovalTimeout + 1 }},
+	}
+
+	for _, tt := range tests {
+		r := sample[gate.ApprovalRule](t, e.fx.acme, "dba-review", "one")
+		tt.mutate(&r)
+
+		_, err := e.h.Store.ApprovalRules().Put(t.Context(), r, 0, e.acme, entry("acme"))
+		wantErr(t, "Put(rule with "+tt.name+")", err, gate.ErrInvalid)
+	}
+
+	rules, err := e.h.Store.ApprovalRules().List(t.Context(), e.fx.acme)
+	mustNil(t, "List(after the refused puts)", err)
+
+	if len(rules) != 0 {
+		t.Fatalf("List(after the refused puts) = %d rules, want none", len(rules))
+	}
+
+	e.wantEntries("acme", 0)
 }

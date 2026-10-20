@@ -53,12 +53,12 @@ both together.
 | [2](0002-organizations-are-namespaces.md) | Organizations are namespaces, in every client | accepted |
 | [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | accepted |
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
-| [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209) |
+| [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209); `pulumi env` versions and routes (ADR 261) |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | accepted (ADRs 211, 249) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted; the backup of one namespace (ADR 218) |
 | [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft; the branding preset setting accepted (ADR 212), operator branding accepted (ADR 235) |
-| [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
+| [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft; the tools' own registry protocols, no OCI endpoint now (ADR 257) |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
 | [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); the points of RFC 77 decided |
@@ -72,13 +72,13 @@ both together.
 | [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing; MFA, sign-in methods, MFA freshness and break-glass accepted (ADR 46, ADR 55, ADR 56, ADR 57) |
 | [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entries (ADR 212) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
-| [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
-| [25](0025-drift-detection.md) | Drift detection and remediation | draft |
-| [26](0026-unit-status.md) | Unit status in the inventory | draft; a lock is a flag, with manual locks (ADR 213) |
+| [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | accepted (ADRs 153, 267) |
+| [25](0025-drift-detection.md) | Drift detection and remediation | discussing; a person approves a remediation by a built-in gate (ADR 258); detection is a plan-only refresh job (ADR 263) |
+| [26](0026-unit-status.md) | Unit status in the inventory | accepted (ADRs 213, 265) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
 | [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | accepted |
 | [29](0029-existing-ci.md) | Using an existing CI as the executor | accepted |
-| [30](0030-opentofu-remote-execution.md) | CLI-driven remote execution for OpenTofu | draft |
+| [30](0030-opentofu-remote-execution.md) | CLI-driven remote execution for OpenTofu | draft; speculative plans first (ADR 254) |
 | [31](0031-kubernetes.md) | Kubernetes: runner, operator, and blueprints as resources | draft |
 | [32](0032-object-storage.md) | Object storage adapters | accepted; no bucket of the customer (ADR 221) |
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | accepted |
@@ -88,12 +88,12 @@ both together.
 | [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |
-| [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
+| [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft; saved views in RFC 100, a saved view is a server object with an API (ADR 266) |
 | [41](0041-agent-interface.md) | An interface for AI agents | draft |
 | [42](0042-migration-import.md) | Migration from other backends and operators | accepted (ADR 29); the import resource and the source adapters decided by ADRs 241 to 244 |
 | [43](0043-ephemeral-units.md) | Ephemeral units and time to live | draft |
 | [44](0044-bulk-operations.md) | Bulk operations | draft; bulk calls accepted (ADR 213) |
-| [45](0045-cost-estimation.md) | Cost estimation | draft |
+| [45](0045-cost-estimation.md) | Cost estimation | draft; the push route first (ADR 259) |
 | [46](0046-insights.md) | Insights: dashboards and reports | draft |
 | [47](0047-discovery-and-codification.md) | Discovery and codification of unmanaged resources | draft |
 | [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
@@ -136,3 +136,14 @@ both together.
 | [86](0086-change-tickets-in-external-change-systems.md) | Change tickets in external change systems, and what the core needs for them | discussing |
 | [87](0087-components-of-the-server-process.md) | Components of the server process, and a start flag that selects them | accepted (ADR 249) |
 | [88](0088-federation-model.md) | Federation model: installations, request forwarding, asynchronous replication, manual failover | accepted (ADR 248) |
+| [90](0090-scanner-and-linter-reports.md) | Reports of IaC scanners and linters on stacks and workspaces, SARIF first | draft |
+| [91](0091-plan-review-at-scale.md) | Plan review at scale, with one view of repeated changes across stacks and workspaces, and noise rules that expire | draft |
+| [92](0092-opentelemetry-for-jobs.md) | OpenTelemetry for jobs, with job traces, fleet metrics and OTLP export to the operator's collector | draft |
+| [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | draft |
+| [94](0094-ci-shim-secrets-at-run-time-out-of-state.md) | The CI shim, which gives secrets to a tool in a team's own CI at run time and keeps them out of state | draft |
+| [95](0095-day-two-actions-outside-state.md) | Day-two actions outside state, which change the world but not the state, and how OpenDustpan records, shows and gates them | draft; provider actions wait for a supported tool that has them, slice 1 no code (ADR 260) |
+| [96](0096-follow-ups-after-an-apply.md) | Follow-ups after an apply, which start an AWX job template or send a signed webhook with selected outputs | draft |
+| [97](0097-test-reports-on-stacks-and-workspaces.md) | Test reports on stacks and workspaces, an extension of RFC 90 to test results | draft |
+| [98](0098-chat-sinks-one-sender-a-renderer-for-each-platform.md) | Chat sinks, with one sender and a renderer for each chat platform (ADR 262) | discussing |
+| [99](0099-the-api-description-and-the-generated-sdks.md) | The API description and the generated SDKs (ADR 264) | discussing |
+| [100](0100-saved-views.md) | Saved views of the unit list, a part of RFC 40 | accepted (ADR 266) |

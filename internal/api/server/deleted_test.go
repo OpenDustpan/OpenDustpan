@@ -48,6 +48,8 @@ func newSweepHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -70,9 +72,11 @@ func newSweepHandler(
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

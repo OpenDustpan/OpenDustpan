@@ -2,9 +2,9 @@
 //
 // A namespace is what Pulumi Cloud calls an organization. Every namespace is
 // authoritative in exactly one region, its home region, and carries a failover
-// version that increases each time an administrator promotes another region.
-// Writes are fenced on that version so a demoted region cannot keep accepting
-// writes after a promotion.
+// version that increases each time a promotion or a restore changes the namespace.
+// Writes are fenced on that version so a write that started before the change
+// cannot commit after it.
 package namespace
 
 import (
@@ -32,8 +32,9 @@ var (
 	// ErrNotHome reports a write attempted outside the namespace's home region.
 	ErrNotHome = errors.New("namespace is not homed in this region")
 	// ErrFenced reports a write rejected because its fence carries a stale
-	// failover version: the namespace was promoted in another region.
-	ErrFenced = errors.New("write fenced: stale namespace failover version")
+	// failover version: a promotion or a restore changed the namespace after the
+	// write began.
+	ErrFenced = errors.New(fencedCopy) //nolint:staticcheck // Copy that clients show as sent.
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 	// ErrUnavailable reports that the database does not answer. Adapters
@@ -47,6 +48,10 @@ var (
 	// maxPageLimit.
 	ErrInvalidPage = errors.New("invalid namespace page")
 )
+
+// fencedCopy is the text of ErrFenced. It is copy: clients show it as sent, so
+// it is a sentence with a capital letter and a full stop.
+const fencedCopy = "The namespace changed while this write ran. Run the command again."
 
 const maxNameLength = 100
 

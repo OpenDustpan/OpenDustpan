@@ -2,6 +2,7 @@ package principal
 
 import (
 	"context"
+	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -55,6 +56,14 @@ type RecordStore interface {
 	// id and sets its update time to e.At. It returns ErrNotFound when no
 	// such principal exists, and ErrNotDisabled when it is not disabled.
 	EnablePrincipal(ctx context.Context, id string, e audit.Entry) error
+	// DisablePrincipal sets the disable time of the principal with the ID id
+	// to e.At and sets its update time to e.At. It only narrows access: the
+	// grants, memberships and tokens of the principal stay, and the principal
+	// cannot use them until EnablePrincipal clears the disable time. The
+	// write runs in maintenance mode, as a revocation does. It returns
+	// ErrNotFound when no such principal exists, and ErrDisabled when it is
+	// disabled.
+	DisablePrincipal(ctx context.Context, id string, e audit.Entry) error
 }
 
 // NamespaceRecordStore keeps the records of the principals of a namespace.
@@ -170,4 +179,32 @@ type Guard interface {
 	// CheckPrincipalGrants checks the current grants of the principal
 	// principalID.
 	CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error
+}
+
+// AdminOnlyGuard is the Guard of an installation that keeps no grants. It
+// allows an administrator and refuses every other caller, because without
+// grants nobody else holds an action on any object.
+type AdminOnlyGuard struct{}
+
+var _ Guard = AdminOnlyGuard{}
+
+// CheckGroupGrants allows only an administrator.
+func (AdminOnlyGuard) CheckGroupGrants(_ context.Context, caller identity.Principal, _ string) error {
+	return adminOnly(caller)
+}
+
+// CheckPrincipalGrants allows only an administrator.
+func (AdminOnlyGuard) CheckPrincipalGrants(_ context.Context, caller identity.Principal, _ string) error {
+	return adminOnly(caller)
+}
+
+func adminOnly(caller identity.Principal) error {
+	if caller.Admin {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"%w: only an administrator changes who holds grants when the installation keeps none",
+		identity.ErrDenied,
+	)
 }

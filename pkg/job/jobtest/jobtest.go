@@ -6,11 +6,10 @@
 //		jobtest.Run(t, func(t *testing.T) jobtest.Harness { return newHarness(t) })
 //	}
 //
-// The suite comes before the first SQL adapter. Its cases state the rules
-// of the ports, and a reference adapter in memory, in the tests of this
-// package, runs them. The cases of job.Claimer, job.Recorder and
-// job.ArtifactStore come with their first implementation, because they need
-// the blob store and the item keys.
+// The cases state the rules of the ports. A reference adapter in memory, in
+// the tests of this package, runs them, and so does each SQL adapter. The
+// cases of job.Claimer, job.Recorder and job.ArtifactStore come with their
+// first implementation, because they need the blob store and the item keys.
 package jobtest
 
 import (
@@ -23,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -37,18 +37,42 @@ type Harness struct {
 
 // Domain makes the rows that a job needs and that other ports own, and
 // reads the audit entries that the job store appends.
+//
+//nolint:interfacebloat // One fixture contract: the rows that the cases of the suite need from the other ports.
 type Domain interface {
 	// CreateNamespace creates the namespace name and returns its fence.
 	CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error)
 	// CreateUnit creates a unit of tool in the namespace of fence and
 	// returns its reference, with its stable unit ID set.
 	CreateUnit(ctx context.Context, fence namespace.Fence, tool, name string) (identity.Object, error)
+	// RenameUnit renames the unit of fence to newName, as the rename of its
+	// tool does: the stable unit ID and the locks of the unit stay. It
+	// returns the unit under its new name. The suite renames a Pulumi unit
+	// only.
+	RenameUnit(
+		ctx context.Context,
+		fence namespace.Fence,
+		unit identity.Object,
+		newName string,
+	) (identity.Object, error)
+	// RemoveUnit removes the unit from the inventory, as the delete of its
+	// tool does. The suite removes a Pulumi unit only.
+	RemoveUnit(ctx context.Context, fence namespace.Fence, unit identity.Object) error
 	// BumpFence increments the failover version of the namespace of fence,
 	// as a failover does, and returns the new fence.
 	BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error)
 	// SetStateVersion makes version the current state version of unit, as
 	// a state write of its tool does.
 	SetStateVersion(ctx context.Context, fence namespace.Fence, unit identity.Object, version string) error
+	// PutManualLock puts a manual lock on target, as manuallock.Store does:
+	// a lock on a unit covers that unit, a lock on a namespace covers each unit
+	// of it. The store of jobs reads the lock in the transaction of a
+	// dispatch. The suite locks a unit and a namespace only: the coverage by a
+	// collection is the one of manuallock.Store.CoveringLock, which the suite
+	// of that port proves.
+	PutManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target, holder, reason string) error
+	// RemoveManualLock removes the manual lock of target.
+	RemoveManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target) error
 	// AuditEntries returns the audit entries of the namespace ns, in the
 	// order of their append.
 	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
@@ -73,6 +97,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"create with a dispatch obeys the one-change rule", testCreateUnitBusy},
 		{"after ErrUnitBusy, a create with no dispatch waits with unit-busy", testCreateWaits},
 		{"create with a dispatch obeys a freeze", testCreateFrozen},
+		{"create with a dispatch obeys a manual lock, and the job waits locked", testCreateLocked},
 		{"create above the open jobs of a unit is ErrLimit", testCreateLimit},
 		{"a write on an older version is ErrConflict", testApplyConflict},
 		{"an event that the state does not allow changes nothing", testApplyTransition},
@@ -83,6 +108,12 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a change dispatch in a freeze is ErrFrozen", testFrozen},
 		{"break-glass passes a freeze", testBreakGlass},
 		{"a dispatch after the freeze ends", testFreezeEnds},
+		{"a dispatch of a unit with a manual lock is ErrLocked, plan phases too", testLocked},
+		{"a manual lock of the namespace stops the dispatch of each unit in it", testNamespaceLocked},
+		{"break-glass does not pass a manual lock", testBreakGlassNotPastLock},
+		{"a queued locked job keeps its queue timeout and dispatches after the unlock", testLockedQueue},
+		{"a phase that runs when the lock arrives runs to its end", testLockRunsOn},
+		{"a refused dispatch of a locked unit writes no audit entry", testLockedAuditRollback},
 		{"a cancel of a dispatched job cancels its operation", testCancelDispatched},
 		{"a cancel of a running job requests the cancel of its operation", testCancelRunning},
 		{"a takeover is a new claim on the same operation", testTakeover},
@@ -102,6 +133,15 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a running job whose operation fails ends failed at the reconcile", testRunningOperationFails},
 		{"the confirmation gate and a confirmation are stored", testConfirmationStored},
 		{"list filters by unit and state, newest first", testList},
+		{"a fence of another namespace reaches no job", testForeignNamespace},
+		{"parallel creates with one key give one job", testParallelCreatesOneKey},
+		{"two claimers of one phase: one wins", testTwoClaimers},
+		{"parallel dispatches on one unit: one holds it", testParallelUnitBusy},
+		{"a dispatch and a manual lock in parallel give one serial order", testDispatchAndLockInParallel},
+		{"a dispatch of a renamed unit still obeys the lock of its namespace", testRenamedUnitLocked},
+		{"a dispatch of a renamed unit still obeys the lock of the unit", testRenamedUnitOwnLock},
+		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
+		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"freezes list, end once, and validate", testFreezes},
 	}
 

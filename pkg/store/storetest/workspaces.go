@@ -3998,6 +3998,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 
 	for i := range services {
 		svc, err := workspace.NewService(workspace.Config{
+			ManualLocks:        nil,
 			Workspaces:         s,
 			States:             s,
 			Blobs:              blobs,

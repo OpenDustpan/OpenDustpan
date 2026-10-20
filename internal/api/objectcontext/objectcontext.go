@@ -18,11 +18,14 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
@@ -54,6 +57,16 @@ type Config struct {
 	Writer        *objectcontext.Writer
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
+	// writes none.
+	Audit audit.Store
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it.
+	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	Sessions      *sessionauth.Checker
 	Logger        *slog.Logger
 }
@@ -69,6 +82,7 @@ type Handler struct {
 	authn       identity.Authenticator
 	sessions    *sessionauth.Checker
 	authz       identity.Authorizer
+	guard       *refusal.Recorder
 	logger      *slog.Logger
 	mux         *patternMux
 	routes      []Route
@@ -106,9 +120,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
-		logger:      cfg.Logger,
-		mux:         newPatternMux(),
-		routes:      nil,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("context"),
+		logger: cfg.Logger,
+		mux:    newPatternMux(),
+		routes: nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -178,6 +195,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
@@ -229,9 +250,11 @@ func classifyConflict(err error) (int, string) {
 	case errors.Is(err, objectcontext.ErrUnitDeleted):
 		return http.StatusConflict, "the unit is deleted: restore it before you change its context"
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, "write fenced: try again"
+		return http.StatusConflict, namespace.ErrFenced.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

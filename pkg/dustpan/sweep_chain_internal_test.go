@@ -21,8 +21,10 @@ func sweepChainServer(
 	t.Helper()
 
 	return &Server{
+		kind:             kindState{store: nil, principals: nil, kind: ""},
 		tempAdmins:       nil,
 		handler:          nil,
+		ungated:          nil,
 		logger:           slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		listenAddr:       "",
 		listener:         nil,
@@ -31,7 +33,6 @@ func sweepChainServer(
 		secretWrapper:    nil,
 		workspaces:       nil,
 		backups:          nil,
-		backupRegistry:   nil,
 		restores:         nil,
 		restoreRegistry:  nil,
 		now:              nil,
@@ -48,11 +49,15 @@ func sweepChainServer(
 		signInPruneEvery: 0,
 		signInProviders:  providerBinding{store: nil, providers: nil},
 		durable:          nil,
+		components:       AllComponents(),
+		watch:            nil,
 		durableOwner:     "",
 		inactivityEvery:  0,
 		deletedEvery:     0,
 		idempotency:      nil,
 		idempotencyEvery: 0,
+		auditChainEvery:  0,
+		flushDenials:     nil,
 	}
 }
 

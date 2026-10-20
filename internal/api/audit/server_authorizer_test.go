@@ -115,13 +115,15 @@ func TestServerScopeWithBuiltInRoles(t *testing.T) {
 	seedRealPrincipal(t, st, "bob", "", identity.Object{})
 
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
-		Namespaces:    namespaces,
-		Entries:       st,
-		EntryReader:   st,
-		Authenticator: realTokenAuthenticator{},
-		Authorizer:    authz,
-		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Entries:        st,
+		EntryReader:    st,
+		Authenticator:  realTokenAuthenticator{},
+		Authorizer:     authz,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("audit handler: %v", err)

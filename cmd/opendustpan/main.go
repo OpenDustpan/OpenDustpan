@@ -2,6 +2,7 @@
 //
 //	opendustpan --version
 //	opendustpan serve [flags]
+//	opendustpan dev [flags]
 //	opendustpan health [flags]
 //	opendustpan namespace create [flags] <name>
 //	opendustpan upgrade check [flags]
@@ -50,6 +51,7 @@ import (
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -236,7 +238,7 @@ func serveWithIO(
 		return err
 	}
 
-	return f.run(ctx, stdin, stderr, terminal)
+	return kindRefusal(f.run(ctx, stdin, stderr, terminal), commandServe)
 }
 
 // serveFlags holds the settings of the serve subcommand.
@@ -255,6 +257,10 @@ type serveFlags struct {
 	args    []string
 	lookup  cli.LookupFunc
 	fileSum [sha256.Size]byte
+
+	// installationKind is the kind of the command: empty means production.
+	// Only the dev command sets it.
+	installationKind installation.Kind
 
 	// hup receives SIGHUP from the parse of the flags on, when --config
 	// names a file. The reloader reads it.
@@ -286,8 +292,10 @@ type serveFlags struct {
 	s3Endpoint                   string
 	s3Region                     string
 	backupTarget                 string
+	allowDevBackups              bool
 	logLevel                     string
 	logFormat                    string
+	components                   string
 	keyFile                      string
 	generateKey                  bool
 	maxCheckpointBytes           int64
@@ -310,6 +318,16 @@ type serveFlags struct {
 	auditCheckpoints    bool
 }
 
+// kind answers the installation kind of the command: production for serve,
+// and the kind that dev sets for the server code that dev shares with serve.
+func (f *serveFlags) kind() installation.Kind {
+	if f.installationKind == "" {
+		return installation.KindProduction
+	}
+
+	return f.installationKind
+}
+
 // check refuses settings that are wrong together or out of range: the TLS
 // pair, the log level and format, the size limits, the delta cutoff, the
 // soft-delete retention and the trusted proxies. It keeps the parsed
@@ -317,6 +335,10 @@ type serveFlags struct {
 // Serve runs it at start and on each reload of the configuration file.
 func (f *serveFlags) check() error {
 	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+		return err
+	}
+
+	if _, err := dustpan.ParseComponents(f.components); err != nil {
 		return err
 	}
 
@@ -434,6 +456,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag(cli.UnsafeAllowDevBackupsFlag).Bool(fs, &f.allowDevBackups)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
@@ -443,6 +466,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 
 // registerNet registers the network and console flags.
 func (f *serveFlags) registerNet(fs *flag.FlagSet) {
+	cli.ByFlag("components").String(fs, &f.components)
 	cli.ByFlag("listen").String(fs, &f.listen)
 	cli.ByFlag("console-dir").String(fs, &f.consoleDir)
 	cli.ByFlag("allowed-origins").String(fs, &f.origins)
@@ -496,7 +520,9 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	cli.LogResolved(ctx, logger, f.resolved)
 
 	f.instanceID = instance.NewID()
-	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
+	if err := f.logComponents(ctx, logger); err != nil {
+		return err
+	}
 
 	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
 		return dbErr
@@ -517,7 +543,7 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 
 	open := func() (store, error) {
 		if st == nil {
-			opened, err := openStore(ctx, f.database, logger, openMigrate)
+			opened, err := openStore(ctx, f.database, logger, openMigrate, installation.KindProduction)
 			if err != nil {
 				return nil, err
 			}
@@ -557,7 +583,8 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 // subject and each setting with its layer and its effective value. The audit
 // log is always on, so a failed write stops the start (decision 11).
 func (f *serveFlags) writeStartEntry(ctx context.Context, entries audit.ServerStore) error {
-	entry := cli.SettingsEntry(audit.ChannelStartup, f.instanceID, time.Now(), cli.AuditSettings(f.resolved))
+	changes := append(cli.AuditSettings(f.resolved), kindChange(f.kind()))
+	entry := cli.SettingsEntry(audit.ChannelStartup, f.instanceID, time.Now(), changes)
 
 	if _, err := entries.AppendServer(ctx, entry); err != nil {
 		return fmt.Errorf("write the start audit entry: %w", err)
@@ -996,7 +1023,7 @@ func (f *serveFlags) serveWithStores(
 	if optErr != nil {
 		return optErr
 	}
-	opts = append(opts, f.backupOptions(backupTarget)...)
+	opts = append(opts, f.restoreOptions(ctx, logger, backupTarget)...)
 	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
 
 	// After the start-up checks and before serving, write the start entry
@@ -1104,6 +1131,26 @@ func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
 	}
 }
 
+// logComponents logs the components of the process with the instance, and one
+// line for each setting that no selected component reads. The settings stay
+// set and the start goes on.
+func (f *serveFlags) logComponents(ctx context.Context, logger *slog.Logger) error {
+	set, err := dustpan.ParseComponents(f.components)
+	if err != nil {
+		return fmt.Errorf("--components: %w", err)
+	}
+
+	logger.LogAttrs(ctx, slog.LevelInfo, "instance",
+		slog.String("instance_id", f.instanceID), slog.String("components", set.String()))
+
+	for _, name := range cli.UnreadFlags(f.resolved, set.Strings()) {
+		logger.LogAttrs(ctx, slog.LevelInfo, "setting has no effect: no selected component reads it",
+			slog.String("key", name), slog.String("components", set.String()))
+	}
+
+	return nil
+}
+
 // serverOptions returns the NewServer options for the opened store, blob
 // store, authenticator, key wrapper and logger, with the audit chain
 // setting and the signed audit checkpoints.
@@ -1173,11 +1220,27 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
 
+	tail, tailErr := f.storeOptions(st, wrapper)
+
+	return append(opts, tail...), tailErr
+}
+
+// storeOptions returns the options of the components and of the stores that
+// the store may or may not keep: the durable operations, the runners and the
+// profiles.
+func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.Option, error) {
+	set, err := dustpan.ParseComponents(f.components)
+	if err != nil {
+		return nil, fmt.Errorf("--components: %w", err)
+	}
+
+	opts := []dustpan.Option{dustpan.WithComponents(set)}
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
-	opts = append(opts, profileStoreOption(st, wrapper)...)
+	opts = append(opts, jobStoreOption(st)...)
+	opts = append(opts, dustpan.WithInstallationKind(f.kind()), dustpan.WithInstallationKindStore(st))
 
-	return opts, nil
+	return append(opts, profileStoreOption(st, wrapper)...), nil
 }
 
 // durableStoreOption returns the durable schedule store option for st, or nil
@@ -1201,6 +1264,19 @@ func runnerStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
+	default:
+		return nil
+	}
+}
+
+// jobStoreOption returns the option of the job store for st, or nil when st
+// keeps no jobs.
+func jobStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithJobStore(s.Jobs())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithJobStore(s.Jobs())}
 	default:
 		return nil
 	}
@@ -1485,6 +1561,37 @@ func (f *serveFlags) backupOptions(target blob.Store) []dustpan.Option {
 	return []dustpan.Option{dustpan.WithBackupTarget(target, strings.TrimSpace(f.backupTarget))}
 }
 
+// restoreOptions returns the backup option and the dev backup options, and
+// writes the warning of a start with the dev backup flag.
+func (f *serveFlags) restoreOptions(ctx context.Context, logger *slog.Logger, target blob.Store) []dustpan.Option {
+	f.warnDevBackups(ctx, logger)
+
+	return append(f.backupOptions(target), f.devBackupOptions()...)
+}
+
+// warnDevBackups writes the one warning of each start with the flag that lets
+// a production installation restore a backup of a dev installation.
+func (f *serveFlags) warnDevBackups(ctx context.Context, logger *slog.Logger) {
+	if !f.allowDevBackups {
+		return
+	}
+
+	logger.WarnContext(ctx, "This server lets a production installation restore a backup of a dev installation. "+
+		"A restore deletes the dev users and their data. We do not recommend this.",
+		slog.String("flag", "--"+cli.UnsafeAllowDevBackupsFlag))
+}
+
+// devBackupOptions returns the NewServer options for a dev backup in a
+// production installation. The flag is the only source of the setting: it has
+// no variable and no configuration file key. The hint names the flag in code
+// quotes for the refusal text.
+func (f *serveFlags) devBackupOptions() []dustpan.Option {
+	return []dustpan.Option{
+		dustpan.WithAllowDevBackups(f.allowDevBackups),
+		dustpan.WithAllowDevHint("`--" + cli.UnsafeAllowDevBackupsFlag + "`"),
+	}
+}
+
 // checkTLSFlags requires both TLS files or none. It names the missing one,
 // so the operator knows which flag to set or clear.
 func checkTLSFlags(certFile, keyFile string) error {
@@ -1533,6 +1640,21 @@ func closeAppLog(ctx context.Context, app *appLog, stderr io.Writer) {
 	}
 }
 
+// logLevelOf answers the slog level of a log level setting that
+// checkLogFlags accepted. An unknown value answers info.
+func logLevelOf(setting string) slog.Level {
+	switch normalizeLogLevel(setting) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // appLogFor builds the application logger and its sinks from the log
 // flags. Without --log-sink it writes to stderr, as serve always did.
 func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
@@ -1540,20 +1662,7 @@ func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
 		return appLog{}, err
 	}
 
-	var level slog.Level
-
-	switch normalizeLogLevel(f.logLevel) {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
-
-	return newAppLog(f.logSinks, level, f.logFormat, stderr, os.LookupEnv)
+	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, os.LookupEnv)
 }
 
 // store is the persistence adapter chosen by --database.
@@ -1575,6 +1684,7 @@ type store interface {
 	accesstoken.Store
 	accesstoken.HostStore
 	tempadmin.Store
+	installation.KindStore
 	close()
 }
 
@@ -1601,21 +1711,27 @@ const (
 	openNoMigrate
 )
 
-// openStore opens the persistence adapter that --database names. Only serve
-// and host create-temp-admin call it: serve runs the server, and host
-// create-temp-admin recovers a lost administrator through the database,
+// openStore opens the persistence adapter that --database names. Only serve,
+// dev and host create-temp-admin call it: serve and dev run the server, and
+// host create-temp-admin recovers a lost administrator through the database,
 // after its off switch and the recovery mode allow it. Every other command
 // is a client of the REST API. The gate test swaps it for a function that
 // fails the test, so a future client command that opens a store fails the
 // test. The mode says whether Open applies pending migrations: serve
 // applies them, and the host command applies none and refuses a database
-// with a pending migration.
+// with a pending migration. The kind is the installation kind of the
+// command: the opener refuses a database that another kind claimed before it
+// applies a migration. An empty kind makes no check.
 //
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
-var openStore = func(ctx context.Context, database string, logger *slog.Logger, mode openMode) (store, error) {
+var openStore = func(
+	ctx context.Context, database string, logger *slog.Logger, mode openMode, kind installation.Kind,
+) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		opts := []sqlite.Option{sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version)}
+		opts := []sqlite.Option{
+			sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version), sqlite.WithInstallationKind(kind),
+		}
 		if mode == openNoMigrate {
 			opts = append(opts, sqlite.WithoutMigrate())
 		}
@@ -1629,7 +1745,7 @@ var openStore = func(ctx context.Context, database string, logger *slog.Logger, 
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		opts := []postgres.Option{postgres.WithBinaryVersion(version)}
+		opts := []postgres.Option{postgres.WithBinaryVersion(version), postgres.WithInstallationKind(kind)}
 		if mode == openNoMigrate {
 			opts = append(opts, postgres.WithoutMigrate())
 		}

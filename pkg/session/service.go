@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -281,13 +282,21 @@ func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest,
 // touch records a use of sess at now. A use inside TouchEvery of the last
 // one writes nothing, so a console request sends no write to the database
 // in the common case. The store applies the same bound, so a race between
-// two instances writes at most one use.
+// two instances writes at most one use. In maintenance mode the store refuses
+// the write, and touch skips the use instead of failing the request.
 func (s *Sessions) touch(ctx context.Context, sess Session, now time.Time, l Limits) error {
 	if !sess.LastSeenAt.IsZero() && now.Sub(sess.LastSeenAt) < TouchEvery {
 		return nil
 	}
 
-	if err := s.store.TouchSession(ctx, sess.ID, now, TouchEvery, l); err != nil {
+	err := s.store.TouchSession(ctx, sess.ID, now, TouchEvery, l)
+	if errors.Is(err, maintenance.ErrInMaintenance) {
+		// Maintenance mode refuses the write of a use. The session stays valid
+		// and the console keeps reading, for example the progress of a restore.
+		return nil
+	}
+
+	if err != nil {
 		return fmt.Errorf("record session use: %w", err)
 	}
 

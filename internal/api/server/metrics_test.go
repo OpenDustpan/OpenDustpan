@@ -66,6 +66,8 @@ func newMetricsHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    authn,
@@ -88,9 +90,11 @@ func newMetricsHandler(
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

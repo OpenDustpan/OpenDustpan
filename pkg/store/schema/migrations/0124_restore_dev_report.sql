@@ -1,0 +1,2 @@
+-- Name record for the shared migration list. Each store dialect holds the
+-- migration SQL under this file name in its own migrations directory.

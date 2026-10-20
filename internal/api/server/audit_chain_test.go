@@ -70,6 +70,8 @@ func newAuditChainHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		TempAdmins:       nil,
 		Now:              nil,
 		Authenticator:    tokenAuthenticator{},
@@ -94,7 +96,9 @@ func newAuditChainHandler(
 		SignIn:           nil,
 		Journal:          nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

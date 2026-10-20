@@ -16,13 +16,17 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -46,19 +50,28 @@ const testProvider = "corp"
 // no cookie: the start of a sign-in sends the browser to the identity
 // provider, and a callback with no sign-in cookie fails.
 func wantPublicStatus(route apiserver.Route) int {
-	if route.Path == "/api/server/sign-in/{provider}" {
+	switch route.Path {
+	case "/api/server/sign-in/{provider}":
 		return http.StatusFound
+	case "/api/dustpan/v1/sign-in/dev-code":
+		return http.StatusForbidden
+	case "/api/dustpan/v1/capabilities":
+		return http.StatusOK
 	}
 
 	return http.StatusBadRequest
 }
 
 // publicPatterns lists the routes that need no sign-in: the start and the
-// callback of a sign-in, which run before the person has a session.
+// callback of a sign-in, which run before the person has a session, the
+// sign-in with the one-time code of the dev command, and the capabilities
+// document, which answers the API version to every caller.
 func publicPatterns() []string {
 	return []string{
 		"GET /api/server/sign-in/{provider}",
 		"GET /api/server/sign-in/{provider}/callback",
+		"POST /api/dustpan/v1/sign-in/dev-code",
+		"GET /api/dustpan/v1/capabilities",
 	}
 }
 
@@ -232,6 +245,21 @@ func newServiceBackedHandler(
 ) *apiserver.Handler {
 	t.Helper()
 
+	handler, _ := newServiceBackedHandlerOf(t, authn, authz, seeds...)
+
+	return handler
+}
+
+// newServiceBackedHandlerOf is newServiceBackedHandler that also returns the
+// store under the handler, so a test can change the installation state.
+func newServiceBackedHandlerOf(
+	t *testing.T,
+	authn identity.Authenticator,
+	authz identity.Authorizer,
+	seeds ...backup.Record,
+) (*apiserver.Handler, *sqlite.Store) {
+	t.Helper()
+
 	st := openRouteTestStore(t)
 	live := openRouteTestBlobs(t)
 	target := openRouteTestBlobs(t)
@@ -265,32 +293,41 @@ func newServiceBackedHandler(
 		t.Fatalf("session service: %v", err)
 	}
 
+	devCode, _, err := devcode.Make(nil)
+	if err != nil {
+		t.Fatalf("make dev sign-in code: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Now:            nil,
-		TempAdmins:     nil,
-		Authenticator:  authn,
-		Authorizer:     authz,
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     namespaces,
-		Backups:        service,
-		Restores:       restores,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "test",
-		Schema:         st,
-		Journal:        st,
-		Principals:     seedRoutePrincipals(t, st),
-		Tokens:         seedRouteTokens(t, st),
-		Access:         seedRouteAccess(t, st),
-		Audit:          st,
-		OnAuditFailure: nil,
-		DeletedUnits:   stubSweeper{},
-		AuditChain:     stubAuditChain{},
-		AuditSinks:     nil,
-		IPAllowlists:   allow,
-		SessionPolicy:  sessionPolicies,
+		Workers:          nil,
+		InstallationKind: "",
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    authn,
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          service,
+		Restores:         restores,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           st,
+		Journal:          st,
+		Principals:       seedRoutePrincipals(t, st),
+		Tokens:           seedRouteTokens(t, st),
+		Access:           seedRouteAccess(t, st),
+		Audit:            st,
+		OnAuditFailure:   nil,
+		DeletedUnits:     stubSweeper{},
+		AuditChain:       stubAuditChain{},
+		AuditSinks:       nil,
+		IPAllowlists:     allow,
+		Gates:            nil,
+		SessionPolicy:    sessionPolicies,
 		SignIn: &apiserver.SignIn{
-			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
+			OnDevRefused: nil,
+			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
 				{
 					Client:      stubOIDC{},
@@ -301,14 +338,17 @@ func newServiceBackedHandler(
 					Source:      principal.SourceOIDC,
 				},
 			},
+			DevCode:  devCode,
+			DevAdmin: bootstrapAdmin,
 		},
 		CheckpointEpochs: fakeEpochs{},
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return handler
+	return handler, st
 }
 
 // Principal, group and token IDs that the handler builders seed, so the
@@ -325,11 +365,14 @@ const (
 	testCallerID         = "prn-routes0000000000003"
 	// testNamespacePrincipalID is a service principal of testNamespace.
 	testNamespacePrincipalID = "prn-routes0000000000004"
-	testGroupID              = "grp-routes0000000000001"
-	testTokenID              = "tok-routes0000000000001"
-	testServiceTokenID       = "tok-routes0000000000002"
-	testOwnTokenID           = "tok-routes0000000000003"
-	testRoleID               = "rol-routes0000000000001"
+	// testDisablePrincipalID is a service principal that the disable route
+	// disables. The sweep of the seed keeps it: only persons are inactive.
+	testDisablePrincipalID = "prn-routes0000000000005"
+	testGroupID            = "grp-routes0000000000001"
+	testTokenID            = "tok-routes0000000000001"
+	testServiceTokenID     = "tok-routes0000000000002"
+	testOwnTokenID         = "tok-routes0000000000003"
+	testRoleID             = "rol-routes0000000000001"
 )
 
 // allowAll allows every action, so the token service passes its own check
@@ -590,6 +633,18 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 			Namespace:   "",
 			GroupCount:  0, BreakGlass: false,
 		},
+		{
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			DisabledAt:  time.Time{},
+			ID:          testDisablePrincipalID,
+			Subject:     "ci-disable",
+			DisplayName: "CI disable",
+			Kind:        principal.KindService,
+			Source:      principal.SourceLocal,
+			Namespace:   "",
+			GroupCount:  0, BreakGlass: false,
+		},
 	}
 	for i := range seeds {
 		if err := st.CreatePrincipal(ctx, seeds[i], storetest.ServerChange(at, "principal:"+seeds[i].ID)); err != nil {
@@ -618,7 +673,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -707,8 +762,9 @@ func newRouteTestBackups(
 	t.Helper()
 
 	service, err := backup.NewService(backup.Config{
-		Exporter:    st,
-		Registry:    st,
+		Exporter: st,
+		Kinds:    st,
+		Registry: st, Operations: st.DurableOperationsPort(), Owner: "", Lease: 0, Logger: nil,
 		Blobs:       live,
 		StateOpener: nil,
 		Target:      target,
@@ -741,8 +797,11 @@ func newRouteTestRestores(
 		Region:      "test",
 		AfterApply:  nil,
 		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+
+		AllowDevBackups: false,
+		AllowDevHint:    "",
+		Now:             nil,
+		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -771,6 +830,7 @@ func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
 		RequestedBy: "tester",
 		Error:       "",
 		State:       backup.RestoreFailed,
+		DevReport:   nil,
 	}
 
 	seedErr := st.CreateRestore(t.Context(), seed)
@@ -996,6 +1056,10 @@ type routeOwner struct {
 func routePrincipalIDs(path string) routeOwner {
 	if strings.HasPrefix(path, "/api/server/namespaces/{namespace}/principals") {
 		return routeOwner{principal: testPrincipalID, id: testNamespacePrincipalID, ofOne: true}
+	}
+
+	if path == "/api/server/principals/{id}/disable" {
+		return routeOwner{principal: testPrincipalID, id: testDisablePrincipalID, ofOne: true}
 	}
 
 	if !strings.HasPrefix(path, "/api/server/principals/{principal}/") {
@@ -1375,6 +1439,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -1397,9 +1463,11 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	}
 
 	cases := []struct {
@@ -1444,8 +1512,9 @@ type stubBackupRegistry struct{}
 
 func (stubBackupRegistry) CreateBackup(_ context.Context, _ backup.Record) error { return nil }
 
+//nolint:revive // argument-limit: the stub has the signature of the port.
 func (stubBackupRegistry) FinishBackup(
-	_ context.Context, _ backup.ID, _ backup.State, _ string, _ time.Time,
+	_ context.Context, _ durable.StepFence, _ backup.ID, _ backup.State, _ string, _ time.Time,
 ) (backup.Record, error) {
 	return backup.Record{
 		StartedAt: time.Time{},
@@ -1463,8 +1532,12 @@ func (stubBackupRegistry) GetBackup(_ context.Context, _ backup.ID) (backup.Reco
 
 func (stubBackupRegistry) ListBackups(_ context.Context) ([]backup.Record, error) { return nil, nil }
 
-func (stubBackupRegistry) FailRunningBackups(_ context.Context, _ time.Time, _ string) error {
+func (stubBackupRegistry) StartBackup(_ context.Context, _ backup.Record, _ durable.StartRequest) error {
 	return nil
+}
+
+func (stubBackupRegistry) FailEndedBackups(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
 }
 
 // TestNewHandlerKeepsBackupService proves the backup service passes through
@@ -1497,7 +1570,12 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    stubBackupExporter{},
+		Kinds:       productionKind{},
 		Registry:    stubBackupRegistry{},
+		Operations:  durabletest.NewMem().Store(),
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 		Blobs:       live,
 		StateOpener: nil,
 		Target:      target,
@@ -1516,6 +1594,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1538,9 +1618,11 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1551,6 +1633,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    stubAuthenticator{},
@@ -1573,9 +1657,11 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
@@ -1609,4 +1695,13 @@ func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, e
 		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
 		FinishedBlobPurges: 0, PendingBlobPurges: 0,
 	}, nil
+}
+
+// productionKind is a backup.KindReader of a production installation, for the
+// route tests that stub the exporter.
+type productionKind struct{}
+
+// ReadKind implements backup.KindReader.
+func (productionKind) ReadKind(_ context.Context) (installation.Kind, error) {
+	return installation.KindProduction, nil
 }

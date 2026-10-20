@@ -25,7 +25,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -56,10 +58,20 @@ type Store struct {
 	// Tests set it to prove the live access tables stay locked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// beforeLockDelete, when set, runs in the removal of a manual lock between
+	// the read of the lock and the delete, inside the transaction. Tests change
+	// the lock there to reach the changed-lock check. Nil in production.
+	beforeLockDelete func(ctx context.Context, q *db.Queries) error
+	// stateLockWait, when it is above zero, replaces stateLockTimeout. Tests
+	// set it to reach the timeout without a long wait. Zero in production.
+	stateLockWait time.Duration
 	// binaryVersion is the version of the binary that opens the store. The
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// kind is the installation kind of the command that opens the store.
+	// Empty means no check before the migrations.
+	kind installation.Kind
 	// noMigrate makes Open apply no migration and refuse a database with
 	// a pending one.
 	noMigrate bool
@@ -74,6 +86,15 @@ type Option func(*Store)
 // minimum refuses.
 func WithBinaryVersion(version string) Option {
 	return func(s *Store) { s.binaryVersion = version }
+}
+
+// WithInstallationKind sets the installation kind of the command that opens
+// the database. When the database already holds a kind, Open compares it with
+// kind before it applies a migration, and returns an error that wraps
+// installation.ErrKindMismatch without a change when the two differ. A
+// database that holds no kind yet passes the check: the claim decides.
+func WithInstallationKind(kind installation.Kind) Option {
+	return func(s *Store) { s.kind = kind }
 }
 
 // WithoutMigrate makes Open check the schema and apply no migration. Open
@@ -132,9 +153,10 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		binaryVersion: "", gate: nil, noMigrate: false,
+		beforeLockDelete: nil, stateLockWait: 0,
+		binaryVersion: "", gate: nil, kind: "", noMigrate: false,
 	}
-	s.gate = gatestore.New(gateRunner{s: s})
+	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	for _, opt := range opts {
 		opt(s)
@@ -185,7 +207,9 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
-	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return insertNamespaceRow(ctx, q, codec.ToNamespaceRow(ns))
+	})
 }
 
 // GetNamespace implements namespace.Store.
@@ -486,7 +510,8 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // the transaction. A guard naming another checkpoint returns
 // ErrConcurrentModification so the service recounts once. It returns
 // ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
-// mutating update of the stack runs.
+// mutating update of the stack runs. While a manual lock covers the stack,
+// its collection or its namespace, the error also matches manuallock.ErrLocked.
 // The stack row is locked before the running check, so a concurrent start
 // or save either wins the lock and the delete conflicts, or waits and then
 // finds no stack. A concurrent create of an update takes no stack lock. When
@@ -511,6 +536,10 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
+			return err
+		}
+
 		if err := refuseRunningStack(ctx, q, locked.ID); err != nil {
 			return err
 		}
@@ -528,7 +557,8 @@ func (s *Store) DeleteStack(
 // ForceDeleteStack implements stack.Store. It soft-deletes the stack as
 // DeleteStack does, even when the latest checkpoint manages resources. It
 // returns ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
-// mutating update of the stack runs.
+// mutating update of the stack runs. While a manual lock covers the stack,
+// its collection or its namespace, the error also matches manuallock.ErrLocked.
 func (s *Store) ForceDeleteStack(
 	ctx context.Context, ref stack.Ref, fence namespace.Fence, d inventory.Deletion,
 ) error {
@@ -541,6 +571,10 @@ func (s *Store) ForceDeleteStack(
 		}
 
 		if err != nil {
+			return err
+		}
+
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
 			return err
 		}
 
@@ -749,8 +783,75 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 	return out, nil
 }
 
+// writeLockClass is the first key of the advisory lock that orders the
+// writes against a change of the installation state. Each write transaction
+// takes the shared form, and an enter or a leave of maintenance mode takes the
+// exclusive form, so an enter waits for the writes in flight. The second key
+// is the schema, so two installations in one database do not wait for each
+// other ("main" in ASCII).
+const writeLockClass int32 = 0x6d61696e
+
+// writeLockSQL takes the shared form of the write lock for this transaction.
+const writeLockSQL = `SELECT pg_advisory_xact_lock_shared($1, hashtext(current_schema()))`
+
+// readStateSQL reads the installation state. A later statement than the
+// lock, so a READ COMMITTED snapshot cannot be older than the lock: a write
+// that waited for an enter reads maintenance mode.
+const readStateSQL = `SELECT state FROM installation WHERE id = 1`
+
+// readStateAndFenceSQL reads the installation state and the failover version
+// of the namespace in one statement, and holds the namespace row FOR SHARE so
+// a promotion waits until the transaction ends.
+const readStateAndFenceSQL = `SELECT
+	(SELECT state FROM installation WHERE id = 1),
+	(SELECT failover_version FROM namespaces WHERE name = $1 FOR SHARE)`
+
+// inTx runs fn in a write transaction. It first takes the shared write lock
+// and reads the installation state, so a write fails with
+// maintenance.ErrInMaintenance on every instance as soon as one instance
+// enters maintenance mode, without a wait for a cache. It fails closed: a
+// read error fails the write with maintenance.ErrUnavailable. The writes of a
+// restore and of the control tables use inControlTx instead.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, func(tx pgx.Tx) error {
+		_, err := readWritable(ctx, tx, readStateSQL, nil)
+
+		return err
+	})
+}
+
+// inControlTx runs fn in a transaction with no installation state check. The
+// writes of a restore and of the control tables (the installation state,
+// backups, restores, durable operations, schedules, heartbeats and the audit
+// chain) must run while the installation is in maintenance mode. The control
+// path is for the writes that keep the installation able to enter, leave and
+// restore from maintenance mode, and that record what happens. Each caller is
+// a write that maintenance mode must not refuse.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
+func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, nil)
+}
+
+// runTx runs before, when set, and then fn in one transaction.
+func (s *Store) runTx(ctx context.Context, fn func(q *db.Queries) error, before func(tx pgx.Tx) error) error {
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if before != nil {
+			if err := before(tx); err != nil {
+				return err
+			}
+		}
+
 		return fn(s.queries.WithTx(tx))
 	})
 	if err != nil {
@@ -758,6 +859,72 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	}
 
 	return nil
+}
+
+// readWritable takes the shared write lock and then reads readSQL in one
+// round trip, as two statements. Each statement has its own READ COMMITTED
+// snapshot, so the read comes after the lock: a write that waited for an
+// enter reads maintenance mode. readSQL returns the installation state in its
+// first column. With fenceName set, it takes the namespace name as its only
+// argument and returns the failover version in a second column, which
+// readWritable returns (nil for a missing namespace row).
+//
+// It returns maintenance.ErrInMaintenance in maintenance mode, and
+// maintenance.ErrUnavailable when the state cannot be read, the row is
+// missing or the stored value is unknown: a write never passes on a read error.
+func readWritable(ctx context.Context, tx pgx.Tx, readSQL string, fenceName *string) (*int64, error) {
+	var batch pgx.Batch
+
+	batch.Queue(writeLockSQL, writeLockClass)
+
+	if fenceName != nil {
+		batch.Queue(readSQL, *fenceName)
+	} else {
+		batch.Queue(readSQL)
+	}
+
+	var (
+		state   *string
+		version *int64
+	)
+
+	results := tx.SendBatch(ctx, &batch)
+
+	_, lockErr := results.Exec()
+
+	var scanErr error
+
+	if lockErr == nil {
+		row := results.QueryRow()
+
+		if fenceName != nil {
+			scanErr = row.Scan(&state, &version)
+		} else {
+			scanErr = row.Scan(&state)
+		}
+	}
+
+	if err := errors.Join(lockErr, scanErr, results.Close()); err != nil {
+		return nil, fmt.Errorf("read installation state postgres database: %w", maintenance.ErrUnavailable)
+	}
+
+	if state == nil {
+		return nil, fmt.Errorf(
+			"read installation state postgres database: row is missing: %w",
+			maintenance.ErrUnavailable,
+		)
+	}
+
+	parsed, err := maintenance.ParseState(*state)
+	if err != nil {
+		return nil, fmt.Errorf("read installation state postgres database: %w", maintenance.ErrUnavailable)
+	}
+
+	if parsed == maintenance.StateMaintenance {
+		return nil, maintenance.ErrInMaintenance
+	}
+
+	return version, nil
 }
 
 // inSnapshotTx runs fn in a REPEATABLE READ, read-only transaction, so each
@@ -778,24 +945,36 @@ func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) 
 	return nil
 }
 
-// inFencedTx runs fn in a transaction that first checks fence, holding the
-// namespace row FOR SHARE so a promotion waits until the transaction ends.
+// inFencedTx runs fn in a write transaction that first takes the shared write
+// lock, then reads the installation state and the failover version of the
+// namespace in one statement and checks both: maintenance mode fails the
+// write with maintenance.ErrInMaintenance, and a stale fence with
+// namespace.ErrFenced. The namespace row is held FOR SHARE so a promotion
+// waits until the transaction ends.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
-	return s.inTx(ctx, func(q *db.Queries) error {
-		version, err := q.GetFailoverVersionForShare(ctx, fence.Namespace.String())
-		if errors.Is(err, pgx.ErrNoRows) {
+	name := fence.Namespace.String()
+
+	return s.runTx(ctx, fn, func(tx pgx.Tx) error {
+		version, err := readWritable(ctx, tx, readStateAndFenceSQL, &name)
+		if err != nil {
+			return err
+		}
+
+		if version == nil {
 			return namespace.ErrNotFound
 		}
 
-		if err != nil {
-			return fmt.Errorf("read failover version: %w", err)
-		}
-
-		if version != fence.FailoverVersion {
+		if *version != fence.FailoverVersion {
 			return namespace.ErrFenced
 		}
 
-		return fn(q)
+		return nil
 	})
 }
 
@@ -806,7 +985,12 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		return migrateTx(ctx, tx, all, migrateRules{binaryVersion: s.binaryVersion, noMigrate: s.noMigrate})
+		return migrateTx(
+			ctx,
+			tx,
+			all,
+			migrateRules{binaryVersion: s.binaryVersion, kind: s.kind, noMigrate: s.noMigrate},
+		)
 	})
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -819,6 +1003,7 @@ func (s *Store) migrate(ctx context.Context) error {
 // of the binary, and whether the caller applies no migration.
 type migrateRules struct {
 	binaryVersion string
+	kind          installation.Kind
 	noMigrate     bool
 }
 
@@ -852,6 +1037,10 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 	plan, err := migrate.Check(recorded, all, rules.binaryVersion)
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
+	}
+
+	if err := checkKind(ctx, tx, rules.kind); err != nil {
+		return err
 	}
 
 	if rules.noMigrate && len(plan.Pending) > 0 {

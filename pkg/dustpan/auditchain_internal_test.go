@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -682,6 +683,44 @@ func metricLine(t *testing.T, chain *auditChain) string {
 	return out.String()
 }
 
+// TestNewEpochAfterRestoreWritesItsEntryInMaintenance proves that the
+// after-apply step of a restore writes its entry in @server while the real
+// stored installation state is maintenance: a restore holds maintenance
+// mode until its last step ends, and a checked append would lose the entry.
+func TestNewEpochAfterRestoreWritesItsEntryInMaintenance(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOn)
+
+	reader, ok := chain.entries.(audit.EntryReader)
+	if !ok {
+		t.Fatal("audit store reads no single entry")
+	}
+
+	state, ok := chain.store.(maintenance.Store)
+	if !ok {
+		t.Fatal("chain store holds no installation state")
+	}
+
+	cps := audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs: openTestBlobs(t), Entries: reader, Signer: newTestCheckpointSigner(t), Marks: nil, Now: nil,
+	})
+
+	if err := state.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	step := newEpochAfterRestore(cps, chain.server, time.Now)
+	if err := step(t.Context()); err != nil {
+		t.Fatalf("after-apply step in maintenance mode: %v", err)
+	}
+
+	last, found, err := chain.store.LastEntry(t.Context(), audit.ServerScope)
+	if err != nil || !found || last.ValuePath != "/audit/checkpoints/epoch/1" {
+		t.Fatalf("last @server entry = %+v, %v, %v; want the epoch 1 entry", last, found, err)
+	}
+}
+
 // TestCheckWritesNoCheckpointWhileAChangeWaits proves that with checkpoints
 // on, check runs the chain check and the checkpoint check but writes no
 // checkpoint while a change of the chain waits. After the wait ends, the
@@ -702,6 +741,7 @@ func TestCheckWritesNoCheckpointWhileAChangeWaits(t *testing.T) {
 		Blobs:   blobs,
 		Entries: reader,
 		Signer:  newTestCheckpointSigner(t),
+		Marks:   nil,
 		Now:     nil,
 	})
 	chain.observed = metrics.NewServerMetrics("test", time.Now())
@@ -763,6 +803,7 @@ func TestCheckWritesNoCheckpointWhileRestoreRuns(t *testing.T) {
 		Blobs:   blobs,
 		Entries: reader,
 		Signer:  newTestCheckpointSigner(t),
+		Marks:   nil,
 		Now:     nil,
 	})
 	chain.observed = metrics.NewServerMetrics("test", time.Now())
@@ -826,6 +867,7 @@ func TestCheckWritesNoCheckpointWhenRestoreCheckFails(t *testing.T) {
 		Blobs:   blobs,
 		Entries: reader,
 		Signer:  newTestCheckpointSigner(t),
+		Marks:   nil,
 		Now:     nil,
 	})
 	chain.observed = metrics.NewServerMetrics("test", time.Now())
@@ -952,6 +994,7 @@ func newFailingTestChain(t *testing.T, fc failCase) *auditChain {
 			Blobs:   blobs,
 			Entries: reader,
 			Signer:  newTestCheckpointSigner(t),
+			Marks:   nil,
 			Now:     nil,
 		})
 	}
@@ -1009,5 +1052,54 @@ func TestRestoredLogCheckCountsAFailedCallAsNotChecked(t *testing.T) {
 
 	if !strings.Contains(got, "dustpan_audit_chain_check_errors_total 1") {
 		t.Fatalf("metrics after a failed call:\n%s\nwant one check error", got)
+	}
+}
+
+// TestChainRunnerClaimsBeatAndUseTheLease proves that the runner of the audit
+// chain migration claims through the claim recorder: a worker with no job
+// schedule that only polls for a migration still writes its heartbeat.
+func TestChainRunnerClaimsBeatAndUseTheLease(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	cfg := defaultSettings()
+	cfg.namespaceStore = st
+	cfg.auditChain = audit.ChainOn
+	cfg.components = Components{api: false, worker: true}
+	cfg.durableStore = st.DurableOperations()
+	cfg.instanceID = "worker-1"
+	cfg.operationLease = time.Minute
+	cfg.watch = newWorkerWatch(cfg)
+
+	chain, err := newAuditChain(cfg, nil)
+	if err != nil || chain == nil {
+		t.Fatalf("new audit chain = %v, %v", chain, err)
+	}
+
+	if beat, beatErr := st.DurableOperations().LastBeat(t.Context()); beatErr != nil || beat.Owner != "" {
+		t.Fatalf("heartbeat before the claim = %+v, %v; want none", beat, beatErr)
+	}
+
+	if runErr := chain.runner.RunOnce(t.Context()); !errors.Is(runErr, durable.ErrNoWork) {
+		t.Fatalf("run once = %v, want %v", runErr, durable.ErrNoWork)
+	}
+
+	beat, err := st.DurableOperations().LastBeat(t.Context())
+	if err != nil {
+		t.Fatalf("read heartbeat: %v", err)
+	}
+
+	if beat.Owner != "worker-1" {
+		t.Fatalf("heartbeat owner after the claim = %q, want worker-1", beat.Owner)
 	}
 }

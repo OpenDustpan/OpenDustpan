@@ -11,6 +11,20 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
+// requireRefusedOverride fails the test unless err matches ErrOverrideRefused and
+// carries the typed refusal of want.
+func requireRefusedOverride(t *testing.T, err error, want workspace.Override) {
+	t.Helper()
+
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
+		t.Fatalf("err = %v, want ErrOverrideRefused", err)
+	}
+
+	if got, ok := workspace.RefusedOverride(err); !ok || got != want {
+		t.Fatalf("RefusedOverride = %v, %v, want %v", got, ok, want)
+	}
+}
+
 // TestUnlockedDeclareNeedsTheSwitches proves a declare on an unlocked unit is
 // refused unless the caller may use the unlocked-write override. The refusal
 // stays ErrNotLocked, and an allowed declare finalizes without a lock (ADR 44,
@@ -31,6 +45,9 @@ func TestUnlockedDeclareNeedsTheSwitches(t *testing.T) {
 		t.Fatalf("refusal does not name the action: %v", err)
 	}
 
+	// The refusal also carries the typed signal that the adapters record.
+	requireRefusedOverride(t, err, workspace.OverrideUnlocked)
+
 	// The action alone is not enough: the switches must be on too, and the
 	// store refuses the declare while either is off (ADR 44, decision 6).
 	_, err = f.svc.BeginState(
@@ -43,6 +60,8 @@ func TestUnlockedDeclareNeedsTheSwitches(t *testing.T) {
 	if !errors.Is(err, workspace.ErrOverrideRefused) {
 		t.Fatalf("declare with the action but no switches: err = %v, want ErrOverrideRefused", err)
 	}
+
+	requireRefusedOverride(t, err, workspace.OverrideUnlocked)
 
 	_, err = f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, namespace.Overrides{Unlocked: true, Forced: false})
 	if err != nil {
@@ -406,4 +425,89 @@ func effectiveOverrides(t *testing.T, f fixture) (namespace.Overrides, error) {
 	}
 
 	return ns.Overrides.And(w.Overrides), nil
+}
+
+// TestOverrideRefusalsSayTheWordsRoutesAndAction proves the refusal of a forced
+// write and the refusal of an unlocked write keep their sentinel, say the plain
+// words first, name both switch routes, and name the action after the words.
+func TestOverrideRefusalsSayTheWordsRoutesAndAction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, f fixture) workspace.NewState
+		wantErr  error
+		wantWord string
+		action   string
+	}{
+		{
+			name: "forced write with the switch off and without the action",
+			setup: func(t *testing.T, f fixture) workspace.NewState {
+				t.Helper()
+
+				if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
+					t.Fatalf("lock: %v", err)
+				}
+
+				if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+					t.Fatalf("first state: %v", err)
+				}
+
+				forced := newState("lin-old", 2, smallDoc)
+				forced.Force = true
+
+				return forced
+			},
+			wantErr:  workspace.ErrOverrideRefused,
+			wantWord: "forced-write switch",
+			action:   "unit:write-forced",
+		},
+		{
+			name: "unlocked write with the switch off and without the action",
+			setup: func(_ *testing.T, _ fixture) workspace.NewState {
+				return newState("lin-old", 1, smallDoc)
+			},
+			wantErr:  workspace.ErrNotLocked,
+			wantWord: "unlocked-write switch",
+			action:   "unit:write-unlocked",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			in := tt.setup(t, f)
+
+			_, err := f.svc.BeginState(t.Context(), f.ws.ID, "alice", in, authority(noOverrides(), nil))
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+
+			checkRefusalText(t, err.Error(), tt.wantWord, tt.action)
+		})
+	}
+}
+
+// checkRefusalText fails the test unless msg says word, then action, and names
+// both switch routes.
+func checkRefusalText(t *testing.T, msg, word, action string) {
+	t.Helper()
+
+	w := strings.Index(msg, word)
+	a := strings.Index(msg, action)
+
+	if w < 0 || a < 0 || a < w {
+		t.Fatalf("err = %q, want %q and then %q", msg, word, action)
+	}
+
+	for _, route := range []string{
+		"PUT /api/server/namespaces/{namespace}/override-switches",
+		"PUT /api/v2/workspaces/{id}/override-switches",
+	} {
+		if !strings.Contains(msg, route) {
+			t.Errorf("err = %q, want route %q", msg, route)
+		}
+	}
 }

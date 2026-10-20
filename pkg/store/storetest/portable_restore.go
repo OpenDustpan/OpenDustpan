@@ -83,7 +83,7 @@ func testRestoreStagingKeepsLive(t *testing.T, newStore RestoreFactory) {
 	before := portableSummaryOf(t, ps.dst)
 	beforeNS := mustGetNamespace(t, ps.dst, live.acme.Name)
 
-	staged, err := ps.dst.StagePortable(ctx, sink.read, sum, files)
+	staged, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst))
 	if err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
@@ -99,7 +99,7 @@ func testRestoreStagingKeepsLive(t *testing.T, newStore RestoreFactory) {
 	assertSameSummary(t, portableSummaryOf(t, ps.dst), before)
 
 	// The staging area is gone: the same bytes stage cleanly again.
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage portable backup again: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func testRestoreStagingReplacesPrevious(t *testing.T, newStore RestoreFactory) {
 
 	witness, hasWitness := ps.dst.(StagingWitness)
 
-	if _, err := ps.dst.StagePortable(ctx, sink1.read, sum1, files1); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink1.read, sum1, files1, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage first backup: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func testRestoreStagingReplacesPrevious(t *testing.T, newStore RestoreFactory) {
 		}
 	}
 
-	if _, err := ps.dst.StagePortable(ctx, sink2.read, sum2, files2); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink2.read, sum2, files2, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage second backup: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func testRestoreStagingRefusesUnsealedState(t *testing.T, newStore RestoreFactor
 
 	edited, descs := unsealStateVersionsFile(t, sink, files)
 
-	if _, err := ps.dst.StagePortable(ctx, PortableOpener(edited), sum, descs); !errors.Is(
+	if _, err := ps.dst.StagePortable(ctx, PortableOpener(edited), sum, descs, StageAs(t, ps.dst)); !errors.Is(
 		err, workspace.ErrUnsealedState,
 	) {
 		t.Fatalf("stage backup with an unsealed state version: err = %v, want ErrUnsealedState", err)
@@ -357,7 +357,7 @@ func testRestoreStagingKeepsCheckpointBlobs(t *testing.T, newStore RestoreFactor
 		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
 	}
 
-	staged, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files)
+	staged, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, ps.dst))
 	if err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
@@ -389,7 +389,7 @@ func testRestoreJournalBlob(t *testing.T, newStore RestoreFactory) {
 
 	sink, sum, files := exportPortable(t, ps.src)
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
 
@@ -422,7 +422,7 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	checkProfileRowCounts(t, ps.src, sum)
 	requireSeededGate(t, ps.src, sum)
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
 
@@ -590,7 +590,7 @@ func testRestoreExportDoesNotTear(t *testing.T, newStore RestoreFactory) {
 		}
 	}
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
 

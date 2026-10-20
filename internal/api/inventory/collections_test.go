@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -197,6 +198,20 @@ func newMoveFixtureWithSessions(
 ) moveFixture {
 	t.Helper()
 
+	return newMoveFixtureFull(t, authz, moves, sessions, nil)
+}
+
+// newMoveFixtureFull is newMoveFixtureWithSessions with the manual lock service
+// locks, which is nil for a handler with no manual locks.
+func newMoveFixtureFull(
+	t *testing.T,
+	authz identity.Authorizer,
+	moves apiinventory.MoveChecker,
+	sessions *sessionauth.Checker,
+	lockSvc func(namespace.Store) *manuallock.Service,
+) moveFixture {
+	t.Helper()
+
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
@@ -220,8 +235,13 @@ func newMoveFixtureWithSessions(
 		t.Fatalf("namespace service: %v", err)
 	}
 
+	var locks *manuallock.Service
+	if lockSvc != nil {
+		locks = lockSvc(nsStore)
+	}
+
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		PublicURL:     "",
+		Audit: nil, OnAuditFailure: nil, Locks: locks, PublicURL: "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
@@ -235,6 +255,7 @@ func newMoveFixtureWithSessions(
 		Authorizer:    authz,
 		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

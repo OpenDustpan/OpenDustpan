@@ -52,6 +52,12 @@ func TestEveryEnvVarHasADeclaration(t *testing.T) {
 			continue
 		}
 
+		// DUSTPAN_DEV marks a shell that holds the dev credentials. No flag
+		// or key sets it, so it is a marker and not a setting.
+		if name == "DUSTPAN_DEV" {
+			continue
+		}
+
 		if !declared[name] {
 			missing = append(missing, name)
 		}
@@ -136,8 +142,8 @@ var (
 //     its variable, its help or its reference names one, or it is a variable
 //     with no flag: a value that no flag takes is a secret by design.
 //
-// A path (a name that ends in -file or _FILE), a bool and an int hold no
-// secret.
+// A path (a name that ends in -file, _FILE or _DIR), a bool and an int hold
+// no secret.
 func TestSensitiveSettingsAreMarked(t *testing.T) {
 	t.Parallel()
 
@@ -152,13 +158,18 @@ func TestSensitiveSettingsAreMarked(t *testing.T) {
 			t.Errorf("setting %s holds a URL, and it is not sensitive and does not refuse user information", s.Name())
 		}
 
-		isPath := strings.HasSuffix(s.Flag, "-file") || strings.HasSuffix(s.Env, "_FILE")
-		holdsSecret := !isPath && (secretWords.MatchString(text) || s.Flag == "")
+		holdsSecret := !holdsPath(s) && (secretWords.MatchString(text) || s.Flag == "")
 
 		if holdsSecret && !s.Sensitive {
 			t.Errorf("setting %s holds a secret or a credential and has no sensitive mark", s.Name())
 		}
 	}
+}
+
+// holdsPath reports whether a setting names a file or a directory: its flag
+// ends in -file, or its variable ends in _FILE or _DIR.
+func holdsPath(s *cli.Setting) bool {
+	return strings.HasSuffix(s.Flag, "-file") || strings.HasSuffix(s.Env, "_FILE") || strings.HasSuffix(s.Env, "_DIR")
 }
 
 // TestStepInputsAreNotSettings proves a variable that the launcher sets for a
@@ -345,7 +356,9 @@ func TestFileKeysAreUnique(t *testing.T) {
 	}
 
 	for _, s := range cli.ServeFlags() {
-		if s.File == "" && s.Flag != "config" {
+		// The setting that lets a production installation restore a dev backup
+		// has no file key and no variable on purpose: only the flag sets it.
+		if s.File == "" && s.Flag != "config" && s.Flag != cli.UnsafeAllowDevBackupsFlag {
 			t.Errorf("serve flag --%s has no file key", s.Flag)
 		}
 	}

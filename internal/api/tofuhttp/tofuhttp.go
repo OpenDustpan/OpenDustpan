@@ -19,8 +19,10 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -43,9 +45,11 @@ type WorkspaceService interface {
 	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// Create creates an unlocked workspace without state.
 	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
-	// LockWithID locks the workspace for holder under lockID, the ID the
-	// client chose (ADR 49, decision 6).
-	LockWithID(ctx context.Context, id workspace.ID, holder, reason, lockID string) (workspace.Workspace, error)
+	// LockWithIDForJob locks the workspace for holder under lockID, the ID the
+	// client chose (ADR 49, decision 6). jobID is the job whose job token made
+	// the request, or empty: a job whose phase started before a manual lock
+	// passes that lock.
+	LockWithIDForJob(ctx context.Context, id workspace.ID, req workspace.LockRequest) (workspace.Workspace, error)
 	// UnlockLock releases holder's lock when it is lockID (ADR 49, decision 6). A
 	// lock that changed after the caller read the unit is refused, not released.
 	UnlockLock(ctx context.Context, id workspace.ID, lockID, holder string) (workspace.Workspace, error)
@@ -81,6 +85,10 @@ type Config struct {
 	Gate *bodygate.Gate
 	// OnAuditFailure runs when an audit append fails. Nil means no counter.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 }
 
 // Handler serves the http backend under /tofu/state/.
@@ -144,7 +152,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces: cfg.Namespaces,
 		audit:      cfg.Audit,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure),
+			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
+			WithSurface("tofu-http"),
 		gate:   cfg.Gate,
 		mux:    http.NewServeMux(),
 		routes: nil,
@@ -280,6 +289,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	if status == http.StatusUnauthorized {
 		w.Header().Set("WWW-Authenticate", `Basic realm="OpenDustpan"`)
 	}
@@ -317,6 +330,8 @@ func classifyNamespace(err error) (int, string, bool) {
 		return http.StatusConflict, namespace.ErrFenced.Error(), true
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, namespace.ErrNotHome.Error(), true
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again after the Retry-After time", true
 	case errors.Is(err, namespace.ErrUnavailable):
 		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again after the Retry-After time", true
 	default:

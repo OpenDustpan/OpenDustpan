@@ -88,7 +88,7 @@ func (o *DurableOperations) Start(ctx context.Context, req durable.StartRequest)
 		created bool
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		var startErr error
 
 		op, created, startErr = startDurable(ctx, q, req)
@@ -375,7 +375,7 @@ func (o *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 	var extended durable.Claim
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := liveDurable(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err
@@ -477,43 +477,50 @@ func (o *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
-		row, err := q.GetDurableOperation(ctx, string(id))
-		if errors.Is(err, sql.ErrNoRows) {
-			return durable.ErrNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("read durable operation: %w", err)
-		}
-
-		now, err := storeNow(ctx, q)
-		if err != nil {
-			return err
-		}
-
-		switch durable.State(row.State) {
-		case durable.StatePending:
-			row.State = string(durable.StateCanceled)
-		case durable.StateRunning:
-			row.CancelRequested = true
-		case durable.StateSucceeded, durable.StateFailed:
-			return durable.ErrFinished
-		case durable.StateCanceled:
-			return nil
-		default:
-			return fmt.Errorf(
-				"durable operation %s has the unknown state %q: %w",
-				id,
-				row.State,
-				errUnknownDurableState,
-			)
-		}
-
-		row.UpdatedAtMs = now
-
-		return writeDurable(ctx, q, row)
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		return cancelDurable(ctx, q, id)
 	})
+}
+
+// cancelDurable applies the rules of durable.Store.Cancel to the operation id
+// in the transaction of q. A domain write that cancels an operation in its
+// own transaction calls it.
+func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
+	row, err := q.GetDurableOperation(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return durable.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read durable operation: %w", err)
+	}
+
+	now, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	switch durable.State(row.State) {
+	case durable.StatePending:
+		row.State = string(durable.StateCanceled)
+	case durable.StateRunning:
+		row.CancelRequested = true
+	case durable.StateSucceeded, durable.StateFailed:
+		return durable.ErrFinished
+	case durable.StateCanceled:
+		return nil
+	default:
+		return fmt.Errorf(
+			"durable operation %s has the unknown state %q: %w",
+			id,
+			row.State,
+			errUnknownDurableState,
+		)
+	}
+
+	row.UpdatedAtMs = now
+
+	return writeDurable(ctx, q, row)
 }
 
 // endAttempt runs the checks that Complete, Fail and Release share, then
@@ -526,7 +533,7 @@ func (s *Store) endAttempt(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := liveDurable(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err

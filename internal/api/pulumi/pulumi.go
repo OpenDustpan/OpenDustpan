@@ -36,10 +36,13 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -109,6 +112,10 @@ type Config struct {
 	// to the dustpan_audit_append_failures_total counter. Nil means no
 	// counter: the routes still answer 204.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// CheckpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero turns the delta capability off.
 	CheckpointDeltaCutoff int
@@ -185,7 +192,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure),
+			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
+			WithSurface("pulumi"),
 		mux:         newPatternMux(),
 		routes:      nil,
 		deltaCutoff: cfg.CheckpointDeltaCutoff,
@@ -431,7 +439,7 @@ func (h *Handler) listStacks(
 	}
 
 	if r.URL.Query().Get("organization") != "" {
-		h.listStacksIn(ctx, w, p, obj.Namespace(), project)
+		h.listStacksIn(w, r, p, obj.Namespace(), project)
 
 		return
 	}
@@ -443,10 +451,13 @@ func (h *Handler) listStacks(
 // unit:read and namespace:read on the namespace, as on a route that
 // declares them.
 func (h *Handler) listStacksIn(
-	ctx context.Context, w http.ResponseWriter, p identity.Principal, ns namespace.Name, project stack.ProjectName,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, ns namespace.Name, project stack.ProjectName,
 ) {
+	ctx := r.Context()
+
 	for _, action := range []identity.Action{identity.ActionUnitRead, identity.ActionNamespaceRead} {
-		if err := h.authz.Authorize(ctx, p, action, identity.NamespaceObject(ns)); err != nil {
+		// The guard writes the audit entry of a refusal.
+		if err := h.guard.Authorize(ctx, r, p, action, identity.NamespaceObject(ns)); err != nil {
 			h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
 
 			return
@@ -829,7 +840,7 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	if err := h.authorizeRenameDestination(ctx, p, oldRef, name); err != nil {
+	if err := h.authorizeRenameDestination(r, p, oldRef, name); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -848,7 +859,7 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity
 // of a rename: the same namespace and Pulumi project under the new stack
 // name. The wrapper already authorized the source unit in the path.
 func (h *Handler) authorizeRenameDestination(
-	ctx context.Context, p identity.Principal, oldRef stack.Ref, name stack.Name,
+	r *http.Request, p identity.Principal, oldRef stack.Ref, name stack.Name,
 ) error {
 	dest := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: name}
 
@@ -857,7 +868,7 @@ func (h *Handler) authorizeRenameDestination(
 		return err
 	}
 
-	if err := h.authz.Authorize(ctx, p, identity.ActionUnitManage, destObj); err != nil {
+	if err := h.guard.Authorize(r.Context(), r, p, identity.ActionUnitManage, destObj); err != nil {
 		return fmt.Errorf("authorize %s: %w", identity.ActionUnitManage, err)
 	}
 
@@ -900,12 +911,16 @@ type errorResponse struct {
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 
-	if status == http.StatusInternalServerError {
+	switch {
+	case status == http.StatusInternalServerError:
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
-	} else if errors.Is(err, secret.ErrDecrypt) {
+	case errors.Is(err, secret.ErrDecrypt):
 		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
+	case errors.Is(err, namespace.ErrFenced):
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	default:
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
@@ -957,8 +972,11 @@ func classify(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrHasResources):
 		return http.StatusBadRequest, hasResourcesMessage
-	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, namespace.ErrFenced),
-		errors.Is(err, stack.ErrOtherSecretsProvider):
+	case errors.Is(err, namespace.ErrFenced):
+		// The copy of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return http.StatusConflict, namespace.ErrFenced.Error()
+	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, stack.ErrOtherSecretsProvider):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, err.Error()
@@ -992,6 +1010,10 @@ func classifySecret(err error) (int, string) {
 // classifyUpdate maps the errors of the update cycle to an HTTP status and a
 // message safe to show callers.
 func classifyUpdate(err error) (int, string) {
+	if manual, ok := errors.AsType[*manuallock.LockedError](err); ok {
+		return http.StatusConflict, manual.Error()
+	}
+
 	switch {
 	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
@@ -1014,6 +1036,8 @@ func classifyUpdate(err error) (int, string) {
 		return http.StatusRequestEntityTooLarge, err.Error()
 	case errors.Is(err, stack.ErrJournalBuildTimeout):
 		return http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	case errors.Is(err, namespace.ErrUnavailable):
 		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again"
 	default:

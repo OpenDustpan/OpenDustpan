@@ -20,8 +20,19 @@ const portableBatchRows = 200
 // foreign-key order, one transaction for each batch of rows, and checks it as
 // the checks of a restore require. The live database is never written.
 func (s *Store) StagePortable(
-	ctx context.Context, open backup.PortableOpener, want backup.Summary, files []backup.PortableFile,
+	ctx context.Context,
+	open backup.PortableOpener,
+	want backup.Summary,
+	files []backup.PortableFile,
+	opts backup.StageOptions,
 ) (backup.Summary, error) {
+	// Layer 1: compare the kind of the backup with the kind that this
+	// database holds, before any row loads. The service checks too; this
+	// check stays so that a caller of the port cannot skip it.
+	if kindErr := s.checkStageKind(ctx, opts); kindErr != nil {
+		return backup.Summary{}, kindErr
+	}
+
 	version, err := func() (int64, error) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()

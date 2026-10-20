@@ -48,6 +48,58 @@ Console sessions live in the database. Each instance accepts a session that anot
 
 Give each instance the same sign-in providers and client secrets. The browser returns from the identity provider to the URL in `--public-url`. The load balancer can send that request to any instance.
 
+## Run the components in separate processes
+
+A process runs one or more components. The `--components` flag (`DUSTPAN_COMPONENTS`) selects them. The default is `all`.
+
+| Component | What it runs |
+| --- | --- |
+| `api` | Each HTTP route: the Pulumi Cloud-compatible API, the TFE-compatible API, the tool-neutral APIs, the installation API and the console files. It starts a durable operation, but it never claims one. |
+| `worker` | The durable operations, the job schedules, the audit shipper and the audit chain check. |
+
+```sh
+opendustpan serve --components api      # scale this for HTTP capacity
+opendustpan serve --components worker   # scale this for background work
+```
+
+An unknown name stops the start. The error names the valid components: `all`, `api` and `worker`.
+
+Each process, whatever its components, runs the store, the key-encryption key check, `/health/live`, `/health/ready` and the metrics route. Each process migrates the database at start, under a lock, so the start order of the processes does not matter. A process that runs `worker` without `api` listens on its port for the probes and the metrics route only. Each other route answers 404. Send client traffic only to `api` processes.
+
+The module switches of the installation apply to each component. The capabilities document lists modules, not components.
+
+### Flags that a component does not read
+
+Some flags matter to the `api` component only. For example, `--console-dir`, `--public-url` and `--oidc-*` matter to `api`. A process that runs `worker` without `api` ignores them, and it does not bind the sign-in providers. The `worker` component reads the other flags too. For example, `--allowed-origins` sets the CORS rule of the metrics route that a `worker` process serves. `--trusted-proxies` and `--trusted-proxy-header` set the client address in its request log. `--soft-delete-retention` sets the end of the retention that `api` records and that `worker` deletes at. `--audit-sink` names the sinks that `api` lists and `worker` ships to. Give these flags to each process. The start log has one line for each such flag, `setting has no effect: no selected component reads it`. The flag does not stop the start. Give each process the same settings if you want one configuration for all processes.
+
+### Readiness
+
+`/health/ready` answers for the components of the process and lists each one with its state in the field `components`. The fields `status` and `failed` keep their meaning: `failed` names each check that failed, and is absent when none failed. `/health/ready/api` and `/health/ready/worker` answer for one component. A component that the process does not run answers 404.
+
+- `api` is ready when the store and the blob store answer.
+- `worker` is ready when the store answers and its claim loop ran in the last 2 claim intervals. A claim interval is the longer of the poll period and the lease period.
+
+The state of the audit chain is information only. While a change of the audit chain waits for approval, the body of the `api` component shows `"audit-chain": "waiting"` in the field `info`. The probe still answers 200. The approval needs the `api` processes in the pool of the Service. The Helm chart probes `/health/ready`.
+
+`/health/live` is the same for each component: it answers when the process runs, and it does not check the claim loop.
+
+### No worker
+
+With `api` processes only, nobody runs the background work. Four signs show that:
+
+- `/health/ready/worker` of a `worker` process answers 503 when its claim loop stops.
+- The metric `dustpan_worker_silent_seconds` shows the time since a worker last claimed work or renewed a claim.
+- The metric `dustpan_oldest_unclaimed_operation_age_seconds` shows how long the oldest unclaimed operation or due schedule waits. It is 0 when none waits. It does not decide the refusal below. A long job, or a schedule that an older worker does not know, leaves work unclaimed while the workers run.
+- `GET /api/server/worker` of the installation API shows `silentSeconds` and lists each due schedule and each operation that no worker claimed for more than 2 lease periods. It needs the action `server:observe`.
+
+Each worker records a heartbeat in the store when it claims work or renews a claim. The time of the store counts, not the clock of the process that reads it. When no worker claimed or renewed a claim for 2 lease periods, an `api` process refuses each request that inserts a durable operation with 503. Today that is the approval of an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process counts the 2 lease periods from the time it began to watch. So it never refuses a start right after it began. A process that runs only `worker` does not fail the restores of the `api` processes when it starts.
+
+`GET /api/server/components` lists the components of the process that answers.
+
+A restore runs in the process that took the request, so it needs no worker. Send the request to an `api` process that has enough time and memory for it.
+
+A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
+
 ## Settings that stay on one host
 
 Some targets write to the disk of the host that runs the instance. Each instance then holds a part of the data.
@@ -67,4 +119,4 @@ Send health checks to the readiness probe. The [observe guide](observe.md) gives
 ## Limits
 
 - SQLite holds one instance only. Do not start two processes on one SQLite file.
-- At start, an instance can mark a backup or a restore as failed while another instance runs it. Start or restart an instance only when no backup or restore runs.
+- At start, an instance can mark a restore as failed while another instance runs it. Start or restart an instance only when no restore runs.

@@ -67,7 +67,15 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	principals, err := principal.NewService(
-		principal.Config{TempAdmins: nil, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      st,
+			Guard:      allowAllGuard{},
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -92,6 +100,8 @@ func newAuditedPrincipalHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -113,10 +123,12 @@ func newAuditedPrincipalHandler(
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		Audit:            entries,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -444,6 +456,24 @@ func refusalCases(aliceID, groupID string) []refusalCase {
 			},
 		},
 		{
+			name: "reserved dev person",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"dev:admin","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "reserved dev prefix, upper case",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"DEV:someone","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
 			name: "two objects",
 			call: apiCall{
 				method: http.MethodPost,
@@ -695,7 +725,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      failingStore{st},
-			Guard:      nil,
+			Guard:      allowAllGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -911,6 +941,8 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",
@@ -919,6 +951,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		Tokens:           nil,
 		Audit:            nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
@@ -936,6 +969,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Schema:           stubSchema{migrations: nil},
 		Principals:       svc,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -993,6 +1027,8 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Backups:          nil,
 		Restores:         nil,
 		Version:          "",
@@ -1001,6 +1037,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		Tokens:           nil,
 		Audit:            nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
@@ -1018,6 +1055,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Schema:           stubSchema{migrations: nil},
 		Principals:       newTestPrincipals(t),
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1059,4 +1097,14 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 				c.principalID, got.TemporaryAdministrator, c.want)
 		}
 	}
+}
+
+// allowAllGuard is a principal.Guard that allows every change. These tests
+// check the routes, not the grant check, which the principal package tests.
+type allowAllGuard struct{}
+
+func (allowAllGuard) CheckGroupGrants(context.Context, identity.Principal, string) error { return nil }
+
+func (allowAllGuard) CheckPrincipalGrants(context.Context, identity.Principal, string) error {
+	return nil
 }

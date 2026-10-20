@@ -13,6 +13,7 @@ the same list.
 | `--config` | `DUSTPAN_CONFIG` | (none) | (none) |
 | `--database` | `DUSTPAN_DATABASE` | `database` | `sqlite:dustpan.db` (or `postgres://...`) |
 | `--region` | `DUSTPAN_REGION` | `region` | `local` |
+| `--components` | `DUSTPAN_COMPONENTS` | `components` | `all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts durable operations, but never claims one. `worker` runs the durable operations, the schedules, the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 on each route except the probes and the metrics route. An unknown name stops the start. See the several instances guide (docs/guides/several-instances.md) |
 | `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
 | `--console-dir` | `DUSTPAN_CONSOLE_DIR` | `console-dir` | (none) |
 | `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none). A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with `Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests. |
@@ -32,6 +33,7 @@ the same list.
 | `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | `s3-endpoint` | (none: AWS) |
 | `--s3-region` | `DUSTPAN_S3_REGION` | `s3-region` | `us-east-1` |
 | `--backup-target` | `DUSTPAN_BACKUP_TARGET` | `backup-target` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
+| `--unsafe-allow-restoring-dev-installation-backups-into-production` | (none) | (none) | false. Only the flag sets it. No variable and no configuration file key sets it. The server writes one warning to the log at each start with the flag. Without it, a production installation refuses to restore a backup of a dev installation. A restore of any backup deletes the dev users and their data from the staged data |
 | `--key-encryption-key-file` | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | `key-encryption-key-file` | `dustpan.key` next to the SQLite file, or `./dustpan.key` for PostgreSQL |
 | `--generate-key-encryption-key` | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | `generate-key-encryption-key` | (none: ask on a terminal, else refuse). Set `true` to make the key file with no prompt |
 | `--max-checkpoint-bytes` | `DUSTPAN_MAX_CHECKPOINT_BYTES` | `max-checkpoint-bytes` | `0`: 32 MiB, the largest Pulumi checkpoint |
@@ -39,7 +41,7 @@ the same list.
 | `--disable-pulumi-journaling` | `DUSTPAN_DISABLE_PULUMI_JOURNALING` | `disable-pulumi-journaling` | (none: journaling on). Set `true` to make the Pulumi CLI save checkpoints |
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
-| `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
+| `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One encrypted state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
 | `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person runs `opendustpan audit-chain approve` |
 | `--audit-checkpoints` | `DUSTPAN_AUDIT_CHECKPOINTS` | `audit-checkpoints` | (none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file |
 | `--audit-signing-key-file` | `DUSTPAN_AUDIT_SIGNING_KEY_FILE` | `audit-signing-key-file` | (none) |
@@ -225,6 +227,42 @@ Each client command takes only the flags in its row:
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of
 the backup commands. The [audit log guide](../guides/audit-log.md) shows
 the audit chain commands.
+
+## Dev command
+
+`opendustpan dev` runs a server for a trial or for CI, with no setup. It reads
+each setting from a flag only. No variable of `serve` and no configuration
+file sets a flag of `dev`, also when `serve` has a flag with the same name.
+The [dev server guide](../guides/dev-server.md) shows the steps.
+
+| Flag | Default |
+| --- | --- |
+| `--data-dir` | (none). The default is a directory for each user. On Linux and other Unix systems, it is `$XDG_DATA_HOME/opendustpan/dev`, or `~/.local/share/opendustpan/dev` when `XDG_DATA_HOME` is not set. On macOS, it is `~/Library/Application Support/opendustpan/dev`. On Windows, it is `%LocalAppData%\opendustpan\dev`. With `DUSTPAN_DATA_DIR` set, it is the directory `dev` in the one that the variable names. Not with `--ephemeral` |
+| `--ephemeral` | (none: the data stays). A stop deletes the data, and with it the state that tracks the cloud resources of the trial. Not with `--data-dir` |
+| `--listen` | `127.0.0.1:8080`. Another address adds a line to the banner and to the log. With no `--tls`, the line also says that the token and the sign-in code cross the network in plain text |
+| `--tls` | (none: HTTP). The `cloud` block of OpenTofu needs it. The certificate lives 30 days |
+| `--hostname` | (none). The certificate holds `localhost`, `127.0.0.1`, `::1`, the host of `--listen` when it is not a wildcard, the name of the host and each `--hostname`. Repeat the flag for each name |
+| `--admin-token-file` | (none: dev makes a token and keeps it in the token file). Only its owner can read it |
+| `--console-dir` | (none) |
+| `--log-level` | `info` (or `debug`, `warn`, `error`) |
+| `--log-format` | `json` (or `text`) |
+| `--disable-pulumi-journaling` | (none: journaling on). Set `true` to make the Pulumi CLI save checkpoints |
+| `--max-checkpoint-bytes` | `0`: 32 MiB, the largest Pulumi checkpoint |
+| `--max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
+| `--max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
+| `--max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One encrypted state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
+| `--blob-cache-bytes` | `0`: no cache. The cache keeps only blobs that are written once: OpenTofu state versions. One blob takes at most one eighth of the cache |
+
+`dev` reads only these two variables:
+
+| Environment | Description |
+| --- | --- |
+| `DUSTPAN_DATA_DIR` | The parent of the data directory of `dev`. The data directory is `dev` in it. `--ephemeral` ignores it, and `--data-dir` wins over it. |
+| `DUSTPAN_DEV_ADMIN_TOKEN` | The administrator token of `dev`, in place of a token that `dev` makes. At least 32 bytes. `dev` clears the variable from its environment after the read, and `dev.env` takes the token from the variable in the shell that loads it. |
+
+At start, `dev` clears each variable of a secret setting of `serve` from its
+environment, and never reads `DUSTPAN_ADMIN_TOKEN` or
+`DUSTPAN_ADMIN_TOKEN_FILE`.
 
 ## Host command
 

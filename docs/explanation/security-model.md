@@ -144,14 +144,14 @@ because the Pulumi CLI writes only the ciphertext there.
 
 ## OpenTofu state
 
-The server seals each new OpenTofu state version before it stores it:
+The server encrypts each new OpenTofu state version before it stores it:
 
 - **One data key for each workspace.** The key-encryption key wraps it, as
   for a Pulumi stack.
-- **The server seals the state blob in chunks of 64 KiB** with AES-256-GCM. The
+- **The server encrypts the state blob in chunks of 64 KiB** with AES-256-GCM. The
   associated data of each chunk binds it to its workspace, its position and
   the end of the stream. A changed, reordered or cut-off blob does not open.
-- **The server also seals the outputs document in the database.**
+- **The server also encrypts the outputs document in the database.**
 - **A download answers the same bytes that the CLI sent.** The MD5 and the
   size of a state version stay those of the plain bytes.
 
@@ -210,12 +210,12 @@ disk encryption and with access rules on the S3 bucket.
 
 | Data | Where | Encrypted by the server |
 | --- | --- | --- |
-| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. Versions that a server older than the seal change wrote stay plain: the server does not seal them later |
+| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. Versions that an older server wrote stay plain: the server does not encrypt them later |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
 | Audit entries, with no secret value | Database | No |
-| Backups | Backup target | Not as a whole. A backup holds the stored bytes: sealed state stays sealed. It holds no key-encryption key |
+| Backups | Backup target | Not as a whole. A backup holds the stored bytes: encrypted state stays encrypted. It holds no key-encryption key |
 
 The server creates the blob directory with access for its owner only.
 

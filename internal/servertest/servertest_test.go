@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/servertest"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
 // request is one request of a test to one server of a cluster, and the
@@ -84,6 +86,163 @@ func TestTwoServersShareOneDatabase(t *testing.T) {
 		},
 		request{server: 1, method: http.MethodGet, path: "/api/stacks/acme/web/test", body: "", want: http.StatusOK},
 	)
+}
+
+// TestMaintenanceStopsWritesOnEveryServer proves that maintenance mode stops
+// writes on a second server in the next request, without a wait for its cache
+// of the installation state. Server 1 reads the state first, so its cache says
+// normal when server 0 enters. Then server 1 refuses a tool write and an
+// installation API write with 503, and a read still answers. After the leave,
+// both writes pass again.
+func TestMaintenanceStopsWritesOnEveryServer(t *testing.T) {
+	t.Parallel()
+
+	c := servertest.Start(t, 2)
+
+	send(
+		t,
+		c,
+		request{
+			server: 0,
+			method: http.MethodPost,
+			path:   "/api/server/namespaces",
+			body:   `{"name":"acme"}`,
+			want:   http.StatusCreated,
+		},
+		request{
+			server: 0,
+			method: http.MethodPost,
+			path:   "/api/stacks/acme/web",
+			body:   `{"stackName":"prod"}`,
+			want:   http.StatusOK,
+		},
+		// Fill the cache of server 1 with the normal state.
+		request{server: 1, method: http.MethodGet, path: "/api/stacks/acme/web/prod", body: "", want: http.StatusOK},
+		request{
+			server: 0,
+			method: http.MethodPost,
+			path:   "/api/server/maintenance/enter",
+			body:   "",
+			want:   http.StatusOK,
+		},
+		request{
+			server: 1,
+			method: http.MethodPost,
+			path:   "/api/stacks/acme/web",
+			body:   `{"stackName":"dev"}`,
+			want:   http.StatusServiceUnavailable,
+		},
+		request{
+			server: 1,
+			method: http.MethodPost,
+			path:   "/api/server/namespaces",
+			body:   `{"name":"other"}`,
+			want:   http.StatusServiceUnavailable,
+		},
+		request{server: 1, method: http.MethodGet, path: "/api/server/namespaces", body: "", want: http.StatusOK},
+		request{
+			server: 1,
+			method: http.MethodPost,
+			path:   "/api/server/maintenance/leave",
+			body:   "",
+			want:   http.StatusOK,
+		},
+	)
+
+	// The cache of the HTTP gate on server 1 may still say maintenance for a
+	// short time after the leave. The write goes through once it reads normal.
+	waitForStatus(t, c, request{
+		server: 1,
+		method: http.MethodPost,
+		path:   "/api/server/namespaces",
+		body:   `{"name":"other"}`,
+		want:   http.StatusCreated,
+	})
+
+	send(
+		t,
+		c,
+		request{
+			server: 1,
+			method: http.MethodPost,
+			path:   "/api/stacks/acme/web",
+			body:   `{"stackName":"dev"}`,
+			want:   http.StatusOK,
+		},
+	)
+}
+
+// TestSplitTopology proves a split topology on one database: server 0 runs
+// the api component, server 1 runs the worker component, and server 2 runs
+// both. The api server serves the routes, the worker server answers 404 on
+// each route except the probes and the metrics route, and a write on the api
+// server reads on the server with both components.
+func TestSplitTopology(t *testing.T) {
+	t.Parallel()
+
+	api, err := dustpan.ParseComponents("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	worker, err := dustpan.ParseComponents("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := servertest.StartSplit(t, []dustpan.Components{api, worker, dustpan.AllComponents()})
+
+	send(
+		t,
+		c,
+		request{
+			server: 0,
+			method: http.MethodPost,
+			path:   "/api/server/namespaces",
+			body:   `{"name":"acme"}`,
+			want:   http.StatusCreated,
+		},
+		request{server: 2, method: http.MethodGet, path: "/api/server/namespaces", body: "", want: http.StatusOK},
+		request{server: 1, method: http.MethodGet, path: "/api/server/namespaces", body: "", want: http.StatusNotFound},
+		request{server: 1, method: http.MethodGet, path: "/api/stacks/acme/web", body: "", want: http.StatusNotFound},
+		request{server: 1, method: http.MethodGet, path: "/health/live", body: "", want: http.StatusNoContent},
+		request{server: 1, method: http.MethodGet, path: "/health/ready/worker", body: "", want: http.StatusOK},
+		request{server: 1, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusNotFound},
+		request{server: 1, method: http.MethodGet, path: "/api/server/metrics", body: "", want: http.StatusOK},
+		request{server: 0, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusOK},
+		request{server: 0, method: http.MethodGet, path: "/api/server/worker", body: "", want: http.StatusOK},
+	)
+}
+
+// waitForStatus sends r until it answers the status that it wants, and fails
+// the test when that takes more than 10 seconds.
+func waitForStatus(t *testing.T, c *servertest.Cluster, r request) {
+	t.Helper()
+
+	timeout := time.After(10 * time.Second)
+
+	for {
+		status, body := c.Do(t, r.server, r.method, r.path, r.body)
+		if status == r.want {
+			return
+		}
+
+		select {
+		case <-timeout:
+			t.Fatalf(
+				"%s %s on server %d: status %d, want %d, body %s",
+				r.method,
+				r.path,
+				r.server,
+				status,
+				r.want,
+				body,
+			)
+		case <-t.Context().Done():
+			t.Fatalf("%s %s on server %d: %v", r.method, r.path, r.server, t.Context().Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // send sends each request in order and fails the test on the first status

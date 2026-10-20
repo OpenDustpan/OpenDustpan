@@ -36,7 +36,7 @@ func sqliteBlameBackupTables() []sqliteBackupTable {
 				backupColAddress,
 				backupColOrdinal,
 				backupColKind,
-				"at_ms",
+				backupColAtMs,
 				"by_subject",
 				"by_token_id",
 				"by_job_id",

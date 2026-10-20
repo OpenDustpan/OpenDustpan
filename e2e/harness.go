@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -661,13 +663,24 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		tb.Fatalf("check key wrapper: %v", checkErr)
 	}
 
+	// The harness serves the handler directly, so it claims the installation
+	// kind that Server.Run claims at start. The backup records it.
+	claimer, ok := st.(installation.KindStore)
+	if !ok {
+		tb.Fatal("the store cannot claim an installation kind")
+	}
+
+	if _, claimErr := claimer.ClaimKind(ctx, installation.KindProduction); claimErr != nil {
+		tb.Fatalf("claim the installation kind: %v", claimErr)
+	}
+
 	blobs := openTestBlobStore(ctx, tb, args.dbPath)
 	target, targetName := openBackupTarget(tb, args.dbPath)
 
 	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
-		append(profileStoreOptions(st, wrapper), []dustpan.Option{
+		append(slices.Concat(profileStoreOptions(st, wrapper), jobStoreOptions(st)), []dustpan.Option{
 			dustpan.WithRegion(region),
 			dustpan.WithNamespaceStore(st),
 			dustpan.WithStackStore(st),
@@ -690,6 +703,10 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		tb.Fatalf("new server: %v", err)
 	}
 
+	// The harness serves the handler directly, so it runs the backup worker
+	// that Server.Run starts. It stops before the stores close.
+	startBackupWorker(ctx, tb, srv)
+
 	return serverBuild{
 		handler:   srv.Handler(),
 		store:     st,
@@ -698,6 +715,27 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
 	}
+}
+
+// startBackupWorker runs the backup worker of srv until the test ends.
+func startBackupWorker(ctx context.Context, tb testing.TB, srv *dustpan.Server) {
+	tb.Helper()
+
+	backups := srv.Backups()
+	if backups == nil {
+		return
+	}
+
+	workCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
+
+	var work sync.WaitGroup
+
+	work.Go(func() { backups.Work(workCtx) })
+
+	tb.Cleanup(func() {
+		stop()
+		work.Wait()
+	})
 }
 
 // openBackupTarget opens a backup target directory next to the database at

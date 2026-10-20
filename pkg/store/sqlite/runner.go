@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -375,13 +376,24 @@ func (r *Runners) CreateJoinToken(
 }
 
 // RevokeJoinToken implements runner.PoolStore.
+//
+// It runs on the control path, so it works in maintenance mode: it only ends
+// a token. The fence and the entries stay. The transaction journals the
+// revocation in maintenance mode, and a restore applies it again.
 func (r *Runners) RevokeJoinToken(ctx context.Context, id string, fence namespace.Fence, e []audit.Entry) error {
+	if len(e) == 0 {
+		return fmt.Errorf("%w: a revocation needs an audit entry", audit.ErrInvalidEntry)
+	}
+
 	r.store.mu.RLock()
 	defer r.store.mu.RUnlock()
 
 	// A revoke of a revoked token changes nothing, and appends nothing: the
-	// transaction returns errNoChange to roll back its audit entries.
-	err := r.inRunnerTx(ctx, fence, e, func(q *db.Queries, nsID string) error {
+	// transaction returns errNoChange to roll back its audit entries and the
+	// journal row.
+	rev := revocation{kind: maintenance.RevokedJoinToken, target: id, endReason: ""}
+
+	err := r.inRevokingRunnerTx(ctx, fence, e, rev, func(q *db.Queries, nsID string) error {
 		row, err := q.GetRunnerJoinToken(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && row.NamespaceID != nsID) {
 			return runner.ErrNotFound
@@ -948,7 +960,7 @@ func (r *Runners) LookupClaim(ctx context.Context, c durable.Claim) (runner.Clai
 
 	var out runner.ClaimRecord
 
-	err := r.store.inTx(ctx, func(q *db.Queries) error {
+	err := r.store.inReadTx(ctx, func(q *db.Queries) error {
 		_, live, err := lockClaim(ctx, q, c)
 		if err != nil {
 			return err
@@ -1351,11 +1363,9 @@ func (r *Runners) UseNonce(ctx context.Context, subject, nonce string, expires, 
 	})
 }
 
-// inRunnerTx runs fn in a transaction that checks fence and then appends the
-// audit entries e, so an error changes nothing.
-func (r *Runners) inRunnerTx(
-	ctx context.Context, fence namespace.Fence, e []audit.Entry, fn func(q *db.Queries, nsID string) error,
-) error {
+// validRunnerEntries returns audit.ErrInvalidEntry when an entry of e fails
+// validation or names another namespace than fence.
+func validRunnerEntries(fence namespace.Fence, e []audit.Entry) error {
 	for i := range e {
 		if err := e[i].Validate(); err != nil {
 			return fmt.Errorf("audit entry: %w", err)
@@ -1365,6 +1375,47 @@ func (r *Runners) inRunnerTx(
 			return fmt.Errorf("%w: entry names %q, fence names %q",
 				audit.ErrInvalidEntry, e[i].Namespace, fence.Namespace)
 		}
+	}
+
+	return nil
+}
+
+// inRevokingRunnerTx is inRunnerTx on the control path, for a revocation: no
+// installation state check, and rev is journaled in maintenance mode. The
+// journal row comes from the first entry of e.
+func (r *Runners) inRevokingRunnerTx(
+	ctx context.Context, fence namespace.Fence, e []audit.Entry, rev revocation,
+	fn func(q *db.Queries, nsID string) error,
+) error {
+	if err := validRunnerEntries(fence, e); err != nil {
+		return err
+	}
+
+	return r.store.inControlFencedTx(ctx, fence, func(q *db.Queries) error {
+		if err := journalRevocation(ctx, q, rev, e[0]); err != nil {
+			return err
+		}
+
+		nsID, err := q.GetNamespaceID(ctx, fence.Namespace.String())
+		if err != nil {
+			return fmt.Errorf("select namespace ID: %w", err)
+		}
+
+		if fnErr := fn(q, nsID); fnErr != nil {
+			return fnErr
+		}
+
+		return appendRunnerAudit(ctx, q, e)
+	})
+}
+
+// inRunnerTx runs fn in a transaction that checks fence and then appends the
+// audit entries e, so an error changes nothing.
+func (r *Runners) inRunnerTx(
+	ctx context.Context, fence namespace.Fence, e []audit.Entry, fn func(q *db.Queries, nsID string) error,
+) error {
+	if err := validRunnerEntries(fence, e); err != nil {
+		return err
 	}
 
 	return r.store.inFencedTx(ctx, fence, func(q *db.Queries) error {

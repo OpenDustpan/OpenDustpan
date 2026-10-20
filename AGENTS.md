@@ -73,15 +73,21 @@ pkg/                   the public SDK (ADR 35)
   objectcontext/       domain: context on every object and the context read API
   graph/               domain: the unit graph, blast radius and focus view
   unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
+  drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
+  trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
+  cron/                helper: the 5-field UTC cron parser and the schedule presets, standard library only
+  savedview/           domain: saved views, a named query of the unit list (RFC 100)
   unitimport/          domain: imports of units from a source, the import ledger and the move check
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
+  gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
   api/objectcontext/   HTTP adapter for the tool-neutral context API (also used by the console)
+  api/jobs/            HTTP adapter for the tool-neutral jobs API
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, token/...  helpers shared across packages
@@ -109,7 +115,9 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   endpoint lands with its e2e step first.
 - Cross-tool features never merge tool models (ADR 13). Shared code calls a
   stack or workspace a "unit", referenced as tool + namespace + the tool's own
-  name. Authorization uses tool-neutral actions on those references. The
+  name. "Unit" stays in code and in the API. Copy says "stack", "workspace",
+  or "stacks and workspaces" (ADR 251). Authorization uses tool-neutral
+  actions on those references. The
   console's cross-tool views read the inventory projection. Each tool package
   publishes to it in the same transaction as its own writes. User-facing text
   keeps each tool's own words.
@@ -118,7 +126,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`, `unitimport`, `gate`) never import
+  `unmanaged`, `drift`, `trigger`, `savedview`, `unitimport`, `gate`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.
@@ -199,6 +207,8 @@ Write one test for each step. The test sends hostile input directly to that step
 If a check looks redundant, keep it, and give it a comment. The comment says that the check is a defense-in-depth layer and names the other layers that it does not rely on. Example: `// Defense in depth: the handler validates the name too; this check stays so that a new caller cannot skip it.` Do not put an ADR number in the comment. Do not remove a check that has such a comment. If a check blocks your work, stop and report to the PM.
 
 A security change is not done without a test for each step and a comment on each redundant check.
+
+Never print, echo, log or copy the environment or a secret. Do not use `env`, `printenv`, `set` or `cat /proc/*/environ`. Do not use a command that writes a secret to the output. Do not write a secret to a file in the repository, a commit, a pull request, an issue or a message. Read a variable by its name only, for example to check that it is set. To get a test database, start your own local PostgreSQL. If a secret is printed by mistake, stop and report it to the PM, so that the owner can rotate it.
 
 ## Voice (UI text, errors, docs)
 

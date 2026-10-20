@@ -54,7 +54,19 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 		return fmt.Errorf("%w: %q", maintenance.ErrInvalidState, state)
 	}
 
-	n, err := s.queries.SetInstallationState(ctx, string(state))
+	var n int64
+
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
+		if err := clearJournalOnEnter(ctx, q, state); err != nil {
+			return err
+		}
+
+		var err error
+
+		n, err = q.SetInstallationState(ctx, string(state))
+
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("store installation state sqlite database: %w", maintenance.ErrUnavailable)
 	}
@@ -85,7 +97,11 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 
 	var changed int64
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
+		if err := clearJournalOnEnter(ctx, q, next); err != nil {
+			return err
+		}
+
 		n, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
 			State:   string(next),
 			State_2: string(expected),

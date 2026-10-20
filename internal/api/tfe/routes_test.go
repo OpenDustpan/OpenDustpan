@@ -270,6 +270,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -364,8 +365,8 @@ func (stubWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspace.Wo
 	return []workspace.Workspace{ws}, nil
 }
 
-func (stubWorkspaces) Lock(
-	_ context.Context, id workspace.ID, holder, _ string,
+func (stubWorkspaces) LockForJob(
+	_ context.Context, id workspace.ID, holder, _, _ string,
 ) (workspace.Workspace, error) {
 	ws, err := stubWorkspaceByID(id)
 	if err != nil {
@@ -889,6 +890,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -912,6 +914,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -937,6 +940,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1706,8 +1710,8 @@ func (errorWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace.Wo
 	return nil, errTestInternal
 }
 
-func (errorWorkspaces) Lock(
-	_ context.Context, _ workspace.ID, _, _ string,
+func (errorWorkspaces) LockForJob(
+	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
 }
@@ -1835,6 +1839,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -41,9 +41,13 @@ const (
 	backupColObjectKind  = "object_kind"
 	backupColObjectID    = "object_id"
 	backupColAtMs        = "at_ms"
+	backupColTarget      = "target"
+	backupColObject      = "object"
 	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
+	backupColSeq         = "seq"
+	backupColJobID       = "job_id"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -224,7 +228,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table: "collection_members",
 			columns: []string{
-				"unit_id", backupColNamespace, "collection_key", "assigned_at_ms",
+				backupColUnitID, backupColNamespace, "collection_key", "assigned_at_ms",
 			},
 		},
 		{
@@ -296,7 +300,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table: "inventory_changes",
 			columns: []string{
-				backupColNamespaceID, "seq", backupColAtMs, backupColTool, backupColUnitID, backupColName,
+				backupColNamespaceID, backupColSeq, backupColAtMs, backupColTool, backupColUnitID, backupColName,
 				backupColDisplayName,
 				backupColStatus, "collection", backupColKind, backupColResourceCount,
 			},
@@ -365,7 +369,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"idp_subject",
 				"token_id",
 				"action",
-				"object",
+				backupColObject,
 				backupColVersion,
 				"value_path",
 				backupColAtMs,
@@ -382,7 +386,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"object_id",
 				"fence_version",
 				"principal_kind",
-				"job_id",
+				backupColJobID,
 				backupColReason,
 			},
 		},
@@ -400,7 +404,9 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteImportBackupTables(),
 		sqliteBlameBackupTables(),
 		sqliteRunnerBackupTables(),
+		sqliteJobBackupTables(),
 		sqliteProfileBackupTables(),
+		sqliteManualLockBackupTables(),
 	)
 }
 
@@ -413,7 +419,7 @@ func sqliteControlTables() []sqliteBackupTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", backupColKind, "input", "version", "state", "attempt", "expiries", "failures",
+				"id", "start_key", backupColKind, "input", backupColVersion, "state", "attempt", "expiries", "failures",
 				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
 				"not_before_ms", "created_at_ms", "updated_at_ms",
 			},
@@ -431,13 +437,21 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{"source", "window_end_ms", "count"},
 		},
 		{
+			table:   backup.TableAuditChainCheck,
+			columns: []string{"id", "checked_at_ms", "invalid"},
+		},
+		{
+			table:   backup.TableAuditChainMark,
+			columns: []string{"scope", "epoch", "sequence", "marked_at_ms"},
+		},
+		{
 			table: backup.TableBackups,
 			columns: []string{
 				"id",
 				backupColState,
 				backupColStartedAtMs,
 				backupColEndedAtMs,
-				"target",
+				backupColTarget,
 				"error",
 			},
 		},
@@ -452,6 +466,7 @@ func sqliteControlTables() []sqliteBackupTable {
 				backupColStartedAtMs,
 				backupColEndedAtMs,
 				"error",
+				"dev_report",
 			},
 		},
 		{
@@ -459,11 +474,31 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColState,
+				"kind",
 			},
 		},
 	}
 
-	return slices.Concat(core, sqliteRunnerControlTables())
+	return slices.Concat(core, sqliteRevocationControlTables(), sqliteRunnerControlTables())
+}
+
+// sqliteRevocationControlTables lists the column list of the control table that
+// holds the journal of revocations made in maintenance mode.
+func sqliteRevocationControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableMaintenanceRevocations,
+			columns: []string{
+				"id",
+				backupColKind,
+				backupColTarget,
+				"end_reason",
+				"actor",
+				backupColObject,
+				backupColAtMs,
+			},
+		},
+	}
 }
 
 // sqliteEmptiedTables lists the column list of every table of
@@ -480,6 +515,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		{
 			table:   backup.TableIdempotencyServerKey,
 			columns: []string{"id", "wrapped_key", backupColWrapperID},
+		},
+		{
+			table:   backup.TableDurableHeartbeats,
+			columns: []string{"owner", backupColAtMs},
 		},
 	}
 }
@@ -655,7 +694,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"subject_kind",
 				"subject_id",
 				"role",
-				"object",
+				backupColObject,
 				"target",
 				"object_kind",
 				backupColNamespace,

@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -190,13 +191,20 @@ func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
 // RevokeGrant implements access.GrantStore. It runs check, then ends the grant in the
 // transaction of the entry, after it checks that the grant is in the
 // namespace of fence.
+//
+// It runs on the control path, so it works in maintenance mode: a grant only
+// allows, and a limit is a ceiling, so ending a grant never widens access.
+// The check, the fence and the entry stay. The transaction journals the
+// revocation in maintenance mode, and a restore applies it again.
 func (s *Store) RevokeGrant(
 	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
 ) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inGrantTx(ctx, fence.Namespace, fence, e, func(q *db.Queries) error {
+	rev := revocation{kind: maintenance.RevokedGrant, target: id, endReason: ""}
+
+	return s.inRevokingGrantTx(ctx, fence, e, rev, func(q *db.Queries) error {
 		if err := runCheck(ctx, q, check); err != nil {
 			return err
 		}
@@ -238,7 +246,7 @@ func (s *Store) ListGrantsOn(
 		return nil, 0, targetErr
 	}
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
 		rows, err := q.ListGrantsOn(ctx, db.ListGrantsOnParams{
 			Target: target, Subject: gq.Subject, Role: gq.Role, AfterSubject: gq.AfterSubject, AfterRole: gq.AfterRole,
 			RowLimit: int64(gq.Limit),
@@ -1105,6 +1113,27 @@ func (s *Store) inGrantTx(
 	}
 
 	return s.inFencedAuditedTx(ctx, fence, &e, fn)
+}
+
+// inRevokingGrantTx is inGrantTx on the control path, for the revocation of a
+// grant: a write on the installation (ns "") takes the zero fence and appends
+// e in the scope @server, and any other write takes the fence of ns and
+// appends e to the chain of ns. Neither checks the installation state, and
+// both journal rev in maintenance mode.
+func (s *Store) inRevokingGrantTx(
+	ctx context.Context, fence namespace.Fence, e audit.Entry, rev revocation, fn func(q *db.Queries) error,
+) error {
+	ns := fence.Namespace
+
+	if err := grantFence(ns, fence); err != nil {
+		return err
+	}
+
+	if ns == "" {
+		return s.inRevokingTx(ctx, e, rev, fn)
+	}
+
+	return s.inRevokingFencedTx(ctx, fence, e, rev, fn)
 }
 
 // grantInNamespace returns access.ErrNotFound when no current grant with

@@ -15,6 +15,7 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
@@ -26,10 +27,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -76,6 +80,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
+	jobRoutes := coverageJobRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := make(
@@ -96,6 +101,8 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		)+len(
 			profileRoutes,
 		)+len(
+			jobRoutes,
+		)+len(
 			server,
 		)+probeRouteCount,
 	)
@@ -106,6 +113,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	out = append(out, auditRoutes...)
 	out = append(out, contextRoutes...)
 	out = append(out, profileRoutes...)
+	out = append(out, jobRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -203,13 +211,21 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	tb.Helper()
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       coverageStackStore{},
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks: nil,
 		// The store never serves a request: only ActiveUpdate runs, and it
 		// answers not found. The embedded stores stay nil on purpose.
 		Updates:            coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
@@ -254,6 +270,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Gate:                 nil,
 		Audit:                nil,
 		OnAuditFailure:       nil,
+		DenialLimiter:        nil,
 	})
 	if err != nil {
 		tb.Fatalf("pulumi handler: %v", err)
@@ -403,6 +420,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		MaxStateBytes:  0,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		tb.Fatalf("tfe handler: %v", err)
@@ -425,6 +443,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Audit:          nil,
 		Gate:           nil,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)
@@ -457,8 +476,8 @@ func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (wo
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
-func (coverageTofuHTTPWorkspaces) LockWithID(
-	_ context.Context, _ workspace.ID, _, _, _ string,
+func (coverageTofuHTTPWorkspaces) LockWithIDForJob(
+	_ context.Context, _ workspace.ID, _ workspace.LockRequest,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
@@ -524,8 +543,8 @@ func (coverageWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace
 	return nil, nil
 }
 
-func (coverageWorkspaces) Lock(
-	_ context.Context, _ workspace.ID, _, _ string,
+func (coverageWorkspaces) LockForJob(
+	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	var none workspace.Workspace
 
@@ -656,7 +675,19 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("collection service: %v", err)
 	}
 
+	locks, err := manuallock.NewService(manuallock.Config{
+		Store:      coverageLockStore{},
+		Namespaces: coverageNamespaceStore{},
+		Authorizer: identity.AdminOnly{},
+		Now:        nil,
+		Phases:     nil,
+	})
+	if err != nil {
+		tb.Fatalf("manual lock service: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Locks:         locks,
 		PublicURL:     "",
 		Moves:         nil,
 		Namespaces:    namespaces,
@@ -671,6 +702,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("inventory handler: %v", err)
@@ -701,9 +733,39 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
+		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("context handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageJobRoutes returns the jobs adapter's route table.
+func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := jobsapi.NewHandler(jobsapi.Config{
+		Namespaces:     namespaces,
+		Jobs:           struct{ job.Store }{nil},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("jobs handler: %v", err)
 	}
 
 	routes := handler.Routes()
@@ -741,6 +803,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		Audit:         nil, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile handler: %v", err)
@@ -826,6 +889,38 @@ func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.Un
 	return collection.Ref{Namespace: "", Name: ""}, nil
 }
 
+// coverageLockStore holds no manual lock. It exists only so that the inventory
+// handler serves its lock routes in the route table; no request is ever served.
+type coverageLockStore struct{}
+
+func (coverageLockStore) PutLock(_ context.Context, _ manuallock.Lock, _ namespace.Fence, _ audit.Entry) error {
+	return nil
+}
+
+func (coverageLockStore) RemoveLock(
+	_ context.Context, _ manuallock.Target, _ string, _ namespace.Fence, _ audit.Entry,
+) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) ForceRemoveLock(
+	_ context.Context, _ manuallock.Target, _ namespace.Fence, _ audit.Entry,
+) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) GetLock(_ context.Context, _ manuallock.Target) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) CoveringLock(_ context.Context, _ collection.UnitRef) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) CoveringLocks(_ context.Context, _ collection.UnitRef) ([]manuallock.Lock, error) {
+	return nil, manuallock.ErrNotLocked
+}
+
 // coverageReader answers no unit. It exists only to build a Handler for its
 // route table; no request is ever served.
 type coverageReader struct{}
@@ -883,13 +978,14 @@ func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 	tb.Helper()
 
 	handler, err := auditapi.NewHandler(auditapi.Config{
-		Namespaces:    namespaces,
-		Entries:       coverageAuditStore{},
-		EntryReader:   nil,
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Entries:        coverageAuditStore{},
+		EntryReader:    nil,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("audit handler: %v", err)
@@ -981,6 +1077,43 @@ func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
 	return svc
 }
 
+// coverageGateConfig holds no approval default and no approval rule: the route
+// table needs a gate configuration service, and the coverage gate never
+// serves a request.
+type coverageGateConfig struct{}
+
+func (coverageGateConfig) ApprovalDefault(context.Context, gate.Scope) (gate.ApprovalDefault, error) {
+	return gate.ApprovalDefault{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutApprovalDefault(
+	context.Context, gate.ApprovalDefault, int64, audit.Entry,
+) (gate.ApprovalDefault, error) {
+	return gate.ApprovalDefault{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteApprovalDefault(context.Context, gate.Scope, int64, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
+func (coverageGateConfig) ApprovalRules(context.Context, gate.Scope) ([]gate.ApprovalRule, error) {
+	return nil, nil
+}
+
+func (coverageGateConfig) ApprovalRule(context.Context, gate.Scope, gate.ID) (gate.ApprovalRule, error) {
+	return gate.ApprovalRule{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutApprovalRule(
+	context.Context, gate.ApprovalRule, int64, audit.Entry,
+) (gate.ApprovalRule, error) {
+	return gate.ApprovalRule{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteApprovalRule(context.Context, gate.ObjectRef, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
 // coverageSessionPolicyStore holds the default session policy: the route
 // table needs a session policy service, and the coverage gate never serves
 // a request.
@@ -1017,6 +1150,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Workers:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},
 		Authorizer:       coverageAuthorizer{},
@@ -1039,9 +1173,12 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     coverageIPAllowlists(tb),
+		Gates:            coverageGateConfig{},
 		SessionPolicy:    coverageSessionPolicies(tb),
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		InstallationKind: "",
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -1150,12 +1287,40 @@ func CoverageAllowlist() []AllowEntry {
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
 		signInAllowEntries(),
+		devAllowEntries(),
 		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),
+		approvalRuleAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
+		manualLockAllowEntries(),
+		jobAllowEntries(),
 	)
+}
+
+// devCoveringTest names the test that proves the routes of the dev command
+// instead of a CLI: no CLI reads the capabilities document or signs in with
+// the code of the first run.
+const devCoveringTest = "TestDevCommand"
+
+// devAllowEntries returns the capabilities document and the sign-in with the
+// one-time code of the dev command. The steps of devCoveringTest start the
+// real binary on a pseudo terminal, play the browser with the code from the
+// banner, and read the document with and without the token.
+func devAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/capabilities", CoveringTest: devCoveringTest,
+			Reason: "Console and client route: no CLI reads the capabilities document. The harness " +
+				"step reads it from a dev server with and without the token.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/sign-in/dev-code", CoveringTest: devCoveringTest,
+			Reason: "Console route: only the one-time link of the dev command signs in with the code. " +
+				"The harness step plays the browser with the code from the banner of the real binary.",
+		},
+	}
 }
 
 // auditSinkCoveringTest names the test that proves the audit sink list
@@ -1391,10 +1556,10 @@ func tokenAllowEntries() []AllowEntry {
 }
 
 // tokenPolicyAllowEntries returns the operator and console routes of the
-// token policy and the principal enable (ADR 53). The harness steps of
+// token policy and the principal enable and disable (ADR 53). The harness steps of
 // TestTokenPolicy drive each one through the real binary on each store.
 func tokenPolicyAllowEntries() []AllowEntry {
-	reason := "Operator and console route (ADR 53): no CLI changes the token policy or enables a principal. " +
+	reason := "Operator and console route (ADR 53): no CLI changes the token policy or enables or disables a principal. " +
 		"The harness step calls it through the real binary and checks the answer."
 
 	routes := []struct{ method, path string }{
@@ -1402,6 +1567,7 @@ func tokenPolicyAllowEntries() []AllowEntry {
 		{http.MethodPatch, "/api/server/token-policy"},
 		{http.MethodPost, "/api/server/token-policy/sweep"},
 		{http.MethodPost, "/api/server/principals/{id}/enable"},
+		{http.MethodPost, "/api/server/principals/{id}/disable"},
 	}
 
 	out := make([]AllowEntry, 0, len(routes))
@@ -1511,6 +1677,42 @@ func ipAllowlistAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: ipAllowlistCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// approvalRuleCoveringTest names the test that proves the approval default and
+// approval rule routes instead of a CLI: no CLI sets an approval rule.
+const approvalRuleCoveringTest = "TestApprovalRules"
+
+// approvalRuleAllowEntries returns the routes of the approval defaults and the
+// approval rules of a namespace. The steps of approvalRuleCoveringTest drive
+// each one through the real server on each store.
+func approvalRuleAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages approval rules. " +
+		"The harness step calls it through the real server and checks the answer."
+
+	const (
+		defaultPath = "/api/dustpan/v1/namespaces/{namespace}/approval-default"
+		rulesPath   = "/api/dustpan/v1/namespaces/{namespace}/approval-rules"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, defaultPath},
+		{http.MethodPut, defaultPath},
+		{http.MethodDelete, defaultPath},
+		{http.MethodGet, rulesPath},
+		{http.MethodGet, rulesPath + "/{id}"},
+		{http.MethodPut, rulesPath + "/{id}"},
+		{http.MethodDelete, rulesPath + "/{id}"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: approvalRuleCoveringTest, Reason: reason,
 		})
 	}
 
@@ -1685,6 +1887,16 @@ func operatorAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/server/metrics",
 			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
 			Reason:       "Operator route (ADR 32): no CLI calls it.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/components",
+			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
+			Reason:       "Operator route: no CLI calls it.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/worker",
+			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
+			Reason:       "Operator route: no CLI calls it.",
 		},
 		{
 			Method: http.MethodPost, Path: "/api/server/audit/checkpoint-epochs",
@@ -2085,4 +2297,41 @@ func reviewAllowEntries() []AllowEntry {
 	}
 
 	return out
+}
+
+// manualLockAllowEntries returns the lock routes of a namespace. The real CLIs
+// never call them: the steps of TestManualLockOnNamespaceStopsTheChangeRoutes
+// take, read, remove and force-remove the lock through the API, and drive both
+// CLIs against it. That test writes no matrix report, so the coverage check must
+// not depend on the order in which the tests finish. The routes of a unit and
+// of a collection need no entry: the matrix scenario of the OpenTofu suite
+// reaches them.
+func manualLockAllowEntries() []AllowEntry {
+	const (
+		path = "/api/dustpan/v1/namespaces/{namespace}/lock"
+		test = "TestManualLockOnNamespaceStopsTheChangeRoutes"
+	)
+
+	reason := "Console and client route: no CLI takes a manual lock. The harness steps of " +
+		test + " take, read and end the lock through the API and run both CLIs against it."
+
+	return []AllowEntry{
+		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodDelete, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodPost, Path: path + "/force-unlock", CoveringTest: test, Reason: reason},
+	}
+}
+
+// jobAllowEntries covers the route that reads a job. No CLI reads a job: the
+// console and the clients of the API do. The harness steps of TestJobsAPI
+// read a job, a job that the caller may not read and a job that does not
+// exist through the API.
+func jobAllowEntries() []AllowEntry {
+	return []AllowEntry{{
+		Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
+		CoveringTest: "TestJobsAPI",
+		Reason: "Console and client route: no CLI reads a job. The harness steps of TestJobsAPI read a job " +
+			"through the API.",
+	}}
 }

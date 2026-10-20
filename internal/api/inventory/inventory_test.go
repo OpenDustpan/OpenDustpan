@@ -263,7 +263,7 @@ func newBehaviorHandlerWith(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
@@ -277,6 +277,7 @@ func newBehaviorHandlerWith(
 		PublicURL:     wiring.publicURL,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -370,6 +371,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 
 	reader.entries[ns] = []coreinventory.Entry{
 		{
+			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
@@ -383,6 +385,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
@@ -396,6 +399,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
@@ -629,6 +633,7 @@ func TestListUnitsLockField(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
@@ -686,6 +691,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
@@ -740,6 +746,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
@@ -937,7 +944,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiinventory.Config{
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
@@ -951,6 +958,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		PublicURL:     "",
+		DenialLimiter: nil,
 	}
 
 	cases := []struct {

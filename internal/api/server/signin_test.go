@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -109,7 +110,9 @@ func alice() oauthtest.User {
 func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 	t.Helper()
 
-	return newSignInEnvWith(t, signInEnvOptions{autoCreate: autoCreate, noPolicyRoutes: false, stored: nil})
+	return newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: autoCreate, noPolicyRoutes: false, stored: nil, authz: nil, namespaces: nil,
+	})
 }
 
 // signInEnvOptions are the options of a sign-in environment. autoCreate
@@ -119,8 +122,21 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 // providers, for the store and the clock of the environment.
 type signInEnvOptions struct {
 	stored         func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders)
+	authz          identity.Authorizer
+	namespaces     []namespace.Name
 	autoCreate     bool
 	noPolicyRoutes bool
+}
+
+// seedNamespaces makes the namespaces names in svc.
+func seedNamespaces(t *testing.T, svc *namespace.Service, names []namespace.Name) {
+	t.Helper()
+
+	for _, name := range names {
+		if _, err := svc.Create(t.Context(), name); err != nil {
+			t.Fatalf("seed namespace %s: %v", name, err)
+		}
+	}
 }
 
 func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
@@ -154,6 +170,13 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
+	seedNamespaces(t, namespaces, opts.namespaces)
+
+	authz := opts.authz
+	if authz == nil {
+		authz = selectiveAuthorizer{deny: map[identity.Action]bool{}}
+	}
+
 	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: clock.Now})
 	if err != nil {
 		t.Fatalf("session policies: %v", err)
@@ -183,36 +206,47 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		admin, stored = opts.stored(st, clock)
 	}
 
+	gates, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: st, Namespaces: namespaces, Now: clock.Now})
+	if err != nil {
+		t.Fatalf("gate config service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		TempAdmins:     nil,
-		Now:            nil,
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     namespaces,
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "test",
-		Schema:         st,
-		Journal:        st,
-		Principals:     principals,
-		Tokens:         seedRouteTokens(t, st),
-		Access:         nil,
-		Audit:          st,
-		OnAuditFailure: nil,
-		DeletedUnits:   stubSweeper{},
-		AuditSinks:     nil,
-		AuditChain:     nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  policyRoutes,
+		Workers:          nil,
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           st,
+		Journal:          st,
+		Principals:       principals,
+		Tokens:           seedRouteTokens(t, st),
+		Access:           nil,
+		Audit:            st,
+		OnAuditFailure:   nil,
+		DeletedUnits:     stubSweeper{},
+		AuditSinks:       nil,
+		AuditChain:       nil,
+		IPAllowlists:     nil,
+		Gates:            gates,
+		SessionPolicy:    policyRoutes,
+		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
-			Sessions: sessions,
-			Limiter:  limiter,
-			Stored:   stored,
-			Admin:    admin,
-			Origins:  []string{signInBase, consoleOrigin},
+			OnDevRefused: nil,
+			DevCode:      nil,
+			DevAdmin:     noBootstrapAdmin,
+			Sessions:     sessions,
+			Limiter:      limiter,
+			Stored:       stored,
+			Admin:        admin,
+			Origins:      []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
 				{
 					Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false,
@@ -221,6 +255,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 			},
 		},
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -545,6 +580,42 @@ func TestSignInSessionRequests(t *testing.T) {
 
 	if code, _ := e.readSession(t, sess); code != http.StatusUnauthorized {
 		t.Fatalf("session after sign-out = %d, want 401", code)
+	}
+}
+
+// TestSignOutRunsInMaintenanceMode proves that a sign-out answers 204 while the
+// installation is in maintenance mode, through the route, the service and the
+// store, and that the session is over afterwards.
+func TestSignOutRunsInMaintenanceMode(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	sess := e.signIn(t)
+
+	_, body := e.readSession(t, sess)
+
+	if err := e.store.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/sign-out", http.NoBody)
+	req.AddCookie(sess)
+	req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
+	req.Header.Set("Origin", consoleOrigin)
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("sign-out in maintenance mode = %d %s, want 204", rec.Code, rec.Body.String())
+	}
+
+	if err := e.store.SetState(t.Context(), maintenance.StateNormal); err != nil {
+		t.Fatalf("leave maintenance mode: %v", err)
+	}
+
+	if code, _ := e.readSession(t, sess); code != http.StatusUnauthorized {
+		t.Fatalf("session after the sign-out in maintenance mode = %d, want 401", code)
 	}
 }
 
@@ -1007,38 +1078,44 @@ func TestSignInProviderDown(t *testing.T) {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principals: %v", err)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		TempAdmins:     nil,
-		Now:            nil,
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     namespaces,
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "test",
-		Schema:         st,
-		Journal:        st,
-		Principals:     principals,
-		Tokens:         nil,
-		Access:         nil,
-		Audit:          st,
-		OnAuditFailure: nil,
-		DeletedUnits:   stubSweeper{},
-		AuditSinks:     nil,
-		AuditChain:     nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  policies,
+		Workers:          nil,
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           st,
+		Journal:          st,
+		Principals:       principals,
+		Tokens:           nil,
+		Access:           nil,
+		Audit:            st,
+		OnAuditFailure:   nil,
+		DeletedUnits:     stubSweeper{},
+		AuditSinks:       nil,
+		AuditChain:       nil,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    policies,
+		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
-			Sessions: sessions, Stored: nil, Admin: nil,
+			OnDevRefused: nil,
+			DevCode:      nil,
+			DevAdmin:     noBootstrapAdmin,
+			Sessions:     sessions, Stored: nil, Admin: nil,
 			Limiter: limiter,
 			Origins: nil,
 			Providers: []apiserver.SignInProvider{
@@ -1046,6 +1123,7 @@ func TestSignInProviderDown(t *testing.T) {
 			},
 		},
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1172,7 +1250,9 @@ func TestSignInSessionPolicyChangeNeedsAFreshSignIn(t *testing.T) {
 func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 	t.Parallel()
 
-	e := newSignInEnvWith(t, signInEnvOptions{autoCreate: true, noPolicyRoutes: true, stored: nil})
+	e := newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: true, noPolicyRoutes: true, stored: nil, authz: nil, namespaces: nil,
+	})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
 	if created.Code != http.StatusCreated {

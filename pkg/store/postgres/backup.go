@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -59,9 +60,12 @@ const (
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
 	pgColKind        = "kind"
+	pgColTarget      = "target"
+	pgColObject      = "object"
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
+	pgColJobID       = "job_id"
 	pgColObjectKind  = "object_kind"
 	pgColObjectID    = "object_id"
 	pgColResourceKey = "resource_key"
@@ -103,7 +107,9 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyImportTables()...)
 	tables = append(tables, pgCopyBlameTables()...)
 	tables = append(tables, pgCopyRunnerTables()...)
+	tables = append(tables, pgCopyJobTables()...)
 	tables = append(tables, pgCopyProfileTables()...)
+	tables = append(tables, pgCopyManualLockTables()...)
 
 	return tables
 }
@@ -273,9 +279,16 @@ func pgCopyCollectionTables() []pgCopyTable {
 		{
 			table: "object_context_owners",
 			columns: []string{
-				pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource,
+				pgColNamespaceID, pgColOwner, pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource,
 			},
-			orderBy: []string{pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
+			orderBy: []string{
+				pgColNamespaceID,
+				pgColOwner,
+				pgColObjectKind,
+				pgColObjectID,
+				pgColResourceKey,
+				pgColSource,
+			},
 		},
 		{
 			table:   "blob_purges",
@@ -312,9 +325,9 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table: "audit_entries",
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
-				"object", pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
+				pgColObject, pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id", "fence_version", "principal_kind", "job_id", pgColReason,
+				"changes", "object_id", "fence_version", "principal_kind", pgColJobID, pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
@@ -341,7 +354,7 @@ func pgControlTables() []pgCopyTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", "kind", "input", "version", "state", "attempt", "expiries", "failures",
+				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries", "failures",
 				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
 				"not_before_ms", "created_at_ms", "updated_at_ms",
 			},
@@ -363,21 +376,36 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{"source", "window_end_ms"},
 		},
 		{
+			table:   backup.TableAuditChainCheck,
+			columns: []string{"id", "checked_at_ms", "invalid"},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableAuditChainMark,
+			columns: []string{"scope", "epoch", "sequence", "marked_at_ms"},
+			orderBy: []string{"scope"},
+		},
+		{
 			table:   backup.TableBackups,
-			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
+			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, pgColTarget, "error"},
 			orderBy: []string{"id"},
 		},
 		{
 			table: backup.TableRestores,
 			columns: []string{
 				"id", pgColState, "backup_id", "pre_backup_id", "requested_by",
-				pgColStartedAtMs, pgColEndedAtMs, "error",
+				pgColStartedAtMs, pgColEndedAtMs, "error", "dev_report",
 			},
 			orderBy: []string{pgColStartedAtMs, "id"},
 		},
 		{
 			table:   backup.TableInstallation,
-			columns: []string{"id", pgColState},
+			columns: []string{"id", pgColState, "kind"},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableMaintenanceRevocations,
+			columns: []string{"id", pgColKind, pgColTarget, "end_reason", "actor", pgColObject, pgColAtMs},
 			orderBy: []string{"id"},
 		},
 	}
@@ -402,6 +430,11 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TableIdempotencyServerKey,
 			columns: []string{"id", "wrapped_key", pgColWrapperID},
 			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableDurableHeartbeats,
+			columns: []string{pgColOwner, pgColAtMs},
+			orderBy: []string{pgColOwner},
 		},
 	}
 }
@@ -532,7 +565,7 @@ func pgCopyGrantTables() []pgCopyTable {
 		{
 			table: backup.TableGrants,
 			columns: []string{
-				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
+				"id", pgColSubject, "subject_kind", "subject_id", "role", pgColObject, "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
 			},
 			orderBy: []string{"id"},
@@ -998,8 +1031,8 @@ func newStagingSchema() (string, error) {
 
 // createStagingSchema creates the staging schema and replays every migration
 // in it, so its tables with their foreign keys match the live schema. The
-// migration DDL runs with the search path on the staging schema only: the
-// live tables stay untouched. It records every migration in the staging
+// migration DDL runs with the search path on the staging schema and its own
+// control schema: the live tables stay untouched. It records every migration in the staging
 // schema_migrations, so the staged data carries its own schema version.
 func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 	all, err := migrate.Load(migrations, "migrations")
@@ -1020,7 +1053,11 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 	}
 
 	return inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(staging)); err != nil {
+		// The control schema of the staging schema comes second. The migration
+		// that moves the installation table makes it, and a later migration
+		// that changes a control table finds the table through it.
+		path := pgIdent(staging) + ", " + pgIdent(staging+"_control")
+		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+path); err != nil {
 			return fmt.Errorf("set staging search path: %w", err)
 		}
 
@@ -1346,44 +1383,144 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	return nil
 }
 
-// FinishBackup implements backup.Registry: it moves the running backup id to
-// a finished state with the error text and end time, and returns the
-// finished row. Any state but succeeded or failed reports ErrNotRunning, as
-// do a missing row (ErrNotFound) and a row that is not running.
+// StartBackup implements backup.Registry: it stores r as a running backup and
+// starts the operation start in one transaction. It reports ErrAlreadyExists
+// when the ID is taken, and ErrAlreadyRunning when the unique index on
+// running backups refuses the row. A failed start changes nothing.
+func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error {
+	if err := start.Validate(); err != nil {
+		return err
+	}
+
+	// Defense in depth: the service builds the request from the backup ID.
+	// This check stays so that no caller can start the row of one backup
+	// with the operation of another kind or key.
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return fmt.Errorf("start backup %s: operation %q of kind %q: %w",
+			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
+	}
+
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
+			ID:          r.ID.String(),
+			State:       string(backup.StateRunning),
+			StartedAtMs: codec.Millis(r.StartedAt),
+			EndedAtMs:   backupEndedAt(time.Time{}),
+			Target:      r.Target,
+			Error:       "",
+		})
+		if err != nil {
+			return fmt.Errorf("insert backup: %w", err)
+		}
+
+		if n == 0 {
+			return backupConflict(ctx, q, r.ID)
+		}
+
+		_, created, err := startOperation(ctx, q, start)
+		if err != nil {
+			return err
+		}
+
+		if !created {
+			// A new row needs a new operation: a taken key is a start of
+			// another backup.
+			return fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
+		}
+
+		return nil
+	})
+}
+
+// FinishBackup implements backup.Registry: it checks the fence f, records
+// its step and moves the running backup id to a finished state with the error
+// text and end time, in one transaction, and returns the finished row. Any
+// state but succeeded or failed reports ErrNotRunning, as do a row that is
+// not running; a missing row reports ErrNotFound. A fence that is not the
+// live claim reports the durable sentinel and changes nothing.
 //
-//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
+//nolint:revive // argument-limit: the fence, the row and the three fields of its end are one write; a struct would only move the fields.
 func (s *Store) FinishBackup(
-	ctx context.Context, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context, f durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
 ) (backup.Record, error) {
 	if state != backup.StateSucceeded && state != backup.StateFailed {
 		return backup.Record{}, backup.ErrNotRunning
 	}
 
-	n, err := s.queries.FinishBackup(ctx, db.FinishBackupParams{
-		State:     string(state),
-		Error:     errText,
-		EndedAtMs: backupEndedAt(endedAt),
-		ID:        id.String(),
+	var out backup.Record
+
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
+		// The fence comes first: a stale claim changes nothing and learns
+		// nothing about the row.
+		if err := recordStep(ctx, q, f, nil); err != nil {
+			return err
+		}
+
+		// Defense in depth: the fence checked above is live, but it must
+		// belong to the operation of this backup. The service passes the
+		// right fence; this check stays so that no caller can finish a row
+		// under the claim of another operation.
+		if err := ownsBackup(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		n, err := q.FinishBackup(ctx, db.FinishBackupParams{
+			State:     string(state),
+			Error:     errText,
+			EndedAtMs: backupEndedAt(endedAt),
+			ID:        id.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("finish backup: %w", err)
+		}
+
+		if n == 0 {
+			return finishFailure(ctx, q, id)
+		}
+
+		row, err := q.GetBackup(ctx, id.String())
+		if err != nil {
+			return fmt.Errorf("select finished backup: %w", err)
+		}
+
+		out = backupRecord(row)
+
+		return nil
 	})
 	if err != nil {
-		return backup.Record{}, fmt.Errorf("finish backup: %w", err)
+		return backup.Record{}, err
 	}
 
-	if n == 0 {
-		return s.finishFailure(ctx, id)
+	return out, nil
+}
+
+// ownsBackup returns durable.ErrClaimLost unless the operation of f is the
+// operation that runs backup id.
+func ownsBackup(ctx context.Context, q *db.Queries, f durable.StepFence, id backup.ID) error {
+	op, err := q.GetDurableOperation(ctx, string(f.Operation))
+	if err != nil {
+		return fmt.Errorf("select operation of the fence: %w", err)
 	}
 
-	return s.GetBackup(ctx, id)
+	if op.Kind != string(backup.OperationKind) || op.StartKey != backup.OperationKey(id) {
+		return durable.ErrClaimLost
+	}
+
+	return nil
 }
 
 // finishFailure reports why FinishBackup changed nothing: ErrNotFound when id
 // does not exist, ErrNotRunning when the row is not running.
-func (s *Store) finishFailure(ctx context.Context, id backup.ID) (backup.Record, error) {
-	if _, err := s.GetBackup(ctx, id); err != nil {
-		return backup.Record{}, err
+func finishFailure(ctx context.Context, q *db.Queries, id backup.ID) error {
+	if _, err := q.GetBackup(ctx, id.String()); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return backup.ErrNotFound
+		}
+
+		return fmt.Errorf("select backup: %w", err)
 	}
 
-	return backup.Record{}, backup.ErrNotRunning
+	return backup.ErrNotRunning
 }
 
 // GetBackup implements backup.Registry: it returns the backup row id, or
@@ -1416,18 +1553,22 @@ func (s *Store) ListBackups(ctx context.Context) ([]backup.Record, error) {
 	return out, nil
 }
 
-// FailRunningBackups implements backup.Registry: it marks every running row
-// failed with the error text and end time. The server calls it at start,
-// after a stop during a backup. Open does not call it: a reconnect must
-// preserve running rows, which the conformance suite replays.
-func (s *Store) FailRunningBackups(ctx context.Context, endedAt time.Time, errText string) error {
-	params := db.FailRunningBackupsParams{Error: errText, EndedAtMs: backupEndedAt(endedAt)}
-
-	if err := s.queries.FailRunningBackups(ctx, params); err != nil {
-		return fmt.Errorf("fail running backups: %w", err)
+// FailEndedBackups implements backup.Registry: it marks failed each running
+// row whose operation ended failed or canceled. The error text is the last
+// error of the operation. Open does not call it: a reconnect must preserve
+// running rows, which the conformance suite replays.
+func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, error) {
+	n, err := s.queries.FailEndedBackups(ctx, db.FailEndedBackupsParams{
+		Fallback:  backup.EndedWithoutFinishText,
+		EndedAtMs: backupEndedAt(endedAt),
+		Prefix:    backup.OperationKeyPrefix,
+		Kind:      string(backup.OperationKind),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fail ended backups: %w", err)
 	}
 
-	return nil
+	return int(n), nil
 }
 
 // backupRecord converts a backup row into a domain record. A NULL end time
@@ -1498,16 +1639,21 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 // taken (ErrAlreadyExists), or the unique index on running backups refused a
 // second running backup (ErrAlreadyRunning).
 func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
-	_, err := s.GetBackup(ctx, id)
+	return backupConflict(ctx, s.queries, id)
+}
+
+// backupConflict is createBackupConflict for the queries of one transaction.
+func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
+	_, err := q.GetBackup(ctx, id.String())
 	if err == nil {
 		return backup.ErrAlreadyExists
 	}
 
-	if errors.Is(err, backup.ErrNotFound) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return backup.ErrAlreadyRunning
 	}
 
-	return err
+	return fmt.Errorf("select backup: %w", err)
 }
 
 // createRestoreConflict answers why CreateRestore inserted no row: the ID is

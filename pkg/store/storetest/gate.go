@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/gatetest"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -80,6 +81,12 @@ func RunGate(t *testing.T, newStore GateFactory) {
 	t.Run("cases", func(t *testing.T) {
 		t.Parallel()
 		gatetest.RunStore(t, newHarness)
+	})
+
+	t.Run("approvers", func(t *testing.T) {
+		t.Parallel()
+		gatetest.RunApprovers(t, kindHarness(newStore, installation.KindProduction),
+			kindHarness(newStore, installation.KindDev))
 	})
 
 	t.Run("every field of every kind is stored", func(t *testing.T) {
@@ -289,6 +296,43 @@ func testGateDeleteCollection(t *testing.T, s GateStore) {
 	}
 }
 
+// kindHarness returns a factory of harnesses over stores of the installation
+// kind want. It claims the kind first, and skips the case when the store
+// cannot claim or read a kind, or holds another one: the check of the
+// approvers reads the kind of the database through ReadKind.
+func kindHarness(newStore GateFactory, want installation.Kind) gatetest.Factory {
+	return func(t *testing.T) gatetest.Harness {
+		t.Helper()
+
+		s := newStore(t)
+
+		claimer, ok := any(s).(installation.KindStore)
+		reader, readable := any(s).(interface {
+			ReadKind(ctx context.Context) (installation.Kind, error)
+		})
+
+		if want == installation.KindProduction && !ok || !readable {
+			// A store that reads no kind counts as production: the check
+			// fails closed.
+			return gatetest.Harness{Store: s, Domain: gateDomain{s: s}}
+		}
+
+		if !ok || !readable {
+			t.Skip("the store cannot claim and read an installation kind")
+		}
+
+		if _, err := claimer.ClaimKind(t.Context(), want); err != nil {
+			t.Fatalf("ClaimKind(%s) = %v", want, err)
+		}
+
+		if got, err := reader.ReadKind(t.Context()); err != nil || got != want {
+			t.Skipf("the store holds the kind %q (%v), the case needs %q", got, err, want)
+		}
+
+		return gatetest.Harness{Store: s, Domain: gateDomain{s: s}}
+	}
+}
+
 // gateDomain makes the namespaces, the collections and the units, and reads
 // the audit entries.
 type gateDomain struct {
@@ -411,7 +455,7 @@ func (d gateDomain) CreateUnit(
 
 	move := collection.Move{
 		Unit: collection.UnitRef{Namespace: ns, Tool: tool, Name: name}, From: "",
-		To: target.Ref, ToID: target.ID,
+		To: target.Ref, ToID: target.ID, EndsLock: false,
 	}
 	if err = d.s.SetUnitCollection(ctx, move, n.Fence(), gateEntry(ns, "unit:set-collection")); err != nil {
 		return fmt.Errorf("move unit %s: %w", name, err)
@@ -1153,7 +1197,7 @@ func testGateJoinFinal(t *testing.T, s GateStore, tc gateUnitCase) {
 	for _, tt := range tests {
 		move := collection.Move{
 			Unit: collection.UnitRef{Namespace: "acme", Tool: tc.tool, Name: tt.unit}, From: "", To: target.Ref,
-			ToID: target.ID,
+			ToID: target.ID, EndsLock: false,
 		}
 
 		err = s.SetUnitCollection(t.Context(), move, fence, gateEntry("acme", "unit:set-collection"))

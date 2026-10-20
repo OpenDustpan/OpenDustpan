@@ -45,11 +45,9 @@ const maintenanceSubject = "maintenance"
 const maintenanceReason = "maintenance mode started"
 
 // DefaultCacheLimit bounds how long a Watcher trusts its read of the
-// installation state. It is short on purpose: the restore apply step of a
-// later issue must wait until every instance can see maintenance mode, and
-// that wait can only be short while this limit is short. RFC 60 proposes the
-// wait: the apply step waits twice the limit plus a clock-skew bound after
-// the enter, then reads the state again before it copies any data.
+// installation state. The limit only saves reads for the HTTP gate and the
+// probes. A write never uses it: each write transaction reads the stored
+// state itself (ErrInMaintenance).
 const DefaultCacheLimit = 2 * time.Second
 
 // Sentinel errors returned by this package and by Store implementations.
@@ -59,6 +57,13 @@ var (
 	// ErrActiveWork reports that entering maintenance mode found a running
 	// update or run. The error text names each one as a unit reference.
 	ErrActiveWork = errors.New("cannot enter maintenance mode while work is active")
+	// ErrInMaintenance reports a write that the store refused because the
+	// installation is in maintenance mode. A store adapter checks the stored
+	// state in each write transaction, so the refusal holds on every instance
+	// at once, at installation scope too, and without a wait for a cache.
+	// A store that cannot read the state refuses the write with
+	// ErrUnavailable: it never admits the write.
+	ErrInMaintenance = errors.New("the installation is in maintenance mode")
 	// ErrStateChanged reports that a conditional write found another state
 	// than expected: another instance entered or left first. The caller
 	// re-reads the state instead of overwriting it.
@@ -176,6 +181,53 @@ func NewService(cfg Config) (*Service, error) {
 // ErrMissingDependency reports a Config without a required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
 
+// maxForceAttempts bounds the attempts of a forced Enter. Work that starts
+// between the cancel and the write of the state makes an attempt end with
+// ErrActiveWork. A forced Enter tries again, and each new attempt cancels
+// that work. A writer that keeps starting work then fails the call after
+// this many attempts instead of looping without end.
+const maxForceAttempts = 3
+
+// ActiveWorkError is the ErrActiveWork answer. It names the work that blocked
+// the enter and, for a forced enter, the work that the attempts canceled
+// before the enter gave up.
+type ActiveWorkError struct {
+	// Work holds the unit references of the work that blocked the enter, in
+	// a stable order.
+	Work []string
+	// Canceled holds the unit references that a forced enter canceled
+	// before it gave up, in a stable order. It is empty without force.
+	Canceled []string
+}
+
+// Error returns the sentinel text with the unit references of Work.
+func (e *ActiveWorkError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrActiveWork, strings.Join(e.Work, ", "))
+}
+
+// Unwrap lets errors.Is match ErrActiveWork.
+func (e *ActiveWorkError) Unwrap() error { return ErrActiveWork }
+
+// CanceledError wraps a failure of a forced enter, other than ErrActiveWork,
+// that came after the enter canceled work. The cancel stays: the error names
+// the units so that the caller can tell the operator what stopped. It
+// unwraps to Err.
+type CanceledError struct {
+	// Err is the failure of the enter.
+	Err error
+	// Canceled holds the unit references that the forced enter canceled
+	// before it failed, in a stable order.
+	Canceled []string
+}
+
+// Error returns the text of Err and the unit references of Canceled.
+func (e *CanceledError) Error() string {
+	return fmt.Sprintf("%v (canceled before the failure: %s)", e.Err, strings.Join(e.Canceled, ", "))
+}
+
+// Unwrap returns Err, so errors.Is and errors.As reach the failure.
+func (e *CanceledError) Unwrap() error { return e.Err }
+
 // EnterResult names the work that entering maintenance mode canceled. Each
 // entry is a unit reference, for example "pulumi:acme/web/prod".
 type EnterResult struct {
@@ -194,7 +246,7 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 
 // Enter moves the installation to maintenance mode. While an update or a run
 // is active it reports ErrActiveWork naming each one, unless force cancels
-// them first and the result names them. Entering twice keeps maintenance
+// them first and the result names what it canceled. Entering twice keeps maintenance
 // mode: the result holds only what this call canceled, empty otherwise.
 //
 // Enter holds the service mutex, so two concurrent enters cannot cancel the
@@ -205,19 +257,52 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 // leave or a rollback landed in between), the enter tries again from the
 // fresh state. After the write, Enter lists the active work again: an update
 // or a run that started between the first check and the write is still
-// active during maintenance. Without force Enter moves back to normal and
-// reports ErrActiveWork naming it, with force it cancels it too and names
-// it. A start after the second check meets the tool adapters, which answer
-// 503.
+// active during maintenance. In that case Enter moves back to normal and
+// reports ErrActiveWork naming it. With force Enter then tries again and the
+// new attempt cancels that work, up to maxForceAttempts attempts. When
+// writers keep starting work, the last attempt reports an *ActiveWorkError
+// that names the work and every unit that the attempts canceled. A start
+// after the second check meets the tool adapters, which answer 503.
+//
+//nolint:revive // The force flag is the API: it picks the bounded retry, and the route maps it from the request body.
 func (s *Service) Enter(ctx context.Context, force bool) (EnterResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for {
+	var canceled []string
+
+	for attempt := 1; ; attempt++ {
 		retry, res, err := s.enterAttempt(ctx, force)
-		if !retry {
-			return res, err
+		canceled = append(canceled, res.Canceled...)
+
+		if retry {
+			continue
 		}
+
+		blocked, isBlocked := errors.AsType[*ActiveWorkError](err)
+		isBlocked = isBlocked && blocked != nil
+
+		if force && attempt < maxForceAttempts && isBlocked {
+			continue
+		}
+
+		if err == nil {
+			slices.Sort(canceled)
+
+			return EnterResult{Canceled: canceled}, nil
+		}
+
+		if len(canceled) > 0 {
+			slices.Sort(canceled)
+
+			if isBlocked {
+				blocked.Canceled = canceled
+			} else {
+				err = &CanceledError{Err: err, Canceled: canceled}
+			}
+		}
+
+		return EnterResult{Canceled: nil}, err
 	}
 }
 
@@ -292,21 +377,26 @@ func (s *Service) enterAttempt(ctx context.Context, force bool) (bool, EnterResu
 	setErr := s.setStateIf(ctx, StateNormal, StateMaintenance)
 	if setErr != nil {
 		if !errors.Is(setErr, ErrStateChanged) {
-			return false, EnterResult{Canceled: nil}, setErr
+			// The cancel stays: the result names it, and Enter attaches it to the error.
+			return false, EnterResult{Canceled: canceled}, setErr
 		}
 
 		return s.enterRaced(ctx, canceled)
 	}
 
+	// With force too: once the state is maintenance, a cancel is a checked
+	// write and maintenance mode refuses it. Work that raced the write moves
+	// the installation back to normal and the caller enters again.
+	var already activeWork
 	if force {
-		res, racedErr := s.cancelRaced(ctx, canceled)
-
-		return false, res, racedErr
+		already = active
 	}
 
-	res, racedErr := s.refuseRaced(ctx)
+	// The result holds what this attempt canceled also when work raced the
+	// write: a forced Enter that gives up names it in the error.
+	_, racedErr := s.refuseRaced(ctx, already)
 
-	return false, res, racedErr
+	return false, EnterResult{Canceled: canceled}, racedErr
 }
 
 // enterRaced answers a lost compare-and-set: another instance changed the
@@ -327,36 +417,26 @@ func (s *Service) enterRaced(ctx context.Context, canceled []string) (bool, Ente
 	return true, EnterResult{Canceled: nil}, nil
 }
 
-// cancelRaced cancels work that started between the enter check and its
-// write, and answers every canceled unit reference.
-func (s *Service) cancelRaced(ctx context.Context, canceled []string) (EnterResult, error) {
-	raced, err := s.activeWork(ctx)
-	if err != nil {
-		return EnterResult{Canceled: nil}, err
-	}
-
-	if len(raced) == 0 {
-		return EnterResult{Canceled: canceled}, nil
-	}
-
-	more, err := s.cancelWork(ctx, raced)
-	if err != nil {
-		return EnterResult{Canceled: nil}, err
-	}
-
-	return EnterResult{Canceled: mergeCanceled(canceled, more)}, nil
-}
-
 // refuseRaced answers work that started between the enter check and its
 // write: it moves back to normal and reports ErrActiveWork naming it. The
 // rollback is a compare-and-set on maintenance, so it moves back only when
 // this enter still owns the row: it never undoes another instance's enter.
 // When the row already moved on (ErrStateChanged), the raced work is still
-// reported, but the state is left alone.
-func (s *Service) refuseRaced(ctx context.Context) (EnterResult, error) {
-	raced, err := s.activeWork(ctx)
+// reported, but the state is left alone. Work in already is not raced: a
+// forced enter met it before the write and left it (a client-encrypted
+// state keeps its lock).
+func (s *Service) refuseRaced(ctx context.Context, already activeWork) (EnterResult, error) {
+	found, err := s.activeWork(ctx)
 	if err != nil {
 		return EnterResult{Canceled: nil}, err
+	}
+
+	raced := make(activeWork, 0, len(found))
+
+	for _, u := range found {
+		if !slices.ContainsFunc(already, func(a activeUnit) bool { return sameUnit(a, u) }) {
+			raced = append(raced, u)
+		}
 	}
 
 	if len(raced) == 0 {
@@ -374,19 +454,9 @@ func (s *Service) refuseRaced(ctx context.Context) (EnterResult, error) {
 	return EnterResult{Canceled: nil}, activeWorkError(raced)
 }
 
-// mergeCanceled joins two canceled lists into one sorted list.
-func mergeCanceled(first, second []string) []string {
-	out := make([]string, 0, len(first)+len(second))
-	out = append(out, first...)
-	out = append(out, second...)
-	slices.Sort(out)
-
-	return out
-}
-
 // activeWorkError reports ErrActiveWork naming each unit of work.
 func activeWorkError(work activeWork) error {
-	return fmt.Errorf("%w: %s", ErrActiveWork, strings.Join(work.names(), ", "))
+	return &ActiveWorkError{Work: work.names(), Canceled: nil}
 }
 
 // setStateIf stores next only when the stored state is expected.
@@ -418,6 +488,13 @@ type activeUnit struct {
 	updateID    stack.UpdateID
 	workspaceID workspace.ID
 	isUpdate    bool
+}
+
+// sameUnit reports whether a and b name the same running update or the same
+// locked workspace.
+func sameUnit(a, b activeUnit) bool {
+	return a.reference == b.reference && a.updateID == b.updateID && a.workspaceID == b.workspaceID &&
+		a.isUpdate == b.isUpdate
 }
 
 // activeWork holds every running update and locked workspace of the
@@ -637,8 +714,10 @@ func unitObject(tool string, ns namespace.Name, name string) (string, error) {
 }
 
 // Watcher reads the installation state with a short cache limit, so every
-// request does not read the database. The zero value is not usable: call
-// NewWatcher.
+// request does not read the database. It only gives the HTTP gate a cheap
+// early refusal. It never decides a write: the store checks the stored state
+// in each write transaction, so a cached or kept state cannot admit a write.
+// The zero value is not usable: call NewWatcher.
 type Watcher struct {
 	store Store
 	now   func() time.Time

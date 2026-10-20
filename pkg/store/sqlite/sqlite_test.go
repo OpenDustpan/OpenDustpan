@@ -24,10 +24,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -151,6 +153,23 @@ func TestSignInFailuresConformance(t *testing.T) {
 
 		return storetest.SignInFailureHarness{
 			Open: func(*testing.T, time.Duration) authgate.FailureCounter { return s },
+		}
+	})
+}
+
+// TestAuditCheckConformance runs the shared suite of the audit chain check
+// state: one SQLite file allows one store, so the suite gets that store for
+// every handle.
+func TestAuditCheckConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunAuditCheck(t, func(t *testing.T) storetest.AuditCheckHarness {
+		t.Helper()
+
+		s := open(t)
+
+		return storetest.AuditCheckHarness{
+			Open: func(*testing.T) audit.CheckStore { return s },
 		}
 	})
 }
@@ -727,6 +746,27 @@ func TestPortableExportConformance(t *testing.T) {
 	})
 }
 
+func TestDevDataConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunDevData(t, func(t *testing.T, kind installation.Kind) storetest.DevDataStore {
+		t.Helper()
+
+		store, ok := openBackup(t).(storetest.DevDataStore)
+		if !ok {
+			t.Fatal("the SQLite store does not hold the dev data ports")
+		}
+
+		if kind != "" {
+			if _, err := store.ClaimKind(t.Context(), kind); err != nil {
+				t.Fatalf("claim the installation kind: %v", err)
+			}
+		}
+
+		return store
+	})
+}
+
 func TestRestoreConformance(t *testing.T) {
 	t.Parallel()
 
@@ -831,6 +871,25 @@ func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The cap
 // IdempotencyStore implements storetest.IdempotencyHolder.
 func (s *backupStore) IdempotencyStore() idempotency.Store { //nolint:ireturn // The capability returns the port.
 	return s.Idempotency(idempotencytest.TestWrapper(s.t, 1))
+}
+
+// EraseKindForTest implements storetest.KindEraser: it sets the stored
+// installation kind back to NULL through a second handle, behind the port.
+func (s *backupStore) EraseKindForTest(ctx context.Context) error {
+	raw, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		return fmt.Errorf("open the database file: %w", err)
+	}
+
+	defer func() {
+		_ = raw.Close() //nolint:errcheck // Test-only handle.
+	}()
+
+	if _, err := raw.ExecContext(ctx, `UPDATE installation SET kind = NULL`); err != nil {
+		return fmt.Errorf("erase the kind: %w", err)
+	}
+
+	return nil
 }
 
 // CurrentStagingID implements storetest.StagingWitness: the path of the
@@ -1439,4 +1498,94 @@ func BenchmarkAuthorizer(b *testing.B) {
 	})
 
 	accesstest.Bench(b, s)
+}
+
+// revocationStore adds to the store the two hooks of the revocation suite: the
+// runner pools of the store, and a write to the revocation journal that the
+// CHECK constraint of the table does not stop.
+type revocationStore struct {
+	*sqlite.Store
+
+	path string
+}
+
+var _ storetest.RevocationStore = (*revocationStore)(nil)
+
+// RunnerPools implements storetest.RevocationStore.
+//
+//nolint:ireturn // The method implements storetest.RevocationStore, which returns the port.
+func (s *revocationStore) RunnerPools() runner.PoolStore {
+	return s.Runners()
+}
+
+// KeepsUnknownKinds implements storetest.RevocationStore. The restore copies
+// the live journal into the staged file, whose table holds the CHECK on the
+// kind, so a row of an unknown kind fails the copy and the restore.
+func (s *revocationStore) KeepsUnknownKinds() bool { return false }
+
+// InsertRawRevocation implements storetest.RevocationStore. It turns off the
+// CHECK constraints for its own connection, as a write to the database file
+// with another tool could.
+func (s *revocationStore) InsertRawRevocation(ctx context.Context, row storetest.RawRevocation) (err error) {
+	raw, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := raw.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	conn, err := raw.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open raw connection: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw connection: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		return fmt.Errorf("turn off the check constraints: %w", err)
+	}
+
+	const insert = `INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+VALUES (?, ?, '', ?, ?, ?)`
+
+	if _, err = conn.ExecContext(ctx, insert, row.Kind, row.Target, row.Actor, row.Object, row.AtMs); err != nil {
+		return fmt.Errorf("insert the raw revocation: %w", err)
+	}
+
+	return nil
+}
+
+// TestRevocationConformance runs the suite of the writes that only reduce
+// access: they run in maintenance mode, and a restore keeps them.
+func TestRevocationConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunRevocations(t, func(t *testing.T) storetest.RevocationStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return &revocationStore{Store: s, path: path}
+	})
 }

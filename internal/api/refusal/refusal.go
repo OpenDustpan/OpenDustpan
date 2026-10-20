@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -26,20 +27,94 @@ const channelHeader = "Dustpan-Channel"
 // installation.
 var errNoServerStore = errors.New("audit store has no installation scope")
 
+// errNoNamespaces reports a Recorder that has no namespace reader and an entry
+// for a namespace.
+var errNoNamespaces = errors.New("recorder has no namespace reader")
+
 // Namespaces reads a namespace to take its fence. The namespace service
 // implements it.
 type Namespaces interface {
 	Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// Bounds of the text that an entry takes from a request. Each value is cut
+// after it is cleaned.
+const (
+	maxSubjectBytes = 255
+	maxObjectBytes  = 512
+	maxRouteBytes   = 200
+)
+
+// Reasons that the middleware writes. A caller of Record in a domain package
+// gives its own reason.
+const (
+	// ReasonPolicy is the reason of a refusal by the Authorizer.
+	ReasonPolicy = "denied by policy"
+	// ReasonFailed is the reason when the Authorizer returned an error that is
+	// not a refusal. The entry never holds the text of that error.
+	ReasonFailed = "authorization failed"
+)
+
+// unknownScope is the scope in the key of the limiter for a namespace that does
+// not exist. A caller can name any namespace, so all such names count as one.
+const unknownScope = "@unknown"
+
+// writeTimeout bounds the append of the entries of one refusal. The append runs
+// after the request context is done too, so a client that closes the
+// connection cannot make an entry get lost.
+const writeTimeout = 5 * time.Second
+
+// suppressedSubject is the subject of the entries that count denials which
+// no entry of their own carries.
+const suppressedSubject = "denial-limiter"
+
 // Recorder asks the Authorizer and writes one audit entry of the outcome
-// denied for each refusal. A nil store writes no entry.
+// denied for each refusal, within the bound of its limiter: for one principal,
+// action, object kind and namespace it writes the first refusal of each
+// window, and counts the others. A nil store writes no entry.
 type Recorder struct {
 	authz      identity.Authorizer
 	store      audit.Store
 	namespaces Namespaces
 	logger     *slog.Logger
 	onFailure  func()
+	limiter    *denylimit.Limiter
+	surface    string
+}
+
+// Denial is what a refusal was about: the action, the object and the reason.
+type Denial struct {
+	Action identity.Action
+	Object identity.Object
+	// Reason says why, in a short sentence.
+	Reason string
+	// Window is the window of the limiter for this refusal. Zero means the
+	// window of the limiter of the Recorder. A caller uses one window for each
+	// action and object kind.
+	Window time.Duration
+}
+
+// maxReasonPartBytes bounds the reason text that a caller gives.
+const maxReasonPartBytes = 100
+
+// WithLimiter sets the limiter and returns r. The default is a limiter with
+// the default bounds of package denylimit. A nil limiter keeps the default.
+func (r *Recorder) WithLimiter(l *denylimit.Limiter) *Recorder {
+	if l != nil {
+		r.limiter = l
+	}
+
+	return r
+}
+
+// WithSurface names the adapter of r and returns r. The name is part of the
+// key of the limiter, so the refusals of two adapters of one tool (the
+// TFE-compatible API and the OpenTofu HTTP backend) in one window write one
+// entry each. The names are fixed in code, so the keys stay bounded.
+func (r *Recorder) WithSurface(name string) *Recorder {
+	r.surface = Clean(name, maxSubjectBytes)
+
+	return r
 }
 
 // New returns a Recorder. OnFailure runs when an append fails. Nil means no
@@ -57,73 +132,215 @@ func New(
 		namespaces: namespaces,
 		logger:     logger,
 		onFailure:  onFailure,
+		surface:    "",
+		limiter: denylimit.New(
+			denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, Now: nil, MaxKeysPerPrincipal: 0},
+		),
 	}
 }
 
 // Authorize asks the Authorizer whether p may do action on obj, and returns
 // its answer. A refusal of an authenticated principal writes an entry before
-// Authorize returns. The entry records the action and the object, never the
-// request body. A failed append logs and counts the failure. It does not
-// change the answer: the refusal is still returned, and a refusal never turns
-// into a success.
+// Authorize returns, unless the limiter holds it back. The entry records the
+// principal, the action, the object, the route and the reason, never the
+// request body or a header value. An error of the Authorizer that is not a
+// refusal gets an entry too, with the reason "authorization failed". A failed
+// append logs and counts the failure. It does not change the answer: the
+// error is still returned, and a refusal never turns into a success.
 func (r *Recorder) Authorize(
 	ctx context.Context, req *http.Request, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
 	err := r.authz.Authorize(ctx, p, action, obj)
-	if err == nil || !errors.Is(err, identity.ErrDenied) {
-		return err
+	if err == nil {
+		return nil
 	}
 
-	// A guest has no subject. The adapters authenticate a caller before they
-	// check its routes, so a guest reaches here only through a bug, and it
-	// writes nothing.
-	if p.Subject == "" {
-		return err
+	// A request that the Authorizer could not decide is refused too. It gets
+	// an entry with a fixed reason, never the text of the error.
+	reason := ReasonFailed
+	if errors.Is(err, identity.ErrDenied) {
+		reason = ReasonPolicy
 	}
 
-	r.record(ctx, req, p, action, obj)
+	r.Record(ctx, req, p, Denial{Action: action, Object: obj, Reason: reason, Window: 0})
 
 	return err
 }
 
-// record appends the entry of one refusal, and logs and counts a failure.
-func (r *Recorder) record(
-	ctx context.Context, req *http.Request, p identity.Principal, action identity.Action, obj identity.Object,
-) {
+// Record writes the entry of a refusal that the caller decided, for example a
+// domain package that refuses a lock release by a principal that is not the
+// holder. Reason says why, in a short sentence. The limiter, the cleaning of
+// the text and the handling of a failed append are the same as for Authorize.
+// Record never returns an error: the caller returns its own refusal.
+func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Principal, d Denial) {
+	action, obj := d.Action, d.Object
+
+	// A guest has no subject. The adapters authenticate a caller before they
+	// check its routes, so a guest reaches here only through a bug, and it
+	// writes nothing.
+	if p.Subject == "" || r.store == nil {
+		return
+	}
+
+	// The writes outlive the request: a canceled request context must not lose
+	// the entry of the refusal. The timeout bounds them.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancel()
+
+	// An object with no namespace (the installation, a person) lands in the
+	// installation scope.
+	scope := obj.Namespace()
+	if obj.IsServer() || scope == "" {
+		scope = audit.ServerScope
+	}
+
+	target := r.resolve(ctx, scope)
+	subject := Clean(p.Subject, maxSubjectBytes)
+
+	decision := r.limiter.AllowWindow(denylimit.Key{
+		Principal: subject,
+		Action:    string(action),
+		Kind:      r.keyKind(obj),
+		Scope:     target.key,
+	}, d.Window)
+
+	r.writeAll(ctx, flushEntries(decision.Flush))
+
+	if !decision.Write {
+		return
+	}
+
+	if decision.Overflow {
+		r.write(ctx, overflowEntry(decision.Suppressed))
+
+		return
+	}
+
+	entry := deniedEntry(ctx, req, p, d, scope)
+	entry.Reason = reasonOf(req, d.Reason, decision.Suppressed)
+
+	r.writeTarget(ctx, target, entry)
+}
+
+// Flush writes the counts that the limiter still holds, as entries of their
+// own, and empties the limiter. The server calls it once at shutdown, with a
+// context that has a short timeout. Flush returns after the writes ended or
+// ctx is done.
+func (r *Recorder) Flush(ctx context.Context) {
 	if r.store == nil {
 		return
 	}
 
-	entry := deniedEntry(ctx, req, p, action, obj)
+	r.writeAll(ctx, flushEntries(r.limiter.Drain()))
+}
 
-	if err := r.append(ctx, obj, entry); err != nil {
-		r.logger.ErrorContext(ctx, "audit append failed for a refused request",
-			slog.String("action", string(action)), slog.String("object", obj.String()),
-			slog.String("error", err.Error()))
-
-		if r.onFailure != nil {
-			r.onFailure()
+// writeAll appends each entry, and stops when ctx is done.
+func (r *Recorder) writeAll(ctx context.Context, entries []audit.Entry) {
+	for i := range entries {
+		if ctx.Err() != nil {
+			return
 		}
+
+		r.write(ctx, entries[i])
 	}
 }
 
-// append writes entry in the scope of obj: the namespace of obj, or the
-// installation scope for an installation object.
-func (r *Recorder) append(ctx context.Context, obj identity.Object, entry audit.Entry) error {
-	if obj.IsServer() {
-		ss, ok := r.store.(audit.ServerStore)
-		if !ok {
-			return errNoServerStore
-		}
+// target is the scope of one refusal: the key for the limiter, and the
+// namespace when the scope is one that exists.
+type target struct {
+	key string
+	// ns is set when the scope is a namespace that exists.
+	ns *namespace.Namespace
+	// unknown is true when the namespace does not exist.
+	unknown bool
+}
 
-		if _, err := ss.AppendServer(ctx, entry); err != nil {
-			return fmt.Errorf("append installation entry: %w", err)
-		}
+// resolve reads the namespace of scope once. The key of a namespace that does
+// not exist is one fixed value, so the names that a caller makes up do not make
+// keys.
+func (r *Recorder) resolve(ctx context.Context, scope namespace.Name) target {
+	t := target{key: scope.String(), ns: nil, unknown: false}
 
-		return nil
+	if scope == audit.ServerScope || r.namespaces == nil {
+		return t
 	}
 
-	ns, err := r.namespaces.Get(ctx, obj.Namespace())
+	ns, err := r.namespaces.Get(ctx, scope)
+
+	switch {
+	case errors.Is(err, namespace.ErrNotFound):
+		t.key, t.unknown = unknownScope, true
+	case err == nil:
+		t.ns = &ns
+	default:
+		// Another error: the append reads the namespace again and reports it.
+		// The raw scope is request text, so the key holds a cleaned, bounded copy.
+		t.key = Clean(scope.String(), maxSubjectBytes)
+	}
+
+	return t
+}
+
+// writeTarget appends entry in the scope that resolve found.
+func (r *Recorder) writeTarget(ctx context.Context, t target, entry audit.Entry) {
+	switch {
+	case t.unknown:
+		r.write(ctx, unknownEntry(entry))
+	case t.ns != nil:
+		if _, err := r.store.Append(ctx, t.ns.Fence(), entry); err != nil {
+			r.fail(ctx, entry, fmt.Errorf("append entry: %w", err))
+		}
+	default:
+		r.write(ctx, entry)
+	}
+}
+
+// unknownEntry moves entry to the installation scope and says that the
+// namespace it named does not exist.
+func unknownEntry(entry audit.Entry) audit.Entry {
+	entry.Reason = Clean(entry.Reason+" (namespace "+Clean(entry.Namespace.String(), maxSubjectBytes)+
+		" does not exist)", audit.MaxReasonLen)
+	entry.Namespace = audit.ServerScope
+
+	return entry
+}
+
+// write appends entry in its scope, and logs and counts a failure.
+func (r *Recorder) write(ctx context.Context, entry audit.Entry) {
+	if err := r.append(ctx, entry); err != nil {
+		r.fail(ctx, entry, err)
+	}
+}
+
+// fail logs and counts an append that failed.
+func (r *Recorder) fail(ctx context.Context, entry audit.Entry, err error) {
+	r.logger.ErrorContext(ctx, "audit append failed for a refused request",
+		slog.String("action", Clean(entry.Action, maxSubjectBytes)),
+		slog.String("object", Clean(entry.Object, maxObjectBytes)),
+		slog.String("error", Clean(err.Error(), maxObjectBytes)))
+
+	if r.onFailure != nil {
+		r.onFailure()
+	}
+}
+
+// append writes entry in its namespace, or in the installation scope. A
+// namespace that does not exist (a caller can name any) falls back to the
+// installation scope, so the refusal is not lost.
+func (r *Recorder) append(ctx context.Context, entry audit.Entry) error {
+	if entry.Namespace == audit.ServerScope {
+		return r.appendServer(ctx, entry)
+	}
+
+	if r.namespaces == nil {
+		return errNoNamespaces
+	}
+
+	ns, err := r.namespaces.Get(ctx, entry.Namespace)
+	if errors.Is(err, namespace.ErrNotFound) {
+		return r.appendServer(ctx, unknownEntry(entry))
+	}
+
 	if err != nil {
 		return fmt.Errorf("read namespace: %w", err)
 	}
@@ -135,41 +352,197 @@ func (r *Recorder) append(ctx context.Context, obj identity.Object, entry audit.
 	return nil
 }
 
-// deniedEntry returns the entry of one refusal, with the outcome denied.
-func deniedEntry(
-	ctx context.Context, req *http.Request, p identity.Principal, action identity.Action, obj identity.Object,
-) audit.Entry {
-	scope := obj.Namespace()
-	if obj.IsServer() {
+// appendServer writes entry in the installation scope.
+func (r *Recorder) appendServer(ctx context.Context, entry audit.Entry) error {
+	ss, ok := r.store.(audit.ServerStore)
+	if !ok {
+		return errNoServerStore
+	}
+
+	if _, err := ss.AppendServer(ctx, entry); err != nil {
+		return fmt.Errorf("append installation entry: %w", err)
+	}
+
+	return nil
+}
+
+// keyKind returns the kind in the key of the limiter: the kind of obj, after
+// the surface of r when it has one.
+func (r *Recorder) keyKind(obj identity.Object) string {
+	if r.surface == "" {
+		return objectKind(obj)
+	}
+
+	return r.surface + "/" + objectKind(obj)
+}
+
+// objectKind names the kind of obj for the key of the limiter.
+func objectKind(obj identity.Object) string {
+	switch {
+	case obj.IsServer():
+		return "server"
+	case obj.IsUnit():
+		// The tool is in the kind: a stack and a workspace in one namespace
+		// are different objects. The set of tools is fixed, so the keys stay
+		// bounded; Clean cuts the text in any case.
+		return "unit:" + Clean(obj.Tool(), maxSubjectBytes)
+	case obj.IsCollection():
+		return "collection"
+	case obj.IsPrincipal():
+		return "principal"
+	case obj.IsCaller():
+		return "caller"
+	default:
+		return "namespace"
+	}
+}
+
+// reasonOf returns the reason text: the cleaned reason and route, and the
+// number of refusals that the limiter held back before this entry.
+func reasonOf(req *http.Request, reason string, suppressed int) string {
+	text := Clean(reason, maxReasonPartBytes)
+
+	if route := routeOf(req); route != "" {
+		text += " on " + route
+	}
+
+	if suppressed > 0 {
+		text += fmt.Sprintf("; %d further refusals since the last entry", suppressed)
+	}
+
+	return Clean(text, audit.MaxReasonLen)
+}
+
+// routeOf returns the route of req: the matched pattern when the mux set one,
+// else the method and the path. It never holds the query or a header value.
+func routeOf(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+
+	if req.Pattern != "" {
+		return Clean(req.Pattern, maxRouteBytes)
+	}
+
+	if req.URL == nil {
+		return Clean(req.Method, maxRouteBytes)
+	}
+
+	return Clean(req.Method+" "+req.URL.Path, maxRouteBytes)
+}
+
+// flushEntries returns the entries that carry the counts of pending.
+func flushEntries(pending []denylimit.Pending) []audit.Entry {
+	out := make([]audit.Entry, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, flushEntry(p))
+	}
+
+	return out
+}
+
+// flushEntry returns the entry that carries the count of refusals of one key
+// that the limiter held back in a window that ended. The count of a namespace
+// that does not exist, and the count of the aggregate key of a principal, go in
+// the installation scope.
+func flushEntry(pending denylimit.Pending) audit.Entry {
+	if pending.Overflow {
+		return overflowEntry(pending.Suppressed)
+	}
+
+	scope := namespace.Name(pending.Key.Scope)
+	if pending.Key.Scope == unknownScope || pending.Key.Scope == denylimit.AggregateMark {
 		scope = audit.ServerScope
+	}
+
+	e := baseEntry(scope, pending.Key.Principal, pending.Key.Action)
+	e.Object = pending.Key.Kind
+	e.Reason = fmt.Sprintf("%d further refusals in the last window were not recorded one by one", pending.Suppressed)
+
+	return e
+}
+
+// overflowEntry returns the entry that stands for the refusals of principals
+// that the limiter had no room to track.
+func overflowEntry(suppressed int) audit.Entry {
+	e := baseEntry(audit.ServerScope, suppressedSubject, "denials:suppressed")
+	e.Object = "denials of untracked principals"
+	e.Reason = fmt.Sprintf("%d refusals were not recorded one by one: too many principals in one window", suppressed)
+
+	return e
+}
+
+// baseEntry returns a denied entry with no request data.
+func baseEntry(scope namespace.Name, subject, action string) audit.Entry {
+	return audit.Entry{
+		At:            time.Now().UTC(),
+		Namespace:     scope,
+		Subject:       subject,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        action,
+		Object:        "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.NormalizeChannel(""),
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeDenied,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+	}
+}
+
+// deniedEntry returns the entry of one refusal, with the outcome denied. The
+// text of the principal and the object is cleaned and bounded.
+func deniedEntry(
+	ctx context.Context, req *http.Request, p identity.Principal, d Denial, scope namespace.Name,
+) audit.Entry {
+	action, obj := d.Action, d.Object
+
+	// A caller of Record may have no request. The entry then has no address (clientip.String accepts nil),
+	// no user agent and the default channel.
+	var userAgent, channel string
+	if req != nil {
+		userAgent, channel = req.UserAgent(), req.Header.Get(channelHeader)
 	}
 
 	return audit.Entry{
 		At:            time.Now().UTC(),
 		Namespace:     scope,
-		Subject:       p.Subject,
+		Subject:       Clean(p.Subject, maxSubjectBytes),
 		IDPSubject:    "",
-		TokenID:       p.TokenID,
+		TokenID:       Clean(p.TokenID, maxSubjectBytes),
 		Action:        string(action),
-		Object:        obj.String(),
+		Object:        Clean(obj.String(), maxObjectBytes),
 		Version:       "",
 		ValuePath:     "",
 		ValueCount:    nil,
 		Changes:       nil,
 		SourceIP:      clientip.String(req),
-		UserAgent:     truncateUserAgent(req.UserAgent()),
-		Channel:       audit.NormalizeChannel(req.Header.Get(channelHeader)),
+		UserAgent:     Clean(truncateUserAgent(userAgent), audit.MaxUserAgentLen),
+		Channel:       audit.NormalizeChannel(channel),
 		Kind:          kindOf(action),
 		Outcome:       audit.OutcomeDenied,
 		RequestID:     requestid.FromContext(ctx),
-		ObjectID:      obj.UnitID(),
+		ObjectID:      Clean(obj.UnitID(), maxSubjectBytes),
 		PrevHash:      "",
 		Hash:          "",
 		Sequence:      0,
 		FenceVersion:  0,
 		Reason:        "",
 		PrincipalKind: string(p.Kind),
-		JobID:         p.JobID,
+		JobID:         Clean(p.JobID, audit.MaxJobIDLen),
 	}
 }
 

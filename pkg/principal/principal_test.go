@@ -38,6 +38,15 @@ func TestValidateSubject(t *testing.T) {
 		{"\xff", principal.ErrInvalid},
 		{"Ünïcode", principal.ErrInvalid},
 		{"\u738b\u5c0f\u660e", principal.ErrInvalid},
+		{"dev", nil},
+		{"developer", nil},
+		{"dev-admin", nil},
+		{"dev.admin", nil},
+		{"dev:admin", principal.ErrReservedSubject},
+		{"dev:", principal.ErrReservedSubject},
+		{"dev:someone", principal.ErrReservedSubject},
+		{"Dev:admin", principal.ErrReservedSubject},
+		{"DEV:ADMIN", principal.ErrReservedSubject},
 		{"admin", principal.ErrReservedSubject},
 		{"Admin", principal.ErrReservedSubject},
 		{"ADMIN", principal.ErrReservedSubject},
@@ -117,7 +126,7 @@ func TestNewServiceNeedsStore(t *testing.T) {
 
 	_, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      nil, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      nil, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a store = %v, want ErrMissingDependency", err)
@@ -227,7 +236,7 @@ func TestServiceEntries(t *testing.T) {
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st,
-		Guard:      nil, Namespaces: nil, Tokens: nil,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -295,7 +304,7 @@ func newServiceOverStore(t *testing.T) *principal.Service {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      openStore(t),
-			Guard:      nil,
+			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,

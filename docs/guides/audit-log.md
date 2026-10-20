@@ -154,11 +154,96 @@ lock that it finds. Each release writes one `change` entry with the action
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.
 
+## Denial entries
+
+Each request that the server refuses because the principal does not hold the action writes one entry with the outcome `denied`.
+Every API writes it. These are the Pulumi Cloud-compatible API, the TFE-compatible API, the OpenTofu HTTP backend, the inventory, context, audit, profile and runner APIs, and the installation API.
+A list that shows only the items that the principal may read does not write an entry for each item that it leaves out.
+The entry is in the scope of the object. An object with no namespace, or with a namespace that does not exist, writes the entry in the scope `@server`. For a namespace that does not exist, the `reason` ends with `(namespace NAME does not exist)`.
+A request with no valid credential answers 401 and writes no entry, because it has no principal.
+
+- `subject`, `tokenID`, `principalKind` and `jobID`: the principal that was refused.
+- `action` and `object`: the action that the route needs, and the object that it needs it on.
+- `reason`: `denied by policy on` and the route, for example `denied by policy on GET /api/audit/entries`. The route is the matched pattern, or the method and the path. It never holds the query.
+- `kind`: `reveal` for a refused read of secret values, `override` for a refused forced write, `tool-operation` for a refused read, else `change`.
+
+The check of the action can fail with an error that is not a refusal. The request then gets that error, and the server writes an entry too.
+The `reason` is then `authorization failed on` and the route. It never holds the text of the error.
+
+An entry holds no request body, no header value and no secret.
+In the subject, the object and the reason, the server writes each control character, format character, line separator and paragraph separator as `\uXXXX`.
+It replaces each byte that is not valid UTF-8 with U+FFFD.
+It cuts the subject to 255 bytes and the object to 512 bytes.
+
+A refusal that a domain package decides also writes an entry, in the place where it happens.
+These refusals write an entry:
+
+- An OpenTofu `UNLOCK` that names a lock that is not the current lock, and an `UNLOCK` that finds the lock changed or held by another principal. The `action` is `unit:lock`.
+- The removal of a manual lock by a principal that is not the holder, and a removal that finds the lock changed. The `action` is the action of the route: `unit:lock` for the removal, `unit:manage` for the force-unlock.
+- A grant or a role that gives more than the principal who makes it holds. The `action` is the action of the route, and the `reason` is `grant gives more than the granter holds`.
+- A state write or a force-unlock that the workspace refuses because the forced-write or unlocked-write switch is off or not granted. A write without the lock to a workspace that no one has locked is such a refusal in two cases. The switch is off, or the principal lacks `unit:write-unlocked`. The client still gets its lock conflict. A write that is refused only because another principal holds the lock writes no entry here. The `action` is `unit:write-forced` or `unit:write-unlocked`, the `kind` is `override` and the `reason` is `override refused`.
+
+The `reason` says which refusal it was.
+A manual lock that is already held answers 409. A manual lock that does not exist answers 404. Neither writes an entry, because they report the state of the object.
+
+If the server cannot write the entry, the request still gets its refusal. The server logs the failure and counts it in `dustpan_audit_append_failures_total` (see "Alert on failed logging").
+The server writes the entry also when the client closes the connection. A write that takes longer than 5 seconds counts as a failure.
+
+### The limit on repeated denials
+
+A principal that sends many refused requests must not fill the log.
+All APIs of the server share one limit.
+For each principal, action, API, kind of object and scope, the server writes the first denial in a window of 1 minute.
+It counts each other denial of that key in the window and writes nothing for it.
+The count goes out in the `reason` of the first entry of the next window (`N further refusals since the last entry`).
+When the principal stops, the first denial of any principal after the window writes one entry with the action and the count (`N further refusals in the last window were not recorded one by one`).
+The kind of a stack or a workspace includes its tool (`unit:pulumi`, `unit:opentofu`).
+A refusal on a workspace does not hide a refusal on a stack in the same namespace.
+The API is part of the key too.
+A refusal on the TFE-compatible API and a refusal on the OpenTofu HTTP backend write one entry each.
+Each namespace that does not exist counts as the same scope, so a principal cannot make keys with names that it invents.
+
+The server tracks at most 4096 keys, and at most 64 keys for each principal.
+A new key of a principal that has 64 keys goes to the aggregate key of that principal.
+The entry of this aggregate names the principal, and its flush entry has the action `*` and the scope `@server`.
+A denial of a new key beyond the 4096 keys adds to one aggregate for all principals.
+The aggregate writes one entry for each window in the scope `@server`. The entry has the action `denials:suppressed` and the subject `denial-limiter`.
+
+The server starts no background task for the limit, so the count of a quiet key waits for the next denial.
+When the server stops with a signal, it writes the counts that it still holds, within 5 seconds.
+A server that ends in another way loses these counts, and a restart starts with no counts.
+
+### Refused dev sign-ins
+
+A production installation refuses a session or a token of a dev person. A dev person has a subject that starts with `dev:`, in any case.
+Only `opendustpan dev` makes such a person. One on a production installation comes from a restored dev backup.
+Each refusal can write an entry with the outcome `denied`, in the scope `@server`:
+
+- `subject`: the subject of the dev person.
+- `action`: `session:sign-in`.
+- `object`: `@server`.
+- `reason`: `sign-in by a dev person refused on a production installation`. When the server counted refusals before this entry, the `reason` ends with `; N further refusals since the last entry`.
+
+The entry holds no token, no session cookie and no request data.
+
+These entries use the limit of the previous section, with a window of 1 hour.
+The server writes at most 1 entry for each dev person for each hour.
+It counts each other refusal of that person in the hour.
+The count goes out in the first entry of the next hour.
+When the table of the limiter is full, a dev refusal uses the overflow slot.
+The overflow slot has a window of 1 minute.
+Then the limit of 1 entry for each person for each hour does not hold.
+When the refusals of the person stop, the first denial of any principal after the hour writes an entry.
+The `object` of this entry is the key `signin/server`.
+The entry holds the count (`N further refusals in the last window were not recorded one by one`).
+When the server stops with a signal, it writes the counts that it still holds.
+A dev installation, and a person whose subject does not start with `dev:`, write no such entry.
+
 ## Settings entries
 
 Each server process writes entries about its own settings in the scope
-`@server` (ADR 63 decisions 9 and 10). The subject is the instance ID: a new
-`ins-` ID at each start, which the start log shows on the line `instance`.
+`@server`. The subject is the ID of the server process: a new `ins-` ID at
+each start, which the start log shows on the line `instance`.
 The action is `server:manage-settings`, and the kind is `change`.
 
 - At each start, the server writes one entry with the channel `startup`.
@@ -173,8 +258,8 @@ The action is `server:manage-settings`, and the kind is `change`.
   `next start`: the entry records a change, and the new value applies at
   the next start.
 
-No route of the API reads the scope `@server` yet (ADR 60 decision 7).
-These entries become readable through the API when that route lands.
+No route of the API reads the scope `@server` yet. These entries become
+readable through the API when that route lands.
 
 A sensitive setting (the database URL and each secret) shows only `set` or
 `not set`, never the value. When the server cannot write the start entry,
@@ -327,7 +412,16 @@ A restore that stops after the swap gets the comparison at the next start.
 A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
 
 The server checks the chain of every namespace and of `@server` at start and every hour.
-`dustpan_audit_chain_invalid` holds the count of scopes whose chain or checkpoints do not match.
+One instance runs each check, as the schedule `audit-chain-check`.
+The instance stores the result in the database.
+Each instance reads the stored result when Prometheus scrapes it, so all instances export the same value.
+`dustpan_audit_chain_invalid` holds the larger of two counts.
+The first count is the scopes that do not match in the stored result.
+The second count is the scopes with a stored mark in the current epoch.
+A check that ends late cannot clear the alarm while a mark stands.
+When an instance cannot read the stored result, it exports 1, adds one to `dustpan_audit_chain_read_errors_total` and logs a warning at most once each minute.
+A database fault never shows as a good chain.
+When `dustpan_audit_chain_read_errors_total` increases together with `dustpan_audit_chain_invalid`, look for a database fault before you look for tampering.
 When a database read, a blob read or a checkpoint write fails, the server does not check that scope.
 It logs a warning and adds one to `dustpan_audit_chain_check_errors_total`.
 Such a check does not lower `dustpan_audit_chain_invalid`.
@@ -390,7 +484,18 @@ At each check, the server does these steps for each scope whose chain matches:
 A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
 The server never signs a scope whose chain or checkpoints do not match.
 Once a checkpoint does not match, later checks fail until a new epoch starts.
+The instance that finds the mismatch stores a mark in the database.
+Every instance reads the mark before it signs, so a mismatch that one instance finds stops signing of that scope. A mark of one scope does not stop the signing of another scope.
+Other scopes keep signing and each gets its own check, so `dustpan_audit_chain_invalid` stays the count of scopes that do not match.
+The mark stays across a restart of any instance, and only a new epoch ends it.
+When an instance cannot read the mark, it signs nothing, counts the scope as invalid and logs the error.
+When an instance cannot store a mark, it keeps the mark in memory and signs nothing for that scope.
+It stores the mark at its next check.
 When a stored checkpoint holds another hash, the write fails and the scope stays invalid.
+The server lists the stored checkpoints of a scope first, and then reads the last entry of the scope.
+The log only grows.
+So a stored checkpoint above the last entry shows a cut log.
+It never shows a checkpoint that another instance stored a moment ago.
 While a change of the chain waits or migrates, the server checks the checkpoints but signs none.
 
 The server logs the key ID and the public key in base64 at start.
@@ -400,8 +505,8 @@ Keep the blob store apart from the database: give the two stores different crede
 If the blob store has object lock, turn it on for the prefix `audit-checkpoints/`.
 An entry is safe from a rewrite only after a checkpoint signs it, so the window is at most one hour.
 A person who can delete checkpoints can hide a rewrite of the entries that came before the next checkpoint.
-The server remembers the newest checkpoint that matched, so a later check finds deleted checkpoints.
-The server forgets this at a restart, so without object lock only later checks find a deletion from before a restart.
+Each instance remembers the newest checkpoint that matched, so a later check finds deleted checkpoints.
+An instance forgets this at a restart, so without object lock only later checks find a deletion from before a restart.
 
 ### Epochs
 
@@ -434,7 +539,7 @@ The server does not start when the file holds a line that is not a 32-byte Ed255
 
 ### Clear the alarm
 
-A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero.
+A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero, and the stored mark keeps every instance from signing that scope.
 First find the cause: compare the entries of the scope with your audit log sinks and with the backups.
 When you know the cause, start a new epoch.
 The server then checks only the checkpoints that it signs after this time.
@@ -448,6 +553,7 @@ The request needs the action `server:manage-audit`.
 It answers 201 with the number of the new epoch, and it writes a change entry in the scope `@server`.
 It answers 409 when signed checkpoints are off.
 Each instance reads the new epoch at its next check.
+A mark from an older epoch stops nothing in the new epoch.
 
 ## What the chain protects against
 

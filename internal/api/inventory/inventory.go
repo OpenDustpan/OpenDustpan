@@ -17,10 +17,15 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -55,11 +60,25 @@ type Config struct {
 	// service serves no collection route, so a namespace store that holds no
 	// collections keeps the rest of the API unchanged.
 	Collections *collection.Service
+	// Locks serves the manual lock routes. It is optional: a nil service serves
+	// no lock route, so a namespace store that holds no manual locks keeps the
+	// rest of the API unchanged.
+	Locks *manuallock.Service
 	// Moves checks the escalation of a move into a collection. It is required
 	// with Collections: a move with no checker is refused.
 	Moves         MoveChecker
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
+	// writes none.
+	Audit audit.Store
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it.
+	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
@@ -81,10 +100,12 @@ type Handler struct {
 	lifecycles  map[string]coreinventory.Lifecycle
 	readScope   DeletedReadScope
 	collections *collection.Service
+	locks       *manuallock.Service
 	moves       MoveChecker
 	authn       identity.Authenticator
 	sessions    *sessionauth.Checker
 	authz       identity.Authorizer
+	guard       *refusal.Recorder
 	publicURL   *url.URL
 	logger      *slog.Logger
 	now         func() time.Time
@@ -132,15 +153,19 @@ func NewHandler(cfg Config) (*Handler, error) {
 		lifecycles:  cfg.Lifecycles,
 		readScope:   cfg.ReadScope,
 		collections: cfg.Collections,
+		locks:       cfg.Locks,
 		moves:       cfg.Moves,
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
-		publicURL:   publicURL,
-		logger:      cfg.Logger,
-		now:         now,
-		mux:         newPatternMux(),
-		routes:      nil,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("inventory"),
+		publicURL: publicURL,
+		logger:    cfg.Logger,
+		now:       now,
+		mux:       newPatternMux(),
+		routes:    nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -205,6 +230,9 @@ type unitEntry struct {
 	Status        string     `json:"status,omitempty"`
 	ResourceCount *int64     `json:"resourceCount,omitempty"`
 	Lock          *lockEntry `json:"lock,omitempty"`
+	// ManualLock is the manual lock that covers the unit, omitted when none
+	// does. Like Lock, it is a flag and not a status.
+	ManualLock *manualLockEntry `json:"manualLock,omitempty"`
 	// Collection is the name of the collection of the unit, omitted when the
 	// unit has none (ADR 51).
 	Collection string `json:"collection,omitempty"`
@@ -251,6 +279,7 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		Status:        e.Status,
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
+		ManualLock:    toManualLockEntry(e.ManualLock),
 		Collection:    e.Collection,
 		Labels:        e.Labels,
 		ConsoleURL:    h.consoleURL(e.UnitID),
@@ -450,6 +479,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
@@ -491,7 +524,7 @@ func classify(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, collection.ErrAlreadyExists), errors.Is(err, collection.ErrNotEmpty),
 		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection),
-		errors.Is(err, namespace.ErrFenced):
+		errors.Is(err, collection.ErrMoveOutOfLockedCollection):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody), errors.Is(err, errMissingUnit):
 		return http.StatusBadRequest, err.Error()
@@ -515,12 +548,24 @@ func classifyChange(err error) (int, string) {
 	case errors.Is(err, coreinventory.ErrNameTaken):
 		return http.StatusConflict, "a live unit holds the name: send a new name in the restore body"
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, "write fenced: try again"
+		return http.StatusConflict, namespace.ErrFenced.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return classifyManualLock(err)
 	}
+}
+
+// classifyManualLock maps the errors of the manual lock routes. Any other error
+// is an internal error.
+func classifyManualLock(err error) (int, string) {
+	if status, message, ok := classifyLock(err); ok {
+		return status, message
+	}
+
+	return http.StatusInternalServerError, "internal error"
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

@@ -76,6 +76,8 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -98,9 +100,11 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -281,6 +285,65 @@ func TestEnterMaintenanceRefusesActiveWork(t *testing.T) {
 	}
 }
 
+func TestEnterMaintenanceListsCanceledWorkWhenForceGivesUp(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeMaintenance(maintenance.StateNormal)
+	fake.enterErr = fmt.Errorf("enter: %w", &maintenance.ActiveWorkError{
+		Work: []string{"pulumi:acme/web/racer3"}, Canceled: []string{"pulumi:acme/web/prod"},
+	})
+	handler := newMaintenanceHandler(t, fake)
+
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", `{"force":true}`)
+	if status != http.StatusConflict {
+		t.Fatalf("POST forced enter that gave up answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	var doc struct {
+		Code     int      `json:"code"`
+		Message  string   `json:"message"`
+		Canceled []string `json:"canceled"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode 409 of POST enter: %v (%s)", err, body)
+	}
+
+	if doc.Code != http.StatusConflict || !strings.Contains(doc.Message, "pulumi:acme/web/racer3") ||
+		len(doc.Canceled) != 1 || doc.Canceled[0] != "pulumi:acme/web/prod" {
+		t.Fatalf("POST enter error = %+v, want code 409 naming the blocking and the canceled work", doc)
+	}
+}
+
+func TestEnterMaintenanceListsCanceledWorkOnOtherFailures(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeMaintenance(maintenance.StateNormal)
+	fake.enterErr = fmt.Errorf("enter: %w", &maintenance.CanceledError{
+		Err: maintenance.ErrUnavailable, Canceled: []string{"pulumi:acme/web/prod"},
+	})
+	handler := newMaintenanceHandler(t, fake)
+
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", `{"force":true}`)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("POST forced enter that failed answers %d, want %d (%s)", status, http.StatusInternalServerError, body)
+	}
+
+	var doc struct {
+		Code     int      `json:"code"`
+		Canceled []string `json:"canceled"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode error of POST enter: %v (%s)", err, body)
+	}
+
+	if doc.Code != http.StatusInternalServerError || len(doc.Canceled) != 1 ||
+		doc.Canceled[0] != "pulumi:acme/web/prod" {
+		t.Fatalf("POST enter error = %+v, want code 500 naming the canceled work", doc)
+	}
+}
+
 func TestEnterMaintenanceRejectsBadBody(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +468,8 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -427,9 +492,11 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err == nil {
 		t.Fatal("NewHandler without maintenance succeeded")

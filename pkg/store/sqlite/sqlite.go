@@ -27,7 +27,9 @@ import (
 	// Registers the "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
 
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -214,6 +216,10 @@ type Store struct {
 	// Tests set it to prove a concurrent write stays blocked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context)
+	// beforeLockDelete, when set, runs in the removal of a manual lock between
+	// the read of the lock and the delete, inside the transaction. Tests change
+	// the lock there to reach the changed-lock check. Nil in production.
+	beforeLockDelete func(ctx context.Context, q *db.Queries) error
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -234,6 +240,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// kind is the installation kind of the command that opens the store.
+	// Empty means no check before the migrations.
+	kind installation.Kind
 	// noMigrate makes Open apply no migration and refuse a database with
 	// a pending one.
 	noMigrate bool
@@ -286,6 +295,15 @@ func WithoutMigrate() Option {
 	return func(s *Store) { s.noMigrate = true }
 }
 
+// WithInstallationKind sets the installation kind of the command that opens
+// the database. When the database already holds a kind, Open compares it with
+// kind before it applies a migration, and returns an error that wraps
+// installation.ErrKindMismatch without a change when the two differ. A
+// database that holds no kind yet passes the check: the claim decides.
+func WithInstallationKind(kind installation.Kind) Option {
+	return func(s *Store) { s.kind = kind }
+}
+
 // Open opens (creating if needed) the database file at path and migrates it.
 // It locks the file first: a second Open of the same file, in this process
 // or in another one, fails with ErrInUse until Close of the first store. The
@@ -293,9 +311,9 @@ func WithoutMigrate() Option {
 // file opened through another spelling shares the one guard. A hard link to
 // the database file is not detected.
 //
-// Open leaves running backup rows alone: crash recovery inspects them before
-// the server marks them failed with FailRunningBackups at start, and offline
-// commands open stores that no server owns.
+// Open leaves running backup rows alone: their operations continue on the
+// next claim after a crash, and offline commands open stores that no server
+// owns.
 func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -366,13 +384,15 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
 		keepAccessHook:      nil,
+		beforeLockDelete:    nil,
 		binaryVersion:       "",
+		kind:                "",
 		noMigrate:           false,
 		processGuard:        guard,
 		stepTxBound:         DefaultStepTransactionBound,
 		gate:                nil,
 	}
-	s.gate = gatestore.New(gateRunner{s: s})
+	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	return s
 }
@@ -530,7 +550,9 @@ func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return insertNamespaceRow(ctx, q, codec.ToNamespaceRow(ns))
+	})
 }
 
 // GetNamespace implements namespace.Store.
@@ -859,7 +881,8 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // the transaction. A guard naming another checkpoint returns
 // ErrConcurrentModification so the service recounts once. It returns
 // ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
-// mutating update of the stack runs.
+// mutating update of the stack runs. While a manual lock covers the stack,
+// its collection or its namespace, the error also matches manuallock.ErrLocked.
 // The transaction holds the write lock from the start, so a concurrent start
 // or finish of an update either runs before the checks or waits until the
 // delete commits.
@@ -881,6 +904,10 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
+			return err
+		}
+
 		if err := refuseRunningStack(ctx, q, stackID); err != nil {
 			return err
 		}
@@ -898,7 +925,8 @@ func (s *Store) DeleteStack(
 // ForceDeleteStack implements stack.Store. It soft-deletes the stack as
 // DeleteStack does, even when the latest checkpoint manages resources. It
 // returns ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
-// mutating update of the stack runs.
+// mutating update of the stack runs. While a manual lock covers the stack,
+// its collection or its namespace, the error also matches manuallock.ErrLocked.
 func (s *Store) ForceDeleteStack(
 	ctx context.Context, ref stack.Ref, fence namespace.Fence, d inventory.Deletion,
 ) error {
@@ -910,6 +938,10 @@ func (s *Store) ForceDeleteStack(
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
+			return err
+		}
+
+		if err := refuseStackDeleteUnderLock(ctx, q, ref); err != nil {
 			return err
 		}
 
@@ -1129,18 +1161,85 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 	return out, nil
 }
 
+// inTx runs fn in a write transaction. It first reads the installation state
+// in the transaction, so a write fails with maintenance.ErrInMaintenance as
+// soon as the state is maintenance. The transaction is IMMEDIATE, so the
+// state cannot change before it commits, and an enter waits for a write in
+// flight. It fails closed: a read error fails the write with
+// maintenance.ErrUnavailable. The writes of a restore and of the control
+// tables use inControlTx instead.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, checkWritable)
+}
+
+// inControlTx runs fn in a transaction with no installation state check. The
+// writes of a restore and of the control tables (the installation state,
+// backups, restores, durable operations, schedules, heartbeats and the audit
+// chain) must run while the installation is in maintenance mode. The control
+// path is for the writes that keep the installation able to enter, leave and
+// restore from maintenance mode, and that record what happens. Each caller is
+// a write that maintenance mode must not refuse.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the write connection; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
+func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, nil)
+}
+
+// runTx runs before, when set, and then fn in one transaction.
+func (s *Store) runTx(
+	ctx context.Context, fn func(q *db.Queries) error, before func(context.Context, *db.Queries) error,
+) error {
 	tx, err := s.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 
-	if err := fn(s.queries.WithTx(tx)); err != nil {
+	q := s.queries.WithTx(tx)
+
+	if before != nil {
+		if beforeErr := before(ctx, q); beforeErr != nil {
+			return errors.Join(beforeErr, rollback(tx))
+		}
+	}
+
+	if err := fn(q); err != nil {
 		return errors.Join(err, rollback(tx))
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// checkWritable reads the installation state in the transaction of q. It
+// returns maintenance.ErrInMaintenance in maintenance mode, and
+// maintenance.ErrUnavailable when the state cannot be read, the row is
+// missing or the stored value is unknown: a write never passes on a read error.
+func checkWritable(ctx context.Context, q *db.Queries) error {
+	raw, err := q.GetInstallationState(ctx)
+	if err != nil {
+		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	state, err := maintenance.ParseState(raw)
+	if err != nil {
+		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	if state == maintenance.StateMaintenance {
+		return maintenance.ErrInMaintenance
 	}
 
 	return nil
@@ -1166,10 +1265,32 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 	return nil
 }
 
-// inFencedTx runs fn in a transaction that first checks fence. The write lock
-// is held from the start, so the failover version cannot change before commit.
+// inFencedTx runs fn in a write transaction that first checks the
+// installation state (inTx) and then fence. The write lock is held from the
+// start, so the failover version cannot change before commit.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.fencedTx(ctx, fence, fn, s.inTx)
+}
+
+// inControlFencedTx runs fn as inFencedTx does, with no installation state
+// check. The audit chain markers of a chain change use it: the change holds
+// maintenance mode while it runs.
+func (s *Store) inControlFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
+	return s.fencedTx(ctx, fence, fn, s.inControlTx)
+}
+
+// fencedTx checks fence in the transaction that begin starts, and then runs fn.
+func (s *Store) fencedTx(
+	ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error,
+	begin func(context.Context, func(q *db.Queries) error) error,
+) error {
+	return begin(ctx, func(q *db.Queries) error {
 		version, err := q.GetFailoverVersion(ctx, fence.Namespace.String())
 		if errors.Is(err, sql.ErrNoRows) {
 			return namespace.ErrNotFound
@@ -1217,6 +1338,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 	if checkErr != nil {
 		return fmt.Errorf("check schema: %w", checkErr)
+	}
+
+	if kindErr := s.checkKind(ctx); kindErr != nil {
+		return kindErr
 	}
 
 	if s.noMigrate && len(plan.Pending) > 0 {

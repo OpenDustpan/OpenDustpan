@@ -20,6 +20,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -163,6 +165,18 @@ func buildFixture(
 ) fixture {
 	t.Helper()
 
+	return buildFixtureWith(t, middleware, nil, deny...)
+}
+
+// buildFixtureWith is buildFixture with a function that changes the handler
+// config before the handler is built.
+func buildFixtureWith(
+	t *testing.T, middleware func(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware,
+	tweak func(cfg *apiprofile.Config, store *sqlite.Store, namespaces *namespace.Service),
+	deny ...identity.Action,
+) fixture {
+	t.Helper()
+
 	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -213,10 +227,17 @@ func buildFixture(
 
 	idem := middleware(t, store, clock)
 
-	handler, err := apiprofile.NewHandler(apiprofile.Config{
+	hcfg := apiprofile.Config{
+		Audit: nil, Namespaces: nil, OnAuditFailure: nil,
 		Profiles: svc, Authenticator: testAuthn{}, Authorizer: authz, Sessions: nil, Idempotency: idem,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,
-	})
+		DenialLimiter: nil,
+	}
+	if tweak != nil {
+		tweak(&hcfg, store, namespaces)
+	}
+
+	handler, err := apiprofile.NewHandler(hcfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -791,11 +812,71 @@ func TestNoMuxBypass(t *testing.T) {
 	}
 }
 
+// TestSharedLimiterFlushReachesNamespace proves that a refusal of the profile
+// API writes the held count of a key of another adapter into the namespace of
+// that key.
+func TestSharedLimiterFlushReachesNamespace(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	lim := denylimit.New(denylimit.Config{
+		Window: time.Minute, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: func() time.Time { return now },
+	})
+
+	var namespaces *namespace.Service
+
+	f := buildFixtureWith(t, keyMiddleware,
+		func(cfg *apiprofile.Config, store *sqlite.Store, ns *namespace.Service) {
+			cfg.Audit, cfg.Namespaces, cfg.DenialLimiter = store, ns, lim
+			namespaces = ns
+		})
+
+	// Another adapter holds the counts of a key in the namespace.
+	other := refusal.New(nil, f.store, namespaces, slog.New(slog.DiscardHandler), nil).WithLimiter(lim)
+
+	bo := identity.Principal{
+		Subject: "bo@example.com", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+		Credential: "", JobID: "",
+	}
+
+	for range 3 {
+		other.Record(t.Context(), nil, bo, refusal.Denial{
+			Action: identity.ActionUnitWrite, Object: identity.NamespaceObject("acme"), Reason: "denied", Window: 0,
+		})
+	}
+
+	now = now.Add(2 * time.Minute)
+
+	// A refusal of the profile API sweeps the limiter and writes the flush entry.
+	denied := f.do(t, send("reader", http.MethodPost, base, "{}"))
+	wantCode(t, "write without profile:write", denied, http.StatusForbidden)
+
+	list, err := f.store.List(t.Context(), namespace.Name("acme"), audit.Page{Number: 1, Size: 100})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	found := false
+
+	for i := range list.Entries {
+		if strings.Contains(list.Entries[i].Reason, "2 further refusals in the last window") {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Fatalf("entries = %+v, want the flush entry of the count 2 in namespace acme", list.Entries)
+	}
+}
+
 func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiprofile.NewHandler(apiprofile.Config{
+		Audit: nil, Namespaces: nil, OnAuditFailure: nil,
 		Profiles: nil, Authenticator: nil, Authorizer: nil, Sessions: nil, Idempotency: nil, Logger: nil, Now: nil,
+		DenialLimiter: nil,
 	})
 	if err == nil {
 		t.Error("NewHandler accepted an empty config")
