@@ -67,12 +67,19 @@ words of each tool. Question 1 asks for the glossary lines.
   "Needs attention".
 - **ADR 224 and ADR 226.** Gates run at six decision points over typed fact
   documents. A missing fact is a typed value, and each built-in gate fails
-  closed on it. `state.write` runs before a write from a person's own CLI or
+  closed on it. A new field in a fact group is a new minor schema version
+  (ADR 226 decision 2). `state.write` runs before a write from a person's own CLI or
   CI, and its `plan` group is always `available == false`.
 - **ADR 213 decision 10.** A manual lock refuses each lock request of a tool
-  for each unit that it covers.
+  for each unit that it covers. A phase that already runs runs to its end.
 - **ADR 250.** Each security path has at least two layers, each with its own
-  test. A plan, a log and each output of a tool are untrusted input.
+  test, and each layer stops the attack alone. A plan, a log and each output
+  of a tool are untrusted input.
+- **ADR 134 decision 5.** A step is an argument list. The launcher merges the
+  standard output and the standard error of a step into one log.
+
+## Related proposals (not decided)
+
 - **RFC 25** proposes drift runs as scheduled refresh-only jobs. **RFC 91**
   proposes noise rules and lists what a rule can never collapse. **RFC 93**
   covers the provider code itself (the supply chain). **RFC 94** names this
@@ -81,9 +88,15 @@ words of each tool. Question 1 asks for the glossary lines.
 ## ADRs this RFC would amend
 
 - **ADR 226 decision 4**, to add a fact group `actions` to `change.planned`
-  and `change.apply` (C1). A new fact group needs a new schema version.
+  and `change.apply` (C1). A new group is a new minor schema version, for
+  example `change.planned/1.1` (ADR 226 decision 2).
 - **ADR 194 decision 4**, to add each planned action invocation to "Needs
   attention" (C3).
+- **ADR 100 decision 4**, so that a `refresh` job plans first (D). Today the
+  `refresh` job of a runner has the one phase `apply`, and so it has no plan
+  phase for a check. The proposal: the phases `plan` and `apply`, where the
+  plan phase runs `plan -refresh-only -out` and the apply phase applies that
+  plan. Question 9 asks for this.
 - **ADR 100 decision 3**, only if the owner picks a fifth job operation
   `invoke` (F, question 4). The recommendation adds no operation in
   slice 1.
@@ -101,9 +114,9 @@ release tags named below.
   <https://github.com/opentofu/opentofu/blob/v1.13/CHANGELOG.md>
 - **Not accepted, not refused.** Issue 3309, "Support action blocks and
   action_trigger lifecycle properties", opened 2025-09-26, is open with the
-  labels `enhancement`, `needs-community-input` and `pending-decision`. A
-  maintainer asked for use cases three times (the last on 2026-04-28), and
-  said that a working group looks at "a new OpenTofu-oriented provider
+  labels `enhancement`, `needs-community-input` and `pending-decision`. On
+  2025-09-26, a contributor (`apparentlymart`, labelled Contributor) wrote
+  that a working group looks at "a new OpenTofu-oriented provider
   protocol". The issue links commits of a third-party fork. They are
   not upstream work. The page folds 10 comments, so we did not read
   each comment. <https://github.com/opentofu/opentofu/issues/3309>
@@ -150,6 +163,9 @@ need to handle.
   <https://github.com/hashicorp/terraform/blob/main/internal/command/views/json/hook.go>
 - **Invoke is a refresh-only plan.** `-invoke` runs as a refresh-only plan
   with action targets. The engine refuses it in each other plan mode.
+  `apply -invoke` takes the state lock, but `-lock=false` turns the lock
+  off. It writes a state version only if the state changed. So a CLI
+  invocation can leave no trace in the state or in the lock.
   <https://github.com/hashicorp/terraform/blob/main/internal/terraform/context_plan.go>
   (lines 300 to 306). This matters for drift runs (D). A lifecycle trigger
   needs a planned create, update or destroy, so a refresh-only plan without
@@ -163,15 +179,15 @@ effects:
 
 | Feature | Runs at preview? | In state | In engine events that reach the server |
 | --- | --- | --- | --- |
-| Provider function (invoke) | yes. The request has `preview: true`, and the provider decides. | nothing | no event of its own |
-| `command` provider resources (`command:local:Command`, `command:remote:Command`) | no (the `run` function does) | inputs, `stdout`, `stderr` | `resourcePreEvent` and `resOutputsEvent` of the resource, output as `diagnosticEvent` |
+| Provider function (invoke) | yes, if the handshake opted in (`HandshakeRequest.invoke_with_preview`). Then the request has `preview: true`, and the provider decides. | nothing | no event of its own |
+| `command` provider resources (`command:local:Command`, `command:remote:Command`) | no. The provider skips create and update at preview. | the resource, with inputs, `stdout`, `stderr` | `resourcePreEvent` and `resOutputsEvent` of the resource, output as `diagnosticEvent` |
 | Resource hooks (v3.182.0 and later) | only with `on_dry_run` | hook names only | none on success, and a `diagnosticEvent` "hook failed" on failure |
 | `Call` (a method of a component) | not verified | nothing | no event of its own |
 
 Sources: <https://github.com/pulumi/pulumi/blob/master/proto/pulumi/provider.proto>
-(lines 275, 276 and 563 to 565),
+(lines 275 and 276 for `invoke_with_preview`, lines 563 to 565 for `preview`),
 <https://github.com/pulumi/pulumi-command/blob/master/provider/pkg/provider/local/commandController.go>
-(lines 40 to 48),
+(lines 47 to 50, the skip at preview),
 <https://github.com/pulumi/pulumi/blob/master/proto/pulumi/resource.proto>
 (line 593), <https://www.pulumi.com/docs/iac/concepts/resources/options/hooks/>,
 <https://github.com/pulumi/pulumi/blob/master/sdk/go/common/apitype/events.go>
@@ -184,15 +200,22 @@ sends. Each other event reaches the server, also diagnostics marked
 <https://github.com/pulumi/pulumi/blob/master/pkg/backend/httpstate/state.go>
 (lines 373 to 376)
 
-A `command` resource is the nearest Pulumi form of an action: it is in the
-plan as a resource step with a type, and it runs on create, on update and on
-a change of `triggers`. A hook and an invoke are not visible in the plan.
+A `command` resource is the nearest Pulumi form of an action. It is a
+resource: it is in the plan as a step with a type, in the state, and in the
+history of the stack. It runs on create, on update and on a change of
+`triggers`. A hook and an invoke are not in the plan, not in the state and
+not in the history.
+
+`pulumi refresh`, also with `--run-program`, runs no `command` create or
+update and no hook on a custom resource, as we read the docs and the code.
+A hook on a component under `refresh --run-program` is not ruled out. We did
+not run it (question 7).
 
 ## What OpenDustpan can see today
 
 | Run | OpenTofu | Pulumi CLI |
 | --- | --- | --- |
-| A runner job (ADR 101) | Nothing about actions, because OpenTofu has none. When it has them: `plan-display` holds the planned invocations, and the launcher can keep the `-json` stream of the apply step. | `plan-display` holds each `command` resource step. Hooks and invokes: nothing. The engine events of the apply reach the server. |
+| A runner job (ADR 101) | Nothing about actions, because OpenTofu has none. When it has them: `plan-display` holds the planned invocations, and the launcher can keep the `-json` stream of the apply step. | `plan-display` holds each `command` resource step. Hooks and invokes: nothing, so the coverage is partial. The engine events of the apply reach the server. |
 | A person's own CLI or CI | Only the lock and the state versions. The TFE-compatible API has no run routes, and the CLI sends no plan and no log. So the server sees no action at all. | The engine events: `command` resource steps, their output, and hook failures. No plan before the update: `state.write` has `plan.available == false`. |
 
 So the server can **gate** actions only in a runner job, and can **record**
@@ -209,12 +232,18 @@ The docs must say this in plain words (question 6).
   tool's own words in its payload. The OpenTofu package fills it from
   `action_invocations` and the `action_*` messages. The Pulumi package
   fills it from `command` resource steps only. Hooks and invokes stay out,
-  because the server cannot see them before they run.
+  because the server cannot see them. The coverage gap is part of the data
+  (C1).
 - **A3.** A2, plus Pulumi hooks and invokes from diagnostics.
 
-**Recommendation: A2.** The record holds what both tools share: a unit, a
+**Recommendation: A1 now, and decide A after the spike.** Slice 1 (F) needs
+no core record. The shape of an OpenTofu action is not known until a release
+has it, and a core record written first would copy the shape of Terraform.
+If the owner wants the record now, A2 is the choice. The record holds what both tools share: a unit, a
 job, an address, a kind, a trigger and a result. It does not merge the tool
-models (ADR 13): each tool keeps its own payload. A3 records failures only,
+models (ADR 13): each tool keeps its own payload. Tool fields that exist
+only for one tool (`onFailure`, the lifecycle trigger and its event) go in
+the tool payload, not in the core fields (ADR 12). A3 records failures only,
 which gives a false picture.
 
 ### B. The record
@@ -222,9 +251,11 @@ which gives a false picture.
 **B1. Fields** (proposal). ID with the prefix `aci-`. `unit` (a unit
 reference with the stable unit ID), `job`, `phase`, `plan` (the stored plan
 ID), `stateVersionRead` (from the plan), `stateVersionWritten` (the state
-version of the same phase, or empty). From the tool: `tool`, `address`,
-`actionType`, `provider`, `trigger` (`invoke`, or `lifecycle` with the
-triggering resource and event), `onFailure`, `configDigest` (SHA-256 of the
+version of the same phase. It can be absent: an action can leave no state
+version, and a CLI invoke can leave no trace). From the tool: `tool`, `address`,
+`actionType`, `provider`, `payload` (the tool's own words: for OpenTofu the
+`trigger`, which is `invoke` or `lifecycle` with the triggering resource and
+event, and `onFailure`), `configDigest` (SHA-256 of the
 canonical configuration JSON, never the values). Result: `state`
 (`planned`, `started`, `completed`, `errored`, `skipped`, `not-reported`),
 `startedAt`, `endedAt`, `error` (at most 4 KiB, masked), and `progress` as a
@@ -236,6 +267,18 @@ invocation with `state: planned`. The apply phase moves each row with the
 phase gets `not-reported`, never `completed`. An observed invocation that
 the plan did not list gets a row with the flag `unplanned`, and the phase
 fails (E, fail closed).
+
+**B2a. Who guarantees a stream that a machine can read.** The launcher merges
+the standard output and the standard error of a step (ADR 134 decision 5).
+So the `-json` stream shares one channel with the unit code and the provider
+output, and either of them can print a line that looks like `action_complete`.
+The server must not trust such a line alone. Options: (a) the server builds
+the apply step with a fixed argument list, and the launcher keeps the `-json`
+stream on a separate file descriptor that only the tool writes. Or (b): no
+such channel, so each invocation stays `not-reported` and the plan is the only
+record. **Recommendation: (a). The spike checks that the tool writes its
+stream to a channel that user code cannot reach.** Until then, a row never
+moves to `completed` from a merged log.
 
 **B3. Audit.** One audit entry for each invocation that starts, with the
 principal of the job, the unit, the address and the result. Not one entry
@@ -255,38 +298,63 @@ an ADR records them.
 ### C. Control
 
 **C1. A fact group `actions`** at `change.planned` and `change.apply`
-(proposal): `available`, `count`, `types` (a set of `actionType`),
-`triggers` (a set of `invoke` and lifecycle events), `providers`.
-`available` is `false` when the tool cannot say (a tool with no actions, a
-plan that the parser could not read). A gate "an action of type X in
-collection prod needs an approval" then reads:
+(proposal, a new minor schema version): `available`, `complete`, `count`,
+`types` (a set of `actionType`), `triggers` (a set of `invoke` and lifecycle
+events), `providers`.
+
+The group must tell "known none" from "unknown":
+
+- **Known none.** A strict parser reads a known plan format. The plan has no
+  action keys. Then `available` is `true`, `complete` is `true` and `count`
+  is `0`. Else the gate fires on every OpenTofu plan.
+- **Unknown.** The plan has a top-level key that the parser does not know,
+  or the parser fails. Then `available` is `false`.
+- **Partial coverage.** For the Pulumi CLI, the server sees `command`
+  resource steps only. Hooks and invokes stay invisible. So the group has
+  `complete == false` for Pulumi, and the docs say so. As an alternative,
+  Pulumi never gives `available == true`. Either way, a gate cannot read
+  `count == 0` as "no side effect" for Pulumi.
+
+A gate "an action of type X in collection prod needs an approval" then reads:
 
 ```cedar
 context.actions.available == false || context.actions.types.contains("example_reboot_instance")
 ```
 
-For the Pulumi CLI, C1 fills `types` from `command` resource steps, as
-`command:remote:Command`. Hooks and invokes stay outside, and the docs say
-so. The alternative is a namespace list of "action resource types" (more
-power, more settings). **Recommendation:** C1, with the fixed list of the
-`command` provider types in slice 2, and no namespace list.
+For the Pulumi CLI, `plan.resourceTypes` (ADR 226 decision 4) has the types
+of `command` resource steps already, so a gate on `command:remote:Command`
+needs no new fact. A Pulumi slice that fills `actions.types` adds nothing
+over `plan.resourceTypes`, and so this RFC has no Pulumi slice.
+**Recommendation:** wait for the Pulumi part, and use `plan.resourceTypes`
+for the `command` gates. A namespace list of "action resource types" adds
+settings and no power.
 
 **C2. Never hidden.** A noise rule (RFC 91) can never collapse a planned
-action invocation, and the reader ignores a match on one. Add it to the RFC
-91 list "What a rule can never collapse". Two layers: the save check
-refuses a rule that names an invocation, and the render ignores a match on
-one.
+action invocation, and the reader ignores a match on one. RFC 91 already
+covers this case in its list "What a rule can never collapse", so this RFC
+adds no new rule. We keep C2 as a named defense-in-depth layer. Its two
+parts each stop the attack alone: the save check refuses a rule that names
+an invocation, and the render ignores a match on one.
 
 **C3. Needs attention.** Each planned invocation is in "Needs attention"
 (ADR 194). The approve control shows only on a view that lists each
 planned invocation. A view that could not read them (the parser failed, the
 plan is too large) shows "actions unknown" and no approve control.
 
-**C4. Locks.** A manual lock refuses the lock request of the tool. An
-OpenTofu `-invoke` is a refresh-only apply, so we expect it to lock the
-state, and so a manual lock to cover it. The spike (F) must prove this with
-the real CLI. A runner job checks the manual lock at dispatch (ADR 213), so
-a job never invokes an action on a locked unit.
+**C4. Locks.** What a lock can and cannot do:
+
+- A runner job checks the manual lock at dispatch (ADR 213 decision 10). A
+  phase that already runs runs to its end. So a lock that a person sets
+  after the dispatch does not stop an action in that phase.
+- A CLI-driven `apply -invoke` takes the state lock, so a manual lock
+  refuses its lock request. But `-lock=false` skips the lock, and then the
+  manual lock does nothing. The action runs before any state write, so a
+  fenced write is refused after the action ran.
+- **The server cannot gate a CLI-driven invocation.** It can refuse the
+  lock request of a person who does not use `-lock=false`, and nothing
+  else. The docs must say this in plain words.
+
+The spike (F) must prove the lock request with the real CLI.
 
 **C5. Allowed actions.** Options: (a) gates only, with C1, or (b) a namespace
 allowlist of action types that the launcher also enforces. **Recommendation:
@@ -295,7 +363,8 @@ fails closed (E). An allowlist in two places drifts.
 
 ### D. Limits, stated plainly
 
-- A provider action is not in state. Drift detection cannot find its effect.
+- A provider action is not in state. (A Pulumi `command` resource is in the
+  state and in the history, but what its command did is not.) Drift detection cannot find its effect.
   A rollback of state does not undo it. A destroy does not undo it. A
   `before_destroy` trigger runs a new action, it does not undo an old one.
 - The provider decides idempotency and retries. OpenDustpan never retries an
@@ -303,16 +372,29 @@ fails closed (E). An allowlist in two places drifts.
   started row with no end `not-reported`.
 - OpenDustpan records what the tool reports. It cannot prove that the
   provider did what it reported.
-- A drift run (RFC 25) must invoke nothing. Three layers, each one alone:
-  1. The job spec of a `refresh` job has no `-invoke` argument. The spec
-     check refuses one.
-  2. The launcher refuses an argument list for a `refresh` step that holds
-     `-invoke` in any form (also `-invoke=` and a response file).
-  3. The plan phase of a `refresh` job fails when its `plan-display` has a
-     planned invocation, before any apply phase.
-  For the Pulumi CLI, `pulumi refresh` runs no hook and no `command`
-  create or update, as we read the docs. Question 7 asks for an e2e step
-  that proves it, also with `--run-program`.
+- A drift run (RFC 25) must invoke nothing. A denylist of arguments is not
+  enough (ADR 250 asks for an allowlist). `TF_CLI_ARGS` and
+  `TF_CLI_ARGS_apply` in the step environment, a custom step of a team
+  (ADR 101 decision 7) and a wrapper binary can add `-invoke` after any
+  check of the argument list. The layers, each one alone:
+  1. **Fixed steps.** The server builds the steps of a `refresh` job from
+     the step planner of the tool, with a fixed argument list from an
+     allowlist. A `refresh` job takes no custom step. The spec check
+     refuses a spec with any other argument.
+  2. **A clean environment.** The spec check refuses `TF_CLI_ARGS` and each
+     `TF_CLI_ARGS_*` variable in the step environment of a `refresh` job,
+     and the launcher refuses them at start.
+  3. **A plan check.** A `refresh` job plans first: the plan phase runs
+     `plan -refresh-only -out`, the server reads the plan with the strict
+     parser (E), the job fails when the plan has a planned invocation, and
+     the apply phase applies that stored plan only. This layer does not
+     depend on the argument list or on the environment. It needs the
+     amendment of ADR 100 decision 4 (question 9). Without it, a drift run
+     has no independent layer, because its one phase is `apply`.
+  For the Pulumi CLI, `pulumi refresh` runs no hook and no `command` create
+  or update on a custom resource, as we read the docs. A component hook
+  under `refresh --run-program` is not ruled out. Question 7 asks for an e2e
+  step that proves both.
 
 ### E. Defense in depth (ADR 250)
 
@@ -322,11 +404,11 @@ unit.
 
 | Layer | What it does | Its test |
 | --- | --- | --- |
-| Check at the boundary | The parser reads `action_invocations` and the `action_*` messages with a strict schema. It accepts known message types, known trigger events and `onFailure` values from the allowlist only. Each address must match the address grammar of the tool. A plan holds at most 1,000 invocations. Each string is at most 4 KiB of strict UTF-8. The parser refuses a plan or a message that fails, and never fixes it. | a plan with each bad field, sent to the parser with the other layers skipped |
+| Check at the boundary | The parser reads `action_invocations` and the `action_*` messages with a strict schema. It accepts known message types, known trigger events and `onFailure` values from the allowlist only. An unknown top-level key gives `available == false`, never "none". Each address must match the address grammar of the tool. A plan holds at most 1,000 invocations. Each string is at most 4 KiB of strict UTF-8. The parser refuses a plan or a message that fails, and never fixes it. | a plan with each bad field and with an unknown top-level key, sent to the parser with the other layers skipped. A plan with no action keys gives `available == true` and `count == 0` |
 | Encode or contain | The server never stores `config_values`, only `configDigest`. The server deletes CR, LF and control characters from each text before it writes a log or an audit entry. The launcher masks each secret in `error` and `progress`. SQL uses placeholders only. | a `message` with CR, LF, a secret of the job and a SQL character |
-| Limit the effect | Size limits as above. A progress log has the size limit of a job log. The fact group holds types, not values. A drift job gets no `-invoke` (D). | a plan with 1,001 invocations, a progress stream above the log limit |
+| Limit the effect | Size limits as above. A progress log has the size limit of a job log. The fact group holds types, not values. A drift job has fixed steps, a clean environment and a plan check (D). | a plan with 1,001 invocations, a progress stream above the log limit, a drift job with `TF_CLI_ARGS=-invoke=...` |
 | Authorize at use | Each read checks `job:read` or `job:read-plans` on the unit of the row. A runner writes rows only for the job of its claim. | a job token of unit A that writes a row of unit B |
-| Fail closed and record | A parse error sets `actions.available` to `false`, and each built-in gate fails closed on it. An unplanned invocation fails the phase. Each refusal writes an audit entry. | a plan that the parser refuses: the gate denies and an audit entry exists |
+| Fail closed and record | A parse error or an unknown key sets `actions.available` to `false`, and each built-in gate fails closed on it. A line in the merged log never sets a row to `completed` (B2a). An unplanned invocation fails the phase. Each refusal writes an audit entry. | a plan that the parser refuses: the gate denies and an audit entry exists |
 
 ### F. The first slice
 
@@ -336,14 +418,17 @@ an approval before each plan that reboots an instance in collection `prod`.
 
 **What can ship before OpenTofu has actions** (slice 1, recommendation):
 
-1. The fact group `actions` with `available` only, always `false` for
-   OpenTofu, and a guide page that says: "OpenTofu has no actions. A gate
-   that reads `actions` fails closed until it does."
-2. C2 and the drift layers of D, because both are cheap and protect the day
-   that actions arrive.
-3. The e2e step: a `refresh` job spec with `-invoke` is refused by layer 1,
-   and the launcher refuses the same argument list by layer 2, with the
-   real OpenTofu CLI of the e2e matrix (latest, 1.12.7, 1.11.14).
+Slice 1 is **no code**:
+
+1. Land the glossary terms when the RFC is accepted.
+2. Fold the drift-run allowlist of D (fixed steps, a clean environment, a
+   plan check) into RFC 25, because it is a rule of drift runs and not of
+   actions.
+
+If the owner wants code in slice 1, it is only the parser of C1 that tells
+"known none" from "unknown", with the tests of E. A fact group with
+`available` always `false` does not ship: each gate that reads it would fail
+on every plan.
 
 There is no e2e step for an action invocation, because no supported tool
 release has one. CLAUDE.md says that every endpoint lands with its e2e step
@@ -358,14 +443,15 @@ first, so the record (B) and the full fact group (C1) wait.
    lifecycle event, each `on_failure` value, a failed action and a deferred
    action. Compare the shapes with the upstream design above, and write the
    differences into this RFC.
-3. Prove C4: a manual lock refuses `tofu apply -invoke=...` from a person's
-   own CLI.
+3. Prove C4: a manual lock refuses the lock request of `tofu apply
+   -invoke=...` from a person's own CLI. Show that `-lock=false` skips it,
+   and that no state version exists after an invoke that changed nothing.
 4. Prove that `apply -refresh-only` without `-invoke` triggers nothing.
 5. Then land B and C1 with their e2e steps, and the persona's gate.
 
-**Pulumi.** The Pulumi part of C1 (`command` resource types) can come in
-slice 2 with an e2e step against the real Pulumi CLI and the `command`
-provider, if the owner wants Pulumi first (question 3).
+**Pulumi.** `plan.resourceTypes` (ADR 226 decision 4) carries the `command`
+resource types, so a gate on them needs no new fact. This RFC has no Pulumi
+slice. Hooks and invokes stay invisible.
 
 ## Open questions
 
@@ -373,34 +459,41 @@ The owner keeps these. Each recommendation is the author's.
 
 1. The words: "provider action" and "action invocation" (`aci-`) in the
    glossary, because "action" is the authorization action? Recommendation:
-   yes.
-2. One tool-neutral record (A2) or no core concept (A1)? Recommendation: A2,
-   with the Pulumi CLI limited to `command` resources.
-3. Wait for OpenTofu, or ship the Pulumi part of C1 first (slice 2)?
-   Recommendation: slice 1 now, and Pulumi `command` types next, because
-   they are in the plan today.
+   yes, and keep the prefix `aci-`.
+2. One tool-neutral record (A2) or no core concept (A1)? Recommendation: A1
+   now, and decide after the spike.
+3. Wait for OpenTofu, or ship a Pulumi part first? Recommendation: wait.
+   `plan.resourceTypes` covers the `command` gates today. Slice 1 is no code.
 4. A fifth job operation `invoke` for an operation run of `-invoke`, with
    the approvals and the isolation of an apply? Recommendation: not now.
    Decide after the spike, when the real shape is known.
 5. Does a plan with a planned invocation turn off auto-apply by default,
-   as a warning does (ADR 224)? Recommendation: yes, a built-in gate with
+   as a warning does (ADR 229 decision 3)? Recommendation: yes, a built-in gate with
    outcome `warn` that a namespace can set to `enforce`.
-6. CLI-driven OpenTofu runs show no action to the server. Is a plan upload
-   from the CI shim (RFC 94) the answer, or do the docs only state the
-   limit? Recommendation: state the limit now, and the shim later.
+6. CLI-driven OpenTofu runs show no action to the server, and `-lock=false`
+   skips the manual lock (C4). Is a plan upload from the CI shim (RFC 94) the
+   answer, or do the docs only state the limit? Recommendation: state the
+   limit now, with `-lock=false` and the missing state version. Add the shim
+   upload later, as advisory only, because the CLI user can skip it.
 7. Does `pulumi refresh`, also with `--run-program`, run a hook or a
-   `command` create? Recommendation: an e2e step that proves it before any
+   `command` create? Recommendation: an e2e step that proves it, and that
+   also covers a component hook under `refresh --run-program`, before any
    Pulumi drift run ships.
 8. Does an unplanned invocation (B2) fail the phase, or only mark the row?
    Recommendation: fail the phase. The apply already ran the action, so the
    failure stops the next phases and tells a person.
+9. Amend ADR 100 decision 4 so that a `refresh` job plans first (D, layer 3)?
+   Recommendation: yes. Another independent layer would need a second source
+   of truth about the plan, and none exists.
 
 ## Proposed glossary lines
 
 - **Provider action**: an operation that a provider defines outside create,
   read, update and delete, such as a reboot. It does not change the state.
   _Avoid_: action (alone: that is an authorization action), operation,
-  hook (that is a Pulumi word).
+  hook (a Pulumi word for code that runs around a resource step), invoke (a
+  Pulumi word for a provider function, and the OpenTofu flag `-invoke`: say
+  "invoke" only for the flag).
 - **Action invocation**: one run of one provider action in one phase of a
   job, recorded with the ID prefix `aci-`. _Avoid_: action run, call.
 

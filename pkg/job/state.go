@@ -63,6 +63,12 @@ func (s State) HoldsUnit() bool {
 	return s == StateDispatched || s == StateRunning || s == StateCanceling
 }
 
+// live reports whether an executor holds, or is about to hold, the current
+// phase of a job in state s: it is dispatched, running or canceling.
+func (s State) live() bool {
+	return s == StateDispatched || s == StateRunning || s == StateCanceling
+}
+
 // WaitReason tells why a queued job does not dispatch now.
 type WaitReason string
 
@@ -75,6 +81,9 @@ const (
 	// WaitFrozen: a change freeze of the namespace is active and the job has
 	// no break-glass.
 	WaitFrozen WaitReason = "frozen"
+	// WaitLocked: a manual lock covers the unit. A break-glass does not
+	// pass it. The job keeps its queue timeout.
+	WaitLocked WaitReason = "locked"
 )
 
 // Event is something that happens to a job.

@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // manualLockHolder answers one manual lock for every unit.
@@ -17,7 +18,15 @@ type manualLockHolder struct {
 	lock manuallock.Lock
 }
 
-func (m manualLockHolder) Covering(context.Context, collection.UnitRef) (manuallock.Lock, error) {
+func (m manualLockHolder) CoveringFor(context.Context, collection.UnitRef, string) (manuallock.Lock, error) {
+	return m.lock, nil
+}
+
+func (m manualLockHolder) NamespaceLock(context.Context, namespace.Name) (manuallock.Lock, error) {
+	if m.lock.Target.Kind != manuallock.KindNamespace {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
+
 	return m.lock, nil
 }
 
