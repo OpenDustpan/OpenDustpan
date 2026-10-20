@@ -162,8 +162,8 @@ read, a write, a list or a delete of one of these blobs, with a blob key of
 another namespace, or with a key of its own namespace that is outside the
 directory of these blobs:
 
-- an item key blob, in the `item-keys` directory of the namespace;
-- the content of an OpenTofu state version, in the `tofu` directory of the
+- An item key blob, in the `item-keys` directory of the namespace.
+- The content of an OpenTofu state version, in the `tofu` directory of the
   namespace.
 
 The action is `blob:out-of-scope`. The scope is `@server`, the subject is
