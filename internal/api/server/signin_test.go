@@ -212,6 +212,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
@@ -1085,6 +1086,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,

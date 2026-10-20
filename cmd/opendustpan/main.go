@@ -1759,7 +1759,9 @@ var openStore = func(
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		opts := []postgres.Option{postgres.WithBinaryVersion(version), postgres.WithInstallationKind(kind)}
+		opts := []postgres.Option{
+			postgres.WithLogger(logger), postgres.WithBinaryVersion(version), postgres.WithInstallationKind(kind),
+		}
 		if mode == openNoMigrate {
 			opts = append(opts, postgres.WithoutMigrate())
 		}
