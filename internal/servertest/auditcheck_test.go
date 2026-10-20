@@ -174,16 +174,16 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 			"audit-chain-check") >= 3
 	})
 
-	keys := queryInt(
+	// One statement, so a tick between two reads cannot change the counts.
+	shared := queryInt(
 		t,
 		c,
-		"SELECT count(DISTINCT start_key) FROM durable_operations WHERE kind = $1",
+		"SELECT count(*) - count(DISTINCT start_key) FROM durable_operations WHERE kind = $1",
 		"audit-chain-check",
 	)
-	ops := queryInt(t, c, "SELECT count(*) FROM durable_operations WHERE kind = $1", "audit-chain-check")
 
-	if keys != ops {
-		t.Fatalf("operations of the check = %d with %d tick keys, want one operation for each tick", ops, keys)
+	if shared != 0 {
+		t.Fatalf("%d operations of the check share a tick key, want one operation for each tick", shared)
 	}
 
 	for i := range 2 {
