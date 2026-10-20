@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
@@ -228,6 +229,11 @@ func classifyNamespace(err error) (problem, bool) {
 		return problem{
 			status: http.StatusMisdirectedRequest, code: "namespace.not-home",
 			message: "namespace is not homed in this region",
+		}, true
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return problem{
+			status: http.StatusServiceUnavailable, code: "maintenance.in-maintenance",
+			message: maintenance.ErrInMaintenance.Error() + ": try again later",
 		}, true
 	default:
 		return problem{status: 0, code: "", message: ""}, false

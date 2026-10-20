@@ -26,6 +26,7 @@ const (
 var (
 	errStepBroke = errors.New("step broke")
 	errNetwork   = errors.New("network unreachable")
+	errPaused    = errors.New("installation paused")
 )
 
 // recorder counts the runs of each step.
@@ -74,6 +75,7 @@ func testConfig(store durable.Store, owner string, steps ...durable.Step) durabl
 		Backoff:      durable.Backoff{Base: 10 * time.Millisecond, Max: 20 * time.Millisecond},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
 		WriteTimeout: time.Second,
+		Deferred:     nil,
 		Logger:       nil,
 		Rand:         func() float64 { return 0 },
 	}
@@ -578,6 +580,59 @@ func TestRunnerReleasesDoNotUseUpAttempts(t *testing.T) {
 	got := waitFor(t, store, op.ID, "succeeded", inState(durable.StateSucceeded))
 	if got.Attempt != 7 || got.Failures != 1 {
 		t.Fatalf("operation = %+v, want success after 5 releases and 1 failure", got)
+	}
+}
+
+// TestRunnerDefersAStepErrorWithoutAFailure proves that a step error that
+// Deferred names releases the operation with no failure: it waits through
+// more attempts than MaxAttempts allows, and then succeeds with no failure
+// counted.
+func TestRunnerDefersAStepErrorWithoutAFailure(t *testing.T) {
+	t.Parallel()
+
+	store := durabletest.NewMem().Store()
+
+	var calls atomic.Int32
+
+	paused := newRecorder().step("one", func(context.Context, durable.StepContext) ([]byte, error) {
+		if calls.Add(1) <= 6 {
+			return nil, fmt.Errorf("write: %w", errPaused)
+		}
+
+		return nil, nil
+	})
+
+	cfg := testConfig(store, "a", paused)
+	cfg.Deferred = func(err error) bool { return errors.Is(err, errPaused) }
+
+	op := start(t, store, "k")
+	runInBackground(t, newRunner(t, cfg))
+
+	got := waitFor(t, store, op.ID, "succeeded", inState(durable.StateSucceeded))
+	if got.Failures != 0 || got.Attempt != 7 {
+		t.Fatalf("operation = %+v, want success after 6 deferred attempts with no failure", got)
+	}
+}
+
+// TestRunnerCountsAnErrorThatIsNotDeferred proves that the same step error
+// counts as a failure when Deferred names nothing.
+func TestRunnerCountsAnErrorThatIsNotDeferred(t *testing.T) {
+	t.Parallel()
+
+	store := durabletest.NewMem().Store()
+	paused := newRecorder().step("one", func(context.Context, durable.StepContext) ([]byte, error) {
+		return nil, errPaused
+	})
+
+	cfg := testConfig(store, "a", paused)
+	cfg.Deferred = func(err error) bool { return errors.Is(err, errStepBroke) }
+
+	op := start(t, store, "k")
+	runInBackground(t, newRunner(t, cfg))
+
+	got := waitFor(t, store, op.ID, "failed", inState(durable.StateFailed))
+	if got.Failures != 3 {
+		t.Fatalf("operation = %+v, want failed after 3 failures", got)
 	}
 }
 

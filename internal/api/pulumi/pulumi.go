@@ -41,6 +41,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -1035,6 +1036,8 @@ func classifyUpdate(err error) (int, string) {
 		return http.StatusRequestEntityTooLarge, err.Error()
 	case errors.Is(err, stack.ErrJournalBuildTimeout):
 		return http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	case errors.Is(err, namespace.ErrUnavailable):
 		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again"
 	default:

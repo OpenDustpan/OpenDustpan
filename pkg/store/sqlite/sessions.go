@@ -211,9 +211,11 @@ func (s *Store) TouchSession(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	err := s.queries.TouchSession(ctx, db.TouchSessionParams{
-		AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
-		SeenAfterMs: boundMillis(bounds.LastSeen), CreatedAfterMs: boundMillis(bounds.Created),
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		return q.TouchSession(ctx, db.TouchSessionParams{
+			AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+			SeenAfterMs: boundMillis(bounds.LastSeen), CreatedAfterMs: boundMillis(bounds.Created),
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
@@ -263,15 +265,23 @@ func (s *Store) CreateRequest(ctx context.Context, r session.Request, d session.
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	n, err := s.queries.CreateSignInRequest(ctx, db.CreateSignInRequestParams{
-		Digest:      d.String(),
-		Provider:    r.Provider,
-		Nonce:       r.Nonce,
-		Verifier:    r.Verifier,
-		ReturnPath:  r.ReturnPath,
-		CreatedAtMs: codec.Millis(r.CreatedAt),
-		ExpiresAtMs: codec.Millis(r.ExpiresAt),
-		MaxAgeMs:    sql.NullInt64{Int64: r.MaxAge.Milliseconds(), Valid: r.HasMaxAge},
+	var n int64
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		n, err = q.CreateSignInRequest(ctx, db.CreateSignInRequestParams{
+			Digest:      d.String(),
+			Provider:    r.Provider,
+			Nonce:       r.Nonce,
+			Verifier:    r.Verifier,
+			ReturnPath:  r.ReturnPath,
+			CreatedAtMs: codec.Millis(r.CreatedAt),
+			ExpiresAtMs: codec.Millis(r.ExpiresAt),
+			MaxAgeMs:    sql.NullInt64{Int64: r.MaxAge.Milliseconds(), Valid: r.HasMaxAge},
+		})
+
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("insert sign-in request: %w", err)
@@ -289,7 +299,15 @@ func (s *Store) TakeRequest(ctx context.Context, d session.Digest, at time.Time)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row, err := s.queries.TakeSignInRequest(ctx, d.String())
+	var row db.TakeSignInRequestRow
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		row, err = q.TakeSignInRequest(ctx, d.String())
+
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return session.Request{}, session.ErrNotFound
 	}
@@ -319,7 +337,15 @@ func (s *Store) PruneRequests(ctx context.Context, at time.Time) (int64, error) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	n, err := s.queries.PruneSignInRequests(ctx, codec.Millis(at))
+	var n int64
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		n, err = q.PruneSignInRequests(ctx, codec.Millis(at))
+
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("prune sign-in requests: %w", err)
 	}
@@ -405,8 +431,10 @@ func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Tim
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	err := s.queries.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
-		ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		return q.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
+			ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),
+		})
 	})
 	if err != nil {
 		return "", fmt.Errorf("insert sign-in provider: %w", err)

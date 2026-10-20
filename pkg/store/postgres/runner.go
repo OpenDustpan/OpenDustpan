@@ -911,7 +911,7 @@ func (r *Runners) RecordClaim(ctx context.Context, c durable.Claim, jobID string
 func (r *Runners) LookupClaim(ctx context.Context, c durable.Claim) (runner.ClaimRecord, error) {
 	var out runner.ClaimRecord
 
-	err := r.store.inTx(ctx, func(q *db.Queries) error {
+	err := r.store.inControlTx(ctx, func(q *db.Queries) error {
 		_, live, err := lockClaim(ctx, q, c)
 		if err != nil {
 			return err

@@ -21,6 +21,9 @@ var (
 // fence and writes the entry in one transaction with the fence check, so the
 // appends of one namespace form one sequence. It returns the stored entry
 // with its sequence, previous hash and hash.
+// An entry records what happened, for example a refusal or a sign-in, so
+// this append has no installation state check: maintenance mode must never
+// drop it. The change that an entry describes keeps its own check.
 func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
 	if err := e.Validate(); err != nil {
 		return audit.Entry{}, err
@@ -33,7 +36,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 
 	var stored audit.Entry
 
-	txErr := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	txErr := s.inControlFencedTx(ctx, fence, func(q *db.Queries) error {
 		var err error
 
 		stored, err = appendAuditEntry(ctx, q, e)
@@ -51,6 +54,9 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 // audit.ServerScope and writes the entry in one transaction, so the appends
 // of the scope form one sequence. The write lock of SQLite, which each
 // transaction takes at its start, orders appends that run at the same time.
+// An entry records what happened, for example a refusal or a sign-in, so
+// this append has no installation state check: maintenance mode must never
+// drop it. The change that an entry describes keeps its own check.
 func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
 	if err := validServerEntry(e); err != nil {
 		return audit.Entry{}, err
@@ -58,7 +64,7 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 
 	var stored audit.Entry
 
-	txErr := s.inTx(ctx, func(q *db.Queries) error {
+	txErr := s.inControlTx(ctx, func(q *db.Queries) error {
 		var err error
 
 		stored, err = appendAuditEntry(ctx, q, e)

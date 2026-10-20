@@ -236,8 +236,10 @@ func (i *Idempotency) Abandon(ctx context.Context, ref idempotency.Ref, token st
 		return err
 	}
 
-	err := i.store.queries.AbandonIdempotencyRecord(ctx, db.AbandonIdempotencyRecordParams{
-		Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key), Token: token,
+	err := i.store.inTx(ctx, func(q *db.Queries) error {
+		return q.AbandonIdempotencyRecord(ctx, db.AbandonIdempotencyRecordParams{
+			Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key), Token: token,
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("delete idempotency record: %w", err)
@@ -248,9 +250,17 @@ func (i *Idempotency) Abandon(ctx context.Context, ref idempotency.Ref, token st
 
 // Sweep implements idempotency.Store.
 func (i *Idempotency) Sweep(ctx context.Context, now time.Time) (int, error) {
-	n, err := i.store.queries.SweepIdempotencyRecords(ctx, db.SweepIdempotencyRecordsParams{
-		NowOverrideMs: codec.IdempotencyOverrideMillis(now), RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
-		PendingTtlMs: idempotency.PendingTTL.Milliseconds(),
+	var n int64
+
+	err := i.store.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		n, err = q.SweepIdempotencyRecords(ctx, db.SweepIdempotencyRecordsParams{
+			NowOverrideMs: codec.IdempotencyOverrideMillis(now), RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
+			PendingTtlMs: idempotency.PendingTTL.Milliseconds(),
+		})
+
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("sweep idempotency records: %w", err)

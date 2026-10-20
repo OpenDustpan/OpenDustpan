@@ -95,7 +95,7 @@ func (s *Store) AcquireSinkLease(ctx context.Context, sink, holder string, ttl t
 
 	var claim durable.Claim
 
-	err = s.inTx(ctx, func(q *db.Queries) error {
+	err = s.inControlTx(ctx, func(q *db.Queries) error {
 		if ensureErr := ensureSinkOperation(ctx, q, sink); ensureErr != nil {
 			return ensureErr
 		}
@@ -138,7 +138,7 @@ func (s *Store) ReleaseSinkLease(ctx context.Context, claim durable.Claim) error
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		row, err := q.GetDurableOperation(ctx, string(claim.Operation))
 		if errors.Is(err, sql.ErrNoRows) {
 			return durable.ErrClaimLost

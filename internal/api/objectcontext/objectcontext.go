@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
@@ -252,6 +253,8 @@ func classifyConflict(err error) (int, string) {
 		return http.StatusConflict, namespace.ErrFenced.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

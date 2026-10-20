@@ -256,6 +256,7 @@ func newChainRunner(cfg *settings, chain *auditChain) (*durable.Runner, error) {
 		Backoff:      durable.Backoff{Base: 0, Max: 0},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
 		WriteTimeout: 0,
+		Deferred:     nil,
 		Logger:       cfg.logger,
 		Rand:         nil,
 	})

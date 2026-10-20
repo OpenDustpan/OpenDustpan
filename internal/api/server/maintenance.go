@@ -39,7 +39,8 @@ type Maintenance interface {
 	Get(ctx context.Context) (maintenance.State, error)
 	// Enter moves the installation to maintenance mode. While an update or
 	// a run is active it reports maintenance.ErrActiveWork naming each one,
-	// unless force cancels them first.
+	// unless force cancels them first. Work that starts during a forced
+	// enter makes it report the same error; a retry cancels that work.
 	Enter(ctx context.Context, force bool) (maintenance.EnterResult, error)
 	// Leave moves the installation back to normal operation.
 	Leave(ctx context.Context) error
