@@ -680,23 +680,7 @@ func testGateDeletedUnitFacts(t *testing.T, s GateStore, tc gateUnitCase) {
 		t.Fatalf("CreateUnit() = %v", err)
 	}
 
-	wantLabels := 0
-
-	if tc.tool == "pulumi" {
-		project, name, _ := strings.Cut(tc.unit, "/")
-
-		ref, perr := stack.ParseRef("acme", project, name)
-		if perr != nil {
-			t.Fatalf("ParseRef() = %v", perr)
-		}
-
-		if err = s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "core"}, gateTime(), fence); err != nil {
-			t.Fatalf("UpdateStackTags() = %v", err)
-		}
-
-		wantLabels = 1
-	}
-
+	wantLabels := tagGateUnit(t, s, tc, fence)
 	id := softDeleteUnitID(t, s, tc, fence)
 
 	got, err := facts.GetDeletedUnitFacts(t.Context(), "acme", tc.tool, id)
@@ -704,19 +688,41 @@ func testGateDeletedUnitFacts(t *testing.T, s GateStore, tc gateUnitCase) {
 		t.Fatalf("GetDeletedUnitFacts() = %+v, %v, want collection payments and %d labels", got, err, wantLabels)
 	}
 
-	if _, err = facts.GetDeletedUnitFacts(
-		t.Context(),
-		"acme",
-		tc.tool,
-		"unknown-id",
-	); !errors.Is(
-		err,
-		inventory.ErrNotFound,
-	) {
-		t.Fatalf("GetDeletedUnitFacts(unknown) = %v, want ErrNotFound", err)
+	wantFactsNotFound(t, facts, tc.tool, "unknown-id")
+	purgeGateUnit(t, s, tc, id, fence)
+	wantFactsNotFound(t, facts, tc.tool, id)
+}
+
+// tagGateUnit gives a Pulumi stack one tag and returns the number of labels
+// that the unit then has. An OpenTofu workspace has none.
+func tagGateUnit(t *testing.T, s GateStore, tc gateUnitCase, fence namespace.Fence) int {
+	t.Helper()
+
+	if tc.tool != "pulumi" {
+		return 0
 	}
 
+	project, name, _ := strings.Cut(tc.unit, "/")
+
+	ref, err := stack.ParseRef("acme", project, name)
+	if err != nil {
+		t.Fatalf("ParseRef() = %v", err)
+	}
+
+	if err = s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "core"}, gateTime(), fence); err != nil {
+		t.Fatalf("UpdateStackTags() = %v", err)
+	}
+
+	return 1
+}
+
+// purgeGateUnit purges the deleted unit id of tc.
+func purgeGateUnit(t *testing.T, s GateStore, tc gateUnitCase, id string, fence namespace.Fence) {
+	t.Helper()
+
 	purge := gateEntry("acme", "unit:purge")
+
+	var err error
 	if tc.tool == "pulumi" {
 		err = s.PurgeStack(t.Context(), stack.ID(id), fence, time.Time{}, purge)
 	} else {
@@ -726,9 +732,14 @@ func testGateDeletedUnitFacts(t *testing.T, s GateStore, tc gateUnitCase) {
 	if err != nil {
 		t.Fatalf("purge = %v", err)
 	}
+}
 
-	if _, err = facts.GetDeletedUnitFacts(t.Context(), "acme", tc.tool, id); !errors.Is(err, inventory.ErrNotFound) {
-		t.Fatalf("GetDeletedUnitFacts(purged) = %v, want ErrNotFound", err)
+// wantFactsNotFound expects ErrNotFound from the facts of the deleted unit id.
+func wantFactsNotFound(t *testing.T, facts inventory.DeletedFactsReader, tool, id string) {
+	t.Helper()
+
+	if _, err := facts.GetDeletedUnitFacts(t.Context(), "acme", tool, id); !errors.Is(err, inventory.ErrNotFound) {
+		t.Fatalf("GetDeletedUnitFacts(%s) = %v, want ErrNotFound", id, err)
 	}
 }
 
