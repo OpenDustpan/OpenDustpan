@@ -145,3 +145,4 @@ both together.
 | [96](0096-follow-ups-after-an-apply.md) | Follow-ups after an apply, which start an AWX job template or send a signed webhook with selected outputs | draft |
 | [97](0097-test-reports-on-stacks-and-workspaces.md) | Test reports on stacks and workspaces, an extension of RFC 90 to test results | draft |
 | [98](0098-chat-sinks-one-sender-a-renderer-for-each-platform.md) | Chat sinks, with one sender and a renderer for each chat platform (ADR 262) | discussing |
+| [99](0099-the-api-description-and-the-generated-sdks.md) | The API description and the generated SDKs (ADR 264) | discussing |
