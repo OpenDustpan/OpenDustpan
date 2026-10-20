@@ -45,7 +45,8 @@ func (p ApproverPolicy) Validate(a Approvers) error {
 	for _, user := range a.Users {
 		switch {
 		case user == NoApprover:
-			return fmt.Errorf("%w: %q is a value for internal use, not an approver", ErrInvalid, user)
+			return fmt.Errorf("%w: %q is a value for internal use, not an approver; replace it with an approver",
+				ErrInvalid, user)
 		case strings.HasPrefix(user, "!"):
 			return fmt.Errorf("%w: the approver %q starts with an exclamation mark", ErrInvalid, user)
 		case production && isDev != nil && isDev(user):

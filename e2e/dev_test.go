@@ -884,14 +884,22 @@ func waitReady(t *testing.T, base string, out *ptyBuffer) {
 // waitBanner waits until the output of dev holds want. The pseudo terminal
 // copies the output on its own goroutine, so the output can lag behind the
 // address file that the test waits for first.
-func (s *devServer) waitBanner(t *testing.T, want string) string {
+func (d *devServer) waitBanner(t *testing.T, want string) string {
 	t.Helper()
 
-	deadline := time.Now().Add(10 * time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 
-	for !strings.Contains(s.out.String(), want) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+
+	for !strings.Contains(d.out.String(), want) {
+		select {
+		case <-ctx.Done():
+			return d.out.String()
+		case <-tick.C:
+		}
 	}
 
-	return s.out.String()
+	return d.out.String()
 }

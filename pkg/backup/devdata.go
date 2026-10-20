@@ -275,6 +275,9 @@ const (
 	// people and their grants, that this may break things that depend on
 	// them, and that we do not recommend this restore.
 	WarnDevBackupIntoProduction RestoreWarningCode = "dev-backup-into-production"
+	// WarnDevBackupWouldRemove says that a check-only restore would remove the
+	// dev people and their grants, and removed nothing.
+	WarnDevBackupWouldRemove RestoreWarningCode = "dev-backup-would-remove"
 	// WarnProductionBackupIntoDev is an info warning: a dev installation
 	// restored a production backup, so production tokens and sessions now
 	// sit in a dev data directory.

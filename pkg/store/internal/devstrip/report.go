@@ -227,7 +227,11 @@ func (r *reporter) dangling(ctx context.Context, q Querier) error {
 	const missing = "NOT IN (SELECT id FROM principals)"
 
 	for _, step := range []struct{ table, where string }{
-		{table: "grants", where: "subject_kind = 'principal' AND subject_id " + missing},
+		{
+			table: "grants",
+			where: "subject_kind = 'principal' AND (subject_id " + missing +
+				" OR subject NOT IN (SELECT 'principal:' || id FROM principals))",
+		},
 		{table: "group_members", where: "principal_id " + missing},
 		{table: "sessions", where: "principal_id " + missing},
 		{table: "access_tokens", where: "principal_id " + missing},

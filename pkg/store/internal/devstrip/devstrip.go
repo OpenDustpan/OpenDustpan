@@ -76,6 +76,14 @@ func (d Dialect) devPrincipals() string {
 	return "(SELECT id FROM principals WHERE " + d.matchSubject() + ")"
 }
 
+// devPrincipalSubjects is the sub-select of the text form ("principal:<id>")
+// of the dev principals. A grant holds its holder twice, as subject and as
+// subject_id, and the two can disagree in a hostile backup. The strip removes a
+// grant that names a dev principal in either, and does not rely on the other.
+func (d Dialect) devPrincipalSubjects() string {
+	return "(SELECT 'principal:' || id FROM principals WHERE " + d.matchSubject() + ")"
+}
+
 // Rebind turns the "?" placeholders of query into the numbered placeholders
 // "$1", "$2" and so on.
 func Rebind(query string) string {
@@ -115,7 +123,13 @@ type class struct {
 //
 //nolint:gochecknoglobals // A frozen table of the classes, like the table lists of pkg/backup.
 var classes = []class{
-	{name: backup.RemovedGrants, table: "grants", link: "subject_id", only: "subject_kind = 'principal'", extra: nil},
+	{
+		name:  backup.RemovedGrants,
+		table: "grants",
+		link:  "subject_id",
+		only:  "subject_kind = 'principal'",
+		extra: func(d Dialect) string { return "subject_kind = 'principal' AND subject IN " + d.devPrincipalSubjects() },
+	},
 	{name: backup.RemovedGroupMembers, table: "group_members", link: colPrincipalID, only: "", extra: nil},
 	{
 		name: backup.RemovedSessions, table: "sessions", link: colPrincipalID, only: "",

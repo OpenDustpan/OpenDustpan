@@ -562,7 +562,7 @@ func sanitizeRestoreError(err error) string {
 	}
 
 	if errors.Is(err, ErrDevBackupRefused) {
-		return refusalSentence(reasonDevBackup, "")
+		return refusalSentence(reasonDevSwap, "")
 	}
 
 	for _, sentinel := range storedRestoreSentinels {
@@ -867,6 +867,8 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 	if _, _, checkErr := CheckRestore(ctx, checkInput); checkErr != nil {
 		return checkErr
 	}
+
+	dev.checkOnly = req.CheckOnly
 
 	if req.CheckOnly {
 		// A check-only restore reports what it would remove and changes

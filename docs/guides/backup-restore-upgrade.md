@@ -187,6 +187,8 @@ To restore a dev backup into a production installation, start the server with th
 This restore deleted the dev users and their grants. Things that depend on them may break. We do not recommend this restore.
 ```
 
+A check-only restore carries the warning `dev-backup-would-remove`. Its text says that the restore would delete the dev users, and that the check changed no data.
+
 An approval rule can lose its last approver. The restore then writes the value `!no-approver` as its approver. Nobody can meet that rule, and the gate refuses the change that it covers until a person changes the rule.
 
 `opendustpan restore` reads the manifest first. It prints a notice before it starts the restore of a dev backup. The answer of a restore lists the warnings, and the answer of a check-only restore also shows the dev data that the restore would delete:

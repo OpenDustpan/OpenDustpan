@@ -53,6 +53,9 @@ func refusalSentence(reason, hint string) string {
 const (
 	reasonDevBackup = "The backup is from a dev installation."
 	reasonDevData   = "The backup holds people of a dev installation."
+	// reasonDevSwap fits the refusal of the swap, which does not know why the
+	// staged data holds dev people: also a backup that claimed production.
+	reasonDevSwap = "The backup holds people of a dev installation, or it is from a dev installation."
 )
 
 // warningTexts holds the text of each warning that a restore answer carries.
@@ -61,6 +64,8 @@ const (
 var warningTexts = map[RestoreWarningCode]string{
 	WarnDevBackupIntoProduction: "This restore removed the dev users and their grants. " +
 		"Things that depend on them may break. We do not recommend this restore.",
+	WarnDevBackupWouldRemove: "This restore would remove the dev users and their grants. " +
+		"This check changed no data. Things that depend on them may break. We do not recommend this restore.",
 	WarnProductionBackupIntoDev: "This backup is from a production installation. " +
 		"Its tokens and sessions are now in a dev data directory.",
 	WarnAuditAppendFailed: "The restore finished. The server could not write an audit entry for the removed dev data. " +
@@ -102,6 +107,8 @@ type devRun struct {
 	live   installation.Kind
 	backup installation.Kind
 	report DevStripReport
+	// checkOnly is true for a check-only restore, which removes nothing.
+	checkOnly bool
 }
 
 // production reports whether the live installation is a production
@@ -115,6 +122,8 @@ func (d *devRun) warnings() []RestoreWarningCode {
 	var codes []RestoreWarningCode
 
 	switch {
+	case d.production() && !d.report.Empty() && d.checkOnly:
+		codes = append(codes, WarnDevBackupWouldRemove)
 	case d.production() && !d.report.Empty():
 		codes = append(codes, WarnDevBackupIntoProduction)
 	case d.live == installation.KindDev && d.backup == installation.KindProduction:
@@ -139,7 +148,7 @@ func (s *RestoreService) devKinds(ctx context.Context, pinned pinnedManifest) (*
 		return nil, fmt.Errorf("read the installation kind of the live data: %w", installation.ErrUnavailable)
 	}
 
-	run := &devRun{live: live, backup: pinned.kind, report: emptyDevReport()}
+	run := &devRun{live: live, backup: pinned.kind, report: emptyDevReport(), checkOnly: false}
 
 	if live == installation.KindProduction && pinned.kind == installation.KindDev && !s.allowDev {
 		return nil, &devRefusalError{text: refusalSentence(reasonDevBackup, s.devHint)}

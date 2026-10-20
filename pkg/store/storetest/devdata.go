@@ -57,6 +57,7 @@ func RunDevData(t *testing.T, newStore DevDataFactory) {
 		{name: "the stage call refuses a dev backup into production by itself", test: testDevStageKind},
 		{name: "the strip removes the dev data and nothing else", test: testDevStrip},
 		{name: "the strip matches the shared table of subjects", test: testDevStripMatchesSharedTable},
+		{name: "the strip fails closed on a hostile approvers body", test: testDevStripHostileBodies},
 		{name: "the strip bounds the report and cleans the subjects", test: testDevStripBounds},
 		{name: "detect changes nothing and remove proves the staging area clean", test: testDevStripModes},
 		{name: "the swap refuses dev data by itself", test: testDevSwapRefuses},
@@ -399,6 +400,18 @@ func devStripCases() []devStripCase {
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedSessions: 1},
 		},
 		{
+			name: "sessions of a principal that is removed in part: one of the reserved provider, one of another",
+			add: func(t *testing.T, e *devExport) *devExport {
+				t.Helper()
+
+				out := e.withKeeper(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
+
+				return out.with(t, "sessions",
+					DevSessionRow("ses-dev-a", "prn-dev", "dev"), DevSessionRow("ses-dev-b", "prn-dev", "google"))
+			},
+			classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: 1, backup.RemovedSessions: 2},
+		},
+		{
 			name: "temp admins by principal ID and by subject in another case",
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
@@ -485,6 +498,20 @@ func devStripCases() []devStripCase {
 				{Kind: kindOwnerRle, Scope: "installation", ID: "own-a", Replaced: true},
 			},
 			bodies: map[string]approverWant{"own-a": {users: []string{"!no-approver"}, groups: []string{}}},
+		},
+		{
+			name: "a grant whose text subject names a dev principal and whose ID names another",
+			add: func(t *testing.T, e *devExport) *devExport {
+				t.Helper()
+
+				grant := DevGrantRow("grt-split", "prn-keeper")
+				grant["subject"] = "principal:prn-dev"
+
+				out := e.withKeeper(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
+
+				return out.with(t, "grants", grant)
+			},
+			classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: 1, backup.RemovedGrants: 1},
 		},
 		{
 			name: "a dev subject with a group and the unit owners: both stay",
@@ -917,6 +944,15 @@ func devSwapCases() []struct {
 
 			return e.with(t, "sign_in_requests", DevSignInRequestRow("req-1", "dev"))
 		}},
+		{name: "a grant whose text subject names a dev principal", add: func(t *testing.T, e *devExport) *devExport {
+			t.Helper()
+
+			grant := DevGrantRow("grt-split", "prn-keeper")
+			grant["subject"] = "principal:prn-dev"
+
+			return e.withKeeper(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin")).
+				with(t, "grants", grant)
+		}},
 		{name: "a dev approver in an approval rule", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
@@ -940,6 +976,60 @@ func devSwapCases() []struct {
 				DevGateObjectRow(kindOwnerRle, "own-a", ruleBody(`[]`, `["dEv:y"]`, false)),
 			)
 		}},
+	}
+}
+
+// hostileApproverBodies lists bodies of gate objects that the gate codec reads
+// as a list with dev:admin, and that a reader of the exact key names would not
+// see: another case, the long s and the Kelvin sign that encoding/json folds to
+// s and k, and a key that occurs twice.
+func hostileApproverBodies() map[string]string {
+	return map[string]string{
+		"a top-level key in another case":    `{"Approvers":{"users":["dev:admin"]},"count":1}`,
+		"an upper case top-level key":        `{"APPROVERS":{"users":["dev:admin"]},"count":1}`,
+		"a key for users in another case":    `{"approvers":{"Users":["dev:admin"]},"count":1}`,
+		"a key for groups in another case":   `{"approvers":{"Groups":["ops"],"users":["dev:admin"]},"count":1}`,
+		"a key for unit owners in lowercase": `{"approvers":{"unitowners":true,"users":["dev:admin"]},"count":1}`,
+		"the long s in the key for users":    `{"approvers":{"users":["alice"],"u\u017fers":["dev:admin"]},"count":1}`,
+		"the Kelvin sign in a key":           `{"approvers":{"users":["alice"],"\u212aey":1,"unitOwners":false,"unitOwner\u017f":true},"count":1}`,
+		"users twice":                        `{"approvers":{"users":["alice"],"users":["dev:admin"]},"count":1}`,
+		"users twice in other cases":         `{"approvers":{"users":["alice"],"USERS":["dev:admin"]},"count":1}`,
+		"approvers twice":                    `{"approvers":{"users":["alice"]},"approvers":{"users":["dev:admin"]},"count":1}`,
+		"approvers twice in other cases":     `{"approvers":{"users":["alice"]},"APPROVERS":{"users":["dev:admin"]},"count":1}`,
+		"data after the object":              `{"approvers":{"users":["alice"]}} {"approvers":{"users":["dev:admin"]}}`,
+		"a body that is no object":           `["dev:admin"]`,
+	}
+}
+
+// testDevStripHostileBodies checks that the strip fails closed on a body that
+// the gate codec would read differently from an exact read of the key names,
+// and that the check of the swap refuses it on its own.
+func testDevStripHostileBodies(t *testing.T, newStore DevDataFactory) {
+	t.Helper()
+
+	base := newDevExport(t, newStore)
+
+	for name, body := range hostileApproverBodies() {
+		for _, kind := range []string{kindRule, kindDefault, kindOwnerRle} {
+			label := name + " (" + kind + ")"
+			export := base.with(t, "gate_objects", DevGateObjectRow(kind, "hostile", body))
+
+			for _, mode := range []backup.DevStripMode{backup.DevStripDetect, backup.DevStripRemove} {
+				dst := newStore(t, installation.KindProduction)
+				export.mustStage(t, dst)
+
+				if _, err := dst.StripDevStaged(t.Context(), mode); !errors.Is(err, backup.ErrDevStripIncomplete) {
+					t.Fatalf("%s: strip mode %d: err = %v, want ErrDevStripIncomplete", label, mode, err)
+				}
+			}
+
+			for swapKind, swap := range map[string]func(DevDataStore) error{
+				"plain": func(dst DevDataStore) error { return applyPlain(t, dst) },
+				"keep":  func(dst DevDataStore) error { return applyKeeping(t, dst) },
+			} {
+				checkSwapRefused(t, label+" ("+swapKind+")", newStore(t, installation.KindProduction), export, swap)
+			}
+		}
 	}
 }
 

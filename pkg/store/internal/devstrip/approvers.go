@@ -1,11 +1,15 @@
 package devstrip
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"strconv"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -111,29 +115,110 @@ type parsedBody struct {
 }
 
 // readApprovers decodes the body, its approvers member and the users of it.
+//
+// The gate codec decodes a body with struct tags, and encoding/json matches a
+// key to a tag without regard to case and with simple case folding (it folds
+// "\u017f" to "s" and "\u212a" to "k"). So the strip cannot read a key by its
+// exact name alone: a key that is not exact but folds to a name the codec
+// reads would name approvers that the strip never sees. A body with such a key,
+// or with a key twice, returns errApproverBody. The users that the strip reads
+// are the users that the codec reads, because the body has only exact keys.
 func readApprovers(body string) (parsedBody, error) {
 	var out parsedBody
 
-	if err := json.Unmarshal([]byte(body), &out.doc); err != nil {
-		return parsedBody{}, fmt.Errorf("%w", errApproverBody)
+	doc, err := strictObject([]byte(body), "approvers")
+	if err != nil {
+		return parsedBody{}, err
 	}
 
-	raw, ok := out.doc["approvers"]
+	out.doc = doc
+
+	raw, ok := doc["approvers"]
 	if !ok || string(raw) == "null" {
 		return out, nil
 	}
 
-	if err := json.Unmarshal(raw, &out.approvers); err != nil {
-		return parsedBody{}, fmt.Errorf("%w", errApproverBody)
+	approvers, err := strictObject(raw, "groups", "users", "unitOwners")
+	if err != nil {
+		return parsedBody{}, err
 	}
 
-	if usersRaw, has := out.approvers["users"]; has {
+	out.approvers = approvers
+
+	if usersRaw, has := approvers["users"]; has {
 		if err := json.Unmarshal(usersRaw, &out.users); err != nil {
 			return parsedBody{}, fmt.Errorf("%w", errApproverBody)
 		}
 	}
 
 	return out, nil
+}
+
+// strictObject decodes raw as one JSON object into its members. It returns
+// errApproverBody when raw is not one object, when a member named in names
+// occurs twice, and when a key is not equal to a name in names but folds to it
+// (the codec would read that key as the name).
+func strictObject(raw []byte, names ...string) (map[string]json.RawMessage, error) {
+	fail := fmt.Errorf("%w", errApproverBody)
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, fail
+	}
+
+	members := map[string]json.RawMessage{}
+
+	for dec.More() {
+		if err := readMember(dec, members, names); err != nil {
+			return nil, err
+		}
+	}
+
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, fail
+	}
+
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, fail
+	}
+
+	return members, nil
+}
+
+// readMember reads one key and its value from dec into members, with the
+// checks of strictObject.
+func readMember(dec *json.Decoder, members map[string]json.RawMessage, names []string) error {
+	fail := fmt.Errorf("%w", errApproverBody)
+
+	tok, err := dec.Token()
+	if err != nil {
+		return fail
+	}
+
+	key, isString := tok.(string)
+	if !isString {
+		return fail
+	}
+
+	for _, name := range names {
+		if key != name && strings.EqualFold(key, name) {
+			return fail
+		}
+	}
+
+	var value json.RawMessage
+	if err := dec.Decode(&value); err != nil {
+		return fail
+	}
+
+	if _, seen := members[key]; seen && slices.Contains(names, key) {
+		return fail
+	}
+
+	members[key] = value
+
+	return nil
 }
 
 // namesNobody reports whether the approvers would name nobody if their users

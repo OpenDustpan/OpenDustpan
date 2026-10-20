@@ -94,7 +94,9 @@ type restoreServiceLive struct {
 	kept       int
 	bumped     int
 	keepingErr error
-	dev        devLiveState
+	// applyErr is the error of ApplyStaging, to test a refusal by the swap.
+	applyErr error
+	dev      devLiveState
 }
 
 // devLiveState holds what the fake live store does for the dev data ports.
@@ -183,6 +185,10 @@ func (l *restoreServiceLive) DiscardStaging(ctx context.Context) error {
 func (l *restoreServiceLive) ApplyStaging(_ context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if l.applyErr != nil {
+		return l.applyErr
+	}
 
 	l.applied++
 	l.bumped++
@@ -2299,6 +2305,7 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 		kept:       0,
 		bumped:     0,
 		keepingErr: nil,
+		applyErr:   nil,
 		dev: devLiveState{
 			kind: installation.KindProduction, kindErr: nil, detect: emptyReport(), remove: emptyReport(),
 			stripErr: map[backup.DevStripMode]error{}, dropped: 0, order: nil, appendErr: nil,

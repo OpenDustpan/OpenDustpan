@@ -414,6 +414,36 @@ func TestRestoreCheckOnlyReportsWhatItWouldRemove(t *testing.T) {
 		len(setup.live.devSnapshot().appends) != 0 {
 		t.Fatal("a check-only restore changed something")
 	}
+
+	warnings := row.Warnings()
+	if len(warnings) != 1 || warnings[0].Code != backup.WarnDevBackupWouldRemove ||
+		!strings.Contains(warnings[0].Text, "would remove") || strings.Contains(warnings[0].Text, "removed the dev") {
+		t.Fatalf("check-only warnings = %+v, want the warning that says it would remove", warnings)
+	}
+}
+
+// TestRestoreSwapRefusalTextFitsAProductionClaim proves that the text of a
+// refusal by the swap does not say that the backup is from a dev installation:
+// the manifest of such a backup may claim production.
+func TestRestoreSwapRefusalTextFitsAProductionClaim(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
+	setManifestKind(t, setup, installation.KindProduction)
+	setup.live.dev.detect = dirtyReport()
+	setup.live.dev.remove = dirtyReport()
+	setup.live.applyErr = backup.ErrDevBackupRefused
+
+	id, err := startRestoreOf(t, setup, plainRestore())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State == backup.RestoreSucceeded || !strings.Contains(row.Error, "or it is from a dev installation") ||
+		strings.Contains(row.Error, "The backup is from a dev installation.") {
+		t.Fatalf("restore = %q %q, want a refusal text that fits a production claim", row.State, row.Error)
+	}
 }
 
 // TestRestoreIntoDevInstallationStripsNothing proves that a dev installation
