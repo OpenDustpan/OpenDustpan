@@ -17,7 +17,7 @@ import (
 // write appends its audit entry in that transaction (fail closed).
 //
 // The store keeps no schedule clock. How a schedule trigger gets its
-// ticks is open (RFC 24). The slice that adds it adds the port for it.
+// ticks is not decided yet. The slice that adds it adds the port for it.
 type Store interface {
 	// Put creates the trigger t, or replaces the trigger of the same ID. A
 	// replace cannot change the unit or the kind. In one transaction it checks
@@ -110,7 +110,7 @@ type Outcome struct {
 //
 // The dispatcher starts a plan with the principal of the trigger for the
 // events that no person starts. Which principal that is, and what it may
-// do, is open (RFC 24). A manual fire uses the actor of the caller.
+// do, is not decided yet. A manual fire uses the actor of the caller.
 //
 // The kind review-request-push has no method yet. It joins when the Forge
 // port exists.
