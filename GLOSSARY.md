@@ -65,6 +65,15 @@ _Avoid_: Routing rule, assignment rule
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
+**Unit state**:
+One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The server derives `locked` at read time from the unit lock, which stays the only source (ADR 265 decision 5). The drift statuses are three of the states.
+_Avoid_: Unit status (for the set), winning status, health
+_Copy says_: the tool's own words on its own pages. "Approval wait" is the human word for `awaiting-approval`.
+
+**Saved view**:
+A name for a query of the unit list, stored on the server and read through the REST API (ADR 266). A saved view holds the query and never its results. A reader runs the query again with the access of the reader, so the view shows only units that the reader can read. A saved view grants no access (ADR 51 decision 7). One person in one namespace owns a view, and a view is private first (ADR 266).
+_Avoid_: Filter preset, bookmark, smart collection (a collection holds units by explicit membership, ADR 51)
+
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
 _Avoid_: Lease (for the inventory field), unit status
@@ -670,6 +679,15 @@ _Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
 **Drift schedule**:
 The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
 _Avoid_: Drift policy (a policy alone names no object), drift trigger
+
+**Trigger**:
+A rule of one unit that starts a plan of that unit on its own (ADR 267). It has one kind: `review-request-push`, `schedule` or `follows`. A trigger starts a plan and nothing else. The job passes through the job service, so the gates, the approval rules, the freezes and the manual locks apply. A trigger has no pool: the job takes the runner pool of the unit settings.
+_Avoid_: Run trigger (except for the TFE-compatible object of that name), webhook (an inbound webhook is another idea), automation, hook
+_Copy says_: "trigger". On the page of one tool, that tool's own words: "plan" for OpenTofu and "preview" for the Pulumi CLI.
+
+**Follows trigger**:
+A trigger of the kind `follows`. It names a source unit. After the source applies, a plan of the unit of the trigger starts. A unit of one tool can follow a unit of another tool. The server refuses a cycle of follows triggers when a person saves one. A follows trigger is a declared dependency edge (ADR 153).
+_Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
 
 **Registry release**:
 One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).

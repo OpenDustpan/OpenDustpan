@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
@@ -196,6 +197,66 @@ func coveringLocks(ctx context.Context, q *db.Queries, unit collection.UnitRef) 
 		locks = append(locks, manuallock.Lock{
 			Since:  codec.FromMillis(row.NamespaceSinceMs.Int64),
 			Target: manuallock.NamespaceTarget(unit.Namespace),
+			Holder: row.NamespaceHolder.String,
+			Reason: row.NamespaceReason.String,
+		})
+	}
+
+	if len(locks) == 0 {
+		return nil, manuallock.ErrNotLocked
+	}
+
+	return locks, nil
+}
+
+// coveringLocksOfUnitID returns every manual lock that covers the unit unitID of
+// the namespace ns, in the order of coveringLocks. It finds the unit by its
+// stable ID, so a rename of the unit does not hide its locks. It returns
+// ErrNotLocked when none covers the unit, and ErrUnitNotInInventory when the
+// inventory holds no such unit.
+func coveringLocksOfUnitID(
+	ctx context.Context, q *db.Queries, ns namespace.Name, unitID string,
+) ([]manuallock.Lock, error) {
+	row, err := q.GetCoveringManualLocksByUnitID(ctx, db.GetCoveringManualLocksByUnitIDParams{
+		Namespace: ns.String(),
+		UnitID:    unitID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, jobstore.ErrUnitNotInInventory
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("select covering manual lock of unit: %w", err)
+	}
+
+	unit := collection.UnitRef{Namespace: ns, Tool: row.UnitTool, Name: row.UnitName}
+
+	var locks []manuallock.Lock
+
+	if row.UnitHolder.Valid {
+		locks = append(locks, manuallock.Lock{
+			Since:  codec.FromMillis(row.UnitSinceMs.Int64),
+			Target: manuallock.UnitTarget(unit),
+			Holder: row.UnitHolder.String,
+			Reason: row.UnitReason.String,
+		})
+	}
+
+	if row.CollectionHolder.Valid {
+		ref := collection.Ref{Namespace: ns, Name: collection.Name(row.CollectionName.String)}
+
+		locks = append(locks, manuallock.Lock{
+			Since:  codec.FromMillis(row.CollectionSinceMs.Int64),
+			Target: manuallock.CollectionTarget(ref),
+			Holder: row.CollectionHolder.String,
+			Reason: row.CollectionReason.String,
+		})
+	}
+
+	if row.NamespaceHolder.Valid {
+		locks = append(locks, manuallock.Lock{
+			Since:  codec.FromMillis(row.NamespaceSinceMs.Int64),
+			Target: manuallock.NamespaceTarget(ns),
 			Holder: row.NamespaceHolder.String,
 			Reason: row.NamespaceReason.String,
 		})

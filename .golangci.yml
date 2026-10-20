@@ -132,6 +132,8 @@ linters:
             - "**/pkg/objectcontext/**"
             - "**/pkg/unmanaged/**"
             - "**/pkg/drift/**"
+            - "**/pkg/trigger/**"
+            - "**/pkg/savedview/**"
             - "**/pkg/registry/**"
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"

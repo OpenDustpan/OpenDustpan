@@ -104,6 +104,7 @@ func newStreamFixture(
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,
+		Operations:  registry.ops,
 		Blobs:       source,
 		StateOpener: opener,
 		Target:      target,
@@ -111,6 +112,9 @@ func newStreamFixture(
 		Now:         func() time.Time { return now },
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -148,12 +152,14 @@ func restoreStreamedBackup(
 	regs := newRestoreServiceRegistry()
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
+	backupRegs := newFakeRegistry()
 	blobs := newMemStore()
 	live := newRestoreServiceLive(liveChecks, regs)
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Kinds:       fixedKind(installation.KindProduction),
-		Registry:    newFakeRegistry(),
+		Registry:    backupRegs,
+		Operations:  backupRegs.ops,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
 		Target:      target,
@@ -161,6 +167,9 @@ func restoreStreamedBackup(
 		Now:         nil,
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)
@@ -333,9 +342,8 @@ func TestRunFailsOnSealedBlobMismatch(t *testing.T) {
 		declare := sealedBlobRef([]byte("a longer plain state"))
 		service, registry, target := seedSealedBackup(t, opener, sealed, declare)
 
-		if _, err := service.Run(t.Context(), "bkp-sealed-size"); !errors.Is(err, backup.ErrCorrupt) {
-			t.Fatalf("run with a mismatched sealed blob: err = %v, want ErrCorrupt", err)
-		}
+		_, err := service.Run(t.Context(), "bkp-sealed-size")
+		assertRunFailed(t, err, backup.ErrCorrupt)
 
 		assertBackupFailedWithNoCopy(t, registry, target, "bkp-sealed-size")
 	})
@@ -347,9 +355,8 @@ func TestRunFailsOnSealedBlobMismatch(t *testing.T) {
 		declare := sealedBlobRef([]byte("tampered-plain-state"))
 		service, registry, target := seedSealedBackup(t, opener, sealed, declare)
 
-		if _, err := service.Run(t.Context(), "bkp-sealed-md5"); !errors.Is(err, backup.ErrCorrupt) {
-			t.Fatalf("run with a mismatched sealed blob: err = %v, want ErrCorrupt", err)
-		}
+		_, err := service.Run(t.Context(), "bkp-sealed-md5")
+		assertRunFailed(t, err, backup.ErrCorrupt)
 
 		assertBackupFailedWithNoCopy(t, registry, target, "bkp-sealed-md5")
 	})
@@ -377,9 +384,8 @@ func TestRunFailsOnSealedBlobMismatch(t *testing.T) {
 
 		service, registry, target := seedSealedBackup(t, nil, sealed, sealedBlobRef(plain))
 
-		if _, err := service.Run(t.Context(), "bkp-sealed-noopener"); !errors.Is(err, backup.ErrCorrupt) {
-			t.Fatalf("run with a sealed blob and no opener: err = %v, want ErrCorrupt", err)
-		}
+		_, err := service.Run(t.Context(), "bkp-sealed-noopener")
+		assertRunFailed(t, err, backup.ErrCorrupt)
 
 		assertBackupFailedWithNoCopy(t, registry, target, "bkp-sealed-noopener")
 	})

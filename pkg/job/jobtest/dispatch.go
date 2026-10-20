@@ -3,6 +3,7 @@ package jobtest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -417,8 +418,9 @@ func testLocked(t *testing.T, h Harness) {
 			t.Fatalf("dispatch of %s on a locked unit = %v, want ErrLocked", op, err)
 		}
 
-		if !strings.Contains(err.Error(), lockHolder) || !strings.Contains(err.Error(), lockReason) {
-			t.Errorf("error = %q, want the holder and the reason", err)
+		// fmt.Sprint, not err.Error(): nilaway cannot see that errors.Is is false for nil.
+		if text := fmt.Sprint(err); !strings.Contains(text, lockHolder) || !strings.Contains(text, lockReason) {
+			t.Errorf("error = %q, want the holder and the reason", text)
 		}
 
 		assertState(t, h, j.ID, job.StateQueued)

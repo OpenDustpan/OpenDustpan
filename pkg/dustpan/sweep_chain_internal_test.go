@@ -33,7 +33,6 @@ func sweepChainServer(
 		secretWrapper:    nil,
 		workspaces:       nil,
 		backups:          nil,
-		backupRegistry:   nil,
 		restores:         nil,
 		restoreRegistry:  nil,
 		now:              nil,

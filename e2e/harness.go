@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -679,7 +680,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
-		append(profileStoreOptions(st, wrapper), []dustpan.Option{
+		append(slices.Concat(profileStoreOptions(st, wrapper), jobStoreOptions(st)), []dustpan.Option{
 			dustpan.WithRegion(region),
 			dustpan.WithNamespaceStore(st),
 			dustpan.WithStackStore(st),
@@ -702,6 +703,10 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		tb.Fatalf("new server: %v", err)
 	}
 
+	// The harness serves the handler directly, so it runs the backup worker
+	// that Server.Run starts. It stops before the stores close.
+	startBackupWorker(ctx, tb, srv)
+
 	return serverBuild{
 		handler:   srv.Handler(),
 		store:     st,
@@ -710,6 +715,27 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
 	}
+}
+
+// startBackupWorker runs the backup worker of srv until the test ends.
+func startBackupWorker(ctx context.Context, tb testing.TB, srv *dustpan.Server) {
+	tb.Helper()
+
+	backups := srv.Backups()
+	if backups == nil {
+		return
+	}
+
+	workCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
+
+	var work sync.WaitGroup
+
+	work.Go(func() { backups.Work(workCtx) })
+
+	tb.Cleanup(func() {
+		stop()
+		work.Wait()
+	})
 }
 
 // openBackupTarget opens a backup target directory next to the database at

@@ -211,8 +211,19 @@ func restoreDeps(t *testing.T, store *sqlite.Store) installationDeps {
 	t.Helper()
 
 	backups, err := backup.NewService(backup.Config{
-		Exporter: store, Kinds: store, Registry: store, Blobs: openRestoreBlobs(t, "blobs"), StateOpener: nil,
-		Target: openRestoreBlobs(t, "backup-target"), TargetName: "dir:test", Now: nil, Version: "test",
+		Exporter:    store,
+		Kinds:       store,
+		Registry:    store,
+		Operations:  store.DurableOperationsPort(),
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
+		Blobs:       openRestoreBlobs(t, "blobs"),
+		StateOpener: nil,
+		Target:      openRestoreBlobs(t, "backup-target"),
+		TargetName:  "dir:test",
+		Now:         nil,
+		Version:     "test",
 		MaxSQLBytes: 0,
 	})
 	if err != nil {

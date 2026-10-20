@@ -792,12 +792,23 @@ UPDATE backups
 SET state = ?, error = ?, ended_at_ms = ?
 WHERE id = ? AND state = 'running';
 
--- name: FailRunningBackups :exec
--- Marks every running backup failed. The server calls it at start, after a
--- stop during a backup.
+-- name: FailEndedBackups :execrows
+-- Marks failed each running backup whose operation ended failed or canceled
+-- without a finish write. The error text is the last error of the
+-- operation, or sqlc.arg('fallback') when it holds none.
 UPDATE backups
-SET state = 'failed', error = ?, ended_at_ms = ?
-WHERE state = 'running';
+SET state = 'failed',
+    error = COALESCE(NULLIF((
+        SELECT o.last_error FROM durable_operations AS o
+        WHERE o.start_key = sqlc.arg('prefix') || backups.id
+          AND o.kind = sqlc.arg('kind')), ''), sqlc.arg('fallback')),
+    ended_at_ms = sqlc.arg('ended_at_ms')
+WHERE state = 'running'
+  AND EXISTS (
+      SELECT 1 FROM durable_operations AS o
+      WHERE o.start_key = sqlc.arg('prefix') || backups.id
+        AND o.kind = sqlc.arg('kind')
+        AND o.state IN ('failed', 'canceled'));
 
 -- name: GetInstallationState :one
 -- The installation state: normal or maintenance. The migration seeds the
@@ -3101,6 +3112,24 @@ LEFT JOIN namespaces AS ns ON ns.name = i.namespace
 LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = ? AND i.tool = ? AND i.name = ?;
 
+-- name: GetCoveringManualLocksByUnitID :one
+-- The same locks as GetCoveringManualLocks, found by the stable unit ID of the
+-- unit in the namespace. A rename of the unit does not hide its locks. No row
+-- means that the inventory holds no such unit: the caller fails closed.
+SELECT i.tool AS unit_tool, i.name AS unit_name,
+       ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
+       cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       nl.holder AS namespace_holder, nl.reason AS namespace_reason, nl.since_ms AS namespace_since_ms,
+       c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
+WHERE i.namespace = sqlc.arg(namespace) AND i.unit_id = sqlc.arg(unit_id);
+
 
 
 -- name: DeleteExpiredIdempotencyRecord :exec
@@ -3211,3 +3240,147 @@ VALUES (sqlc.arg('scope'), sqlc.arg('epoch'), sqlc.arg('sequence'), sqlc.arg('no
 ON CONFLICT (scope) DO UPDATE SET epoch = excluded.epoch, sequence = excluded.sequence,
     marked_at_ms = excluded.marked_at_ms
 WHERE audit_chain_mark.epoch < excluded.epoch;
+
+-- name: NextJobSeq :one
+-- The sequence number of the next job of a namespace. The write transaction
+-- orders it, and the unique index on (namespace_id, seq) refuses a duplicate.
+SELECT CAST(COALESCE(MAX(j.seq), 0) + 1 AS INTEGER) AS seq
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = sqlc.arg(namespace);
+
+-- name: InsertJob :exec
+INSERT INTO jobs (
+    id, namespace_id, unit_id, seq, state, wait, current_phase, current_changes, current_operation,
+    idempotency_key, version, body, created_at_ms, updated_at_ms
+) VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(unit_id),
+    sqlc.arg(seq), sqlc.arg(state), sqlc.arg(wait), sqlc.arg(current_phase), sqlc.arg(current_changes),
+    sqlc.arg(current_operation), sqlc.arg(idempotency_key), sqlc.arg(version), sqlc.arg(body),
+    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+);
+
+-- name: GetJob :one
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE j.id = sqlc.arg(id);
+
+-- name: GetJobByKey :one
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND j.idempotency_key = sqlc.arg(idempotency_key);
+
+-- name: UpdateJob :execrows
+-- It changes no row when the stored version is not the one that the caller
+-- read.
+UPDATE jobs
+SET state = sqlc.arg(state), wait = sqlc.arg(wait), current_phase = sqlc.arg(current_phase),
+    current_changes = sqlc.arg(current_changes), current_operation = sqlc.arg(current_operation),
+    version = sqlc.arg(version), body = sqlc.arg(body), updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE id = sqlc.arg(id) AND version = sqlc.arg(prev_version);
+
+-- name: CountOpenJobsOfUnit :one
+SELECT COUNT(*) FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND j.unit_id = sqlc.arg(unit_id)
+  AND j.state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired');
+
+-- name: CountOpenJobsOfNamespace :one
+SELECT COUNT(*) FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+  AND j.state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired');
+
+-- name: GetJobHolderOfUnit :one
+-- A job other than the given one that holds the unit for a change.
+SELECT j.id FROM jobs AS j
+WHERE j.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND j.unit_id = sqlc.arg(unit_id) AND j.id <> sqlc.arg(except_id) AND j.current_changes = 1
+  AND j.state IN ('dispatched', 'running', 'canceling')
+LIMIT 1;
+
+-- name: ListAwaitingJobsOfUnit :many
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE j.namespace_id = (SELECT x.id FROM namespaces AS x WHERE x.name = sqlc.arg(namespace))
+  AND j.unit_id = sqlc.arg(unit_id) AND j.state = 'awaiting-state'
+ORDER BY j.seq;
+
+-- name: ListOrphanJobs :many
+-- Jobs that hold their unit while the durable operation of their current
+-- phase does not exist or ended. op_state is NULL for a missing operation.
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       d.state AS op_state
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+LEFT JOIN durable_operations AS d ON d.id = j.current_operation
+WHERE j.state IN ('dispatched', 'running', 'canceling')
+  AND j.state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired')
+  AND (d.id IS NULL OR d.state IN ('succeeded', 'failed', 'canceled'))
+ORDER BY j.seq
+LIMIT sqlc.arg(max_rows);
+
+-- name: GetActiveJobFreeze :one
+SELECT f.id FROM job_freezes AS f
+JOIN namespaces AS n ON n.id = f.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND f.starts_at_ms <= sqlc.arg(now_ms)
+  AND (f.ends_at_ms = 0 OR sqlc.arg(now_ms) < f.ends_at_ms)
+ORDER BY f.starts_at_ms, f.id
+LIMIT 1;
+
+-- name: InsertJobFreeze :execrows
+INSERT INTO job_freezes (id, namespace_id, reason, starts_at_ms, ends_at_ms, created_by, ended_by)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(reason),
+    sqlc.arg(starts_at_ms), sqlc.arg(ends_at_ms), sqlc.arg(created_by), sqlc.arg(ended_by)
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: GetJobFreeze :one
+SELECT f.id, n.name AS namespace, f.reason, f.starts_at_ms, f.ends_at_ms, f.created_by, f.ended_by
+FROM job_freezes AS f
+JOIN namespaces AS n ON n.id = f.namespace_id
+WHERE f.id = sqlc.arg(id);
+
+-- name: EndJobFreeze :exec
+UPDATE job_freezes SET ends_at_ms = sqlc.arg(ends_at_ms), ended_by = sqlc.arg(ended_by)
+WHERE id = sqlc.arg(id);
+
+-- name: ListJobFreezes :many
+SELECT f.id, n.name AS namespace, f.reason, f.starts_at_ms, f.ends_at_ms, f.created_by, f.ended_by
+FROM job_freezes AS f
+JOIN namespaces AS n ON n.id = f.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND (f.ends_at_ms = 0 OR f.ends_at_ms > sqlc.arg(since_ms))
+ORDER BY f.starts_at_ms, f.id;
+
+-- name: GetUnitStateVersion :one
+SELECT version_id FROM unit_state_versions
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND unit_id = sqlc.arg(unit_id);
+
+-- name: PutUnitStateVersion :exec
+INSERT INTO unit_state_versions (unit_id, namespace_id, version_id, updated_at_ms)
+VALUES (
+    sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(version_id), sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, updated_at_ms = excluded.updated_at_ms;
+
+-- name: GetUnitFinalVersion :one
+SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND unit_id = sqlc.arg(unit_id);
+
+-- name: PutUnitFinalVersion :exec
+INSERT INTO unit_final_versions (unit_id, namespace_id, version_id, commit_id, job_id, at_ms)
+VALUES (
+    sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(version_id), sqlc.arg(commit_id), sqlc.arg(job_id), sqlc.arg(at_ms)
+)
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, commit_id = excluded.commit_id,
+    job_id = excluded.job_id, at_ms = excluded.at_ms;

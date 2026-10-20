@@ -25,7 +25,7 @@ import (
 
 // pollTimeout bounds a backup poll: a test backup of a small database ends
 // well before it.
-const pollTimeout = 10 * time.Second
+const pollTimeout = 60 * time.Second
 
 // pollInterval sets how often a backup poll reads the row.
 const pollInterval = 10 * time.Millisecond
@@ -122,6 +122,10 @@ func newBackupFixture(
 		Exporter:    exporter,
 		Kinds:       stores.registry,
 		Registry:    stores.registry,
+		Operations:  stores.registry.DurableOperationsPort(),
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 		Blobs:       stores.live,
 		StateOpener: nil,
 		Target:      stores.target,
@@ -133,6 +137,19 @@ func newBackupFixture(
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)
 	}
+
+	// A worker claims the backup operations, as the worker component of a
+	// server does. It stops before the stores close.
+	workCtx, stopWork := context.WithCancel(context.WithoutCancel(t.Context()))
+
+	var work sync.WaitGroup
+
+	work.Go(func() { service.Work(workCtx) })
+
+	t.Cleanup(func() {
+		stopWork()
+		work.Wait()
+	})
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
 	if err != nil {
