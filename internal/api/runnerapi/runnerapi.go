@@ -20,7 +20,10 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -59,6 +62,16 @@ type Config struct {
 
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
+	// writes none.
+	Audit audit.Store
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it.
+	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	Sessions      *sessionauth.Checker
 	Logger        *slog.Logger
 
@@ -87,6 +100,7 @@ type Handler struct {
 	operations durable.Store
 	authn      identity.Authenticator
 	authz      identity.Authorizer
+	guard      *refusal.Recorder
 	sessions   *sessionauth.Checker
 	logger     *slog.Logger
 	release    runner.Release
@@ -131,11 +145,27 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		namespaces: cfg.Namespaces, pools: cfg.Pools, members: cfg.Members, handoffs: cfg.Handoffs,
-		claimer: cfg.Claimer, sweeps: cfg.Sweeps, operations: cfg.Operations,
-		authn: cfg.Authenticator, authz: cfg.Authorizer, sessions: cfg.Sessions, logger: cfg.Logger,
-		release: cfg.Release, serverURL: cfg.ServerURL, now: now, interval: interval, polls: sync.Map{},
-		mux: newPatternMux(), routes: nil,
+		namespaces: cfg.Namespaces,
+		pools:      cfg.Pools,
+		members:    cfg.Members,
+		handoffs:   cfg.Handoffs,
+		claimer:    cfg.Claimer,
+		sweeps:     cfg.Sweeps,
+		operations: cfg.Operations,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		sessions:   cfg.Sessions,
+		logger:     cfg.Logger,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("runner"),
+		release:   cfg.Release,
+		serverURL: cfg.ServerURL,
+		now:       now,
+		interval:  interval,
+		polls:     sync.Map{},
+		mux:       newPatternMux(),
+		routes:    nil,
 	}
 
 	h.routes = h.buildRoutes()

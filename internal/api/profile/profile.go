@@ -15,7 +15,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -40,6 +43,16 @@ type Config struct {
 	Profiles      *profile.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
+	// writes none.
+	Audit audit.Store
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it.
+	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
@@ -55,6 +68,7 @@ type Handler struct {
 	profiles *profile.Service
 	authn    identity.Authenticator
 	authz    identity.Authorizer
+	guard    *refusal.Recorder
 	sessions *sessionauth.Checker
 	idem     *idempotent.Middleware
 	logger   *slog.Logger
@@ -79,6 +93,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		profiles: cfg.Profiles,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, nil, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("profile"),
 		sessions: cfg.Sessions,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,

@@ -176,6 +176,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -876,4 +877,40 @@ type listedGrantDoc struct {
 type listedGrantListDoc struct {
 	Grants []listedGrantDoc `json:"grants"`
 	Total  int64            `json:"total"`
+}
+
+// TestEscalationRefusalIsAudited proves the domain layer of the denial audit:
+// a grant that gives more than the granter holds answers 403 and writes a
+// denied entry with the reason of the escalation.
+func TestEscalationRefusalIsAudited(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	// ann holds no operator action, so she cannot give one.
+	f.as(t, "ann", apiCall{
+		http.MethodPost, "/api/server/grants", `{"subject":"principal:prn-bob","role":"installation-operator"}`,
+		http.StatusForbidden,
+	}, nil)
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	var denied []audit.Entry
+
+	for _, e := range listing.Entries {
+		if e.Outcome == audit.OutcomeDenied && e.Subject == "ann" {
+			denied = append(denied, e)
+		}
+	}
+
+	if len(denied) != 1 {
+		t.Fatalf("denied entries of ann = %+v, want one", denied)
+	}
+
+	if !strings.HasPrefix(denied[0].Reason, "grant gives more than the granter holds") {
+		t.Fatalf("reason = %q, want the reason of the escalation", denied[0].Reason)
+	}
 }

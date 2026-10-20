@@ -150,6 +150,7 @@ func newRevealFixtureWithSessions(
 		Audit:                   cfg.store,
 		OnAuditFailure:          cfg.onFail,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

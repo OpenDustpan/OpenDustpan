@@ -409,6 +409,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		AuditSinks:       nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -524,6 +525,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 		AuditSinks:       nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
