@@ -654,3 +654,55 @@ func refuseRestoreUnderLock(
 
 	return &manuallock.LockedError{Lock: l, Noun: noun, Name: unit.Namespace.String() + "/" + name}
 }
+
+// deleteRefusal names what a refused delete says: base is the error of the
+// tool that the refusal matches, noun and name describe the unit.
+type deleteRefusal struct {
+	base error
+	noun string
+	name string
+}
+
+// refuseDeleteUnderLock returns an error that matches base and
+// manuallock.ErrLocked when a manual lock covers the unit that a soft delete is
+// about to remove, on the unit, on its collection or on its namespace. It runs
+// in the transaction of the delete, before the unit row changes, so the error
+// rolls the delete back: a lock stops every change, and a delete is a change.
+// Without it, a lock that commits after the service check leaves a deleted unit
+// with a lock that no route can remove.
+//
+// Defense in depth: the service reads the covering lock before it calls the
+// store. This check stays so that the store does not rely on its caller: it
+// reads the locks in the same transaction as the write, which holds the row of
+// the namespace, so a lock write of the same namespace either commits before
+// this read or waits until the delete commits.
+func refuseDeleteUnderLock(ctx context.Context, q *db.Queries, unit collection.UnitRef, refusal deleteRefusal) error {
+	l, err := coveringLock(ctx, q, unit)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of %s: %w", refusal.noun, err)
+	}
+
+	return fmt.Errorf("%w: %w", refusal.base, &manuallock.LockedError{
+		Lock: l, Noun: refusal.noun, Name: unit.Namespace.String() + "/" + refusal.name,
+	})
+}
+
+// refuseStackDeleteUnderLock is refuseDeleteUnderLock for the stack ref. The
+// error matches stack.ErrUpdateConflict, as the refusal of the service does.
+func refuseStackDeleteUnderLock(ctx context.Context, q *db.Queries, ref stack.Ref) error {
+	return refuseDeleteUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: inventoryTool, Name: stackUnitName(ref),
+	}, deleteRefusal{base: stack.ErrUpdateConflict, noun: "stack", name: ref.Project.String() + "/" + ref.Stack.String()})
+}
+
+// refuseWorkspaceDeleteUnderLock is refuseDeleteUnderLock for the workspace
+// ref. The error matches workspace.ErrLocked, as the refusal of the service does.
+func refuseWorkspaceDeleteUnderLock(ctx context.Context, q *db.Queries, ref workspace.Ref) error {
+	return refuseDeleteUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: inventoryToolOpenTofu, Name: ref.Name.String(),
+	}, deleteRefusal{base: workspace.ErrLocked, noun: "workspace", name: ref.Name.String()})
+}
