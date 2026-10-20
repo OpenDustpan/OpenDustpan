@@ -137,3 +137,6 @@ both together.
 | [87](0087-components-of-the-server-process.md) | Components of the server process, and a start flag that selects them | accepted (ADR 249) |
 | [88](0088-federation-model.md) | Federation model: installations, request forwarding, asynchronous replication, manual failover | accepted (ADR 248) |
 | [90](0090-scanner-and-linter-reports.md) | Reports of IaC scanners and linters on stacks and workspaces, SARIF first | draft |
+| [91](0091-plan-review-at-scale.md) | Plan review at scale, with one view of repeated changes across stacks and workspaces, and noise rules that expire | draft |
+| [92](0092-opentelemetry-for-jobs.md) | OpenTelemetry for jobs, with job traces, fleet metrics and OTLP export to the operator's collector | draft |
+| [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | draft |

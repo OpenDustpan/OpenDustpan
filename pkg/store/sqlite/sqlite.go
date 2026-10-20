@@ -29,6 +29,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -549,7 +550,9 @@ func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return insertNamespaceRow(ctx, q, codec.ToNamespaceRow(ns))
+	})
 }
 
 // GetNamespace implements namespace.Store.
@@ -1148,18 +1151,85 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 	return out, nil
 }
 
+// inTx runs fn in a write transaction. It first reads the installation state
+// in the transaction, so a write fails with maintenance.ErrInMaintenance as
+// soon as the state is maintenance. The transaction is IMMEDIATE, so the
+// state cannot change before it commits, and an enter waits for a write in
+// flight. It fails closed: a read error fails the write with
+// maintenance.ErrUnavailable. The writes of a restore and of the control
+// tables use inControlTx instead.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, checkWritable)
+}
+
+// inControlTx runs fn in a transaction with no installation state check. The
+// writes of a restore and of the control tables (the installation state,
+// backups, restores, durable operations, schedules, heartbeats and the audit
+// chain) must run while the installation is in maintenance mode. The control
+// path is for the writes that keep the installation able to enter, leave and
+// restore from maintenance mode, and that record what happens. Each caller is
+// a write that maintenance mode must not refuse.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the write connection; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
+func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.runTx(ctx, fn, nil)
+}
+
+// runTx runs before, when set, and then fn in one transaction.
+func (s *Store) runTx(
+	ctx context.Context, fn func(q *db.Queries) error, before func(context.Context, *db.Queries) error,
+) error {
 	tx, err := s.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 
-	if err := fn(s.queries.WithTx(tx)); err != nil {
+	q := s.queries.WithTx(tx)
+
+	if before != nil {
+		if beforeErr := before(ctx, q); beforeErr != nil {
+			return errors.Join(beforeErr, rollback(tx))
+		}
+	}
+
+	if err := fn(q); err != nil {
 		return errors.Join(err, rollback(tx))
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// checkWritable reads the installation state in the transaction of q. It
+// returns maintenance.ErrInMaintenance in maintenance mode, and
+// maintenance.ErrUnavailable when the state cannot be read, the row is
+// missing or the stored value is unknown: a write never passes on a read error.
+func checkWritable(ctx context.Context, q *db.Queries) error {
+	raw, err := q.GetInstallationState(ctx)
+	if err != nil {
+		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	state, err := maintenance.ParseState(raw)
+	if err != nil {
+		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	if state == maintenance.StateMaintenance {
+		return maintenance.ErrInMaintenance
 	}
 
 	return nil
@@ -1185,10 +1255,32 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 	return nil
 }
 
-// inFencedTx runs fn in a transaction that first checks fence. The write lock
-// is held from the start, so the failover version cannot change before commit.
+// inFencedTx runs fn in a write transaction that first checks the
+// installation state (inTx) and then fence. The write lock is held from the
+// start, so the failover version cannot change before commit.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.fencedTx(ctx, fence, fn, s.inTx)
+}
+
+// inControlFencedTx runs fn as inFencedTx does, with no installation state
+// check. The audit chain markers of a chain change use it: the change holds
+// maintenance mode while it runs.
+func (s *Store) inControlFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
+	return s.fencedTx(ctx, fence, fn, s.inControlTx)
+}
+
+// fencedTx checks fence in the transaction that begin starts, and then runs fn.
+func (s *Store) fencedTx(
+	ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error,
+	begin func(context.Context, func(q *db.Queries) error) error,
+) error {
+	return begin(ctx, func(q *db.Queries) error {
 		version, err := q.GetFailoverVersion(ctx, fence.Namespace.String())
 		if errors.Is(err, sql.ErrNoRows) {
 			return namespace.ErrNotFound

@@ -60,7 +60,7 @@ func (d *DurableOperations) Start(ctx context.Context, req durable.StartRequest)
 		created bool
 	)
 
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		var startErr error
 
 		op, created, startErr = startOperation(ctx, q, req)
@@ -196,7 +196,7 @@ func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 
 	// No work is not an error of the transaction: the end of the canceled
 	// operations commits also when no operation can run.
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		ended := db.EndExpiredCanceledDurableOperationsParams{Kinds: kinds, MaxVersions: maxVersions}
 		if err := q.EndExpiredCanceledDurableOperations(ctx, ended); err != nil {
 			return fmt.Errorf("end canceled operations: %w", err)
@@ -256,7 +256,7 @@ func (d *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 	var out durable.Claim
 
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := lockLive(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err
@@ -287,7 +287,7 @@ func (d *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 // RecordStep implements durable.Store.
 func (d *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence, result []byte) error {
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		return recordStep(ctx, q, f, result)
 	})
 	if err != nil {
@@ -388,7 +388,7 @@ func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 
 // Cancel implements durable.Store.
 func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
-	err := d.store.inTx(ctx, func(q *db.Queries) error {
+	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
 		row, err := q.LockDurableOperation(ctx, string(id))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return durable.ErrNotFound
@@ -441,7 +441,7 @@ func (d *DurableOperations) end(
 	c durable.Claim,
 	next func(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error),
 ) error {
-	return d.store.inTx(ctx, func(q *db.Queries) error {
+	return d.store.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := lockLive(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err

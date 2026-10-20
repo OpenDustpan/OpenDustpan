@@ -31,7 +31,7 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		total int64
 	)
 
-	err = s.inTx(ctx, func(q *db.Queries) error {
+	err = s.inReadTx(ctx, func(q *db.Queries) error {
 		rows, listErr := q.ReviewGrants(ctx, p)
 		if listErr != nil {
 			return fmt.Errorf("select review rows: %w", listErr)
@@ -128,7 +128,7 @@ func (s *Store) CallerGrants(ctx context.Context, cq access.CallerGrantsQuery) (
 		total int64
 	)
 
-	err = s.inTx(ctx, func(q *db.Queries) error {
+	err = s.inReadTx(ctx, func(q *db.Queries) error {
 		rows, listErr := q.CallerGrants(ctx, p)
 		if listErr != nil {
 			return fmt.Errorf("select caller grants: %w", listErr)

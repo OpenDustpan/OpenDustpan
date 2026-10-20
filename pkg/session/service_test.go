@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -277,6 +278,45 @@ func TestSessionsTouchEvery(t *testing.T) {
 	got, err = f.store.GetSession(t.Context(), sess.ID)
 	if err != nil || !got.LastSeenAt.Equal(f.svc.Now()) {
 		t.Fatalf("last use after 90 seconds = %v, %v; want %v", got.LastSeenAt, err, f.svc.Now())
+	}
+}
+
+// TestAuthenticateInMaintenanceSkipsTouch proves that a session older than
+// TouchEvery still authenticates in maintenance mode: the store refuses the
+// write of the use, the request does not fail, and the last use stays as it
+// was. After the leave, the next use writes again.
+func TestAuthenticateInMaintenanceSkipsTouch(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionsFixture(t)
+	sess, secret := f.start(t)
+
+	if err := f.store.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance: %v", err)
+	}
+
+	f.clock.Add(2 * time.Minute)
+
+	if _, err := f.svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate in maintenance mode: %v", err)
+	}
+
+	got, err := f.store.GetSession(t.Context(), sess.ID)
+	if err != nil || !got.LastSeenAt.Equal(sess.CreatedAt) {
+		t.Fatalf("last use in maintenance mode = %v, %v; want %v", got.LastSeenAt, err, sess.CreatedAt)
+	}
+
+	if leaveErr := f.store.SetState(t.Context(), maintenance.StateNormal); leaveErr != nil {
+		t.Fatalf("leave maintenance: %v", leaveErr)
+	}
+
+	if _, authErr := f.svc.Authenticate(t.Context(), secret); authErr != nil {
+		t.Fatalf("authenticate after leave: %v", authErr)
+	}
+
+	got, err = f.store.GetSession(t.Context(), sess.ID)
+	if err != nil || !got.LastSeenAt.Equal(f.svc.Now()) {
+		t.Fatalf("last use after leave = %v, %v; want %v", got.LastSeenAt, err, f.svc.Now())
 	}
 }
 

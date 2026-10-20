@@ -140,6 +140,7 @@ func newAuditFixtureFor(t *testing.T, err error, authn identity.Authenticator) a
 		OnAuditFailure: func() {
 			failures++
 		},
+		DenialLimiter: nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
