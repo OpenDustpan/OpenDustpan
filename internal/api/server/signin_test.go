@@ -184,7 +184,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		InstallationKind: "",
+		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
 		Authenticator:    tokenAuthenticator{},
@@ -208,6 +208,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		AuditChain:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    policyRoutes,
+		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
 			DevCode:  nil,
 			DevAdmin: noBootstrapAdmin,
@@ -1017,7 +1018,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		InstallationKind: "",
+		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
 		Authenticator:    tokenAuthenticator{},
@@ -1041,6 +1042,7 @@ func TestSignInProviderDown(t *testing.T) {
 		AuditChain:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    policies,
+		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
 			DevCode:  nil,
 			DevAdmin: noBootstrapAdmin,

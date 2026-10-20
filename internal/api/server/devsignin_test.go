@@ -183,6 +183,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
 			Providers: nil, DevCode: handlerCode, DevAdmin: devAdmin,
 		},
 		InstallationKind: parts.kind,
+		Workers:          nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
