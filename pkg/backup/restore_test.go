@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -153,6 +154,8 @@ func writeRestoreManifest(
 		RowCounts:     maps.Clone(in.dump.Rows),
 		SQLFormat:     backup.PortableFormat,
 		SQLFiles:      files,
+
+		InstallationKind: installation.KindProduction,
 	}
 
 	data, err := json.Marshal(manifest)

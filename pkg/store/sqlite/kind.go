@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
@@ -74,4 +75,34 @@ func (s *Store) checkKind(ctx context.Context) error {
 	}
 
 	return installation.Check(raw.String, s.kind)
+}
+
+var _ backup.KindReader = (*Store)(nil)
+
+// ReadKind implements backup.KindReader. It reads the stored kind and never
+// claims one. It returns installation.ErrUnavailable, without driver text,
+// when the row is missing, when no kind is claimed yet, when the stored value
+// is not a known kind, and when the read fails.
+func (s *Store) ReadKind(ctx context.Context) (installation.Kind, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.readKindLocked(ctx)
+}
+
+// readKindLocked reads the stored kind. The caller holds the store lock,
+// shared or exclusive.
+func (s *Store) readKindLocked(ctx context.Context) (installation.Kind, error) {
+	raw, err := s.queries.GetInstallationKind(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf(
+			"read installation kind sqlite database: row is missing: %w", installation.ErrUnavailable,
+		)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read installation kind sqlite database: %w", installation.ErrUnavailable)
+	}
+
+	return installation.FromStored(raw.String)
 }

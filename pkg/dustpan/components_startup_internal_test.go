@@ -80,7 +80,7 @@ func (r *registrySpy) FailRunningRestores(context.Context, time.Time, string) er
 func (r *registrySpy) ListRestores(context.Context) ([]backup.RestoreRecord, error) {
 	return []backup.RestoreRecord{{
 		StartedAt: time.Time{}, EndedAt: time.Time{}, ID: "", BackupID: "", PreBackupID: "", RequestedBy: "",
-		Error: "", State: backup.RestoreApplying,
+		Error: "", State: backup.RestoreApplying, DevReport: nil,
 	}}, nil
 }
 

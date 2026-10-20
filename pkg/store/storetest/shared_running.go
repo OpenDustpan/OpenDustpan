@@ -53,7 +53,7 @@ func testSharedOneRunning(t *testing.T, a, b Store) {
 			restoreErrs[i] = h.CreateRestore(t.Context(), backup.RestoreRecord{
 				StartedAt: start, EndedAt: time.Time{}, ID: backup.RestoreID(ident.NewID("rst-")),
 				BackupID: backup.ID(ident.NewID("bkp-")), PreBackupID: "", RequestedBy: "admin", Error: "",
-				State: backup.RestoreChecking,
+				State: backup.RestoreChecking, DevReport: nil,
 			})
 		})
 	}

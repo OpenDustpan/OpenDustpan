@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -239,7 +240,7 @@ func TestPortableSpecFollowsTables(t *testing.T) {
 }
 
 // TestPortableManifestFormat proves the manifest of a portable backup names
-// format 2 and the portable SQL format, and lists each table file (ADR 42,
+// format 3 and the portable SQL format, and lists each table file (ADR 42,
 // decision 4).
 func TestPortableManifestFormat(t *testing.T) {
 	t.Parallel()
@@ -268,6 +269,7 @@ func TestPortableManifestFormat(t *testing.T) {
 				Size:    9,
 			},
 		},
+		InstallationKind: installation.KindProduction,
 	}
 
 	raw, err := json.Marshal(manifest)
@@ -276,7 +278,7 @@ func TestPortableManifestFormat(t *testing.T) {
 	}
 
 	text := string(raw)
-	for _, want := range []string{`"format":2`, `"sqlFormat":"portable"`, `"path":"sql/namespaces.jsonl.gz"`} {
+	for _, want := range []string{`"format":3`, `"installationKind":"production"`, `"sqlFormat":"portable"`, `"path":"sql/namespaces.jsonl.gz"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("manifest %s does not contain %s", text, want)
 		}

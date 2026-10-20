@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
@@ -76,4 +77,25 @@ func checkKind(ctx context.Context, tx pgx.Tx, want installation.Kind) error {
 	}
 
 	return installation.Check(raw.String, want)
+}
+
+var _ backup.KindReader = (*Store)(nil)
+
+// ReadKind implements backup.KindReader. It reads the stored kind and never
+// claims one. It returns installation.ErrUnavailable, without driver text,
+// when the row is missing, when no kind is claimed yet, when the stored value
+// is not a known kind, and when the read fails.
+func (s *Store) ReadKind(ctx context.Context) (installation.Kind, error) {
+	raw, err := s.queries.GetInstallationKind(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf(
+			"read installation kind postgres database: row is missing: %w", installation.ErrUnavailable,
+		)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read installation kind postgres database: %w", installation.ErrUnavailable)
+	}
+
+	return installation.FromStored(raw.String)
 }

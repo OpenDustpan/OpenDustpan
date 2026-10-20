@@ -42,6 +42,11 @@ func (s RestoreState) String() string {
 // restore applies; PreBackupID is the backup of the live data taken before
 // the apply, empty when the restore stopped before it. RequestedBy is the
 // subject that asked. Error holds the failure text for an operator.
+//
+// DevReport is nil until RecordDevReport stores a report. The report holds the
+// dev data that the restore removed, or, for a check-only restore, the dev
+// data that it would remove, and the codes of the warnings that the answer
+// carries. CreateRestore ignores it.
 type RestoreRecord struct {
 	StartedAt   time.Time
 	EndedAt     time.Time
@@ -51,6 +56,7 @@ type RestoreRecord struct {
 	RequestedBy string
 	Error       string
 	State       RestoreState
+	DevReport   *DevStripReport
 }
 
 // Sentinel errors returned by the restore registry.
@@ -110,6 +116,13 @@ type Applier interface {
 	// ApplyStaging swaps the staged restore data into the live data, fences
 	// every namespace, and removes the staging area. It reports ErrCorrupt
 	// when no staged data exists.
+	//
+	// Before it changes anything, it reads the live installation kind from its
+	// own database. When it cannot read the kind, it refuses the swap and
+	// changes nothing. On a production installation it checks the whole
+	// staging area, and refuses the swap with ErrDevBackupRefused when the
+	// staging area holds a dev principal or a row that names one, whatever the
+	// stage call, the manifest or the strip reported.
 	ApplyStaging(ctx context.Context) error
 }
 
@@ -122,8 +135,24 @@ type AccessKeepingApplier interface {
 	// ApplyStagingKeepingAccess swaps the staged restore data into the live
 	// data, keeps the current rows of the access tables, fences every
 	// namespace, and removes the staging area. It reports ErrCorrupt when
-	// no staged data exists.
-	ApplyStagingKeepingAccess(ctx context.Context) error
+	// no staged data exists. It makes the same dev data checks as ApplyStaging,
+	// on the whole staging area, also on the access tables that it does not
+	// take.
+	//
+	// The swap takes temp_admins from the backup and keeps the live
+	// principals. So it drops, in the swap transaction, each staged
+	// temp_admins row that names a principal that the live principals table
+	// does not hold, and returns the count in the result.
+	ApplyStagingKeepingAccess(ctx context.Context) (KeepAccessResult, error)
+}
+
+// KeepAccessResult is what a swap that keeps the access tables changed beyond
+// the plain swap.
+type KeepAccessResult struct {
+	// DroppedTempAdmins is the count of staged temp_admins rows that the swap
+	// dropped because they name a principal that the live principals table
+	// does not hold.
+	DroppedTempAdmins int64
 }
 
 // Fencer increments the failover version of every namespace (ADR 38

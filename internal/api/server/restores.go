@@ -50,7 +50,26 @@ type startRestoreRequest struct {
 // never names a pre-backup ID: the service takes that backup only after the
 // checks pass, so a failed check must not name a backup that was never taken.
 type startRestoreResponse struct {
-	ID string `json:"id"`
+	ID       string               `json:"id"`
+	Warnings []restoreWarningJSON `json:"warnings"`
+}
+
+// restoreWarningJSON is one warning of a restore. The code is stable, so a
+// client can test it and show its own text. The restore goes on after a
+// warning.
+type restoreWarningJSON struct {
+	Code string `json:"code"`
+	Text string `json:"text"`
+}
+
+// devDataJSON states the dev data of a restore: the removal of a restore that
+// ran, or, for a check-only restore, the removal that it would make. It names
+// no token, no session ID and no more than the report holds.
+type devDataJSON struct {
+	// Principals is the number of dev principals.
+	Principals int64 `json:"principals"`
+	// Classes is the count of each class of removed rows.
+	Classes map[string]int64 `json:"classes"`
 }
 
 // restoreSummaryJSON is one row of the restores table. Times are UTC in RFC
@@ -66,6 +85,8 @@ type restoreSummaryJSON struct {
 	StartedAt   string `json:"startedAt"`
 	EndedAt     string `json:"endedAt,omitempty"`
 	Error       string `json:"error,omitempty"`
+	// Warnings is always a list, empty when the restore has none.
+	Warnings []restoreWarningJSON `json:"warnings"`
 }
 
 // listRestoresResponse lists the restores this installation ran, newest first.
@@ -85,6 +106,10 @@ type getRestoreResponse struct {
 	EndedAt     string           `json:"endedAt,omitempty"`
 	Error       string           `json:"error,omitempty"`
 	Manifest    *backup.Manifest `json:"manifest,omitempty"`
+	// Warnings is always a list, empty when the restore has none.
+	Warnings []restoreWarningJSON `json:"warnings"`
+	// DevData is set when the restore found or removed dev data.
+	DevData *devDataJSON `json:"devData,omitempty"`
 }
 
 // startRestore starts a restore in the background and answers 202 with its
@@ -141,7 +166,14 @@ func (h *Handler) startRestore(
 		outcome: audit.OutcomeSuccess,
 	})
 
-	h.writeJSON(ctx, w, http.StatusAccepted, startRestoreResponse{ID: id.String()})
+	// The warnings that the kinds decide are on the row from the start.
+	warnings := []restoreWarningJSON{}
+
+	if record, getErr := h.restores.Get(ctx, id); getErr == nil {
+		warnings = warningsJSON(record)
+	}
+
+	h.writeJSON(ctx, w, http.StatusAccepted, startRestoreResponse{ID: id.String(), Warnings: warnings})
 }
 
 // canReplaceAccess reports whether p may replace the access tables in a
@@ -255,6 +287,8 @@ func (h *Handler) getRestore(w http.ResponseWriter, r *http.Request, _ identity.
 		EndedAt:     "",
 		Error:       record.Error,
 		Manifest:    nil,
+		Warnings:    warningsJSON(record),
+		DevData:     devDataOf(record),
 	}
 
 	if record.PreBackupID != "" {
@@ -294,6 +328,7 @@ func summarizeRestore(record backup.RestoreRecord) restoreSummaryJSON {
 		StartedAt:   formatBackupTime(record.StartedAt),
 		EndedAt:     "",
 		Error:       record.Error,
+		Warnings:    warningsJSON(record),
 	}
 
 	if record.PreBackupID != "" {
@@ -305,4 +340,35 @@ func summarizeRestore(record backup.RestoreRecord) restoreSummaryJSON {
 	}
 
 	return doc
+}
+
+// warningsJSON renders the warnings of a restore row as a list that is never
+// nil.
+func warningsJSON(record backup.RestoreRecord) []restoreWarningJSON {
+	warnings := record.Warnings()
+	out := make([]restoreWarningJSON, 0, len(warnings))
+
+	for _, w := range warnings {
+		out = append(out, restoreWarningJSON{Code: string(w.Code), Text: w.Text})
+	}
+
+	return out
+}
+
+// devDataOf renders the dev data of a restore row, or nil when the row holds
+// no report that names dev data.
+func devDataOf(record backup.RestoreRecord) *devDataJSON {
+	if record.DevReport == nil || !record.DevReport.HasDev() {
+		return nil
+	}
+
+	classes := make(map[string]int64, len(record.DevReport.Classes))
+
+	for class, n := range record.DevReport.Classes {
+		if n > 0 {
+			classes[string(class)] = n
+		}
+	}
+
+	return &devDataJSON{Principals: record.DevReport.Classes[backup.RemovedPrincipals], Classes: classes}
 }

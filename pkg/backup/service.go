@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // FormatVersion is the manifest format number of the portable format. Check
@@ -68,6 +69,44 @@ type Manifest struct {
 	SQLFormat string `json:"sqlFormat"`
 	// SQLFiles holds one descriptor for each table file of the SQL part.
 	SQLFiles []PortableFile `json:"sqlFiles"`
+	// InstallationKind is the kind of the installation that made the backup,
+	// read from its own database. The key is required. The manifest is not
+	// authenticated, so the value is a claim: a restore on a production
+	// installation also decides from the staged data.
+	InstallationKind installation.Kind `json:"installationKind"`
+}
+
+// UnmarshalJSON reads a manifest. A value of installationKind that is not a
+// JSON string fails with ErrManifestKindInvalid, so a wrong JSON type gets the
+// same error as an unknown value. The value is not checked here: readManifest
+// checks it after the format number.
+func (m *Manifest) UnmarshalJSON(data []byte) error {
+	type plain Manifest
+
+	wire := struct {
+		*plain
+
+		Kind json.RawMessage `json:"installationKind"`
+	}{plain: (*plain)(m), Kind: nil}
+
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err //nolint:wrapcheck // The caller maps every decode failure to ErrCorrupt.
+	}
+
+	m.InstallationKind = ""
+
+	if len(wire.Kind) == 0 || string(wire.Kind) == "null" {
+		return nil
+	}
+
+	var kind string
+	if err := json.Unmarshal(wire.Kind, &kind); err != nil {
+		return fmt.Errorf("installationKind is not a string: %w", ErrManifestKindInvalid)
+	}
+
+	m.InstallationKind = installation.Kind(kind)
+
+	return nil
 }
 
 // ManifestBlob names one copied blob with its size and MD5.
@@ -86,6 +125,9 @@ type ManifestBlob struct {
 type Config struct {
 	Exporter PortableExporter
 	Registry Registry
+	// Kinds reads the installation kind of the database that the exporter
+	// reads. The manifest records it. A caller cannot pass a kind in.
+	Kinds KindReader
 	// Blobs is the live content store the backup copies from.
 	Blobs blob.Store
 	// StateOpener opens sealed OpenTofu state blobs for the copy check: the
@@ -110,6 +152,7 @@ type Config struct {
 // Service runs backups of a whole installation into a blob.Store target.
 type Service struct {
 	exporter   PortableExporter
+	kinds      KindReader
 	registry   Registry
 	source     blob.Store
 	opener     StateOpener
@@ -139,6 +182,8 @@ func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Exporter == nil:
 		return nil, fmt.Errorf("%w: exporter", ErrMissingDependency)
+	case cfg.Kinds == nil:
+		return nil, fmt.Errorf("%w: installation kind reader", ErrMissingDependency)
 	case cfg.Registry == nil:
 		return nil, fmt.Errorf("%w: registry", ErrMissingDependency)
 	case cfg.Blobs == nil:
@@ -159,6 +204,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		exporter:   cfg.Exporter,
+		kinds:      cfg.Kinds,
 		registry:   cfg.Registry,
 		source:     cfg.Blobs,
 		opener:     cfg.StateOpener,
@@ -403,6 +449,13 @@ func (s *Service) release() {
 func (s *Service) backup(
 	ctx context.Context, id ID, startedAt time.Time, manifestKey blob.Key,
 ) error {
+	// Read the kind before the first object lands in the target, so a database
+	// that claims no kind leaves no file and no manifest.
+	kind, err := s.readKind(ctx)
+	if err != nil {
+		return err
+	}
+
 	exported, err := s.exportPortable(ctx, id)
 	if err != nil {
 		return err
@@ -423,6 +476,7 @@ func (s *Service) backup(
 
 	return s.writeManifest(ctx, manifestInput{
 		startedAt: startedAt,
+		kind:      kind,
 		id:        id,
 		sum:       exported.sum,
 		ordered:   stored,
@@ -431,6 +485,22 @@ func (s *Service) backup(
 		sha:       exported.sha,
 		key:       manifestKey,
 	})
+}
+
+// readKind reads the installation kind of the database from its own store.
+// Any failure, and any value that is not a known kind, is
+// installation.ErrUnavailable: the export fails and writes no backup.
+func (s *Service) readKind(ctx context.Context) (installation.Kind, error) {
+	kind, err := s.kinds.ReadKind(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read the installation kind for the backup: %w", err)
+	}
+
+	if !kind.Valid() {
+		return "", fmt.Errorf("read the installation kind for the backup: %w", installation.ErrUnavailable)
+	}
+
+	return kind, nil
 }
 
 // orderBlobs returns the references ordered by key, so copies and the
@@ -929,6 +999,7 @@ func corruptBlobError(key string, size int64, sum []byte, ref BlobRef) error {
 // manifestInput groups the manifest fields writeManifest needs.
 type manifestInput struct {
 	startedAt time.Time
+	kind      installation.Kind
 	id        ID
 	sum       Summary
 	files     []PortableFile
@@ -956,6 +1027,8 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		RowCounts:     in.sum.RowCounts,
 		SQLFormat:     PortableFormat,
 		SQLFiles:      in.files,
+
+		InstallationKind: in.kind,
 	}
 
 	manifest.Blobs = append(manifest.Blobs, in.ordered...)
@@ -1040,9 +1113,19 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 		return Manifest{}, fmt.Errorf("close manifest of backup %s: %w", id, closeErr)
 	}
 
+	return parseManifest(id, data)
+}
+
+// parseManifest decodes the bytes of the manifest of backup id and checks the
+// format, the ID, the kind and the file descriptors.
+func parseManifest(id ID, data []byte) (Manifest, error) {
 	var manifest Manifest
 
 	if err := json.Unmarshal(data, &manifest); err != nil {
+		if errors.Is(err, ErrManifestKindInvalid) {
+			return Manifest{}, fmt.Errorf("backup %s: %w", id, err)
+		}
+
 		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w", id, ErrCorrupt)
 	}
 
@@ -1059,6 +1142,12 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 		)
 	case manifest.ID != id:
 		return Manifest{}, fmt.Errorf("backup %s holds a manifest of %s: %w", id, manifest.ID, ErrCorrupt)
+	}
+
+	// The kind is a claim, and an unknown value is not valid. There is no
+	// conversion and no default.
+	if _, err := installation.ParseKind(string(manifest.InstallationKind)); err != nil {
+		return Manifest{}, fmt.Errorf("backup %s: %w", id, ErrManifestKindInvalid)
 	}
 
 	// The descriptors name the objects that Check, restore and the key peek
