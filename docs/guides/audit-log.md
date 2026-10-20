@@ -158,20 +158,24 @@ allows only the two kinds.
 
 The server writes one entry of the kind `security` and the outcome `denied`
 when it stops an access that crosses a namespace boundary. Today this is a
-read, a write, a delete or a listing of a Pulumi checkpoint blob or a journal
-batch blob with a blob key of another namespace, or with a key of its own
-namespace that is outside the directory of the Pulumi blobs. The action is
-`blob:out-of-scope`. The scope is `@server`, the subject is `server`, and the
-object is the ID of the namespace of the call. The reason names the operation.
-It also says whether the key was outside the namespace or outside the Pulumi
-blob directory of the namespace. The entry never holds the blob key that the
-call used.
+read, a write, a delete or a listing of one of these blobs with a blob key of
+another namespace, or with a key of its own namespace that is outside the
+directory of the blob kind:
 
-A request that meets such a refusal fails with a server error, and the entry
-is the record for the operator. The server stores the checkpoint and the
-journal batches of a stack under `namespaces/<namespace ID>/pulumi/`, so a
-refusal shows a damaged row or a fault in the server, not a mistake of the
-client.
+- An item key blob, in the item-keys directory.
+- A Pulumi checkpoint blob or a journal batch blob, in the Pulumi directory.
+
+The action is `blob:out-of-scope`. The scope is `@server`, the subject is
+`server`, and the object is the ID of the namespace of the call. The reason
+names the blob kind and the operation. It also says whether the key was
+outside the namespace or outside the directory of the blob kind in the
+namespace. The entry never holds the blob key that the call used.
+
+A request for a Pulumi blob that meets such a refusal fails with a server
+error, and the entry is the record for the operator. The server stores the
+checkpoint and the journal batches of a stack under
+`namespaces/<namespace ID>/pulumi/`, so a refusal shows a damaged row or a
+fault in the server, not a mistake of the client.
 
 ## Denial entries
 
