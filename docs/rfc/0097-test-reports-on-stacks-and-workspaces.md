@@ -128,8 +128,7 @@ The routes follow RFC 90's API, with `test-reports` in place of
 | `GET .../units/{unit_id}/test-cases` | `unit:read` | the unit |
 
 The upload names `commit=<sha>`, and the tool and its version. It takes an
-`Idempotency-Key` (ADR 210 decision 6). A job token never holds
-`unit:upload-test-report`.
+`Idempotency-Key` (ADR 210 decision 6).
 
 ### Limits and rules at the boundary (proposal)
 
@@ -228,6 +227,9 @@ For `GLOSSARY.md`, after acceptance. This PR does not edit the glossary.
 - **Test case**: one test in a test report, with its suite, its outcome and
   its duration.
   _Avoid_: Test (alone), assertion, check
+8. Does a job token hold `unit:upload-test-report`? Recommendation: no,
+   so that a job cannot report on its own result. The upload comes from the
+   CI of the team with a principal of its own.
 
 ## Outcome
 

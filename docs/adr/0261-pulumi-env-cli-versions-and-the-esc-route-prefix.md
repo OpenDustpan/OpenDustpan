@@ -14,7 +14,7 @@ the Pulumi CLI. The facts on 2026-10-20, from the changelogs and the
 source of `pulumi/pulumi`:
 
 - `pulumi env` is in the core CLI since v3.88.0.
-- Up to v3.131.x, it calls `/api/preview/environments/{org}/{env}`.
+- Up to v3.131.0, it calls `/api/preview/environments/{org}/{env}`.
 - From v3.132.0, it calls `/api/esc/environments/{org}/{project}/{env}`.
 - v3.251.0 moved only the source of the commands into `pulumi/pulumi`.
   It made no change on the wire.
@@ -30,14 +30,16 @@ The e2e matrix of the Pulumi CLI has three versions: latest, 3.250.0 and
    Cloud-compatible API.
 2. **One prefix.** The server serves the prefix `/api/esc` only. It serves
    no route under `/api/preview/environments`. A request to that prefix
-   gets an error in the shape of the Pulumi Cloud-compatible API (`{"code":
-   <status>, "message": "..."}`). The message names the minimum version,
+   gets the status 404 and an error in the shape of the Pulumi
+   Cloud-compatible API (`{"code": 404, "message": "..."}`). The refusal
+   needs no sign-in and reads no object, so its route is on the public list
+   of the route test of the Pulumi adapter. The message names the minimum version,
    3.132.0. The server has no compatibility code for the older shape.
 3. **No gate by `User-Agent`.** The server does not accept or refuse a
    request by the `User-Agent` header, because the client controls that
    header and it cannot be trusted. The shapes are the same across the
    supported range. The control is the recorded traffic of each version in
-   the matrix, and a `make e2e` check of each new release of the CLI.
+   the matrix, and the check that `make e2e` makes on each new release of the CLI.
 
 Benchmark: cloud SDK and CLI vendors publish a window of supported
 versions and test it on each release. A refusal of every older CLI at each
@@ -48,5 +50,5 @@ weekly release would break a small team.
 - A team that uses `pulumi env` needs the Pulumi CLI 3.132.0 or newer. An
   older CLI gets an error that names the version.
 - The server has one set of routes for `pulumi env`.
-- Each new release of the Pulumi CLI is checked with `make e2e` before the
-  matrix moves.
+- `make e2e` checks each new release of the Pulumi CLI before the matrix
+  moves.

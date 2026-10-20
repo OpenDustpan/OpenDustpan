@@ -1,6 +1,6 @@
 # 258. Drift remediation is a plan that a person approves, by a built-in gate
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Accepts part of RFC 25 (the open question on automatic remediation). Uses ADR 226 decision 7
+Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Accepts part of RFC 25 (the open question on automatic remediation). Uses ADR 226 decision 7. Decision 7 of ADR 226 extended by a third built-in gate of wider scope. Phase table of ADR 205 extended by a plan phase for a scheduled refresh job
 
 ## Context
 
@@ -38,10 +38,17 @@ evidence. A schedule cannot tell these cases apart. A person can.
    built-in gate.** The built-in gate
    `builtin/schedule-apply-needs-approval` (ADR 226 decision 7) makes the
    apply phase of a job with `source.kind` `schedule` wait for the
-   approval of a person on the stored plan of that job (ADR 191). It is
-   `enforce` by default. An installation administrator can switch it to
-   `evaluate`, with fresh authentication and an audit entry. A regulated
-   team can lock that switch with an access limit. The principal of the
+   approval of a person on the stored plan of that job (ADR 191). The scope
+   of this gate is each job with `source.kind` `schedule` whose operation
+   is `apply`, `destroy` or `refresh`. A remediation job of the operation
+   `refresh` has a plan phase (OpenTofu `plan -refresh-only`, Pulumi
+   `refresh --preview-only`) and a stored plan, so the gate holds before
+   its write phase. The gate is `enforce` by default. An installation
+   administrator can switch it to `evaluate`, with fresh authentication and
+   an audit entry. An access limit can lock that switch, except for a
+   break-glass session (ADR 223 decision 7). Only the installation scope
+   can set that limit: the installation owner sets it, not each team. The
+   principal of the
    schedule cannot approve. `autoApply` is `false` for such a job while
    the gate enforces, and the decision record names the gate.
 4. **A second escape hatch is the API.** A team that wants automatic remediation
@@ -73,5 +80,9 @@ entity to manage ICT changes in a controlled way.
   its own principal shows in the audit log.
 - A namespace cannot switch the gate off alone. Only an installation
   administrator can, with fresh authentication and an audit entry, and
-  an access limit can lock that switch. The user documentation of drift
-  says this.
+  an installation access limit can lock that switch, except for a
+  break-glass session. The user documentation of drift says this.
+- This ADR extends two earlier decisions. ADR 226 decision 7 gets a third
+  built-in gate, and the gate has a wider scope than the two gates that
+  decision names. The phase table of ADR 205 gets a plan phase for a
+  scheduled job of the operation `refresh`.

@@ -11,11 +11,15 @@ OpenTofu 1.7.0 added the encryption of state and plan files on the client,
 with AES-GCM and the key providers `pbkdf2`, `aws_kms`, `gcp_kms` and
 `openbao`. 1.10.0 added the key provider `external`, which runs a program
 of the team, and 1.11.0 added `azure_vault`
-(<https://opentofu.org/docs/language/state/encryption/>, the change logs of
-v1.7, v1.10 and v1.11). The encrypted state is a JSON envelope with `meta`,
-`encrypted_data` and `encryption_version`. Only `serial` and `lineage` stay
-in plain text, so that a backend can order the versions
-(`internal/encryption/state.go`, and issue 1407 of `opentofu/opentofu`).
+(<https://opentofu.org/docs/language/state/encryption/>, and the change logs of
+[v1.7](https://github.com/opentofu/opentofu/blob/v1.7/CHANGELOG.md),
+[v1.10](https://github.com/opentofu/opentofu/blob/v1.10/CHANGELOG.md) and
+[v1.11](https://github.com/opentofu/opentofu/blob/v1.11/CHANGELOG.md)). The
+encrypted state is a JSON envelope with `meta`, `encrypted_data` and
+`encryption_version` (`internal/encryption/base.go`, lines 105 to 107).
+Only `serial` and `lineage` stay in plain text, so that a backend can order
+the versions (`internal/encryption/state.go`, lines 67 to 89, and issue 1407
+of `opentofu/opentofu`).
 
 The server already handles this envelope. `workspace.IsClientEncrypted`
 finds it, the serial and lineage checks of ADR 25 and ADR 49 use the plain
@@ -71,8 +75,8 @@ what the team has with no client encryption, with more keys in more places.
    check forces each other gate to read `available` (ADR 226 decision 3).
 5. **A unit with an envelope keeps its outputs sealed.** For a unit whose
    stored state is an envelope, the server keeps no value from the plain
-   `json-state`. It keeps the outputs sealed, as ADR 41 does, and it
-   shows no output value in plain text. The user documentation says that
+   `json-state`. It keeps `json-state-outputs` sealed at rest, and the outputs read
+   masks them as ADR 41 decision 8 does. The user documentation says that
    client encryption keeps the contents from the server only with the http
    backend. With the `cloud` block and the `remote` backend, the outputs
    reach the server in plain text, and with the `cloud` block a rendering

@@ -543,6 +543,6 @@ The owner keeps these. Each recommendation is the author's.
 
 ## Outcome
 
-Accepted in part as [ADR 260](../adr/0260-day-two-actions-wait-for-a-supported-tool.md)
+Accepted in part as [ADR 260, Provider actions wait for a supported tool that has them](../adr/0260-day-two-actions-wait-for-a-supported-tool.md)
 on 2026-10-20: question 3 (wait) and slice 1 (no code). The other
 questions stay open.
