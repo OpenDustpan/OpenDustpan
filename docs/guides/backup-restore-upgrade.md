@@ -123,11 +123,21 @@ list names it:
 opendustpan restore --server https://dustpan.example --backup bkp-bbb
 ```
 
-While the restore applies, the server holds maintenance mode: the tool APIs
-answer 503 and the installation API stays available. The server leaves
-maintenance mode when the restore ends, also after a failure. The server
-does not enter maintenance mode while an update or a run is active, unless
-the request sets `--force`, which cancels them first and names them.
+While the restore applies, the server holds maintenance mode. The tool APIs
+answer 503. A write to the installation API also answers 503 with
+`Retry-After`: the restore replaces tokens, service tokens, principals,
+grants, groups, roles, namespaces and policies, and a write in this time
+would be lost. Reads of the installation API, the maintenance routes and the
+backup and restore routes stay available. The server leaves maintenance mode
+when the restore ends, also after a failure. The server does not enter
+maintenance mode while an update or a run is active, unless the request sets
+`--force`, which cancels them first and names them.
+
+Each write checks the stored installation state in its own database
+transaction. After one server enters maintenance mode, every other server
+refuses writes in its next request. A write that is already in progress
+ends before the enter returns. A server that cannot read the installation
+state refuses the write.
 
 The restore increments the failover version of every namespace. Leases,
 update tokens, locks and upload capabilities from before the restore stop

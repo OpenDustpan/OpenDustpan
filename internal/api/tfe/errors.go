@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -20,6 +21,9 @@ const titleForbidden = "forbidden"
 
 // titleConflict is the JSON:API title of a 409 answer.
 const titleConflict = "conflict"
+
+// titleServiceUnavailable is the JSON:API title of a 503 answer.
+const titleServiceUnavailable = "service unavailable"
 
 // jsonAPIMediaType is the media type of every response, including errors.
 const jsonAPIMediaType = "application/vnd.api+json"
@@ -183,10 +187,16 @@ func classifyNamespace(err error) (errorClass, bool) {
 			title:  "misdirected request",
 			detail: err.Error(),
 		}, true
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return errorClass{
+			status: http.StatusServiceUnavailable,
+			title:  titleServiceUnavailable,
+			detail: maintenance.ErrInMaintenance.Error() + ": try again after the Retry-After time",
+		}, true
 	case errors.Is(err, namespace.ErrUnavailable):
 		return errorClass{
 			status: http.StatusServiceUnavailable,
-			title:  "service unavailable",
+			title:  titleServiceUnavailable,
 			detail: "database unavailable: try again after the Retry-After time",
 		}, true
 	default:
@@ -260,7 +270,7 @@ func classify(err error) errorClass {
 	case errors.Is(err, workspace.ErrBusy):
 		return errorClass{
 			status: http.StatusServiceUnavailable,
-			title:  "service unavailable",
+			title:  titleServiceUnavailable,
 			detail: "server is busy: try again after the Retry-After time",
 		}
 	case errors.Is(err, errInvalidBody),

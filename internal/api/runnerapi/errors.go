@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -106,7 +107,8 @@ func classifyProtocolOther(
 		return mk(http.StatusBadRequest, protocol.ErrorInvalid)
 	case errors.Is(err, runner.ErrLimit):
 		return mk(http.StatusTooManyRequests, protocol.ErrorRateLimited)
-	case errors.Is(err, namespace.ErrFenced), errors.Is(err, namespace.ErrNotHome):
+	case errors.Is(err, namespace.ErrFenced), errors.Is(err, namespace.ErrNotHome),
+		errors.Is(err, maintenance.ErrInMaintenance):
 		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable)
 	default:
 		return http.StatusInternalServerError, protocol.Error{
@@ -154,6 +156,8 @@ func classifyManagementConflict(err error) (int, string) {
 		return http.StatusConflict, "write fenced: try again"
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}
