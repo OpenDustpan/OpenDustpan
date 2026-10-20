@@ -1,6 +1,6 @@
-# 258. Drift remediation is a plan that a person approves, never an automatic apply
+# 258. Drift remediation is a plan that a person approves, by a built-in gate
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Accepts part of RFC 25 (the open question on automatic remediation). Adds a fixed control to ADR 222 decision 4
+Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Accepts part of RFC 25 (the open question on automatic remediation). Uses ADR 226 decision 7
 
 ## Context
 
@@ -34,28 +34,33 @@ evidence. A schedule cannot tell these cases apart. A person can.
    the resources (accept the cloud, or revert the cloud) is its own job,
    with its own plan phase and its own stored plan. A drift run never
    becomes an apply.
-3. **A person approves each remediation that a schedule starts.** A fixed
-   control (ADR 222 decision 4): the apply phase of a job with
-   `source.kind` `schedule` waits for the approval of a person on the
-   stored plan of that job (ADR 191). No gate, no approval default and no
-   namespace setting removes this wait. The principal of the schedule
-   cannot approve. `autoApply` is `false` for such a job, and the decision
-   record shows the fixed control.
-4. **The escape hatch is the API.** A team that wants automatic remediation
+3. **A person approves each remediation that a schedule starts, by a
+   built-in gate.** The built-in gate
+   `builtin/schedule-apply-needs-approval` (ADR 226 decision 7) makes the
+   apply phase of a job with `source.kind` `schedule` wait for the
+   approval of a person on the stored plan of that job (ADR 191). It is
+   `enforce` by default. An installation administrator can switch it to
+   `evaluate`, with fresh authentication and an audit entry. A regulated
+   team can lock that switch with an access limit. The principal of the
+   schedule cannot approve. `autoApply` is `false` for such a job while
+   the gate enforces, and the decision record names the gate.
+4. **A second escape hatch is the API.** A team that wants automatic remediation
    starts the remediation job through the API (ADR 17) from its own
    automation, with a principal of its own. That job has the source kind
    of its caller, meets the normal gates and approval rules, and the audit
    log names the principal. The team owns that decision and its record.
 5. **Ignore is a record.** An "ignore" of a drift is a record with a
-   person, a reason and an expiry. It changes no resource.
-6. **Open in RFC 25.** The schedule, its spread and its pause, the status
+   person, a reason and an expiry. It changes no resource. RFC 25 names
+   the action that it needs and its audit entry.
+6. **Open in RFC 25.** The action and the audit entry of an ignore, the schedule, its spread and its pause, the status
    vocabulary (RFC 26), the pull request action (RFC 12), and the fixed
    steps and the clean environment of a drift run (RFC 95 section D) stay
    open.
 
 Benchmark: AWS Config runs automatic remediation only when the owner
 configures it for each rule. Hosted IaC services detect drift and notify by
-default, and an apply needs a person or an opt-in setting of the owner. SOC
+default, and an apply needs a person or an opt-in setting of the owner.
+The gate has a safe default and an audited opt-out. SOC
 2 change management and ISO 27001 change control ask for an authorized,
 recorded approval of each change to production. DORA asks the financial
 entity to manage ICT changes in a controlled way.
@@ -66,5 +71,7 @@ entity to manage ICT changes in a controlled way.
   applies it.
 - A small team that wants automatic remediation writes it on the API, and
   its own principal shows in the audit log.
-- A namespace cannot configure the wait away. The user documentation of
-  drift says this.
+- A namespace cannot switch the gate off alone. Only an installation
+  administrator can, with fresh authentication and an audit entry, and
+  an access limit can lock that switch. The user documentation of drift
+  says this.

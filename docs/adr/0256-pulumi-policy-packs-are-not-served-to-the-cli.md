@@ -13,8 +13,9 @@ the CLI source (`pulumi/pulumi`, Apache-2.0, `master` at commit
 
 - The answer that creates an update (`begin-update`, or the older create
   routes of `preview`, `update`, `refresh` and `destroy`) holds
-  `requiredPolicies`. Each entry has a name, a version, a version tag, a
-  config and a `packLocation` URL (`sdk/go/common/apitype/policy.go`).
+  `requiredPolicies`. Each entry has a name, a display name, a version, a version tag,
+  a config, the `environments` and a `packLocation` URL
+  (`sdk/go/common/apitype/policy.go`).
 - The CLI downloads each pack from `packLocation` with a plain `GET` and
   no `Authorization` header. It unpacks it, installs its dependencies
   with the language tool (for example `npm` or `pip`), and runs it on the
@@ -44,7 +45,9 @@ never runs a resource policy (ADR 194 decision 8).
 1. **The gate engine is the control.** Resource policy that must hold is a
    gate on a stored plan (ADR 224, ADR 226 decision 7). A gate runs on the
    server, at a decision point that the person cannot skip. A check on the
-   machine of the person is never a control.
+   machine of the person is never a control. A CLI-driven `pulumi up`
+   gets no server-side resource-policy check, because `state.write` has no
+   plan facts.
 2. **No required packs in the answer of an update.** The Pulumi adapter
    keeps `requiredPolicies` absent in each answer that creates an update.
    It serves no `GET /api/stacks/{org}/{project}/{stack}/policypacks` and
@@ -57,7 +60,9 @@ never runs a resource policy (ADR 194 decision 8).
    `--policy-pack` on a workstation or in its own CI, and in a step of a
    runner job, where the results become the resource policy report of the
    stored plan. A write from a person's own CLI meets the gates of
-   `state.write` (ADR 224 decision 16).
+   `state.write` (ADR 224 decision 16). A regulated team that wants no
+   unchecked write from a person's CLI adds a gate at `state.write` that
+   denies `source.kind` `cli`, so that changes go through runner jobs.
 5. **A later change needs an RFC.** If served packs come back as fast
    feedback on a workstation, the RFC must keep them advisory, and it must
    answer three points: the integrity of the pack (the wire has no hash, so

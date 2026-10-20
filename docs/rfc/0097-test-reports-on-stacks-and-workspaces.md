@@ -32,7 +32,7 @@ Checked on 2026-10-20.
 
 | Tool | Native report | Source |
 | --- | --- | --- |
-| OpenTofu `tofu test` | `-json` (machine-readable output on stdout) and `-json-into=<file>`. No JUnit XML option. `-json-into` came with 1.12.0. The version that added `tofu test -json` is UNCONFIRMED. | <https://opentofu.org/docs/cli/commands/test/>, the v1.12 change log |
+| OpenTofu `tofu test` | `-json` (machine-readable output on stdout) and `-json-into=<file>`. No JUnit XML option. `-json-into` came with 1.12.0, from the change log. The version that added `tofu test -json` is UNCONFIRMED. | <https://opentofu.org/docs/cli/commands/test/>, the v1.12 change log |
 | Terraform CLI `terraform test` | `-junit-xml=<file>`, generally available in 1.11.0 (experimental before). Not with `-cloud-run`. OpenDustpan does not support this CLI (RFC 53). | <https://developer.hashicorp.com/terraform/cli/commands/test>, the v1.11 change log |
 | Pulumi CLI | No test runner and no report format of its own. Unit tests use the framework of each language (for example Mocha, `unittest`, `go test`, NUnit, JUnit 5) with the mocks of the SDK. A JUnit XML file comes from that framework, not from the CLI. | <https://www.pulumi.com/docs/iac/guides/testing/unit/> |
 
@@ -143,9 +143,9 @@ The upload names `commit=<sha>`, and the tool and its version. It takes an
   `properties` only, and an allowlist of attributes. An unknown element
   refuses the report. It never repairs one.
 - A name is at most 1 KiB, a message at most 16 KiB, of strict UTF-8.
-- The server keeps no `system-out` and no `system-err` in the rows. The
-  raw report keeps them, sealed, behind `unit:read-test-reports`, because
-  they can hold secrets.
+- The server keeps no `system-out`, no `system-err` and no failure
+  message in the rows. The raw report keeps them, sealed, behind
+  `unit:read-test-reports`, because they can hold secrets.
 
 ### Defense in depth (ADR 250)
 
@@ -162,8 +162,9 @@ The upload names `commit=<sha>`, and the tool and its version. It takes an
 - The raw report is a blob of a new kind `test-report`, sealed with its own
   item key (ADR 151), as RFC 90 proposes for a scanner report.
 - Test cases are rows: report ID, unit ID, suite, name, outcome (`passed`,
-  `failed`, `errored` or `skipped`), duration in milliseconds and the
-  failure message.
+  `failed`, `errored` or `skipped`) and duration in milliseconds. A row
+  holds no failure message, because a message can hold a secret. The
+  messages stay in the sealed raw report, behind `unit:read-test-reports`.
 - Retention: the newest N reports for each unit and tool (question 6).
 
 ### The first slice

@@ -21,11 +21,19 @@ The server already handles this envelope. `workspace.IsClientEncrypted`
 finds it, the serial and lineage checks of ADR 25 and ADR 49 use the plain
 fields, a force-unlock that must fence the state fails with
 `workspace.ErrClientEncrypted`, and a reveal of the contents answers 409.
-ADR 41 found that the `cloud` block at commit `52ade2f` sends plain state
-and plain outputs also when the client encrypts. The http backend sends the
-envelope. Whether each path of the TFE-compatible API sends plain state is
-UNCONFIRMED: another TFE-compatible server reported encrypted state from
-the `remote` backend.
+We read the OpenTofu source for the three backends that can reach the
+server:
+
+- **The http backend** sends the envelope and nothing else. ADR 41 records
+  this.
+- **The `cloud` block** encrypts the state, decrypts it again, and uploads
+  the plain `json-state` and the plain `json-state-outputs`, sensitive
+  values included (`internal/cloud/state.go`, lines 220 to 247 and 311 to
+  321). So the server receives a plain rendering of the state, also when
+  the client encrypts.
+- **The `remote` backend** uploads the encrypted raw state, but it uploads
+  the outputs as plain JSON (`internal/backend/remote/backend_state.go`,
+  lines 94 to 117).
 
 So for a unit whose stored state is an envelope, the server cannot read
 resources or outputs. The resource index has no entries for it (ADR 163
@@ -57,19 +65,27 @@ what the team has with no client encryption, with more keys in more places.
 3. **What still works.** Locks, the fence, the serial and lineage checks,
    state versions, history, download as sent, restore of a version, and
    backups. These need no contents.
-4. **Gates fail closed.** A fact that comes from the contents of such a
-   state is `available == false`. A gate that reads it meets the rule of
-   ADR 226 decision 3: `available == false` matches its `deny` or approval
-   outcome. A missing contents never passes a gate.
-5. **A key in a profile is the team's choice.** A profile (ADR 200) can
+4. **Missing contents is a typed value.** A fact that comes from the
+   contents of such a state is `available == false`. Built-in gates and
+   starter packs treat `available == false` as deny or approval. The save
+   check forces each other gate to read `available` (ADR 226 decision 3).
+5. **A unit with an envelope keeps its outputs sealed.** For a unit whose
+   stored state is an envelope, the server keeps no value from the plain
+   `json-state`. It keeps the outputs sealed, as ADR 41 does, and it
+   shows no output value in plain text. The user documentation says that
+   client encryption keeps the contents from the server only with the http
+   backend. With the `cloud` block and the `remote` backend, the outputs
+   reach the server in plain text, and with the `cloud` block a rendering
+   of the state reaches it too.
+6. **A key in a profile is the team's choice.** A profile (ADR 200) can
    hold any value, so a team can put a key there for its runners. The
    server never uses that value to read state. The user documentation says
    that a key in a profile lets the operator of the server read the state,
    and so removes what client encryption gives.
-6. **The escape hatch.** A team that wants search, the graph and the state
+7. **The escape hatch.** A team that wants search, the graph and the state
    facts turns client encryption off for the unit. The server seals the
    state at rest, and the namespace can use its own key (ADR 217).
-7. **Plans of runner jobs.** A runner job of such a unit still uploads the
+8. **Plans of runner jobs.** A runner job of such a unit still uploads the
    `plan-display` part of its plan (ADR 102), which the runner makes with the key of the team.
    The user documentation says that this plan reaches the server in plain
    text, masked as each plan is.
@@ -82,10 +98,13 @@ the fewest possible locations.
 
 ## Consequences
 
-- A team that encrypts state on the client keeps that guarantee against
-  the operator of the server.
+- A team that encrypts state on the client with the http backend keeps
+  that guarantee against the operator of the server. With the `cloud`
+  block and the `remote` backend, the guarantee does not hold for the
+  outputs, and for the `cloud` block it does not hold for a rendering of
+  the state.
 - That team loses the features that read state, for that unit only. The
   console says why.
-- The check of what each path of the TFE-compatible API sends (plain or
-  envelope) needs an e2e step for the `cloud` block and the `remote`
-  backend with encryption on.
+- An e2e step for the `cloud` block and the `remote` backend with
+  encryption on checks what each path sends, and that the server keeps
+  no plain value for a unit with an envelope.

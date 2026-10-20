@@ -53,7 +53,7 @@ both together.
 | [2](0002-organizations-are-namespaces.md) | Organizations are namespaces, in every client | accepted |
 | [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | accepted |
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
-| [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209) |
+| [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209); `pulumi env` versions and routes (ADR 261) |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | accepted (ADRs 211, 249) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted; the backup of one namespace (ADR 218) |
@@ -73,7 +73,7 @@ both together.
 | [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entries (ADR 212) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
-| [25](0025-drift-detection.md) | Drift detection and remediation | draft; no automatic remediation (ADR 258) |
+| [25](0025-drift-detection.md) | Drift detection and remediation | draft; a person approves a remediation by a built-in gate (ADR 258) |
 | [26](0026-unit-status.md) | Unit status in the inventory | draft; a lock is a flag, with manual locks (ADR 213) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
 | [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | accepted |

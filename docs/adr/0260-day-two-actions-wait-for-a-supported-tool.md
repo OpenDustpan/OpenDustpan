@@ -28,10 +28,16 @@ check of the change logs):
   feature is `pulumi do`: v3.242.0 (2026-05-19, pull request 23176 of
   `pulumi/pulumi`) added it to run provider functions without state and
   print JSON, and a reviewer called it experimental. v3.243.0 added
-  resources, v3.246.0 added `--stateless` (the default becomes stateful),
-  and v3.254.0 added stateful create, delete and `upsert`. What `pulumi do`
-  sends to a Pulumi Cloud-compatible backend in stateful mode is
-  UNCONFIRMED. A stateless `pulumi do` sends nothing to the backend. A
+  resources, v3.246.0 added `--stateless`, and announced that stateful becomes the
+  default. v3.254.0 added stateful create, delete and `upsert`. We read
+  the CLI source (`pkg/cmd/pulumi/do/do_resource_upsert.go`, lines 845 to
+  873). A stateful `pulumi do` runs a normal `backend.UpdateStack`, or
+  `PreviewStack` with `--dry-run`. So it sends `begin-update`, engine events
+  and checkpoints to the backend. The checkpoint holds a new `snippets`
+  section, and the deployment declares the feature `snippets`
+  (`sdk/go/common/apitype/core.go`, lines 167 to 171). On `master`,
+  stateful is the default (`do.go`, line 486). A stateless `pulumi do`
+  sends nothing to the backend. A
   `command` resource is the nearest form of an action inside an update,
   and `plan.resourceTypes` (ADR 226 decision 4) already holds its type, so
   a gate can stop it today.
@@ -49,9 +55,9 @@ supported tool can make an action invocation for that step.
    allowlist into RFC 25.
 3. **The trigger of the spike.** The spike plan of RFC 95 starts with the
    first OpenTofu release or prerelease that has actions. For the Pulumi
-   CLI, a check with the real CLI finds what `pulumi do` sends to the
-   Pulumi Cloud-compatible API in stateful mode. That check comes before
-   any code, and its result goes into RFC 95.
+   CLI, a stateful `pulumi do` already reaches the update routes today.
+   An e2e step on the latest CLI checks that the checkpoint path accepts
+   a deployment with the feature `snippets`. The result goes into RFC 95.
 4. **The limit is in the docs.** The user documentation of runs says
    that OpenDustpan does not see a provider action, and that a `command`
    resource of the Pulumi CLI is visible to a gate through its resource

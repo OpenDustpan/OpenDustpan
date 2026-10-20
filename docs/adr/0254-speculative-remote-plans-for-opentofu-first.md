@@ -15,8 +15,9 @@ of the team, a launcher and a source pipeline. ADR 199 gives a snapshot of
 files with no git commit. So the parts that RFC 6 named as missing exist.
 
 We read the OpenTofu source (`opentofu/opentofu`, `main` at `42f15c9`,
-2026-10-19, with checks against `v1.11.9`) and go-tfe `v1.101.0`, the
-version that OpenTofu pins:
+2026-10-19, with checks against `v1.11.9`) and go-tfe `v1.95.0`, the
+version that OpenTofu `v1.11.9` pins. The e2e matrix uses OpenTofu
+1.11.14, 1.12.7 and 1.13.1:
 
 - The `cloud` block reads `GET /api/v2/organizations/:org/entitlement-set`.
   It runs locally when `operations` is `false`, or when the workspace has
@@ -34,12 +35,16 @@ version that OpenTofu pins:
   6. Polls of the run.
   7. `GET /plans/:id`, and reads of its `log-read-url` with `limit` and
      `offset`.
-- While a run is `pending`, the CLI also reads the workspace, the runs of
-  the workspace, `GET /organizations/:org/runs/queue` and
-  `GET /organizations/:org/capacity`. An error of any of these stops the
+- While a run is `pending`, the CLI also reads the workspace and
+  `GET /organizations/:org/runs/queue`. It reads the runs of the
+  workspace unless this run is the current run. It reads
+  `GET /organizations/:org/capacity` only when the queue position is
+  greater than 0. An error of any of these stops the
   plan. An error of `run-events` stops the plan too. The CLI reads cost
   estimates, policy checks and task stages only when the run names them.
 - `tofu apply` and `tofu plan -out` send `speculative=false`.
+  `tofu plan -out` also sends `provisional=true`, which makes a saved
+  cloud plan.
 - The CLI sends values of `-var`, `-var-file` and environment variables as
   run variables, with no sensitive flag (`internal/cloud/cloud_variables.go`).
 - After a remote apply, the CLI reads no state version. Its outputs come
@@ -106,7 +111,8 @@ an apply through the TFE API.
     - How `-auto-approve` (`auto-apply=true`) meets `autoApply` of the
       decision record (ADR 229 decision 3).
     - The saved cloud plan of `-out`.
-    - The `remote` backend.
+    - The `remote` backend. It rejects run variables and `plan -out`,
+      and it reads no run-events and no task stages.
     - How runner labels map to agent pools.
 
 Benchmark: CI services with self-hosted runners and the agents of hosted

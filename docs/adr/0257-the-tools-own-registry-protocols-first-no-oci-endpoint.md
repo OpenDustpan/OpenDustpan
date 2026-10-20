@@ -1,6 +1,6 @@
 # 257. Providers and modules: the tools' own registry protocols first, and no OCI endpoint now
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Answers the open question of ADR 170 and the second open question of ADR 177. Accepts part of RFC 10
+Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Answers the protocol part of the open question of ADR 170 and the second open question of ADR 177. Accepts part of RFC 10
 
 ## Context
 
@@ -25,7 +25,7 @@ The facts on 2026-10-20:
   The TFE-compatible API already serves the discovery document.
 - **OCI in OpenTofu.** 1.10.0 added modules from OCI (`oci://` sources)
   and OCI registries as a kind of provider mirror (`oci_mirror` in
-  `provider_installation`). 1.13.0 added credentials for each repository and
+  `provider_installation`). 1.13.0 added transient credentials tracked for each repository and
   `tofu providers lock -oci-mirror`. OCI cannot yet be the primary source
   of a provider. This needs a registry with OCI Distribution 1.1.0
   (<https://opentofu.org/docs/cli/oci_registries/>, the change logs of v1.10

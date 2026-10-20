@@ -42,8 +42,10 @@ account of the team that chose the estimator.
    an operator turns it on for a namespace. Its dependency needs the
    approval of the owner.
 4. **No change to the gates.** A gate on cost reads the facts of ADR 226.
-   The `cost` facts are `available == false` when no estimate arrived, and
-   a gate that reads them fails closed (ADR 226 decision 3).
+   The `cost` facts are `available == false` when no estimate arrived.
+   Built-in gates and starter packs treat `available == false` as deny or
+   approval. The save check forces each other gate to read `available`
+   (ADR 226 decision 3).
 
 Benchmark: AWS and Google Cloud price their own resources and send no
 customer plan to a third party. PCI DSS and ISO 27001 ask for a record of
