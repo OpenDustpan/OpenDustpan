@@ -1689,11 +1689,19 @@ func (s *Updates) cancelJournaled(ctx context.Context, ref Ref, id UpdateID) (Up
 // a manual lock covers it. The error matches ErrUpdateConflict and
 // manuallock.ErrLocked, and names the holder and the reason of the manual lock.
 func (s *Updates) checkManualLock(ctx context.Context, ref Ref, jobID string) error {
-	if s.manual == nil {
+	return refuseManualLock(ctx, s.manual, ref, jobID)
+}
+
+// refuseManualLock returns an error that matches ErrUpdateConflict and
+// manuallock.ErrLocked while a manual lock covers the stack ref, and nil when
+// locks is nil or no lock covers the stack for the request. A lock that cannot
+// be read refuses the request: the check fails closed.
+func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID string) error {
+	if locks == nil {
 		return nil
 	}
 
-	l, err := s.manual.CoveringFor(ctx, collection.UnitRef{
+	l, err := locks.CoveringFor(ctx, collection.UnitRef{
 		Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
 	}, jobID)
 	if errors.Is(err, manuallock.ErrNotLocked) {

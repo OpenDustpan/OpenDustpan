@@ -425,6 +425,15 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 		return err
 	}
 
+	// A manual lock stops the delete of the workspace. The workspace must exist
+	// to be covered: a missing one falls through to the not-found answer of the
+	// store.
+	if w, getErr := s.Get(ctx, ref); getErr == nil {
+		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
+			return fmt.Errorf("delete workspace %s: %w", ref, lockErr)
+		}
+	}
+
 	if w, getErr := s.Get(ctx, ref); getErr == nil {
 		if sweepErr := s.sweepExpiredRows(ctx, w); sweepErr != nil {
 			s.logger.WarnContext(
@@ -804,7 +813,9 @@ type PendingState struct {
 
 // BeginState declares a new state version for the workspace. The caller must
 // hold the lock, or make an unlocked write that allow.Unlocked permits. The
-// content follows through Upload with the returned token.
+// content follows through Upload with the returned token. An unlocked write
+// fails with ErrLocked, matching manuallock.ErrLocked, while a manual lock
+// covers the workspace; a write under the lock of the caller is not refused.
 // It first sweeps the expired pending versions of the workspace with their
 // attempted content, then refuses with ErrTooManyPending when the workspace
 // still holds the maximum pending versions. The sweep is best effort: a
@@ -852,6 +863,16 @@ func (s *Service) BeginState(
 	unlocked, used, err := declareOverrides(w, holder, in, known, auth.Allow)
 	if err != nil {
 		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
+	}
+
+	// A write that holds no lock is not the write of a tool that holds its own
+	// lock, so a manual lock stops it. The check runs before the override is
+	// recorded: a refused write leaves no override entry. A write under the lock
+	// of the caller is never refused here.
+	if unlocked {
+		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
+			return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, lockErr)
+		}
 	}
 
 	if recordErr := recordOverrides(w, used, auth.Record); recordErr != nil {
@@ -2596,6 +2617,15 @@ func (s *Service) checkManualLock(ctx context.Context, id ID, jobID string) erro
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
 		return err
+	}
+
+	return s.refuseManualLock(ctx, w, jobID)
+}
+
+// refuseManualLock is checkManualLock for a workspace that the caller has read.
+func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID string) error {
+	if s.manual == nil {
+		return nil
 	}
 
 	l, err := s.manual.CoveringFor(ctx, collection.UnitRef{

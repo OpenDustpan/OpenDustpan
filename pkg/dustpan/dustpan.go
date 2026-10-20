@@ -1446,8 +1446,14 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		return services{}, err
 	}
 
+	var stackLocks stack.ManualLocks
+	if manual != nil {
+		stackLocks = manual
+	}
+
 	stacks, err := stack.NewService(stack.Config{
 		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now, State: updates, Retention: cfg.softDeleteRetention,
+		ManualLocks: stackLocks,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)

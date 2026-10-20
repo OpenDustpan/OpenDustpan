@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -262,4 +264,148 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newLockedStackService returns the stack service over the store fake of the
+// delete tests, with the manual lock port locks, and the ref it acts on.
+func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Service, *deleteStacks, stack.Ref) {
+	t.Helper()
+
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: &memNamespaces{ns: ns}, Now: func() time.Time { return now }, Region: "local"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	ref, err := stack.ParseRef("acme", "web", "dev")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil}
+
+	svc, err := stack.NewService(stack.Config{
+		Store: store, Namespaces: namespaces, Now: func() time.Time { return now }, State: nil, Retention: 0,
+		ManualLocks: locks,
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	return svc, store, ref
+}
+
+// TestDeleteAndRenameMeetTheManualLock proves the delete, the forced delete and
+// the rename of a stack fail while a manual lock covers it, before the store is
+// reached, with an error that names the holder and the reason. A stack that no
+// manual lock covers reaches the store, and a lock that cannot be read refuses
+// the request.
+func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
+	t.Parallel()
+
+	newName, err := stack.ParseName("prod")
+	if err != nil {
+		t.Fatalf("parse name: %v", err)
+	}
+
+	calls := []struct {
+		name string
+		call func(*stack.Service, stack.Ref) error
+	}{
+		{"Delete", func(s *stack.Service, ref stack.Ref) error { return s.Delete(t.Context(), ref, deleteEntry()) }},
+		{"ForceDelete", func(s *stack.Service, ref stack.Ref) error { return s.ForceDelete(t.Context(), ref, deleteEntry()) }},
+		{"Rename", func(s *stack.Service, ref stack.Ref) error {
+			_, renameErr := s.Rename(t.Context(), ref, newName)
+
+			return renameErr
+		}},
+	}
+
+	for _, c := range calls {
+		t.Run(c.name+"/covered", func(t *testing.T) {
+			t.Parallel()
+
+			locks := answering()
+			svc, store, ref := newLockedStackService(t, locks)
+
+			checkRefusal(t, c.call(svc, ref), locks)
+
+			if got := store.calls(); got != 0 {
+				t.Errorf("store delete calls = %d, want 0", got)
+			}
+		})
+
+		t.Run(c.name+"/not covered", func(t *testing.T) {
+			t.Parallel()
+
+			svc, _, ref := newLockedStackService(t, failing(manuallock.ErrNotLocked))
+
+			err := c.call(svc, ref)
+			if errors.Is(err, manuallock.ErrLocked) || errors.Is(err, stack.ErrUpdateConflict) {
+				t.Fatalf("err = %v, want the request to reach the store", err)
+			}
+		})
+
+		t.Run(c.name+"/lock cannot be read", func(t *testing.T) {
+			t.Parallel()
+
+			svc, store, ref := newLockedStackService(t, failing(errManualLockRead))
+
+			if err := c.call(svc, ref); !errors.Is(err, errManualLockRead) {
+				t.Fatalf("err = %v, want the read failure", err)
+			}
+
+			if got := store.calls(); got != 0 {
+				t.Errorf("store delete calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
+// TestImportAndRestoreMeetTheManualLock proves `stack import` and a restore run
+// as updates of the kinds import and restore, so a manual lock that covers the
+// stack refuses them at the start. The state stays as it was and no update is
+// left running.
+func TestImportAndRestoreMeetTheManualLock(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+
+	finishVersion(t, f, `{"v":1}`)
+
+	locks := answering()
+	svc := withManualLocks(t, f, locks)
+
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{"import", func() error {
+			_, err := svc.Import(ctx, f.ref, "carol@example.com", checkpoint(0, `{"imported":true}`))
+
+			return err
+		}},
+		{"restore", func() error {
+			_, err := svc.Restore(ctx, f.ref, 1, "bob@example.com")
+
+			return err
+		}},
+	}
+
+	for _, c := range calls {
+		checkRefusal(t, c.call(), locks)
+		locks.asked = nil
+		locks.jobs = nil
+	}
+
+	checkRestoreExport(t, f, `{"v":1}`)
+	checkLockFree(t, f)
 }

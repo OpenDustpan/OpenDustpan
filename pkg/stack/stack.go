@@ -271,6 +271,9 @@ type Config struct {
 	// Retention is how long a deleted stack stays before its final delete
 	// (ADR 47, decision 2). Zero means inventory.DeletedRetention.
 	Retention time.Duration
+	// ManualLocks refuses the delete and the rename of a stack that a manual
+	// lock covers. A nil port refuses nothing.
+	ManualLocks ManualLocks
 }
 
 // Service implements the stack use cases.
@@ -280,6 +283,7 @@ type Service struct {
 	now        func() time.Time
 	state      LatestState
 	retention  time.Duration
+	manual     ManualLocks
 }
 
 // NewService returns a Service. Store and Namespaces are required; Now defaults to time.Now.
@@ -304,7 +308,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, now: now,
-		state: cfg.State, retention: retention,
+		state: cfg.State, retention: retention, manual: cfg.ManualLocks,
 	}, nil
 }
 
@@ -378,11 +382,16 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 // allowed in its home region. The delete and the audit entry e, stamped with
 // the time of the delete, commit together or not at all (ADR 60, fail
 // closed). It returns ErrNotFound if the stack does not exist, and
-// ErrUpdateConflict while a mutating update of the stack runs.
+// ErrUpdateConflict while a mutating update of the stack runs or while a
+// manual lock covers the stack.
 func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
 	if err != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
+	}
+
+	if lockErr := refuseManualLock(ctx, s.manual, ref, ""); lockErr != nil {
+		return fmt.Errorf("delete stack %s: %w", ref, lockErr)
 	}
 
 	fence := ns.Fence()
@@ -434,11 +443,15 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 // namespace's failover version and only allowed in its home region. It
 // writes the audit entry e as Delete does. It returns ErrNotFound if the
 // stack does not exist, and ErrUpdateConflict while a mutating update of the
-// stack runs.
+// stack runs or while a manual lock covers the stack.
 func (s *Service) ForceDelete(ctx context.Context, ref Ref, e audit.Entry) error {
 	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
 	if err != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
+	}
+
+	if lockErr := refuseManualLock(ctx, s.manual, ref, ""); lockErr != nil {
+		return fmt.Errorf("delete stack %s: %w", ref, lockErr)
 	}
 
 	e.At = s.now().UTC()
@@ -530,11 +543,19 @@ func (s *Service) UpdateTags(
 
 // Rename changes the stack name of oldRef to newName and returns the renamed
 // stack. The stack ID stays the same. The write is fenced on the namespace's
-// failover version and only allowed in its home region.
+// failover version and only allowed in its home region. It returns
+// ErrUpdateConflict, matching manuallock.ErrLocked, while a manual lock covers
+// the stack.
 func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, error) {
 	ns, err := s.namespaces.WritableHere(ctx, oldRef.Namespace)
 	if err != nil {
 		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, err)
+	}
+
+	// A rename that a manual lock allowed would leave the state of the stack
+	// under the old name: the import that a rename needs next meets the lock.
+	if lockErr := refuseManualLock(ctx, s.manual, oldRef, ""); lockErr != nil {
+		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, lockErr)
 	}
 
 	renameErr := s.store.RenameStack(ctx, oldRef, newName, ns.Fence())

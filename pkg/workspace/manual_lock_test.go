@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -308,5 +309,129 @@ func TestLockRequestOfAnEarlierJobPhasePasses(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestDeleteMeetsTheManualLock proves the delete of a workspace fails while a
+// manual lock covers it, names the holder and the reason, and leaves the
+// workspace in place. A workspace that no manual lock covers is deleted.
+func TestDeleteMeetsTheManualLock(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		locks   func() *fakeManualLocks
+		wantErr error
+	}{
+		{name: "covered", locks: func() *fakeManualLocks { return answering(heldCollectionLock()) }, wantErr: manuallock.ErrLocked},
+		{name: "not covered", locks: func() *fakeManualLocks { return failing(manuallock.ErrNotLocked) }, wantErr: nil},
+		{name: "the lock cannot be read", locks: func() *fakeManualLocks { return failing(errManualLockRead) }, wantErr: errManualLockRead},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			svc := withManualLocks(t, f, tc.locks())
+
+			err := svc.Delete(t.Context(), f.ws.Ref, retentionEntry())
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Delete = %v, want %v", err, tc.wantErr)
+			}
+
+			_, getErr := svc.GetByID(t.Context(), f.ws.ID)
+			if tc.wantErr == nil {
+				if !errors.Is(getErr, workspace.ErrNotFound) {
+					t.Errorf("workspace after the delete: %v, want ErrNotFound", getErr)
+				}
+
+				return
+			}
+
+			if getErr != nil {
+				t.Errorf("workspace after the refused delete: %v, want it in place", getErr)
+			}
+
+			if errors.Is(tc.wantErr, manuallock.ErrLocked) {
+				checkLockedError(t, err)
+			}
+		})
+	}
+}
+
+// TestUnlockedWriteMeetsTheManualLock proves a state declare that holds no lock
+// fails while a manual lock covers the workspace, even with the override on, and
+// writes no override entry. A declare under the lock of the caller is not
+// refused: the holder of a tool lock keeps writing.
+func TestUnlockedWriteMeetsTheManualLock(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	allow := namespace.Overrides{Unlocked: true, Forced: false}
+
+	if _, err := f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, allow); err != nil {
+		t.Fatalf("namespace switch: %v", err)
+	}
+
+	if _, err := f.svc.SetOverrides(ctx, f.ws.ID, allow); err != nil {
+		t.Fatalf("unit switch: %v", err)
+	}
+
+	svc := withManualLocks(t, f, answering(heldCollectionLock()))
+	recorded := 0
+
+	_, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("lin-1", 1, smallDoc),
+		authority(allow, func(workspace.Override) error { recorded++; return nil }))
+	checkLockedError(t, err)
+
+	if recorded != 0 {
+		t.Errorf("override entries = %d, want 0: a refused write records no override", recorded)
+	}
+
+	// A tool lock taken before the manual lock stays usable for its holder.
+	if _, lockErr := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); lockErr != nil {
+		t.Fatalf("lock before the manual lock: %v", lockErr)
+	}
+
+	pending, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("lin-1", 1, smallDoc), authority(allow, nil))
+	if err != nil {
+		t.Fatalf("declare under the lock of the caller: %v", err)
+	}
+
+	if pending.Version.UnlockedWrite {
+		t.Error("declare under the lock of the caller carries the unlocked-write flag")
+	}
+}
+
+// TestRestoreMeetsTheManualLock proves a restore that has to take the tool lock
+// first fails while a manual lock covers the workspace, and that a restore under
+// the lock of the caller is not refused.
+func TestRestoreMeetsTheManualLock(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "{\"v\":1}")
+	pushVersion(t, f, 2, "{\"v\":2}")
+
+	mustUnlock(t, f)
+
+	svc := withManualLocks(t, f, answering(heldCollectionLock()))
+
+	_, err := svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	checkLockedError(t, err)
+	checkHistoryTotal(t, f, 2)
+
+	if _, lockErr := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); lockErr != nil {
+		t.Fatalf("lock before the manual lock: %v", lockErr)
+	}
+
+	if _, err := svc.Restore(ctx, f.ws.ID, first.ID, "alice"); err != nil {
+		t.Fatalf("restore under the lock of the caller: %v", err)
 	}
 }
