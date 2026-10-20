@@ -1,0 +1,10 @@
+package: dustpan
+generate:
+  models: true
+  client: true
+compatibility:
+  # Without it, a constant is named after its value only (Dark), and a later
+  # enum with the same value renames the constant.
+  always-prefix-enum-values: true
+output-options:
+  nullable-type: true

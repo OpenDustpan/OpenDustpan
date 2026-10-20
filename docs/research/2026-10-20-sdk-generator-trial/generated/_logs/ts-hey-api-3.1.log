@@ -1,0 +1,5 @@
+[90m@hey-api/openapi-ts v0.99.0[39m
+
+[90m[Job 1] [39m[90m~[39m [36mGenerating...[39m
+[90m[Job 1] [39m[36m  [1] [39m<trial>/fixture/openapi-3.1.json
+[90m[Job 1] [39m[32m✓[39m [96m<out>/ts-hey-api-3.1[39m [90m· 4 files · 201ms[39m

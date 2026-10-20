@@ -1,0 +1,987 @@
+{
+  "components": {
+    "headers": {
+      "ETag": {
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "parameters": {
+      "Id": {
+        "in": "path",
+        "name": "id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IdempotencyKey": {
+        "in": "header",
+        "name": "Idempotency-Key",
+        "required": false,
+        "schema": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "IfMatch": {
+        "in": "header",
+        "name": "If-Match",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IfMatchRequired": {
+        "in": "header",
+        "name": "If-Match",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Namespace": {
+        "description": "A namespace name, or - for a read across namespaces.",
+        "in": "path",
+        "name": "namespace",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PageSize": {
+        "in": "query",
+        "name": "pageSize",
+        "schema": {
+          "default": 50,
+          "format": "int32",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "PageToken": {
+        "in": "query",
+        "name": "pageToken",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ToolFilter": {
+        "in": "query",
+        "name": "tool",
+        "schema": {
+          "$ref": "#/components/schemas/Tool"
+        }
+      },
+      "UnitId": {
+        "in": "path",
+        "name": "unit_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "description": "An error"
+      }
+    },
+    "schemas": {
+      "Backup": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BackupState"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "BackupCheck": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "BackupCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BackupList": {
+        "properties": {
+          "backups": {
+            "items": {
+              "$ref": "#/components/schemas/Backup"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backups",
+          "nextPageToken"
+        ],
+        "type": "object"
+      },
+      "BackupState": {
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "Capabilities": {
+        "properties": {
+          "apiVersion": {
+            "example": "v1",
+            "type": "string"
+          },
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/Module"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "apiVersion"
+        ],
+        "type": "object"
+      },
+      "ChangeOrder": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "approved",
+              "rejected",
+              "applied"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Error": {
+        "description": "The error shape of the tool-neutral API. code is the HTTP status.",
+        "properties": {
+          "code": {
+            "example": 404,
+            "format": "int32",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              ]
+            },
+            "maxProperties": 8,
+            "type": "object"
+          },
+          "errorCode": {
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*(\\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "Lock": {
+        "properties": {
+          "holder": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "holder",
+          "since",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "Module": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "OpenTofuDetails": {
+        "properties": {
+          "terraformVersion": {
+            "nullable": true,
+            "type": "string"
+          },
+          "tool": {
+            "enum": [
+              "opentofu"
+            ],
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "workspace"
+        ],
+        "type": "object"
+      },
+      "Preferences": {
+        "properties": {
+          "extra": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "language": {
+            "nullable": true,
+            "type": "string"
+          },
+          "pinnedUnits": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "theme": {
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PulumiDetails": {
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "stack": {
+            "type": "string"
+          },
+          "tool": {
+            "enum": [
+              "pulumi"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "project",
+          "stack"
+        ],
+        "type": "object"
+      },
+      "Tool": {
+        "enum": [
+          "pulumi",
+          "opentofu"
+        ],
+        "type": "string"
+      },
+      "Unit": {
+        "properties": {
+          "details": {
+            "$ref": "#/components/schemas/UnitDetails"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "lastChange": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "lock": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Lock"
+              }
+            ],
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "resourceCount": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "tool": {
+            "$ref": "#/components/schemas/Tool"
+          },
+          "unitId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "unitId",
+          "namespace",
+          "name",
+          "tool",
+          "lastChange",
+          "details"
+        ],
+        "type": "object"
+      },
+      "UnitDetails": {
+        "discriminator": {
+          "mapping": {
+            "opentofu": "#/components/schemas/OpenTofuDetails",
+            "pulumi": "#/components/schemas/PulumiDetails"
+          },
+          "propertyName": "tool"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/PulumiDetails"
+          },
+          {
+            "$ref": "#/components/schemas/OpenTofuDetails"
+          }
+        ]
+      },
+      "UnitList": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/Unit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "units",
+          "nextPageToken"
+        ],
+        "type": "object"
+      },
+      "Verdict": {
+        "additionalProperties": false,
+        "properties": {
+          "comment": {
+            "nullable": true,
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "license": {
+      "name": "Apache-2.0"
+    },
+    "title": "OpenDustpan API (trial fixture)",
+    "version": "0.1.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/dustpan/v1/backups": {
+      "get": {
+        "operationId": "listBackups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/PageToken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "List backups",
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          "installation:backup"
+        ]
+      },
+      "post": {
+        "operationId": "createBackup",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupCreate"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backup"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Start a backup",
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          "installation:backup"
+        ]
+      }
+    },
+    "/api/dustpan/v1/backups/{id}": {
+      "delete": {
+        "operationId": "deleteBackup",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatchRequired"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Delete a backup",
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          "installation:backup"
+        ]
+      },
+      "get": {
+        "operationId": "getBackup",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backup"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Read a backup",
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          "installation:backup"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ]
+    },
+    "/api/dustpan/v1/backups/{id}/check": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "operationId": "checkBackup",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCheck"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Check a backup",
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          "installation:backup"
+        ]
+      }
+    },
+    "/api/dustpan/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "summary": "Read the API version and the optional modules",
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
+    "/api/dustpan/v1/me/preferences": {
+      "get": {
+        "operationId": "getPreferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Read the preferences of the caller",
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          "caller:read"
+        ]
+      },
+      "patch": {
+        "operationId": "updatePreferences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/Preferences"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Change the preferences of the caller",
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          "caller:manage-preferences"
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/change-orders/{id}/verdict": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Namespace"
+        },
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "operationId": "setChangeOrderVerdict",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Verdict"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeOrder"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Approve or reject a change order",
+        "tags": [
+          "change-orders"
+        ],
+        "x-dustpan-actions": [
+          "changeorder:decide"
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/deleted-units/{unit_id}/restore": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Namespace"
+        },
+        {
+          "$ref": "#/components/parameters/UnitId"
+        }
+      ],
+      "post": {
+        "operationId": "restoreDeletedUnit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unit"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Restore a deleted unit",
+        "tags": [
+          "units"
+        ],
+        "x-dustpan-actions": [
+          "unit:restore"
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units": {
+      "get": {
+        "operationId": "listUnits",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/PageToken"
+          },
+          {
+            "$ref": "#/components/parameters/ToolFilter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnitList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "List the units of a namespace",
+        "tags": [
+          "units"
+        ],
+        "x-dustpan-actions": [
+          "unit:read"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Namespace"
+        }
+      ]
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}": {
+      "get": {
+        "operationId": "getUnit",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unit"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Read a unit",
+        "tags": [
+          "units"
+        ],
+        "x-dustpan-actions": [
+          "unit:read"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Namespace"
+        },
+        {
+          "$ref": "#/components/parameters/UnitId"
+        }
+      ]
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    }
+  ],
+  "tags": [
+    {
+      "name": "installation"
+    },
+    {
+      "name": "units"
+    },
+    {
+      "name": "backups"
+    },
+    {
+      "name": "me"
+    },
+    {
+      "name": "change-orders"
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=45941 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+[main] INFO  o.o.codegen.DefaultGenerator - Generating with dryRun=false
+[main] INFO  o.o.c.ignore.CodegenIgnoreProcessor - No .openapi-generator-ignore file found.
+[main] INFO  o.o.codegen.DefaultGenerator - OpenAPI Generator: csharp (client)
+[main] INFO  o.o.codegen.DefaultGenerator - Generator 'csharp' is considered stable.
+[main] INFO  o.o.c.l.AbstractCSharpCodegen - Environment variable CSHARP_POST_PROCESS_FILE not defined so the C# code may not be properly formatted by uncrustify (0.66 or later) or other code formatter. To define it, try `export CSHARP_POST_PROCESS_FILE="/usr/local/bin/uncrustify --no-backup" && export UNCRUSTIFY_CONFIG=/path/to/uncrustify-rules.cfg` (Linux/Mac). Note: replace /path/to with the location of uncrustify-rules.cfg
+[main] INFO  o.o.c.l.AbstractCSharpCodegen - NOTE: To enable file post-processing, 'enablePostProcessFile' must be set to `true` (--enable-post-process-file for CLI).
+[main] INFO  o.o.c.languages.CSharpClientCodegen - Generating code for .NET Framework net8.0
+[main] INFO  o.o.codegen.InlineModelResolver - Inline schema created as Error_errorArgs_value. To have complete control of the model name, set the `title` field or use the modelNameMapping option (e.g. --model-name-mappings Error_errorArgs_value=NewModel,ModelA=NewModelA in CLI) or inlineSchemaNameMapping option (--inline-schema-name-mappings Error_errorArgs_value=NewModel,ModelA=NewModelA in CLI).
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Backup.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Backup.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/BackupCheck.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/BackupCheck.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/BackupCreate.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/BackupCreate.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/BackupList.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/BackupList.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/BackupState.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/BackupState.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Capabilities.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Capabilities.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/ChangeOrder.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/ChangeOrder.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Error.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Error.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/ErrorErrorArgsValue.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/ErrorErrorArgsValue.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Lock.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Lock.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Module.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Module.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/OpenTofuDetails.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/OpenTofuDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Preferences.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Preferences.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/PulumiDetails.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/PulumiDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Tool.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Tool.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Unit.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Unit.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/UnitDetails.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/UnitDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/UnitList.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/UnitList.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Model/Verdict.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/models/Verdict.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Api/BackupsApi.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/apis/BackupsApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Api/ChangeOrdersApi.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/apis/ChangeOrdersApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Api/InstallationApi.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/apis/InstallationApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Api/MeApi.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/apis/MeApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Api/UnitsApi.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/apis/UnitsApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client.Test/README.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/README.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/.gitignore
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/OpenDustpan.Client.sln
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/appveyor.yml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/scripts/git_push.sh
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/docs/scripts/git_push.ps1
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/OpenDustpan.Client.csproj
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/README.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/TokenProvider`1.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/RateLimitProvider`1.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/TokenContainer`1.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/TokenBase.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/ApiException.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/ApiResponse`1.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/ClientUtils.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/HostConfiguration.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/ApiFactory.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/DateTimeJsonConverter.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/DateTimeNullableJsonConverter.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/DateOnlyJsonConverter.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/DateOnlyNullableJsonConverter.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/ApiResponseEventArgs.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/ExceptionEventArgs.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/JsonSerializerOptionsProvider.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/CookieContainer.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/Option.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/FileParameter.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Api/IApi.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Logging/RestLogEvents.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Extensions/IHttpClientBuilderExtensions.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Extensions/IHostBuilderExtensions.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Extensions/IServiceCollectionExtensions.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/src/OpenDustpan.Client/Client/BearerToken.cs
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/api/openapi.yaml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/.openapi-generator-ignore
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/.openapi-generator/VERSION
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/csharp-openapi-generator-3.0/.openapi-generator/FILES
+################################################################################
+# Thanks for using OpenAPI Generator.                                          #
+# Please consider donating to help us maintain this project ?                 #
+# https://opencollective.com/openapi_generator/donate                          #
+#                                                                              #
+# This generator's contributed by Jim Schubert (https://github.com/jimschubert)#
+# Please support his work directly via https://patreon.com/jimschubert ?      #
+################################################################################

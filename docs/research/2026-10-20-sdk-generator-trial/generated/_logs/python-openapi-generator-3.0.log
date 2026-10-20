@@ -1,0 +1,91 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=45941 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+[main] INFO  o.o.codegen.DefaultGenerator - Generating with dryRun=false
+[main] INFO  o.o.c.ignore.CodegenIgnoreProcessor - No .openapi-generator-ignore file found.
+[main] INFO  o.o.codegen.DefaultGenerator - OpenAPI Generator: python (client)
+[main] INFO  o.o.codegen.DefaultGenerator - Generator 'python' is considered stable.
+[main] INFO  o.o.c.l.AbstractPythonCodegen - Environment variable PYTHON_POST_PROCESS_FILE not defined so the Python code may not be properly formatted. To define it, try 'export PYTHON_POST_PROCESS_FILE="/usr/local/bin/yapf -i"' (Linux/Mac)
+[main] INFO  o.o.c.l.AbstractPythonCodegen - NOTE: To enable file post-processing, 'enablePostProcessFile' must be set to `true` (--enable-post-process-file for CLI).
+[main] INFO  o.o.codegen.InlineModelResolver - Inline schema created as Error_errorArgs_value. To have complete control of the model name, set the `title` field or use the modelNameMapping option (e.g. --model-name-mappings Error_errorArgs_value=NewModel,ModelA=NewModelA in CLI) or inlineSchemaNameMapping option (--inline-schema-name-mappings Error_errorArgs_value=NewModel,ModelA=NewModelA in CLI).
+[main] WARN  o.o.codegen.utils.ModelUtils - Failed to get the schema name: null
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/backup.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Backup.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/backup_check.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/BackupCheck.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/backup_create.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/BackupCreate.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/backup_list.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/BackupList.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/backup_state.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/BackupState.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/capabilities.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Capabilities.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/change_order.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/ChangeOrder.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/error.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Error.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/error_error_args_value.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/ErrorErrorArgsValue.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/lock.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Lock.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/module.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Module.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/open_tofu_details.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/OpenTofuDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/preferences.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Preferences.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/pulumi_details.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/PulumiDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/tool.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Tool.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/unit.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Unit.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/unit_details.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/UnitDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/unit_list.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/UnitList.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/verdict.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/Verdict.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api/backups_api.py
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/python-openapi-generator-3.0/test/test_backups_api.py (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/BackupsApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api/change_orders_api.py
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/python-openapi-generator-3.0/test/test_change_orders_api.py (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/ChangeOrdersApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api/installation_api.py
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/python-openapi-generator-3.0/test/test_installation_api.py (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/InstallationApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api/me_api.py
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/python-openapi-generator-3.0/test/test_me_api.py (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/MeApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api/units_api.py
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/python-openapi-generator-3.0/test/test_units_api.py (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/docs/UnitsApi.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/README.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/tox.ini
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/test-requirements.txt
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/requirements.txt
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/setup.cfg
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/git_push.sh
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/.gitignore
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/.travis.yml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/.github/workflows/python.yml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/.gitlab-ci.yml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/setup.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/pyproject.toml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/py.typed
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/configuration.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/__init__.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/models/__init__.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api/__init__.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/exceptions.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api_client.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/api_response.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/opendustpan/rest.py
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/.openapi-generator-ignore
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/.openapi-generator/VERSION
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/python-openapi-generator-3.0/.openapi-generator/FILES
+############################################################################################
+# Thanks for using OpenAPI Generator.                                                      #
+# We appreciate your support! Please consider donating to help us maintain this project.   #
+# https://opencollective.com/openapi_generator/donate                                      #
+############################################################################################

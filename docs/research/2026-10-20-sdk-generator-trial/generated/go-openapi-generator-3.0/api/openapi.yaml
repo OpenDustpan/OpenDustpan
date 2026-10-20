@@ -1,0 +1,961 @@
+openapi: 3.0.3
+info:
+  license:
+    name: Apache-2.0
+  title: OpenDustpan API (trial fixture)
+  version: 0.1.0
+servers:
+- url: http://localhost:8080
+security:
+- bearerAuth: []
+tags:
+- name: installation
+- name: units
+- name: backups
+- name: me
+- name: change-orders
+paths:
+  /api/dustpan/v1/backups:
+    get:
+      operationId: listBackups
+      parameters:
+      - explode: true
+        in: query
+        name: pageSize
+        required: false
+        schema:
+          default: 50
+          format: int32
+          maximum: 500
+          minimum: 1
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: pageToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupList"
+          description: OK
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: List backups
+      tags:
+      - backups
+      x-dustpan-actions:
+      - installation:backup
+    post:
+      operationId: createBackup
+      parameters:
+      - explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          maxLength: 255
+          minLength: 1
+          pattern: "^[\\x21-\\x7e]+$"
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupCreate"
+        required: false
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Backup"
+          description: Accepted
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Start a backup
+      tags:
+      - backups
+      x-dustpan-actions:
+      - installation:backup
+  /api/dustpan/v1/backups/{id}:
+    delete:
+      operationId: deleteBackup
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          maxLength: 255
+          minLength: 1
+          pattern: "^[\\x21-\\x7e]+$"
+          type: string
+        style: simple
+      - explode: false
+        in: header
+        name: If-Match
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Deleted
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Delete a backup
+      tags:
+      - backups
+      x-dustpan-actions:
+      - installation:backup
+    get:
+      operationId: getBackup
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Backup"
+          description: OK
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Read a backup
+      tags:
+      - backups
+      x-dustpan-actions:
+      - installation:backup
+  /api/dustpan/v1/backups/{id}/check:
+    post:
+      operationId: checkBackup
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          maxLength: 255
+          minLength: 1
+          pattern: "^[\\x21-\\x7e]+$"
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupCheck"
+          description: OK
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Check a backup
+      tags:
+      - backups
+      x-dustpan-actions:
+      - installation:backup
+  /api/dustpan/v1/capabilities:
+    get:
+      operationId: getCapabilities
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+          description: OK
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      security: []
+      summary: Read the API version and the optional modules
+      tags:
+      - installation
+      x-dustpan-actions: []
+  /api/dustpan/v1/me/preferences:
+    get:
+      operationId: getPreferences
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preferences"
+          description: OK
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Read the preferences of the caller
+      tags:
+      - me
+      x-dustpan-actions:
+      - caller:read
+    patch:
+      operationId: updatePreferences
+      parameters:
+      - explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          maxLength: 255
+          minLength: 1
+          pattern: "^[\\x21-\\x7e]+$"
+          type: string
+        style: simple
+      - explode: false
+        in: header
+        name: If-Match
+        required: false
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/Preferences"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preferences"
+          description: OK
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Change the preferences of the caller
+      tags:
+      - me
+      x-dustpan-actions:
+      - caller:manage-preferences
+  /api/dustpan/v1/namespaces/{namespace}/change-orders/{id}/verdict:
+    post:
+      operationId: setChangeOrderVerdict
+      parameters:
+      - description: "A namespace name, or - for a read across namespaces."
+        explode: false
+        in: path
+        name: namespace
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          maxLength: 255
+          minLength: 1
+          pattern: "^[\\x21-\\x7e]+$"
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Verdict"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeOrder"
+          description: OK
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Approve or reject a change order
+      tags:
+      - change-orders
+      x-dustpan-actions:
+      - changeorder:decide
+  /api/dustpan/v1/namespaces/{namespace}/deleted-units/{unit_id}/restore:
+    post:
+      operationId: restoreDeletedUnit
+      parameters:
+      - description: "A namespace name, or - for a read across namespaces."
+        explode: false
+        in: path
+        name: namespace
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: unit_id
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          maxLength: 255
+          minLength: 1
+          pattern: "^[\\x21-\\x7e]+$"
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Unit"
+          description: OK
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Restore a deleted unit
+      tags:
+      - units
+      x-dustpan-actions:
+      - unit:restore
+  /api/dustpan/v1/namespaces/{namespace}/units:
+    get:
+      operationId: listUnits
+      parameters:
+      - description: "A namespace name, or - for a read across namespaces."
+        explode: false
+        in: path
+        name: namespace
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: pageSize
+        required: false
+        schema:
+          default: 50
+          format: int32
+          maximum: 500
+          minimum: 1
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: pageToken
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: tool
+        required: false
+        schema:
+          $ref: "#/components/schemas/Tool"
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitList"
+          description: OK
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: List the units of a namespace
+      tags:
+      - units
+      x-dustpan-actions:
+      - unit:read
+  /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}:
+    get:
+      operationId: getUnit
+      parameters:
+      - description: "A namespace name, or - for a read across namespaces."
+        explode: false
+        in: path
+        name: namespace
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: unit_id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Unit"
+          description: OK
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: An error
+      summary: Read a unit
+      tags:
+      - units
+      x-dustpan-actions:
+      - unit:read
+components:
+  headers:
+    ETag:
+      explode: false
+      schema:
+        type: string
+      style: simple
+  parameters:
+    Id:
+      explode: false
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+      style: simple
+    IdempotencyKey:
+      explode: false
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        maxLength: 255
+        minLength: 1
+        pattern: "^[\\x21-\\x7e]+$"
+        type: string
+      style: simple
+    IfMatch:
+      explode: false
+      in: header
+      name: If-Match
+      required: false
+      schema:
+        type: string
+      style: simple
+    IfMatchRequired:
+      explode: false
+      in: header
+      name: If-Match
+      required: true
+      schema:
+        type: string
+      style: simple
+    Namespace:
+      description: "A namespace name, or - for a read across namespaces."
+      explode: false
+      in: path
+      name: namespace
+      required: true
+      schema:
+        type: string
+      style: simple
+    PageSize:
+      explode: true
+      in: query
+      name: pageSize
+      required: false
+      schema:
+        default: 50
+        format: int32
+        maximum: 500
+        minimum: 1
+        type: integer
+      style: form
+    PageToken:
+      explode: true
+      in: query
+      name: pageToken
+      required: false
+      schema:
+        type: string
+      style: form
+    ToolFilter:
+      explode: true
+      in: query
+      name: tool
+      required: false
+      schema:
+        $ref: "#/components/schemas/Tool"
+      style: form
+    UnitId:
+      explode: false
+      in: path
+      name: unit_id
+      required: true
+      schema:
+        type: string
+      style: simple
+  responses:
+    Error:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+      description: An error
+  schemas:
+    Backup:
+      example:
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        finishedAt: 2000-01-23T04:56:07.000+00:00
+        id: id
+        sizeBytes: 0
+        state: pending
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        finishedAt:
+          format: date-time
+          nullable: true
+          type: string
+        id:
+          type: string
+        sizeBytes:
+          format: int64
+          nullable: true
+          type: integer
+        state:
+          $ref: "#/components/schemas/BackupState"
+      required:
+      - createdAt
+      - id
+      - state
+      type: object
+    BackupCheck:
+      example:
+        ok: true
+        problems:
+        - problems
+        - problems
+      properties:
+        ok:
+          type: boolean
+        problems:
+          items:
+            type: string
+          type: array
+      required:
+      - ok
+      - problems
+      type: object
+    BackupCreate:
+      additionalProperties: false
+      example:
+        note: note
+      properties:
+        note:
+          maxLength: 256
+          type: string
+      type: object
+    BackupList:
+      example:
+        backups:
+        - createdAt: 2000-01-23T04:56:07.000+00:00
+          finishedAt: 2000-01-23T04:56:07.000+00:00
+          id: id
+          sizeBytes: 0
+          state: pending
+        - createdAt: 2000-01-23T04:56:07.000+00:00
+          finishedAt: 2000-01-23T04:56:07.000+00:00
+          id: id
+          sizeBytes: 0
+          state: pending
+        nextPageToken: nextPageToken
+      properties:
+        backups:
+          items:
+            $ref: "#/components/schemas/Backup"
+          type: array
+        nextPageToken:
+          type: string
+      required:
+      - backups
+      - nextPageToken
+      type: object
+    BackupState:
+      enum:
+      - pending
+      - running
+      - succeeded
+      - failed
+      type: string
+    Capabilities:
+      example:
+        apiVersion: v1
+        modules:
+        - enabled: true
+          name: name
+        - enabled: true
+          name: name
+      properties:
+        apiVersion:
+          example: v1
+          type: string
+        modules:
+          items:
+            $ref: "#/components/schemas/Module"
+          type: array
+      required:
+      - apiVersion
+      type: object
+    ChangeOrder:
+      example:
+        id: id
+        status: open
+      properties:
+        id:
+          type: string
+        status:
+          enum:
+          - open
+          - approved
+          - rejected
+          - applied
+          type: string
+      required:
+      - id
+      - status
+      type: object
+    Error:
+      description: The error shape of the tool-neutral API. code is the HTTP status.
+      example:
+        code: 404
+        errorArgs:
+          key: Error_errorArgs_value
+        errorCode: errorCode
+        message: message
+      properties:
+        code:
+          example: 404
+          format: int32
+          type: integer
+        errorArgs:
+          additionalProperties:
+            $ref: "#/components/schemas/Error_errorArgs_value"
+          maxProperties: 8
+          type: object
+        errorCode:
+          pattern: "^[a-z][a-z0-9]*(-[a-z0-9]+)*(\\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$"
+          type: string
+        message:
+          type: string
+      required:
+      - code
+      - message
+      type: object
+    Lock:
+      properties:
+        holder:
+          type: string
+        operation:
+          type: string
+        since:
+          format: date-time
+          type: string
+      required:
+      - holder
+      - operation
+      - since
+      type: object
+    Module:
+      example:
+        enabled: true
+        name: name
+      properties:
+        enabled:
+          type: boolean
+        name:
+          type: string
+      required:
+      - enabled
+      - name
+      type: object
+    OpenTofuDetails:
+      properties:
+        terraformVersion:
+          nullable: true
+          type: string
+        tool:
+          enum:
+          - opentofu
+          type: string
+        workspace:
+          type: string
+      required:
+      - tool
+      - workspace
+      type: object
+    Preferences:
+      example:
+        extra:
+          key: ""
+        language: language
+        pinnedUnits:
+        - pinnedUnits
+        - pinnedUnits
+        theme: system
+      properties:
+        extra:
+          additionalProperties: true
+          type: object
+        language:
+          nullable: true
+          type: string
+        pinnedUnits:
+          items:
+            type: string
+          type: array
+        theme:
+          enum:
+          - system
+          - light
+          - dark
+          type: string
+      type: object
+    PulumiDetails:
+      example:
+        project: project
+        stack: stack
+        tool: pulumi
+      properties:
+        project:
+          type: string
+        stack:
+          type: string
+        tool:
+          enum:
+          - pulumi
+          type: string
+      required:
+      - project
+      - stack
+      - tool
+      type: object
+    Tool:
+      enum:
+      - pulumi
+      - opentofu
+      type: string
+    Unit:
+      example:
+        details:
+          project: project
+          stack: stack
+          tool: pulumi
+        labels:
+          key: labels
+        lastChange: 2000-01-23T04:56:07.000+00:00
+        lock: ""
+        name: name
+        namespace: namespace
+        resourceCount: 0
+        tool: pulumi
+        unitId: unitId
+      properties:
+        details:
+          $ref: "#/components/schemas/UnitDetails"
+        labels:
+          additionalProperties:
+            type: string
+          type: object
+        lastChange:
+          format: date-time
+          type: string
+        lock:
+          allOf:
+          - $ref: "#/components/schemas/Lock"
+          nullable: true
+        name:
+          type: string
+        namespace:
+          type: string
+        resourceCount:
+          format: int64
+          nullable: true
+          type: integer
+        tool:
+          $ref: "#/components/schemas/Tool"
+        unitId:
+          type: string
+      required:
+      - details
+      - lastChange
+      - name
+      - namespace
+      - tool
+      - unitId
+      type: object
+    UnitDetails:
+      discriminator:
+        mapping:
+          opentofu: "#/components/schemas/OpenTofuDetails"
+          pulumi: "#/components/schemas/PulumiDetails"
+        propertyName: tool
+      oneOf:
+      - $ref: "#/components/schemas/PulumiDetails"
+      - $ref: "#/components/schemas/OpenTofuDetails"
+    UnitList:
+      example:
+        nextPageToken: nextPageToken
+        units:
+        - details:
+            project: project
+            stack: stack
+            tool: pulumi
+          labels:
+            key: labels
+          lastChange: 2000-01-23T04:56:07.000+00:00
+          lock: ""
+          name: name
+          namespace: namespace
+          resourceCount: 0
+          tool: pulumi
+          unitId: unitId
+        - details:
+            project: project
+            stack: stack
+            tool: pulumi
+          labels:
+            key: labels
+          lastChange: 2000-01-23T04:56:07.000+00:00
+          lock: ""
+          name: name
+          namespace: namespace
+          resourceCount: 0
+          tool: pulumi
+          unitId: unitId
+      properties:
+        nextPageToken:
+          type: string
+        units:
+          items:
+            $ref: "#/components/schemas/Unit"
+          type: array
+      required:
+      - nextPageToken
+      - units
+      type: object
+    Verdict:
+      additionalProperties: false
+      example:
+        comment: comment
+        decision: approve
+      properties:
+        comment:
+          nullable: true
+          type: string
+        decision:
+          enum:
+          - approve
+          - reject
+          type: string
+      required:
+      - decision
+      type: object
+    Error_errorArgs_value:
+      oneOf:
+      - maxLength: 256
+        type: string
+      - format: int64
+        type: integer
+  securitySchemes:
+    bearerAuth:
+      scheme: bearer
+      type: http

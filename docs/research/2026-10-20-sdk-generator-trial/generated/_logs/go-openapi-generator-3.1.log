@@ -1,0 +1,79 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=45941 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+[main] WARN  o.o.codegen.DefaultCodegen - OpenAPI 3.1 support is still in beta. To report an issue related to 3.1 spec, please kindly open an issue in the Github repo: https://github.com/openAPITools/openapi-generator.
+[main] INFO  o.o.codegen.DefaultGenerator - Generating with dryRun=false
+[main] INFO  o.o.c.ignore.CodegenIgnoreProcessor - No .openapi-generator-ignore file found.
+[main] INFO  o.o.codegen.DefaultGenerator - OpenAPI Generator: go (client)
+[main] INFO  o.o.codegen.DefaultGenerator - Generator 'go' is considered stable.
+[main] INFO  o.o.c.languages.AbstractGoCodegen - Environment variable GO_POST_PROCESS_FILE not defined so Go code may not be properly formatted. To define it, try `export GO_POST_PROCESS_FILE="/usr/local/bin/gofmt -w"` (Linux/Mac)
+[main] INFO  o.o.c.languages.AbstractGoCodegen - NOTE: To enable file post-processing, 'enablePostProcessFile' must be set to `true` (--enable-post-process-file for CLI).
+[main] INFO  o.o.codegen.InlineModelResolver - Inline schema created as Error_errorArgs_value. To have complete control of the model name, set the `title` field or use the modelNameMapping option (e.g. --model-name-mappings Error_errorArgs_value=NewModel,ModelA=NewModelA in CLI) or inlineSchemaNameMapping option (--inline-schema-name-mappings Error_errorArgs_value=NewModel,ModelA=NewModelA in CLI).
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_backup.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Backup.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_backup_check.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/BackupCheck.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_backup_create.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/BackupCreate.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_backup_list.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/BackupList.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_backup_state.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/BackupState.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_capabilities.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Capabilities.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_change_order.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/ChangeOrder.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_error.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Error.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_error_error_args_value.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/ErrorErrorArgsValue.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_lock.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Lock.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_module.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Module.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_open_tofu_details.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/OpenTofuDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_preferences.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Preferences.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_pulumi_details.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/PulumiDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_tool.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Tool.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_unit.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Unit.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_unit_details.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/UnitDetails.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_unit_list.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/UnitList.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/model_verdict.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/Verdict.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/api_backups.go
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/go-openapi-generator-3.1/test/api_backups_test.go (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/BackupsAPI.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/api_change_orders.go
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/go-openapi-generator-3.1/test/api_change_orders_test.go (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/ChangeOrdersAPI.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/api_installation.go
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/go-openapi-generator-3.1/test/api_installation_test.go (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/InstallationAPI.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/api_me.go
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/go-openapi-generator-3.1/test/api_me_test.go (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/MeAPI.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/api_units.go
+[main] INFO  o.o.codegen.TemplateManager - Skipped <out>/go-openapi-generator-3.1/test/api_units_test.go (Skipped by apiTests options supplied by user.)
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/docs/UnitsAPI.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/api/openapi.yaml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/README.md
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/git_push.sh
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/.gitignore
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/configuration.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/client.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/response.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/.travis.yml
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/utils.go
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/.openapi-generator-ignore
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/.openapi-generator/VERSION
+[main] INFO  o.o.codegen.TemplateManager - writing file <out>/go-openapi-generator-3.1/.openapi-generator/FILES
+############################################################################################
+# Thanks for using OpenAPI Generator.                                                      #
+# We appreciate your support! Please consider donating to help us maintain this project.   #
+# https://opencollective.com/openapi_generator/donate                                      #
+############################################################################################

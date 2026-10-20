@@ -1,0 +1,6 @@
+INFO	convenient	Generating convenient error response	{"at": "openapi-3.1.json:90:16"}
+WARN	Header name is not canonical, canonical name will be used	{"at": "openapi-3.1.json:4:15", "original_name": "ETag", "canonical_name": "Etag"}
+WARN	Header name is not canonical, canonical name will be used	{"at": "openapi-3.1.json:4:15", "original_name": "ETag", "canonical_name": "Etag"}
+WARN	Header name is not canonical, canonical name will be used	{"at": "openapi-3.1.json:4:15", "original_name": "ETag", "canonical_name": "Etag"}
+WARN	Header name is not canonical, canonical name will be used	{"at": "openapi-3.1.json:4:15", "original_name": "ETag", "canonical_name": "Etag"}
+WARN	Header name is not canonical, canonical name will be used	{"at": "openapi-3.1.json:4:15", "original_name": "ETag", "canonical_name": "Etag"}
