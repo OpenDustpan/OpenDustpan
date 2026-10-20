@@ -139,6 +139,11 @@ refuses writes in its next request. A write that is already in progress
 ends before the enter returns. A server that cannot read the installation
 state refuses the write.
 
+The audit log keeps its entries in maintenance mode: an entry that records a
+refusal, a sign-in or a restore is never dropped. A console session that
+exists stays valid, but its last-use time does not change. A new sign-in is
+not possible until the server leaves maintenance mode.
+
 The restore increments the failover version of every namespace. Leases,
 update tokens, locks and upload capabilities from before the restore stop
 working, so no client can write data from before the restore into the
