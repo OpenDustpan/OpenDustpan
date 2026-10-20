@@ -136,3 +136,4 @@ both together.
 | [86](0086-change-tickets-in-external-change-systems.md) | Change tickets in external change systems, and what the core needs for them | discussing |
 | [87](0087-components-of-the-server-process.md) | Components of the server process, and a start flag that selects them | accepted (ADR 249) |
 | [88](0088-federation-model.md) | Federation model: installations, request forwarding, asynchronous replication, manual failover | accepted (ADR 248) |
+| [91](0091-plan-review-at-scale.md) | Plan review at scale, with one view of repeated changes across stacks and workspaces, and noise rules that expire | draft |
