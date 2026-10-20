@@ -1012,24 +1012,41 @@ func testDevStripHostileBodies(t *testing.T, newStore DevDataFactory) {
 	for name, body := range hostileApproverBodies() {
 		for _, kind := range []string{kindRule, kindDefault, kindOwnerRle} {
 			label := name + " (" + kind + ")"
-			export := base.with(t, "gate_objects", DevGateObjectRow(kind, "hostile", body))
 
-			for _, mode := range []backup.DevStripMode{backup.DevStripDetect, backup.DevStripRemove} {
-				dst := newStore(t, installation.KindProduction)
-				export.mustStage(t, dst)
-
-				if _, err := dst.StripDevStaged(t.Context(), mode); !errors.Is(err, backup.ErrDevStripIncomplete) {
-					t.Fatalf("%s: strip mode %d: err = %v, want ErrDevStripIncomplete", label, mode, err)
-				}
-			}
-
-			for swapKind, swap := range map[string]func(DevDataStore) error{
-				"plain": func(dst DevDataStore) error { return applyPlain(t, dst) },
-				"keep":  func(dst DevDataStore) error { return applyKeeping(t, dst) },
-			} {
-				checkSwapRefused(t, label+" ("+swapKind+")", newStore(t, installation.KindProduction), export, swap)
-			}
+			// A subtest closes its stores when it ends, so the number of cases
+			// does not decide how many connections the suite holds.
+			t.Run(label, func(t *testing.T) {
+				checkHostileApproversBody(
+					t,
+					newStore,
+					base.with(t, "gate_objects", DevGateObjectRow(kind, "hostile", body)),
+					label,
+				)
+			})
 		}
+	}
+}
+
+// checkHostileApproversBody expects the strip to fail closed in both modes and
+// both swap paths to refuse the staged export, which holds one hostile
+// gate object.
+func checkHostileApproversBody(t *testing.T, newStore DevDataFactory, export *devExport, label string) {
+	t.Helper()
+
+	for _, mode := range []backup.DevStripMode{backup.DevStripDetect, backup.DevStripRemove} {
+		dst := newStore(t, installation.KindProduction)
+		export.mustStage(t, dst)
+
+		if _, err := dst.StripDevStaged(t.Context(), mode); !errors.Is(err, backup.ErrDevStripIncomplete) {
+			t.Fatalf("%s: strip mode %d: err = %v, want ErrDevStripIncomplete", label, mode, err)
+		}
+	}
+
+	for swapKind, swap := range map[string]func(DevDataStore) error{
+		"plain": func(dst DevDataStore) error { return applyPlain(t, dst) },
+		"keep":  func(dst DevDataStore) error { return applyKeeping(t, dst) },
+	} {
+		checkSwapRefused(t, label+" ("+swapKind+")", newStore(t, installation.KindProduction), export, swap)
 	}
 }
 
