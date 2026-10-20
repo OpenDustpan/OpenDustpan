@@ -70,7 +70,7 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      st,
-			Guard:      principal.AdminOnlyGuard{},
+			Guard:      allowAllGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -724,7 +724,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      failingStore{st},
-			Guard:      principal.AdminOnlyGuard{},
+			Guard:      allowAllGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -1094,4 +1094,14 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 				c.principalID, got.TemporaryAdministrator, c.want)
 		}
 	}
+}
+
+// allowAllGuard is a principal.Guard that allows every change. These tests
+// check the routes, not the grant check, which the principal package tests.
+type allowAllGuard struct{}
+
+func (allowAllGuard) CheckGroupGrants(context.Context, identity.Principal, string) error { return nil }
+
+func (allowAllGuard) CheckPrincipalGrants(context.Context, identity.Principal, string) error {
+	return nil
 }
