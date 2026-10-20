@@ -76,7 +76,7 @@ RFC uses it.
   The capability `repo-token` stays only for the git credential mode `forge`
   of ADR 130 decision 11, for other live fetches.
 - **Q8. Comment commands.** `dustpan apply` applies the exact plan of the
-  summary comment, with four conditions. `unlock` stays a command. A comment
+  summary comment, with three conditions. `unlock` stays a command. A comment
   never approves (rule 8).
 - **Q9. The person or IaC gives the event secret.** The server never answers
   it.
