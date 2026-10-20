@@ -4570,6 +4570,9 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 
 			return nil
 		}, "workspace", "select", e2e.RemoteDev, "-no-color"),
+		step("move prod into a collection before the delete", func(e2e.Result) error {
+			return moveIntoDeletedGateCollection(ctx, env)
+		}, "workspace", "select", e2e.RemoteDev, "-no-color"),
 		step("workspace delete prod", func(e2e.Result) error {
 			path := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/" + remoteProdName
 			if !env.Requested("workspace delete prod", http.MethodDelete, path) {
@@ -4584,6 +4587,38 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
 		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
 	}, tofuRestoreSteps(ctx, env, &removedID, existedAt)...)
+}
+
+// deletedGateCollection is the collection that holds the prod workspace when
+// it is deleted. The gates of the restore and of the purge are set on this
+// collection, so they match only when the guard reads the real collection of
+// the deleted unit.
+const deletedGateCollection = "deleted-gate"
+
+// moveIntoDeletedGateCollection makes the collection and moves the prod
+// workspace into it.
+func moveIntoDeletedGateCollection(ctx context.Context, env *e2e.Env) error {
+	status, body, err := env.APIStatus(ctx, http.MethodPost, collectionsBase, `{"name":"`+deletedGateCollection+`"}`)
+	if err != nil {
+		return err
+	}
+
+	if status != http.StatusCreated {
+		return fmt.Errorf("%w: make collection: status %d (%s), want 201", errUnexpected, status, body)
+	}
+
+	path := "/api/inventory/unit-collection?unit=" + url.QueryEscape("opentofu:"+e2e.Namespace+"/"+remoteProdName)
+
+	status, body, err = env.APIStatus(ctx, http.MethodPut, path, `{"collection":"`+deletedGateCollection+`"}`)
+	if err != nil {
+		return err
+	}
+
+	if status != http.StatusOK {
+		return fmt.Errorf("%w: move the workspace: status %d (%s), want 200", errUnexpected, status, body)
+	}
+
+	return nil
 }
 
 // workspaceIDData is the data member of a TFE-compatible workspace document,

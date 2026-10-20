@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -323,14 +325,102 @@ func TestStateGuardThatCannotDecideRefuses(t *testing.T) {
 			ws := newWriteCounter()
 
 			rec := serveGuarded(t, newGuardedHandler(t, ws, newFakeGuard(errGuardDown)), rt)
-			if rec.Code < http.StatusBadRequest || ws.count() != 0 {
-				t.Fatalf("%s answers %d with %d writes, want an error and no write", rt.name, rec.Code, ws.count())
+			// OpenTofu reads 403 as a refusal and stops. It retries a 5xx.
+			if rec.Code != http.StatusForbidden || ws.count() != 0 ||
+				!strings.Contains(rec.Body.String(), "gate.unavailable") {
+				t.Fatalf(
+					"%s answers %d with %d writes, want 403 with gate.unavailable and no write: %s",
+					rt.name, rec.Code, ws.count(), rec.Body,
+				)
 			}
 
 			if strings.Contains(rec.Body.String(), errGuardDown.Error()) {
 				t.Fatalf("body %q shows the internal error text", rec.Body)
 			}
 		})
+	}
+}
+
+func TestStateGuardRefusalOfAJobTokenIsADenial(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ws := newWriteCounter()
+			err := fmt.Errorf("job 42 does not hold the unit: %w", identity.ErrDenied)
+
+			rec := serveGuarded(t, newGuardedHandler(t, ws, newFakeGuard(err)), rt)
+			if rec.Code != http.StatusForbidden || ws.count() != 0 ||
+				strings.Contains(rec.Body.String(), "gate.unavailable") {
+				t.Fatalf("%s answers %d with %d writes, want 403 as a denial and no write: %s",
+					rt.name, rec.Code, ws.count(), rec.Body)
+			}
+		})
+	}
+}
+
+// heldWorkspaces is a workspace port whose workspace is locked by someone
+// else, and whose GetByID fails when readFails is set.
+type heldWorkspaces struct {
+	*writeCounter
+
+	readFails bool
+}
+
+func (h heldWorkspaces) GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	if h.readFails {
+		return workspace.Workspace{}, workspace.ErrNotFound
+	}
+
+	w, err := h.writeCounter.GetByID(ctx, id)
+	w.Lock = workspace.Lock{LockedAt: time.Now(), ID: "lock-1", Holder: "bob", Reason: ""}
+
+	return w, err
+}
+
+func (h heldWorkspaces) LockForJob(
+	_ context.Context, _ workspace.ID, _, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrLocked
+}
+
+// A CLI that waits under -lock-timeout retries a lock on a held workspace. The
+// retry writes no decision record, so the guard is not asked while the lock is held.
+func TestLockOnAHeldWorkspaceAsksNoGuard(t *testing.T) {
+	t.Parallel()
+
+	guard := newFakeGuard(nil)
+	h := newGuardedHandler(t, heldWorkspaces{writeCounter: newWriteCounter(), readFails: false}, guard)
+	rt := guardRoutes()[0]
+
+	for range 3 {
+		if rec := serveGuarded(t, h, rt); rec.Code != http.StatusConflict {
+			t.Fatalf("lock on a held workspace answers %d, want 409: %s", rec.Code, rec.Body)
+		}
+	}
+
+	if len(guard.seen) != 0 {
+		t.Fatalf("the guard saw %d checks of a lock on a held workspace, want none", len(guard.seen))
+	}
+}
+
+// The guard runs after the allowance check of a force-unlock, so a call that
+// the allowance refuses writes no decision record.
+func TestForceUnlockAsksTheGuardAfterTheAllowance(t *testing.T) {
+	t.Parallel()
+
+	guard := newFakeGuard(nil)
+	h := newGuardedHandler(t, heldWorkspaces{writeCounter: newWriteCounter(), readFails: true}, guard)
+	rt := guardRoutes()[1]
+
+	if rec := serveGuarded(t, h, rt); rec.Code != http.StatusNotFound {
+		t.Fatalf("force-unlock with a failed allowance answers %d, want 404: %s", rec.Code, rec.Body)
+	}
+
+	if len(guard.seen) != 0 {
+		t.Fatalf("the guard saw %d checks before the allowance, want none", len(guard.seen))
 	}
 }
 

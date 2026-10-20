@@ -115,6 +115,17 @@ func RunGate(t *testing.T, newStore GateFactory) {
 		}
 	})
 
+	t.Run("a deleted unit keeps its collection and labels for the gates", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range gateUnitCases() {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				testGateDeletedUnitFacts(t, newStore(t), tc)
+			})
+		}
+	})
+
 	t.Run("a rename of a stack moves its configuration", func(t *testing.T) {
 		t.Parallel()
 		testGateRenameStack(t, newStore(t))
@@ -640,6 +651,84 @@ func gateUnitCases() []gateUnitCase {
 	return []gateUnitCase{
 		{name: "an OpenTofu workspace", tool: "opentofu", unit: "net"},
 		{name: "a Pulumi stack", tool: "pulumi", unit: "web/prod"},
+	}
+}
+
+// testGateDeletedUnitFacts puts the unit of tc in a collection, deletes it and
+// reads its facts: the real collection, and for a Pulumi stack its tags as
+// labels. A live unit, an unknown unit and a purged unit are not found.
+func testGateDeletedUnitFacts(t *testing.T, s GateStore, tc gateUnitCase) {
+	t.Helper()
+
+	facts, ok := s.(inventory.DeletedFactsReader)
+	if !ok {
+		t.Fatalf("store %T lacks the deleted facts reader", s)
+	}
+
+	d := gateDomain{s: s}
+
+	fence, err := d.CreateNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("CreateNamespace() = %v", err)
+	}
+
+	if err = d.CreateCollection(t.Context(), "acme", "payments"); err != nil {
+		t.Fatalf("CreateCollection() = %v", err)
+	}
+
+	if err = d.CreateUnit(t.Context(), "acme", tc.tool, tc.unit, "payments"); err != nil {
+		t.Fatalf("CreateUnit() = %v", err)
+	}
+
+	wantLabels := 0
+
+	if tc.tool == "pulumi" {
+		project, name, _ := strings.Cut(tc.unit, "/")
+
+		ref, perr := stack.ParseRef("acme", project, name)
+		if perr != nil {
+			t.Fatalf("ParseRef() = %v", perr)
+		}
+
+		if err = s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "core"}, gateTime(), fence); err != nil {
+			t.Fatalf("UpdateStackTags() = %v", err)
+		}
+
+		wantLabels = 1
+	}
+
+	id := softDeleteUnitID(t, s, tc, fence)
+
+	got, err := facts.GetDeletedUnitFacts(t.Context(), "acme", tc.tool, id)
+	if err != nil || got.Collection != "payments" || len(got.Labels) != wantLabels {
+		t.Fatalf("GetDeletedUnitFacts() = %+v, %v, want collection payments and %d labels", got, err, wantLabels)
+	}
+
+	if _, err = facts.GetDeletedUnitFacts(
+		t.Context(),
+		"acme",
+		tc.tool,
+		"unknown-id",
+	); !errors.Is(
+		err,
+		inventory.ErrNotFound,
+	) {
+		t.Fatalf("GetDeletedUnitFacts(unknown) = %v, want ErrNotFound", err)
+	}
+
+	purge := gateEntry("acme", "unit:purge")
+	if tc.tool == "pulumi" {
+		err = s.PurgeStack(t.Context(), stack.ID(id), fence, time.Time{}, purge)
+	} else {
+		err = s.PurgeWorkspace(t.Context(), workspace.ID(id), fence, time.Time{}, purge)
+	}
+
+	if err != nil {
+		t.Fatalf("purge = %v", err)
+	}
+
+	if _, err = facts.GetDeletedUnitFacts(t.Context(), "acme", tc.tool, id); !errors.Is(err, inventory.ErrNotFound) {
+		t.Fatalf("GetDeletedUnitFacts(purged) = %v, want ErrNotFound", err)
 	}
 }
 

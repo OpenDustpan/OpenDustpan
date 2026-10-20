@@ -3,6 +3,7 @@ package tfe
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -47,7 +48,7 @@ func (h *Handler) guardStateWrite(
 	ctx := r.Context()
 
 	_, err := h.stateGuard.GuardStateWrite(ctx, gate.StateWrite{
-		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceCLI,
+		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceCLI, PlanLock: false,
 	})
 	if err == nil {
 		return true
@@ -55,10 +56,21 @@ func (h *Handler) guardStateWrite(
 
 	refusal, ok := errors.AsType[*gate.RefusalError](err)
 	if !ok {
-		// Not a decision: the guard could not decide. The write stays refused.
-		h.writeError(ctx, w, err)
+		if errors.Is(err, identity.ErrDenied) {
+			h.writeError(ctx, w, err)
 
-		return false
+			return false
+		}
+
+		// Not a decision: the guard could not decide (the store, the fence or
+		// the decision record failed). The write stays refused. OpenTofu reads
+		// 403 as a refusal and stops. It reads 5xx as a fault to retry.
+		h.logger.ErrorContext(ctx, "state guard failed", slog.String("object", obj.String()), slog.Any("error", err))
+
+		refusal = &gate.RefusalError{
+			Err: fmt.Errorf("%w: %w", gate.ErrUnavailable, err), Record: "",
+			Messages: []string{"The gates could not decide this write, so the write is refused."},
+		}
 	}
 
 	code, _ := gate.Code(refusal)

@@ -222,8 +222,10 @@ func TestStateGuardThatCannotDecideRefuses(t *testing.T) {
 			f := guardedFixture(t, newRecordingGuard(errGuardDown))
 
 			rec := serveRoute(t, f, rt)
-			if rec.Code < http.StatusBadRequest || len(f.pulumi.calls) != 0 {
-				t.Fatalf("%s answers %d with %d calls, want an error and none", rt.name, rec.Code, len(f.pulumi.calls))
+			if rec.Code != http.StatusServiceUnavailable || len(f.pulumi.calls) != 0 ||
+				!strings.Contains(rec.Body.String(), "gate.unavailable") {
+				t.Fatalf("%s answers %d with %d calls, want 503 with gate.unavailable and none: %s",
+					rt.name, rec.Code, len(f.pulumi.calls), rec.Body)
 			}
 
 			if strings.Contains(rec.Body.String(), errGuardDown.Error()) {

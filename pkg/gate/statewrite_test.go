@@ -52,8 +52,17 @@ func (swSubjects) Subject(_ context.Context, p identity.Principal) (gate.Subject
 	switch p.Subject {
 	case "ci":
 		s.Kind, s.Credential = gate.PrincipalService, gate.CredentialTrustToken
-	case "runner":
+	case "runner", "runner-apply", "runner-plan", "runner-other":
 		s.Kind, s.Credential = gate.PrincipalService, gate.CredentialJobToken
+
+		held, err := identity.UnitObject("opentofu", "acme", map[string]string{
+			"runner-apply": "web", "runner-plan": "web", "runner-other": "db",
+		}[p.Subject])
+		if p.Subject != "runner" && err == nil {
+			s.Job = &gate.JobClaim{
+				Job: "42", Phase: "apply", PassedApply: p.Subject != "runner-plan", Units: []identity.Object{held},
+			}
+		}
 	case "glass":
 		s.BreakGlassAccount = true
 	case "stale":
@@ -301,7 +310,7 @@ func swWrite(t *testing.T, subject, unit string, op gate.OperationKind) gate.Sta
 
 	return gate.StateWrite{
 		Principal: principal(subject, false), Unit: swUnit(t, unit), Operation: op,
-		Action: identity.ActionUnitWrite, Source: gate.SourceCLI,
+		Action: identity.ActionUnitWrite, Source: gate.SourceCLI, PlanLock: false,
 	}
 }
 
@@ -763,19 +772,47 @@ func TestLimitRefusalsShareOneRecord(t *testing.T) {
 	}
 }
 
-func TestJobTokenSkipsGatesButNotLimits(t *testing.T) {
+func TestJobTokenWritesOnlyWhatTheJobModelAllows(t *testing.T) {
 	t.Parallel()
 
-	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
-	e.putGate(t, newSWGate(atUnit, "deny-all", "", gate.OutcomeDeny, "x"))
-
-	d, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "runner", "web", gate.OperationLock))
-	if err != nil || d.Result != gate.ResultAllow || d.Record != "" {
-		t.Fatalf("GuardStateWrite(job token) = %+v, %v, want allow with no record: the job model decided", d, err)
+	tests := []struct {
+		name     string
+		subject  string
+		planLock bool
+		denied   bool
+	}{
+		{"a phase that passed apply writes a unit of its job", "runner-apply", false, false},
+		{"a plan phase takes the lock of its plan", "runner-plan", true, false},
+		{"a plan phase writes no other state", "runner-plan", false, true},
+		{"a job token with no job is denied", "runner", false, true},
+		{"a job token with no job is denied for a plan lock", "runner", true, true},
+		{"a unit outside the job is denied", "runner-other", false, true},
 	}
 
-	if recs := e.records(t); len(recs) != 0 {
-		t.Fatalf("records = %d, want none for a job token", len(recs))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+			e.putGate(t, newSWGate(atUnit, "deny-all", "", gate.OutcomeDeny, "x"))
+
+			w := swWrite(t, tt.subject, "web", gate.OperationLock)
+			w.PlanLock = tt.planLock
+
+			d, err := e.svc.GuardStateWrite(t.Context(), w)
+
+			if tt.denied {
+				if !errors.Is(err, identity.ErrDenied) {
+					t.Fatalf("GuardStateWrite() = %+v, %v, want identity.ErrDenied", d, err)
+				}
+			} else if err != nil || d.Result != gate.ResultAllow || d.Record != "" {
+				t.Fatalf("GuardStateWrite() = %+v, %v, want allow with no record: the job model decided", d, err)
+			}
+
+			if recs := e.records(t); len(recs) != 0 {
+				t.Fatalf("records = %d, want none for a job token", len(recs))
+			}
+		})
 	}
 }
 

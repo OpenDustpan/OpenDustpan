@@ -52,7 +52,11 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 		return nil, nil //nolint:nilnil // A store without gates is a valid setup: no write is checked.
 	}
 
-	facts := inventoryFacts{reader: cfg.inventoryReader, ids: nil}
+	facts := inventoryFacts{reader: cfg.inventoryReader, ids: nil, deleted: nil}
+	if deleted, hasDeleted := cfg.namespaceStore.(inventory.DeletedFactsReader); hasDeleted {
+		facts.deleted = deleted
+	}
+
 	if ids, hasIDs := cfg.namespaceStore.(unitIDs); hasIDs {
 		facts.ids = ids
 	}
@@ -91,6 +95,9 @@ type inventoryFacts struct {
 	// ids finds the stable ID of a unit by its reference. It is nil when the
 	// store has no such lookup, and the reader then lists the namespace.
 	ids unitIDs
+	// deleted gives the collection and the labels of a deleted unit. It is
+	// nil when the store keeps no deleted units.
+	deleted inventory.DeletedFactsReader
 }
 
 // unitIDs finds the stable ID of a live unit by its reference with one
@@ -144,6 +151,10 @@ func (f inventoryFacts) entry(ctx context.Context, unit identity.Object) (invent
 
 	e, err := f.reader.GetUnit(ctx, id)
 	if errors.Is(err, inventory.ErrUnitNotFound) {
+		if unit.UnitID() != "" {
+			return f.deletedEntry(ctx, unit)
+		}
+
 		return inventory.Entry{}, gate.ErrNotFound
 	}
 
@@ -153,6 +164,32 @@ func (f inventoryFacts) entry(ctx context.Context, unit identity.Object) (invent
 
 	return e, nil
 }
+
+// deletedEntry returns the collection and the labels of a deleted unit that
+// the reference names by its stable ID. The membership of a collection stays
+// until the purge, so the facts are the real ones. A unit that is neither live
+// nor deleted fails closed: the error is not gate.ErrNotFound, because that
+// error reads as a unit with no collection.
+func (f inventoryFacts) deletedEntry(ctx context.Context, unit identity.Object) (inventory.Entry, error) {
+	if f.deleted == nil {
+		return inventory.Entry{}, fmt.Errorf("%w: unit %s", errNoDeletedFacts, unit)
+	}
+
+	facts, err := f.deleted.GetDeletedUnitFacts(ctx, unit.Namespace(), unit.Tool(), unit.UnitID())
+	if err != nil {
+		return inventory.Entry{}, fmt.Errorf("facts of deleted unit %s: %w", unit, err)
+	}
+
+	return inventory.Entry{
+		LastChanged: time.Time{}, Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName(),
+		UnitID: unit.UnitID(), DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, ManualLock: nil,
+		Collection: facts.Collection, Labels: facts.Labels,
+	}, nil
+}
+
+// errNoDeletedFacts reports a unit that is not live, in a store that keeps no
+// facts of deleted units.
+var errNoDeletedFacts = errors.New("the unit is not live and the store keeps no facts of deleted units")
 
 // unitID returns the stable ID of unit: the one the reference carries, or the
 // one that the store finds with one indexed read. It returns the empty ID when

@@ -33,8 +33,11 @@ The server does not check these writes yet: a Pulumi update, stack import,
 rename or removal, the OpenTofu HTTP backend, and a state version that a client
 sends with no lock. They keep their earlier behavior.
 
-A write with the token of a job passes the gates. The job decided the change
-before it started. The access limits still hold for a job token.
+A write with the token of a job passes the gates only in two cases. The job
+decided the change before it started, so a phase that passed the apply decision
+writes to a unit of its own job with no gate. Each other phase takes only the
+lock of its plan. Each other write with a job token is denied, also a write to a
+unit that the job does not hold. The access limits still hold for a job token.
 
 ## What a gate reads
 

@@ -92,7 +92,11 @@ func (h *Handler) lockWorkspace(
 
 	reason := lockReason(body)
 
-	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
+	// A held lock refuses the call with 409 whatever the gates say, and a CLI
+	// that waits under -lock-timeout retries it. The gates run only when the
+	// lock is free, so a retry writes no new decision record.
+	held := h.lockHolder(ctx, id) != ""
+	if !held && !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
 		return
 	}
 
@@ -288,16 +292,16 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWriteForced, op: gate.OperationUnlock}) {
-		return
-	}
-
 	holder := h.lockHolder(ctx, id)
 
 	allow, err := h.allowance(ctx, p, id, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWriteForced, op: gate.OperationUnlock}) {
 		return
 	}
 

@@ -357,6 +357,10 @@ func (h *Handler) restoreUnit(
 		return
 	}
 
+	if !h.deletedUnitExists(w, r, obj) {
+		return
+	}
+
 	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitRestore, op: gate.OperationRollback}) {
 		return
 	}
@@ -378,6 +382,23 @@ func (h *Handler) restoreUnit(
 		Name:      name,
 		UnitID:    unitID,
 	})
+}
+
+// deletedUnitExists answers 404 and returns false for a unit that is not a
+// deleted unit, so that an unknown or purged unit answers as the tool would
+// answer. The state guard fails closed for such a unit too: the check of the
+// guard does not rely on this one.
+func (h *Handler) deletedUnitExists(w http.ResponseWriter, r *http.Request, obj identity.Object) bool {
+	ctx := r.Context()
+
+	_, err := h.deleted.GetDeletedUnit(ctx, obj.Namespace(), obj.Tool(), obj.UnitID())
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return false
+	}
+
+	return true
 }
 
 // readRestoreRequest reads the optional body of a restore. An empty body is
@@ -417,6 +438,10 @@ func (h *Handler) purgeUnit(
 	if !ok || life == nil {
 		h.writeError(ctx, w, unknownTool(obj.Tool()))
 
+		return
+	}
+
+	if !h.deletedUnitExists(w, r, obj) {
 		return
 	}
 

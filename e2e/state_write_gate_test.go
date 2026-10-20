@@ -125,8 +125,10 @@ func checkNotLocked(body string) error {
 // checkRefusedWithoutALock returns a check of the output of a tofu command that
 // the gate refused: it failed, it did not read the refusal as a held lock, which
 // the CLI would retry, and it shows the error code and the ID of the decision
-// record. The CLI wraps its lines, so the check reads single words.
-func checkRefusedWithoutALock(code string) func(e2e.Result) error {
+// record. It also shows the text of the gate message or the name of the limit.
+// The CLI wraps its lines and draws a frame of box characters around an error,
+// so the check joins the words of the output before it reads the text.
+func checkRefusedWithoutALock(code, text string) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		out := r.Stdout + r.Stderr
 
@@ -134,8 +136,10 @@ func checkRefusedWithoutALock(code string) func(e2e.Result) error {
 			return fmt.Errorf("%w: the CLI read the refusal as a held lock: %s", errUnexpected, out)
 		}
 
-		for _, want := range []string{"Error acquiring the state lock", code, "gdr-"} {
-			if !strings.Contains(out, want) {
+		words := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ")
+
+		for _, want := range []string{"Error acquiring the state lock", code, "gdr-", text} {
+			if !strings.Contains(words, want) {
 				return fmt.Errorf("%w: the CLI output lacks %q: %s", errUnexpected, want, out)
 			}
 		}
@@ -255,7 +259,7 @@ func (g *gateRun) denyGate() {
 	g.put("freeze-e2e", lockCondition, gate.OutcomeDeny, gate.ModeEnforce)
 	g.post("gate: the lock is refused with 403 in the TFE shape", g.lockPath, http.StatusForbidden,
 		refusalCheck("gate.denied", freezeText))
-	g.planStep("gate: tofu plan stops at the gate", true, checkRefusedWithoutALock("gate.denied"))
+	g.planStep("gate: tofu plan stops at the gate", true, checkRefusedWithoutALock("gate.denied", freezeText))
 	g.get("gate: the workspace holds no lock after the refusal", g.workspace, checkNotLocked)
 	g.get("gate: the state did not change", g.current, func(body string) error {
 		var after stateDocument
@@ -330,7 +334,11 @@ func (g *gateRun) accessLimit() {
 	must(g.t, g.env.PutAccessLimit(g.t.Context(), g.ns, limit))
 	g.post("gate: an access limit refuses the lock", g.lockPath, http.StatusForbidden,
 		refusalCheck("gate.limited", "no-writes-e2e"))
-	g.planStep("gate: tofu plan stops at the access limit", true, checkRefusedWithoutALock("gate.limited"))
+	g.planStep(
+		"gate: tofu plan stops at the access limit",
+		true,
+		checkRefusedWithoutALock("gate.limited", "no-writes-e2e"),
+	)
 	must(g.t, g.env.DeleteAccessLimit(g.t.Context(), g.ns, limit.Scope, limit.ID))
 }
 
@@ -363,7 +371,9 @@ func restoreGateSteps(
 ) []e2e.StepSpec {
 	id := gate.ID("deleted-" + operation + "-e2e")
 	ns := namespace.Name(e2e.Namespace)
-	scope := gate.NamespaceScope(ns)
+	// The gate holds for the collection of the deleted unit only, so the
+	// refusal proves that the guard read the real collection of the unit.
+	scope := gate.CollectionScope(ns, deletedGateCollection)
 
 	refused := func(status int, body string) error {
 		if status != http.StatusForbidden || !strings.Contains(body, "Writes to opentofu are frozen") ||

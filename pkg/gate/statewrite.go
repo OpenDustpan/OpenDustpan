@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // stateWriteSchema returns the version of the fact schema of state.write.
@@ -42,6 +43,9 @@ type StateWrite struct {
 	// Source is cli for a write from the CLI of a tool, and api for a call
 	// of the tool-neutral API.
 	Source SourceKind
+	// PlanLock is true when the write takes or ends the lock or the update
+	// lease of the plan of a job. Only a job token uses it.
+	PlanLock bool
 }
 
 // GuardStateWrite checks the access limits of the action of w, then
@@ -50,8 +54,10 @@ type StateWrite struct {
 // *RefusalError, and any other error also refuses the write: the guard fails
 // closed.
 //
-// A job token passes the gates here, because the job model decided the
-// change of such a write (see Evaluate). The access limits hold for it.
+// A job token skips the gates only as far as Evaluate allows: a write by a
+// phase that passed change.apply to a unit of its own job, or the lock or
+// the update lease of the plan in any other phase. Each other write with a
+// job token fails with identity.ErrDenied. The access limits hold for it.
 func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, error) {
 	ctx = withFactMemo(ctx)
 
@@ -69,7 +75,24 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 	}
 
 	if subject.Credential == CredentialJobToken {
-		return Decision{Record: "", Result: ResultAllow, Requirements: nil, Warnings: nil, AutoApply: false}, nil
+		// The job model decides a write with a job token. The write needs no
+		// fence, because it writes no decision record.
+		return s.Evaluate(ctx, Change{
+			Point:     PointStateWrite,
+			Namespace: w.Unit.Namespace(),
+			Ref:       ChangeRef{Kind: ChangeStateWrite, ID: ""},
+			Subject:   subject,
+			Source:    w.Source,
+			Author:    subject.ID,
+			Operation: w.Operation,
+			Units: []identity.Object{
+				w.Unit,
+			},
+			Holders:    nil,
+			PlanLock:   w.PlanLock,
+			BreakGlass: "",
+			Fence:      namespace.Fence{Namespace: w.Unit.Namespace(), FailoverVersion: 0},
+		})
 	}
 
 	fence, err := s.fences.Fence(ctx, w.Unit.Namespace())
@@ -80,7 +103,7 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 	return s.Evaluate(ctx, Change{
 		Point: PointStateWrite, Namespace: w.Unit.Namespace(), Ref: ChangeRef{Kind: ChangeStateWrite, ID: ""},
 		Subject: subject, Source: w.Source, Author: subject.ID, Operation: w.Operation,
-		Units: []identity.Object{w.Unit}, Holders: nil, PlanLock: false, BreakGlass: "", Fence: fence,
+		Units: []identity.Object{w.Unit}, Holders: nil, PlanLock: w.PlanLock, BreakGlass: "", Fence: fence,
 	})
 }
 
@@ -158,7 +181,13 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change) (Decision, e
 	rec := run.record()
 
 	if err = s.store.Records().Put(ctx, rec, c.Fence); err != nil {
-		return Decision{}, fmt.Errorf("%w: write the decision record: %w", ErrUnavailable, err)
+		// The record ID is known, but the record is not stored. The refusal
+		// names the ID so that the person can tell support which write failed.
+		return Decision{}, &RefusalError{
+			Err:      fmt.Errorf("%w: write the decision record: %w", ErrUnavailable, err),
+			Record:   rec.ID,
+			Messages: []string{"The decision record could not be written, so the write is refused."},
+		}
 	}
 
 	if run.refusal != nil {

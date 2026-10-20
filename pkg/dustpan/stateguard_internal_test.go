@@ -74,7 +74,7 @@ const (
 // gateFacts returns the facts source for the way mode names the unit.
 func gateFacts(entries []inventory.Entry, mode int) (inventoryFacts, *fakeUnitIDs) {
 	lookup := &fakeUnitIDs{calls: 0}
-	f := inventoryFacts{reader: fakeInventory{entries: entries, err: nil}, ids: nil}
+	f := inventoryFacts{reader: fakeInventory{entries: entries, err: nil}, ids: nil, deleted: nil}
 
 	if mode == byIndexedLookup {
 		f.ids = lookup
@@ -139,12 +139,18 @@ func TestInventoryFactsOfAnUnknownUnit(t *testing.T) {
 	for _, mode := range namingModes() {
 		f, _ := gateFacts(nil, mode)
 
-		if _, err := f.Collection(t.Context(), gateTestUnit(t, mode)); !errors.Is(err, gate.ErrNotFound) {
-			t.Fatalf("Collection(mode %d) = %v, want gate.ErrNotFound", mode, err)
-		}
+		// A reference with a stable ID names a unit that must be live or
+		// deleted, so an unknown one fails closed. A name that the store does
+		// not know is a unit that is not yet in the inventory.
+		wantNotFound := mode != byStableID
 
-		if _, err := f.Labels(t.Context(), gateTestUnit(t, mode)); !errors.Is(err, gate.ErrNotFound) {
-			t.Fatalf("Labels(mode %d) = %v, want gate.ErrNotFound", mode, err)
+		for name, read := range map[string]func() error{
+			"Collection": func() error { _, err := f.Collection(t.Context(), gateTestUnit(t, mode)); return err },
+			"Labels":     func() error { _, err := f.Labels(t.Context(), gateTestUnit(t, mode)); return err },
+		} {
+			if err := read(); errors.Is(err, gate.ErrNotFound) != wantNotFound || err == nil && !wantNotFound {
+				t.Fatalf("%s(mode %d) = %v, want gate.ErrNotFound: %v", name, mode, err, wantNotFound)
+			}
 		}
 	}
 }
@@ -273,5 +279,84 @@ func TestInventoryFactsOfAnUnknownUnitByIndexedLookup(t *testing.T) {
 			err,
 			lookup.calls,
 		)
+	}
+}
+
+// errDeletedDown is the error of a store that does not answer.
+var errDeletedDown = errors.New("deleted facts down")
+
+// fakeDeleted serves the facts of the deleted units, by unit ID.
+type fakeDeleted struct {
+	facts map[string]inventory.DeletedFacts
+	err   error
+}
+
+func (f fakeDeleted) GetDeletedUnitFacts(
+	_ context.Context, _ namespace.Name, _, unitID string,
+) (inventory.DeletedFacts, error) {
+	if f.err != nil {
+		return inventory.DeletedFacts{}, f.err
+	}
+
+	if facts, ok := f.facts[unitID]; ok {
+		return facts, nil
+	}
+
+	return inventory.DeletedFacts{}, inventory.ErrNotFound
+}
+
+func TestInventoryFactsOfADeletedUnitGiveItsRealCollectionAndLabels(t *testing.T) {
+	t.Parallel()
+
+	f, _ := gateFacts(nil, byStableID)
+	f.deleted = fakeDeleted{
+		facts: map[string]inventory.DeletedFacts{
+			"ws-1": {Collection: "prod", Labels: map[string]string{"team": "core", "env": "prod"}},
+		},
+		err: nil,
+	}
+
+	coll, err := f.Collection(t.Context(), gateTestUnit(t, byStableID))
+	if err != nil || coll != collection.Name("prod") {
+		t.Fatalf("Collection(deleted unit) = %q, %v, want prod", coll, err)
+	}
+
+	labels, err := f.Labels(t.Context(), gateTestUnit(t, byStableID))
+	if err != nil || !slices.Equal(labels, []string{"env=prod", "team=core"}) {
+		t.Fatalf("Labels(deleted unit) = %v, %v, want the sorted labels", labels, err)
+	}
+}
+
+// A deleted unit that is not found must never read as a unit with no
+// collection: a gate on its collection would not match, and the write would go on.
+func TestInventoryFactsOfAUnitThatIsNeitherLiveNorDeletedFailClosed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		deleted inventory.DeletedFactsReader
+	}{
+		{"the unit is not deleted", fakeDeleted{facts: nil, err: nil}},
+		{"the store keeps no deleted units", nil},
+		{"the store does not answer", fakeDeleted{facts: nil, err: errDeletedDown}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f, _ := gateFacts(nil, byStableID)
+			f.deleted = tc.deleted
+
+			if _, err := f.Collection(t.Context(), gateTestUnit(t, byStableID)); err == nil ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Collection() = %v, want an error that is not gate.ErrNotFound", err)
+			}
+
+			if _, err := f.Labels(t.Context(), gateTestUnit(t, byStableID)); err == nil ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Labels() = %v, want an error that is not gate.ErrNotFound", err)
+			}
+		})
 	}
 }
