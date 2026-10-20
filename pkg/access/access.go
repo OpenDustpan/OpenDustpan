@@ -166,6 +166,9 @@ var families = map[identity.Action]Family{
 	identity.ActionProfileWrite:                   FamilyData,
 	identity.ActionProfileOpen:                    FamilyData,
 	identity.ActionProfileManage:                  FamilyData,
+	identity.ActionViewCreate:                     FamilyData,
+	identity.ActionViewRead:                       FamilyData,
+	identity.ActionViewDelete:                     FamilyData,
 
 	identity.ActionCallerRead:     FamilySelf,
 	identity.ActionRoleRead:       FamilySelf,

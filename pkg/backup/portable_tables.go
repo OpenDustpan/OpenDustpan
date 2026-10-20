@@ -704,5 +704,6 @@ func portableSpec() []PortableTable {
 		portableJobTables(),
 		portableProfileTables(),
 		portableManualLockTables(),
+		portableSavedViewTables(),
 	)
 }

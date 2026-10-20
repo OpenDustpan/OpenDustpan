@@ -6,25 +6,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
-)
-
-const (
-	// maxLabelFilters is the largest number of label query values in one
-	// request.
-	maxLabelFilters = 10
-	// maxReferenceFilters is the largest number of reference query values in
-	// one request.
-	maxReferenceFilters = 20
-	// maxLabelKeyLen and maxLabelValueLen are the largest lengths of a label
-	// key and of a label value, in characters.
-	maxLabelKeyLen   = 128
-	maxLabelValueLen = 256
 )
 
 var (
@@ -84,9 +69,9 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 	}
 
 	rawLabels := query["label"]
-	if len(rawLabels) > maxLabelFilters {
+	if len(rawLabels) > coreinventory.MaxLabelFilters {
 		return unitFilter{}, fmt.Errorf(
-			"%w: send at most %d label query values", errInvalidQuery, maxLabelFilters,
+			"%w: send at most %d label query values", errInvalidQuery, coreinventory.MaxLabelFilters,
 		)
 	}
 
@@ -100,9 +85,9 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 	}
 
 	rawRefs := query["reference"]
-	if len(rawRefs) > maxReferenceFilters {
+	if len(rawRefs) > coreinventory.MaxReferenceFilters {
 		return unitFilter{}, fmt.Errorf(
-			"%w: send at most %d reference query values", errInvalidQuery, maxReferenceFilters,
+			"%w: send at most %d reference query values", errInvalidQuery, coreinventory.MaxReferenceFilters,
 		)
 	}
 
@@ -129,11 +114,11 @@ func parseLabelFilter(raw string) (labelFilter, error) {
 		return labelFilter{}, errLabelFormat
 	}
 
-	if !validLabelKey(key) {
+	if !coreinventory.ValidLabelKey(key) {
 		return labelFilter{}, errLabelKey
 	}
 
-	if !validLabelValue(value) {
+	if !coreinventory.ValidLabelValue(value) {
 		return labelFilter{}, errLabelValue
 	}
 
@@ -152,39 +137,4 @@ func parseReferenceFilter(raw string, ns namespace.Name) (identity.Object, error
 	}
 
 	return obj, nil
-}
-
-// validLabelKey reports whether s is a label key: 1 to maxLabelKeyLen
-// letters, digits and the characters . _ : / -.
-func validLabelKey(s string) bool {
-	if s == "" || len(s) > maxLabelKeyLen {
-		return false
-	}
-
-	for _, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == '.', c == '_', c == ':', c == '/', c == '-':
-		default:
-			return false
-		}
-	}
-
-	return true
-}
-
-// validLabelValue reports whether s is a label value: 0 to maxLabelValueLen
-// characters of valid UTF-8, with no control character.
-func validLabelValue(s string) bool {
-	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > maxLabelValueLen {
-		return false
-	}
-
-	for _, c := range s {
-		if unicode.IsControl(c) {
-			return false
-		}
-	}
-
-	return true
 }

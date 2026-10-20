@@ -38,4 +38,12 @@ type Store interface {
 	// Delete removes the view with ID id of owner in ns. It returns ErrNotFound as Get
 	// does, and namespace.ErrFenced. On an error it changes nothing.
 	Delete(ctx context.Context, ns namespace.Name, id ID, owner string, fence namespace.Fence, e audit.Entry) error
+	// DeleteOwned removes every view of owner in ns in one transaction and
+	// returns the number of views removed. It appends one audit entry for each
+	// view: a copy of e with ObjectID set to the view ID. The entry holds the ID
+	// and never the name. It changes nothing and returns namespace.ErrFenced
+	// when the fence is stale or belongs to another namespace than ns. An owner
+	// with no view in ns gives 0 and no entry. The cleanup of a principal that
+	// the installation removed uses it, once for each namespace.
+	DeleteOwned(ctx context.Context, ns namespace.Name, owner string, fence namespace.Fence, e audit.Entry) (int, error)
 }
