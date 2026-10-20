@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -83,5 +84,29 @@ func TestWriteFailsClosedOnStateReadError(t *testing.T) {
 				exec(t, statements[1])
 			},
 		}
+	})
+}
+
+// TestAuditAppendsPassInMaintenance proves that a standalone audit entry is
+// never dropped in maintenance mode.
+func TestAuditAppendsPassInMaintenance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunAuditInMaintenance(t, func(t *testing.T) storetest.AuditMaintenanceStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestSinkCursorAdvancesInMaintenance proves that the audit shipper can
+// advance its cursor in maintenance mode.
+func TestSinkCursorAdvancesInMaintenance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunFeedInMaintenance(t, func(t *testing.T) audittest.FeedMaintenanceStore {
+		t.Helper()
+
+		return open(t)
 	})
 }

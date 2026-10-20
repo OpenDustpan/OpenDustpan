@@ -79,7 +79,7 @@ func TestWriteWaitsForEnterAndReadsItsState(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if err = lockWritesExclusive(ctx, s.queries.WithTx(tx)); err != nil {
+	if err = lockWritesExclusive(ctx, s.queries.WithTx(tx), 0); err != nil {
 		t.Fatalf("take the exclusive lock: %v", err)
 	}
 
@@ -104,5 +104,47 @@ func newLockNamespace() namespace.Namespace {
 		CreatedAt: time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC), ID: namespace.NewID(),
 		Name: "locked", HomeRegion: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+}
+
+// TestEnterGivesUpWhenAWriteDoesNotEnd proves that an enter does not wait
+// without limit for a write transaction that holds the shared write lock: it
+// reports maintenance.ErrUnavailable after the lock timeout, changes nothing,
+// and a leave and a later enter work after the write ends.
+func TestEnterGivesUpWhenAWriteDoesNotEnd(t *testing.T) {
+	t.Parallel()
+
+	s := openKeepLockStore(t, testPostgresURL(t))
+	s.stateLockWait = 200 * time.Millisecond
+	ctx := t.Context()
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	if _, err = tx.Exec(ctx, writeLockSQL, writeLockClass); err != nil {
+		t.Fatalf("take the shared lock: %v", err)
+	}
+
+	for name, run := range map[string]func() error{
+		"SetStateIf": func() error {
+			return s.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance)
+		},
+		"SetState": func() error { return s.SetState(ctx, maintenance.StateMaintenance) },
+	} {
+		if err = run(); !errors.Is(err, maintenance.ErrUnavailable) {
+			t.Fatalf("%s while a write does not end: err = %v, want ErrUnavailable", name, err)
+		}
+	}
+
+	commit(t, tx)
+
+	if got, getErr := s.GetState(ctx); getErr != nil || got != maintenance.StateNormal {
+		t.Fatalf("state after the refused enters = %q, %v, want normal without error", got, getErr)
+	}
+
+	if err = s.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter after the write ended: %v", err)
 	}
 }

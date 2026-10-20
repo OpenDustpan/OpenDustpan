@@ -124,7 +124,7 @@ func classifyProtocolOther(
 		return http.StatusServiceUnavailable, protocol.Error{
 			Code: protocol.ErrorUnavailable, Message: namespace.ErrFenced.Error(), Supported: "",
 		}
-	case  errors.Is(err, namespace.ErrNotHome),
+	case errors.Is(err, namespace.ErrNotHome),
 		errors.Is(err, maintenance.ErrInMaintenance):
 		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable)
 	default:

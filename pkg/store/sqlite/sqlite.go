@@ -1158,6 +1158,12 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 // flight. It fails closed: a read error fails the write with
 // maintenance.ErrUnavailable. The writes of a restore and of the control
 // tables use inControlTx instead.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, checkWritable)
 }
@@ -1168,6 +1174,12 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // chain) must run while the installation is in maintenance mode. Each caller
 // is a write that maintenance mode must not refuse, and none runs for a tool
 // or installation API request.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, nil)
 }
@@ -1245,6 +1257,12 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 // inFencedTx runs fn in a write transaction that first checks the
 // installation state (inTx) and then fence. The write lock is held from the
 // start, so the failover version cannot change before commit.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
 	return s.fencedTx(ctx, fence, fn, s.inTx)
 }

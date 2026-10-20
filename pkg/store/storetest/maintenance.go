@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -278,7 +279,11 @@ type writers struct {
 	store   Store
 	ns      namespace.Namespace
 	started chan struct{}
-	first   atomic.Value
+	// ended closes when every writer returned, so a wait for started cannot
+	// hang when the writers fail before they commit enough rows.
+	ended   chan struct{}
+	mu      sync.Mutex
+	first   error
 	counter atomic.Int64
 	once    sync.Once
 	group   sync.WaitGroup
@@ -287,12 +292,17 @@ type writers struct {
 // startWriters starts writerCount writers. It closes started once they have
 // committed a few rows.
 func startWriters(ctx context.Context, s Store, ns namespace.Namespace) *writers {
-	//nolint:exhaustruct_v5 // The counter, the first error, the once and the group start zero.
-	w := &writers{store: s, ns: ns, started: make(chan struct{})}
+	//nolint:exhaustruct_v5 // The counter, the first error, the mutex, the once and the group start zero.
+	w := &writers{store: s, ns: ns, started: make(chan struct{}), ended: make(chan struct{})}
 
 	for range writerCount {
 		w.group.Go(func() { w.run(ctx) })
 	}
+
+	go func() {
+		w.group.Wait()
+		close(w.ended)
+	}()
 
 	return w
 }
@@ -306,7 +316,11 @@ func (w *writers) run(ctx context.Context) {
 		err := w.store.CreateStack(ctx, newStack(w.ns.Name, "web", name), w.ns.Fence())
 		if err != nil {
 			if !errors.Is(err, maintenance.ErrInMaintenance) {
-				w.first.Store(err)
+				w.mu.Lock()
+				if w.first == nil {
+					w.first = err
+				}
+				w.mu.Unlock()
 			}
 
 			return
@@ -321,13 +335,26 @@ func (w *writers) run(ctx context.Context) {
 // wait returns after every writer ended, with the first error that is not
 // maintenance.ErrInMaintenance.
 func (w *writers) wait() error {
-	w.group.Wait()
+	<-w.ended
 
-	if err, ok := w.first.Load().(error); ok {
-		return err
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.first
+}
+
+// waitStarted returns once the writers committed a few rows. It fails the
+// test when the writers end or the context ends first.
+func (w *writers) waitStarted(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	select {
+	case <-w.started:
+	case <-w.ended:
+		t.Fatalf("the writers ended before they committed a few rows: %v", w.wait())
+	case <-ctx.Done():
+		t.Fatalf("wait for the writers to start: %v", ctx.Err())
 	}
-
-	return nil
 }
 
 // testMaintenanceEnterStopsWrites covers a write in flight at enter. Writers
@@ -342,7 +369,7 @@ func testMaintenanceEnterStopsWrites(t *testing.T, s Store) {
 	w := startWriters(ctx, s, ns)
 
 	// Let the writers commit some rows before the enter.
-	<-w.started
+	w.waitStarted(ctx, t)
 
 	if err := s.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance); err != nil {
 		t.Fatalf("enter maintenance mode: %v", err)
@@ -435,5 +462,87 @@ func testWriteFailsClosed(t *testing.T, s Store, fault StateFault) {
 
 	if _, err := s.GetStack(ctx, st.Ref); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("get stack of the refused write: err = %v, want ErrNotFound", err)
+	}
+}
+
+// AuditMaintenanceStore is the store that RunAuditInMaintenance needs: the
+// audit ports and the namespace and installation state ports.
+type AuditMaintenanceStore interface {
+	Store
+	audit.Store
+	audit.ServerStore
+}
+
+// auditProbeEntry returns a valid entry of the kind read-access in scope ns.
+func auditProbeEntry(ns namespace.Name, requestID string) audit.Entry {
+	return audit.Entry{
+		At:            now(),
+		Namespace:     ns,
+		Subject:       "probe",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "unit:read",
+		Object:        "pulumi:acme/web/prod",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "probe",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindReadAccess,
+		Outcome:       audit.OutcomeDenied,
+		RequestID:     requestID,
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+	}
+}
+
+// RunAuditInMaintenance checks that an audit entry that stands alone, for
+// example the record of a refusal or of a sign-in, passes in maintenance
+// mode at both scopes and is never dropped, while a write that the entry
+// could describe is still refused.
+func RunAuditInMaintenance(t *testing.T, newStore func(t *testing.T) AuditMaintenanceStore) {
+	t.Helper()
+
+	s := newStore(t)
+	ctx := t.Context()
+	ns := newNamespace(t, s, "acme")
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); err != nil {
+		t.Fatalf("set installation state to maintenance: %v", err)
+	}
+
+	server, err := s.AppendServer(ctx, auditProbeEntry(audit.ServerScope, "req-server"))
+	if err != nil {
+		t.Fatalf("append server entry in maintenance mode: %v", err)
+	}
+
+	scoped, err := s.Append(ctx, ns.Fence(), auditProbeEntry(ns.Name, "req-ns"))
+	if err != nil {
+		t.Fatalf("append namespace entry in maintenance mode: %v", err)
+	}
+
+	if server.Sequence != 1 || scoped.Sequence != 1 {
+		t.Fatalf("sequences = %d and %d, want 1 and 1", server.Sequence, scoped.Sequence)
+	}
+
+	// The fence still holds: a stale fence is refused in maintenance mode too.
+	stale := ns.Fence()
+	stale.FailoverVersion++
+
+	if _, err := s.Append(ctx, stale, auditProbeEntry(ns.Name, "req-stale")); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("append with a stale fence in maintenance mode: err = %v, want ErrFenced", err)
+	}
+
+	late := s.CreateStack(ctx, newStack(ns.Name, "web", "late"), ns.Fence())
+	if !errors.Is(late, maintenance.ErrInMaintenance) {
+		t.Fatalf("write in maintenance mode: err = %v, want ErrInMaintenance", late)
 	}
 }

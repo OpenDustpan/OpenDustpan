@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -97,4 +98,38 @@ func execControl(t *testing.T, conn *pgx.Conn, statement string) {
 	if _, err := conn.Exec(t.Context(), statement); err != nil {
 		t.Fatalf("%s: %v", statement, err)
 	}
+}
+
+// TestAuditAppendsPassInMaintenance proves that a standalone audit entry is
+// never dropped in maintenance mode.
+func TestAuditAppendsPassInMaintenance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL suite", envURL)
+	}
+
+	storetest.RunAuditInMaintenance(t, func(t *testing.T) storetest.AuditMaintenanceStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// TestSinkCursorAdvancesInMaintenance proves that the audit shipper can
+// advance its cursor in maintenance mode.
+func TestSinkCursorAdvancesInMaintenance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL suite", envURL)
+	}
+
+	audittest.RunFeedInMaintenance(t, func(t *testing.T) audittest.FeedMaintenanceStore {
+		t.Helper()
+
+		return open(t, base)
+	})
 }

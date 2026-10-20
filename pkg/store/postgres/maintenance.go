@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -52,7 +54,7 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 	var changed int64
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := lockWritesExclusive(ctx, q); err != nil {
+		if err := lockWritesExclusive(ctx, q, s.stateLockWait); err != nil {
 			return err
 		}
 
@@ -76,11 +78,26 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 	return nil
 }
 
+// stateLockTimeout bounds the wait of an enter or a leave for the write
+// lock. A write transaction that does not end would otherwise hold the
+// exclusive request in the queue, and every later write would wait behind it.
+const stateLockTimeout = 10 * time.Second
+
 // lockWritesExclusive takes the exclusive form of the write lock for this
 // transaction. It waits until every write transaction in flight has ended, and
 // it holds back every later write until this transaction commits. A write that
-// comes after the commit reads the new state.
-func lockWritesExclusive(ctx context.Context, q *db.Queries) error {
+// comes after the commit reads the new state. The wait ends after
+// stateLockTimeout, and the call then reports maintenance.ErrUnavailable, so
+// a stuck write cannot block the other writes without limit.
+func lockWritesExclusive(ctx context.Context, q *db.Queries, wait time.Duration) error {
+	if wait <= 0 {
+		wait = stateLockTimeout
+	}
+
+	if err := q.SetLockTimeout(ctx, strconv.FormatInt(wait.Milliseconds(), 10)+"ms"); err != nil {
+		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+	}
+
 	if err := q.LockWritesExclusive(ctx, writeLockClass); err != nil {
 		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
 	}
@@ -115,7 +132,7 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 	var changed int64
 
 	err := s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := lockWritesExclusive(ctx, q); err != nil {
+		if err := lockWritesExclusive(ctx, q, s.stateLockWait); err != nil {
 			return err
 		}
 

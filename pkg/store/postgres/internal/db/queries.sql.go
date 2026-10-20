@@ -12541,6 +12541,17 @@ func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) er
 	return err
 }
 
+const setLockTimeout = `-- name: SetLockTimeout :exec
+SELECT set_config('lock_timeout', $1::text, true)
+`
+
+// Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
+// The timeout is a PostgreSQL duration text, for example 10000ms.
+func (q *Queries) SetLockTimeout(ctx context.Context, timeout string) error {
+	_, err := q.db.Exec(ctx, setLockTimeout, timeout)
+	return err
+}
+
 const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows
 UPDATE namespaces
 SET ip_allowlist = $1

@@ -23,6 +23,9 @@ var (
 // fence and writes the entry in one transaction with the fence check, so the
 // appends of one namespace form one sequence. It returns the stored entry
 // with its sequence, previous hash and hash.
+// An entry records what happened, for example a refusal or a sign-in, so
+// this append has no installation state check: maintenance mode must never
+// drop it. The change that an entry describes keeps its own check.
 func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
 	if err := e.Validate(); err != nil {
 		return audit.Entry{}, err
@@ -35,7 +38,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 
 	var stored audit.Entry
 
-	txErr := s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
+	txErr := s.inControlFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		var err error
 
 		stored, err = appendAuditEntry(ctx, q, e)
@@ -54,6 +57,9 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 // of the scope form one sequence. A transaction-scoped advisory lock orders
 // appends that run at the same time, as the namespace row lock does for a
 // namespace.
+// An entry records what happened, for example a refusal or a sign-in, so
+// this append has no installation state check: maintenance mode must never
+// drop it. The change that an entry describes keeps its own check.
 func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
 	if err := validServerEntry(e); err != nil {
 		return audit.Entry{}, err
@@ -61,7 +67,7 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 
 	var stored audit.Entry
 
-	txErr := s.inTx(ctx, func(q *db.Queries) error {
+	txErr := s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}

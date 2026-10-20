@@ -62,6 +62,9 @@ type Store struct {
 	// the read of the lock and the delete, inside the transaction. Tests change
 	// the lock there to reach the changed-lock check. Nil in production.
 	beforeLockDelete func(ctx context.Context, q *db.Queries) error
+	// stateLockWait, when it is above zero, replaces stateLockTimeout. Tests
+	// set it to reach the timeout without a long wait. Zero in production.
+	stateLockWait time.Duration
 	// binaryVersion is the version of the binary that opens the store. The
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
@@ -150,8 +153,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		beforeLockDelete: nil,
-		binaryVersion:    "", gate: nil, kind: "", noMigrate: false,
+		beforeLockDelete: nil, stateLockWait: 0,
+		binaryVersion: "", gate: nil, kind: "", noMigrate: false,
 	}
 	s.gate = gatestore.New(gateRunner{s: s})
 
@@ -799,6 +802,12 @@ const readStateAndFenceSQL = `SELECT
 // enters maintenance mode, without a wait for a cache. It fails closed: a
 // read error fails the write with maintenance.ErrUnavailable. The writes of a
 // restore and of the control tables use inControlTx instead.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, func(tx pgx.Tx) error {
 		_, err := readWritable(ctx, tx, readStateSQL, nil)
@@ -813,6 +822,12 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // chain) must run while the installation is in maintenance mode. Each caller
 // is a write that maintenance mode must not refuse, and none runs for a tool
 // or installation API request.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, nil)
 }
@@ -925,6 +940,12 @@ func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) 
 // write with maintenance.ErrInMaintenance, and a stale fence with
 // namespace.ErrFenced. The namespace row is held FOR SHARE so a promotion
 // waits until the transaction ends.
+//
+// Never start a checked transaction (inTx, inFencedTx or any helper built on
+// them) from inside fn, and never call a Store method that does. The outer
+// transaction holds the shared write lock; the inner one asks for it again,
+// and it queues behind an enter that waits for the outer one: a deadlock.
+// Take the state check once, in the outermost transaction.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
 	name := fence.Namespace.String()
 

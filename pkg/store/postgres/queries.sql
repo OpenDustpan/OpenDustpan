@@ -852,6 +852,11 @@ UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
 
+-- name: SetLockTimeout :exec
+-- Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
+-- The timeout is a PostgreSQL duration text, for example 10000ms.
+SELECT set_config('lock_timeout', sqlc.arg(timeout)::text, true);
+
 -- name: LockWritesExclusive :exec
 -- Takes the exclusive form of the write lock for this transaction. It waits
 -- for every write transaction in flight, and holds every later write back
