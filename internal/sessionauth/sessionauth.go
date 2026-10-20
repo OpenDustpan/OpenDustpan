@@ -53,6 +53,9 @@ type Checker struct {
 	sessions Sessions
 	origins  []string
 	refuse   bool
+	// onRefused is called with the subject of each dev person that refuse
+	// turns away. Nil means no call.
+	onRefused func(ctx context.Context, subject string)
 }
 
 // Option changes a Checker.
@@ -66,6 +69,13 @@ func RefuseDevSubjects() Option {
 	return func(c *Checker) { c.refuse = true }
 }
 
+// OnDevRefused makes the Checker call f with the subject of each dev person
+// whose session it refuses (see RefuseDevSubjects). f must not block, and it
+// must not put the cookie or any request data in a record.
+func OnDevRefused(f func(ctx context.Context, subject string)) Option {
+	return func(c *Checker) { c.onRefused = f }
+}
+
 // New returns a Checker that checks sessions with sessions and lets a
 // request with the cookie come from origins.
 func New(sessions Sessions, origins []string, opts ...Option) (*Checker, error) {
@@ -73,7 +83,7 @@ func New(sessions Sessions, origins []string, opts ...Option) (*Checker, error) 
 		return nil, errNoSessions
 	}
 
-	c := &Checker{sessions: sessions, origins: slices.Clone(origins), refuse: false}
+	c := &Checker{sessions: sessions, origins: slices.Clone(origins), refuse: false, onRefused: nil}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -129,6 +139,10 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 	}
 
 	if c.refuse && principal.IsDevSubject(m.Owner.Subject) {
+		if c.onRefused != nil {
+			c.onRefused(r.Context(), m.Owner.Subject)
+		}
+
 		return identity.Principal{}, none, fmt.Errorf("%w: a session of a dev person is not valid on this installation",
 			identity.ErrUnauthenticated)
 	}

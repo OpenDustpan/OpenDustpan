@@ -190,7 +190,8 @@ func (h *Handler) putLock(w http.ResponseWriter, r *http.Request, p identity.Pri
 
 	l, err := h.locks.Lock(ctx, p, lockTarget(obj), reason, entry)
 	if err != nil {
-		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: ""}, err)
+		denial := refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: "", Window: 0}
+		h.writeLockFailure(w, r, p, denial, err)
 
 		return
 	}
@@ -220,7 +221,8 @@ func (h *Handler) deleteLock(w http.ResponseWriter, r *http.Request, p identity.
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "unlock")
 
 	if err := h.locks.Unlock(ctx, p, lockTarget(obj), entry); err != nil {
-		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: ""}, err)
+		denial := refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: "", Window: 0}
+		h.writeLockFailure(w, r, p, denial, err)
 
 		return
 	}
@@ -238,7 +240,13 @@ func (h *Handler) forceUnlock(w http.ResponseWriter, r *http.Request, p identity
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitManage, "force-unlock")
 
 	if err := h.locks.ForceUnlock(ctx, p, lockTarget(obj), entry); err != nil {
-		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitManage, Object: obj, Reason: ""}, err)
+		h.writeLockFailure(
+			w,
+			r,
+			p,
+			refusal.Denial{Action: identity.ActionUnitManage, Object: obj, Reason: "", Window: 0},
+			err,
+		)
 
 		return
 	}

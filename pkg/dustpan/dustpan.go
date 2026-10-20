@@ -845,7 +845,7 @@ func wireDevGuard(cfg *settings) {
 		return
 	}
 
-	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator)
+	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator).OnRefused(devRefusalAudit(cfg))
 }
 
 // requestOf answers the client address and the request ID that the server

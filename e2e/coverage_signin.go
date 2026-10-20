@@ -72,7 +72,8 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil, AuditChain: nil,
 		IPAllowlists: nil, SessionPolicy: nil,
 		SignIn: &serverapi.SignIn{
-			Sessions: sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
+			OnDevRefused: nil,
+			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
 			DevCode: code, DevAdmin: identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
 		},
 		CheckpointEpochs: nil,

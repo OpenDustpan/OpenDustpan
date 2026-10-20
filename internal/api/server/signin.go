@@ -147,6 +147,9 @@ type SignIn struct {
 	// sign-in grants the role of the site administrator as DevAdmin, and
 	// refuses to sign in when the handler has no access service.
 	DevAdmin identity.Principal
+	// OnDevRefused is called with the subject of each dev person whose session
+	// a server of another kind refuses. Nil means no call.
+	OnDevRefused func(ctx context.Context, subject string)
 }
 
 // StoredProviders finds the sign-in providers that the API keeps.
@@ -217,7 +220,7 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 
 	var opts []sessionauth.Option
 	if kind != installation.KindDev {
-		opts = append(opts, sessionauth.RefuseDevSubjects())
+		opts = append(opts, sessionauth.RefuseDevSubjects(), sessionauth.OnDevRefused(cfg.OnDevRefused))
 	}
 
 	checker, err := sessionauth.New(cfg.Sessions, cfg.Origins, opts...)

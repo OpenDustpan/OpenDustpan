@@ -218,3 +218,44 @@ func TestIsDevSubjectMatchesSharedTable(t *testing.T) {
 		})
 	}
 }
+
+// TestDevGuardOnRefused proves that the guard tells the hook the subject of
+// each dev person that it refuses, and only of those.
+func TestDevGuardOnRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		subject string
+		want    []string
+	}{
+		{subject: "dev:admin", want: []string{"dev:admin"}},
+		{subject: "Dev:Admin", want: []string{"Dev:Admin"}},
+		{subject: "corp:alice", want: nil},
+		{subject: "dev", want: nil},
+	} {
+		var got []string
+
+		guard := principal.RefuseDevSubjects(staticAuthenticator{subject: tc.subject}).
+			OnRefused(func(_ context.Context, subject string) { got = append(got, subject) })
+
+		_, err := guard.AuthenticateToken(t.Context(), "token")
+		if refused := errors.Is(err, identity.ErrUnauthenticated); refused != (len(tc.want) > 0) {
+			t.Errorf("subject %q: refused = %t, want %t", tc.subject, refused, len(tc.want) > 0)
+		}
+
+		if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+			t.Errorf("subject %q: hook got %v, want %v", tc.subject, got, tc.want)
+		}
+	}
+}
+
+// staticAuthenticator resolves each token to a person with one subject.
+type staticAuthenticator struct{ subject string }
+
+func (a staticAuthenticator) AuthenticateToken(context.Context, string) (identity.Principal, error) {
+	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: a.subject,
+		DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind: identity.KindPerson, Credential: identity.CredentialSession, JobID: "",
+	}, nil
+}

@@ -273,3 +273,51 @@ func TestDrainReturnsTheHeldCountsAndEmptiesTheLimiter(t *testing.T) {
 		t.Fatalf("limiter holds %d keys after drain, want 0", l.Len())
 	}
 }
+
+// TestAllowWindow proves that a key with its own window keeps that window, and
+// that a key with no window keeps the window of the Limiter.
+func TestAllowWindow(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	l := denylimit.New(denylimit.Config{
+		Window: time.Minute, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: c.now,
+	})
+
+	long, short := key("long"), key("short")
+
+	if d := l.AllowWindow(long, time.Hour); !d.Write {
+		t.Fatal("first denial of the long key: Write = false, want true")
+	}
+
+	if d := l.AllowWindow(long, time.Hour); d.Write {
+		t.Fatal("second denial of the long key: Write = true, want false")
+	}
+
+	if d := l.Allow(short); !d.Write {
+		t.Fatal("first denial of the short key: Write = false, want true")
+	}
+
+	// Past the window of the Limiter, inside the hour.
+	c.advance(30 * time.Minute)
+
+	if d := l.Allow(short); !d.Write {
+		t.Fatal("short key after its window: Write = false, want true")
+	}
+
+	d := l.AllowWindow(long, time.Hour)
+	if d.Write {
+		t.Fatal("long key inside its hour: Write = true, want false")
+	}
+
+	if len(d.Flush) != 0 {
+		t.Fatalf("flush inside the hour = %+v, want none", d.Flush)
+	}
+
+	c.advance(31 * time.Minute)
+
+	d = l.AllowWindow(long, time.Hour)
+	if !d.Write || d.Suppressed != 2 {
+		t.Fatalf("long key after the hour: Write = %v, Suppressed = %d, want true and 2", d.Write, d.Suppressed)
+	}
+}

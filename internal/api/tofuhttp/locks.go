@@ -344,7 +344,8 @@ func (h *Handler) recordLockRefusal(ctx context.Context, r *http.Request, c call
 		return
 	}
 
-	h.guard.Record(ctx, r, c.principal, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: reason})
+	denial := refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: reason, Window: 0}
+	h.guard.Record(ctx, r, c.principal, denial)
 }
 
 // writeConflict answers 409 with the current lock info, or with no body when
