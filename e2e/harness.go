@@ -702,6 +702,10 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		tb.Fatalf("new server: %v", err)
 	}
 
+	// The harness serves the handler directly, so it runs the backup worker
+	// that Server.Run starts. It stops before the stores close.
+	startBackupWorker(tb, srv)
+
 	return serverBuild{
 		handler:   srv.Handler(),
 		store:     st,
@@ -710,6 +714,27 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
 	}
+}
+
+// startBackupWorker runs the backup worker of srv until the test ends.
+func startBackupWorker(tb testing.TB, srv *dustpan.Server) {
+	tb.Helper()
+
+	backups := srv.Backups()
+	if backups == nil {
+		return
+	}
+
+	ctx, stop := context.WithCancel(context.WithoutCancel(tb.Context()))
+
+	var work sync.WaitGroup
+
+	work.Go(func() { backups.Work(ctx) })
+
+	tb.Cleanup(func() {
+		stop()
+		work.Wait()
+	})
 }
 
 // openBackupTarget opens a backup target directory next to the database at
