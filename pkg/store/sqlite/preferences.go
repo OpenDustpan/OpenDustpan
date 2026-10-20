@@ -96,7 +96,9 @@ func (s *Store) Update(
 	var result preferences.Result
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		res, err := preferences.Change(ctx, preferencesTx{q: q}, s.logger, personID, patch, e, ifMatch)
+		res, err := preferences.Change(ctx, preferencesTx{q: q}, preferences.ChangeInput{
+			Log: s.logger, PersonID: personID, Patch: patch, Entry: e, IfMatch: ifMatch,
+		})
 		result = res
 
 		return err

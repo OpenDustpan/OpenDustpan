@@ -908,7 +908,8 @@ func testStoredBadField(t *testing.T, s Store) {
 	}
 
 	// A row that is not a document at all gives the defaults.
-	if err := w.WriteRawPreferences(t.Context(), p.id, `{"theme":"terminal","theme":"default"}`, at(4).UnixMilli()); err != nil {
+	err := w.WriteRawPreferences(t.Context(), p.id, `{"theme":"terminal","theme":"default"}`, at(4).UnixMilli())
+	if err != nil {
 		t.Fatalf("write the row: %v", err)
 	}
 
@@ -942,16 +943,15 @@ func testIfMatch(t *testing.T, s Store) {
 	stale := version - 1
 
 	for _, ifMatch := range []int64{0, stale, version + 1} {
-		_, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(2)), &ifMatch)
-		if !errors.Is(err, preferences.ErrPreconditionFailed) {
-			t.Errorf("Update with version %d: error = %v, want ErrPreconditionFailed", ifMatch, err)
+		_, refused := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(2)), &ifMatch)
+		if !errors.Is(refused, preferences.ErrPreconditionFailed) {
+			t.Errorf("Update with version %d: error = %v, want ErrPreconditionFailed", ifMatch, refused)
 		}
 	}
 
 	// A patch that changes nothing is refused too, when the version is old.
-	if _, err := s.Update(t.Context(), p.id, preferences.Patch{}, entry(p.id, at(2)), &stale); !errors.Is(
-		err, preferences.ErrPreconditionFailed,
-	) {
+	_, err = s.Update(t.Context(), p.id, preferences.Patch{}, entry(p.id, at(2)), &stale)
+	if !errors.Is(err, preferences.ErrPreconditionFailed) {
 		t.Errorf("no-op with an old version: error = %v, want ErrPreconditionFailed", err)
 	}
 
@@ -963,7 +963,8 @@ func testIfMatch(t *testing.T, s Store) {
 		t.Errorf("entries = %d, want %d: a refused change writes none", n, entries)
 	}
 
-	if _, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(3)), &version); err != nil {
+	_, err = s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(3)), &version)
+	if err != nil {
 		t.Errorf("Update with the stored version: %v", err)
 	}
 }

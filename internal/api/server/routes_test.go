@@ -1452,6 +1452,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -1607,6 +1608,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
@@ -1646,6 +1648,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,

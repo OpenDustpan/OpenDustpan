@@ -230,7 +230,7 @@ func preferencesVersions(ctx context.Context, t *testing.T, env *e2e.Env, token 
 
 	oldTag := first.Header.Get("ETag")
 	if oldTag == "" {
-		t.Fatalf("GET answers no ETag")
+		t.Fatal("GET answers no ETag")
 	}
 
 	// A change with the version that the read gave works and gives a new version.
@@ -252,7 +252,8 @@ func preferencesVersions(ctx context.Context, t *testing.T, env *e2e.Env, token 
 		t.Fatalf("412 errorCode = %q", refused.ErrorCode)
 	}
 
-	if after, _ := prefsCall(ctx, t, env, prefsGet(token, http.StatusOK)); after.Header.Get("ETag") != resp.Header.Get("ETag") {
+	after, _ := prefsCall(ctx, t, env, prefsGet(token, http.StatusOK))
+	if after.Header.Get("ETag") != resp.Header.Get("ETag") {
 		t.Fatalf("ETag after a refused patch = %q, want %q", after.Header.Get("ETag"), resp.Header.Get("ETag"))
 	}
 }

@@ -399,7 +399,12 @@ func TestParseStoredDropsWhatFailsACheck(t *testing.T) {
 		want    preferences.Settings
 		dropped []string
 	}{
-		{"a bad zone", `{"timeZone":"Mars/Olympus","theme":"terminal"}`, preferences.Settings{"theme": "terminal"}, []string{"timeZone"}},
+		{
+			"a bad zone",
+			`{"timeZone":"Mars/Olympus","theme":"terminal"}`,
+			preferences.Settings{"theme": "terminal"},
+			[]string{"timeZone"},
+		},
 		{"an unknown member", `{"nope":"x","language":"he"}`, preferences.Settings{"language": "he"}, []string{"nope"}},
 		{"a value that is not text", `{"theme":3}`, preferences.Settings{}, []string{"theme"}},
 		{"not an object", `[1]`, preferences.Settings{}, []string{"document"}},

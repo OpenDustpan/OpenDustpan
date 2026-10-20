@@ -25,6 +25,18 @@ type Tx interface {
 	Append(ctx context.Context, e audit.Entry) error
 }
 
+// ChangeInput is the request of Change.
+type ChangeInput struct {
+	// Log records the name of each stored field that fails a check. Nil means
+	// no log.
+	Log      *slog.Logger
+	PersonID string
+	Patch    Patch
+	Entry    audit.Entry
+	// IfMatch is nil, or the Version that the caller read.
+	IfMatch *int64
+}
+
 // Change applies patch to the preferences of the person personID through tx,
 // as the Update of a Store must: it reads the row, applies the patch with
 // Apply (which checks every value), and, when a value changes, writes the row
@@ -32,17 +44,16 @@ type Tx interface {
 // patch that changes nothing writes nothing. When ifMatch is set, it must be the
 // version of the stored row, or Change returns ErrPreconditionFailed first. The caller runs it in one
 // transaction, so a failed call changes nothing.
-func Change(
-	ctx context.Context, tx Tx, log *slog.Logger, personID string, patch Patch, e audit.Entry, ifMatch *int64,
-) (Result, error) {
+func Change(ctx context.Context, tx Tx, in ChangeInput) (Result, error) {
 	none := Result{Document: Default(), Changed: nil}
+	personID, patch, e, ifMatch := in.PersonID, in.Patch, in.Entry, in.IfMatch
 
 	document, updatedAtMs, err := tx.Load(ctx, personID)
 	if err != nil {
 		return none, err
 	}
 
-	current, updatedAt := Load(document, updatedAtMs, log)
+	current, updatedAt := Load(document, updatedAtMs, in.Log)
 
 	if ifMatch != nil && *ifMatch != current.DocumentAt(updatedAt).Version() {
 		return none, ErrPreconditionFailed

@@ -119,7 +119,9 @@ func (s *Store) Update(
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
 
-		res, err := preferences.Change(ctx, preferencesTx{q: q, lock: true}, s.logger, personID, patch, e, ifMatch)
+		res, err := preferences.Change(ctx, preferencesTx{q: q, lock: true}, preferences.ChangeInput{
+			Log: s.logger, PersonID: personID, Patch: patch, Entry: e, IfMatch: ifMatch,
+		})
 		result = res
 
 		return err
