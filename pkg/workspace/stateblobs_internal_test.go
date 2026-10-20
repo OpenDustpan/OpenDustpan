@@ -20,48 +20,13 @@ import (
 const (
 	acmeID  = namespace.ID("ns-acmeacmeacmeacmeacme")
 	otherID = namespace.ID("ns-otherotherotherother")
+	testWS  = ID("ws-1")
 )
 
 var (
 	errNotUsed   = errors.New("not used")
 	errAuditDown = errors.New("audit log down")
 )
-
-// scopeNamespace returns a namespace of the tests.
-func scopeNamespace(id namespace.ID, name namespace.Name) namespace.Namespace {
-	return namespace.Namespace{
-		CreatedAt: time.Time{}, ID: id, Name: name, HomeRegion: "local",
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
-	}
-}
-
-// scopeNamespaces is a namespace store with a fixed set of namespaces.
-type scopeNamespaces struct {
-	byName map[namespace.Name]namespace.Namespace
-}
-
-func (s scopeNamespaces) CreateNamespace(context.Context, namespace.Namespace) error {
-	return errNotUsed
-}
-
-func (s scopeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
-	ns, ok := s.byName[name]
-	if !ok {
-		return namespace.Namespace{}, namespace.ErrNotFound
-	}
-
-	return ns, nil
-}
-
-func (s scopeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
-	return errNotUsed
-}
-
-func (s scopeNamespaces) ListNamespaces(context.Context) ([]namespace.Namespace, error) {
-	return nil, errNotUsed
-}
-
-func (s scopeNamespaces) Ping(context.Context) error { return nil }
 
 // callCountingStore is a blob store in memory that counts the calls.
 type callCountingStore struct {
@@ -162,20 +127,10 @@ func (l *refusalLog) all() []string {
 func newScopeBlobs(t *testing.T) (*stateBlobs, *callCountingStore, *refusalLog) {
 	t.Helper()
 
-	nsStore := scopeNamespaces{byName: map[namespace.Name]namespace.Namespace{
-		"acme":  scopeNamespace(acmeID, "acme"),
-		"other": scopeNamespace(otherID, "other"),
-	}}
-
-	namespaces, err := namespace.NewService(namespace.Config{Store: nsStore, Now: nil, Region: "local"})
-	if err != nil {
-		t.Fatalf("namespace service: %v", err)
-	}
-
 	store := &callCountingStore{mu: sync.Mutex{}, objects: map[blob.Key][]byte{}, calls: 0}
 	refusals := &refusalLog{mu: sync.Mutex{}, got: nil, err: nil}
 
-	return &stateBlobs{store: store, namespaces: namespaces, refusals: refusals}, store, refusals
+	return &stateBlobs{store: store, refusals: refusals}, store, refusals
 }
 
 // hostileKey is one key that the use-time check must refuse. want is the error
@@ -216,6 +171,24 @@ func TestStateBlobsRefuseHostileKeys(t *testing.T) {
 			blob.ErrOutOfScope,
 			true,
 		},
+		{
+			"a blob of another workspace of the namespace",
+			"namespaces/" + acmeID.String() + "/tofu/ws-2/sv-1/a1",
+			blob.ErrOutOfScope,
+			true,
+		},
+		{
+			"a workspace ID that only starts like ours",
+			"namespaces/" + acmeID.String() + "/tofu/ws-10/sv-1/a1",
+			blob.ErrOutOfScope,
+			true,
+		},
+		{
+			"the directory of the namespace, not of the workspace",
+			"namespaces/" + acmeID.String() + "/tofu/",
+			blob.ErrOutOfScope,
+			true,
+		},
 		{"the item key directory", "namespaces/" + acmeID.String() + "/item-keys/ik-1/v1", blob.ErrOutOfScope, true},
 		{"the old layout", "tofu/ws-1/sv-1/a1", blob.ErrOutOfScope, true},
 		{
@@ -240,10 +213,10 @@ func TestStateBlobsRefuseHostileKeys(t *testing.T) {
 
 	ops := []hostileOp{
 		{"put", opPut, func(b *stateBlobs, r io.Reader, key blob.Key) error {
-			return b.put(context.Background(), "acme", key, r)
+			return b.put(context.Background(), acmeID, testWS, key, r)
 		}},
 		{"get", opGet, func(b *stateBlobs, _ io.Reader, key blob.Key) error {
-			rc, err := b.get(context.Background(), "acme", key)
+			rc, err := b.get(context.Background(), acmeID, testWS, key)
 			if rc != nil {
 				err = errors.Join(err, rc.Close())
 			}
@@ -251,10 +224,10 @@ func TestStateBlobsRefuseHostileKeys(t *testing.T) {
 			return err
 		}},
 		{"delete", opDelete, func(b *stateBlobs, _ io.Reader, key blob.Key) error {
-			return b.delete(context.Background(), "acme", key)
+			return b.delete(context.Background(), acmeID, testWS, key)
 		}},
 		{"deleteRetried", opDelete, func(b *stateBlobs, _ io.Reader, key blob.Key) error {
-			return b.deleteRetried(context.Background(), "acme", key)
+			return b.deleteRetried(context.Background(), acmeID, testWS, key)
 		}},
 	}
 
@@ -329,7 +302,7 @@ func TestStateBlobsListRefusesHostileWorkspaces(t *testing.T) {
 
 			b, store, refusals := newScopeBlobs(t)
 
-			_, err := b.list(context.Background(), "acme", ws)
+			_, err := b.list(context.Background(), acmeID, ws)
 			if !errors.Is(err, blob.ErrOutOfScope) {
 				t.Fatalf("err = %v, want blob.ErrOutOfScope", err)
 			}
@@ -353,19 +326,19 @@ func TestStateBlobsInScope(t *testing.T) {
 	b, store, refusals := newScopeBlobs(t)
 	ctx := context.Background()
 
-	key := scopedAttemptKey(t, b, "acme", acmeID)
-	otherKey := scopedAttemptKey(t, b, "other", otherID)
+	key := scopedAttemptKey(t, b, acmeID)
+	otherKey := scopedAttemptKey(t, b, otherID)
 
-	if err := b.put(ctx, "acme", key, strings.NewReader("state")); err != nil {
+	if err := b.put(ctx, acmeID, testWS, key, strings.NewReader("state")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 
-	listed, err := b.list(ctx, "acme", "ws-1")
+	listed, err := b.list(ctx, acmeID, testWS)
 	if err != nil || len(listed) != 1 || listed[0].Key != key {
 		t.Fatalf("list = %v, %v, want only %q", listed, err, key)
 	}
 
-	if other, listErr := b.list(ctx, "other", "ws-1"); listErr != nil || len(other) != 0 {
+	if other, listErr := b.list(ctx, otherID, testWS); listErr != nil || len(other) != 0 {
 		t.Fatalf("list of other = %v, %v, want none", other, listErr)
 	}
 
@@ -384,14 +357,14 @@ func TestStateBlobsInScope(t *testing.T) {
 	}
 }
 
-// scopedAttemptKey returns the attempt key of the namespace name and checks
-// that it starts with the directory of the namespace ID id.
-func scopedAttemptKey(t *testing.T, b *stateBlobs, name namespace.Name, id namespace.ID) blob.Key {
+// scopedAttemptKey returns the attempt key of the namespace with ID id and
+// checks that it starts with the directory of the workspace in that namespace.
+func scopedAttemptKey(t *testing.T, b *stateBlobs, id namespace.ID) blob.Key {
 	t.Helper()
 
-	key, err := b.attemptKey(context.Background(), name, "ws-1", "sv-1")
+	key, err := b.attemptKey(id, testWS, "sv-1")
 	if err != nil {
-		t.Fatalf("attempt key of %s: %v", name, err)
+		t.Fatalf("attempt key of %s: %v", id, err)
 	}
 
 	if want := "namespaces/" + id.String() + "/tofu/ws-1/sv-1/"; !strings.HasPrefix(key.String(), want) {
@@ -407,7 +380,7 @@ func checkGetAndDelete(t *testing.T, b *stateBlobs, key blob.Key) {
 
 	ctx := context.Background()
 
-	rc, err := b.get(ctx, "acme", key)
+	rc, err := b.get(ctx, acmeID, testWS, key)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -417,33 +390,42 @@ func checkGetAndDelete(t *testing.T, b *stateBlobs, key blob.Key) {
 		t.Fatalf("read = %q, %v, %v, want state", data, err, closeErr)
 	}
 
-	if err = b.deleteRetried(ctx, "acme", key); err != nil {
+	if err = b.deleteRetried(ctx, acmeID, testWS, key); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
-	if _, err = b.get(ctx, "acme", key); !errors.Is(err, blob.ErrNotFound) {
+	if _, err = b.get(ctx, acmeID, testWS, key); !errors.Is(err, blob.ErrNotFound) {
 		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
 	}
 }
 
-// TestStateBlobsUnknownNamespace proves that a namespace the server does not
-// know gets no view and no store call.
-func TestStateBlobsUnknownNamespace(t *testing.T) {
+// TestStateBlobsInvalidNamespaceID proves that a namespace ID that is empty or
+// malformed gets no view and no store call, and no refusal record: the call
+// fails closed before it names a key.
+func TestStateBlobsInvalidNamespaceID(t *testing.T) {
 	t.Parallel()
 
-	b, store, refusals := newScopeBlobs(t)
+	for _, id := range []namespace.ID{"", "acme", "ns-", "NS-ACME", "ns-acme/../x"} {
+		t.Run(string(id), func(t *testing.T) {
+			t.Parallel()
 
-	_, err := b.get(context.Background(), "ghost", blob.Key("namespaces/"+acmeID.String()+"/tofu/ws-1/sv-1/a1"))
-	if !errors.Is(err, namespace.ErrNotFound) {
-		t.Fatalf("err = %v, want namespace.ErrNotFound", err)
-	}
+			b, store, refusals := newScopeBlobs(t)
 
-	if n := store.callCount(); n != 0 {
-		t.Errorf("calls that reached the store = %d, want 0", n)
-	}
+			_, err := b.get(
+				context.Background(), id, testWS, blob.Key("namespaces/"+acmeID.String()+"/tofu/ws-1/sv-1/a1"),
+			)
+			if err == nil {
+				t.Fatal("err = nil, want an error")
+			}
 
-	if got := refusals.all(); len(got) != 0 {
-		t.Errorf("refusals = %v, want none", got)
+			if n := store.callCount(); n != 0 {
+				t.Errorf("calls that reached the store = %d, want 0", n)
+			}
+
+			if got := refusals.all(); len(got) != 0 {
+				t.Errorf("refusals = %v, want none", got)
+			}
+		})
 	}
 }
 
@@ -455,7 +437,7 @@ func TestStateBlobsRecorderFailure(t *testing.T) {
 	b, _, refusals := newScopeBlobs(t)
 	refusals.err = errAuditDown
 
-	_, err := b.get(context.Background(), "acme", blob.Key("namespaces/"+otherID.String()+"/tofu/ws-1/sv-1/a1"))
+	_, err := b.get(context.Background(), acmeID, testWS, blob.Key("namespaces/"+otherID.String()+"/tofu/ws-1/sv-1/a1"))
 	if !errors.Is(err, blob.ErrOutOfScope) || !errors.Is(err, errAuditDown) {
 		t.Fatalf("err = %v, want blob.ErrOutOfScope joined with the record failure", err)
 	}
@@ -561,18 +543,18 @@ func TestStateBlobsDeleteEveryShapeInTheDirectory(t *testing.T) {
 		}
 	}
 
-	listed, err := b.list(ctx, "acme", "ws-1")
+	listed, err := b.list(ctx, acmeID, testWS)
 	if err != nil || len(listed) != 4 {
 		t.Fatalf("list = %d, %v, want 4", len(listed), err)
 	}
 
 	for _, obj := range listed {
-		if deleteErr := b.deleteRetried(ctx, "acme", obj.Key); deleteErr != nil {
+		if deleteErr := b.deleteRetried(ctx, acmeID, testWS, obj.Key); deleteErr != nil {
 			t.Fatalf("delete %q: %v", obj.Key, deleteErr)
 		}
 	}
 
-	if left, listErr := b.list(ctx, "acme", "ws-1"); listErr != nil || len(left) != 0 {
+	if left, listErr := b.list(ctx, acmeID, testWS); listErr != nil || len(left) != 0 {
 		t.Fatalf("list after the delete = %d, %v, want none", len(left), listErr)
 	}
 

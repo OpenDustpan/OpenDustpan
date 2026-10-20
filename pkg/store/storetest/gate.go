@@ -431,13 +431,14 @@ func (d gateDomain) CreateUnit(
 		}
 
 		w := workspace.Workspace{
-			CreatedAt: gateTime(),
-			UpdatedAt: gateTime(),
-			Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			ID:        workspace.ID(ident.NewID("ws-")),
-			Ref:       workspace.Ref{Namespace: ns, Name: wname},
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-			Revision:  1,
+			NamespaceID: "",
+			CreatedAt:   gateTime(),
+			UpdatedAt:   gateTime(),
+			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			ID:          workspace.ID(ident.NewID("ws-")),
+			Ref:         workspace.Ref{Namespace: ns, Name: wname},
+			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+			Revision:    1,
 		}
 		if err = d.s.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 			return fmt.Errorf("create workspace %s: %w", name, err)

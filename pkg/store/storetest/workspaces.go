@@ -366,13 +366,14 @@ func mustWorkspaceName(t *testing.T, name string) workspace.Name {
 
 func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Workspace {
 	return workspace.Workspace{
-		CreatedAt: now(),
-		UpdatedAt: now(),
-		Lock:      clearedLock(),
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		Lock:        clearedLock(),
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
+		NamespaceID: ns.ID,
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 
@@ -520,11 +521,12 @@ func finalizeRecorded(
 func assertWorkspace(t *testing.T, got, want workspace.Workspace) {
 	t.Helper()
 
-	if got.Ref != want.Ref || got.ID != want.ID || got.Revision != want.Revision ||
-		!got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) ||
-		got.Lock.ID != want.Lock.ID || got.Lock.Holder != want.Lock.Holder ||
-		got.Lock.Reason != want.Lock.Reason || !got.Lock.LockedAt.Equal(want.Lock.LockedAt) ||
-		got.Overrides != want.Overrides {
+	same := got.Ref == want.Ref && got.NamespaceID == want.NamespaceID && got.ID == want.ID &&
+		got.Revision == want.Revision && got.Overrides == want.Overrides &&
+		got.CreatedAt.Equal(want.CreatedAt) && got.UpdatedAt.Equal(want.UpdatedAt) &&
+		got.Lock.ID == want.Lock.ID && got.Lock.Holder == want.Lock.Holder &&
+		got.Lock.Reason == want.Lock.Reason && got.Lock.LockedAt.Equal(want.Lock.LockedAt)
+	if !same {
 		t.Fatalf("workspace = %+v, want %+v", got, want)
 	}
 }
@@ -738,7 +740,7 @@ func testListWorkspaces(t *testing.T, s WorkspaceStore) {
 	}
 
 	for i := range want {
-		if got[i].Ref.Name.String() != want[i] || got[i].Ref.Namespace != ns.Name {
+		if got[i].Ref.Name.String() != want[i] || got[i].Ref.Namespace != ns.Name || got[i].NamespaceID != ns.ID {
 			t.Fatalf("listed workspaces = %v, want %v", workspaceNames(got), want)
 		}
 	}

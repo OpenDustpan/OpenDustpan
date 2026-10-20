@@ -672,13 +672,14 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 		}
 
 		items = append(items, workspace.Workspace{
-			CreatedAt: at,
-			UpdatedAt: at,
-			Lock:      tc.lock,
-			ID:        workspace.ID(tc.id),
-			Ref:       workspace.Ref{Namespace: ns, Name: name},
-			Revision:  1,
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			NamespaceID: "",
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			Lock:        tc.lock,
+			ID:          workspace.ID(tc.id),
+			Ref:         workspace.Ref{Namespace: ns, Name: name},
+			Revision:    1,
+			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 		})
 	}
 

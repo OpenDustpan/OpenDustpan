@@ -714,7 +714,7 @@ The server does not follow a redirect: a 3xx answer is a failed batch, and the s
 ### Object storage
 
 `blob:<prefix>` writes to the blob store of the server: the directory of `--blob-dir` or the bucket of `--blob-store`.
-The prefixes `tofu` and `pulumi` hold state, so the server refuses them.
+The prefixes `namespaces` and `pulumi` hold state, so the server refuses them.
 The prefix `audit-checkpoints` holds signed audit checkpoints, so the server refuses it.
 Each object is `<prefix>/<scope>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
 The two times are the first and the last entry of the file in Unix milliseconds.

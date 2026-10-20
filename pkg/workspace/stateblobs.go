@@ -34,42 +34,35 @@ func StateBlobFamily() secret.OutOfScopeFamily {
 
 // stateBlobs reads and writes the state content blobs. It builds a
 // *blob.Scoped for each call, from the namespace ID of the workspace row that
-// the caller resolved and authorized, never from a request field. Each blob
-// key is namespaces/<namespace ID>/tofu/<workspace ID>/<state version ID>/<attempt>.
+// the caller resolved and authorized, never from a request field. It reads
+// no namespace: the ID comes from Workspace.NamespaceID. Each blob key is
+// namespaces/<namespace ID>/tofu/<workspace ID>/<state version ID>/<attempt>.
 //
-// A call with a key of another namespace returns blob.ErrOutOfScope before
-// any call to the store, and writes one refusal to the
-// secret.OutOfScopeRecorder.
+// A write or a delete accepts a key only inside the directory of the
+// workspace, namespaces/<namespace ID>/tofu/<workspace ID>/. A key of another
+// namespace, of another kind in the namespace, or of another workspace of the
+// namespace returns blob.ErrOutOfScope before any call to the store, and
+// writes one refusal to the secret.OutOfScopeRecorder.
 type stateBlobs struct {
-	store      blob.Store
-	namespaces *namespace.Service
-	refusals   secret.OutOfScopeRecorder
+	store    blob.Store
+	refusals secret.OutOfScopeRecorder
 }
 
-// view returns the view of the store for the namespace called name, with the
-// ID of that namespace. The ID comes from the namespace record, so a caller
-// never chooses it.
-func (b *stateBlobs) view(ctx context.Context, name namespace.Name) (*blob.Scoped, namespace.ID, error) {
-	ns, err := b.namespaces.Get(ctx, name)
+// view returns the view of the store for the namespace with ID ns.
+func (b *stateBlobs) view(ns namespace.ID) (*blob.Scoped, error) {
+	v, err := blob.NewScoped(b.store, ns)
 	if err != nil {
-		return nil, "", fmt.Errorf("scope of state blobs: %w", err)
+		return nil, fmt.Errorf("scope of state blobs: %w", err)
 	}
 
-	v, err := blob.NewScoped(b.store, ns.ID)
-	if err != nil {
-		return nil, "", fmt.Errorf("scope of state blobs: %w", err)
-	}
-
-	return v, ns.ID, nil
+	return v, nil
 }
 
 // attemptKey returns a fresh blob key for one upload attempt of the state
-// version sv of the workspace ws, inside the namespace called name. IDs are
+// version sv of the workspace ws, inside the namespace with ID ns. IDs are
 // lowercase, so the key is valid whatever the namespace is called.
-func (b *stateBlobs) attemptKey(
-	ctx context.Context, name namespace.Name, ws ID, sv StateVersionID,
-) (blob.Key, error) {
-	v, _, err := b.view(ctx, name)
+func (b *stateBlobs) attemptKey(ns namespace.ID, ws ID, sv StateVersionID) (blob.Key, error) {
+	v, err := b.view(ns)
 	if err != nil {
 		return "", err
 	}
@@ -82,99 +75,106 @@ func (b *stateBlobs) attemptKey(
 	return key, nil
 }
 
-// put stores r under key, in the namespace called name. It returns
-// blob.ErrOutOfScope, and does not read r, when key is outside the state
-// directory of that namespace.
-func (b *stateBlobs) put(ctx context.Context, name namespace.Name, key blob.Key, r io.Reader) error {
-	v, id, err := b.scopedKey(ctx, name, key, opPut)
+// put stores r under key, for the workspace ws of the namespace with ID ns.
+// It returns blob.ErrOutOfScope, and does not read r, when key is outside the
+// directory of that workspace.
+func (b *stateBlobs) put(ctx context.Context, ns namespace.ID, ws ID, key blob.Key, r io.Reader) error {
+	v, err := b.scopedKey(ctx, ns, ws, key, opPut)
 	if err != nil {
 		return err
 	}
 
-	return b.refuse(ctx, id, opPut, v.Put(ctx, key, r), secret.OutOfScopePlace(v, key))
+	return b.refuse(ctx, ns, opPut, v.Put(ctx, key, r), secret.OutOfScopePlace(v, key))
 }
 
-// get opens the blob under key, in the namespace called name. It returns
-// blob.ErrOutOfScope when key is outside the state directory of that
-// namespace.
-func (b *stateBlobs) get(ctx context.Context, name namespace.Name, key blob.Key) (io.ReadCloser, error) {
-	v, id, err := b.scopedKey(ctx, name, key, opGet)
+// get opens the blob under key, for the workspace ws of the namespace with ID
+// ns. It returns blob.ErrOutOfScope when key is outside the directory of that
+// workspace.
+func (b *stateBlobs) get(ctx context.Context, ns namespace.ID, ws ID, key blob.Key) (io.ReadCloser, error) {
+	v, err := b.scopedKey(ctx, ns, ws, key, opGet)
 	if err != nil {
 		return nil, err
 	}
 
 	r, err := v.Get(ctx, key)
 	if err != nil {
-		return nil, b.refuse(ctx, id, opGet, err, secret.OutOfScopePlace(v, key))
+		return nil, b.refuse(ctx, ns, opGet, err, secret.OutOfScopePlace(v, key))
 	}
 
 	return r, nil
 }
 
-// delete removes the blob under key, in the namespace called name. A missing
-// blob is not an error. It returns blob.ErrOutOfScope when key is outside the
-// state directory of that namespace.
-func (b *stateBlobs) delete(ctx context.Context, name namespace.Name, key blob.Key) error {
-	v, id, err := b.scopedKey(ctx, name, key, opDelete)
+// delete removes the blob under key, for the workspace ws of the namespace
+// with ID ns. A missing blob is not an error. It returns blob.ErrOutOfScope
+// when key is outside the directory of that workspace.
+func (b *stateBlobs) delete(ctx context.Context, ns namespace.ID, ws ID, key blob.Key) error {
+	v, err := b.scopedKey(ctx, ns, ws, key, opDelete)
 	if err != nil {
 		return err
 	}
 
-	return b.refuse(ctx, id, opDelete, v.Delete(ctx, key), secret.OutOfScopePlace(v, key))
+	return b.refuse(ctx, ns, opDelete, v.Delete(ctx, key), secret.OutOfScopePlace(v, key))
 }
 
 // deleteRetried is delete with a retry of a transient failure after a short
 // backoff (blob.DeleteRetried). A refusal is not retried.
-func (b *stateBlobs) deleteRetried(ctx context.Context, name namespace.Name, key blob.Key) error {
-	v, id, err := b.scopedKey(ctx, name, key, opDelete)
+func (b *stateBlobs) deleteRetried(ctx context.Context, ns namespace.ID, ws ID, key blob.Key) error {
+	v, err := b.scopedKey(ctx, ns, ws, key, opDelete)
 	if err != nil {
 		return err
 	}
 
-	return b.refuse(ctx, id, opDelete, blob.DeleteRetried(ctx, v, key), secret.OutOfScopePlace(v, key))
+	return b.refuse(ctx, ns, opDelete, blob.DeleteRetried(ctx, v, key), secret.OutOfScopePlace(v, key))
 }
 
-// list returns the blobs of the workspace ws, in the namespace called name.
-func (b *stateBlobs) list(ctx context.Context, name namespace.Name, ws ID) ([]blob.Object, error) {
-	v, id, err := b.view(ctx, name)
+// list returns the blobs of the workspace ws, in the namespace with ID ns.
+func (b *stateBlobs) list(ctx context.Context, ns namespace.ID, ws ID) ([]blob.Object, error) {
+	v, err := b.view(ns)
 	if err != nil {
 		return nil, err
 	}
 
-	objects, err := v.List(ctx, v.Prefix()+stateBlobDir+ws.String()+"/")
+	objects, err := v.List(ctx, workspaceDir(v, ws))
 	if err != nil {
-		return nil, b.refuse(ctx, id, opList, fmt.Errorf("list state blobs: %w", err), secret.OutsideNamespace)
+		return nil, b.refuse(ctx, ns, opList, fmt.Errorf("list state blobs: %w", err), secret.OutsideNamespace)
 	}
 
 	return objects, nil
 }
 
-// scopedKey returns the view of the namespace called name after it checks
-// that key is inside the state directory of that namespace. A key of another
-// namespace, or a key of another directory of the namespace, is a refusal.
+// workspaceDir returns the directory of the state blobs of the workspace ws in
+// the view v: namespaces/<namespace ID>/tofu/<workspace ID>/.
+func workspaceDir(v *blob.Scoped, ws ID) string {
+	return v.Prefix() + stateBlobDir + ws.String() + "/"
+}
+
+// scopedKey returns the view of the namespace with ID ns after it checks that
+// key is inside the directory of the workspace ws. A key of another namespace,
+// of another directory of the namespace, or of another workspace is a refusal.
 //
 // The shape of the rest of the key is not checked here: a purge and a sweep
 // delete each blob that a listing of the workspace directory returns, also a
 // blob of an unexpected shape, so no blob of a purged workspace stays. The
 // view checks that the whole key is valid.
 //
-// Defense in depth: the view refuses a key outside the namespace too. This
-// check stays so that a key of a blob of another kind in the same namespace,
-// for example a checkpoint, never reaches the state code, and it does not
-// rely on the view.
+// Defense in depth: the view refuses a key outside the namespace too, and the
+// callers take the key from the row of the workspace. This check stays so
+// that a row of one workspace never names, and so never deletes, a blob of
+// another workspace of the same namespace, or a blob of another kind such as
+// a checkpoint. It does not rely on the view or on the row.
 func (b *stateBlobs) scopedKey(
-	ctx context.Context, name namespace.Name, key blob.Key, op string,
-) (*blob.Scoped, namespace.ID, error) {
-	v, id, err := b.view(ctx, name)
+	ctx context.Context, ns namespace.ID, ws ID, key blob.Key, op string,
+) (*blob.Scoped, error) {
+	v, err := b.view(ns)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
-	if !strings.HasPrefix(key.String(), v.Prefix()+stateBlobDir) {
-		return nil, "", b.refuse(ctx, id, op, blob.ErrOutOfScope, secret.OutOfScopePlace(v, key))
+	if ws == "" || !strings.HasPrefix(key.String(), workspaceDir(v, ws)) {
+		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, secret.OutOfScopePlace(v, key))
 	}
 
-	return v, id, nil
+	return v, nil
 }
 
 // validStateRest reports whether rest, the part of a key after the state

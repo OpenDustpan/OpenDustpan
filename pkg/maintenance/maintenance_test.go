@@ -645,8 +645,9 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		NamespaceID: "",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 		Lock: workspace.Lock{
 			LockedAt: time.Now(),
 			ID:       "lock-1",

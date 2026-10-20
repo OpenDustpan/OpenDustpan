@@ -622,6 +622,27 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
 FROM workspaces
 WHERE id = $1 AND deleted_at_ms IS NULL;
 
+-- name: ReadWorkspace :one
+-- The read behind the store port: the workspace with the ID of its namespace,
+-- from the join with the namespace row, so a caller needs no second read.
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = $1 AND w.name = $2 AND w.deleted_at_ms IS NULL;
+
+-- name: ReadWorkspaceByID :one
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.id = $1 AND w.deleted_at_ms IS NULL;
+
+-- name: ReadWorkspaces :many
+SELECT sqlc.embed(w), n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = $1 AND w.deleted_at_ms IS NULL
+ORDER BY w.name;
+
 -- name: LockWorkspaceForFinalize :one
 -- Locks the workspace row so two finalizes on one workspace cannot both pass
 -- the serial check.
