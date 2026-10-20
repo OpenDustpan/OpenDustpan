@@ -1790,8 +1790,8 @@ func testBackupFinishForeignFence(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("claim the other operation: %v", err)
 	}
 
-	if err := s.DurableOperationsPort().Complete(t.Context(), otherOp.Claim); err != nil {
-		t.Fatalf("complete the other operation: %v", err)
+	if completeErr := s.DurableOperationsPort().Complete(t.Context(), otherOp.Claim); completeErr != nil {
+		t.Fatalf("complete the other operation: %v", completeErr)
 	}
 
 	fences := map[string]durable.StepFence{
@@ -1800,9 +1800,9 @@ func testBackupFinishForeignFence(t *testing.T, newStore BackupFactory) {
 	}
 
 	for name, fence := range fences {
-		_, err := s.FinishBackup(t.Context(), fence, r.ID, backup.StateSucceeded, "", now().Add(time.Hour))
-		if !errors.Is(err, durable.ErrClaimLost) {
-			t.Fatalf("finish with a fence of an %s: err = %v, want durable.ErrClaimLost", name, err)
+		_, finishErr := s.FinishBackup(t.Context(), fence, r.ID, backup.StateSucceeded, "", now().Add(time.Hour))
+		if !errors.Is(finishErr, durable.ErrClaimLost) {
+			t.Fatalf("finish with a fence of an %s: err = %v, want durable.ErrClaimLost", name, finishErr)
 		}
 
 		requireStillRunning(t, s, r.ID, claim)
