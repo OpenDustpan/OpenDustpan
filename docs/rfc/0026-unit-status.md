@@ -1,8 +1,9 @@
 ---
 rfc: 26
 title: Unit status in the inventory
-status: accepted (ADRs 213, 265)
+status: accepted
 created: 2026-10-10
+adr: 213, 265
 ---
 
 # RFC 26. Unit status in the inventory
@@ -54,7 +55,7 @@ vocabulary holds no `locked` value.
 - C. Store `locked` as a state. This contradicts ADR 213 decision 9.
 
 Answer: A (ADR 265 decision 5). Option A supersedes in part the vocabulary
-sentence of ADR 213 decision 9 and keeps the flag as the only source. The badge set is one list for the console and
+sentence of ADR 213 decision 9. The badge set is one list for the console and
 the filter (decision 26.2). The flag stays the only source, so no stored state
 holds `locked`.
 
@@ -70,7 +71,7 @@ own words (ADR 12, ADR 251).
 
 | State | Set by | Source today |
 | --- | --- | --- |
-| `locked` | the inventory | the lock and the manual lock |
+| `locked` | derived at read time | the lock and the manual lock |
 | `drifted`, `in-sync`, `unknown` | the drift package | the drift result (ADR 263) |
 | `running`, `queued`, `awaiting-approval` | the job model | the jobs of the unit, when the job store writes them |
 | `failed` | the job model, and the `stack` package for a Pulumi CLI update | the latest change to end: an apply or destroy job, or an update of kind update, destroy or import |

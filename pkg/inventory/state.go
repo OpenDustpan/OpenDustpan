@@ -29,7 +29,8 @@ const (
 	StateApplyNeeded State = "apply-needed"
 	// StateDrifted means that the latest drift check found a difference.
 	StateDrifted State = "drifted"
-	// StateFailed means that the latest change job of the unit failed.
+	// StateFailed means that the latest change to end failed: an apply or destroy
+	// job, or a Pulumi CLI update.
 	StateFailed State = "failed"
 	// StateUnknown means that the drift state of the unit is not known.
 	StateUnknown State = "unknown"

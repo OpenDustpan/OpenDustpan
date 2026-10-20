@@ -39,9 +39,10 @@ decision 8 holds the wire value of the approval wait.
 7. **Each state has named writers.** The drift package writes `drifted`,
    `in-sync` and `unknown`. The job model writes `running`, `queued` and
    `awaiting-approval`. The job model and the `stack` package write `failed`
-   (decision 10). A writer writes a state only in the transaction of its own
-   write, with the `namespace.Fence`, and the store checks the fence in the
-   same transaction. Only `locked` is derived.
+   (decision 10). The job model writes `apply-needed` (decision 9). A writer
+   writes a state only in the transaction of its own write, with the
+   `namespace.Fence`, and the store checks the fence in the same transaction.
+   Only `locked` is derived.
 8. **`unknown` shows only for a unit with a drift check setting.** The unit
    shows `unknown` until its first drift result. A unit with no drift check
    setting shows no drift state. `in-sync` shows when the latest drift result
