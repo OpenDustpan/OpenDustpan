@@ -238,7 +238,7 @@ func (s *Store) ListGrantsOn(
 		return nil, 0, targetErr
 	}
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
 		rows, err := q.ListGrantsOn(ctx, db.ListGrantsOnParams{
 			Target: target, Subject: gq.Subject, Role: gq.Role, AfterSubject: gq.AfterSubject, AfterRole: gq.AfterRole,
 			RowLimit: int64(gq.Limit),

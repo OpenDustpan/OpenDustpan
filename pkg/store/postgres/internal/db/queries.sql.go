@@ -10989,6 +10989,18 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 	return i, err
 }
 
+const lockWritesExclusive = `-- name: LockWritesExclusive :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext(current_schema()))
+`
+
+// Takes the exclusive form of the write lock for this transaction. It waits
+// for every write transaction in flight, and holds every later write back
+// until this transaction ends. Each write transaction takes the shared form.
+func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockWritesExclusive, class)
+	return err
+}
+
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
@@ -12561,6 +12573,17 @@ type SetLastSignInParams struct {
 
 func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) error {
 	_, err := q.db.Exec(ctx, setLastSignIn, arg.AtMs, arg.ID)
+	return err
+}
+
+const setLockTimeout = `-- name: SetLockTimeout :exec
+SELECT set_config('lock_timeout', $1::text, true)
+`
+
+// Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
+// The timeout is a PostgreSQL duration text, for example 10000ms.
+func (q *Queries) SetLockTimeout(ctx context.Context, timeout string) error {
+	_, err := q.db.Exec(ctx, setLockTimeout, timeout)
 	return err
 }
 

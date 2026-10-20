@@ -104,8 +104,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handl
 	}}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Locks:         nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: unitEntries(), err: nil},
@@ -119,6 +118,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handl
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		PublicURL:     "https://dustpan.example.com",
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

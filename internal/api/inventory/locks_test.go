@@ -152,10 +152,61 @@ func (subjectAuthenticator) AuthenticateToken(_ context.Context, token string) (
 	}, nil
 }
 
+// memAudit is an audit.Store that keeps the appended entries of the namespace
+// acme in memory. It does not chain them: the tests read the fields.
+type memAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+var _ audit.Store = (*memAudit)(nil)
+
+func (m *memAudit) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, err
+	}
+
+	if e.Namespace != fence.Namespace {
+		return audit.Entry{}, audit.ErrInvalidEntry
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.entries = append(m.entries, e)
+
+	return e, nil
+}
+
+func (m *memAudit) List(_ context.Context, _ namespace.Name, _ audit.Page) (audit.Listing, error) {
+	return audit.Listing{Entries: nil, Total: 0}, nil
+}
+
+func (m *memAudit) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: true}, nil
+}
+
+// denied returns the entries with the outcome denied.
+func (m *memAudit) denied() []audit.Entry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []audit.Entry
+
+	for i := range m.entries {
+		if m.entries[i].Outcome == audit.OutcomeDenied {
+			out = append(out, m.entries[i])
+		}
+	}
+
+	return out
+}
+
 // lockFixture is a handler with the lock routes over an in-memory store.
 type lockFixture struct {
 	handler *apiinventory.Handler
 	store   *memLocks
+	audit   *memAudit
 }
 
 func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
@@ -170,6 +221,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 	}
 
 	store := newMemLocks()
+	auditStore := &memAudit{mu: sync.Mutex{}, entries: nil}
 
 	locks, err := manuallock.NewService(
 		manuallock.Config{Store: store, Namespaces: nsStore, Authorizer: authz, Now: nil, Phases: nil},
@@ -179,27 +231,30 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Namespaces:    nsSvc,
-		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
-		Deleted:       &memDeleted{entries: nil},
-		History:       nil,
-		Lifecycles:    testLifecycles(),
-		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
-		Collections:   nil,
-		Locks:         locks,
-		Moves:         nil,
-		Authenticator: subjectAuthenticator{},
-		Authorizer:    authz,
-		Sessions:      nil,
-		PublicURL:     "",
-		Logger:        slog.New(slog.DiscardHandler),
-		Now:           nil,
+		Namespaces:     nsSvc,
+		Units:          &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
+		Deleted:        &memDeleted{entries: nil},
+		History:        nil,
+		Lifecycles:     testLifecycles(),
+		ReadScope:      fixedScope{err: nil, ids: nil, all: true},
+		Collections:    nil,
+		Locks:          locks,
+		Moves:          nil,
+		Authenticator:  subjectAuthenticator{},
+		Authorizer:     authz,
+		Audit:          auditStore,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		PublicURL:      "",
+		Logger:         slog.New(slog.DiscardHandler),
+		Now:            nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)
 	}
 
-	return lockFixture{handler: handler, store: store}
+	return lockFixture{handler: handler, store: store, audit: auditStore}
 }
 
 // do sends one request as subject and returns the answer.
@@ -483,6 +538,15 @@ func checkDenied(t *testing.T, obj lockObject, tc deniedCase) {
 
 	if _, held := f.store.locks[target.String()]; held != tc.seed {
 		t.Errorf("lock held = %v after a denied request, want %v", held, tc.seed)
+	}
+
+	got := f.audit.denied()
+	if len(got) != 1 {
+		t.Fatalf("denied entries = %d, want 1: %+v", len(got), got)
+	}
+
+	if got[0].Action != string(tc.deny) || got[0].Subject != "alice" {
+		t.Errorf("entry action %q subject %q, want %q and alice", got[0].Action, got[0].Subject, tc.deny)
 	}
 }
 
@@ -810,5 +874,115 @@ func TestLockRoutesAnswerLockChangedWith409(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestLockRefusalsOfTheServiceWriteDeniedEntries proves that a removal by a
+// principal that does not hold the lock, and a removal that finds the lock
+// changed, answer 409 and write one denied entry with their own reason and the
+// action of the route.
+func TestLockRefusalsOfTheServiceWriteDeniedEntries(t *testing.T) {
+	t.Parallel()
+
+	cases := []serviceRefusalCase{
+		{
+			name: "not holder", method: http.MethodDelete, force: false, action: identity.ActionUnitLock,
+			reason: "lock held by another principal", removeErr: nil,
+		},
+		{
+			name: "lock changed on removal", method: http.MethodDelete, force: false,
+			action: identity.ActionUnitLock, reason: "lock changed during the removal",
+			removeErr: manuallock.ErrLockChanged,
+		},
+		{
+			name: "lock changed on force-unlock", method: http.MethodPost, force: true,
+			action: identity.ActionUnitManage, reason: "lock changed during the removal",
+			removeErr: manuallock.ErrLockChanged,
+		},
+	}
+
+	for _, obj := range lockObjects() {
+		for _, tc := range cases {
+			t.Run(obj.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				checkServiceRefusal(t, obj, tc)
+			})
+		}
+	}
+}
+
+// serviceRefusalCase is one refusal that the lock service decides.
+type serviceRefusalCase struct {
+	name      string
+	method    string
+	force     bool
+	action    identity.Action
+	reason    string
+	removeErr error
+}
+
+// checkServiceRefusal sends the removal of tc on a lock that bob holds, as
+// alice, and checks the 409 and the denied entry.
+func checkServiceRefusal(t *testing.T, obj lockObject, tc serviceRefusalCase) {
+	t.Helper()
+
+	f := newLockFixture(t, selectiveAuthorizer{deny: nil})
+	target := mustTarget(t, obj)
+	f.store.locks[target.String()] = manuallock.Lock{
+		Since: time.Now(), Target: target, Holder: "bob", Reason: "seed",
+	}
+	f.store.removeErr = tc.removeErr
+
+	path := obj.path
+	if tc.force {
+		path = forcePath(path)
+	}
+
+	rec := f.do(t, "alice", tc.method, path, "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	got := f.audit.denied()
+	if len(got) != 1 {
+		t.Fatalf("denied entries = %d, want 1: %+v", len(got), got)
+	}
+
+	if got[0].Action != string(tc.action) || got[0].Subject != "alice" || !strings.HasPrefix(got[0].Reason, tc.reason) {
+		t.Errorf("entry action %q subject %q reason %q, want %q and alice and %q",
+			got[0].Action, got[0].Subject, got[0].Reason, tc.action, tc.reason)
+	}
+}
+
+// TestLockStateAnswersWriteNoDeniedEntry proves that a lock that is already held
+// and an object with no lock to remove are state and not refusals: they answer
+// as before and write no denied entry.
+func TestLockStateAnswersWriteNoDeniedEntry(t *testing.T) {
+	t.Parallel()
+
+	for _, obj := range lockObjects() {
+		t.Run(obj.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLockFixture(t, selectiveAuthorizer{deny: nil})
+			target := mustTarget(t, obj)
+
+			if rec := f.do(t, "alice", http.MethodDelete, obj.path, ""); rec.Code != http.StatusNotFound {
+				t.Fatalf("remove of no lock: status = %d, want %d", rec.Code, http.StatusNotFound)
+			}
+
+			f.store.locks[target.String()] = manuallock.Lock{
+				Since: time.Now(), Target: target, Holder: "bob", Reason: "seed",
+			}
+
+			if rec := f.do(t, "alice", http.MethodPut, obj.path, `{"reason":"x"}`); rec.Code != http.StatusConflict {
+				t.Fatalf("lock of a held object: status = %d, want %d", rec.Code, http.StatusConflict)
+			}
+
+			if got := f.audit.denied(); len(got) != 0 {
+				t.Errorf("denied entries = %d, want 0: %+v", len(got), got)
+			}
+		})
 	}
 }

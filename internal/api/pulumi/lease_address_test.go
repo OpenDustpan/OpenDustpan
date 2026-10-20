@@ -99,6 +99,7 @@ func newUpdateFixtureWithAddressGate(
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -293,6 +294,7 @@ func newSharedLeaseFixture(t *testing.T, setup sharedLeaseSetup, gate pulumi.Add
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

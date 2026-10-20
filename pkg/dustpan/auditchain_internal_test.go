@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -680,6 +681,44 @@ func metricLine(t *testing.T, chain *auditChain) string {
 	}
 
 	return out.String()
+}
+
+// TestNewEpochAfterRestoreWritesItsEntryInMaintenance proves that the
+// after-apply step of a restore writes its entry in @server while the real
+// stored installation state is maintenance: a restore holds maintenance
+// mode until its last step ends, and a checked append would lose the entry.
+func TestNewEpochAfterRestoreWritesItsEntryInMaintenance(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOn)
+
+	reader, ok := chain.entries.(audit.EntryReader)
+	if !ok {
+		t.Fatal("audit store reads no single entry")
+	}
+
+	state, ok := chain.store.(maintenance.Store)
+	if !ok {
+		t.Fatal("chain store holds no installation state")
+	}
+
+	cps := audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs: openTestBlobs(t), Entries: reader, Signer: newTestCheckpointSigner(t), Now: nil,
+	})
+
+	if err := state.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	step := newEpochAfterRestore(cps, chain.server, time.Now)
+	if err := step(t.Context()); err != nil {
+		t.Fatalf("after-apply step in maintenance mode: %v", err)
+	}
+
+	last, found, err := chain.store.LastEntry(t.Context(), audit.ServerScope)
+	if err != nil || !found || last.ValuePath != "/audit/checkpoints/epoch/1" {
+		t.Fatalf("last @server entry = %+v, %v, %v; want the epoch 1 entry", last, found, err)
+	}
 }
 
 // TestCheckWritesNoCheckpointWhileAChangeWaits proves that with checkpoints

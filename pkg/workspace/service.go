@@ -941,6 +941,41 @@ const (
 	OverrideUnlocked
 )
 
+// OverrideRefusedError is the error of an override that the unit, its namespace or
+// the caller's permissions do not allow. It matches ErrOverrideRefused and any
+// cause that it wraps, so a refused unlocked write still matches ErrNotLocked.
+// Adapters read Override to pick the action to record, never the text.
+type OverrideRefusedError struct {
+	// Override is the override that the refused write needed.
+	Override Override
+	msg      string
+	causes   []error
+}
+
+// NewOverrideRefusedError returns an OverrideRefusedError for override with the text msg.
+// The result matches ErrOverrideRefused and each of causes.
+func NewOverrideRefusedError(override Override, msg string, causes ...error) *OverrideRefusedError {
+	return &OverrideRefusedError{Override: override, msg: msg, causes: causes}
+}
+
+// Error returns the text of the refusal.
+func (e *OverrideRefusedError) Error() string { return e.msg }
+
+// Unwrap returns ErrOverrideRefused and the causes of the refusal.
+func (e *OverrideRefusedError) Unwrap() []error {
+	return append([]error{ErrOverrideRefused}, e.causes...)
+}
+
+// RefusedOverride returns the override of the first OverrideRefusedError in the
+// chain of err, and whether the chain holds one.
+func RefusedOverride(err error) (Override, bool) {
+	if refusal, ok := errors.AsType[*OverrideRefusedError](err); ok {
+		return refusal.Override, true
+	}
+
+	return 0, false
+}
+
 // declareOverrides checks the lock and the overrides of one declare. It returns
 // whether the declare is an unlocked write and the overrides it uses. A forced
 // declare needs the override only when the unit has state (ADR 44, decision 4).
@@ -995,13 +1030,13 @@ type pendingDeclare struct {
 
 // forcedRefusal names the action and the switches that allow a forced write.
 func forcedRefusal() error {
-	return fmt.Errorf(
-		"%w: a forced write needs the forced-write switch on for the namespace "+
+	return NewOverrideRefusedError(OverrideForced, fmt.Sprintf(
+		"%s: a forced write needs the forced-write switch on for the namespace "+
 			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
 			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
 			"and the permission to write forced state (`unit:write-forced`)",
 		ErrOverrideRefused,
-	)
+	))
 }
 
 // unlockedRefusal keeps the status of a refused declare on an unlocked unit
@@ -1011,13 +1046,13 @@ func unlockedRefusal(lockErr error) error {
 		return lockErr
 	}
 
-	return fmt.Errorf(
-		"%w: a write without the lock needs the unlocked-write switch on for the namespace "+
+	return NewOverrideRefusedError(OverrideUnlocked, fmt.Sprintf(
+		"%s: a write without the lock needs the unlocked-write switch on for the namespace "+
 			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
 			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
 			"and the permission to write without the lock (`unit:write-unlocked`)",
 		lockErr,
-	)
+	), lockErr)
 }
 
 // Upload stores the content of a pending state version and makes it current.

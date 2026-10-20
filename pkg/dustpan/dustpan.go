@@ -49,6 +49,7 @@ import (
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
@@ -56,6 +57,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
@@ -143,6 +145,9 @@ const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
+	// denialLimiter is the one limiter of the audit entries of refused requests.
+	// Every adapter gets it, so its bound on keys holds for the whole server.
+	denialLimiter   *denylimit.Limiter
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -570,6 +575,9 @@ type Server struct {
 	tempAdmins  *tempadmin.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
+	// flushDenials writes the counts of refused requests that the limiter still
+	// holds. Run calls it once at shutdown.
+	flushDenials func(ctx context.Context)
 	// deleted runs the retention sweep of the deleted units on a schedule.
 	deleted *deletedSweeper
 	// signInRequests deletes the expired sign-in requests on a schedule, or
@@ -632,6 +640,9 @@ type services struct {
 // defaultSettings answers the settings of a server before its options.
 func defaultSettings() *settings {
 	return &settings{
+		denialLimiter: denylimit.New(denylimit.Config{
+			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
+		}),
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -919,8 +930,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	backupRegistry, restoreRegistry := registriesOf(cfg.namespaceStore)
 
 	srv := &Server{
-		handler:          handlers.served,
-		ungated:          handlers.ungated,
+		flushDenials: denialFlusher(cfg, svc, observed),
+		handler:      handlers.served, ungated: handlers.ungated,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
 		listener:         cfg.listener,
@@ -1042,7 +1053,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	neutral, err := newNeutralHandlers(svc, cfg)
+	neutral, err := newNeutralHandlers(svc, cfg, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -1094,27 +1105,29 @@ type neutralHandlers struct {
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
 // context API.
-func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
-	units, err := newInventoryHandler(svc, cfg)
+func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMetrics) (neutralHandlers, error) {
+	onFailure := func() { observed.IncAuditAppendFailure() }
+
+	units, err := newInventoryHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
-	entries, err := newAuditHandler(svc, cfg)
+	entries, err := newAuditHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
-	contexts, err := newContextHandler(svc, cfg)
+	contexts, err := newContextHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
 
-	runners, err := newRunnerHandler(cfg, svc)
+	runners, err := newRunnerHandler(cfg, svc, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
-	profiles, err := newProfileHandler(svc, cfg)
+	profiles, err := newProfileHandler(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1166,6 +1179,7 @@ func newTofuHTTPHandler(
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
+		DenialLimiter: cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1237,6 +1251,7 @@ func newTFEHandler(
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
+		DenialLimiter: cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -1632,6 +1647,7 @@ func (s *Server) Run(ctx context.Context) error {
 	waitShipper := s.workerOnly(func() func() { return s.startAuditShipper(shipCtx) })
 
 	defer func() {
+		s.flushDenialCounts(ctx)
 		stopCheck()
 		waitCheck()
 		stopShipper()
@@ -1642,6 +1658,37 @@ func (s *Server) Run(ctx context.Context) error {
 
 	return s.serveUntilDone(ctx, srv, ln)
 }
+
+// flushDenialCounts writes the counts of refused requests that no entry carries
+// yet. It uses a fresh context with a timeout, because ctx is done at shutdown.
+func (s *Server) flushDenialCounts(ctx context.Context) {
+	if s.flushDenials == nil {
+		return
+	}
+
+	flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushTimeout)
+	defer cancel()
+
+	s.flushDenials(flushCtx)
+}
+
+// denialFlusher returns the function that writes the counts that the shared
+// limiter still holds. It uses the audit store of the namespace store, like the
+// adapters.
+func denialFlusher(cfg *settings, svc services, observed *metrics.ServerMetrics) func(context.Context) {
+	var entries audit.Store
+	if st, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = st
+	}
+
+	rec := refusal.New(nil, entries, svc.namespaces, cfg.logger, func() { observed.IncAuditAppendFailure() }).
+		WithLimiter(cfg.denialLimiter)
+
+	return rec.Flush
+}
+
+// flushTimeout bounds the write of the counts of refused requests at shutdown.
+const flushTimeout = 5 * time.Second
 
 // workerOnly runs start when the process runs the worker component, and
 // answers the function that waits for what start began. Without the worker
@@ -2085,6 +2132,7 @@ func newPulumiHandler(
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
+		DenialLimiter:           cfg.denialLimiter,
 		CheckpointDeltaCutoff:   cfg.checkpointDeltaCutoff,
 		DisablePulumiJournaling: cfg.disablePulumiJournaling,
 	})
@@ -2099,7 +2147,7 @@ func newPulumiHandler(
 // service and the audit store. The store comes from the namespace store:
 // every SQL adapter serves all ports from one database connection. A custom
 // store that keeps no audit entries fails here with a clear error.
-func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
+func newAuditHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
 	entries, ok := cfg.namespaceStore.(audit.Store)
 	if !ok {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
@@ -2120,6 +2168,9 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
+
+		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("audit api: %w", err)
@@ -2132,7 +2183,14 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 // when that store also keeps context. A custom store without context gets no
 // context API: its routes are not served and the rest of the API works as
 // before.
-func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
+func newContextHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+	// A namespace store that keeps no audit entries gives a nil store, and a
+	// refusal then writes no entry.
+	var neutralAudit audit.Store
+	if st, ok := cfg.namespaceStore.(audit.Store); ok {
+		neutralAudit = st
+	}
+
 	store, ok := cfg.namespaceStore.(objectcontext.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No context API: the store keeps no context.
@@ -2163,6 +2221,10 @@ func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
+
+		Audit:          neutralAudit,
+		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("context api: %w", err)
@@ -2173,7 +2235,7 @@ func newContextHandler(svc services, cfg *settings) (http.Handler, error) {
 
 // newProfileHandler builds the profile API, or returns nil when no profile
 // store is set.
-func newProfileHandler(svc services, cfg *settings) (http.Handler, error) {
+func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
 	if cfg.profileStore == nil {
 		return nil, nil //nolint:nilnil // No profile API: no profile store is set.
 	}
@@ -2208,6 +2270,10 @@ func newProfileHandler(svc services, cfg *settings) (http.Handler, error) {
 		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
 		Now:           cfg.now,
+
+		Audit:          entries,
+		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("profile api: %w", err)
@@ -2286,7 +2352,14 @@ func checkRetention(d time.Duration) error {
 // tool (ADR 47). Every SQL adapter also reads the deleted units through the
 // inventory reader. A custom reader that keeps no deleted units fails here
 // with a clear error.
-func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
+func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+	// A namespace store that keeps no audit entries gives a nil store, and a
+	// refusal then writes no entry.
+	var neutralAudit audit.Store
+	if st, ok := cfg.namespaceStore.(audit.Store); ok {
+		neutralAudit = st
+	}
+
 	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
 	if !ok {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
@@ -2329,6 +2402,10 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		PublicURL:     strings.TrimSpace(cfg.publicURL),
 		Logger:        cfg.logger,
 		Now:           cfg.now,
+
+		Audit:          neutralAudit,
+		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
@@ -2437,13 +2514,14 @@ func newServerHandler(
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
-		DeletedUnits: deps.services.deleted,
-		TempAdmins:   tempReaderOf(cfg.namespaceStore),
-		Now:          cfg.now,
-		AuditChain:   auditChainPort(deps.chain),
-		AuditSinks:   sinks,
-		Workers:      cfg.watch,
-		SignIn:       deps.signIn,
+		DenialLimiter: cfg.denialLimiter,
+		DeletedUnits:  deps.services.deleted,
+		TempAdmins:    tempReaderOf(cfg.namespaceStore),
+		Now:           cfg.now,
+		AuditChain:    auditChainPort(deps.chain),
+		AuditSinks:    sinks,
+		Workers:       cfg.watch,
+		SignIn:        deps.signIn,
 
 		InstallationKind: cfg.installationKind,
 	})

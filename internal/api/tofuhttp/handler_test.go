@@ -343,6 +343,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		Audit:          nil,
 		Gate:           nil,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -726,5 +727,164 @@ func TestFencedWriteStatuses(t *testing.T) {
 	rec = do(newTestHandler(t, writing), http.MethodPost, unitPath, `{"serial":1,"lineage":"l"}`, bearer(adminToken))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("fenced POST: status %d, want %d; body %q", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
+// TestLockRefusalsAreAudited proves the domain layer of the denial audit: an
+// UNLOCK that the middleware allows but the workspace refuses writes a denied
+// entry with the reason, and the answer stays 409.
+func TestLockRefusalsAreAudited(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, err: nil, entries: nil, mu: sync.Mutex{}}
+
+	h, err := tofuhttp.NewHandler(tofuhttp.Config{
+		Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
+		Workspaces: newFakeUnits(true), Namespaces: fakeNamespaces{}, Audit: store,
+		Gate: nil, OnAuditFailure: nil,
+		DenialLimiter: nil,
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	if rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+		t.Fatalf("LOCK: status %d, want 200", rec.Code)
+	}
+
+	rec := do(h, "UNLOCK", unitPath, lockBody("lock-two", "alice"), bearer(adminToken))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("UNLOCK with another lock ID: status %d, want 409", rec.Code)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if len(store.entries) != 1 {
+		t.Fatalf("entries = %+v, want one denied entry", store.entries)
+	}
+
+	e := store.entries[0]
+	if e.Outcome != audit.OutcomeDenied || !strings.HasPrefix(e.Reason, "unlock names a lock") ||
+		e.Object != "opentofu:acme/net" || e.Action != string(identity.ActionUnitLock) {
+		t.Fatalf("entry = %+v, want denied, the unit, the lock action and the reason of the lock refusal", e)
+	}
+}
+
+// TestOverrideRefusalsAreAudited proves the domain layer of the denial audit:
+// a state write that the workspace refuses because the forced-write switch is
+// off answers 403 and writes a denied entry with the forced-write action.
+func TestOverrideRefusalsAreAudited(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, err: nil, entries: nil, mu: sync.Mutex{}}
+	units := newFakeUnits(true)
+	units.writeErr = fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+
+	h, err := tofuhttp.NewHandler(tofuhttp.Config{
+		Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
+		Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
+		Gate: nil, OnAuditFailure: nil,
+		DenialLimiter: nil,
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	rec := do(h, http.MethodPost, unitPath, `{"version":4}`, bearer(userToken))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("refused override: status %d, want 403; body %q", rec.Code, rec.Body.String())
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if len(store.entries) != 1 {
+		t.Fatalf("entries = %+v, want one denied entry", store.entries)
+	}
+
+	e := store.entries[0]
+	if e.Outcome != audit.OutcomeDenied || e.Action != string(identity.ActionUnitWriteForced) ||
+		e.Kind != audit.KindOverride || e.Object != "opentofu:acme/net" || e.Subject != "bob" {
+		t.Fatalf("entry = %+v, want denied, kind override, the forced-write action and the unit", e)
+	}
+}
+
+// TestRefusedUnlockedWriteIsAudited proves a write without the lock that the
+// workspace refuses writes a denied entry with the unlocked-write action when
+// the switch is off and when the caller lacks the permission, and that a forced
+// refusal keeps the forced-write action.
+func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantAction string
+	}{
+		{
+			name: "permission missing",
+			err: workspace.NewOverrideRefusedError(
+				workspace.OverrideUnlocked,
+				"workspace is not locked: needs `unit:write-unlocked`",
+				workspace.ErrNotLocked,
+			),
+			wantStatus: http.StatusForbidden,
+			wantAction: string(identity.ActionUnitWriteUnlocked),
+		},
+		{
+			name: "switch off",
+			err: workspace.NewOverrideRefusedError(
+				workspace.OverrideUnlocked, "write refused: the unlocked-write switch is off",
+			),
+			wantStatus: http.StatusForbidden,
+			wantAction: string(identity.ActionUnitWriteUnlocked),
+		},
+		{
+			name: "forced",
+			err: workspace.NewOverrideRefusedError(
+				workspace.OverrideForced, "write refused: the forced-write switch is off",
+			),
+			wantStatus: http.StatusForbidden,
+			wantAction: string(identity.ActionUnitWriteForced),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &recordingAudit{Store: nil, err: nil, entries: nil, mu: sync.Mutex{}}
+			units := newFakeUnits(true)
+			units.writeErr = tc.err
+
+			h, err := tofuhttp.NewHandler(tofuhttp.Config{
+				Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
+				Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
+				Gate: nil, OnAuditFailure: nil,
+				DenialLimiter: nil,
+			})
+			if err != nil {
+				t.Fatalf("new handler: %v", err)
+			}
+
+			rec := do(h, http.MethodPost, unitPath, `{"version":4}`, bearer(userToken))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status %d, want %d; body %q", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+
+			if len(store.entries) != 1 {
+				t.Fatalf("entries = %+v, want one denied entry", store.entries)
+			}
+
+			if e := store.entries[0]; e.Outcome != audit.OutcomeDenied || e.Action != tc.wantAction ||
+				e.Kind != audit.KindOverride {
+				t.Fatalf("entry = %+v, want denied override entry with action %s", e, tc.wantAction)
+			}
+		})
 	}
 }

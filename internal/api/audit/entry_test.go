@@ -140,13 +140,15 @@ func TestReadOneEntryWithoutReader(t *testing.T) {
 	}
 
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
-		Namespaces:    namespaces,
-		Entries:       entries,
-		EntryReader:   nil,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    &recordingAuthorizer{calls: nil},
-		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Entries:        entries,
+		EntryReader:    nil,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     &recordingAuthorizer{calls: nil},
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -216,13 +218,15 @@ func TestReadOneEntryOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	}
 
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
-		Namespaces:    namespaces,
-		Entries:       entries,
-		EntryReader:   entries,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Entries:        entries,
+		EntryReader:    entries,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -246,13 +250,15 @@ func newReaderHandler(t *testing.T, reader audit.EntryReader) http.Handler {
 	}
 
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
-		Namespaces:    namespaces,
-		Entries:       &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil},
-		EntryReader:   reader,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    &recordingAuthorizer{calls: nil},
-		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Entries:        &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil},
+		EntryReader:    reader,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     &recordingAuthorizer{calls: nil},
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

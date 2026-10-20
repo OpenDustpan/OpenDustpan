@@ -363,6 +363,7 @@ func buildSecretFixture(
 		Audit:                   cfg.store,
 		OnAuditFailure:          cfg.onFail,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1137,6 +1138,7 @@ func TestSecretsMissingKey(t *testing.T) {
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1564,6 +1566,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1773,6 +1776,7 @@ func newLoggedSecretsHandler(
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1951,6 +1955,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -2002,6 +2007,7 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)

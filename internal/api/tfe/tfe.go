@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -232,6 +233,10 @@ type Config struct {
 	// to the dustpan_audit_append_failures_total counter. Nil means no
 	// counter: the routes still fail closed with a 500 and no value.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// Gate bounds concurrent large bodies by bytes held at once.
 	Gate *bodygate.Gate
 	// MaxStateBytes bounds one OpenTofu state version. Zero means
@@ -286,7 +291,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure),
+			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
+			WithSurface("tfe"),
 		gate:     cfg.Gate,
 		maxState: cfg.MaxStateBytes,
 		mux:      newPatternMux(),

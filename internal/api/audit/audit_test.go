@@ -309,13 +309,15 @@ func newTestHandler(t *testing.T) *apitaudit.Handler {
 	}
 
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
-		Namespaces:    namespaces,
-		Entries:       entries,
-		EntryReader:   entries,
-		Authenticator: stubAuthenticator{},
-		Authorizer:    stubAuthorizer{},
-		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Entries:        entries,
+		EntryReader:    entries,
+		Authenticator:  stubAuthenticator{},
+		Authorizer:     stubAuthorizer{},
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -351,13 +353,15 @@ func newEnforcingHandlerWithSessions(
 	}
 
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
-		Namespaces:    namespaces,
-		Entries:       entries,
-		EntryReader:   entries,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Sessions:      sessions,
-		Logger:        slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Entries:        entries,
+		EntryReader:    entries,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Sessions:       sessions,
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -566,13 +570,15 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	}
 
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
-		Namespaces:    namespaces,
-		Entries:       entries,
-		EntryReader:   entries,
-		Authenticator: tokenAuthenticator{},
-		Sessions:      nil,
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil,
+		Namespaces:     namespaces,
+		Entries:        entries,
+		EntryReader:    entries,
+		Authenticator:  tokenAuthenticator{},
+		Sessions:       nil,
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:         slog.New(slog.DiscardHandler),
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

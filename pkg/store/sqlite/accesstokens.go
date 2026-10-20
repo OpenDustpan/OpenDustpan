@@ -134,7 +134,7 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 		total int64
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
 		rows, err := q.ListAccessTokens(ctx, db.ListAccessTokensParams{
 			PrincipalID: cols.PrincipalID,
 			Status:      cols.Status,
@@ -229,8 +229,10 @@ func (s *Store) TouchToken(ctx context.Context, id string, at time.Time, every t
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	err := s.queries.TouchAccessToken(ctx, db.TouchAccessTokenParams{
-		AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		return q.TouchAccessToken(ctx, db.TouchAccessTokenParams{
+			AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("touch access token: %w", err)

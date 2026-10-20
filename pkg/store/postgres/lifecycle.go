@@ -591,7 +591,10 @@ func (s *Store) ListBlobPurges(
 
 // FinishBlobPurge implements inventory.BlobPurges.
 func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error {
-	if err := s.queries.DeleteBlobPurge(ctx, db.DeleteBlobPurgeParams{Tool: tool, UnitID: unitID}); err != nil {
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		return q.DeleteBlobPurge(ctx, db.DeleteBlobPurgeParams{Tool: tool, UnitID: unitID})
+	})
+	if err != nil {
 		return fmt.Errorf("finish blob purge: %w", err)
 	}
 

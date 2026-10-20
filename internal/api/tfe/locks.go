@@ -304,6 +304,7 @@ func (h *Handler) forceUnlockWorkspace(
 		ctx, id, expect, p.Subject, allow, record, forceUnlockEntry(r, p, obj, attrs.Reason),
 	)
 	if err != nil {
+		h.recordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, err)
 
 		return

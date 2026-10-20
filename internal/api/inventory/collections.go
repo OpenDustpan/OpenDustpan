@@ -314,7 +314,7 @@ func (h *Handler) moveUnit(
 	default:
 	}
 
-	toID, authErr := h.authorizeMove(ctx, p, obj, from, to)
+	toID, authErr := h.authorizeMove(r, p, obj, from, to)
 	if authErr != nil {
 		h.writeError(ctx, w, authErr)
 
@@ -431,8 +431,10 @@ type MoveChecker interface {
 // the grants that the target collection gives must be ones the caller holds on
 // the unit. It returns the stable ID of the target that the move checked.
 func (h *Handler) authorizeMove(
-	ctx context.Context, p identity.Principal, obj identity.Object, from, to collection.Ref,
+	r *http.Request, p identity.Principal, obj identity.Object, from, to collection.Ref,
 ) (string, error) {
+	ctx := r.Context()
+
 	toObj := identity.CollectionObject(to.Namespace, to.Name.String())
 	checks := []moveCheck{
 		{identity.ActionUnitManageAccess, obj},
@@ -448,7 +450,7 @@ func (h *Handler) authorizeMove(
 	}
 
 	for i := range checks {
-		if err := h.authorize(ctx, p, checks[i].action, checks[i].object); err != nil {
+		if err := h.authorize(ctx, r, p, checks[i].action, checks[i].object); err != nil {
 			return "", err
 		}
 	}
@@ -472,9 +474,9 @@ func nameOrNone(n collection.Name) string {
 // authorize checks one action on one object with the authorizer of the handler.
 // A denied check wraps identity.ErrDenied.
 func (h *Handler) authorize(
-	ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+	ctx context.Context, r *http.Request, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
-	if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
+	if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
 		return fmt.Errorf("authorize %s: %w", action, err)
 	}
 

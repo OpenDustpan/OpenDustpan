@@ -87,6 +87,7 @@ func newUpdateFixtureWithGate(
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -170,6 +171,7 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

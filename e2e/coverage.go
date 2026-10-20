@@ -263,6 +263,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Gate:                 nil,
 		Audit:                nil,
 		OnAuditFailure:       nil,
+		DenialLimiter:        nil,
 	})
 	if err != nil {
 		tb.Fatalf("pulumi handler: %v", err)
@@ -412,6 +413,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		MaxStateBytes:  0,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		tb.Fatalf("tfe handler: %v", err)
@@ -434,6 +436,7 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 		Audit:          nil,
 		Gate:           nil,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)
@@ -692,6 +695,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("inventory handler: %v", err)
@@ -722,6 +726,7 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
+		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("context handler: %v", err)
@@ -762,6 +767,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile handler: %v", err)
@@ -936,13 +942,14 @@ func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 	tb.Helper()
 
 	handler, err := auditapi.NewHandler(auditapi.Config{
-		Namespaces:    namespaces,
-		Entries:       coverageAuditStore{},
-		EntryReader:   nil,
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Entries:        coverageAuditStore{},
+		EntryReader:    nil,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("audit handler: %v", err)
@@ -1097,6 +1104,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		SignIn:           nil,
 		CheckpointEpochs: nil,
 		InstallationKind: "",
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)

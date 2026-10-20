@@ -21,7 +21,7 @@ func (d *DurableOperations) Beat(ctx context.Context, owner string) error {
 		return fmt.Errorf("heartbeat owner is empty: %w", durable.ErrInvalid)
 	}
 
-	return d.store.inTx(ctx, func(q *db.Queries) error {
+	return d.store.inControlTx(ctx, func(q *db.Queries) error {
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the database clock: %w", err)

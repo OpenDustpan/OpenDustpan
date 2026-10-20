@@ -948,7 +948,7 @@ func (r *Runners) LookupClaim(ctx context.Context, c durable.Claim) (runner.Clai
 
 	var out runner.ClaimRecord
 
-	err := r.store.inTx(ctx, func(q *db.Queries) error {
+	err := r.store.inReadTx(ctx, func(q *db.Queries) error {
 		_, live, err := lockClaim(ctx, q, c)
 		if err != nil {
 			return err

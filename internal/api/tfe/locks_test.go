@@ -114,6 +114,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -391,6 +392,7 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

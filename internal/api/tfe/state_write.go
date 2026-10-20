@@ -214,6 +214,7 @@ func (h *Handler) createStateVersion(
 
 	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, auth)
 	if err != nil {
+		h.recordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, h.lineageLockedDetail(ctx, id, p.Subject, err))
 
 		return

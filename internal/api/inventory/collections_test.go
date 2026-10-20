@@ -241,8 +241,7 @@ func newMoveFixtureFull(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Locks:         locks,
-		PublicURL:     "",
+		Audit: nil, OnAuditFailure: nil, Locks: locks, PublicURL: "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
@@ -256,6 +255,7 @@ func newMoveFixtureFull(
 		Authorizer:    authz,
 		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)
