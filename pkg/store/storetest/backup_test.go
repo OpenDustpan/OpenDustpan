@@ -1985,9 +1985,7 @@ func (s *fakeBackupStore) FinishBackup(
 	var out backup.Record
 
 	finish := func() error {
-		// The operation of the fence has to be the operation of the row.
-		op, err := s.mem.Store().Get(ctx, f.Operation)
-		if err != nil || op.Key != backup.OperationKey(id) {
+		if !s.fenceOwnsRow(ctx, f, id) {
 			return durable.ErrClaimLost
 		}
 
@@ -2899,6 +2897,14 @@ func (s *fakeBackupStore) SaveReleased(
 	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
 ) error {
 	return s.SaveWorkspace(ctx, w, fence)
+}
+
+// fenceOwnsRow reports whether the operation of f is the operation of backup
+// id: the operation of the fence has to be the operation of the row.
+func (s *fakeBackupStore) fenceOwnsRow(ctx context.Context, f durable.StepFence, id backup.ID) bool {
+	op, err := s.mem.Store().Get(ctx, f.Operation)
+
+	return err == nil && op.Key == backup.OperationKey(id)
 }
 
 // createBackupLocked stores r with the rules of CreateBackup. The caller

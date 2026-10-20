@@ -704,7 +704,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 
 	// The harness serves the handler directly, so it runs the backup worker
 	// that Server.Run starts. It stops before the stores close.
-	startBackupWorker(tb, srv)
+	startBackupWorker(ctx, tb, srv)
 
 	return serverBuild{
 		handler:   srv.Handler(),
@@ -717,7 +717,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 }
 
 // startBackupWorker runs the backup worker of srv until the test ends.
-func startBackupWorker(tb testing.TB, srv *dustpan.Server) {
+func startBackupWorker(ctx context.Context, tb testing.TB, srv *dustpan.Server) {
 	tb.Helper()
 
 	backups := srv.Backups()
@@ -725,11 +725,11 @@ func startBackupWorker(tb testing.TB, srv *dustpan.Server) {
 		return
 	}
 
-	ctx, stop := context.WithCancel(context.WithoutCancel(tb.Context()))
+	workCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
 
 	var work sync.WaitGroup
 
-	work.Go(func() { backups.Work(ctx) })
+	work.Go(func() { backups.Work(workCtx) })
 
 	tb.Cleanup(func() {
 		stop()
