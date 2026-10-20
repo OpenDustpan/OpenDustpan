@@ -167,18 +167,20 @@ func restoreStreamedBackup(
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        live,
-		Registry:    regs,
-		Backups:     backups,
-		Maintenance: maint,
-		Blobs:       blobs,
-		Target:      target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            live,
+		Registry:        regs,
+		Backups:         backups,
+		Maintenance:     maint,
+		Blobs:           blobs,
+		Target:          target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)

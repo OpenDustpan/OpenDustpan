@@ -66,9 +66,9 @@ func newTokenSecret(t *testing.T) string {
 func devPeopleRows(t *testing.T) (map[string][]map[string]any, []restoredDev) {
 	t.Helper()
 
-	now := time.Now().UnixMilli()
+	nowMs := time.Now().UnixMilli()
 	rows := map[string][]map[string]any{}
-	people := []restoredDev{}
+	people := make([]restoredDev, 0, 2)
 
 	for i, subject := range []string{"dev:admin", "DEV:Admin"} {
 		id := fmt.Sprintf("prn-dev%d", i)
@@ -83,12 +83,12 @@ func devPeopleRows(t *testing.T) (map[string][]map[string]any, []restoredDev) {
 
 		sess := storetest.DevSessionRow(fmt.Sprintf("ses-dev%d", i), id, "dev")
 		sess["digest"] = session.DigestOf(secret).String()
-		sess["created_at_ms"], sess["last_seen_at_ms"], sess["auth_time_ms"] = now, now, now
+		sess["created_at_ms"], sess["last_seen_at_ms"], sess["auth_time_ms"] = nowMs, nowMs, nowMs
 
 		sum := sha256.Sum256([]byte(person.token))
 		tok := storetest.DevTokenRow(fmt.Sprintf("tok-dev%d", i), id)
 		tok["digest"] = hex.EncodeToString(sum[:])
-		tok["created_at_ms"] = now
+		tok["created_at_ms"] = nowMs
 
 		rows["principals"] = append(rows["principals"], storetest.DevPrincipalRow(id, subject))
 		rows["sessions"] = append(rows["sessions"], sess)
@@ -238,7 +238,10 @@ func checkSessionRefused(t *testing.T, person restoredDev, open, refusing *sessi
 
 	request := func(ctx context.Context) *http.Request {
 		r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/inventory/namespaces", http.NoBody)
-		r.AddCookie(&http.Cookie{Name: sessionauth.Cookie, Value: person.session.Reveal()})
+		r.AddCookie(&http.Cookie{
+			Name: sessionauth.Cookie, Value: person.session.Reveal(), Secure: true, HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
 
 		return r
 	}

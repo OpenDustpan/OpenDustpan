@@ -442,9 +442,11 @@ func devStripCases() []devStripCase {
 				return e.with(t, "gate_objects", DevGateObjectRow(kindRule, "rule-a",
 					ruleBody(`[]`, `["dev:admin","alice"]`, false)))
 			},
-			classes:   map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
-			approvers: []backup.DevApproverRemoval{{Kind: kindRule, Scope: "installation", ID: "rule-a", Replaced: false}},
-			bodies:    map[string]approverWant{"rule-a": {users: []string{"alice"}, groups: []string{}}},
+			classes: map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
+			approvers: []backup.DevApproverRemoval{
+				{Kind: kindRule, Scope: "installation", ID: "rule-a", Replaced: false},
+			},
+			bodies: map[string]approverWant{"rule-a": {users: []string{"alice"}, groups: []string{}}},
 		},
 		{
 			name: "a dev subject in an approval default that has other approvers",
@@ -492,9 +494,11 @@ func devStripCases() []devStripCase {
 				return e.with(t, "gate_objects", DevGateObjectRow(kindRule, "rule-b",
 					ruleBody(`["ops"]`, `["dev:z"]`, true)))
 			},
-			classes:   map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
-			approvers: []backup.DevApproverRemoval{{Kind: kindRule, Scope: "installation", ID: "rule-b", Replaced: false}},
-			bodies:    map[string]approverWant{"rule-b": {users: []string{}, groups: []string{"ops"}, owners: true}},
+			classes: map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
+			approvers: []backup.DevApproverRemoval{
+				{Kind: kindRule, Scope: "installation", ID: "rule-b", Replaced: false},
+			},
+			bodies: map[string]approverWant{"rule-b": {users: []string{}, groups: []string{"ops"}, owners: true}},
 		},
 		{
 			name: "no dev data",
@@ -814,7 +818,11 @@ func assertCleanSubjects(t *testing.T, report backup.DevStripReport) {
 
 	for _, p := range report.Principals {
 		if len(p.Subject) > backup.MaxReportedSubjectBytes {
-			t.Fatalf("subject of %d bytes in the report, want at most %d", len(p.Subject), backup.MaxReportedSubjectBytes)
+			t.Fatalf(
+				"subject of %d bytes in the report, want at most %d",
+				len(p.Subject),
+				backup.MaxReportedSubjectBytes,
+			)
 		}
 
 		for _, r := range p.Subject {
@@ -912,7 +920,11 @@ func devSwapCases() []struct {
 		{name: "a dev approver in an approval rule", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "gate_objects", DevGateObjectRow(kindRule, "rule-a", ruleBody(`[]`, `["dev:admin"]`, false)))
+			return e.with(
+				t,
+				"gate_objects",
+				DevGateObjectRow(kindRule, "rule-a", ruleBody(`[]`, `["dev:admin"]`, false)),
+			)
 		}},
 		{name: "a dev approver in an approval default", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
@@ -922,7 +934,11 @@ func devSwapCases() []struct {
 		{name: "a dev approver in an ownership rule", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "gate_objects", DevGateObjectRow(kindOwnerRle, "own-a", ruleBody(`[]`, `["dEv:y"]`, false)))
+			return e.with(
+				t,
+				"gate_objects",
+				DevGateObjectRow(kindOwnerRle, "own-a", ruleBody(`[]`, `["dEv:y"]`, false)),
+			)
 		}},
 	}
 }

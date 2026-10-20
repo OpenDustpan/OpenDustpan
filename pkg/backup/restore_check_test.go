@@ -218,11 +218,13 @@ func (s *checkSetup) check(t *testing.T, key secret.Wrapper, region string) (bac
 	t.Helper()
 
 	return backup.CheckRestore(t.Context(), backup.CheckInput{
-		Target: s.target,
-		Live:   s.live,
-		Key:    key,
-		ID:     s.id,
-		Region: region,
+		Target:     s.target,
+		Live:       s.live,
+		Key:        key,
+		ID:         s.id,
+		Region:     region,
+		Stage:      backup.StageOptions{BackupKind: "", AllowDev: false},
+		AfterStage: nil,
 	})
 }
 

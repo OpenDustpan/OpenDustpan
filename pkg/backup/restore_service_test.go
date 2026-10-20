@@ -766,6 +766,7 @@ func waitRestoreEnd(t *testing.T, regs *restoreServiceRegistry, id backup.Restor
 		RequestedBy: "",
 		Error:       "",
 		State:       "",
+		DevReport:   nil,
 	}
 }
 
@@ -855,18 +856,20 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 	}
 
 	other, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        setup.live,
-		Registry:    setup.regs,
-		Backups:     setup.backups,
-		Maintenance: setup.maint,
-		Blobs:       setup.blobs,
-		Target:      setup.target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            setup.live,
+		Registry:        setup.regs,
+		Backups:         setup.backups,
+		Maintenance:     setup.maint,
+		Blobs:           setup.blobs,
+		Target:          setup.target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new second service: %v", err)
@@ -1049,18 +1052,20 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 	proxy := &mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        setup.live,
-		Registry:    setup.regs,
-		Backups:     setup.backups,
-		Maintenance: setup.maint,
-		Blobs:       setup.blobs,
-		Target:      proxy,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            setup.live,
+		Registry:        setup.regs,
+		Backups:         setup.backups,
+		Maintenance:     setup.maint,
+		Blobs:           setup.blobs,
+		Target:          proxy,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1229,6 +1234,7 @@ func pollRestoreSucceeded(
 		RequestedBy: "",
 		Error:       "",
 		State:       "",
+		DevReport:   nil,
 	}
 }
 
@@ -1270,18 +1276,20 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 	buf := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	logged, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        setup.live,
-		Registry:    setup.regs,
-		Backups:     setup.backups,
-		Maintenance: setup.maint,
-		Blobs:       setup.blobs,
-		Target:      setup.target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      slog.New(slog.NewTextHandler(buf, nil)),
+		Live:            setup.live,
+		Registry:        setup.regs,
+		Backups:         setup.backups,
+		Maintenance:     setup.maint,
+		Blobs:           setup.blobs,
+		Target:          setup.target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          slog.New(slog.NewTextHandler(buf, nil)),
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1386,18 +1394,20 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        live,
-		Registry:    regs,
-		Backups:     backups,
-		Maintenance: maint,
-		Blobs:       blobs,
-		Target:      check.target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            live,
+		Registry:        regs,
+		Backups:         backups,
+		Maintenance:     maint,
+		Blobs:           blobs,
+		Target:          check.target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1649,18 +1659,20 @@ func restoreServiceWithHook(
 	t.Helper()
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        setup.live,
-		Registry:    setup.regs,
-		Backups:     setup.backups,
-		Maintenance: setup.maint,
-		Blobs:       setup.blobs,
-		Target:      setup.target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  hook,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            setup.live,
+		Registry:        setup.regs,
+		Backups:         setup.backups,
+		Maintenance:     setup.maint,
+		Blobs:           setup.blobs,
+		Target:          setup.target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      hook,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service with a hook: %v", err)
@@ -1677,18 +1689,20 @@ func restoreServiceAdmitting(
 	t.Helper()
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        setup.live,
-		Registry:    setup.regs,
-		Backups:     setup.backups,
-		Maintenance: setup.maint,
-		Blobs:       setup.blobs,
-		Target:      setup.target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       admit,
-		Now:         nil,
-		Logger:      nil,
+		Live:            setup.live,
+		Registry:        setup.regs,
+		Backups:         setup.backups,
+		Maintenance:     setup.maint,
+		Blobs:           setup.blobs,
+		Target:          setup.target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           admit,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service with an admit hook: %v", err)
@@ -1831,18 +1845,20 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        live,
-		Registry:    regs,
-		Backups:     backups,
-		Maintenance: maint,
-		Blobs:       blobs,
-		Target:      check.target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            live,
+		Registry:        regs,
+		Backups:         backups,
+		Maintenance:     maint,
+		Blobs:           blobs,
+		Target:          check.target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1966,18 +1982,20 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        setup.live,
-		Registry:    setup.regs,
-		Backups:     setup.backups,
-		Maintenance: setup.maint,
-		Blobs:       setup.blobs,
-		Target:      proxy,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            setup.live,
+		Registry:        setup.regs,
+		Backups:         setup.backups,
+		Maintenance:     setup.maint,
+		Blobs:           setup.blobs,
+		Target:          proxy,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -2058,18 +2076,20 @@ func TestRestoreRefusesOtherFormat(t *testing.T) {
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        setup.live,
-		Registry:    setup.regs,
-		Backups:     setup.backups,
-		Maintenance: setup.maint,
-		Blobs:       setup.blobs,
-		Target:      proxy,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            setup.live,
+		Registry:        setup.regs,
+		Backups:         setup.backups,
+		Maintenance:     setup.maint,
+		Blobs:           setup.blobs,
+		Target:          proxy,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -2298,9 +2318,4 @@ func (m *restoreServiceMaintenance) counts() maintenanceCounts {
 	defer m.mu.Unlock()
 
 	return maintenanceCounts{enters: m.enters, leaves: m.leaves}
-}
-
-// sleepBriefly waits a few milliseconds, for the polls of the tests.
-func sleepBriefly() {
-	time.Sleep(10 * time.Millisecond)
 }

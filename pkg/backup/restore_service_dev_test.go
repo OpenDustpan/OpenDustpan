@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -68,78 +70,105 @@ func startRestoreOf(
 	return id, setup.service.Start(t.Context(), id, req)
 }
 
+// Static errors that the fake live store returns.
+var (
+	errStripLastStep = errors.New("last step failed")
+	errStripLook     = errors.New("cannot read")
+	errAuditDown     = errors.New("audit store is down")
+)
+
+// restoreRequestOf returns a restore request with every field set. The test
+// helper sets the backup and the requester.
+func restoreRequestOf(checkOnly, keepAccess bool) backup.RestoreRequest {
+	return backup.RestoreRequest{
+		BackupID: "", PreBackupID: "", CheckOnly: checkOnly, Force: false, RequestedBy: "",
+		KeepAccessTables: keepAccess,
+	}
+}
+
+// plainRestore is a restore with no option.
+func plainRestore() backup.RestoreRequest { return restoreRequestOf(false, false) }
+
 // TestRestoreRefusesDevBackupIntoProduction sends a backup of the kind dev to a
 // production installation with the setting off. The service compares the kinds
 // before it enters maintenance mode, takes the backup of the live data or
-// stages anything (layer 1b). With the setting on, the restore goes on.
+// stages anything (layer 1b).
 func TestRestoreRefusesDevBackupIntoProduction(t *testing.T) {
 	t.Parallel()
 
-	t.Run("setting off", func(t *testing.T) {
-		t.Parallel()
-
-		setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
-			cfg.AllowDevHint = "`--allow-dev`"
-		})
-		setManifestKind(t, setup, installation.KindDev)
-
-		_, err := startRestoreOf(t, setup, backup.RestoreRequest{})
-		if !errors.Is(err, backup.ErrDevBackupRefused) {
-			t.Fatalf("start: err = %v, want ErrDevBackupRefused", err)
-		}
-
-		text, ok := backup.RefusalText(err)
-		if !ok || !strings.Contains(text, "To restore it, start the server with `--allow-dev`.") ||
-			!strings.Contains(text, "The backup is from a dev installation.") {
-			t.Fatalf("refusal text = %q, want the sentence with the hint", text)
-		}
-
-		if enters := setup.maint.counts().enters; enters != 0 {
-			t.Fatalf("maintenance enters = %d, want 0", enters)
-		}
-
-		if got := setup.live.stageCallCount(); got != 0 {
-			t.Fatalf("stage calls = %d, want 0", got)
-		}
-
-		if idx := setup.order.index("export"); idx >= 0 {
-			t.Fatalf("order %v holds a pre-backup export, want none", setup.order.snapshot())
-		}
-
-		rows, _ := setup.regs.ListRestores(t.Context())
-		if len(rows) != 0 {
-			t.Fatalf("restore rows = %+v, want none", rows)
-		}
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
+		cfg.AllowDevHint = "`--allow-dev`"
 	})
+	setManifestKind(t, setup, installation.KindDev)
 
-	t.Run("setting off, check only", func(t *testing.T) {
-		t.Parallel()
+	_, err := startRestoreOf(t, setup, plainRestore())
+	if !errors.Is(err, backup.ErrDevBackupRefused) {
+		t.Fatalf("start: err = %v, want ErrDevBackupRefused", err)
+	}
 
-		setup := newRestoreServiceSetup(t)
-		setManifestKind(t, setup, installation.KindDev)
+	text, ok := backup.RefusalText(err)
+	if !ok || !strings.Contains(text, "To restore it, start the server with `--allow-dev`.") ||
+		!strings.Contains(text, "The backup is from a dev installation.") {
+		t.Fatalf("refusal text = %q, want the sentence with the hint", text)
+	}
 
-		_, err := startRestoreOf(t, setup, backup.RestoreRequest{CheckOnly: true})
-		if !errors.Is(err, backup.ErrDevBackupRefused) {
-			t.Fatalf("check-only start: err = %v, want ErrDevBackupRefused", err)
-		}
-	})
+	assertNothingStarted(t, setup)
+}
 
-	t.Run("setting on", func(t *testing.T) {
-		t.Parallel()
+// assertNothingStarted proves that a refused restore entered no maintenance
+// mode, staged nothing, took no pre-backup and wrote no row.
+func assertNothingStarted(t *testing.T, setup *restoreServiceSetup) {
+	t.Helper()
 
-		setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
-		setManifestKind(t, setup, installation.KindDev)
+	if enters := setup.maint.counts().enters; enters != 0 {
+		t.Fatalf("maintenance enters = %d, want 0", enters)
+	}
 
-		id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
+	if got := setup.live.stageCallCount(); got != 0 {
+		t.Fatalf("stage calls = %d, want 0", got)
+	}
 
-		row := waitRestoreEnd(t, setup.regs, id)
-		if row.State != backup.RestoreSucceeded {
-			t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
-		}
-	})
+	if idx := setup.order.index("export"); idx >= 0 {
+		t.Fatalf("order %v holds a pre-backup export, want none", setup.order.snapshot())
+	}
+
+	rows, err := setup.regs.ListRestores(t.Context())
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("restore rows = %+v, %v, want none", rows, err)
+	}
+}
+
+// TestRestoreRefusesDevBackupCheckOnly proves that a check-only start is
+// refused the same way.
+func TestRestoreRefusesDevBackupCheckOnly(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+	setManifestKind(t, setup, installation.KindDev)
+
+	_, err := startRestoreOf(t, setup, restoreRequestOf(true, false))
+	if !errors.Is(err, backup.ErrDevBackupRefused) {
+		t.Fatalf("check-only start: err = %v, want ErrDevBackupRefused", err)
+	}
+}
+
+// TestRestoreAllowsDevBackupWithTheSetting proves that, with the setting on,
+// the restore goes on.
+func TestRestoreAllowsDevBackupWithTheSetting(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
+	setManifestKind(t, setup, installation.KindDev)
+
+	id, err := startRestoreOf(t, setup, plainRestore())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State != backup.RestoreSucceeded {
+		t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
+	}
 }
 
 // TestRestoreStagesWithTheKindAndTheSetting proves that the service passes the
@@ -165,7 +194,7 @@ func TestRestoreStagesWithTheKindAndTheSetting(t *testing.T) {
 			})
 			setManifestKind(t, setup, tc.manifest)
 
-			id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
+			id, err := startRestoreOf(t, setup, plainRestore())
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -195,7 +224,7 @@ func TestRestoreRefusesAKindThatChangedAfterTheCheck(t *testing.T) {
 	block := make(chan struct{})
 	setup.live.setStageBlock(block)
 
-	id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
+	id, err := startRestoreOf(t, setup, plainRestore())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -223,62 +252,63 @@ func awaitStageCalls(t *testing.T, setup *restoreServiceSetup, n int) {
 			return
 		}
 
+		timer := time.NewTimer(10 * time.Millisecond)
+
 		select {
 		case <-t.Context().Done():
+			timer.Stop()
 			t.Fatalf("wait for stage calls: %v", t.Context().Err())
-		default:
+		case <-timer.C:
 		}
-
-		sleepBriefly()
 	}
 
 	t.Fatalf("the live store never started %d stage calls", n)
 }
 
-// TestRestoreStripsDevData runs a restore of a production installation over
-// staged data that holds dev people (layer 2). The manifest says production,
-// so only the staged data tells.
-func TestRestoreStripsDevData(t *testing.T) {
+// TestRestoreStripsDevDataSettingOff runs a restore of a production
+// installation over staged data that holds dev people with the setting off
+// (layer 2). The manifest says production, so only the staged data tells.
+func TestRestoreStripsDevDataSettingOff(t *testing.T) {
 	t.Parallel()
 
-	t.Run("setting off refuses and changes nothing", func(t *testing.T) {
-		t.Parallel()
+	setup := newRestoreServiceSetup(t)
+	setup.live.dev.detect = dirtyReport()
 
-		setup := newRestoreServiceSetup(t)
-		setup.live.dev.detect = dirtyReport()
+	id, err := startRestoreOf(t, setup, plainRestore())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
-		id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State != backup.RestoreFailed || !strings.Contains(row.Error, "production installation") {
+		t.Fatalf("restore = %q (%s), want failed with the refusal text", row.State, row.Error)
+	}
 
-		row := waitRestoreEnd(t, setup.regs, id)
-		if row.State != backup.RestoreFailed || !strings.Contains(row.Error, "production installation") {
-			t.Fatalf("restore = %q (%s), want failed with the refusal text", row.State, row.Error)
-		}
+	snap := setup.live.devSnapshot()
+	if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 || snap.discards == 0 {
+		t.Fatalf("applies %d, enters %d, discards %d, want a refusal before maintenance mode with a discard",
+			setup.live.counts().applied, setup.maint.counts().enters, snap.discards)
+	}
 
-		snap := setup.live.devSnapshot()
-		if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 || snap.discards == 0 {
-			t.Fatalf("applies %d, enters %d, discards %d, want a refusal before maintenance mode with a discard",
-				setup.live.counts().applied, setup.maint.counts().enters, snap.discards)
-		}
+	if slices.Contains(snap.strips, backup.DevStripRemove) {
+		t.Fatal("the service removed dev data with the setting off")
+	}
+}
 
-		for _, mode := range snap.strips {
-			if mode == backup.DevStripRemove {
-				t.Fatal("the service removed dev data with the setting off")
-			}
-		}
-	})
+// TestRestoreStripsDevDataSettingOn runs the strip with the setting on, with
+// and without the keep-access option.
+func TestRestoreStripsDevDataSettingOn(t *testing.T) {
+	t.Parallel()
 
 	for _, keep := range []bool{false, true} {
-		t.Run(fmt.Sprintf("setting on, keep access %v", keep), func(t *testing.T) {
+		t.Run(fmt.Sprintf("keep access %v", keep), func(t *testing.T) {
 			t.Parallel()
 
 			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
 			setup.live.dev.detect = dirtyReport()
 			setup.live.dev.remove = dirtyReport()
 
-			id, err := startRestoreOf(t, setup, backup.RestoreRequest{KeepAccessTables: keep})
+			id, err := startRestoreOf(t, setup, restoreRequestOf(false, keep))
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -288,146 +318,159 @@ func TestRestoreStripsDevData(t *testing.T) {
 				t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
 			}
 
-			// The report is in the record before the swap.
-			if rec, ap := setup.order.index("record"), setup.order.index("apply"); rec < 0 || ap < 0 || rec > ap {
-				t.Fatalf("order = %v, want the report recorded before the swap", setup.order.snapshot())
-			}
-
-			if row.DevReport == nil || len(row.Warnings()) != 1 ||
-				row.Warnings()[0].Code != backup.WarnDevBackupIntoProduction {
-				t.Fatalf("record = %+v, want the warning dev-backup-into-production", row.DevReport)
-			}
-
-			if !strings.Contains(row.Warnings()[0].Text, "We do not recommend this restore.") {
-				t.Fatalf("warning text = %q", row.Warnings()[0].Text)
-			}
-
-			snap := setup.live.devSnapshot()
-			if !strings.Contains(auditObjects(snap.appends), "dev principal \"dev:admin\"") {
-				t.Fatalf("audit entries = %v, want one for dev:admin", auditObjects(snap.appends))
-			}
+			checkStripRecord(t, setup, row)
 		})
 	}
+}
 
-	t.Run("a strip that does not finish discards the staging area", func(t *testing.T) {
-		t.Parallel()
+// checkStripRecord proves that the report is in the record before the swap,
+// that the record holds the warning, and that the audit entries name the
+// removed person.
+func checkStripRecord(t *testing.T, setup *restoreServiceSetup, row backup.RestoreRecord) {
+	t.Helper()
 
-		setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
-		setup.live.dev.detect = dirtyReport()
-		setup.live.dev.stripErr[backup.DevStripRemove] = errors.New("last step failed")
+	if rec, ap := setup.order.index("record"), setup.order.index("apply"); rec < 0 || ap < 0 || rec > ap {
+		t.Fatalf("order = %v, want the report recorded before the swap", setup.order.snapshot())
+	}
 
-		id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
+	if row.DevReport == nil || len(row.Warnings()) != 1 ||
+		row.Warnings()[0].Code != backup.WarnDevBackupIntoProduction {
+		t.Fatalf("record = %+v, want the warning dev-backup-into-production", row.DevReport)
+	}
 
-		row := waitRestoreEnd(t, setup.regs, id)
-		if row.State != backup.RestoreFailed || row.Error != backup.ErrDevStripIncomplete.Error() {
-			t.Fatalf("restore = %q (%s), want failed with the strip text", row.State, row.Error)
-		}
+	if !strings.Contains(row.Warnings()[0].Text, "We do not recommend this restore.") {
+		t.Fatalf("warning text = %q", row.Warnings()[0].Text)
+	}
 
-		if setup.live.counts().applied != 0 || setup.live.devSnapshot().discards == 0 {
-			t.Fatal("the failed strip applied the staged data or kept the staging area")
-		}
-	})
+	snap := setup.live.devSnapshot()
+	if !strings.Contains(auditObjects(snap.appends), "dev principal \"dev:admin\"") {
+		t.Fatalf("audit entries = %v, want one for dev:admin", auditObjects(snap.appends))
+	}
+}
 
-	t.Run("a strip that cannot look fails the restore", func(t *testing.T) {
-		t.Parallel()
+// TestRestoreStripThatDoesNotFinishDiscardsTheStagingArea proves that a strip
+// that does not finish discards the staging area.
+func TestRestoreStripThatDoesNotFinishDiscardsTheStagingArea(t *testing.T) {
+	t.Parallel()
 
-		setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
-		setup.live.dev.stripErr[backup.DevStripDetect] = errors.New("cannot read")
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
+	setup.live.dev.detect = dirtyReport()
+	setup.live.dev.stripErr[backup.DevStripRemove] = errStripLastStep
 
-		id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
+	id, err := startRestoreOf(t, setup, plainRestore())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
-		if row := waitRestoreEnd(t, setup.regs, id); row.State != backup.RestoreFailed {
-			t.Fatalf("state = %q, want failed", row.State)
-		}
-	})
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State != backup.RestoreFailed || row.Error != backup.ErrDevStripIncomplete.Error() {
+		t.Fatalf("restore = %q (%s), want failed with the strip text", row.State, row.Error)
+	}
 
-	t.Run("a check-only restore reports what it would remove", func(t *testing.T) {
-		t.Parallel()
+	if setup.live.counts().applied != 0 || setup.live.devSnapshot().discards == 0 {
+		t.Fatal("the failed strip applied the staged data or kept the staging area")
+	}
+}
 
-		setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
-		setup.live.dev.detect = dirtyReport()
+// TestRestoreFailsWhenTheStripCannotLook proves that a strip that cannot look
+// fails the restore.
+func TestRestoreFailsWhenTheStripCannotLook(t *testing.T) {
+	t.Parallel()
 
-		id, err := startRestoreOf(t, setup, backup.RestoreRequest{CheckOnly: true})
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
+	setup.live.dev.stripErr[backup.DevStripDetect] = errStripLook
 
-		row := waitRestoreEnd(t, setup.regs, id)
-		if row.State != backup.RestoreSucceeded || row.DevReport == nil ||
-			row.DevReport.Classes[backup.RemovedPrincipals] != 1 {
-			t.Fatalf("check-only restore = %q %+v, want the counts it would remove", row.State, row.DevReport)
-		}
+	id, err := startRestoreOf(t, setup, plainRestore())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
-		if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 ||
-			len(setup.live.devSnapshot().appends) != 0 {
-			t.Fatal("a check-only restore changed something")
-		}
-	})
+	if row := waitRestoreEnd(t, setup.regs, id); row.State != backup.RestoreFailed {
+		t.Fatalf("state = %q, want failed", row.State)
+	}
+}
 
-	t.Run("a dev installation strips nothing and warns about a production backup", func(t *testing.T) {
-		t.Parallel()
+// TestRestoreCheckOnlyReportsWhatItWouldRemove proves that a check-only
+// restore reports what it would remove and changes nothing.
+func TestRestoreCheckOnlyReportsWhatItWouldRemove(t *testing.T) {
+	t.Parallel()
 
-		setup := newRestoreServiceSetup(t)
-		setup.live.dev.kind = installation.KindDev
-		setup.live.dev.detect = dirtyReport()
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
+	setup.live.dev.detect = dirtyReport()
 
-		id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
+	id, err := startRestoreOf(t, setup, restoreRequestOf(true, false))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
-		row := waitRestoreEnd(t, setup.regs, id)
-		if row.State != backup.RestoreSucceeded || len(row.Warnings()) != 1 ||
-			row.Warnings()[0].Code != backup.WarnProductionBackupIntoDev {
-			t.Fatalf("restore = %q %+v, want the production-backup-into-dev warning", row.State, row.Warnings())
-		}
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State != backup.RestoreSucceeded || row.DevReport == nil ||
+		row.DevReport.Classes[backup.RemovedPrincipals] != 1 {
+		t.Fatalf("check-only restore = %q %+v, want the counts it would remove", row.State, row.DevReport)
+	}
 
-		if strips := setup.live.devSnapshot().strips; len(strips) != 0 {
-			t.Fatalf("a dev installation ran the strip: %v", strips)
-		}
-	})
+	if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 ||
+		len(setup.live.devSnapshot().appends) != 0 {
+		t.Fatal("a check-only restore changed something")
+	}
+}
 
-	t.Run("a live kind that cannot be read fails the restore", func(t *testing.T) {
-		t.Parallel()
+// TestRestoreIntoDevInstallationStripsNothing proves that a dev installation
+// strips nothing and warns about a production backup.
+func TestRestoreIntoDevInstallationStripsNothing(t *testing.T) {
+	t.Parallel()
 
-		setup := newRestoreServiceSetup(t)
-		setup.live.dev.kindErr = installation.ErrUnavailable
+	setup := newRestoreServiceSetup(t)
+	setup.live.dev.kind = installation.KindDev
+	setup.live.dev.detect = dirtyReport()
 
-		if _, err := startRestoreOf(t, setup, backup.RestoreRequest{}); !errors.Is(err, installation.ErrUnavailable) {
-			t.Fatalf("start: err = %v, want ErrUnavailable", err)
-		}
+	id, err := startRestoreOf(t, setup, plainRestore())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
 
-		if setup.live.counts().applied != 0 {
-			t.Fatal("a restore ran with no live kind")
-		}
-	})
+	row := waitRestoreEnd(t, setup.regs, id)
+	if row.State != backup.RestoreSucceeded || len(row.Warnings()) != 1 ||
+		row.Warnings()[0].Code != backup.WarnProductionBackupIntoDev {
+		t.Fatalf("restore = %q %+v, want the production-backup-into-dev warning", row.State, row.Warnings())
+	}
+
+	if strips := setup.live.devSnapshot().strips; len(strips) != 0 {
+		t.Fatalf("a dev installation ran the strip: %v", strips)
+	}
+}
+
+// TestRestoreFailsWhenTheLiveKindCannotBeRead proves that a live kind that
+// cannot be read fails the restore.
+func TestRestoreFailsWhenTheLiveKindCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+	setup.live.dev.kindErr = installation.ErrUnavailable
+
+	if _, err := startRestoreOf(t, setup, plainRestore()); !errors.Is(err, installation.ErrUnavailable) {
+		t.Fatalf("start: err = %v, want ErrUnavailable", err)
+	}
+
+	if setup.live.counts().applied != 0 {
+		t.Fatal("a restore ran with no live kind")
+	}
 }
 
 // auditObjects joins the object text of the audit entries.
 func auditObjects(entries []audit.Entry) string {
 	objects := make([]string, 0, len(entries))
-	for _, e := range entries {
-		objects = append(objects, e.Object)
+	for i := range entries {
+		objects = append(objects, entries[i].Object)
 	}
 
 	return strings.Join(objects, "\n")
 }
 
-// TestRestoreRecordsABoundedRemoval checks the entries after the swap for a
-// report of 250 dev principals: 100 entries, one summary entry, and one entry
-// for each class that has no principal (providers and dangling rows here). No entry holds a control character,
-// a token or a session ID (decisions 11 and 2e).
-func TestRestoreRecordsABoundedRemoval(t *testing.T) {
-	t.Parallel()
-
-	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
-
+// boundedRemovalReport returns a report of 250 dev principals, of which the
+// first MaxAuditedPrincipals are named. The first subject holds control
+// characters.
+func boundedRemovalReport() backup.DevStripReport {
 	report := backup.DevStripReport{
 		Principals:      nil,
 		OtherPrincipals: 150,
@@ -452,10 +495,61 @@ func TestRestoreRecordsABoundedRemoval(t *testing.T) {
 		})
 	}
 
+	return report
+}
+
+// auditCounts holds the number of audit entries for each kind of removal.
+type auditCounts struct {
+	principals int
+	others     int
+	classes    int
+}
+
+// countAuditEntries counts the entries for a principal, for the others and
+// for a class, and fails for an entry that holds a control character.
+func countAuditEntries(t *testing.T, entries []audit.Entry) auditCounts {
+	t.Helper()
+
+	var counts auditCounts
+
+	for i := range entries {
+		object := entries[i].Object
+
+		switch {
+		case strings.Contains(object, " removed dev principal "):
+			counts.principals++
+		case strings.Contains(object, " other dev principals"):
+			counts.others++
+		case strings.Contains(object, " removed "):
+			counts.classes++
+		default:
+			// Another entry of the chain: not counted.
+		}
+
+		for _, r := range object {
+			if unicode.IsControl(r) {
+				t.Fatalf("audit object %q holds control character %U", object, r)
+			}
+		}
+	}
+
+	return counts
+}
+
+// TestRestoreRecordsABoundedRemoval checks the entries after the swap for a
+// report of 250 dev principals: 100 entries, one summary entry, and one entry
+// for each class that has no principal (providers and dangling rows here). No
+// entry holds a control character, a token or a session ID.
+func TestRestoreRecordsABoundedRemoval(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
+
+	report := boundedRemovalReport()
 	setup.live.dev.detect = report
 	setup.live.dev.remove = report
 
-	id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
+	id, err := startRestoreOf(t, setup, plainRestore())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -464,28 +558,10 @@ func TestRestoreRecordsABoundedRemoval(t *testing.T) {
 		t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
 	}
 
-	var principals, others, classes int
-
-	for _, e := range setup.live.devSnapshot().appends {
-		switch {
-		case strings.Contains(e.Object, " removed dev principal "):
-			principals++
-		case strings.Contains(e.Object, " other dev principals"):
-			others++
-		case strings.Contains(e.Object, " removed "):
-			classes++
-		}
-
-		for _, r := range e.Object {
-			if unicode.IsControl(r) {
-				t.Fatalf("audit object %q holds control character %U", e.Object, r)
-			}
-		}
-	}
-
-	if principals != backup.MaxAuditedPrincipals || others != 1 || classes != 2 {
+	got := countAuditEntries(t, setup.live.devSnapshot().appends)
+	if got.principals != backup.MaxAuditedPrincipals || got.others != 1 || got.classes != 2 {
 		t.Fatalf("entries: %d principals, %d summaries, %d classes, want %d, 1, 2",
-			principals, others, classes, backup.MaxAuditedPrincipals)
+			got.principals, got.others, got.classes, backup.MaxAuditedPrincipals)
 	}
 }
 
@@ -498,9 +574,9 @@ func TestRestoreSurvivesAFailedAuditAppend(t *testing.T) {
 	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
 	setup.live.dev.detect = dirtyReport()
 	setup.live.dev.remove = dirtyReport()
-	setup.live.dev.appendErr = errors.New("audit store is down")
+	setup.live.dev.appendErr = errAuditDown
 
-	id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
+	id, err := startRestoreOf(t, setup, plainRestore())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -530,7 +606,7 @@ func TestRestoreCountsDroppedTempAdmins(t *testing.T) {
 	setup.live.dev.remove = dirtyReport()
 	setup.live.dev.dropped = 2
 
-	id, err := startRestoreOf(t, setup, backup.RestoreRequest{KeepAccessTables: true})
+	id, err := startRestoreOf(t, setup, restoreRequestOf(false, true))
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -556,7 +632,7 @@ func TestRestoreLogsOneWarningForEachClass(t *testing.T) {
 	setup.live.dev.detect = dirtyReport()
 	setup.live.dev.remove = dirtyReport()
 
-	id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
+	id, err := startRestoreOf(t, setup, plainRestore())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

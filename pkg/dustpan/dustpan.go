@@ -708,6 +708,8 @@ func defaultSettings() *settings {
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
+		allowDevBackups:         false,
+		allowDevHint:            "",
 	}
 }
 

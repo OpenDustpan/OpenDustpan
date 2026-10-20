@@ -2,7 +2,6 @@ package dustpan
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -56,7 +55,7 @@ type (
 func TestNewRestoreServiceNeedsDevPorts(t *testing.T) {
 	t.Parallel()
 
-	real := openRestoreStore(t)
+	base := openRestoreStore(t)
 
 	tests := []struct {
 		name    string
@@ -65,17 +64,17 @@ func TestNewRestoreServiceNeedsDevPorts(t *testing.T) {
 	}{
 		{
 			name:    "no KindReader",
-			store:   withoutKindReader{baseRestoreStore: real, DevStripper: real, DevReportRecorder: real},
+			store:   withoutKindReader{baseRestoreStore: base, DevStripper: base, DevReportRecorder: base},
 			missing: "KindReader",
 		},
 		{
 			name:    "no DevStripper",
-			store:   withoutStripper{baseRestoreStore: real, KindReader: real, DevReportRecorder: real},
+			store:   withoutStripper{baseRestoreStore: base, KindReader: base, DevReportRecorder: base},
 			missing: "DevStripper",
 		},
 		{
 			name:    "no DevReportRecorder",
-			store:   withoutRecorder{baseRestoreStore: real, KindReader: real, DevStripper: real},
+			store:   withoutRecorder{baseRestoreStore: base, KindReader: base, DevStripper: base},
 			missing: "DevReportRecorder",
 		},
 	}
@@ -84,46 +83,67 @@ func TestNewRestoreServiceNeedsDevPorts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			service, err := newRestoreService(restoreSettings(t, tc.store, true), restoreDeps(t, real), nil)
-			if err == nil || service != nil {
-				t.Fatalf("restore service = %v, %v, want a start error and no service", service, err)
-			}
-
-			if !errors.Is(err, errRestoreNeedsLive) || !strings.Contains(err.Error(), tc.missing) {
-				t.Fatalf("error = %q, want errRestoreNeedsLive naming %s", err, tc.missing)
-			}
-
-			// Another port must not appear in the list.
-			for _, other := range []string{"KindReader", "DevStripper", "DevReportRecorder"} {
-				if other != tc.missing && strings.Contains(err.Error(), other) {
-					t.Fatalf("error = %q names %s, which the store holds", err, other)
-				}
-			}
+			service, err := newRestoreService(
+				addBackupTarget(t, restoreSettings(t, tc.store)),
+				restoreDeps(t, base),
+				nil,
+			)
+			checkMissingPort(t, service, err, tc.missing)
 		})
 	}
+}
 
-	t.Run("a store with every port and a target", func(t *testing.T) {
-		t.Parallel()
+// checkMissingPort proves that the start failed with errRestoreNeedsLive,
+// that the text names the missing port, and that it names no other port.
+func checkMissingPort(t *testing.T, service *backup.RestoreService, err error, missing string) {
+	t.Helper()
 
-		// The service only holds the maintenance service; the test never enters it.
-		service, err := newRestoreService(
-			restoreSettings(t, real, true),
-			restoreDeps(t, real),
-			new(maintenance.Service),
-		)
-		if err != nil || service == nil {
-			t.Fatalf("restore service = %v, %v, want a service", service, err)
+	if err == nil || service != nil {
+		t.Fatalf("restore service = %v, %v, want a start error and no service", service, err)
+	}
+
+	if !errors.Is(err, errRestoreNeedsLive) || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("error = %q, want errRestoreNeedsLive naming %s", err, missing)
+	}
+
+	// Another port must not appear in the list.
+	for _, other := range []string{"KindReader", "DevStripper", "DevReportRecorder"} {
+		if other != missing && strings.Contains(err.Error(), other) {
+			t.Fatalf("error = %q names %s, which the store holds", err, other)
 		}
-	})
+	}
+}
 
-	t.Run("no backup target needs no port", func(t *testing.T) {
-		t.Parallel()
+// TestNewRestoreServiceWithEveryPort proves that a store with every port and
+// a backup target gets a restore service.
+func TestNewRestoreServiceWithEveryPort(t *testing.T) {
+	t.Parallel()
 
-		service, err := newRestoreService(restoreSettings(t, tests[0].store, false), restoreDeps(t, real), nil)
-		if err != nil || service != nil {
-			t.Fatalf("restore service = %v, %v, want none and no error", service, err)
-		}
-	})
+	base := openRestoreStore(t)
+
+	// The service only holds the maintenance service; the test never enters it.
+	service, err := newRestoreService(
+		addBackupTarget(t, restoreSettings(t, base)),
+		restoreDeps(t, base),
+		new(maintenance.Service),
+	)
+	if err != nil || service == nil {
+		t.Fatalf("restore service = %v, %v, want a service", service, err)
+	}
+}
+
+// TestNewRestoreServiceWithoutTargetNeedsNoPort proves that no backup target
+// needs no port.
+func TestNewRestoreServiceWithoutTargetNeedsNoPort(t *testing.T) {
+	t.Parallel()
+
+	base := openRestoreStore(t)
+	store := withoutKindReader{baseRestoreStore: base, DevStripper: base, DevReportRecorder: base}
+
+	service, err := newRestoreService(restoreSettings(t, store), restoreDeps(t, base), nil)
+	if err != nil || service != nil {
+		t.Fatalf("restore service = %v, %v, want none and no error", service, err)
+	}
 }
 
 // openRestoreStore opens a SQLite store that holds every restore port.
@@ -144,79 +164,64 @@ func openRestoreStore(t *testing.T) *sqlite.Store {
 	return st
 }
 
-// restoreSettings returns the settings that newRestoreService reads.
-func restoreSettings(t *testing.T, store namespace.Store, withTarget bool) *settings {
+// restoreSettings returns the settings that newRestoreService reads, with no
+// backup target.
+func restoreSettings(t *testing.T, store namespace.Store) *settings {
 	t.Helper()
 
 	cfg := defaultSettings()
 	cfg.namespaceStore = store
-	cfg.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg.logger = slog.New(slog.DiscardHandler)
 
-	if withTarget {
-		target, err := fs.Open(filepath.Join(t.TempDir(), "target"))
-		if err != nil {
-			t.Fatalf("open backup target: %v", err)
-		}
+	return cfg
+}
 
-		t.Cleanup(func() {
-			if closeErr := target.Close(); closeErr != nil {
-				t.Errorf("close backup target: %v", closeErr)
-			}
-		})
+// openRestoreBlobs opens a file blob store in a new directory and closes it
+// at the end of the test.
+func openRestoreBlobs(t *testing.T, name string) *fs.Store {
+	t.Helper()
 
-		cfg.backupTarget = target
-
-		blobs, blobsErr := fs.Open(filepath.Join(t.TempDir(), "live-blobs"))
-		if blobsErr != nil {
-			t.Fatalf("open blob store: %v", blobsErr)
-		}
-
-		t.Cleanup(func() {
-			if closeErr := blobs.Close(); closeErr != nil {
-				t.Errorf("close blob store: %v", closeErr)
-			}
-		})
-
-		cfg.blobStore = blobs
+	store, err := fs.Open(filepath.Join(t.TempDir(), name))
+	if err != nil {
+		t.Fatalf("open %s: %v", name, err)
 	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close %s: %v", name, closeErr)
+		}
+	})
+
+	return store
+}
+
+// addBackupTarget gives the settings a backup target and a live blob store.
+func addBackupTarget(t *testing.T, cfg *settings) *settings {
+	t.Helper()
+
+	cfg.backupTarget = openRestoreBlobs(t, "target")
+	cfg.blobStore = openRestoreBlobs(t, "live-blobs")
 
 	return cfg
 }
 
 // restoreDeps returns installation dependencies with a backup service over
-// the real store.
-func restoreDeps(t *testing.T, real *sqlite.Store) installationDeps {
+// the store.
+func restoreDeps(t *testing.T, store *sqlite.Store) installationDeps {
 	t.Helper()
 
-	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
-	if err != nil {
-		t.Fatalf("open blob store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := blobs.Close(); closeErr != nil {
-			t.Errorf("close blob store: %v", closeErr)
-		}
-	})
-
-	target, err := fs.Open(filepath.Join(t.TempDir(), "backup-target"))
-	if err != nil {
-		t.Fatalf("open backup target: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close backup target: %v", closeErr)
-		}
-	})
-
 	backups, err := backup.NewService(backup.Config{
-		Exporter: real, Kinds: real, Registry: real, Blobs: blobs, StateOpener: nil, Target: target,
-		TargetName: "dir:test", Now: nil, Version: "test", MaxSQLBytes: 0,
+		Exporter: store, Kinds: store, Registry: store, Blobs: openRestoreBlobs(t, "blobs"), StateOpener: nil,
+		Target: openRestoreBlobs(t, "backup-target"), TargetName: "dir:test", Now: nil, Version: "test",
+		MaxSQLBytes: 0,
 	})
 	if err != nil {
 		t.Fatalf("backup service: %v", err)
 	}
 
-	return installationDeps{backups: backups}
+	var deps installationDeps
+
+	deps.backups = backups
+
+	return deps
 }

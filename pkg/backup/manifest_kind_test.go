@@ -59,8 +59,8 @@ func TestManifestKindIsRequired(t *testing.T) {
 	}{
 		{name: "production", change: func(m string) string { return m }, wantErr: nil},
 		{
-			name:   "dev",
-			change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"dev"`, 1) },
+			name:    "dev",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"dev"`, 1) },
 			wantErr: nil,
 		},
 		{

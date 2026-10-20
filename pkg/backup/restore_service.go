@@ -929,11 +929,8 @@ func (s *RestoreService) applyPinned(
 		return repinErr
 	}
 
-	if stageErr := s.stage(
-		ctx,
-		backupID,
-		StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
-	); stageErr != nil {
+	stageOpts := StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev}
+	if stageErr := s.stage(ctx, backupID, stageOpts); stageErr != nil {
 		return fmt.Errorf("stage backup %s for restore %s: %w", backupID, id, stageErr)
 	}
 
