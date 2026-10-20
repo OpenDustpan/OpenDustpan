@@ -18,6 +18,13 @@ type StateGuard interface {
 	GuardStateWrite(ctx context.Context, w gate.StateWrite) (gate.Decision, error)
 }
 
+// stateCheck says what a route writes: the action that the route needs and the
+// operation kind of the write.
+type stateCheck struct {
+	action identity.Action
+	op     gate.OperationKind
+}
+
 // guardStateWrite asks the state guard before the restore or the final
 // delete of a unit. It returns true when the call may go on. When it returns
 // false, the answer is written in the error shape of this API: a refusal by a
@@ -25,8 +32,7 @@ type StateGuard interface {
 // does not answer 503. The message holds the message of each gate, the error
 // code and the ID of the decision record.
 func (h *Handler) guardStateWrite(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
-	action identity.Action, op gate.OperationKind,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, check stateCheck,
 ) bool {
 	if h.stateGuard == nil {
 		return true
@@ -35,7 +41,7 @@ func (h *Handler) guardStateWrite(
 	ctx := r.Context()
 
 	_, err := h.stateGuard.GuardStateWrite(ctx, gate.StateWrite{
-		Principal: p, Unit: obj, Operation: op, Action: action, Source: gate.SourceAPI,
+		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceAPI,
 	})
 	if err == nil {
 		return true
@@ -60,6 +66,7 @@ func (h *Handler) guardStateWrite(
 		status = http.StatusConflict
 	case errors.Is(refusal, gate.ErrUnavailable):
 		status = http.StatusServiceUnavailable
+	default:
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: refusalMessage(refusal, code)})

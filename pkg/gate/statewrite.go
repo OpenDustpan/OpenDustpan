@@ -14,8 +14,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// stateWriteSchema is the version of the fact schema of state.write.
-var stateWriteSchema = SchemaVersion{Subject: string(PointStateWrite), Major: 1, Minor: 0}
+// stateWriteSchema returns the version of the fact schema of state.write.
+func stateWriteSchema() SchemaVersion {
+	return SchemaVersion{Subject: string(PointStateWrite), Major: 1, Minor: 0}
+}
 
 // defaultApprovalTimeout is the timeout of an approval rule that sets none.
 const defaultApprovalTimeout = 7 * 24 * time.Hour
@@ -51,16 +53,18 @@ type StateWrite struct {
 // A job token passes the gates here, because the job model decided the
 // change of such a write (see Evaluate). The access limits hold for it.
 func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, error) {
+	ctx = withFactMemo(ctx)
+
 	subject, err := s.subjects.Subject(ctx, w.Principal)
 	if err != nil {
 		return Decision{}, fmt.Errorf("state.write: %w", err)
 	}
 
 	if !subject.BreakGlassAccount {
-		if err = s.checkLimits(ctx, subject, AccessCall{
-			Principal: w.Principal, Action: w.Action, Object: w.Unit,
-		}); err != nil {
-			return Decision{}, err
+		call := AccessCall{Principal: w.Principal, Action: w.Action, Object: w.Unit}
+
+		if limitErr := s.checkLimits(ctx, subject, call); limitErr != nil {
+			return Decision{}, limitErr
 		}
 	}
 
@@ -90,11 +94,53 @@ type unitEval struct {
 	doc    map[string]any
 }
 
+// stateWriteRun is one evaluation of state.write.
+type stateWriteRun struct {
+	svc       *Service
+	change    Change
+	units     []unitEval
+	cfg       Config
+	gates     []Gate
+	invalid   map[PolicyID]string
+	answers   []Answer
+	engineErr error
+	requires  []Requirement
+	warnings  []string
+	result    Result
+	refusal   *RefusalError
+}
+
+// unitEffect collects what the enforced gates say about one unit.
+type unitEffect struct {
+	denies    []string
+	errs      []string
+	approvals []string
+	warns     []string
+}
+
+// result returns the result of the unit: the strictest effect.
+func (e *unitEffect) result() Result {
+	switch {
+	case len(e.denies) > 0:
+		return ResultDeny
+	case len(e.errs) > 0:
+		return ResultError
+	case len(e.approvals) > 0:
+		return ResultAwaitingApproval
+	case len(e.warns) > 0:
+		return ResultWarn
+	default:
+		return ResultAllow
+	}
+}
+
 // evaluateStateWrite evaluates the gates of state.write for each unit of c
 // and writes the decision record.
 func (s *Service) evaluateStateWrite(ctx context.Context, c Change) (Decision, error) {
 	if c.BreakGlass != "" {
-		return Decision{}, fmt.Errorf("%w: a break-glass for a gate in error is not implemented in this version", ErrUnavailable)
+		return Decision{}, fmt.Errorf(
+			"%w: a break-glass for a gate in error is not implemented in this version", ErrUnavailable,
+		)
 	}
 
 	// Defense in depth: the store checks the fence of the record too. This
@@ -104,55 +150,119 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change) (Decision, e
 		return Decision{}, fmt.Errorf("%w: the fence is not the fence of namespace %q", ErrInvalid, c.Namespace)
 	}
 
-	units, scopes, err := s.stateWriteUnits(ctx, c)
+	run, err := s.newStateWriteRun(ctx, c)
 	if err != nil {
 		return Decision{}, err
 	}
 
-	cfg, err := s.store.Snapshot(ctx, scopes)
-	if err != nil {
-		return Decision{}, fmt.Errorf("%w: gate configuration: %w", ErrUnavailable, err)
-	}
+	rec := run.record()
 
-	gates := slices.DeleteFunc(slices.Clone(cfg.Gates), func(g Gate) bool { return g.DecisionPoint != PointStateWrite })
-
-	invalid, engineErr := s.recheck(ctx, gates)
-
-	var answers []Answer
-	if engineErr == nil {
-		answers, engineErr = s.askEngine(ctx, c, units, gates)
-	}
-
-	rec := Record{
-		ID: NewRecordID(), Point: PointStateWrite, Change: ChangeRef{Kind: ChangeStateWrite, ID: ""},
-		Namespace: c.Namespace, At: s.now(), Subject: c.Subject.ID, Schema: stateWriteSchema, PathSets: nil,
-		Units: make([]UnitResult, 0, len(units)), Requirements: nil, Warnings: nil, AutoApply: false,
-		Controls: nil, BreakGlass: "", Result: ResultAllow, Action: "", Count: 1, LastAt: time.Time{},
-	}
-	rec.Change.ID = string(rec.ID)
-	rec.LastAt = rec.At
-
-	out := outcome{}
-
-	for i := range units {
-		var answer *Answer
-		if engineErr == nil && answers != nil {
-			answer = &answers[i]
-		}
-
-		res := s.unitResult(&units[i], gates, &cfg, answer, engineErr, invalid, &out)
-		rec.Units = append(rec.Units, res)
-	}
-
-	rec.Result = out.result()
-	rec.Requirements = out.requirements
-	rec.Warnings = out.warnings
-
-	if err := s.store.Records().Put(ctx, rec, c.Fence); err != nil {
+	if err = s.store.Records().Put(ctx, rec, c.Fence); err != nil {
 		return Decision{}, fmt.Errorf("%w: write the decision record: %w", ErrUnavailable, err)
 	}
 
-	return out.decision(&rec, engineErr)
+	if run.refusal != nil {
+		run.refusal.Record = rec.ID
+
+		return Decision{}, run.refusal
+	}
+
+	return Decision{
+		Record:       rec.ID,
+		Result:       rec.Result,
+		Requirements: nil,
+		Warnings:     run.warnings,
+		AutoApply:    false,
+	}, nil
+}
+
+// newStateWriteRun reads the configuration and asks the engine.
+func (s *Service) newStateWriteRun(ctx context.Context, c Change) (*stateWriteRun, error) {
+	units, scopes, err := s.stateWriteUnits(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := s.store.Snapshot(ctx, scopes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: gate configuration: %w", ErrUnavailable, err)
+	}
+
+	run := &stateWriteRun{
+		svc:       s,
+		change:    c,
+		units:     units,
+		cfg:       cfg,
+		invalid:   nil,
+		answers:   nil,
+		engineErr: nil,
+		gates: slices.DeleteFunc(
+			slices.Clone(cfg.Gates),
+			func(g Gate) bool { return g.DecisionPoint != PointStateWrite },
+		),
+		requires: nil,
+		warnings: nil,
+		result:   ResultAllow,
+		refusal:  nil,
+	}
+
+	run.invalid, run.engineErr = s.recheck(ctx, run.gates)
+	if run.engineErr == nil {
+		run.answers, run.engineErr = s.askEngine(ctx, c, units, run.gates)
+	}
+
+	return run, nil
+}
+
+// record builds the decision record of the run and decides the result.
+func (r *stateWriteRun) record() Record {
+	at := r.svc.now()
+	id := NewRecordID()
+
+	rec := Record{
+		ID: id, Point: PointStateWrite, Change: ChangeRef{Kind: ChangeStateWrite, ID: string(id)},
+		Namespace: r.change.Namespace, At: at, Subject: r.change.Subject.ID, Schema: stateWriteSchema(),
+		PathSets: nil, Units: make([]UnitResult, 0, len(r.units)), Requirements: nil, Warnings: nil,
+		AutoApply: false, Controls: nil, BreakGlass: "", Result: ResultAllow, Action: "", Count: 1, LastAt: at,
+	}
+
+	total := unitEffect{denies: nil, errs: nil, approvals: nil, warns: nil}
+
+	for i := range r.units {
+		res, eff := r.unitResult(i)
+		rec.Units = append(rec.Units, res)
+
+		total.denies = append(total.denies, eff.denies...)
+		total.errs = append(total.errs, eff.errs...)
+		total.approvals = append(total.approvals, eff.approvals...)
+		total.warns = append(total.warns, eff.warns...)
+	}
+
+	rec.Requirements, rec.Warnings = r.requires, total.warns
+	r.warnings = total.warns
+
+	r.decide(&rec, &total, r.engineErr != nil && hasEnforcedGate(r.gates))
+
+	return rec
+}
+
+// decide sets the result of the record and the refusal of the run.
+func (r *stateWriteRun) decide(rec *Record, total *unitEffect, engineDown bool) {
+	rec.Result = total.result()
+
+	switch {
+	case len(total.denies) > 0:
+		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.denies}
+	case engineDown:
+		rec.Result = ResultError
+		r.refusal = &RefusalError{Err: ErrUnavailable, Record: "", Messages: []string{cleanText(r.engineErr.Error())}}
+	case len(total.errs) > 0:
+		r.refusal = &RefusalError{Err: ErrRuleFailed, Record: "", Messages: total.errs}
+	case len(total.approvals) > 0:
+		// A CLI cannot wait for people, so an approval outcome refuses.
+		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.approvals}
+	default:
+	}
 }
 
 // stateWriteUnits builds the facts of each unit of c, and the scopes whose
@@ -162,13 +272,9 @@ func (s *Service) stateWriteUnits(ctx context.Context, c Change) ([]unitEval, []
 
 	var scopes []Scope
 
-	add := func(sc Scope) {
-		if !slices.Contains(scopes, sc) {
-			scopes = append(scopes, sc)
-		}
-	}
+	for i := range c.Units {
+		u := c.Units[i]
 
-	for _, u := range c.Units {
 		coll, err := s.collectionOf(ctx, u)
 		if err != nil {
 			return nil, nil, err
@@ -191,7 +297,9 @@ func (s *Service) stateWriteUnits(ctx context.Context, c Change) ([]unitEval, []
 
 		held := slices.Concat(chain, c.Holders)
 		for _, sc := range held {
-			add(sc)
+			if !slices.Contains(scopes, sc) {
+				scopes = append(scopes, sc)
+			}
 		}
 
 		units = append(units, unitEval{unit: u, scopes: held, facts: facts, doc: doc})
@@ -203,20 +311,24 @@ func (s *Service) stateWriteUnits(ctx context.Context, c Change) ([]unitEval, []
 // stateWriteFacts builds the fact document of one unit at state.write. The
 // plan facts and the state facts are not available: the write comes from a
 // CLI that sends no plan.
-func stateWriteFacts(c Change, u identity.Object, coll collection.Name, labels []string) (Facts, map[string]any, error) {
+func stateWriteFacts(
+	c Change,
+	u identity.Object,
+	coll collection.Name,
+	labels []string,
+) (Facts, map[string]any, error) {
 	source := c.Source
 	if source == "" {
 		source = SourceAPI
 	}
 
-	f := Facts{
-		Schema:    stateWriteSchema,
-		Principal: PrincipalFacts{Kind: c.Subject.Kind, Credential: c.Subject.Credential},
-		Source:    SourceFacts{Kind: source, Ref: "", Protected: false, Commit: "", UpstreamUnit: ""},
-		Unit:      UnitFacts{Tool: u.Tool(), Collection: coll.String(), Labels: labels},
-		Operation: OperationFacts{Kind: c.Operation},
-		Document:  DocumentFacts{Truncated: nil},
-	}
+	var f Facts
+
+	f.Schema = stateWriteSchema()
+	f.Principal = PrincipalFacts{Kind: c.Subject.Kind, Credential: c.Subject.Credential}
+	f.Source = SourceFacts{Kind: source, Ref: "", Protected: false, Commit: "", UpstreamUnit: ""}
+	f.Unit = UnitFacts{Tool: u.Tool(), Collection: coll.String(), Labels: labels}
+	f.Operation = OperationFacts{Kind: c.Operation}
 
 	raw, err := json.Marshal(f)
 	if err != nil {
@@ -225,7 +337,7 @@ func stateWriteFacts(c Change, u identity.Object, coll collection.Name, labels [
 
 	if len(raw) > MaxFactDocumentBytes {
 		f.Unit.Labels = nil
-		f.Document.Truncated = []string{"unit.labels"}
+		f.Document = DocumentFacts{Truncated: []string{"unit.labels"}}
 
 		if raw, err = json.Marshal(f); err != nil || len(raw) > MaxFactDocumentBytes {
 			return Facts{}, nil, fmt.Errorf("%w: the fact document of %s", ErrLimit, u)
@@ -246,7 +358,7 @@ func stateWriteFacts(c Change, u identity.Object, coll collection.Name, labels [
 // makes it invalid. It returns the diagnostic of each invalid gate, or the
 // error of an engine that cannot check.
 func (s *Service) recheck(ctx context.Context, gates []Gate) (map[PolicyID]string, error) {
-	current := CheckedWith{Engine: s.engine.Version(), Schema: stateWriteSchema}
+	current := CheckedWith{Engine: s.engine.Version(), Schema: stateWriteSchema()}
 	invalid := map[PolicyID]string{}
 
 	for i := range gates {
@@ -257,7 +369,7 @@ func (s *Service) recheck(ctx context.Context, gates []Gate) (map[PolicyID]strin
 			continue
 		}
 
-		diags, err := s.engine.Check(ctx, Schema{Version: stateWriteSchema, PathSets: nil}, []Policy{gatePolicy(g)})
+		diags, err := s.engine.Check(ctx, Schema{Version: stateWriteSchema(), PathSets: nil}, []Policy{gatePolicy(g)})
 		if err != nil {
 			return nil, fmt.Errorf("%w: check gate %s: %w", ErrUnavailable, g.PolicyID(), err)
 		}
@@ -281,17 +393,14 @@ func gatePolicy(g *Gate) Policy {
 
 // askEngine gives each unit its answer. It returns the answers in the order
 // of the units, or the error of the engine, which fails the write closed. It
-// asks nothing when no gate exists.
+// asks nothing when no valid gate exists.
 func (s *Service) askEngine(ctx context.Context, c Change, units []unitEval, gates []Gate) ([]Answer, error) {
 	policies := make([]Policy, 0, len(gates))
 
 	for i := range gates {
-		g := &gates[i]
-		if g.State != StateValid {
-			continue
+		if gates[i].State == StateValid {
+			policies = append(policies, gatePolicy(&gates[i]))
 		}
-
-		policies = append(policies, gatePolicy(g))
 	}
 
 	if len(policies) == 0 {
@@ -299,6 +408,7 @@ func (s *Service) askEngine(ctx context.Context, c Change, units []unitEval, gat
 	}
 
 	requests := make([]Request, 0, len(units))
+
 	for i := range units {
 		f := units[i].facts
 		requests = append(requests, Request{
@@ -307,7 +417,7 @@ func (s *Service) askEngine(ctx context.Context, c Change, units []unitEval, gat
 		})
 	}
 
-	set := PolicySet{Schema: Schema{Version: stateWriteSchema, PathSets: nil}, Policies: policies}
+	set := PolicySet{Schema: Schema{Version: stateWriteSchema(), PathSets: nil}, Policies: policies}
 
 	answers, err := s.engine.Evaluate(ctx, set, requests)
 	if err != nil {
@@ -315,7 +425,9 @@ func (s *Service) askEngine(ctx context.Context, c Change, units []unitEval, gat
 	}
 
 	if len(answers) != len(requests) {
-		return nil, fmt.Errorf("%w: the engine gave %d answers for %d requests", ErrUnavailable, len(answers), len(requests))
+		return nil, fmt.Errorf(
+			"%w: the engine gave %d answers for %d requests", ErrUnavailable, len(answers), len(requests),
+		)
 	}
 
 	for i := range answers {
@@ -327,57 +439,16 @@ func (s *Service) askEngine(ctx context.Context, c Change, units []unitEval, gat
 	return answers, nil
 }
 
-// outcome collects the combined result of the units of one evaluation.
-type outcome struct {
-	denies       []string
-	errors       []string
-	approvals    []string
-	requirements []Requirement
-	warnings     []string
-	unavailable  bool
+// hasEnforcedGate reports whether a valid gate in enforce mode exists. An
+// engine that does not answer matters only then.
+func hasEnforcedGate(gates []Gate) bool {
+	return slices.ContainsFunc(gates, func(g Gate) bool { return g.Mode == ModeEnforce && g.State == StateValid })
 }
 
-// result returns the combined result: the strictest of the units.
-func (o *outcome) result() Result {
-	switch {
-	case len(o.denies) > 0:
-		return ResultDeny
-	case o.unavailable || len(o.errors) > 0:
-		return ResultError
-	case len(o.approvals) > 0:
-		return ResultAwaitingApproval
-	case len(o.warnings) > 0:
-		return ResultWarn
-	default:
-		return ResultAllow
-	}
-}
+// unitResult evaluates the gates for unit i from its answer.
+func (r *stateWriteRun) unitResult(i int) (UnitResult, *unitEffect) {
+	u := &r.units[i]
 
-// decision returns the decision of the evaluation, or the refusal.
-func (o *outcome) decision(rec *Record, engineErr error) (Decision, error) {
-	switch {
-	case len(o.denies) > 0:
-		return Decision{}, &RefusalError{Err: ErrDenied, Record: rec.ID, Messages: o.denies}
-	case o.unavailable:
-		return Decision{}, &RefusalError{Err: ErrUnavailable, Record: rec.ID, Messages: []string{cleanText(engineErr.Error())}}
-	case len(o.errors) > 0:
-		return Decision{}, &RefusalError{Err: ErrRuleFailed, Record: rec.ID, Messages: o.errors}
-	case len(o.approvals) > 0:
-		// A CLI cannot wait for people, so an approval outcome refuses.
-		return Decision{}, &RefusalError{Err: ErrDenied, Record: rec.ID, Messages: o.approvals}
-	}
-
-	return Decision{
-		Record: rec.ID, Result: rec.Result, Requirements: nil, Warnings: o.warnings, AutoApply: false,
-	}, nil
-}
-
-// unitResult evaluates the gates for one unit from its answer and adds the
-// effect to out.
-func (s *Service) unitResult(
-	u *unitEval, gates []Gate, cfg *Config, answer *Answer, engineErr error, invalid map[PolicyID]string,
-	out *outcome,
-) UnitResult {
 	digest, err := digestOf(u.doc)
 	if err != nil {
 		digest = ""
@@ -386,159 +457,149 @@ func (s *Service) unitResult(
 	res := UnitResult{
 		Unit: UnitRef{Object: u.unit}, Facts: u.facts, Digest: digest, Gates: []PolicyResult{}, Result: ResultAllow,
 	}
+	eff := &unitEffect{denies: nil, errs: nil, approvals: nil, warns: nil}
 
-	var (
-		denies, approvals, warns, errs []string
-	)
+	var answer *Answer
+	if r.engineErr == nil {
+		answer = &r.answers[i]
+	}
 
-	for i := range gates {
-		g := &gates[i]
+	for gi := range r.gates {
+		g := &r.gates[gi]
 		if !slices.Contains(u.scopes, g.Scope) {
 			continue
 		}
 
-		pr := PolicyResult{
-			Policy: g.PolicyID(), Version: g.Version, Mode: g.Mode, Outcome: g.Outcome, Matched: false,
-			Error: false, Diagnostic: "", Skipped: false, BrokenBy: "", Message: "",
-		}
-
-		s.fillGateResult(&pr, g, u, answer, engineErr, invalid)
-
-		if g.Mode != ModeEnforce {
-			res.Gates = append(res.Gates, pr)
-
-			continue
-		}
-
-		switch {
-		case pr.Error && g.OnError == OnErrorSkip:
-			pr.Skipped = true
-		case pr.Error:
-			errs = append(errs, "the gate "+pr.Policy.String()+" failed: "+pr.Diagnostic)
-		case pr.Matched:
-			s.applyOutcome(&pr, u, cfg, &denies, &approvals, &warns, &errs, out)
+		pr := r.gateResult(g, u, answer)
+		if g.Mode == ModeEnforce {
+			r.enforce(&pr, g, u, eff)
 		}
 
 		res.Gates = append(res.Gates, pr)
 	}
 
-	out.denies = append(out.denies, denies...)
-	out.errors = append(out.errors, errs...)
-	out.approvals = append(out.approvals, approvals...)
-	out.warnings = append(out.warnings, warns...)
-
-	if engineErr != nil && hasEnforcedGate(gates) {
-		out.unavailable = true
+	res.Result = eff.result()
+	if r.engineErr != nil && hasEnforcedGate(r.gates) {
 		res.Result = ResultError
-
-		return res
 	}
 
-	switch {
-	case len(denies) > 0:
-		res.Result = ResultDeny
-	case len(errs) > 0:
-		res.Result = ResultError
-	case len(approvals) > 0:
-		res.Result = ResultAwaitingApproval
-	case len(warns) > 0:
-		res.Result = ResultWarn
+	return res, eff
+}
+
+// gateResult sets the match, the error and the message of one gate for one
+// unit.
+func (r *stateWriteRun) gateResult(g *Gate, u *unitEval, answer *Answer) PolicyResult {
+	pr := PolicyResult{
+		Policy: g.PolicyID(), Version: g.Version, Mode: g.Mode, Outcome: g.Outcome, Matched: false,
+		Error: false, Diagnostic: "", Skipped: false, BrokenBy: "", Message: "",
 	}
 
-	return res
-}
-
-// hasEnforcedGate reports whether a gate in enforce mode exists. An engine
-// that does not answer matters only then.
-func hasEnforcedGate(gates []Gate) bool {
-	return slices.ContainsFunc(gates, func(g Gate) bool { return g.Mode == ModeEnforce && g.State == StateValid })
-}
-
-// fillGateResult sets the match, the error and the message of one gate for
-// one unit.
-func (s *Service) fillGateResult(
-	pr *PolicyResult, g *Gate, u *unitEval, answer *Answer, engineErr error, invalid map[PolicyID]string,
-) {
 	switch {
 	case g.State != StateValid:
-		pr.Error, pr.Diagnostic = true, firstNonEmpty(invalid[pr.Policy], "the gate failed its last check and is not valid")
-	case engineErr != nil:
-		pr.Error, pr.Diagnostic = true, cleanText(engineErr.Error())
+		pr.Error = true
+		pr.Diagnostic = firstNonEmpty(r.invalid[pr.Policy], "the gate failed its last check and is not valid")
+	case r.engineErr != nil:
+		pr.Error, pr.Diagnostic = true, cleanText(r.engineErr.Error())
 	case answer != nil:
-		for _, d := range answer.Diagnostics {
-			if d.Policy == pr.Policy {
-				pr.Error, pr.Diagnostic = true, cleanText(d.Message)
-			}
-		}
-
-		if !pr.Error && slices.Contains(answer.Matched, pr.Policy) {
-			pr.Matched = true
-		}
+		r.readAnswer(&pr, answer)
+	default:
 	}
 
 	if !pr.Matched {
-		return
+		return pr
 	}
 
 	msg, err := renderMessage(g.Message, u.doc)
 	if err != nil {
 		pr.Matched, pr.Error, pr.Diagnostic = false, true, cleanText(err.Error())
 
-		return
+		return pr
 	}
 
 	pr.Message = cleanText(msg)
+
+	return pr
 }
 
-// applyOutcome adds the effect of the matched gate pr to the lists of the
-// unit.
-func (s *Service) applyOutcome(
-	pr *PolicyResult, u *unitEval, cfg *Config, denies, approvals, warns, errs *[]string, out *outcome,
-) {
-	switch {
-	case pr.Outcome == OutcomeDeny:
-		*denies = append(*denies, firstNonEmpty(pr.Message, "the gate "+pr.Policy.String()+" denies the write"))
-	case pr.Outcome == OutcomeWarn:
-		*warns = append(*warns, firstNonEmpty(pr.Message, "the gate "+pr.Policy.String()+" warns about the write"))
-	default:
-		id, ok := pr.Outcome.Rule()
-		rule, found := findRule(cfg, u, id)
-
-		// Defense in depth: the store refuses a gate whose approval rule
-		// does not resolve. This check stays so that a row from another
-		// version, or a restored row, still fails closed.
-
-		if !ok || !found {
-			pr.Error, pr.Matched = true, false
-			pr.Diagnostic = "the approval rule " + string(pr.Outcome) + " does not exist for the unit"
-			*errs = append(*errs, "the gate "+pr.Policy.String()+" failed: "+pr.Diagnostic)
-
-			return
+// readAnswer sets the match and the error of pr from the answer.
+func (r *stateWriteRun) readAnswer(pr *PolicyResult, answer *Answer) {
+	for _, d := range answer.Diagnostics {
+		if d.Policy == pr.Policy {
+			pr.Error, pr.Diagnostic = true, cleanText(d.Message)
 		}
-
-		req := requirementOfRule(rule)
-		if !slices.ContainsFunc(out.requirements, func(r Requirement) bool { return r.Name == req.Name }) {
-			out.requirements = append(out.requirements, req)
-		}
-
-		*approvals = append(*approvals, fmt.Sprintf(
-			"%s The write needs approval by rule %s. A write from a CLI cannot wait for approval: "+
-				"open a change order for %s with the OpenDustpan CLI, and write after it is approved.",
-			firstNonEmpty(pr.Message, "The gate "+pr.Policy.String()+" matches."), id, u.unit,
-		))
 	}
+
+	if !pr.Error && slices.Contains(answer.Matched, pr.Policy) {
+		pr.Matched = true
+	}
+}
+
+// enforce adds the effect of the enforced gate g to eff.
+func (r *stateWriteRun) enforce(pr *PolicyResult, g *Gate, u *unitEval, eff *unitEffect) {
+	switch {
+	case pr.Error && g.OnError == OnErrorSkip:
+		pr.Skipped = true
+	case pr.Error:
+		eff.errs = append(eff.errs, "the gate "+pr.Policy.String()+" failed: "+pr.Diagnostic)
+	case pr.Matched:
+		r.applyOutcome(pr, u, eff)
+	default:
+	}
+}
+
+// applyOutcome adds the effect of the matched gate pr to eff.
+func (r *stateWriteRun) applyOutcome(pr *PolicyResult, u *unitEval, eff *unitEffect) {
+	switch pr.Outcome {
+	case OutcomeDeny:
+		eff.denies = append(eff.denies, firstNonEmpty(pr.Message, "the gate "+pr.Policy.String()+" denies the write"))
+	case OutcomeWarn:
+		eff.warns = append(
+			eff.warns,
+			firstNonEmpty(pr.Message, "the gate "+pr.Policy.String()+" warns about the write"),
+		)
+	default:
+		r.requireApproval(pr, u, eff)
+	}
+}
+
+// requireApproval adds the requirement of an approval outcome. A CLI cannot
+// wait for it, so the message tells the person what to do.
+func (r *stateWriteRun) requireApproval(pr *PolicyResult, u *unitEval, eff *unitEffect) {
+	id, ok := pr.Outcome.Rule()
+	rule, found := r.findRule(u, id)
+
+	// Defense in depth: the store refuses a gate whose approval rule does
+	// not resolve. This check stays so that a row from another version, or
+	// a restored row, still fails closed.
+	if !ok || !found {
+		pr.Error, pr.Matched = true, false
+		pr.Diagnostic = "the approval rule " + string(pr.Outcome) + " does not exist for the unit"
+		eff.errs = append(eff.errs, "the gate "+pr.Policy.String()+" failed: "+pr.Diagnostic)
+
+		return
+	}
+
+	req := requirementOfRule(*rule)
+	if !slices.ContainsFunc(r.requires, func(x Requirement) bool { return x.Name == req.Name }) {
+		r.requires = append(r.requires, req)
+	}
+
+	eff.approvals = append(eff.approvals, fmt.Sprintf(
+		"%s The write needs approval by rule %s. A write from a CLI cannot wait for approval: "+
+			"open a change order for %s with the OpenDustpan CLI, and write after it is approved.",
+		firstNonEmpty(pr.Message, "The gate "+pr.Policy.String()+" matches."), id, u.unit,
+	))
 }
 
 // findRule returns the approval rule id of the scopes of the unit.
-func findRule(cfg *Config, u *unitEval, id ID) (ApprovalRule, bool) {
-	for i := range cfg.ApprovalRules {
-		r := cfg.ApprovalRules[i]
-		if r.ID == id && slices.Contains(u.scopes, r.Scope) {
-			return r, true
+func (r *stateWriteRun) findRule(u *unitEval, id ID) (*ApprovalRule, bool) {
+	for i := range r.cfg.ApprovalRules {
+		if rule := &r.cfg.ApprovalRules[i]; rule.ID == id && slices.Contains(u.scopes, rule.Scope) {
+			return rule, true
 		}
 	}
 
-	return ApprovalRule{}, false
+	return nil, false
 }
 
 // requirementOfRule returns the requirement that rule gives, with no
@@ -589,7 +650,7 @@ func renderMessage(template string, doc map[string]any) (string, error) {
 func lookup(doc map[string]any, path string) (any, bool) {
 	var cur any = doc
 
-	for _, part := range strings.Split(path, ".") {
+	for part := range strings.SplitSeq(path, ".") {
 		m, ok := cur.(map[string]any)
 		if !ok {
 			return nil, false

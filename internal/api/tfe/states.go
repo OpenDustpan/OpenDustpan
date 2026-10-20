@@ -473,7 +473,7 @@ func (h *Handler) restoreStateVersion(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitWrite, gate.OperationRollback) {
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationRollback}) {
 		return
 	}
 

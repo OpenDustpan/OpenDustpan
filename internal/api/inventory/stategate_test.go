@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -14,11 +15,20 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// errGuardDown is the error of a guard that cannot decide.
+var errGuardDown = errors.New("store down")
+
 // recordingGuard answers each check with err, and keeps the checks it saw.
 type recordingGuard struct {
 	mu   sync.Mutex
 	err  error
 	seen []gate.StateWrite
+}
+
+var _ apiinventory.StateGuard = (*recordingGuard)(nil)
+
+func newRecordingGuard(err error) *recordingGuard {
+	return &recordingGuard{mu: sync.Mutex{}, err: err, seen: nil}
 }
 
 func (g *recordingGuard) GuardStateWrite(_ context.Context, w gate.StateWrite) (gate.Decision, error) {
@@ -32,123 +42,193 @@ func (g *recordingGuard) GuardStateWrite(_ context.Context, w gate.StateWrite) (
 	}, g.err
 }
 
-func TestStateGuardOnRestoreAndPurge(t *testing.T) {
+// guardRoute is one write route and what the guard must see for it.
+type guardRoute struct {
+	name   string
+	method string
+	target string
+	body   string
+	ok     int
+	op     gate.OperationKind
+	action identity.Action
+}
+
+func guardRoutes() []guardRoute {
+	return []guardRoute{
+		{
+			"restore", http.MethodPost, "/api/inventory/deleted-units/pulumi/stk-1/restore?organization=acme", "{}",
+			http.StatusOK, gate.OperationRollback, identity.ActionUnitRestore,
+		},
+		{
+			"purge", http.MethodDelete, "/api/inventory/deleted-units/pulumi/stk-1?organization=acme", "",
+			http.StatusNoContent, gate.OperationDelete, identity.ActionUnitPurge,
+		},
+	}
+}
+
+// guardRefusal is one refusal that the guard can give and the answer it shows.
+type guardRefusal struct {
+	name   string
+	err    *gate.RefusalError
+	status int
+	code   string
+}
+
+func guardRefusals() []guardRefusal {
+	refusal := func(err error, record string) *gate.RefusalError {
+		return &gate.RefusalError{Err: err, Record: gate.RecordID(record), Messages: []string{"No restores."}}
+	}
+
+	return []guardRefusal{
+		{"deny", refusal(gate.ErrDenied, "gdr-aaaaaaaaaaaaaaaaaaaa"), http.StatusForbidden, "gate.denied"},
+		{"limit", refusal(gate.ErrLimited, "gdr-bbbbbbbbbbbbbbbbbbbb"), http.StatusForbidden, "gate.limited"},
+		{
+			"rule failed",
+			refusal(gate.ErrRuleFailed, "gdr-cccccccccccccccccccc"),
+			http.StatusConflict,
+			"gate.rule-failed",
+		},
+		{
+			"engine down", refusal(gate.ErrUnavailable, "gdr-dddddddddddddddddddd"), http.StatusServiceUnavailable,
+			"gate.unavailable",
+		},
+	}
+}
+
+func guardedFixture(t *testing.T, guard apiinventory.StateGuard) deletedFixture {
+	t.Helper()
+
+	return buildGuardedFixture(t, guardSpec{
+		entries: seededDeleted().entries, authz: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		lifecycleErr: nil, scope: fixedScope{err: nil, ids: nil, all: true}, guard: guard,
+	})
+}
+
+func serveRoute(t *testing.T, f deletedFixture, rt guardRoute) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return f.serve(t, rt.method, rt.target, rt.body)
+}
+
+func TestStateGuardSeesTheWrite(t *testing.T) {
 	t.Parallel()
 
-	routes := []struct {
-		name   string
-		method string
-		target string
-		body   string
-		ok     int
-		op     gate.OperationKind
-		action identity.Action
-	}{
-		{
-			"restore", http.MethodPost, "/api/inventory/deleted-units/pulumi/stk-1/restore?organization=acme", "{}", http.StatusOK,
-			gate.OperationRollback, identity.ActionUnitRestore,
-		},
-		{
-			"purge", http.MethodDelete, "/api/inventory/deleted-units/pulumi/stk-1?organization=acme", "", http.StatusNoContent,
-			gate.OperationDelete, identity.ActionUnitPurge,
-		},
-	}
-
-	refusals := []struct {
-		name   string
-		err    error
-		status int
-		code   string
-	}{
-		{"deny", &gate.RefusalError{Err: gate.ErrDenied, Record: "gdr-aaaaaaaaaaaaaaaaaaaa", Messages: []string{"No restores."}}, http.StatusForbidden, "gate.denied"},
-		{"limit", &gate.RefusalError{Err: gate.ErrLimited, Record: "gdr-bbbbbbbbbbbbbbbbbbbb", Messages: []string{"No restores."}}, http.StatusForbidden, "gate.limited"},
-		{"rule failed", &gate.RefusalError{Err: gate.ErrRuleFailed, Record: "gdr-cccccccccccccccccccc", Messages: []string{"No restores."}}, http.StatusConflict, "gate.rule-failed"},
-		{"engine down", &gate.RefusalError{Err: gate.ErrUnavailable, Record: "gdr-dddddddddddddddddddd", Messages: []string{"No restores."}}, http.StatusServiceUnavailable, "gate.unavailable"},
-	}
-
-	for _, rt := range routes {
-		t.Run(rt.name+" passes when nothing refuses", func(t *testing.T) {
+	for _, rt := range guardRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := &recordingGuard{}
-			f := buildGuardedFixture(t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
-				fixedScope{err: nil, ids: nil, all: true}, guard)
+			guard := newRecordingGuard(nil)
+			f := guardedFixture(t, guard)
 
-			rec := f.serve(t, rt.method, rt.target, rt.body)
-			if rec.Code != rt.ok || len(f.pulumi.calls) != 1 {
-				t.Fatalf("%s answers %d with %d calls, want %d and 1: %s", rt.name, rec.Code, len(f.pulumi.calls), rt.ok, rec.Body)
-			}
-
-			if len(guard.seen) != 1 {
-				t.Fatalf("guard saw %d checks, want 1", len(guard.seen))
+			rec := serveRoute(t, f, rt)
+			if rec.Code != rt.ok || len(f.pulumi.calls) != 1 || len(guard.seen) != 1 {
+				t.Fatalf("%s answers %d with %d calls and %d checks, want %d, 1 and 1: %s",
+					rt.name, rec.Code, len(f.pulumi.calls), len(guard.seen), rt.ok, rec.Body)
 			}
 
 			got := guard.seen[0]
 			if got.Operation != rt.op || got.Action != rt.action || got.Source != gate.SourceAPI ||
 				got.Unit.Tool() != "pulumi" || got.Unit.UnitID() != "stk-1" {
-				t.Fatalf("guard saw %+v, want operation %s, action %s, the API source and the unit", got, rt.op, rt.action)
-			}
-		})
-
-		t.Run(rt.name+" is the same without a guard", func(t *testing.T) {
-			t.Parallel()
-
-			f := newDeletedFixture(t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil)
-
-			rec := f.serve(t, rt.method, rt.target, rt.body)
-			if rec.Code != rt.ok || len(f.pulumi.calls) != 1 {
-				t.Fatalf("%s answers %d with %d calls, want %d and 1: %s", rt.name, rec.Code, len(f.pulumi.calls), rt.ok, rec.Body)
-			}
-		})
-
-		for _, rf := range refusals {
-			t.Run(rt.name+" refuses on "+rf.name, func(t *testing.T) {
-				t.Parallel()
-
-				guard := &recordingGuard{err: rf.err}
-				f := buildGuardedFixture(t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
-					fixedScope{err: nil, ids: nil, all: true}, guard)
-
-				rec := f.serve(t, rt.method, rt.target, rt.body)
-				if rec.Code != rf.status || len(f.pulumi.calls) != 0 {
-					t.Fatalf("%s answers %d with %d calls, want %d and none: %s", rt.name, rec.Code, len(f.pulumi.calls), rf.status, rec.Body)
-				}
-
-				var body struct {
-					Code    int    `json:"code"`
-					Message string `json:"message"`
-				}
-				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-					t.Fatalf("body %q: %v", rec.Body, err)
-				}
-
-				refusal := &gate.RefusalError{}
-				_ = errors.As(rf.err, &refusal)
-
-				if body.Code != rf.status || !strings.Contains(body.Message, refusal.Messages[0]) ||
-					!strings.Contains(body.Message, string(refusal.Record)) || !strings.Contains(body.Message, rf.code) {
-					t.Fatalf("body = %+v, want code %d, the message, the code %s and the record", body, rf.status, rf.code)
-				}
-			})
-		}
-
-		t.Run(rt.name+" is refused when the guard cannot decide", func(t *testing.T) {
-			t.Parallel()
-
-			guard := &recordingGuard{err: errors.New("store down")}
-			f := buildGuardedFixture(t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
-				fixedScope{err: nil, ids: nil, all: true}, guard)
-
-			rec := f.serve(t, rt.method, rt.target, rt.body)
-			if rec.Code < 400 || len(f.pulumi.calls) != 0 {
-				t.Fatalf("%s answers %d with %d calls, want an error and none", rt.name, rec.Code, len(f.pulumi.calls))
-			}
-
-			if strings.Contains(rec.Body.String(), "store down") {
-				t.Fatalf("body %q shows the internal error text", rec.Body)
+				t.Fatalf(
+					"guard saw %+v, want operation %s, action %s, the API source and the unit",
+					got,
+					rt.op,
+					rt.action,
+				)
 			}
 		})
 	}
 }
 
-var _ apiinventory.StateGuard = (*recordingGuard)(nil)
+func TestNoGuardChangesNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newDeletedFixture(
+				t,
+				seededDeleted().entries,
+				selectiveAuthorizer{deny: map[identity.Action]bool{}},
+				nil,
+			)
+
+			rec := serveRoute(t, f, rt)
+			if rec.Code != rt.ok || len(f.pulumi.calls) != 1 {
+				t.Fatalf(
+					"%s answers %d with %d calls, want %d and 1: %s",
+					rt.name,
+					rec.Code,
+					len(f.pulumi.calls),
+					rt.ok,
+					rec.Body,
+				)
+			}
+		})
+	}
+}
+
+// refusalBody is the error body of the inventory API.
+type refusalBody struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// checkRefusalBody checks the answer of a refusal.
+func checkRefusalBody(t *testing.T, rec *httptest.ResponseRecorder, rf guardRefusal) {
+	t.Helper()
+
+	var body refusalBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", rec.Body, err)
+	}
+
+	if body.Code != rf.status || !strings.Contains(body.Message, "No restores.") ||
+		!strings.Contains(body.Message, string(rf.err.Record)) || !strings.Contains(body.Message, rf.code) {
+		t.Fatalf("body = %+v, want code %d, the message, the code %s and the record", body, rf.status, rf.code)
+	}
+}
+
+func TestStateGuardRefusalIsInTheToolNeutralShape(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		for _, rf := range guardRefusals() {
+			t.Run(rt.name+" on "+rf.name, func(t *testing.T) {
+				t.Parallel()
+
+				f := guardedFixture(t, newRecordingGuard(rf.err))
+
+				rec := serveRoute(t, f, rt)
+				if rec.Code != rf.status || len(f.pulumi.calls) != 0 {
+					t.Fatalf("%s answers %d with %d calls, want %d and none: %s",
+						rt.name, rec.Code, len(f.pulumi.calls), rf.status, rec.Body)
+				}
+
+				checkRefusalBody(t, rec, rf)
+			})
+		}
+	}
+}
+
+func TestStateGuardThatCannotDecideRefuses(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range guardRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := guardedFixture(t, newRecordingGuard(errGuardDown))
+
+			rec := serveRoute(t, f, rt)
+			if rec.Code < http.StatusBadRequest || len(f.pulumi.calls) != 0 {
+				t.Fatalf("%s answers %d with %d calls, want an error and none", rt.name, rec.Code, len(f.pulumi.calls))
+			}
+
+			if strings.Contains(rec.Body.String(), errGuardDown.Error()) {
+				t.Fatalf("body %q shows the internal error text", rec.Body)
+			}
+		})
+	}
+}

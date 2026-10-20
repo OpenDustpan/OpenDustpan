@@ -92,7 +92,7 @@ func (h *Handler) lockWorkspace(
 
 	reason := lockReason(body)
 
-	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitWrite, gate.OperationLock) {
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
 		return
 	}
 
@@ -288,7 +288,7 @@ func (h *Handler) forceUnlockWorkspace(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitWriteForced, gate.OperationUnlock) {
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWriteForced, op: gate.OperationUnlock}) {
 		return
 	}
 

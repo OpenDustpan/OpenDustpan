@@ -71,7 +71,6 @@ import (
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
-	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -653,7 +652,7 @@ type services struct {
 	collections *collection.Service
 	// gates checks the writes of state against the access limits and the
 	// gates of state.write, or is nil when the store keeps no gates.
-	gates *gate.Service
+	gates *gateService
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
@@ -771,12 +770,7 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
-	svc.collections, err = newCollectionService(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	svc.gates, err = newGateService(cfg, svc.namespaces)
+	svc.collections, svc.gates, err = newCollectionAndGateServices(cfg, svc.namespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -1545,6 +1539,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		deleted:     nil,
 		access:      nil,
 		collections: nil,
+		gates:       nil,
 	}, nil
 }
 

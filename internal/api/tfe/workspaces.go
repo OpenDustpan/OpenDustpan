@@ -201,7 +201,7 @@ func (h *Handler) deleteWorkspace(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitManage, gate.OperationDelete) {
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitManage, op: gate.OperationDelete}) {
 		return
 	}
 

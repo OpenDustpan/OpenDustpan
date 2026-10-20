@@ -65,7 +65,15 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 	t.Parallel()
 
 	_, err := gate.NewService(gate.ServiceConfig{
-		Store: nil, Engine: nil, Producers: nil, Members: nil, Units: nil, Subjects: nil, Fences: nil, Now: nil, Log: nil,
+		Store:     nil,
+		Engine:    nil,
+		Producers: nil,
+		Members:   nil,
+		Units:     nil,
+		Subjects:  nil,
+		Fences:    nil,
+		Now:       nil,
+		Log:       nil,
 	})
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("NewService(nil ports) = %v, want ErrInvalid", err)
@@ -90,7 +98,7 @@ func jobWrite(t *testing.T, unit string, passedApply, planLock bool) gate.Change
 
 	return gate.Change{
 		Point: gate.PointStateWrite, Namespace: "acme",
-		Ref: gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""},
+		Ref: gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""}, Source: "",
 		Subject: gate.Subject{
 			ID: "job:42", Groups: nil, Kind: gate.PrincipalService, Credential: gate.CredentialJobToken,
 			AuthAt: time.Time{}, BreakGlassAccount: false,

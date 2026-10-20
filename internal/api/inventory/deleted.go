@@ -357,7 +357,7 @@ func (h *Handler) restoreUnit(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitRestore, gate.OperationRollback) {
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitRestore, op: gate.OperationRollback}) {
 		return
 	}
 
@@ -420,7 +420,7 @@ func (h *Handler) purgeUnit(
 		return
 	}
 
-	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitPurge, gate.OperationDelete) {
+	if !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitPurge, op: gate.OperationDelete}) {
 		return
 	}
 

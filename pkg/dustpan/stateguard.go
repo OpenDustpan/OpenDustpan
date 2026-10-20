@@ -20,6 +20,28 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
+// gateService is the service that checks the writes of state. The alias keeps
+// the name of the package out of the files that name gate for the body gate.
+type gateService = gate.Service
+
+// newCollectionAndGateServices returns the collection service and the gate
+// service. Each one is nil when the store does not hold its data.
+func newCollectionAndGateServices(
+	cfg *settings, namespaces *namespace.Service,
+) (*collection.Service, *gateService, error) {
+	collections, err := newCollectionService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	gates, err := newGateService(cfg, namespaces)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return collections, gates, nil
+}
+
 // newGateService returns the service that checks each write of state against
 // the access limits and the gates of state.write, or nil when the store
 // keeps no gates or the server has no inventory. Both SQL adapters keep gates.
@@ -30,7 +52,8 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 		return nil, nil //nolint:nilnil // A store without gates is a valid setup: no write is checked.
 	}
 
-	facts := inventoryFacts{reader: cfg.inventoryReader}
+	ids, _ := cfg.namespaceStore.(unitIDs)
+	facts := inventoryFacts{reader: cfg.inventoryReader, ids: ids}
 
 	var actions []string
 	for _, family := range []access.Family{
@@ -63,36 +86,15 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 // inventory. One read gives both.
 type inventoryFacts struct {
 	reader inventory.Reader
+	// ids finds the stable ID of a unit by its reference. It is nil when the
+	// store has no such lookup, and the reader then lists the namespace.
+	ids unitIDs
 }
 
-// entry returns the inventory entry of unit. A unit that is not in the
-// inventory, for example a deleted unit, gives gate.ErrNotFound.
-func (f inventoryFacts) entry(ctx context.Context, unit identity.Object) (inventory.Entry, error) {
-	if id := unit.UnitID(); id != "" {
-		e, err := f.reader.GetUnit(ctx, id)
-		if errors.Is(err, inventory.ErrUnitNotFound) {
-			return inventory.Entry{}, gate.ErrNotFound
-		}
-
-		if err != nil {
-			return inventory.Entry{}, fmt.Errorf("inventory unit %s: %w", id, err)
-		}
-
-		return e, nil
-	}
-
-	entries, err := f.reader.ListUnits(ctx, unit.Namespace())
-	if err != nil {
-		return inventory.Entry{}, fmt.Errorf("inventory units of %s: %w", unit.Namespace(), err)
-	}
-
-	for i := range entries {
-		if entries[i].Tool == unit.Tool() && entries[i].Name == unit.UnitName() {
-			return entries[i], nil
-		}
-	}
-
-	return inventory.Entry{}, gate.ErrNotFound
+// unitIDs finds the stable ID of a live unit by its reference with one
+// indexed read. The SQL stores implement it.
+type unitIDs interface {
+	UnitID(ctx context.Context, obj identity.Object) (string, bool, error)
 }
 
 // Collection implements gate.Membership.
@@ -126,6 +128,51 @@ func (f inventoryFacts) Labels(ctx context.Context, unit identity.Object) ([]str
 	return labels, nil
 }
 
+// entry returns the inventory entry of unit. A unit that is not in the
+// inventory, for example a deleted unit, gives gate.ErrNotFound.
+func (f inventoryFacts) entry(ctx context.Context, unit identity.Object) (inventory.Entry, error) {
+	id := unit.UnitID()
+
+	if id == "" && f.ids != nil {
+		found, ok, err := f.ids.UnitID(ctx, unit)
+		if err != nil {
+			return inventory.Entry{}, fmt.Errorf("unit ID of %s: %w", unit, err)
+		}
+
+		if !ok {
+			return inventory.Entry{}, gate.ErrNotFound
+		}
+
+		id = found
+	}
+
+	if id != "" {
+		e, err := f.reader.GetUnit(ctx, id)
+		if errors.Is(err, inventory.ErrUnitNotFound) {
+			return inventory.Entry{}, gate.ErrNotFound
+		}
+
+		if err != nil {
+			return inventory.Entry{}, fmt.Errorf("inventory unit %s: %w", id, err)
+		}
+
+		return e, nil
+	}
+
+	entries, err := f.reader.ListUnits(ctx, unit.Namespace())
+	if err != nil {
+		return inventory.Entry{}, fmt.Errorf("inventory units of %s: %w", unit.Namespace(), err)
+	}
+
+	for i := range entries {
+		if entries[i].Tool == unit.Tool() && entries[i].Name == unit.UnitName() {
+			return entries[i], nil
+		}
+	}
+
+	return inventory.Entry{}, gate.ErrNotFound
+}
+
 // principalSubjects gives the Subject of a principal from the facts that its
 // credential carries. It resolves no group and no authentication time yet, so
 // a limit or a gate that reads a group does not match, and a limit that asks
@@ -152,6 +199,8 @@ func (principalSubjects) Subject(_ context.Context, p identity.Principal) (gate.
 		credential = gate.CredentialJobToken
 	case identity.CredentialTrustToken:
 		credential = gate.CredentialTrustToken
+	case identity.CredentialAccessToken:
+		credential = gate.CredentialAccessToken
 	default:
 	}
 
@@ -185,7 +234,7 @@ func (f namespaceFences) Fence(ctx context.Context, ns namespace.Name) (namespac
 // nil service.
 //
 //nolint:ireturn // The adapter takes the port, and nil must stay an untyped nil.
-func stateGuardOf(svc *gate.Service) tfe.StateGuard {
+func stateGuardOf(svc *gateService) tfe.StateGuard {
 	if svc == nil {
 		return nil
 	}
@@ -196,7 +245,7 @@ func stateGuardOf(svc *gate.Service) tfe.StateGuard {
 // inventoryGuardOf is stateGuardOf for the tool-neutral inventory API.
 //
 //nolint:ireturn // The adapter takes the port, and nil must stay an untyped nil.
-func inventoryGuardOf(svc *gate.Service) inventoryapi.StateGuard {
+func inventoryGuardOf(svc *gateService) inventoryapi.StateGuard {
 	if svc == nil {
 		return nil
 	}

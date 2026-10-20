@@ -403,6 +403,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	tb.Helper()
 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
+		StateGuard:     nil,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		AddressGate:    nil,

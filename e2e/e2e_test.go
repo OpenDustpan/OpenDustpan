@@ -4197,6 +4197,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	collectionsScenario(t, env)
 	// The manual lock routes stop an OpenTofu plan until the lock goes.
 	manualLockRoutesScenario(t, env)
+	// A gate or an access limit at state.write stops the lock (ADR 224).
+	tofuStateWriteGateScenario(t, env)
 	// The context routes: the workspace reads the owners of its namespace.
 	tofuContextScenario(t, env)
 

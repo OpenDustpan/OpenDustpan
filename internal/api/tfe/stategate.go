@@ -24,6 +24,13 @@ func gateErrorCodes() []string {
 	return []string{"gate.denied", "gate.limited", "gate.rule-failed", "gate.unavailable"}
 }
 
+// stateCheck says what a route writes: the action that the route needs and the
+// operation kind of the write.
+type stateCheck struct {
+	action identity.Action
+	op     gate.OperationKind
+}
+
 // guardStateWrite asks the state guard before the write of the route. It
 // returns true when the write may go on. When it returns false, the answer is
 // written: a refusal of a gate or an access limit answers 403 as a JSON:API
@@ -31,8 +38,7 @@ func gateErrorCodes() []string {
 // and holds no lock. The detail holds the message of each gate, the error
 // code and the ID of the decision record.
 func (h *Handler) guardStateWrite(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
-	action identity.Action, op gate.OperationKind,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, check stateCheck,
 ) bool {
 	if h.stateGuard == nil {
 		return true
@@ -41,7 +47,7 @@ func (h *Handler) guardStateWrite(
 	ctx := r.Context()
 
 	_, err := h.stateGuard.GuardStateWrite(ctx, gate.StateWrite{
-		Principal: p, Unit: obj, Operation: op, Action: action, Source: gate.SourceCLI,
+		Principal: p, Unit: obj, Operation: check.op, Action: check.action, Source: gate.SourceCLI,
 	})
 	if err == nil {
 		return true
