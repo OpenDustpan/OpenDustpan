@@ -215,6 +215,9 @@ The owner keeps these. Each recommendation is the author's.
 8. Is the order of this RFC and RFC 90 one slice (one upload API for both),
    or RFC 90 first? Recommendation: RFC 90 first, then this RFC as a
    second kind on the same API.
+9. Does a job token hold `unit:upload-test-report`? Recommendation: no,
+   so that a job cannot report on its own result. The upload comes from the
+   CI of the team with a principal of its own.
 
 ## Proposed glossary lines
 
@@ -227,9 +230,6 @@ For `GLOSSARY.md`, after acceptance. This PR does not edit the glossary.
 - **Test case**: one test in a test report, with its suite, its outcome and
   its duration.
   _Avoid_: Test (alone), assertion, check
-8. Does a job token hold `unit:upload-test-report`? Recommendation: no,
-   so that a job cannot report on its own result. The upload comes from the
-   CI of the team with a principal of its own.
 
 ## Outcome
 
