@@ -85,6 +85,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a unit lock covers the unit only", test: testUnitLockCovers},
 		{name: "a collection lock covers its units", test: testCollectionLockCovers},
 		{name: "a unit that joins a locked collection is covered", test: testJoinCovered},
+		{name: "every covering lock is listed, unit first", test: testCoveringLocksListsAll},
 		{name: "a unit that leaves a locked collection is not covered", test: testLeaveNotCovered},
 		{name: "a move out of a locked collection needs the right to end the lock", test: testLeaveNeedsEndsLock},
 		{name: "a restore under a manual lock is refused and rolled back", test: testRestoreUnderLock},
@@ -587,6 +588,50 @@ func testCollectionLockCovers(t *testing.T, s Store) {
 
 	if _, err := s.GetLock(t.Context(), manuallock.UnitTarget(f.web)); !errors.Is(err, manuallock.ErrNotLocked) {
 		t.Errorf("GetLock of the member: err = %v, want ErrNotLocked: GetLock does not read the collection", err)
+	}
+}
+
+// testCoveringLocksListsAll proves CoveringLocks answers each lock that covers
+// the unit, the unit first, then its collection, then its namespace, and that
+// a unit which no lock covers gets ErrNotLocked and never an empty list.
+func testCoveringLocksListsAll(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+
+	if locks, err := s.CoveringLocks(t.Context(), f.web); !errors.Is(err, manuallock.ErrNotLocked) || len(locks) != 0 {
+		t.Fatalf("no lock: %+v, %v; want ErrNotLocked and no lock", locks, err)
+	}
+
+	f.put(t, f.web, f.payments)
+	f.lock(t, manuallock.NamespaceTarget(f.ns.Name), alice, testReason)
+	f.lock(t, manuallock.CollectionTarget(f.payments.Ref), alice, testReason)
+	f.lock(t, manuallock.UnitTarget(f.web), alice, testReason)
+
+	locks, err := s.CoveringLocks(t.Context(), f.web)
+	if err != nil {
+		t.Fatalf("CoveringLocks: %v", err)
+	}
+
+	want := []manuallock.Target{
+		manuallock.UnitTarget(f.web),
+		manuallock.CollectionTarget(f.payments.Ref),
+		manuallock.NamespaceTarget(f.ns.Name),
+	}
+
+	if len(locks) != len(want) {
+		t.Fatalf("CoveringLocks = %d locks, want %d: %+v", len(locks), len(want), locks)
+	}
+
+	for i, target := range want {
+		if locks[i].Target != target {
+			t.Errorf("lock %d target = %s, want %s", i, locks[i].Target, target)
+		}
+	}
+
+	first, err := s.CoveringLock(t.Context(), f.web)
+	if err != nil || first.Target != want[0] {
+		t.Errorf("CoveringLock = %+v, %v; want the lock of the unit", first, err)
 	}
 }
 

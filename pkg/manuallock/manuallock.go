@@ -275,4 +275,9 @@ type Store interface {
 	// holds the lock. It returns ErrNotLocked when no lock covers the unit
 	// or the unit does not exist.
 	CoveringLock(ctx context.Context, unit collection.UnitRef) (Lock, error)
+	// CoveringLocks returns every manual lock that covers the unit, in one
+	// read: the lock of the unit first, then the lock of its collection, then
+	// the lock of its namespace. It returns ErrNotLocked, and never an empty
+	// list, when no lock covers the unit or the unit does not exist.
+	CoveringLocks(ctx context.Context, unit collection.UnitRef) ([]Lock, error)
 }

@@ -34,6 +34,28 @@ func (c coveringLocks) CoveringLock(context.Context, collection.UnitRef) (manual
 	return c.lock, nil
 }
 
+// GetLock answers the lock when it is on t, so the check of a move reads the
+// source collection itself.
+func (c coveringLocks) GetLock(_ context.Context, t manuallock.Target) (manuallock.Lock, error) {
+	if c.err != nil {
+		return manuallock.Lock{}, c.err
+	}
+
+	if c.lock.Target != t {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
+
+	return c.lock, nil
+}
+
+func (c coveringLocks) CoveringLocks(context.Context, collection.UnitRef) ([]manuallock.Lock, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+
+	return []manuallock.Lock{c.lock}, nil
+}
+
 // lockOf returns a manual lock of alice on target.
 func lockOf(target manuallock.Target) manuallock.Lock {
 	return manuallock.Lock{

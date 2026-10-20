@@ -218,31 +218,70 @@ func (s *Service) Covering(ctx context.Context, unit collection.UnitRef) (Lock, 
 	return s.store.CoveringLock(ctx, unit)
 }
 
+// LockOn returns the manual lock that t itself holds, or ErrNotLocked. Unlike
+// Covering it does not look at the lock of a wider target, and unlike Get it
+// does not check the access of a caller: it is for a server check that has
+// authorized the caller on its own action, such as the move of a unit out of a
+// locked collection.
+func (s *Service) LockOn(ctx context.Context, t Target) (Lock, error) {
+	if err := t.Valid(); err != nil {
+		return Lock{}, err
+	}
+
+	return s.store.GetLock(ctx, t)
+}
+
+// NamespaceLock returns the manual lock of the namespace ns, or ErrNotLocked.
+// The restore of a deleted unit asks it: a deleted unit has no inventory entry,
+// so Covering cannot find the lock of its namespace.
+func (s *Service) NamespaceLock(ctx context.Context, ns namespace.Name) (Lock, error) {
+	return s.LockOn(ctx, NamespaceTarget(ns))
+}
+
 // CoveringFor is Covering for the lock request of the caller that holds the job
 // token of the job jobID (empty for any other caller). A lock request of a job
 // whose phase on the unit started before the manual lock passes: it answers
 // ErrNotLocked. The phase runs to its end, and so do its tool locks. Every other
 // case answers as Covering does. The service fails closed: a missing phase
 // clock, an error of the clock, a phase that started at or after the lock and a
-// time of zero all keep the lock.
+// time of zero all keep the lock. When several locks cover the unit, the phase
+// passes only if it started before each of them, and the answer is the first lock
+// that it did not start before.
 //
 // Defense in depth: the authenticator sets the job ID only for a verified job
 // token, and the clock checks that the job is live on this unit. This check
 // stays so that a caller which sets a job ID by mistake cannot pass a lock.
 func (s *Service) CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (Lock, error) {
-	l, err := s.store.CoveringLock(ctx, unit)
-	if err != nil || jobID == "" || s.phases == nil {
-		return l, err
+	locks, err := s.store.CoveringLocks(ctx, unit)
+	if err != nil {
+		return Lock{}, err
+	}
+
+	if len(locks) == 0 {
+		return Lock{}, ErrNotLocked
+	}
+
+	if jobID == "" || s.phases == nil {
+		return locks[0], nil
 	}
 
 	// The request passes only on a positive answer: a clock that fails or answers
 	// zero leaves the lock in place.
 	started, clockErr := s.phases.PhaseStartedAt(ctx, jobID, unit)
-	if passes := clockErr == nil && !started.IsZero() && started.Before(l.Since); passes {
-		return Lock{}, ErrNotLocked
+	if clockErr != nil || started.IsZero() {
+		return locks[0], nil //nolint:nilerr // Fail closed: a clock that fails or answers zero keeps the lock.
 	}
 
-	return l, nil
+	// The phase passes only when it started before every lock that covers the
+	// unit, so a new lock on a wider object never lifts a refusal that an older
+	// lock gives.
+	for i := range locks {
+		if !started.Before(locks[i].Since) {
+			return locks[i], nil
+		}
+	}
+
+	return Lock{}, ErrNotLocked
 }
 
 // authorize checks that p may do action on the object of t. It fails closed:

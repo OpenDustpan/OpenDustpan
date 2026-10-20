@@ -517,6 +517,8 @@ func runTofuHTTPUnlockedPushUnderManualLock(t *testing.T, env *e2e.Env, backendE
 	wsID := env.WorkspaceID(ctx, t)
 	unitSwitches := "/api/v2/workspaces/" + wsID + "/override-switches"
 	nsSwitches := "/api/server/namespaces/" + e2e.Namespace + "/override-switches"
+	const unlockedPushStep = "http backend: state push without a lock under the manual lock"
+
 	on, off := `{"allow-forced-writes":false,"allow-unlocked-writes":true}`,
 		`{"allow-forced-writes":false,"allow-unlocked-writes":false}`
 
@@ -525,8 +527,8 @@ func runTofuHTTPUnlockedPushUnderManualLock(t *testing.T, env *e2e.Env, backendE
 	overrideSwitches(t, env, "http backend: turn on the unit switches", unitSwitches, on)
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check:  checkTofuHTTPUnlockedPushRefused(env),
-		Name:   "http backend: state push without a lock under the manual lock",
+		Check:  checkTofuHTTPUnlockedPushRefused(env, unlockedPushStep),
+		Name:   unlockedPushStep,
 		Args:   []string{"state", "push", "-lock=false", "-"},
 		Env:    backendEnv,
 		Stdin:  push,
@@ -542,8 +544,8 @@ func runTofuHTTPUnlockedPushUnderManualLock(t *testing.T, env *e2e.Env, backendE
 // checkTofuHTTPUnlockedPushRefused checks a state push without a lock ID that a
 // manual lock stopped. The CLI prints the status only, so the answer of the
 // server is the proof: the POST answered 423 with lock info that names the
-// holder and the reason.
-func checkTofuHTTPUnlockedPushRefused(env *e2e.Env) func(e2e.Result) error {
+// holder and the reason. It reads only the requests of the step stepName.
+func checkTofuHTTPUnlockedPushRefused(env *e2e.Env, stepName string) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if out := r.Stdout + r.Stderr; !strings.Contains(out, "423") {
 			return fmt.Errorf("%w: push output lacks the status 423: %s", errUnexpected, out)
@@ -552,7 +554,7 @@ func checkTofuHTTPUnlockedPushRefused(env *e2e.Env) func(e2e.Result) error {
 		entries := env.Recorder.Entries()
 		for i := range entries {
 			e := &entries[i]
-			if e.Method != http.MethodPost || e.Status != http.StatusLocked {
+			if e.Step != stepName || e.Method != http.MethodPost || e.Status != http.StatusLocked {
 				continue
 			}
 

@@ -282,6 +282,11 @@ type ManualLocks interface {
 	// manuallock.ErrNotLocked when no manual lock covers the unit for the
 	// request.
 	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	// NamespaceLock returns the manual lock of the namespace, or
+	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
+	// unit has no inventory entry, so CoveringFor cannot find the lock of its
+	// namespace.
+	NamespaceLock(ctx context.Context, ns namespace.Name) (manuallock.Lock, error)
 }
 
 // lockStripes is the number of striped mutexes serializing declares and
@@ -474,6 +479,15 @@ func (s *Service) RestoreDeleted(
 	fence, err := s.fence(ctx, ns)
 	if err != nil {
 		return Ref{}, err
+	}
+
+	// Defense in depth: the store refuses a restore under a manual lock in the
+	// transaction of the restore, after the workspace is live again. This check
+	// stays so that the refusal does not rely on the store: a deleted workspace
+	// has no inventory entry, so it reads the lock of the namespace, and the
+	// store check covers the lock of the workspace and of its collection.
+	if lockErr := s.refuseRestoreUnderNamespaceLock(ctx, ns, id); lockErr != nil {
+		return Ref{}, fmt.Errorf("restore workspace %s: %w", id, lockErr)
 	}
 
 	e.At = s.clock()
@@ -2652,4 +2666,27 @@ func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID strin
 	}
 
 	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{Lock: l, Noun: "workspace", Name: w.Ref.String()})
+}
+
+// refuseRestoreUnderNamespaceLock returns an error that matches ErrLocked and
+// manuallock.ErrLocked while a manual lock covers the namespace ns, and nil when
+// there is no manual lock service or the namespace has no lock. A lock that
+// cannot be read refuses the restore: the check fails closed.
+func (s *Service) refuseRestoreUnderNamespaceLock(ctx context.Context, ns namespace.Name, id ID) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	l, err := s.manual.NamespaceLock(ctx, ns)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of namespace %s: %w", ns, err)
+	}
+
+	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{
+		Lock: l, Noun: "workspace", Name: ns.String() + "/" + id.String(),
+	})
 }

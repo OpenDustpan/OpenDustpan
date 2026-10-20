@@ -177,6 +177,11 @@ type ManualLocks interface {
 	// manuallock.ErrNotLocked when no manual lock covers the unit for the
 	// request.
 	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	// NamespaceLock returns the manual lock of the namespace, or
+	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
+	// unit has no inventory entry, so CoveringFor cannot find the lock of its
+	// namespace.
+	NamespaceLock(ctx context.Context, ns namespace.Name) (manuallock.Lock, error)
 }
 
 // Updates implements the update cycle of the Pulumi CLI: create and start an

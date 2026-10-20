@@ -100,6 +100,10 @@ func (m *memLocks) CoveringLock(_ context.Context, _ collection.UnitRef) (manual
 	return manuallock.Lock{}, manuallock.ErrNotLocked
 }
 
+func (m *memLocks) CoveringLocks(_ context.Context, _ collection.UnitRef) ([]manuallock.Lock, error) {
+	return nil, manuallock.ErrNotLocked
+}
+
 func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (manuallock.Lock, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

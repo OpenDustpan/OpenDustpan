@@ -139,49 +139,73 @@ func (s *Store) CoveringLock(ctx context.Context, unit collection.UnitRef) (manu
 // coveringLock is CoveringLock in the transaction of q. A restore reads the lock
 // of the unit it has just brought back, in its own transaction.
 func coveringLock(ctx context.Context, q *db.Queries, unit collection.UnitRef) (manuallock.Lock, error) {
+	locks, err := coveringLocks(ctx, q, unit)
+	if err != nil {
+		return manuallock.Lock{}, err
+	}
+
+	return locks[0], nil
+}
+
+// CoveringLocks implements manuallock.Store. It reads the row of the unit once,
+// so the answer is one consistent view of the three locks.
+func (s *Store) CoveringLocks(ctx context.Context, unit collection.UnitRef) ([]manuallock.Lock, error) {
+	return coveringLocks(ctx, s.queries, unit)
+}
+
+// coveringLocks returns every manual lock that covers the unit, the lock of the
+// unit first, then the lock of its collection, then the lock of its namespace.
+// It returns ErrNotLocked, and never an empty list, when none covers the unit.
+func coveringLocks(ctx context.Context, q *db.Queries, unit collection.UnitRef) ([]manuallock.Lock, error) {
 	row, err := q.GetCoveringManualLocks(ctx, db.GetCoveringManualLocksParams{
 		Namespace: unit.Namespace.String(),
 		Tool:      unit.Tool,
 		Name:      unit.Name,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return manuallock.Lock{}, manuallock.ErrNotLocked
+		return nil, manuallock.ErrNotLocked
 	}
 
 	if err != nil {
-		return manuallock.Lock{}, fmt.Errorf("select covering manual lock: %w", err)
+		return nil, fmt.Errorf("select covering manual lock: %w", err)
 	}
 
+	var locks []manuallock.Lock
+
 	if row.UnitHolder.Valid {
-		return manuallock.Lock{
+		locks = append(locks, manuallock.Lock{
 			Since:  codec.FromMillis(row.UnitSinceMs.Int64),
 			Target: manuallock.UnitTarget(unit),
 			Holder: row.UnitHolder.String,
 			Reason: row.UnitReason.String,
-		}, nil
+		})
 	}
 
 	if row.CollectionHolder.Valid {
 		ref := collection.Ref{Namespace: unit.Namespace, Name: collection.Name(row.CollectionName.String)}
 
-		return manuallock.Lock{
+		locks = append(locks, manuallock.Lock{
 			Since:  codec.FromMillis(row.CollectionSinceMs.Int64),
 			Target: manuallock.CollectionTarget(ref),
 			Holder: row.CollectionHolder.String,
 			Reason: row.CollectionReason.String,
-		}, nil
+		})
 	}
 
 	if row.NamespaceHolder.Valid {
-		return manuallock.Lock{
+		locks = append(locks, manuallock.Lock{
 			Since:  codec.FromMillis(row.NamespaceSinceMs.Int64),
 			Target: manuallock.NamespaceTarget(unit.Namespace),
 			Holder: row.NamespaceHolder.String,
 			Reason: row.NamespaceReason.String,
-		}, nil
+		})
 	}
 
-	return manuallock.Lock{}, manuallock.ErrNotLocked
+	if len(locks) == 0 {
+		return nil, manuallock.ErrNotLocked
+	}
+
+	return locks, nil
 }
 
 // manualLockObject returns the stable ID of the object of t: the unit ID of

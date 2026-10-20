@@ -371,9 +371,11 @@ func (e *movedOutOfLockError) Is(target error) bool {
 // checkMoveOutOfLock refuses a move of unit out of the collection from while a
 // manual lock of that collection covers the unit, unless the caller holds
 // unit:manage on the unit. The move ends the coverage of the collection lock,
-// so it would get around the lock for a caller that only holds unit:move. It
-// returns the name of the collection whose lock the move leaves, for the audit
-// entry of the move, or the empty string when no lock of from covers the unit.
+// so it would get around the lock for a caller that only holds unit:move. A
+// lock on the unit itself does not change this: the move still ends the lock of
+// the collection. It returns the name of the collection whose lock the move
+// leaves, for the audit entry of the move, or the empty string when from has no
+// lock.
 // A lock that cannot be read refuses the move: the check fails closed.
 //
 // Defense in depth: the route and authorizeMove check the access of the move.
@@ -386,17 +388,16 @@ func (h *Handler) checkMoveOutOfLock(
 		return "", nil
 	}
 
-	l, err := h.locks.Covering(ctx, unit)
+	// Read the lock of the source collection itself. Covering would answer the
+	// lock of the unit first, and a unit lock hides the collection lock that the
+	// move would end.
+	l, err := h.locks.LockOn(ctx, manuallock.CollectionTarget(from))
 	if errors.Is(err, manuallock.ErrNotLocked) {
 		return "", nil
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("read manual lock of %s: %w", unit, err)
-	}
-
-	if l.Target.Kind != manuallock.KindCollection || l.Target.Collection != from {
-		return "", nil
+		return "", fmt.Errorf("read manual lock of collection %s: %w", from.Name, err)
 	}
 
 	if authErr := h.authorize(ctx, p, identity.ActionUnitManage, obj); authErr != nil {

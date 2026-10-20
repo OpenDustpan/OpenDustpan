@@ -875,6 +875,10 @@ func (coverageLockStore) CoveringLock(_ context.Context, _ collection.UnitRef) (
 	return manuallock.Lock{}, manuallock.ErrNotLocked
 }
 
+func (coverageLockStore) CoveringLocks(_ context.Context, _ collection.UnitRef) ([]manuallock.Lock, error) {
+	return nil, manuallock.ErrNotLocked
+}
+
 // coverageReader answers no unit. It exists only to build a Handler for its
 // route table; no request is ever served.
 type coverageReader struct{}
@@ -2174,36 +2178,26 @@ func reviewAllowEntries() []AllowEntry {
 	return out
 }
 
-// manualLockAllowEntries returns the lock routes of a collection and of a
-// namespace. The real CLIs never call them: the steps of TestManualLockStopsBothTools
-// and TestManualLockOnNamespaceStopsTheChangeRoutes take, read, remove and
-// force-remove each lock through the API, and drive both CLIs against it. Those
-// tests write no matrix report, so the coverage check must not depend on the
-// order in which they finish.
+// manualLockAllowEntries returns the lock routes of a namespace. The real CLIs
+// never call them: the steps of TestManualLockOnNamespaceStopsTheChangeRoutes
+// take, read, remove and force-remove the lock through the API, and drive both
+// CLIs against it. That test writes no matrix report, so the coverage check must
+// not depend on the order in which the tests finish. The routes of a unit and
+// of a collection need no entry: the matrix scenario of the OpenTofu suite
+// reaches them.
 func manualLockAllowEntries() []AllowEntry {
-	// routesPerLock counts the put, get, delete and force-unlock routes of one object.
-	const routesPerLock = 4
+	const (
+		path = "/api/dustpan/v1/namespaces/{namespace}/lock"
+		test = "TestManualLockOnNamespaceStopsTheChangeRoutes"
+	)
 
-	const prefix = "/api/dustpan/v1/namespaces/{namespace}"
+	reason := "Console and client route: no CLI takes a manual lock. The harness steps of " +
+		test + " take, read and end the lock through the API and run both CLIs against it."
 
-	cases := []struct{ path, test string }{
-		{prefix + "/collections/{collection}/lock", "TestManualLockStopsBothTools"},
-		{prefix + "/lock", "TestManualLockOnNamespaceStopsTheChangeRoutes"},
+	return []AllowEntry{
+		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodDelete, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodPost, Path: path + "/force-unlock", CoveringTest: test, Reason: reason},
 	}
-
-	out := make([]AllowEntry, 0, routesPerLock*len(cases))
-
-	for _, c := range cases {
-		reason := "Console and client route: no CLI takes a manual lock. The harness steps of " +
-			c.test + " take, read and end the lock through the API and run both CLIs against it."
-
-		out = append(out,
-			AllowEntry{Method: http.MethodPut, Path: c.path, CoveringTest: c.test, Reason: reason},
-			AllowEntry{Method: http.MethodGet, Path: c.path, CoveringTest: c.test, Reason: reason},
-			AllowEntry{Method: http.MethodDelete, Path: c.path, CoveringTest: c.test, Reason: reason},
-			AllowEntry{Method: http.MethodPost, Path: c.path + "/force-unlock", CoveringTest: c.test, Reason: reason},
-		)
-	}
-
-	return out
 }

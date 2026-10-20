@@ -632,8 +632,11 @@ func purgeUnitContext(ctx context.Context, q *db.Queries, ns namespace.Name, uni
 // of the restore, after the unit is live again, so the error rolls the restore
 // back: a lock stops every change, and a restore is a change.
 //
-// Defense in depth: no route checks a manual lock before a restore. This check
-// is the only layer, and it reads the lock in the same transaction as the write.
+// Defense in depth: the service reads the lock of the namespace before it calls
+// the store. This check stays so that the store does not rely on its caller: it
+// reads the lock of the unit, of its collection and of its namespace in the same
+// transaction as the write, and a lock that appears after the service check
+// still stops the restore.
 func refuseRestoreUnderLock(
 	ctx context.Context, q *db.Queries, unit collection.UnitRef, noun, name string,
 ) error {

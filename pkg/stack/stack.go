@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -482,6 +483,15 @@ func (s *Service) RestoreDeleted(
 		return Ref{}, fmt.Errorf("restore stack %s: %w", id, err)
 	}
 
+	// Defense in depth: the store refuses a restore under a manual lock in the
+	// transaction of the restore, after the stack is live again. This check
+	// stays so that the refusal does not rely on the store: a deleted stack has
+	// no inventory entry, so it reads the lock of the namespace, and the store
+	// check covers the lock of the stack and of its collection.
+	if lockErr := refuseRestoreUnderNamespaceLock(ctx, s.manual, ns, id); lockErr != nil {
+		return Ref{}, fmt.Errorf("restore stack %s: %w", id, lockErr)
+	}
+
 	e.At = s.now().UTC()
 
 	ref, err := s.store.RestoreStack(ctx, id, newName, n.Fence(), e)
@@ -616,4 +626,25 @@ func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy tim
 	}
 
 	return nil
+}
+
+// refuseRestoreUnderNamespaceLock returns an error that matches
+// manuallock.ErrLocked while a manual lock covers the namespace ns, and nil when
+// locks is nil or the namespace has no lock. A lock that cannot be read refuses
+// the restore: the check fails closed.
+func refuseRestoreUnderNamespaceLock(ctx context.Context, locks ManualLocks, ns namespace.Name, id ID) error {
+	if locks == nil {
+		return nil
+	}
+
+	l, err := locks.NamespaceLock(ctx, ns)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of namespace %s: %w", ns, err)
+	}
+
+	return &manuallock.LockedError{Lock: l, Noun: "stack", Name: ns.String() + "/" + id.String()}
 }

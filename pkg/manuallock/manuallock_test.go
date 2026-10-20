@@ -56,13 +56,14 @@ type recordingStore struct {
 	putErr    error
 	removeErr error
 	held      manuallock.Lock
+	coverers  []manuallock.Lock
 	getErr    error
 }
 
 // newStore returns a store that accepts every write and holds no lock.
 func newStore() *recordingStore {
 	return &recordingStore{
-		put: nil, putEntry: nil, putFence: nil, removed: nil, putErr: nil, removeErr: nil, forced: 0,
+		put: nil, putEntry: nil, putFence: nil, removed: nil, putErr: nil, removeErr: nil, forced: 0, coverers: nil,
 		held: manuallock.Lock{Since: time.Time{}, Target: zeroTarget(), Holder: "", Reason: ""}, getErr: nil,
 	}
 }
@@ -101,6 +102,18 @@ func (s *recordingStore) GetLock(context.Context, manuallock.Target) (manuallock
 
 func (s *recordingStore) CoveringLock(context.Context, collection.UnitRef) (manuallock.Lock, error) {
 	return s.held, s.getErr
+}
+
+func (s *recordingStore) CoveringLocks(context.Context, collection.UnitRef) ([]manuallock.Lock, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+
+	if len(s.coverers) > 0 {
+		return s.coverers, nil
+	}
+
+	return []manuallock.Lock{s.held}, nil
 }
 
 // fakeAuthorizer allows the actions in allow on every object and records each
@@ -939,6 +952,63 @@ func TestCoveringForLetsAnEarlierPhasePass(t *testing.T) {
 
 			if !errors.Is(err, manuallock.ErrNotLocked) {
 				t.Fatalf("CoveringFor = %+v, %v; want ErrNotLocked", got, err)
+			}
+		})
+	}
+}
+
+// TestCoveringForNeedsEveryLockToBeNewer proves a lock request passes only when
+// its phase started before every manual lock that covers the unit: an older
+// lock on a wider object keeps the refusal that a newer lock on the unit alone
+// would lift, so adding a lock never lifts a refusal.
+func TestCoveringForNeedsEveryLockToBeNewer(t *testing.T) {
+	t.Parallel()
+
+	phase := fixedNow()
+	unitLock := manuallock.Lock{
+		Since: phase.Add(time.Minute), Target: manuallock.UnitTarget(webUnit()), Holder: "alice", Reason: "unit",
+	}
+	spaceLock := manuallock.Lock{
+		Since: phase.Add(-time.Minute), Target: acmeTarget(), Holder: "bob", Reason: "namespace",
+	}
+
+	var noLock manuallock.Lock
+
+	cases := []struct {
+		name    string
+		locks   []manuallock.Lock
+		want    manuallock.Lock
+		wantErr error
+	}{
+		{
+			name: "one newer lock", locks: []manuallock.Lock{unitLock},
+			want: noLock, wantErr: manuallock.ErrNotLocked,
+		},
+		{
+			name: "newer unit lock, older namespace lock", locks: []manuallock.Lock{unitLock, spaceLock},
+			want: spaceLock, wantErr: nil,
+		},
+		{name: "older namespace lock alone", locks: []manuallock.Lock{spaceLock}, want: spaceLock, wantErr: nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+			store.coverers = tc.locks
+
+			svc, err := manuallock.NewService(manuallock.Config{
+				Store: store, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Now: fixedNow,
+				Phases: fakePhases{jobs: map[string]time.Time{"job-1": phase}, err: nil},
+			})
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+
+			got, err := svc.CoveringFor(t.Context(), webUnit(), "job-1")
+			if !errors.Is(err, tc.wantErr) || got != tc.want {
+				t.Fatalf("CoveringFor = %+v, %v; want %+v, %v", got, err, tc.want, tc.wantErr)
 			}
 		})
 	}

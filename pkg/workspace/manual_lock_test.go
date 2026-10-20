@@ -54,6 +54,30 @@ func failing(err error) *fakeManualLocks {
 	return &fakeManualLocks{lock: heldCollectionLock(), err: err, asked: nil, passJob: "", jobs: nil}
 }
 
+// NamespaceLock answers the held lock when it is on a namespace, as the manual
+// lock service does, and the configured error first.
+func (f *fakeManualLocks) NamespaceLock(_ context.Context, _ namespace.Name) (manuallock.Lock, error) {
+	if f.err != nil {
+		return manuallock.Lock{}, f.err
+	}
+
+	if f.lock.Target.Kind != manuallock.KindNamespace {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
+
+	return f.lock, nil
+}
+
+// heldNamespaceLock is a manual lock of alice on the namespace acme.
+func heldNamespaceLock() manuallock.Lock {
+	return manuallock.Lock{
+		Since:  time.Date(2026, time.October, 9, 9, 0, 0, 0, time.UTC),
+		Target: manuallock.NamespaceTarget("acme"),
+		Holder: "alice",
+		Reason: "change window closed",
+	}
+}
+
 // heldCollectionLock is a manual lock of alice on the collection acme/payments.
 func heldCollectionLock() manuallock.Lock {
 	return manuallock.Lock{
@@ -564,5 +588,67 @@ func TestDeleteFailsClosedWhenTheWorkspaceCannotBeRead(t *testing.T) {
 
 	if _, getErr := f.svc.GetByID(t.Context(), f.ws.ID); getErr != nil {
 		t.Errorf("workspace after the refused delete: %v", getErr)
+	}
+}
+
+// TestRestoreMeetsTheNamespaceLock proves the restore of a deleted workspace
+// fails while a manual lock covers its namespace, before the store is reached:
+// the store check is not the only layer. The workspace stays deleted. A
+// namespace with no lock restores it, and a lock that cannot be read refuses
+// the restore.
+func TestRestoreMeetsTheNamespaceLock(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		locks        *fakeManualLocks
+		wantErr      error
+		wantRestored bool
+	}{
+		{
+			"namespace locked",
+			&fakeManualLocks{lock: heldNamespaceLock(), err: nil, asked: nil, passJob: "", jobs: nil},
+			manuallock.ErrLocked, false,
+		},
+		{"namespace not locked", failing(manuallock.ErrNotLocked), nil, true},
+		{"lock cannot be read", failing(errManualLockRead), errManualLockRead, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+
+			if err := f.svc.Delete(t.Context(), f.ws.Ref, retentionEntry()); err != nil {
+				t.Fatalf("Delete: %v", err)
+			}
+
+			svc := withManualLocks(t, f, tc.locks)
+
+			_, err := svc.RestoreDeleted(t.Context(), f.ws.Ref.Namespace, f.ws.ID, "", retentionEntry())
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("RestoreDeleted = %v, want %v", err, tc.wantErr)
+			}
+
+			_, getErr := svc.GetByID(t.Context(), f.ws.ID)
+			if restored := getErr == nil; restored != tc.wantRestored {
+				t.Errorf("workspace live after RestoreDeleted(%v) = %v, want %v", err, restored, tc.wantRestored)
+			}
+
+			if errors.Is(tc.wantErr, manuallock.ErrLocked) {
+				checkNamesAlice(t, err)
+			}
+		})
+	}
+}
+
+// checkNamesAlice checks that err holds a LockedError that names alice.
+func checkNamesAlice(t *testing.T, err error) {
+	t.Helper()
+
+	var locked *manuallock.LockedError
+	if !errors.As(err, &locked) || locked.Lock.Holder != "alice" {
+		t.Errorf("err = %v, want a LockedError that names the holder", err)
 	}
 }

@@ -45,6 +45,30 @@ func (f *fakeManualLocks) CoveringFor(
 	return f.lock, nil
 }
 
+// NamespaceLock answers the held lock when it is on a namespace, as the manual
+// lock service does, and the configured error first.
+func (f *fakeManualLocks) NamespaceLock(_ context.Context, _ namespace.Name) (manuallock.Lock, error) {
+	if f.err != nil {
+		return manuallock.Lock{}, f.err
+	}
+
+	if f.lock.Target.Kind != manuallock.KindNamespace {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
+
+	return f.lock, nil
+}
+
+// heldNamespaceLock is a manual lock of alice on the namespace acme.
+func heldNamespaceLock() manuallock.Lock {
+	return manuallock.Lock{
+		Since:  time.Date(2026, time.October, 9, 9, 0, 0, 0, time.UTC),
+		Target: manuallock.NamespaceTarget("acme"),
+		Holder: "alice",
+		Reason: "change window closed",
+	}
+}
+
 // heldCollectionLock is a manual lock of alice on the collection acme/payments.
 func heldCollectionLock() manuallock.Lock {
 	return manuallock.Lock{
@@ -289,7 +313,7 @@ func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Servic
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil}
+	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0}
 
 	svc, err := stack.NewService(stack.Config{
 		Store: store, Namespaces: namespaces, Now: func() time.Time { return now }, State: nil, Retention: 0,
@@ -411,4 +435,51 @@ func TestImportAndRestoreMeetTheManualLock(t *testing.T) {
 
 	checkRestoreExport(t, f, `{"v":1}`)
 	checkLockFree(t, f)
+}
+
+// TestRestoreMeetsTheNamespaceLock proves the restore of a deleted stack fails
+// while a manual lock covers its namespace, before the store is reached: the
+// store check is not the only layer. A namespace with no lock reaches the store,
+// and a lock that cannot be read refuses the restore.
+func TestRestoreMeetsTheNamespaceLock(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		locks     *fakeManualLocks
+		wantErr   error
+		wantStore bool
+	}{
+		{
+			"namespace locked",
+			&fakeManualLocks{lock: heldNamespaceLock(), err: nil, asked: nil, passJob: "", jobs: nil},
+			manuallock.ErrLocked, false,
+		},
+		{"namespace not locked", failing(manuallock.ErrNotLocked), stack.ErrNotFound, true},
+		{"lock cannot be read", failing(errManualLockRead), errManualLockRead, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, store, _ := newLockedStackService(t, tc.locks)
+
+			_, err := svc.RestoreDeleted(t.Context(), "acme", stack.ID("stk-1"), "", deleteEntry())
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("RestoreDeleted = %v, want %v", err, tc.wantErr)
+			}
+
+			if got := store.restores(); (got > 0) != tc.wantStore {
+				t.Errorf("store restore calls = %d, want reached = %v", got, tc.wantStore)
+			}
+
+			if errors.Is(tc.wantErr, manuallock.ErrLocked) {
+				var locked *manuallock.LockedError
+				if !errors.As(err, &locked) || locked.Lock.Holder != "alice" {
+					t.Errorf("err = %v, want a LockedError that names the holder", err)
+				}
+			}
+		})
+	}
 }
