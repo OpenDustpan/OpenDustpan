@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -323,7 +324,7 @@ func (h *Handler) moveUnit(
 
 	version := "from=" + nameOrNone(from.Name) + ";to=" + to.Name.String()
 
-	held, lockErr := h.checkMoveOutOfLock(ctx, p, obj, unit, from)
+	held, lockErr := h.checkMoveOutOfLock(r, p, obj, unit, from)
 	if lockErr != nil {
 		h.writeError(ctx, w, lockErr)
 
@@ -340,7 +341,7 @@ func (h *Handler) moveUnit(
 		auditEntry(r, p, obj, identity.ActionUnitMove, version),
 	)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeMoveError(w, r, p, obj, err)
 
 		return
 	}
@@ -382,8 +383,10 @@ func (e *movedOutOfLockError) Is(target error) bool {
 // This check stays so that a role with unit:move and no unit:manage cannot use
 // the move to end a manual lock.
 func (h *Handler) checkMoveOutOfLock(
-	ctx context.Context, p identity.Principal, obj identity.Object, unit collection.UnitRef, from collection.Ref,
+	r *http.Request, p identity.Principal, obj identity.Object, unit collection.UnitRef, from collection.Ref,
 ) (string, error) {
+	ctx := r.Context()
+
 	if h.locks == nil || from.Name == "" {
 		return "", nil
 	}
@@ -400,10 +403,17 @@ func (h *Handler) checkMoveOutOfLock(
 		return "", fmt.Errorf("read manual lock of collection %s: %w", from.Name, err)
 	}
 
-	if authErr := h.authorize(ctx, p, identity.ActionUnitManage, obj); authErr != nil {
+	// The Authorizer is asked directly, and not through the guard: the guard
+	// would record the generic policy reason, and this refusal records its own
+	// reason once.
+	if authErr := h.authz.Authorize(ctx, p, identity.ActionUnitManage, obj); authErr != nil {
 		if !errors.Is(authErr, identity.ErrDenied) {
-			return "", authErr
+			h.recordMoveOutRefusal(r, p, obj, refusal.ReasonFailed)
+
+			return "", fmt.Errorf("authorize %s: %w", identity.ActionUnitManage, authErr)
 		}
+
+		h.recordMoveOutRefusal(r, p, obj, reasonMoveOutNeedsManage)
 
 		return "", &movedOutOfLockError{locked: &manuallock.LockedError{
 			Lock: l, Noun: "", Name: unit.Namespace.String() + "/" + unit.Name,
@@ -411,6 +421,33 @@ func (h *Handler) checkMoveOutOfLock(
 	}
 
 	return from.Name.String(), nil
+}
+
+// reasonMoveOutNeedsManage is the audit reason of a refused move out of a
+// locked collection.
+const reasonMoveOutNeedsManage = "move out of a locked collection needs unit:manage"
+
+// recordMoveOutRefusal writes the audit entry of a move that a manual lock of
+// the source collection refuses.
+func (h *Handler) recordMoveOutRefusal(r *http.Request, p identity.Principal, obj identity.Object, reason string) {
+	h.guard.Record(r.Context(), r, p, refusal.Denial{
+		Action: identity.ActionUnitManage,
+		Object: obj,
+		Reason: reason,
+	})
+}
+
+// writeMoveError answers the error of the store move. The store checks the lock
+// again in the move transaction, so a lock set after checkMoveOutOfLock refuses
+// the move here, and gets the same audit entry.
+func (h *Handler) writeMoveError(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, err error,
+) {
+	if errors.Is(err, collection.ErrMoveOutOfLockedCollection) {
+		h.recordMoveOutRefusal(r, p, obj, reasonMoveOutNeedsManage)
+	}
+
+	h.writeError(r.Context(), w, err)
 }
 
 // moveCheck is one action that a move needs, on one object.

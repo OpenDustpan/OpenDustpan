@@ -60,6 +60,8 @@ func TestMoveOutOfLockedCollectionWithUnitLock(t *testing.T) {
 		if got := f.collectionOfUnit(t); got != "old" {
 			t.Errorf("unit collection = %q after a refused move, want old", got)
 		}
+
+		f.wantOneMoveOutRefusal(t)
 	})
 
 	t.Run("caller with unit:manage", func(t *testing.T) {
@@ -76,6 +78,31 @@ func TestMoveOutOfLockedCollectionWithUnitLock(t *testing.T) {
 			t.Errorf("unit collection = %q after the move, want new", got)
 		}
 	})
+}
+
+// wantOneMoveOutRefusal checks that the namespace audit log holds one denied
+// entry of unit:manage on the unit, with the reason of the move-out refusal and
+// not the generic policy reason.
+func (f storeMoveFixture) wantOneMoveOutRefusal(t *testing.T) {
+	t.Helper()
+
+	l, err := f.store.List(t.Context(), f.ns.Name, audit.Page{Number: 1, Size: 100})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	var reasons []string
+
+	for _, e := range l.Entries {
+		if e.Outcome == audit.OutcomeDenied {
+			reasons = append(reasons, e.Action+": "+e.Reason)
+		}
+	}
+
+	const want = "unit:manage: move out of a locked collection needs unit:manage"
+	if len(reasons) != 1 || !strings.HasPrefix(reasons[0], want) {
+		t.Errorf("denied audit entries = %q, want one that starts with %q", reasons, want)
+	}
 }
 
 // collectionOfUnit returns the name of the collection that holds the unit.
@@ -221,7 +248,8 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		Units:       &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections: colSvc, Moves: f.ids, Deleted: &memDeleted{entries: nil}, History: nil,
 		Lifecycles: testLifecycles(), ReadScope: fixedScope{err: nil, ids: nil, all: true}, Now: nil,
-		Authenticator: tokenAuthenticator{}, Authorizer: authz, Sessions: nil,
+		Authenticator: tokenAuthenticator{}, Authorizer: authz, Audit: f.store, OnAuditFailure: nil,
+		DenialLimiter: nil, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
