@@ -79,7 +79,7 @@ func pgRunnerControlTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
 			table:   "runner_claims",
-			columns: []string{pgColOperationID, pgColToken, "claimed_at_ms", "job_id", "phase"},
+			columns: []string{pgColOperationID, pgColToken, "claimed_at_ms", pgColJobID, "phase"},
 			orderBy: []string{pgColOperationID, pgColToken},
 		},
 		{
