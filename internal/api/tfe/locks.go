@@ -75,8 +75,9 @@ func (h *Handler) lockHolder(ctx context.Context, id workspace.ID) string {
 // workspace need distinct principals. The server mints the lock ID and
 // records the subject of the caller as the holder. A lock on a held workspace
 // answers 409 with a detail holding "is locked by User" and the holder. A
-// lost compare-and-swap also answers so: the loser retries once, then reports
-// the held lock, so the CLI waits and retries under -lock-timeout.
+// lost compare-and-swap also answers so: the loser retries once, through the
+// gates again, then reports the held lock, so the CLI waits and retries under
+// -lock-timeout.
 func (h *Handler) lockWorkspace(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
@@ -93,56 +94,73 @@ func (h *Handler) lockWorkspace(
 	reason := lockReason(body)
 
 	// A held lock refuses the call with 409 whatever the gates say, and a CLI
-	// that waits under -lock-timeout retries it. The gates run only when the
-	// lock is free, so a retry writes no new decision record.
-	held := h.lockHolder(ctx, id) != ""
-	if !held && !h.guardStateWrite(w, r, p, obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
-		return
-	}
-
-	locked, err := h.workspaces.LockForJob(ctx, id, p.Subject, reason, p.JobTokenID())
-	if err != nil {
-		if errors.Is(err, workspace.ErrLocked) {
-			h.writeConflict(ctx, w, h.lockRefusalDetail(ctx, id, err))
-
-			return
-		}
-
-		if errors.Is(err, workspace.ErrConcurrentModification) {
-			h.retryLock(ctx, w, id, p, reason)
-
-			return
-		}
-
-		h.writeError(ctx, w, err)
+	// that waits under -lock-timeout retries it. The answer comes from this
+	// read alone: the handler never calls LockForJob for a lock that it saw
+	// held. If the holder unlocks after the read, the caller gets 409 and
+	// retries, so no call takes the lock without the gates. A retry writes no
+	// new decision record.
+	if holder := h.lockHolder(ctx, id); holder != "" {
+		h.writeConflict(ctx, w, lockConflictDetail(id, holder))
 
 		return
 	}
 
-	h.writeWorkspace(ctx, w, http.StatusOK, p, locked)
+	c := lockCall{w: w, r: r, p: p, obj: obj, id: id, reason: reason}
+	if !h.lockOnce(ctx, c) {
+		return
+	}
+
+	// The compare-and-swap was lost. Read the holder again: a held lock ends the
+	// call with 409, and a free lock goes through the gates again.
+	if holder := h.lockHolder(ctx, id); holder != "" {
+		h.writeConflict(ctx, w, lockConflictDetail(id, holder))
+
+		return
+	}
+
+	if !h.lockOnce(ctx, c) {
+		return
+	}
+
+	h.writeConflict(ctx, w, h.lockRefusalDetail(ctx, id, workspace.ErrConcurrentModification))
 }
 
-// retryLock retries one lock after a lost compare-and-swap. A win answers
-// 200 with the workspace. A further conflict answers 409 with a detail
-// holding "is locked by User" and the holder, so the CLI waits and retries
-// under -lock-timeout.
-func (h *Handler) retryLock(
-	ctx context.Context, w http.ResponseWriter, id workspace.ID, p identity.Principal, reason string,
-) {
-	locked, err := h.workspaces.LockForJob(ctx, id, p.Subject, reason, p.JobTokenID())
-	if err == nil {
-		h.writeWorkspace(ctx, w, http.StatusOK, p, locked)
+// lockCall holds the parts of one lock request.
+type lockCall struct {
+	w      http.ResponseWriter
+	r      *http.Request
+	p      identity.Principal
+	obj    identity.Object
+	id     workspace.ID
+	reason string
+}
 
-		return
+// lockOnce takes the lock of a workspace that was free at the last read. The
+// gates run before the LockForJob call. It answers every outcome itself and
+// returns false, except a lost compare-and-swap: it then writes nothing and
+// returns true, so that the caller can read the holder and try again. A win
+// answers 200 with the workspace. A refusal answers 409 with a detail holding
+// "is locked by User" and the holder, so the CLI waits and retries under
+// -lock-timeout.
+func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
+	if !h.guardStateWrite(c.w, c.r, c.p, c.obj, stateCheck{action: identity.ActionUnitWrite, op: gate.OperationLock}) {
+		return false
 	}
 
-	if errors.Is(err, workspace.ErrLocked) || errors.Is(err, workspace.ErrConcurrentModification) {
-		h.writeConflict(ctx, w, h.lockRefusalDetail(ctx, id, err))
+	locked, err := h.workspaces.LockForJob(ctx, c.id, c.p.Subject, c.reason, c.p.JobTokenID())
 
-		return
+	switch {
+	case err == nil:
+		h.writeWorkspace(ctx, c.w, http.StatusOK, c.p, locked)
+	case errors.Is(err, workspace.ErrLocked):
+		h.writeConflict(ctx, c.w, h.lockRefusalDetail(ctx, c.id, err))
+	case errors.Is(err, workspace.ErrConcurrentModification):
+		return true
+	default:
+		h.writeError(ctx, c.w, err)
 	}
 
-	h.writeError(ctx, w, err)
+	return false
 }
 
 // lockRefusalDetail returns the detail of a refused lock request. A manual lock

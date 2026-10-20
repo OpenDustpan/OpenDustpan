@@ -314,7 +314,10 @@ func (s *Service) stateWriteUnits(ctx context.Context, c Change) ([]unitEval, []
 			return nil, nil, err
 		}
 
-		labels, err := s.labelsOf(ctx, u)
+		// A write is checked against facts that exist. A unit reference that
+		// resolves to nothing fails closed: the gates never see "no collection,
+		// no labels" for a unit that the source does not know.
+		labels, err := s.labelsOfKnown(ctx, u)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -614,8 +617,8 @@ func (r *stateWriteRun) requireApproval(pr *PolicyResult, u *unitEval, eff *unit
 	}
 
 	eff.approvals = append(eff.approvals, fmt.Sprintf(
-		"%s The write needs approval by rule %s. A write from a CLI cannot wait for approval: "+
-			"open a change order for %s with the OpenDustpan CLI, and write after it is approved.",
+		"%s The write needs approval by rule %s. A write from a CLI cannot wait for approval, "+
+			"so the server refuses the write to %s.",
 		firstNonEmpty(pr.Message, "The gate "+pr.Policy.String()+" matches."), id, u.unit,
 	))
 }

@@ -22,6 +22,13 @@ type manualLockedWorkspaces struct {
 	lock manuallock.Lock
 }
 
+// GetByID reports the workspace as free: a manual lock is not a lock of the
+// tool, so the lock request reaches the workspace service and the service
+// refuses it.
+func (m manualLockedWorkspaces) GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	return m.stubWorkspaces.GetByID(ctx, id)
+}
+
 func (m manualLockedWorkspaces) LockForJob(
 	_ context.Context, id workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {

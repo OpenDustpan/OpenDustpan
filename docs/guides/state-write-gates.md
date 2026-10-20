@@ -112,8 +112,7 @@ a gate in error, and 503 when the engine does not answer.
 
 - `deny`: the write is refused.
 - `approval:<rule>`: a CLI cannot wait for people, so the write is refused. The
-  message tells the person to open a change order for the unit and to write after
-  the change order is approved.
+  message names the rule and the unit.
 - `warn`: the write goes on. The warning is in the decision record only.
 - A gate in `evaluate` mode is evaluated and recorded, and has no other effect.
 - A gate in error stops the write when it is in `enforce` mode. A gate with

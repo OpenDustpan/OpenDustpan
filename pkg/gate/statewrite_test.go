@@ -378,9 +378,13 @@ func swCases() []swCase {
 		newSWGate(atUnit, "careful", "", gate.OutcomeWarn, "take care"))
 	warnCase.warnings = 1
 
-	approval := refuseCase("an approval outcome refuses a CLI and names the change order", gate.ErrDenied,
-		gate.ResultAwaitingApproval, "open a change order for opentofu:acme/web",
-		newSWGate(atUnit, "needs-two", "", gate.ApprovalOutcome("two-eyes"), "Prod writes need review."))
+	approval := refuseCase(
+		"an approval outcome refuses a CLI and names the rule and the unit",
+		gate.ErrDenied,
+		gate.ResultAwaitingApproval,
+		"needs approval by rule two-eyes. A write from a CLI cannot wait for approval, so the server refuses the write to opentofu:acme/web",
+		newSWGate(atUnit, "needs-two", "", gate.ApprovalOutcome("two-eyes"), "Prod writes need review."),
+	)
 	approval.rule, approval.requires = true, 1
 
 	skip := newSWGate(atUnit, "broken-skip", broken, gate.OutcomeDeny, "x").skippingErrors()
@@ -897,5 +901,29 @@ func TestHugeLabelSetIsTruncatedInTheFactDocument(t *testing.T) {
 	facts := e.newestRecord(t).Units[0].Facts
 	if len(facts.Unit.Labels) != 0 || !slices.Equal(facts.Document.Truncated, []string{"unit.labels"}) {
 		t.Fatalf("facts = %+v, want the labels emptied and named in document.truncated", facts)
+	}
+}
+
+// swUnknownUnits knows no unit: its labels are not found.
+type swUnknownUnits struct {
+	swUnits
+}
+
+func (swUnknownUnits) Labels(context.Context, identity.Object) ([]string, error) {
+	return nil, gate.ErrNotFound
+}
+
+// A unit reference that resolves to nothing fails closed at state.write. The
+// gates never see a unit with no collection and no labels in its place, so a
+// gate that matches on labels cannot be skipped with a reference to an unknown
+// unit.
+func TestUnknownUnitFailsClosedAtStateWrite(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnknownUnits{swUnits{collections: nil, labels: nil}}, nil)
+
+	_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock))
+	if !errors.Is(err, gate.ErrUnavailable) {
+		t.Fatalf("GuardStateWrite(unknown unit) = %v, want ErrUnavailable", err)
 	}
 }

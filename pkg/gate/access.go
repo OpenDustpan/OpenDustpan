@@ -294,6 +294,35 @@ func (s *Service) collectionOf(ctx context.Context, unit identity.Object) (colle
 
 // labelsOf returns the labels of unit, or none for an unknown unit.
 func (s *Service) labelsOf(ctx context.Context, unit identity.Object) ([]string, error) {
+	labels, err := s.fetchLabels(ctx, unit)
+	if errors.Is(err, ErrNotFound) {
+		return []string{}, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("%w: labels of %s: %w", ErrUnavailable, unit, err)
+	}
+
+	return labels, nil
+}
+
+// labelsOfKnown returns the labels of a unit that must exist. A unit that the
+// source does not know fails closed with ErrUnavailable, and never reads as a
+// unit with no labels.
+func (s *Service) labelsOfKnown(ctx context.Context, unit identity.Object) ([]string, error) {
+	labels, err := s.fetchLabels(ctx, unit)
+	if err != nil {
+		return nil, fmt.Errorf("%w: labels of %s: %w", ErrUnavailable, unit, err)
+	}
+
+	return labels, nil
+}
+
+// fetchLabels reads the labels of unit from the memo or from the source. It
+// returns the error of the source as it is, ErrNotFound included. It keeps only
+// labels of a unit that exists, so that a lenient read of an unknown unit never
+// hides the unit from a strict read in the same call.
+func (s *Service) fetchLabels(ctx context.Context, unit identity.Object) ([]string, error) {
 	if m := memoOf(ctx); m != nil {
 		m.mu.Lock()
 		labels, ok := m.labels[unit.String()]
@@ -305,12 +334,8 @@ func (s *Service) labelsOf(ctx context.Context, unit identity.Object) ([]string,
 	}
 
 	labels, err := s.units.Labels(ctx, unit)
-	if errors.Is(err, ErrNotFound) {
-		labels, err = nil, nil
-	}
-
 	if err != nil {
-		return nil, fmt.Errorf("%w: labels of %s: %w", ErrUnavailable, unit, err)
+		return nil, err
 	}
 
 	if labels == nil {

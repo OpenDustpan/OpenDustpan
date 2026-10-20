@@ -304,7 +304,7 @@ func (g *gateRun) evaluateGate() {
 }
 
 // approvalGate proves that an approval outcome refuses a CLI and names the
-// change order.
+// rule and the unit.
 func (g *gateRun) approvalGate() {
 	g.t.Helper()
 
@@ -316,8 +316,15 @@ func (g *gateRun) approvalGate() {
 
 	must(g.t, g.env.PutApprovalRule(g.t.Context(), g.ns, rule))
 	g.put("review-gate-e2e", lockCondition, gate.ApprovalOutcome("review-e2e"), gate.ModeEnforce)
-	g.post("gate: an approval outcome refuses the lock and names the change order", g.lockPath, http.StatusForbidden,
-		refusalCheck("gate.denied", "open a change order for "+tofuUnitRef()))
+	g.post(
+		"gate: an approval outcome refuses the lock and names the rule",
+		g.lockPath,
+		http.StatusForbidden,
+		refusalCheck(
+			"gate.denied",
+			"needs approval by rule review-e2e. A write from a CLI cannot wait for approval, so the server refuses the write to "+tofuUnitRef(),
+		),
+	)
 	g.remove("review-gate-e2e")
 	must(g.t, g.env.DeleteApprovalRule(g.t.Context(), g.ns, rule.Scope, rule.ID))
 }

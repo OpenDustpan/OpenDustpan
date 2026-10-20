@@ -441,3 +441,180 @@ func TestGateErrorCodesAreListed(t *testing.T) {
 		}
 	}
 }
+
+// flipWorkspaces is a workspace port whose lock reads as held by bob while
+// held(lockCalls) is true. LockForJob answers the errors in lockErrs one by
+// one, then succeeds, and counts its calls. A held lock that LockForJob would
+// still take models a holder that unlocks after the check of the handler.
+type flipWorkspaces struct {
+	*writeCounter
+
+	mu        sync.Mutex
+	held      func(lockCalls int) bool
+	lockErrs  []error
+	lockCalls int
+}
+
+func newFlipWorkspaces(held func(lockCalls int) bool, lockErrs ...error) *flipWorkspaces {
+	return &flipWorkspaces{
+		writeCounter: newWriteCounter(), mu: sync.Mutex{}, held: held, lockErrs: lockErrs, lockCalls: 0,
+	}
+}
+
+func (f *flipWorkspaces) GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	w, err := f.writeCounter.GetByID(ctx, id)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	w.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+	if f.held(f.lockCalls) {
+		w.Lock = workspace.Lock{LockedAt: time.Now(), ID: "lock-1", Holder: "bob", Reason: ""}
+	}
+
+	return w, err
+}
+
+func (f *flipWorkspaces) LockForJob(
+	ctx context.Context, id workspace.ID, holder, reason, job string,
+) (workspace.Workspace, error) {
+	f.mu.Lock()
+
+	f.lockCalls++
+	if len(f.lockErrs) > 0 {
+		err := f.lockErrs[0]
+		f.lockErrs = f.lockErrs[1:]
+		f.mu.Unlock()
+
+		return workspace.Workspace{}, err
+	}
+
+	f.mu.Unlock()
+
+	return f.writeCounter.LockForJob(ctx, id, holder, reason, job)
+}
+
+func (f *flipWorkspaces) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.lockCalls
+}
+
+func always(int) bool { return true }
+
+func never(int) bool { return false }
+
+// The lock is held at the check and would be free at LockForJob. The handler
+// must not call LockForJob for a lock that it saw held: the call that would win
+// has not passed the gates and the limits.
+func TestLockHeldAtTheCheckIsNeverTakenUnguarded(t *testing.T) {
+	t.Parallel()
+
+	guard := newFakeGuard(nil)
+	ws := newFlipWorkspaces(always)
+
+	rec := serveGuarded(t, newGuardedHandler(t, ws, guard), guardRoutes()[0])
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "is locked by User bob") {
+		t.Fatalf("lock held at the check answers %d, want 409 with the holder: %s", rec.Code, rec.Body)
+	}
+
+	if ws.calls() != 0 || ws.count() != 0 || len(guard.seen) != 0 {
+		t.Fatalf("lock held at the check made %d lock calls and %d checks, want none", ws.calls(), len(guard.seen))
+	}
+}
+
+// A caller that a limit blocks still sees the holder of a held lock, and the
+// call writes no record, because the guard is not asked.
+func TestLimitBlockedCallerSeesTheHolderOfAHeldLock(t *testing.T) {
+	t.Parallel()
+
+	limited := &gate.RefusalError{
+		Err: gate.ErrLimited, Record: "gdr-bbbbbbbbbbbbbbbbbbbb", Messages: []string{"A limit."},
+	}
+	guard := newFakeGuard(limited)
+	ws := newFlipWorkspaces(always)
+	h := newGuardedHandler(t, ws, guard)
+
+	for range 3 {
+		rec := serveGuarded(t, h, guardRoutes()[0])
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "is locked by User bob") {
+			t.Fatalf("limited caller on a held lock gets %d, want 409 with the holder: %s", rec.Code, rec.Body)
+		}
+	}
+
+	if ws.calls() != 0 || len(guard.seen) != 0 {
+		t.Fatalf("held lock made %d lock calls and %d checks, want none", ws.calls(), len(guard.seen))
+	}
+}
+
+// A lost compare-and-swap retries through the guard again, so the second
+// LockForJob call is also guarded.
+func TestLockRetryRunsTheGuardAgain(t *testing.T) {
+	t.Parallel()
+
+	guard := newFakeGuard(nil)
+	ws := newFlipWorkspaces(never, workspace.ErrConcurrentModification)
+
+	rec := serveGuarded(t, newGuardedHandler(t, ws, guard), guardRoutes()[0])
+	if rec.Code != http.StatusOK || ws.calls() != 2 || len(guard.seen) != 2 {
+		t.Fatalf("retried lock answers %d with %d lock calls and %d checks, want 200, 2 and 2: %s",
+			rec.Code, ws.calls(), len(guard.seen), rec.Body)
+	}
+}
+
+// The holder appears between the lost compare-and-swap and the retry. The
+// retry answers 409 and does not call LockForJob again.
+func TestLockRetryOnAHeldLockCallsNothing(t *testing.T) {
+	t.Parallel()
+
+	guard := newFakeGuard(nil)
+	ws := newFlipWorkspaces(func(calls int) bool { return calls >= 1 }, workspace.ErrConcurrentModification)
+
+	rec := serveGuarded(t, newGuardedHandler(t, ws, guard), guardRoutes()[0])
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "is locked by User bob") ||
+		ws.calls() != 1 || len(guard.seen) != 1 {
+		t.Fatalf("retry on a held lock answers %d with %d lock calls and %d checks, want 409, 1 and 1: %s",
+			rec.Code, ws.calls(), len(guard.seen), rec.Body)
+	}
+}
+
+// passThenRefuse allows the first check and refuses the later ones with after.
+type passThenRefuse struct {
+	mu    sync.Mutex
+	seen  int
+	after error
+}
+
+func (g *passThenRefuse) GuardStateWrite(_ context.Context, _ gate.StateWrite) (gate.Decision, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.seen++
+
+	if g.seen > 1 {
+		return gate.Decision{Record: "", Result: gate.ResultDeny, Requirements: nil, Warnings: nil, AutoApply: false},
+			g.after
+	}
+
+	return gate.Decision{Record: "", Result: gate.ResultAllow, Requirements: nil, Warnings: nil, AutoApply: false}, nil
+}
+
+// A gate that refuses at the retry stops the second take of the lock.
+func TestLockRetryRefusedByTheGuardTakesNoLock(t *testing.T) {
+	t.Parallel()
+
+	denied := &gate.RefusalError{
+		Err:      gate.ErrDenied,
+		Record:   "gdr-aaaaaaaaaaaaaaaaaaaa",
+		Messages: []string{"No locks."},
+	}
+	guard := &passThenRefuse{mu: sync.Mutex{}, seen: 0, after: denied}
+	ws := newFlipWorkspaces(never, workspace.ErrConcurrentModification)
+
+	rec := serveGuarded(t, newGuardedHandler(t, ws, guard), guardRoutes()[0])
+	if rec.Code != http.StatusForbidden || ws.calls() != 1 || ws.count() != 0 {
+		t.Fatalf("retry refused by the guard answers %d with %d lock calls, want 403 and 1: %s",
+			rec.Code, ws.calls(), rec.Body)
+	}
+}

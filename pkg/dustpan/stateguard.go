@@ -162,8 +162,22 @@ func (f inventoryFacts) entry(ctx context.Context, unit identity.Object) (invent
 		return inventory.Entry{}, fmt.Errorf("inventory unit %s: %w", id, err)
 	}
 
+	// Defense in depth: the caller names the unit by its stable ID, and the ID
+	// alone selects the row. This check stays so that a reference with the ID of
+	// a unit in another namespace or of another tool never reads the facts of
+	// that unit. It does not rely on the authorization of the route or on the
+	// stores, which key the units by namespace and tool too.
+	if e.Namespace != unit.Namespace() || e.Tool != unit.Tool() {
+		return inventory.Entry{}, fmt.Errorf("%w: unit %s", errUnitMismatch, unit)
+	}
+
 	return e, nil
 }
+
+// errUnitMismatch reports a stable ID whose inventory entry belongs to another
+// namespace or another tool than the reference. It is not gate.ErrNotFound,
+// because that error reads as a unit with no collection.
+var errUnitMismatch = errors.New("the stable ID names a unit in another namespace or of another tool")
 
 // deletedEntry returns the collection and the labels of a deleted unit that
 // the reference names by its stable ID. The membership of a collection stays

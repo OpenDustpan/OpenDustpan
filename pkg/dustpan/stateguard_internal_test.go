@@ -360,3 +360,38 @@ func TestInventoryFactsOfAUnitThatIsNeitherLiveNorDeletedFailClosed(t *testing.T
 		})
 	}
 }
+
+// A stable ID whose entry belongs to another namespace or tool never gives the
+// facts of that entry, and never reads as a unit with no collection.
+func TestInventoryFactsRefuseAnEntryOfAnotherNamespaceOrTool(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		change func(e *inventory.Entry)
+	}{
+		{"another namespace", func(e *inventory.Entry) { e.Namespace = "globex" }},
+		{"another tool", func(e *inventory.Entry) { e.Tool = "pulumi" }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := gateTestEntry()
+			tc.change(&entry)
+
+			f, _ := gateFacts([]inventory.Entry{entry}, byStableID)
+
+			if _, err := f.Collection(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, errUnitMismatch) ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Collection() = %v, want errUnitMismatch and not gate.ErrNotFound", err)
+			}
+
+			if _, err := f.Labels(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, errUnitMismatch) ||
+				errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Labels() = %v, want errUnitMismatch and not gate.ErrNotFound", err)
+			}
+		})
+	}
+}

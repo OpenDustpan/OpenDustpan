@@ -392,6 +392,13 @@ func (s *Store) GetDeletedUnit(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.deletedUnit(ctx, ns, tool, unitID)
+}
+
+// deletedUnit reads one deleted unit. The caller holds the read lock.
+func (s *Store) deletedUnit(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedEntry, error) {
 	row, err := s.queries.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
 		Namespace: ns.String(), Tool: tool, UnitID: unitID,
 	})
@@ -564,14 +571,16 @@ func inventoryLock(row db.ListInventoryRow) *inventory.Lock {
 func (s *Store) GetDeletedUnitFacts(
 	ctx context.Context, ns namespace.Name, tool, unitID string,
 ) (inventory.DeletedFacts, error) {
-	if _, err := s.GetDeletedUnit(ctx, ns, tool, unitID); err != nil {
+	// One lock over all reads: the entry, the collection and the labels come
+	// from the same state of the database.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, err := s.deletedUnit(ctx, ns, tool, unitID); err != nil {
 		return inventory.DeletedFacts{}, err
 	}
 
 	facts := inventory.DeletedFacts{Collection: "", Labels: map[string]string{}}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	name, err := s.queries.GetUnitCollection(ctx, unitID)
 	switch {
