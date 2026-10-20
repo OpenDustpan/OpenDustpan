@@ -434,6 +434,7 @@ func (h *Handler) recordMoveOutRefusal(r *http.Request, p identity.Principal, ob
 		Action: identity.ActionUnitManage,
 		Object: obj,
 		Reason: reason,
+		Window: 0,
 	})
 }
 

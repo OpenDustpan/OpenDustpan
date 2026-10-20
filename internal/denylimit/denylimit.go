@@ -86,6 +86,17 @@ type Config struct {
 type slot struct {
 	start      time.Time
 	suppressed int
+	// window is the window of this key. Zero means the window of the Limiter.
+	window time.Duration
+}
+
+// span returns the window of s: its own, or def when s has none.
+func (s *slot) span(def time.Duration) time.Duration {
+	if s.window > 0 {
+		return s.window
+	}
+
+	return def
 }
 
 // Limiter decides which denials write an entry. It is safe for concurrent use.
@@ -114,7 +125,7 @@ func New(cfg Config) *Limiter {
 		mu:        sync.Mutex{},
 		keys:      make(map[Key]*slot),
 		perCount:  make(map[string]int),
-		overflow:  slot{start: time.Time{}, suppressed: 0},
+		overflow:  slot{start: time.Time{}, suppressed: 0, window: 0},
 		lastSweep: time.Time{},
 	}
 
@@ -141,8 +152,16 @@ func New(cfg Config) *Limiter {
 	return l
 }
 
-// Allow records one denial of key and says whether it writes an entry.
+// Allow records one denial of key and says whether it writes an entry. The
+// window of the key is the window of the Limiter.
 func (l *Limiter) Allow(key Key) Decision {
+	return l.AllowWindow(key, 0)
+}
+
+// AllowWindow is Allow with a window for key. The window applies when the key
+// opens its first window; a window of zero or less means the window of the
+// Limiter. A caller uses one window for each key.
+func (l *Limiter) AllowWindow(key Key, window time.Duration) Decision {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -164,7 +183,7 @@ func (l *Limiter) Allow(key Key) Decision {
 	}
 
 	if len(l.keys) < l.maxKeys {
-		l.keys[key] = &slot{start: now, suppressed: 0}
+		l.keys[key] = &slot{start: now, suppressed: 0, window: max(window, 0)}
 
 		if !isAggregate(key) {
 			l.perCount[key.Principal]++
@@ -185,7 +204,7 @@ func (l *Limiter) Allow(key Key) Decision {
 	}
 
 	d.Write, d.Suppressed = true, l.overflow.suppressed
-	l.overflow = slot{start: now, suppressed: 0}
+	l.overflow = slot{start: now, suppressed: 0, window: 0}
 
 	return d
 }
@@ -225,7 +244,7 @@ func (l *Limiter) Drain() []Pending {
 
 	l.keys = make(map[Key]*slot)
 	l.perCount = make(map[string]int)
-	l.overflow = slot{start: time.Time{}, suppressed: 0}
+	l.overflow = slot{start: time.Time{}, suppressed: 0, window: 0}
 
 	return out
 }
@@ -254,7 +273,7 @@ func (l *Limiter) sweep(now time.Time, current Key) []Pending {
 	for k, s := range l.keys {
 		// The key of this denial is not flushed: Allow carries its count in the
 		// entry of this denial.
-		if k == current || now.Sub(s.start) < l.window {
+		if k == current || now.Sub(s.start) < s.span(l.window) {
 			continue
 		}
 
@@ -281,7 +300,7 @@ func (l *Limiter) sweep(now time.Time, current Key) []Pending {
 			Key:        Key{Principal: "", Action: "", Kind: "", Scope: ""},
 			Suppressed: l.overflow.suppressed, Overflow: true,
 		})
-		l.overflow = slot{start: time.Time{}, suppressed: 0}
+		l.overflow = slot{start: time.Time{}, suppressed: 0, window: 0}
 	}
 
 	if complete {
@@ -293,7 +312,7 @@ func (l *Limiter) sweep(now time.Time, current Key) []Pending {
 
 // touch counts a denial of a key that the table holds, or opens its next window.
 func (l *Limiter) touch(d Decision, s *slot, now time.Time) Decision {
-	if now.Sub(s.start) < l.window {
+	if now.Sub(s.start) < s.span(l.window) {
 		s.suppressed++
 
 		return d
