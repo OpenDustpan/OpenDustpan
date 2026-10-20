@@ -1985,6 +1985,12 @@ func (s *fakeBackupStore) FinishBackup(
 	var out backup.Record
 
 	finish := func() error {
+		// The operation of the fence has to be the operation of the row.
+		op, err := s.mem.Store().Get(ctx, f.Operation)
+		if err != nil || op.Key != backup.OperationKey(id) {
+			return durable.ErrClaimLost
+		}
+
 		r, ok := s.data.backups[id.String()]
 		if !ok {
 			return backup.ErrNotFound

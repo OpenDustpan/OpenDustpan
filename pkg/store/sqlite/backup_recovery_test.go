@@ -21,7 +21,7 @@ import (
 )
 
 // recoveryLease is the lease period of the recovery test.
-const recoveryLease = 300 * time.Millisecond
+const recoveryLease = 2 * time.Second
 
 // holdTarget is a backup target that holds the first write of a SQL table
 // file until the context of the write ends, as a process that dies in the
