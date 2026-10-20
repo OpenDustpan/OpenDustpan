@@ -262,11 +262,19 @@ func (s *Service) EnablePrincipal(
 
 // DisablePrincipal disables the principal with the ID id, with the entry e. It
 // only narrows access: the grants of the principal stay and it cannot use
-// them until EnablePrincipal clears the disable, so the Guard has nothing to
-// check. The write works in maintenance mode, as a revocation does. It
-// returns ErrNotFound when no such principal exists and ErrDisabled when it
-// is disabled.
-func (s *Service) DisablePrincipal(ctx context.Context, e audit.Entry, id string) error {
+// them until EnablePrincipal clears the disable. The Guard still checks that
+// caller holds every action that the grants of the principal give, so that a
+// caller cannot lock out a principal with more rights than their own. The
+// check is a read and the write works in maintenance mode, as a revocation
+// does. It returns ErrNotFound when no such principal exists and ErrDisabled
+// when it is disabled.
+func (s *Service) DisablePrincipal(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
+) error {
+	if err := s.checkPrincipal(ctx, caller, id); err != nil {
+		return fmt.Errorf("disable principal %q: %w", id, err)
+	}
+
 	if err := s.store.DisablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
 		return fmt.Errorf("disable principal %q: %w", id, err)
 	}

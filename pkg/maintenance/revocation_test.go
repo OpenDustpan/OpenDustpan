@@ -66,6 +66,40 @@ func TestRevocationValidateTargets(t *testing.T) {
 	}
 }
 
+// TestRevocationValidateActorAndObject proves that the actor and the object
+// of a row must be printable text of bounded length: a hostile row is refused
+// and a reference with ":" and "/" passes.
+func TestRevocationValidateActorAndObject(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{"alice", "alice@example.com", "token:tok-1", "acme/pulumi/proj/stack", "ünï"} {
+		row := revocationRow(maintenance.RevokedToken, "tok-1")
+		row.Actor, row.Object = text, text
+
+		if err := row.Validate(); err != nil {
+			t.Errorf("text %q: %v, want valid", text, err)
+		}
+	}
+
+	hostile := []string{"", "a\nb", "a\rb", "\x00", "a\x1b[31m", "\xff\xfe", "a\u202eb", strings.Repeat("a", 256)}
+
+	for _, text := range hostile {
+		actor := revocationRow(maintenance.RevokedToken, "tok-1")
+		actor.Actor = text
+
+		if err := actor.Validate(); !errors.Is(err, maintenance.ErrInvalidRevocation) {
+			t.Errorf("actor %q: err = %v, want ErrInvalidRevocation", text, err)
+		}
+
+		object := revocationRow(maintenance.RevokedToken, "tok-1")
+		object.Object = text
+
+		if err := object.Validate(); !errors.Is(err, maintenance.ErrInvalidRevocation) {
+			t.Errorf("object %q: err = %v, want ErrInvalidRevocation", text, err)
+		}
+	}
+}
+
 // TestRevocationReplayEntry proves the entry of an applied row and the entry
 // of a refused row.
 func TestRevocationReplayEntry(t *testing.T) {
@@ -96,5 +130,37 @@ func TestRevocationReplayEntry(t *testing.T) {
 	if denied.Outcome != audit.OutcomeDenied || denied.Object != "maintenance-revocation:9" ||
 		strings.Contains(denied.Subject+denied.Object+denied.ValuePath, "mallory") {
 		t.Fatalf("entry of a refused row = %+v, want the outcome denied and no text of the row", denied)
+	}
+}
+
+// TestRevocationReplayEntryHostileActor proves that a row with a valid kind
+// and target but a hostile actor or object gets a denied entry that holds no
+// text of the row, so that one row can not block a restore.
+func TestRevocationReplayEntryHostileActor(t *testing.T) {
+	t.Parallel()
+
+	for _, hostile := range []string{"mallory\nforged", "mallory\x00"} {
+		for _, field := range []string{"actor", "object"} {
+			row := revocationRow(maintenance.RevokedToken, "tok-1")
+			if field == "actor" {
+				row.Actor = hostile
+			} else {
+				row.Object = hostile
+			}
+
+			err := row.Validate()
+			if !errors.Is(err, maintenance.ErrInvalidRevocation) {
+				t.Fatalf("%s %q: err = %v, want ErrInvalidRevocation", field, hostile, err)
+			}
+
+			denied := row.ReplayEntry(err)
+			if verr := denied.Validate(); verr != nil {
+				t.Fatalf("%s %q: entry of a refused row: %v", field, hostile, verr)
+			}
+
+			if denied.Outcome != audit.OutcomeDenied || strings.Contains(denied.Subject+denied.Object+denied.ValuePath, "mallory") {
+				t.Fatalf("%s %q: entry = %+v, want the outcome denied and no text of the row", field, hostile, denied)
+			}
+		}
 	}
 }

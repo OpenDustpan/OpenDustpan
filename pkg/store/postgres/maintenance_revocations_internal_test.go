@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -211,7 +214,7 @@ func TestRestoreSwapWaitsForARevocationInFlight(t *testing.T) {
 		t.Fatalf("export portable: %v", err)
 	}
 
-	if _, stageErr := s.StagePortable(ctx, sink.read, sum, files); stageErr != nil {
+	if _, stageErr := s.StagePortable(ctx, sink.read, sum, files, storetest.StageAs(t, s)); stageErr != nil {
 		t.Fatalf("stage portable: %v", stageErr)
 	}
 
@@ -275,5 +278,73 @@ func TestRestoreSwapWaitsForARevocationInFlight(t *testing.T) {
 	countErr := s.pool.QueryRow(ctx, query, maintenance.ActionReplayRevocation).Scan(&replayed)
 	if countErr != nil || replayed != 1 {
 		t.Fatalf("replay audit entries = %d, %v, want 1", replayed, countErr)
+	}
+}
+
+// TestFailedReplayRollsBackTheSwap proves that a replay step which fails in
+// the middle of the swap undoes the whole swap. The staged sessions table
+// holds a trigger that refuses the update of the replay. The apply returns
+// the error, the live schema still holds the session as the stay ended it,
+// and the journal keeps its row, so a later restore can replay it.
+func TestFailedReplayRollsBackTheSwap(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	s := openKeepLockStore(t, testPostgresURL(t))
+	id := revSeed(t, s)
+
+	sink := &keepLockSink{files: map[string]*bytes.Buffer{}}
+
+	sum, files, err := s.ExportPortable(ctx, sink.open)
+	if err != nil {
+		t.Fatalf("export portable: %v", err)
+	}
+
+	if _, stageErr := s.StagePortable(ctx, sink.read, sum, files, storetest.StageAs(t, s)); stageErr != nil {
+		t.Fatalf("stage portable: %v", stageErr)
+	}
+
+	if enterErr := s.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance); enterErr != nil {
+		t.Fatalf("enter: %v", enterErr)
+	}
+
+	e := storetest.ServerChange(time.Now().UTC(), session.FullRef("prn-race", id))
+	if endErr := s.EndSession(ctx, id, session.ReasonEnded, e); endErr != nil {
+		t.Fatalf("end the session in maintenance mode: %v", endErr)
+	}
+
+	staging := pgx.Identifier{s.stagingSchema}.Sanitize()
+	refuse := pgx.Identifier{s.stagingSchema, "refuse_replay"}.Sanitize()
+
+	for _, stmt := range []string{
+		"CREATE FUNCTION " + refuse + "() RETURNS trigger LANGUAGE plpgsql AS " +
+			"$$ BEGIN RAISE EXCEPTION 'replay refused'; END $$",
+		"CREATE TRIGGER refuse_replay BEFORE UPDATE ON " + staging + ".sessions " +
+			"FOR EACH ROW EXECUTE FUNCTION " + refuse + "()",
+	} {
+		if _, execErr := s.pool.Exec(ctx, stmt); execErr != nil {
+			t.Fatalf("add the failing step to the staged schema: %v", execErr)
+		}
+	}
+
+	if applyErr := s.ApplyStaging(ctx); applyErr == nil || !strings.Contains(applyErr.Error(), "replay refused") {
+		t.Fatalf("apply staging = %v, want the error of the failed replay step", applyErr)
+	}
+
+	if n := revJournalCount(t, s); n != 1 {
+		t.Fatalf("journal rows after the failed swap = %d, want 1", n)
+	}
+
+	var endedMs int64
+	if scanErr := s.pool.QueryRow(ctx, `SELECT ended_at_ms FROM sessions WHERE id = $1`, id).Scan(&endedMs); scanErr != nil {
+		t.Fatalf("read the live session after the failed swap: %v", scanErr)
+	}
+
+	if endedMs == 0 {
+		t.Fatal("live session is active after the failed swap, want it still ended")
+	}
+
+	if got, stateErr := s.GetState(ctx); stateErr != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after the failed swap = %q, %v, want maintenance without error", got, stateErr)
 	}
 }

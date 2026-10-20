@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1193,7 +1194,7 @@ func testRevocationsHostileInput(t *testing.T, s RevocationStore) {
 func revStageAndApply(t *testing.T, s RevocationStore, export revExport) {
 	t.Helper()
 
-	if _, err := s.StagePortable(t.Context(), export.sink.read, export.sum, export.files); err != nil {
+	if _, err := s.StagePortable(t.Context(), export.sink.read, export.sum, export.files, StageAs(t, s)); err != nil {
 		t.Fatalf("stage the export: %v", err)
 	}
 
@@ -1386,6 +1387,23 @@ func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
 				i, e, r.object, r.kind)
 		}
 	}
+
+	// A second restore in the same stay applies the journal again. The
+	// staged rows are the rows of the export, so the replay must end in the
+	// same state and write no second set of entries.
+	total := revAuditTotal(t, s)
+
+	revStageAndApply(t, s, export)
+
+	revCheckRestored(t, s, f)
+
+	if got := revAuditTotal(t, s); got != total {
+		t.Fatalf("audit entries after the second restore = %d, want %d", got, total)
+	}
+
+	if again := revReplayEntries(t, s); len(again) != len(stay) {
+		t.Fatalf("replay audit entries after the second restore = %d, want %d", len(again), len(stay))
+	}
 }
 
 // replayOutcomes counts the replay entries by outcome.
@@ -1443,23 +1461,33 @@ func testReplayRefusesHostileRows(t *testing.T, s RevocationStore) {
 		t.Fatalf("end the session in maintenance mode: %v", err)
 	}
 
+	// Each row names a target that the replay would revoke, so that a row
+	// which got through would show in the state below.
 	hostile := []struct {
-		kind, target string
+		kind, target, actor, object string
 	}{
-		{maintenance.RevokedToken, revKeepToken + "%"},
-		{maintenance.RevokedToken, "' OR '1'='1"},
-		{maintenance.RevokedToken, ""},
-		{maintenance.RevokedSession, revSessionTwo + "\n"},
-		{maintenance.RevokedPrincipal, "../" + revPerson},
+		{maintenance.RevokedToken, revKeepToken + "%", "mallory", "token:x"},
+		{maintenance.RevokedToken, "' OR '1'='1", "mallory", "token:x"},
+		{maintenance.RevokedToken, "", "mallory", "token:x"},
+		{maintenance.RevokedSession, revSessionTwo + "\n", "mallory", "token:x"},
+		{maintenance.RevokedPrincipal, "../" + revPerson, "mallory", "token:x"},
+		{maintenance.RevokedToken, revKeepToken, "mallory\nforged", "token:x"},
+		{maintenance.RevokedToken, revKeepToken, "mallory", "token:x\nforged"},
+		{maintenance.RevokedToken, revKeepToken, "mallory" + strings.Repeat("a", 256), "token:x"},
+		{maintenance.RevokedToken, revKeepToken, "mallory", "token:" + strings.Repeat("a", 256)},
+		{maintenance.RevokedToken, revKeepToken, "", "token:x"},
+		{maintenance.RevokedToken, revKeepToken, "mallory", ""},
 	}
 
 	if s.KeepsUnknownKinds() {
-		hostile = append(hostile, struct{ kind, target string }{"wipe", revKeepToken})
+		hostile = append(hostile, struct{ kind, target, actor, object string }{
+			"wipe", revKeepToken, "mallory", "token:x",
+		})
 	}
 
 	for _, h := range hostile {
 		row := RawRevocation{
-			Kind: h.kind, Target: h.target, Actor: "mallory", Object: "token:x", AtMs: revAt(31).UnixMilli(),
+			Kind: h.kind, Target: h.target, Actor: h.actor, Object: h.object, AtMs: revAt(31).UnixMilli(),
 		}
 
 		if err := s.InsertRawRevocation(t.Context(), row); err != nil {

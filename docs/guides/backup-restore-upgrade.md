@@ -204,7 +204,9 @@ restore applies. These writes run, each with its audit entry:
   refused.
 - the disable of a principal (`POST /api/server/principals/{id}/disable`). The
   grants and tokens of the principal stay, and the principal can not use them
-  until an administrator enables it again.
+  until an administrator enables it again. The check of a disable in normal
+  operation stays in force: the caller holds every action that the grants of
+  the principal give.
 - the expiry of a temporary administrator, which ends the record, disables the
   principal, revokes its grants and tokens and ends its group memberships.
 

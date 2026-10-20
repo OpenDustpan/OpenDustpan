@@ -745,15 +745,16 @@ func enablePrincipal(
 
 // disablePrincipal serves POST /api/server/principals/{id}/disable: it
 // disables a principal and answers 200 with the principal. The write only
-// narrows access, so it works in maintenance mode. A principal that is
-// disabled answers 409.
+// narrows access, so it works in maintenance mode. The caller must hold every
+// action that the grants of the principal give. A principal that is disabled
+// answers 409.
 func disablePrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	id := r.PathValue("id")
 	object := principal.Ref(id)
 
-	if err := svc.DisablePrincipal(r.Context(), e, id); err != nil {
+	if err := svc.DisablePrincipal(r.Context(), e, caller, id); err != nil {
 		return failed(object), err
 	}
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 )
@@ -89,8 +91,11 @@ func (r Revocation) Validate() error {
 		return fmt.Errorf("%w: target %q is not an ID", ErrInvalidRevocation, r.Target)
 	}
 
-	if r.Actor == "" || r.Object == "" {
-		return fmt.Errorf("%w: row %d has no actor or object", ErrInvalidRevocation, r.ID)
+	// The actor is a subject and the object is a reference such as
+	// "token:tok-1", so both use a wider set than an ID: printable
+	// characters only, with the same length bound as the target.
+	if !validText(r.Actor) || !validText(r.Object) {
+		return fmt.Errorf("%w: row %d has an actor or an object that is not valid text", ErrInvalidRevocation, r.ID)
 	}
 
 	return nil
@@ -109,6 +114,23 @@ func validTarget(s string) bool {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
 		case c == '-', c == '_', c == '.':
 		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// validText reports whether s is 1 to maxTargetLen bytes of valid UTF-8 with
+// printable characters only. It refuses control characters, so that the text
+// can not break a line of the audit log or of a log file.
+func validText(s string) bool {
+	if s == "" || len(s) > maxTargetLen || !utf8.ValidString(s) {
+		return false
+	}
+
+	for _, c := range s {
+		if !unicode.IsPrint(c) {
 			return false
 		}
 	}

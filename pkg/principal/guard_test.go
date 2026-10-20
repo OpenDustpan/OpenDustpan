@@ -106,6 +106,10 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		t.Fatalf("delete group = %v, want the refusal of the guard", err)
 	}
 
+	if err := svc.DisablePrincipal(ctx, e, caller, p.ID); !errors.Is(err, errRefused) {
+		t.Fatalf("disable principal = %v, want the refusal of the guard", err)
+	}
+
 	if err := svc.EnablePrincipal(ctx, e, caller, p.ID); !errors.Is(err, errRefused) {
 		t.Fatalf("enable principal = %v, want the refusal of the guard", err)
 	}
@@ -118,13 +122,28 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		t.Fatalf("group after the refused delete: %v", err)
 	}
 
-	if checks != 5 {
-		t.Fatalf("guard checks = %d, want 5", checks)
+	if checks != 6 {
+		t.Fatalf("guard checks = %d, want 6", checks)
+	}
+
+	got, err := svc.GetPrincipal(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("get principal after the refused disable: %v", err)
+	}
+
+	if !got.DisabledAt.IsZero() {
+		t.Fatal("principal is disabled after a refused disable, want enabled")
 	}
 
 	delete(guard.refuse, g.ID)
 
 	if _, err := svc.AddMember(ctx, e, caller, g.ID, p.ID); err != nil {
 		t.Fatalf("add member that the guard allows: %v", err)
+	}
+
+	delete(guard.refuse, p.ID)
+
+	if err := svc.DisablePrincipal(ctx, e, caller, p.ID); err != nil {
+		t.Fatalf("disable principal that the guard allows: %v", err)
 	}
 }
