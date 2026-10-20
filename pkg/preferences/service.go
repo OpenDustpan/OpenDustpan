@@ -58,7 +58,7 @@ func (s *Service) Get(ctx context.Context, caller identity.Principal) (Document,
 // the time, the object and the kind, and the store sets the action and the
 // changed fields. A patch that changes nothing writes no entry.
 func (s *Service) Update(
-	ctx context.Context, caller identity.Principal, patch Patch, e audit.Entry,
+	ctx context.Context, caller identity.Principal, patch Patch, e audit.Entry, ifMatch *int64,
 ) (Result, error) {
 	id, err := s.person(ctx, caller)
 	if err != nil {
@@ -75,12 +75,27 @@ func (s *Service) Update(
 	e.Kind = audit.KindChange
 	e.Outcome = audit.OutcomeSuccess
 
-	res, err := s.store.Update(ctx, id, patch, e)
+	res, err := s.store.Update(ctx, id, patch, e, ifMatch)
 	if err != nil {
 		return Result{Document: Default(), Changed: nil}, fmt.Errorf("update preferences: %w", err)
 	}
 
 	return res, nil
+}
+
+// Object returns the audit object of a change that caller makes: the principal
+// reference of the principal of its subject. For a person, it is the same
+// object as the entry of a successful change, so the entry of a refusal
+// matches its change. A caller without a record, and a failed read of the
+// record, give the invalid reference, so no text of the request reaches the
+// audit log.
+func (s *Service) Object(ctx context.Context, caller identity.Principal) string {
+	p, err := s.people.GetPrincipalBySubject(ctx, caller.Subject)
+	if err != nil {
+		return principal.Ref("")
+	}
+
+	return principal.Ref(p.ID)
 }
 
 // person returns the ID of the person that caller acts as. It returns

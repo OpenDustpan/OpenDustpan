@@ -128,6 +128,10 @@ type Config struct {
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
+	// Preferences keeps the preferences of a person. Nil means the store
+	// keeps none: the preferences routes answer 501. Both SQL adapters keep
+	// them.
+	Preferences *preferences.Service
 	// Workers reports the components of the process and the state of the
 	// worker, and refuses the start of a durable operation when no worker
 	// claimed or renewed a claim. Nil means no refusal and an empty report.
@@ -196,20 +200,10 @@ type Handler struct {
 	routes         []Route
 }
 
-// Option sets an optional dependency of a Handler that NewHandler builds.
-type Option func(*Handler)
-
-// WithPreferences sets the service of the preferences of a person. Without
-// it, or with nil, the store keeps none and the preferences routes answer
-// 501. Both SQL adapters keep them.
-func WithPreferences(svc *preferences.Service) Option {
-	return func(h *Handler) { h.preferences = svc }
-}
-
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
 // Namespaces, Maintenance and Metrics are required. Backups is optional: nil
 // means no backup target is configured.
-func NewHandler(cfg Config, opts ...Option) (*Handler, error) {
+func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -259,17 +253,13 @@ func NewHandler(cfg Config, opts ...Option) (*Handler, error) {
 		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
-		preferences:    nil,
+		preferences:    cfg.Preferences,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
 
 	if h.now == nil {
 		h.now = time.Now
-	}
-
-	for _, opt := range opts {
-		opt(h)
 	}
 
 	h.routes = h.buildRoutes()

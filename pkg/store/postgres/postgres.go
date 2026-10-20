@@ -15,6 +15,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -75,10 +76,24 @@ type Store struct {
 	// noMigrate makes Open apply no migration and refuse a database with
 	// a pending one.
 	noMigrate bool
+	// logger records the warnings of the store. It defaults to a discard
+	// handler; pass WithLogger to record them.
+	logger *slog.Logger
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
 type Option func(*Store)
+
+// WithLogger sets the logger that records the warning for a stored preference
+// that fails its check. The default is a discard logger, so the store stays
+// silent unless the caller passes a logger.
+func WithLogger(logger *slog.Logger) Option {
+	return func(s *Store) {
+		if logger != nil {
+			s.logger = logger
+		}
+	}
+}
 
 // WithBinaryVersion sets the version of the binary, for example v0.1.0. Open
 // refuses a schema whose minimum binary version is above it with a
@@ -154,7 +169,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
 		beforeLockDelete: nil, stateLockWait: 0,
-		binaryVersion: "", gate: nil, kind: "", noMigrate: false,
+		binaryVersion: "", gate: nil, kind: "", noMigrate: false, logger: slog.New(slog.DiscardHandler),
 	}
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 

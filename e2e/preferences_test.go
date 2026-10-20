@@ -26,7 +26,7 @@ type prefsAnswer struct {
 	Digits           *string `json:"digits"`
 	TimeZone         *string `json:"timeZone"`
 	DateStyle        string  `json:"dateStyle"`
-	UpdatedAt        *int64  `json:"updatedAt"`
+	UpdatedAt        *string `json:"updatedAt"`
 	Message          string  `json:"message"`
 	ErrorCode        string  `json:"errorCode"`
 }
@@ -66,17 +66,20 @@ type prefsReq struct {
 	method      string
 	contentType string
 	body        string
+	ifMatch     string
 	want        int
 }
 
 // prefsGet reads the preferences with token.
 func prefsGet(token string, want int) prefsReq {
-	return prefsReq{token: token, method: http.MethodGet, contentType: "", body: "", want: want}
+	return prefsReq{token: token, method: http.MethodGet, contentType: "", body: "", ifMatch: "", want: want}
 }
 
 // prefsPatch sends a merge patch with token.
 func prefsPatch(token, body string, want int) prefsReq {
-	return prefsReq{token: token, method: http.MethodPatch, contentType: prefsPatchType, body: body, want: want}
+	return prefsReq{
+		token: token, method: http.MethodPatch, contentType: prefsPatchType, body: body, ifMatch: "", want: want,
+	}
 }
 
 // prefsCall sends one request and decodes the answer.
@@ -85,6 +88,7 @@ func prefsCall(ctx context.Context, t *testing.T, env *e2e.Env, in prefsReq) (e2
 
 	resp, err := env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
 		Token: in.token, Method: in.method, Path: prefsRoute, ContentType: in.contentType, Body: in.body,
+		IfMatch: in.ifMatch,
 	})
 	if err != nil {
 		t.Fatalf("%s %s: %v", in.method, prefsRoute, err)
@@ -196,22 +200,60 @@ func preferencesReadAndChange(ctx context.Context, t *testing.T, env *e2e.Env, a
 	}
 
 	preferencesNoOpAndReset(ctx, t, env, aliceToken, *changed.UpdatedAt)
+	preferencesVersions(ctx, t, env, aliceToken)
 }
 
 // preferencesNoOpAndReset proves that a patch that changes nothing keeps
 // updatedAt, and that null resets a field and a field that the patch leaves out
 // keeps its value.
-func preferencesNoOpAndReset(ctx context.Context, t *testing.T, env *e2e.Env, token string, updatedAt int64) {
+func preferencesNoOpAndReset(ctx context.Context, t *testing.T, env *e2e.Env, token, updatedAt string) {
 	t.Helper()
 
 	again := prefsStep(ctx, t, env, prefsPatch(token, `{"language":"ar"}`, http.StatusOK))
 	if again.UpdatedAt == nil || *again.UpdatedAt != updatedAt {
-		t.Fatalf("updatedAt after a patch that changes nothing = %v, want %d", again.UpdatedAt, updatedAt)
+		t.Fatalf("updatedAt after a patch that changes nothing = %v, want %s", again.UpdatedAt, updatedAt)
 	}
 
 	reset := prefsStep(ctx, t, env, prefsPatch(token, `{"digits":null,"language":null}`, http.StatusOK))
 	if reset.Digits != nil || reset.Language != nil || reset.Theme != "terminal" || reset.TimeZone == nil {
 		t.Fatalf("PATCH null answer = %+v, want digits and language reset and the rest kept", reset)
+	}
+}
+
+// preferencesVersions proves that the ETag of a read is the version of the
+// document, and that a PATCH with the If-Match header of an older version
+// answers 412 and changes nothing.
+func preferencesVersions(ctx context.Context, t *testing.T, env *e2e.Env, token string) {
+	t.Helper()
+
+	first, _ := prefsCall(ctx, t, env, prefsGet(token, http.StatusOK))
+
+	oldTag := first.Header.Get("ETag")
+	if oldTag == "" {
+		t.Fatalf("GET answers no ETag")
+	}
+
+	// A change with the version that the read gave works and gives a new version.
+	fresh := prefsPatch(token, `{"hourCycle":"h23"}`, http.StatusOK)
+	fresh.ifMatch = oldTag
+
+	resp, doc := prefsCall(ctx, t, env, fresh)
+	if resp.Status != http.StatusOK || doc.UpdatedAt == nil || resp.Header.Get("ETag") == "" ||
+		resp.Header.Get("ETag") == oldTag {
+		t.Fatalf("PATCH with the read version answers %d, ETag %q (%s); want 200 and a new ETag",
+			resp.Status, resp.Header.Get("ETag"), resp.Body)
+	}
+
+	// The old version is refused and nothing changes.
+	stale := prefsPatch(token, `{"hourCycle":"h12"}`, http.StatusPreconditionFailed)
+	stale.ifMatch = oldTag
+
+	if refused := prefsStep(ctx, t, env, stale); refused.ErrorCode != "preferences.precondition-failed" {
+		t.Fatalf("412 errorCode = %q", refused.ErrorCode)
+	}
+
+	if after, _ := prefsCall(ctx, t, env, prefsGet(token, http.StatusOK)); after.Header.Get("ETag") != resp.Header.Get("ETag") {
+		t.Fatalf("ETag after a refused patch = %q, want %q", after.Header.Get("ETag"), resp.Header.Get("ETag"))
 	}
 }
 
@@ -242,7 +284,7 @@ func preferencesRefusals(ctx context.Context, t *testing.T, env *e2e.Env, token 
 
 	notPatch := prefsReq{
 		token: token, method: http.MethodPatch, contentType: "application/json", body: `{"theme":"default"}`,
-		want: http.StatusUnsupportedMediaType,
+		ifMatch: "", want: http.StatusUnsupportedMediaType,
 	}
 	if doc := prefsStep(ctx, t, env, notPatch); doc.ErrorCode != "preferences.media-type-unsupported" {
 		t.Fatalf("415 errorCode = %q", doc.ErrorCode)
@@ -312,10 +354,11 @@ func preferencesAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 		}
 	}
 
-	// Two real changes of alice (the change and the reset), nine patches that
+	// Three real changes of alice (the change, the reset and the change with
+	// If-Match; the patch with an old version wrote none), nine patches that
 	// the checks of the body or of the media type refused, and two patches of a
 	// caller that is not a person.
-	want := map[string]int{"success": 2, "failure": 9, "denied": 2}
+	want := map[string]int{"success": 3, "failure": 9, "denied": 2}
 	if len(counts) != len(want) || counts["success"] != want["success"] || counts["failure"] != want["failure"] ||
 		counts["denied"] != want["denied"] {
 		t.Fatalf("preferences-changed entries by outcome = %v, want %v", counts, want)

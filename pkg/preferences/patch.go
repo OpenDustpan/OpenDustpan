@@ -217,16 +217,14 @@ func (p Patch) Validate() error {
 
 // Apply applies patch to current and returns the new settings and the flat
 // names of the fields whose value changed, in order. It checks every value of
-// patch and every value of current, so a store that calls it never writes a
-// value that failed a check, also when the stored document came from an older
-// version or from a restore. It changes neither argument. A value equal to
+// patch and every value of the new settings, so a store that calls it never
+// writes a value that failed a check, also when the stored document came from
+// an older version or from a restore. It checks the new settings and not
+// current, so a patch that sets a stored field that fails a check back to its
+// default always works. It changes neither argument. A value equal to
 // the default of its field is stored as no value, so two Settings are equal
 // when they give the same document.
 func Apply(current Settings, patch Patch) (Settings, []string, error) {
-	if err := current.Validate(); err != nil {
-		return nil, nil, err
-	}
-
 	if err := patch.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -244,6 +242,10 @@ func Apply(current Settings, patch Patch) (Settings, []string, error) {
 		}
 
 		next[name] = *v
+	}
+
+	if err := next.Validate(); err != nil {
+		return nil, nil, err
 	}
 
 	changed := []string{}
@@ -322,3 +324,42 @@ func ParseSettings(text string) (Settings, error) {
 
 	return out, nil
 }
+
+// ParseStored reads the stored text of a row for a read. It drops each field
+// that fails its check, and each member that is not a field, and returns the
+// names of the dropped members, in order. It never returns the value of a
+// dropped member. Text that is not one JSON object of strings with no
+// repeated key gives no settings, and the one name "document". So a stored
+// value that fails a check never stops a person from reading or changing
+// the preferences. ParseSettings is the strict form.
+func ParseStored(text string) (Settings, []string) {
+	if len(text) > MaxBodyBytes {
+		return Settings{}, []string{storedDocument}
+	}
+
+	members, err := objectMembers([]byte(text))
+	if err != nil {
+		return Settings{}, []string{storedDocument}
+	}
+
+	out := Settings{}
+	dropped := []string{}
+
+	for _, name := range sortedKeys(members) {
+		v, err := textOrNull(name, members[name])
+		if err != nil || v == nil || checkValue(name, *v) != nil {
+			dropped = append(dropped, name)
+
+			continue
+		}
+
+		if spec, _ := specOf(name); *v != spec.def {
+			out[name] = *v
+		}
+	}
+
+	return out, dropped
+}
+
+// storedDocument names a stored text that is not a document of members.
+const storedDocument = "document"

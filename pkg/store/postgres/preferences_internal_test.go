@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +77,7 @@ func TestPreferencesRowGoesWithThePerson(t *testing.T) {
 	id := prefsPerson(t, s)
 	at := time.UnixMilli(1_700_000_100_000).UTC()
 
-	if _, err := s.Update(t.Context(), id, preferences.Patch{}, prefsEntry(id, at)); err != nil {
+	if _, err := s.Update(t.Context(), id, preferences.Patch{}, prefsEntry(id, at), nil); err != nil {
 		t.Fatalf("Update no-op: %v", err)
 	}
 
@@ -87,7 +86,7 @@ func TestPreferencesRowGoesWithThePerson(t *testing.T) {
 	}
 
 	patch := preferences.Patch{preferences.FieldLanguage: preferences.Text("ar")}
-	if _, err := s.Update(t.Context(), id, patch, prefsEntry(id, at)); err != nil {
+	if _, err := s.Update(t.Context(), id, patch, prefsEntry(id, at), nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -105,9 +104,9 @@ func TestPreferencesRowGoesWithThePerson(t *testing.T) {
 }
 
 // TestPreferencesStoredRowIsChecked puts rows into the table that a person
-// could not have set. The store must refuse to read them and must not write
-// over them, so a restore or an older version never gives the console a
-// value that fails the checks.
+// could not have set. The store drops each stored field that fails a check, so
+// a restore or an older version never gives the console a value that fails the
+// checks, and never locks the person out. The next change replaces the row.
 func TestPreferencesStoredRowIsChecked(t *testing.T) {
 	t.Parallel()
 
@@ -134,21 +133,23 @@ func TestPreferencesStoredRowIsChecked(t *testing.T) {
 				t.Fatalf("write row: %v", err)
 			}
 
-			if _, err := s.Get(t.Context(), id); !errors.Is(err, preferences.ErrInvalidStored) {
-				t.Errorf("Get error = %v, want ErrInvalidStored", err)
+			got, err := s.Get(t.Context(), id)
+			got.UpdatedAt = time.Time{}
+
+			if err != nil || got != preferences.Default() {
+				t.Errorf("Get = %+v, %v; want the defaults", got, err)
 			}
 
 			at := time.UnixMilli(1_700_000_100_000).UTC()
 			patch := preferences.Patch{preferences.FieldColorMode: preferences.Text("dark")}
 
-			_, updateErr := s.Update(t.Context(), id, patch, prefsEntry(id, at))
-			if !errors.Is(updateErr, preferences.ErrInvalidStored) {
-				t.Errorf("Update error = %v, want ErrInvalidStored", updateErr)
+			if _, updateErr := s.Update(t.Context(), id, patch, prefsEntry(id, at), nil); updateErr != nil {
+				t.Errorf("Update error = %v, want none", updateErr)
 			}
 
 			row, err := s.queries.GetPersonPreferences(t.Context(), id)
-			if err != nil || row.Document.String != doc {
-				t.Errorf("row = %+v, %v; want the stored text unchanged", row, err)
+			if err != nil || row.Document.String != `{"colorMode":"dark"}` {
+				t.Errorf("row = %+v, %v; want only the new setting", row, err)
 			}
 		})
 	}

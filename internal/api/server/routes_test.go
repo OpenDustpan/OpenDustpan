@@ -344,7 +344,8 @@ func newServiceBackedHandlerOf(
 		},
 		CheckpointEpochs: fakeEpochs{},
 		DenialLimiter:    nil,
-	}, apiserver.WithPreferences(preferences.NewService(st, st, nil)))
+		Preferences:      preferences.NewService(st, st, nil),
+	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

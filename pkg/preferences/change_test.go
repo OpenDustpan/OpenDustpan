@@ -64,7 +64,7 @@ func TestChangeWritesARealChange(t *testing.T) {
 	at := time.Date(2026, time.October, 20, 12, 0, 0, 999999999, time.UTC)
 	patch := preferences.Patch{"language": preferences.Text("ar"), "theme": preferences.Text("terminal")}
 
-	res, err := preferences.Change(t.Context(), tx, "prn-alice", patch, entryAt(at))
+	res, err := preferences.Change(t.Context(), tx, nil, "prn-alice", patch, entryAt(at), nil)
 	if err != nil {
 		t.Fatalf("Change: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestChangeWritesNothingForANoOp(t *testing.T) {
 	tx.document, tx.updated = `{"language":"ar"}`, 1_000
 	patch := preferences.Patch{"language": preferences.Text("ar"), "theme": nil}
 
-	res, err := preferences.Change(t.Context(), tx, "prn-alice", patch, entryAt(time.UnixMilli(5_000)))
+	res, err := preferences.Change(t.Context(), tx, nil, "prn-alice", patch, entryAt(time.UnixMilli(5_000)), nil)
 	if err != nil {
 		t.Fatalf("Change: %v", err)
 	}
@@ -126,11 +126,6 @@ func TestChangeStopsOnAnError(t *testing.T) {
 			0,
 			0,
 		},
-		{
-			"a stored document that fails a check",
-			func(tx *fakeTx) { tx.document, tx.updated = `{"language":"x y"}`, 1 },
-			change, preferences.ErrInvalidStored, 0, 0,
-		},
 		{"a patch that fails a check", func(*fakeTx) {}, badDigits, preferences.ErrInvalidValue, 0, 0},
 		{"a save error", func(tx *fakeTx) { tx.saveErr = errTxDown }, change, errTxDown, 1, 0},
 		{
@@ -150,7 +145,7 @@ func TestChangeStopsOnAnError(t *testing.T) {
 			tx := newFakeTx()
 			tc.setup(tx)
 
-			res, err := preferences.Change(t.Context(), tx, "prn-alice", tc.patch, entryAt(time.UnixMilli(5_000)))
+			res, err := preferences.Change(t.Context(), tx, nil, "prn-alice", tc.patch, entryAt(time.UnixMilli(5_000)), nil)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
@@ -169,5 +164,93 @@ func TestChangeStopsOnAnError(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestChangeIgnoresAStoredFieldThatFailsACheck(t *testing.T) {
+	t.Parallel()
+
+	const stored = `{"timeZone":"Mars/Olympus","theme":"terminal"}`
+
+	// A patch that resets the bad field works, and changes nothing that the
+	// person sees.
+	tx := newFakeTx()
+	tx.document, tx.updated = stored, 1_000
+
+	res, err := preferences.Change(
+		t.Context(), tx, nil, "prn-alice", preferences.Patch{"timeZone": nil}, entryAt(time.UnixMilli(5_000)), nil,
+	)
+	if err != nil || len(res.Changed) != 0 || len(tx.saved) != 0 || res.Document.TimeZone != "" {
+		t.Errorf("reset: result = %+v, %v, saved %q; want no change", res, err, tx.saved)
+	}
+
+	// Another change works, and the write drops the bad field.
+	tx = newFakeTx()
+	tx.document, tx.updated = stored, 1_000
+
+	res, err = preferences.Change(
+		t.Context(), tx, nil, "prn-alice", preferences.Patch{"colorMode": preferences.Text("dark")},
+		entryAt(time.UnixMilli(5_000)), nil,
+	)
+	if err != nil || !slices.Equal(res.Changed, []string{"colorMode"}) ||
+		len(tx.saved) != 1 || tx.saved[0] != `{"colorMode":"dark","theme":"terminal"}` {
+		t.Errorf("other change: result = %+v, %v, saved %q; want the bad field gone", res, err, tx.saved)
+	}
+}
+
+func TestChangeChecksTheVersion(t *testing.T) {
+	t.Parallel()
+
+	patch := preferences.Patch{"theme": preferences.Text("terminal")}
+	stale, current := int64(999), int64(1_000)
+
+	for name, tc := range map[string]struct {
+		ifMatch *int64
+		want    error
+	}{
+		"no precondition": {nil, nil},
+		"the version":     {&current, nil},
+		"another version": {&stale, preferences.ErrPreconditionFailed},
+	} {
+		tx := newFakeTx()
+		tx.document, tx.updated = `{"language":"ar"}`, 1_000
+
+		_, err := preferences.Change(t.Context(), tx, nil, "prn-alice", patch, entryAt(time.UnixMilli(5_000)), tc.ifMatch)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: error = %v, want %v", name, err, tc.want)
+		}
+
+		if tc.want != nil && (len(tx.saved) != 0 || len(tx.appended) != 0) {
+			t.Errorf("%s: wrote %d rows and %d entries, want none", name, len(tx.saved), len(tx.appended))
+		}
+	}
+
+	// A person that never changed a preference has version 0.
+	zero := int64(0)
+
+	if _, err := preferences.Change(
+		t.Context(), newFakeTx(), nil, "prn-alice", patch, entryAt(time.UnixMilli(5_000)), &zero,
+	); err != nil {
+		t.Errorf("version 0 on no row: %v", err)
+	}
+}
+
+func TestChangeGivesEachChangeANewVersion(t *testing.T) {
+	t.Parallel()
+
+	tx := newFakeTx()
+	tx.document, tx.updated = `{"language":"ar"}`, 5_000
+
+	// The time of the entry is the time of the last change, or older.
+	for _, at := range []int64{5_000, 4_000} {
+		tx.saved = nil
+
+		res, err := preferences.Change(
+			t.Context(), tx, nil, "prn-alice", preferences.Patch{"theme": preferences.Text("terminal")},
+			entryAt(time.UnixMilli(at)), nil,
+		)
+		if err != nil || tx.savedMs != 5_001 || res.Document.Version() != 5_001 {
+			t.Errorf("at %d: saved %d, result %+v, %v; want the version 5001", at, tx.savedMs, res.Document, err)
+		}
 	}
 }

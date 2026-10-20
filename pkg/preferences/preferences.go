@@ -73,6 +73,9 @@ var (
 	// ErrNotPerson means the caller is not a person with a record: a service,
 	// a workload, a job or a bootstrap administrator.
 	ErrNotPerson = errors.New("preferences belong to a person, and the caller is not a person with a record")
+	// ErrPreconditionFailed means the version that a change expects is not
+	// the version of the stored preferences. The change writes nothing.
+	ErrPreconditionFailed = errors.New("preferences changed since the version in If-Match")
 	// ErrInvalidStored means a stored document is not valid. A store returns
 	// it for a row that fails the checks, and a restore refuses the row.
 	ErrInvalidStored = errors.New("stored preferences are not valid")
@@ -124,6 +127,18 @@ type Document struct {
 	TimeZone           string
 	Digits             string
 	ResolvedLanguage   string
+}
+
+// Version returns the version of the document: the time of the last change in
+// Unix milliseconds, or 0 for a person that never changed a preference. A
+// change that names the version it expects (see Store) writes only when the
+// stored version is the same.
+func (d Document) Version() int64 {
+	if d.UpdatedAt.IsZero() {
+		return 0
+	}
+
+	return d.UpdatedAt.UnixMilli()
 }
 
 // The defaults of the fields that have one. A nullable field has the empty

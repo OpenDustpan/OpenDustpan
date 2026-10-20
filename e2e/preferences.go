@@ -18,6 +18,8 @@ type TypedRequest struct {
 	Path        string
 	ContentType string
 	Body        string
+	// IfMatch is the If-Match header. Empty sends none.
+	IfMatch string
 }
 
 // ServerAPIStatusTyped sends one installation API request with the Token as a
@@ -38,6 +40,10 @@ func (e *Env) ServerAPIStatusTyped(ctx context.Context, in TypedRequest) (APIRes
 
 	if in.ContentType != "" {
 		req.Header.Set("Content-Type", in.ContentType)
+	}
+
+	if in.IfMatch != "" {
+		req.Header.Set("If-Match", in.IfMatch)
 	}
 
 	resp, err := e.client.Do(req)

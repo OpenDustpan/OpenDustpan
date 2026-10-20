@@ -2,6 +2,7 @@ package preferences
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -18,8 +19,8 @@ type Store interface {
 	// settings over the defaults, with UpdatedAt set to the time of the last
 	// change, or the zero time when the person never changed a preference.
 	// It returns ErrPersonNotFound when no person with that ID exists. It
-	// returns ErrInvalidStored when the row fails the checks of this
-	// package, and never returns a value that failed a check.
+	// drops each stored field that fails the checks of this package, and
+	// never returns a value that failed a check.
 	Get(ctx context.Context, personID string) (Document, error)
 
 	// Update applies patch to the preferences of the person personID in one
@@ -40,7 +41,12 @@ type Store interface {
 	// fails a check, and audit.ErrInvalidEntry when e fails validation or
 	// names another scope than audit.ServerScope, also for a patch that
 	// changes nothing. A failed call changes nothing.
-	Update(ctx context.Context, personID string, patch Patch, e audit.Entry) (Result, error)
+	//
+	// ifMatch is nil, or the Version that the caller read. When it is set and
+	// the stored version differs, Update returns ErrPreconditionFailed and
+	// writes nothing, also no audit entry. The check runs in the transaction
+	// of the write, so two writers with the same version cannot both win.
+	Update(ctx context.Context, personID string, patch Patch, e audit.Entry, ifMatch *int64) (Result, error)
 }
 
 // Result is the answer of Update.
@@ -79,20 +85,24 @@ func ChangeEntry(e audit.Entry, changed []string) audit.Entry {
 
 // Load reads the row of a person in a store. An empty document means that the
 // person has no row: the settings are then empty and the time is the zero time.
-// A stored document is never empty. It returns ErrInvalidStored for a document
-// that fails the checks, so a store never returns a value that failed a check,
-// also when the row came from an older version or from a restore.
-func Load(document string, updatedAtMs int64) (Settings, time.Time, error) {
+// A stored field that fails its check is dropped, so a store never returns a
+// value that failed a check, also when the row came from an older version or
+// from a restore, and a bad field never locks the person out. Load logs the
+// name of each dropped field, and never its value. log nil means no log.
+func Load(document string, updatedAtMs int64, log *slog.Logger) (Settings, time.Time) {
 	if document == "" {
-		return Settings{}, time.Time{}, nil
+		return Settings{}, time.Time{}
 	}
 
-	settings, err := ParseSettings(document)
-	if err != nil {
-		return nil, time.Time{}, err
+	settings, dropped := ParseStored(document)
+
+	if log != nil {
+		for _, name := range dropped {
+			log.Warn("dropped a stored preference that fails its check", slog.String("field", name))
+		}
 	}
 
-	return settings, time.UnixMilli(updatedAtMs).UTC(), nil
+	return settings, time.UnixMilli(updatedAtMs).UTC()
 }
 
 // DocumentAt returns the document that s gives, with UpdatedAt set to at.

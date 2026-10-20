@@ -2588,9 +2588,10 @@ func newServerHandler(
 		AuditSinks:    sinks,
 		Workers:       cfg.watch,
 		SignIn:        deps.signIn,
+		Preferences:   newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
-	}, serverapi.WithPreferences(newPreferencesService(cfg)))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}

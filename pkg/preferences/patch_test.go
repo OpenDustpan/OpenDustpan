@@ -3,6 +3,8 @@ package preferences_test
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -348,8 +350,9 @@ func TestApplyChangesNothingOnAnError(t *testing.T) {
 	}
 }
 
-// A stored document that fails a check never reaches a write: Apply checks it.
-func TestApplyChecksTheStoredSettings(t *testing.T) {
+// A stored value that fails a check never reaches a write: Apply checks the
+// new settings. A patch that sets the field back to its default always works.
+func TestApplyChecksTheNewSettings(t *testing.T) {
 	t.Parallel()
 
 	for _, current := range []preferences.Settings{
@@ -361,6 +364,53 @@ func TestApplyChecksTheStoredSettings(t *testing.T) {
 	} {
 		if _, _, err := preferences.Apply(current, preferences.Patch{}); !errors.Is(err, preferences.ErrInvalidStored) {
 			t.Errorf("Apply(%v) error = %v, want ErrInvalidStored", current, err)
+		}
+	}
+}
+
+func TestApplyResetsAStoredFieldThatFailsACheck(t *testing.T) {
+	t.Parallel()
+
+	current := preferences.Settings{"timeZone": "Mars/Olympus", "theme": "terminal"}
+
+	for name, patch := range map[string]preferences.Patch{
+		"null":  {"timeZone": nil},
+		"other": {"timeZone": preferences.Text("Europe/Berlin")},
+	} {
+		next, changed, err := preferences.Apply(current, patch)
+		if err != nil || !slices.Contains(changed, "timeZone") {
+			t.Errorf("%s: Apply = %v, %v, %v; want a change of timeZone", name, next, changed, err)
+		}
+	}
+
+	if _, _, err := preferences.Apply(current, preferences.Patch{"theme": preferences.Text("default")}); !errors.Is(
+		err, preferences.ErrInvalidStored,
+	) {
+		t.Errorf("a patch that keeps the bad field: error = %v, want ErrInvalidStored", err)
+	}
+}
+
+func TestParseStoredDropsWhatFailsACheck(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		text    string
+		want    preferences.Settings
+		dropped []string
+	}{
+		{"a bad zone", `{"timeZone":"Mars/Olympus","theme":"terminal"}`, preferences.Settings{"theme": "terminal"}, []string{"timeZone"}},
+		{"an unknown member", `{"nope":"x","language":"he"}`, preferences.Settings{"language": "he"}, []string{"nope"}},
+		{"a value that is not text", `{"theme":3}`, preferences.Settings{}, []string{"theme"}},
+		{"not an object", `[1]`, preferences.Settings{}, []string{"document"}},
+		{"a repeated member", `{"theme":"terminal","theme":"default"}`, preferences.Settings{}, []string{"document"}},
+		{"all good", `{"theme":"terminal"}`, preferences.Settings{"theme": "terminal"}, []string{}},
+	}
+
+	for _, tc := range tests {
+		got, dropped := preferences.ParseStored(tc.text)
+		if !maps.Equal(got, tc.want) || !slices.Equal(dropped, tc.dropped) {
+			t.Errorf("%s: ParseStored = %v, %v; want %v, %v", tc.name, got, dropped, tc.want, tc.dropped)
 		}
 	}
 }

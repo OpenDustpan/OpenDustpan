@@ -11,8 +11,10 @@
 package preferencestest
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +30,17 @@ type Store interface {
 	preferences.Store
 	principal.Store
 	audit.Store
+}
+
+// RawWriter is a Store that also writes the stored text of a row without the
+// checks of the package, as an older version or a restore could leave it. The
+// case for a stored field that fails a check runs only on a Store that is a
+// RawWriter.
+type RawWriter interface {
+	Store
+	// WriteRawPreferences writes the row of the person personID with the
+	// document and the time updatedAtMs as they are.
+	WriteRawPreferences(ctx context.Context, personID, document string, updatedAtMs int64) error
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -67,6 +80,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "updates at the same time on different fields all apply", test: testConcurrentFields},
 		{name: "updates at the same time on one field leave one value", test: testConcurrentSameField},
 		{name: "the audit chain stays valid after changes", test: testChainValid},
+		{name: "a stored field that fails a check is dropped and never locks the person out", test: testStoredBadField},
+		{name: "a change with a version writes only when the version is the stored one", test: testIfMatch},
+		{name: "each change gives a version above the one before it", test: testVersionRises},
 	}
 
 	for _, tc := range cases {
@@ -150,7 +166,7 @@ func entry(id string, when time.Time) audit.Entry {
 func update(t *testing.T, s Store, p person, n int, patch preferences.Patch) preferences.Result {
 	t.Helper()
 
-	res, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(n)))
+	res, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(n)), nil)
 	if err != nil {
 		t.Fatalf("Update(%v): %v", patch, err)
 	}
@@ -345,7 +361,7 @@ func testNoOp(t *testing.T, s Store) {
 		"the default value of a field":        set(preferences.FieldTheme, "default", preferences.FieldDateStyle, "locale"),
 		"null on both schemes with no values": reset(preferences.FieldTerminalSchemeLight),
 	} {
-		res, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(1)))
+		res, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(1)), nil)
 		if err != nil {
 			t.Fatalf("%s: Update: %v", name, err)
 		}
@@ -363,7 +379,7 @@ func testNoOp(t *testing.T, s Store) {
 	// stays.
 	update(t, s, p, 2, set(preferences.FieldLanguage, "ru"))
 
-	res, err := s.Update(t.Context(), p.id, set(preferences.FieldLanguage, "ru"), entry(p.id, at(9)))
+	res, err := s.Update(t.Context(), p.id, set(preferences.FieldLanguage, "ru"), entry(p.id, at(9)), nil)
 	if err != nil {
 		t.Fatalf("Update again: %v", err)
 	}
@@ -393,7 +409,7 @@ func testEntryNamesOnly(t *testing.T, s Store) {
 
 	patch := set(preferences.FieldTimeZone, secretish, preferences.FieldLanguage, "ar")
 
-	if _, err := s.Update(t.Context(), p.id, patch, e); err != nil {
+	if _, err := s.Update(t.Context(), p.id, patch, e, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -460,7 +476,7 @@ func testUpdatedAt(t *testing.T, s Store) {
 	p := mustPrincipal(t, s, "alice", principal.KindPerson)
 	when := base.Add(1234567 * time.Microsecond)
 
-	res, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "terminal"), entry(p.id, when))
+	res, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "terminal"), entry(p.id, when), nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -534,7 +550,7 @@ func testHostileValues(t *testing.T, s Store) {
 
 	for field, values := range hostile() {
 		for _, value := range values {
-			_, err := s.Update(t.Context(), p.id, set(field, value), entry(p.id, at(5)))
+			_, err := s.Update(t.Context(), p.id, set(field, value), entry(p.id, at(5)), nil)
 
 			var fieldErr *preferences.FieldError
 
@@ -565,7 +581,7 @@ func testUnknownField(t *testing.T, s Store) {
 	for _, name := range []string{
 		"unknown", preferences.FieldUpdatedAt, preferences.FieldTerminalSchemes, "", "Theme", "__proto__", "theme ",
 	} {
-		_, err := s.Update(t.Context(), p.id, set(name, "x"), entry(p.id, at(1)))
+		_, err := s.Update(t.Context(), p.id, set(name, "x"), entry(p.id, at(1)), nil)
 		if !errors.Is(err, preferences.ErrUnknownField) {
 			t.Errorf("Update(%q) error = %v, want ErrUnknownField", name, err)
 		}
@@ -614,7 +630,7 @@ func testValidValues(t *testing.T, s Store) {
 	}
 
 	for i, patch := range cases {
-		if _, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(i+1))); err != nil {
+		if _, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(i+1)), nil); err != nil {
 			t.Errorf("Update(%v): %v", patch, err)
 		}
 	}
@@ -637,7 +653,7 @@ func testInvalidEntry(t *testing.T, s Store) {
 			e := entry(p.id, at(1))
 			mutate(&e)
 
-			if _, err := s.Update(t.Context(), p.id, patch, e); !errors.Is(err, audit.ErrInvalidEntry) {
+			if _, err := s.Update(t.Context(), p.id, patch, e, nil); !errors.Is(err, audit.ErrInvalidEntry) {
 				t.Errorf("%s, patch %v: error = %v, want ErrInvalidEntry", name, patch, err)
 			}
 		}
@@ -661,6 +677,7 @@ func testMissingPerson(t *testing.T, s Store) {
 			id,
 			set(preferences.FieldTheme, "terminal"),
 			entry(principal.IDPrefix+"x", at(1)),
+			nil,
 		)
 		if !errors.Is(err, preferences.ErrPersonNotFound) {
 			t.Errorf("Update(%q) error = %v, want ErrPersonNotFound", id, err)
@@ -681,7 +698,7 @@ func testServiceRefused(t *testing.T, s Store) {
 		t.Errorf("Get error = %v, want ErrPersonNotFound", err)
 	}
 
-	_, err := s.Update(t.Context(), svc.id, set(preferences.FieldTheme, "terminal"), entry(svc.id, at(1)))
+	_, err := s.Update(t.Context(), svc.id, set(preferences.FieldTheme, "terminal"), entry(svc.id, at(1)), nil)
 	if !errors.Is(err, preferences.ErrPersonNotFound) {
 		t.Errorf("Update error = %v, want ErrPersonNotFound", err)
 	}
@@ -704,7 +721,7 @@ func testDeletedPerson(t *testing.T, s Store) {
 		t.Errorf("Get error = %v, want ErrPersonNotFound", err)
 	}
 
-	_, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(3)))
+	_, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(3)), nil)
 	if !errors.Is(err, preferences.ErrPersonNotFound) {
 		t.Errorf("Update error = %v, want ErrPersonNotFound", err)
 	}
@@ -773,7 +790,7 @@ func testConcurrentFields(t *testing.T, s Store) {
 
 	for i, patch := range patches {
 		wg.Go(func() {
-			_, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(i+1)))
+			_, err := s.Update(t.Context(), p.id, patch, entry(p.id, at(i+1)), nil)
 			errs <- err
 		})
 	}
@@ -811,7 +828,7 @@ func testConcurrentSameField(t *testing.T, s Store) {
 
 	for i, v := range values {
 		wg.Go(func() {
-			_, err := s.Update(t.Context(), p.id, set(preferences.FieldLanguage, v), entry(p.id, at(i+1)))
+			_, err := s.Update(t.Context(), p.id, set(preferences.FieldLanguage, v), entry(p.id, at(i+1)), nil)
 			if err != nil {
 				t.Errorf("concurrent Update(%s): %v", v, err)
 			}
@@ -851,5 +868,126 @@ func testChainValid(t *testing.T, s Store) {
 
 	if !res.Valid {
 		t.Errorf("audit chain check = %+v, want a valid chain", res)
+	}
+}
+
+// A row with a value that fails a check: the read serves the document with no
+// such field, and a patch that resets the field, or changes another field,
+// works.
+func testStoredBadField(t *testing.T, s Store) {
+	t.Helper()
+
+	w, ok := s.(RawWriter)
+	if !ok {
+		t.Skip("the store writes no raw row")
+	}
+
+	p := mustPrincipal(t, s, "alice", principal.KindPerson)
+
+	row := `{"timeZone":"Mars/Olympus"}`
+	if err := w.WriteRawPreferences(t.Context(), p.id, row, at(1).UnixMilli()); err != nil {
+		t.Fatalf("write the row: %v", err)
+	}
+
+	got := get(t, s, p)
+	if got.TimeZone != "" || got.Theme != "default" || !got.UpdatedAt.Equal(at(1)) {
+		t.Errorf("Get = %+v, want the document with no timeZone and the time of the row", got)
+	}
+
+	if res := update(t, s, p, 2, reset(preferences.FieldTimeZone)); res.Document.TimeZone != "" {
+		t.Errorf("reset of timeZone: document = %+v, want no timeZone", res.Document)
+	}
+
+	res := update(t, s, p, 3, set(preferences.FieldTheme, "terminal"))
+	if !slices.Equal(res.Changed, []string{preferences.FieldTheme}) {
+		t.Errorf("change of theme: changed = %v, want theme", res.Changed)
+	}
+
+	if got := get(t, s, p); got.Theme != "terminal" || got.TimeZone != "" {
+		t.Errorf("Get = %+v, want theme terminal and no timeZone", got)
+	}
+
+	// A row that is not a document at all gives the defaults.
+	if err := w.WriteRawPreferences(t.Context(), p.id, `{"theme":"terminal","theme":"default"}`, at(4).UnixMilli()); err != nil {
+		t.Fatalf("write the row: %v", err)
+	}
+
+	if got := get(t, s, p); got.Theme != "default" {
+		t.Errorf("Get of a row with a repeated key = %+v, want the defaults", got)
+	}
+
+	update(t, s, p, 5, set(preferences.FieldLanguage, "ar"))
+}
+
+// A change with ifMatch writes only when ifMatch is the version that the store
+// holds. A refused change writes no row and no audit entry.
+func testIfMatch(t *testing.T, s Store) {
+	t.Helper()
+
+	p := mustPrincipal(t, s, "alice", principal.KindPerson)
+	zero := int64(0)
+
+	// No row: version 0.
+	res, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "terminal"), entry(p.id, at(1)), &zero)
+	if err != nil {
+		t.Fatalf("Update with version 0 on no row: %v", err)
+	}
+
+	version := res.Document.Version()
+	if version != at(1).UnixMilli() {
+		t.Fatalf("version = %d, want %d", version, at(1).UnixMilli())
+	}
+
+	entries := len(changeEntries(t, s))
+	stale := version - 1
+
+	for _, ifMatch := range []int64{0, stale, version + 1} {
+		_, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(2)), &ifMatch)
+		if !errors.Is(err, preferences.ErrPreconditionFailed) {
+			t.Errorf("Update with version %d: error = %v, want ErrPreconditionFailed", ifMatch, err)
+		}
+	}
+
+	// A patch that changes nothing is refused too, when the version is old.
+	if _, err := s.Update(t.Context(), p.id, preferences.Patch{}, entry(p.id, at(2)), &stale); !errors.Is(
+		err, preferences.ErrPreconditionFailed,
+	) {
+		t.Errorf("no-op with an old version: error = %v, want ErrPreconditionFailed", err)
+	}
+
+	if got := get(t, s, p); got.Theme != "terminal" || got.Version() != version {
+		t.Errorf("Get = %+v, want the document before the refused changes", got)
+	}
+
+	if n := len(changeEntries(t, s)); n != entries {
+		t.Errorf("entries = %d, want %d: a refused change writes none", n, entries)
+	}
+
+	if _, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(3)), &version); err != nil {
+		t.Errorf("Update with the stored version: %v", err)
+	}
+}
+
+// Each change gives a version above the one before it, also when the entry
+// has the same time or an older time.
+func testVersionRises(t *testing.T, s Store) {
+	t.Helper()
+
+	p := mustPrincipal(t, s, "alice", principal.KindPerson)
+	last := int64(0)
+
+	for i, when := range []time.Time{at(5), at(5), at(1)} {
+		theme := []string{"terminal", "default", "terminal"}[i]
+
+		res, err := s.Update(t.Context(), p.id, set(preferences.FieldTheme, theme), entry(p.id, when), nil)
+		if err != nil {
+			t.Fatalf("Update %d: %v", i, err)
+		}
+
+		if v := res.Document.Version(); v <= last {
+			t.Errorf("version after change %d = %d, want above %d", i, v, last)
+		}
+
+		last = res.Document.Version()
 	}
 }

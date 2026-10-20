@@ -3,6 +3,7 @@ package preferences
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 )
@@ -28,9 +29,12 @@ type Tx interface {
 // as the Update of a Store must: it reads the row, applies the patch with
 // Apply (which checks every value), and, when a value changes, writes the row
 // with the time of e and appends the entry with the changed field names. A
-// patch that changes nothing writes nothing. The caller runs it in one
+// patch that changes nothing writes nothing. When ifMatch is set, it must be the
+// version of the stored row, or Change returns ErrPreconditionFailed first. The caller runs it in one
 // transaction, so a failed call changes nothing.
-func Change(ctx context.Context, tx Tx, personID string, patch Patch, e audit.Entry) (Result, error) {
+func Change(
+	ctx context.Context, tx Tx, log *slog.Logger, personID string, patch Patch, e audit.Entry, ifMatch *int64,
+) (Result, error) {
 	none := Result{Document: Default(), Changed: nil}
 
 	document, updatedAtMs, err := tx.Load(ctx, personID)
@@ -38,9 +42,10 @@ func Change(ctx context.Context, tx Tx, personID string, patch Patch, e audit.En
 		return none, err
 	}
 
-	current, updatedAt, err := Load(document, updatedAtMs)
-	if err != nil {
-		return none, fmt.Errorf("read preferences: %w", err)
+	current, updatedAt := Load(document, updatedAtMs, log)
+
+	if ifMatch != nil && *ifMatch != current.DocumentAt(updatedAt).Version() {
+		return none, ErrPreconditionFailed
 	}
 
 	next, changed, err := Apply(current, patch)
@@ -57,7 +62,13 @@ func Change(ctx context.Context, tx Tx, personID string, patch Patch, e audit.En
 		return none, fmt.Errorf("encode preferences: %w", err)
 	}
 
+	// The version of a document is its time, so each change must give a time
+	// above the one before it, also in the same millisecond and after a step
+	// back of the clock. Then a version never names two documents.
 	at := e.At.UTC().Truncate(millisecond)
+	if !updatedAt.IsZero() && !at.After(updatedAt) {
+		at = updatedAt.Add(millisecond)
+	}
 
 	if err := tx.Save(ctx, personID, text, at.UnixMilli()); err != nil {
 		return none, fmt.Errorf("write preferences: %w", err)

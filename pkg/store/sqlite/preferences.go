@@ -69,10 +69,7 @@ func (s *Store) Get(ctx context.Context, personID string) (preferences.Document,
 		return preferences.Default(), err
 	}
 
-	settings, updatedAt, err := preferences.Load(document, updatedAtMs)
-	if err != nil {
-		return preferences.Default(), fmt.Errorf("read preferences: %w", err)
-	}
+	settings, updatedAt := preferences.Load(document, updatedAtMs, s.logger)
 
 	return settings.DocumentAt(updatedAt), nil
 }
@@ -80,7 +77,7 @@ func (s *Store) Get(ctx context.Context, personID string) (preferences.Document,
 // Update implements preferences.Store. It runs preferences.Change in one
 // transaction with the audit entry.
 func (s *Store) Update(
-	ctx context.Context, personID string, patch preferences.Patch, e audit.Entry,
+	ctx context.Context, personID string, patch preferences.Patch, e audit.Entry, ifMatch *int64,
 ) (preferences.Result, error) {
 	// Defense in depth: the service and the route check the entry and the
 	// patch too. The store checks them before it opens a transaction, so a
@@ -99,7 +96,7 @@ func (s *Store) Update(
 	var result preferences.Result
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		res, err := preferences.Change(ctx, preferencesTx{q: q}, personID, patch, e)
+		res, err := preferences.Change(ctx, preferencesTx{q: q}, s.logger, personID, patch, e, ifMatch)
 		result = res
 
 		return err

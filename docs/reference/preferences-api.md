@@ -38,7 +38,7 @@ and the bootstrap admin token.
   "timeZone": "Asia/Riyadh",
   "digits": null,
   "resolvedLanguage": "ar",
-  "updatedAt": 1760745600000
+  "updatedAt": "2026-10-18T09:30:00.000Z"
 }
 ```
 
@@ -60,7 +60,7 @@ a preference has no stored row, and `updatedAt` is `null`.
 | `timeZone` | An IANA time zone name of 1 to 64 characters, or `null` | `null`: the browser decides |
 | `digits` | `latn`, `arab` or `null` | `null`: the formatting locale decides |
 | `resolvedLanguage` | A BCP 47 tag of 2 to 35 characters, or `null` | `null` |
-| `updatedAt` | Unix milliseconds of the last change, or `null` | `null` |
+| `updatedAt` | The time of the last change, as an RFC 3339 string in UTC with milliseconds, or `null` | `null` |
 
 The server checks the shape of a language tag and of a scheme ID. The console
 has the list of languages and of schemes, so a new one needs no server
@@ -89,6 +89,30 @@ it, and the server stores it without a decision of its own. For the rules of
 A patch that changes no value answers 200 with the full document. It does not
 change `updatedAt`, and it writes no audit entry.
 
+## Versions
+
+`GET` and `PATCH` answer with the `ETag` header. It holds the version of the
+document in quotes. The version changes with each change of a preference. A
+person that never changed a preference has the version `"0"`.
+
+`PATCH` can take the `If-Match` header with the `ETag` of an earlier read.
+When the version is not the current one, the server answers 412 and changes
+nothing. It writes no audit entry. Use this to not overwrite a change that
+another device made after your read. A request with no `If-Match` header
+always applies. `If-Match: *` also always applies. A value that is not one
+version in quotes answers 400.
+
+```sh
+curl -i "$SERVER/api/dustpan/v1/me/preferences" -H "Authorization: Bearer $TOKEN"
+# ETag: "1760779800000"
+
+curl -X PATCH "$SERVER/api/dustpan/v1/me/preferences" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/merge-patch+json" \
+  -H 'If-Match: "1760779800000"' \
+  -d '{"theme": "terminal"}'
+```
+
 ```sh
 curl -X PATCH "$SERVER/api/dustpan/v1/me/preferences" \
   -H "Authorization: Bearer $TOKEN" \
@@ -108,10 +132,12 @@ A client selects its text from `errorCode`. An error of a field has
 | 400 | `preferences.field-unknown` | The body has a field that the document does not have |
 | 400 | `preferences.field-read-only` | The body has `updatedAt` |
 | 400 | `preferences.field-invalid` | A value is not allowed. `errorArgs.field` names the field. |
+| 400 | `preferences.if-match-invalid` | `If-Match` is not one version in quotes, or `*` |
 | 401 | | No valid token |
 | 403 | `preferences.person-required` | The caller is not a person |
 | 403 | | The caller lacks the action |
 | 413 | `preferences.body-too-large` | The body is over 4096 bytes |
+| 412 | `preferences.precondition-failed` | `If-Match` holds a version that is not the current one |
 | 415 | `preferences.media-type-unsupported` | The content type is not `application/merge-patch+json` |
 | 501 | `preferences.unavailable` | The store of the server keeps no preferences |
 | 503 | | The server is in maintenance mode, for a `PATCH` |
@@ -126,9 +152,17 @@ installation scope. The entry has the names of the changed fields, for example
 never has the values.
 
 A `PATCH` that the server refuses changes nothing and writes one entry with the
-same action. The outcome is `denied` for a caller that is not a person, and
-`failure` for any other refusal. The entry names no value and no field of the
-request. A refused `GET` writes no entry.
+same action and the same object as a change: the person. The outcome is
+`denied` for a caller that is not a person, and `failure` for any other
+refusal. The entry names no value and no field of the request. A `PATCH` that
+answers 412 writes no entry. A refused `GET` writes no entry.
+
+The server does not serve a stored value that fails its check, for example a
+time zone that the time zone database of the server does not know any more. It
+leaves the field out of the document, so the field has its default, and writes
+the name of the field to the log. The person can still read and change the
+other preferences. A `PATCH` that sets the field to `null` or to a good value
+works.
 
 A backup holds the preferences of each person, and a restore brings them back
 with the person. A restore checks each stored value with the same rules as the

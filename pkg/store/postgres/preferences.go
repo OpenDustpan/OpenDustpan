@@ -89,10 +89,7 @@ func (s *Store) Get(ctx context.Context, personID string) (preferences.Document,
 		return preferences.Default(), err
 	}
 
-	settings, updatedAt, err := preferences.Load(document, updatedAtMs)
-	if err != nil {
-		return preferences.Default(), fmt.Errorf("read preferences: %w", err)
-	}
+	settings, updatedAt := preferences.Load(document, updatedAtMs, s.logger)
 
 	return settings.DocumentAt(updatedAt), nil
 }
@@ -102,7 +99,7 @@ func (s *Store) Get(ctx context.Context, personID string) (preferences.Document,
 // server audit scope first, as every audited write does, and then the row of
 // the person, so the lock order is the same everywhere.
 func (s *Store) Update(
-	ctx context.Context, personID string, patch preferences.Patch, e audit.Entry,
+	ctx context.Context, personID string, patch preferences.Patch, e audit.Entry, ifMatch *int64,
 ) (preferences.Result, error) {
 	// Defense in depth: the service and the route check the entry and the
 	// patch too. The store checks them before it opens a transaction, so a
@@ -122,7 +119,7 @@ func (s *Store) Update(
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
 
-		res, err := preferences.Change(ctx, preferencesTx{q: q, lock: true}, personID, patch, e)
+		res, err := preferences.Change(ctx, preferencesTx{q: q, lock: true}, s.logger, personID, patch, e, ifMatch)
 		result = res
 
 		return err

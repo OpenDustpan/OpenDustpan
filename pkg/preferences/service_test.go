@@ -3,6 +3,8 @@ package preferences_test
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,7 +48,7 @@ func (s *recordingStore) Get(_ context.Context, id string) (preferences.Document
 }
 
 func (s *recordingStore) Update(
-	_ context.Context, id string, patch preferences.Patch, e audit.Entry,
+	_ context.Context, id string, patch preferences.Patch, e audit.Entry, _ *int64,
 ) (preferences.Result, error) {
 	s.calls++
 	s.updateID, s.patch, s.entry = id, patch, e
@@ -139,7 +141,7 @@ func TestServiceRefusesACallerThatIsNotAPerson(t *testing.T) {
 				t.Errorf("Get error = %v, want ErrNotPerson", err)
 			}
 
-			_, err = svc.Update(t.Context(), tc.caller, preferences.Patch{}, blankEntry())
+			_, err = svc.Update(t.Context(), tc.caller, preferences.Patch{}, blankEntry(), nil)
 			if !errors.Is(err, preferences.ErrNotPerson) {
 				t.Errorf("Update error = %v, want ErrNotPerson", err)
 			}
@@ -180,7 +182,7 @@ func TestServiceSetsTheAuditEntry(t *testing.T) {
 	base.Subject, base.TokenID, base.Action, base.Object, base.Namespace = "alice", "tok-1", "x", "y", "other"
 	patch := preferences.Patch{preferences.FieldTheme: preferences.Text("terminal")}
 
-	_, err := svc.Update(t.Context(), callerOf("alice", identity.KindPerson, ""), patch, base)
+	_, err := svc.Update(t.Context(), callerOf("alice", identity.KindPerson, ""), patch, base, nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -224,7 +226,7 @@ func TestServiceRefusesAHostilePatch(t *testing.T) {
 		store := newRecordingStore(nil)
 		svc := newService(store, knownPeople)
 
-		_, err := svc.Update(t.Context(), callerOf("alice", identity.KindPerson, ""), patch, blankEntry())
+		_, err := svc.Update(t.Context(), callerOf("alice", identity.KindPerson, ""), patch, blankEntry(), nil)
 		if err == nil {
 			t.Errorf("%s: Update = nil, want an error", name)
 		}
@@ -246,7 +248,7 @@ func TestServiceWrapsTheErrorOfTheStore(t *testing.T) {
 		t.Errorf("Get error = %v, want ErrPersonNotFound", err)
 	}
 
-	_, err := svc.Update(t.Context(), alice, preferences.Patch{}, blankEntry())
+	_, err := svc.Update(t.Context(), alice, preferences.Patch{}, blankEntry(), nil)
 	if !errors.Is(err, preferences.ErrPersonNotFound) {
 		t.Errorf("Update error = %v, want ErrPersonNotFound", err)
 	}
@@ -295,21 +297,34 @@ func TestChangeEntry(t *testing.T) {
 func TestLoadAndDocumentAt(t *testing.T) {
 	t.Parallel()
 
-	settings, at, err := preferences.Load("", 0)
-	if err != nil || len(settings) != 0 || !at.IsZero() {
-		t.Errorf("Load of no row = %v, %v, %v; want empty settings and the zero time", settings, at, err)
+	settings, at := preferences.Load("", 0, nil)
+	if len(settings) != 0 || !at.IsZero() {
+		t.Errorf("Load of no row = %v, %v; want empty settings and the zero time", settings, at)
 	}
 
-	settings, at, err = preferences.Load(`{"language":"he"}`, 1_760_745_600_000)
-	if err != nil || at.UnixMilli() != 1_760_745_600_000 || at.Location() != time.UTC {
-		t.Fatalf("Load = %v, %v, %v", settings, at, err)
+	settings, at = preferences.Load(`{"language":"he"}`, 1_760_745_600_000, nil)
+	if at.UnixMilli() != 1_760_745_600_000 || at.Location() != time.UTC {
+		t.Fatalf("Load = %v, %v", settings, at)
 	}
 
 	if doc := settings.DocumentAt(at); doc.Language != "he" || !doc.UpdatedAt.Equal(at) {
 		t.Errorf("DocumentAt = %+v", doc)
 	}
+}
 
-	if _, _, err := preferences.Load(`{"language":"x y"}`, 1); !errors.Is(err, preferences.ErrInvalidStored) {
-		t.Errorf("Load of a bad document error = %v, want ErrInvalidStored", err)
+func TestLoadDropsAndLogsAFieldThatFailsACheck(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+
+	log := slog.New(slog.NewTextHandler(&out, nil))
+
+	settings, _ := preferences.Load(`{"language":"x y","theme":"terminal"}`, 1, log)
+	if len(settings) != 1 || settings["theme"] != "terminal" {
+		t.Errorf("Load = %v, want the theme only", settings)
+	}
+
+	if text := out.String(); !strings.Contains(text, "field=language") || strings.Contains(text, "x y") {
+		t.Errorf("log = %q, want the field name and never the value", text)
 	}
 }

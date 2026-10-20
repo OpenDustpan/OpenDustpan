@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -73,6 +74,14 @@ var (
 		status: http.StatusBadRequest, code: "preferences.field-unknown", args: nil,
 		message: preferences.ErrUnknownField.Error(),
 	}
+	errPreferencesIfMatch = &codedError{
+		status: http.StatusBadRequest, code: "preferences.if-match-invalid", args: nil,
+		message: "If-Match must be one version in quotes, as the ETag of a read gives it, or *",
+	}
+	errPreferencesChanged = &codedError{
+		status: http.StatusPreconditionFailed, code: "preferences.precondition-failed", args: nil,
+		message: preferences.ErrPreconditionFailed.Error(),
+	}
 	errPreferencesReadOnly = &codedError{
 		status: http.StatusBadRequest, code: "preferences.field-read-only",
 		args:    map[string]any{"field": preferences.FieldUpdatedAt},
@@ -101,6 +110,8 @@ func preferencesError(err error) error {
 		return errPreferencesUnknownField
 	case errors.Is(err, preferences.ErrReadOnlyField):
 		return errPreferencesReadOnly
+	case errors.Is(err, preferences.ErrPreconditionFailed):
+		return errPreferencesChanged
 	case errors.Is(err, preferences.ErrNotPerson):
 		return errPreferencesNotPerson
 	case errors.Is(err, preferences.ErrPersonNotFound):
@@ -112,7 +123,8 @@ func preferencesError(err error) error {
 
 // preferencesResponse is the document of the preferences on the wire. A
 // nullable field that has no value is null, and updatedAt is null for a
-// person that never changed a preference.
+// person that never changed a preference. It is a time in RFC 3339 format,
+// in UTC, with milliseconds.
 //
 // Contract: the console reads these fields. Never remove or rename them.
 type preferencesResponse struct {
@@ -130,13 +142,45 @@ type preferencesResponse struct {
 	TimeZone           *string                 `json:"timeZone"`
 	Digits             *string                 `json:"digits"`
 	ResolvedLanguage   *string                 `json:"resolvedLanguage"`
-	UpdatedAt          *int64                  `json:"updatedAt"`
+	UpdatedAt          *string                 `json:"updatedAt"`
 }
 
 // terminalSchemesResponse holds the color scheme of each color mode.
 type terminalSchemesResponse struct {
 	Light string `json:"light"`
 	Dark  string `json:"dark"`
+}
+
+// updatedAtLayout is the RFC 3339 format of updatedAt: UTC, with milliseconds.
+const updatedAtLayout = "2006-01-02T15:04:05.000Z07:00"
+
+// preferencesETag returns the ETag of a document: its version in quotes. The
+// version changes with each change of a preference, so a write with If-Match
+// refuses a document that another request changed after the read.
+func preferencesETag(d preferences.Document) string {
+	return `"` + strconv.FormatInt(d.Version(), 10) + `"`
+}
+
+// preferencesIfMatch returns the version of the If-Match header, and whether
+// the request sent one. The header holds one version in quotes, as the ETag
+// of a read gives it, or *, which matches the preferences of any person. A
+// value that is neither gives errPreferencesIfMatch.
+func preferencesIfMatch(r *http.Request) (*int64, error) {
+	raw := strings.TrimSpace(r.Header.Get("If-Match"))
+	if raw == "" || raw == "*" {
+		return nil, nil //nolint:nilnil // No version means no precondition.
+	}
+
+	if len(raw) < 3 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return nil, errPreferencesIfMatch
+	}
+
+	v, err := strconv.ParseInt(raw[1:len(raw)-1], 10, 64)
+	if err != nil || v < 0 {
+		return nil, errPreferencesIfMatch
+	}
+
+	return &v, nil
 }
 
 // nullable returns nil for the empty text, which is the null of a field.
@@ -150,11 +194,11 @@ func nullable(s string) *string {
 
 // preferencesOf converts a document to its wire form.
 func preferencesOf(d preferences.Document) preferencesResponse {
-	var updated *int64
+	var updated *string
 
 	if !d.UpdatedAt.IsZero() {
-		ms := d.UpdatedAt.UnixMilli()
-		updated = &ms
+		text := d.UpdatedAt.UTC().Format(updatedAtLayout)
+		updated = &text
 	}
 
 	return preferencesResponse{
@@ -221,6 +265,7 @@ func (h *Handler) getPreferences(w http.ResponseWriter, r *http.Request, p ident
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", preferencesETag(doc))
 	h.writeJSON(ctx, w, http.StatusOK, preferencesOf(doc))
 }
 
@@ -228,8 +273,10 @@ func (h *Handler) getPreferences(w http.ResponseWriter, r *http.Request, p ident
 // JSON merge patch (IETF RFC 7396): a field that the body leaves out keeps its
 // value, and null sets a field back to its default. It answers 200 with the
 // full document, also for a patch that changes nothing. Such a patch does not
-// change updatedAt and writes no audit entry. A refused patch changes nothing
-// and writes one failure entry.
+// change updatedAt and writes no audit entry. The ETag header holds the version
+// of the new document. A request with the If-Match header of an older version
+// answers 412 and changes nothing. Any other refused patch changes nothing and
+// writes one failure entry.
 func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -246,7 +293,14 @@ func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
-	res, err := h.preferences.Update(ctx, p, patch, callerEntry(r, p, identity.ActionCallerManagePreferences))
+	ifMatch, err := preferencesIfMatch(r)
+	if err != nil {
+		h.refusePatch(w, r, p, err)
+
+		return
+	}
+
+	res, err := h.preferences.Update(ctx, p, patch, callerEntry(r, p, identity.ActionCallerManagePreferences), ifMatch)
 	if err != nil {
 		h.refusePatch(w, r, p, preferencesError(err))
 
@@ -254,6 +308,7 @@ func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request, p ide
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", preferencesETag(res.Document))
 	h.writeJSON(ctx, w, http.StatusOK, preferencesOf(res.Document))
 }
 
@@ -293,19 +348,25 @@ func readPreferencesPatch(w http.ResponseWriter, r *http.Request, p identity.Pri
 
 // refusePatch answers the refusal err of a PATCH and writes one entry for the
 // refused change, best effort: a lost entry never changes the answer. The
-// entry has the action of the change with the outcome denied, for a caller that
-// is not a person, and the outcome failure for any other refusal. It names no
+// entry has the action of the change and the principal reference of the caller
+// as object, as the entry of a successful change has. Its outcome is denied for
+// a caller that is not a person, and failure for any other refusal. It names no
 // value of the request. A refused request that the server cannot attribute to
-// a change (a store in maintenance mode answers 503) writes none.
+// a change (a store in maintenance mode answers 503) writes none, and a change
+// that the If-Match header refuses with 412 writes none.
 func (h *Handler) refusePatch(w http.ResponseWriter, r *http.Request, p identity.Principal, err error) {
-	if coded, ok := errors.AsType[*codedError](err); ok && coded.status < http.StatusInternalServerError {
+	// A request with an outdated If-Match changes nothing and is no failure of
+	// the caller, so it writes no entry.
+	coded, ok := errors.AsType[*codedError](err)
+	if ok && coded.status < http.StatusInternalServerError && !errors.Is(err, errPreferencesChanged) {
 		outcome := audit.OutcomeFailure
 		if errors.Is(err, errPreferencesNotPerson) {
 			outcome = audit.OutcomeDenied
 		}
 
 		h.appendServerChange(r, p, serverChange{
-			at: h.now(), action: identity.Action(preferences.AuditAction), object: "preferences", outcome: outcome,
+			at: h.now(), action: identity.Action(preferences.AuditAction), object: h.preferences.Object(r.Context(), p),
+			outcome: outcome,
 		})
 	}
 

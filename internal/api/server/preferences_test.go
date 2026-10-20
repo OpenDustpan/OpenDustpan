@@ -100,6 +100,14 @@ type response struct {
 func (e prefsEnv) call(t *testing.T, token, method, contentType, body string) response {
 	t.Helper()
 
+	return e.callIf(t, token, method, contentType, body, "")
+}
+
+// callIf sends one request with the If-Match header ifMatch. An ifMatch of ""
+// sends none.
+func (e prefsEnv) callIf(t *testing.T, token, method, contentType, body, ifMatch string) response {
+	t.Helper()
+
 	req := httptest.NewRequestWithContext(testContext(t), method, prefsPath, strings.NewReader(body))
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -107,6 +115,10 @@ func (e prefsEnv) call(t *testing.T, token, method, contentType, body string) re
 
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
+	}
+
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
 	}
 
 	rec := httptest.NewRecorder()
@@ -127,6 +139,13 @@ func (e prefsEnv) patch(t *testing.T, token, body string) response {
 	return e.call(t, token, http.MethodPatch, prefsPatchType, body)
 }
 
+// patchIf sends a PATCH with the If-Match header ifMatch.
+func (e prefsEnv) patchIf(t *testing.T, token, body, ifMatch string) response {
+	t.Helper()
+
+	return e.callIf(t, token, http.MethodPatch, prefsPatchType, body, ifMatch)
+}
+
 // prefsDoc is the document of an answer.
 type prefsDoc struct {
 	Theme              string      `json:"theme"`
@@ -143,7 +162,7 @@ type prefsDoc struct {
 	TimeZone           *string     `json:"timeZone"`
 	Digits             *string     `json:"digits"`
 	ResolvedLanguage   *string     `json:"resolvedLanguage"`
-	UpdatedAt          *int64      `json:"updatedAt"`
+	UpdatedAt          *string     `json:"updatedAt"`
 }
 
 // testContext returns a context that a cleanup of the test can use. The
@@ -284,8 +303,12 @@ func TestPreferencesPatchAndRead(t *testing.T) {
 		t.Errorf("document = %q, want %q", have, want)
 	}
 
-	if doc.UpdatedAt == nil || *doc.UpdatedAt <= 0 {
-		t.Errorf("updatedAt = %v, want Unix milliseconds", doc.UpdatedAt)
+	if doc.UpdatedAt == nil {
+		t.Fatalf("updatedAt = null, want a time")
+	}
+
+	if at, err := time.Parse(time.RFC3339, *doc.UpdatedAt); err != nil || at.Location() != time.UTC {
+		t.Errorf("updatedAt = %q (%v), want an RFC 3339 time in UTC", *doc.UpdatedAt, err)
 	}
 
 	if read := e.get(t, tokenTester); read.status != http.StatusOK || read.body != got.body {
@@ -464,8 +487,8 @@ func checkCallerRefusals(t *testing.T, e prefsEnv) {
 
 	for i := range refusals {
 		entry := &refusals[i]
-		if entry.Outcome != audit.OutcomeDenied || entry.Object != "preferences" || len(entry.Changes) != 0 {
-			t.Errorf("refusal entry = %+v, want the outcome denied on preferences, with no change", *entry)
+		if entry.Outcome != audit.OutcomeDenied || !strings.HasPrefix(entry.Object, "principal:") || len(entry.Changes) != 0 {
+			t.Errorf("refusal entry = %+v, want the outcome denied on a principal, with no change", *entry)
 		}
 	}
 }
@@ -671,8 +694,8 @@ func checkBodyRefusals(t *testing.T, e prefsEnv) {
 
 	for i := range refusals {
 		entry := &refusals[i]
-		if entry.Outcome != audit.OutcomeFailure || entry.Object != "preferences" || len(entry.Changes) != 0 {
-			t.Errorf("refusal entry = %+v, want the outcome failure on preferences, with no change", *entry)
+		if entry.Outcome != audit.OutcomeFailure || entry.Object != principal.Ref(testCallerID) || len(entry.Changes) != 0 {
+			t.Errorf("refusal entry = %+v, want the outcome failure on the person tester, with no change", *entry)
 		}
 	}
 }
@@ -788,5 +811,65 @@ func TestPreferencesUnavailable(t *testing.T) {
 
 	for _, got := range []response{e.get(t, tokenTester), e.patch(t, tokenTester, `{}`)} {
 		checkRefusal(t, got, http.StatusNotImplemented, "preferences.unavailable")
+	}
+}
+
+// The ETag of a read is the version of the document. A PATCH with If-Match
+// writes only when the version is the one that the caller read.
+func TestPreferencesETagAndIfMatch(t *testing.T) {
+	t.Parallel()
+
+	e := newPrefsEnv(t)
+
+	first := e.get(t, tokenTester)
+	if got := first.header.Get("ETag"); got != `"0"` {
+		t.Errorf("ETag of the defaults = %q, want \"0\"", got)
+	}
+
+	changed := e.patchIf(t, tokenTester, `{"language":"ru"}`, first.header.Get("ETag"))
+	checkRefusal(t, changed, http.StatusOK, "")
+
+	tag := changed.header.Get("ETag")
+	if tag == "" || tag == `"0"` || e.get(t, tokenTester).header.Get("ETag") != tag {
+		t.Fatalf("ETag after a change = %q, want the version that a read gives", tag)
+	}
+
+	// The old version is refused: 412, no write and no entry of any kind.
+	entries := len(e.prefsEntries(t)) + len(e.prefsRefusals(t))
+
+	stale := e.patchIf(t, tokenTester, `{"theme":"terminal"}`, first.header.Get("ETag"))
+	checkRefusal(t, stale, http.StatusPreconditionFailed, "preferences.precondition-failed")
+
+	if got := e.get(t, tokenTester).doc(t); got.Theme != "default" {
+		t.Errorf("theme = %q after a refused patch, want default", got.Theme)
+	}
+
+	if n := len(e.prefsEntries(t)) + len(e.prefsRefusals(t)); n != entries {
+		t.Errorf("entries = %d after a 412, want %d", n, entries)
+	}
+
+	// A patch that changes nothing keeps the version, and * matches.
+	same := e.patchIf(t, tokenTester, `{"language":"ru"}`, tag)
+	if same.status != http.StatusOK || same.header.Get("ETag") != tag {
+		t.Errorf("no-op patch = %d, ETag %q; want 200 and %q", same.status, same.header.Get("ETag"), tag)
+	}
+
+	if got := e.patchIf(t, tokenTester, `{"theme":"terminal"}`, "*"); got.status != http.StatusOK {
+		t.Errorf("If-Match * = %d %s, want 200", got.status, got.body)
+	}
+}
+
+func TestPreferencesIfMatchMustBeOneVersion(t *testing.T) {
+	t.Parallel()
+
+	e := newPrefsEnv(t)
+
+	for _, header := range []string{`0`, `"x"`, `"-1"`, `W/"0"`, `"0", "1"`, `""`, `"`} {
+		got := e.patchIf(t, tokenTester, `{"theme":"terminal"}`, header)
+		checkRefusal(t, got, http.StatusBadRequest, "preferences.if-match-invalid")
+	}
+
+	if got := e.get(t, tokenTester).doc(t); got.Theme != "default" {
+		t.Errorf("theme = %q after refused patches, want default", got.Theme)
 	}
 }
