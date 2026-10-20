@@ -204,7 +204,14 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	tb.Helper()
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       coverageStackStore{},
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
@@ -460,7 +467,7 @@ func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (wo
 }
 
 func (coverageTofuHTTPWorkspaces) LockWithIDForJob(
-	_ context.Context, _ workspace.ID, _, _, _, _ string,
+	_ context.Context, _ workspace.ID, _ workspace.LockRequest,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
@@ -663,6 +670,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Namespaces: coverageNamespaceStore{},
 		Authorizer: identity.AdminOnly{},
 		Now:        nil,
+		Phases:     nil,
 	})
 	if err != nil {
 		tb.Fatalf("manual lock service: %v", err)

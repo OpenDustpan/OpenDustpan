@@ -126,7 +126,8 @@ func lockTarget(obj identity.Object) manuallock.Target {
 	case obj.IsNamespace():
 		return manuallock.NamespaceTarget(obj.Namespace())
 	case !obj.IsUnit():
-		return manuallock.Target{}
+		// A unit target with no name is not valid: the lock service refuses it.
+		return manuallock.UnitTarget(collection.UnitRef{Namespace: "", Tool: "", Name: ""})
 	}
 
 	return manuallock.UnitTarget(collection.UnitRef{

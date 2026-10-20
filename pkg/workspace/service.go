@@ -589,15 +589,24 @@ func (s *Service) LockForJob(ctx context.Context, id ID, holder, reason, jobID s
 // names it again in each write (ADR 49, decision 6). An ID that is empty, too
 // long or has characters outside the lock ID set fails with ErrInvalidLockID.
 func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID string) (Workspace, error) {
-	return s.LockWithIDForJob(ctx, id, holder, reason, lockID, "")
+	return s.LockWithIDForJob(ctx, id, LockRequest{Holder: holder, Reason: reason, LockID: lockID, JobID: ""})
 }
 
-// LockWithIDForJob is LockWithID for a request that carries the job token of
-// the job jobID, or no job token when jobID is empty. A job whose phase started
-// before a manual lock passes that lock.
-func (s *Service) LockWithIDForJob(
-	ctx context.Context, id ID, holder, reason, lockID, jobID string,
-) (Workspace, error) {
+// LockRequest is a lock request of the OpenTofu HTTP backend: the holder, the
+// reason and the lock ID that the client chose, and the job whose job token made
+// the request. JobID is empty for a request with another credential.
+type LockRequest struct {
+	Holder string
+	Reason string
+	LockID string
+	JobID  string
+}
+
+// LockWithIDForJob is LockWithID for a request that can carry the job token of
+// a job. A job whose phase started before a manual lock passes that lock.
+func (s *Service) LockWithIDForJob(ctx context.Context, id ID, req LockRequest) (Workspace, error) {
+	holder, reason, lockID, jobID := req.Holder, req.Reason, req.LockID, req.JobID
+
 	if holder == "" {
 		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
 	}

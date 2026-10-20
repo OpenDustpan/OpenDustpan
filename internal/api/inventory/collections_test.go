@@ -15,8 +15,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/manuallock"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 

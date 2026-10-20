@@ -167,6 +167,7 @@ func newServiceWith(t *testing.T, s manuallock.Store, authz manuallock.Authorize
 
 	svc, err := manuallock.NewService(manuallock.Config{
 		Store: s, Namespaces: fakeNamespaces{}, Authorizer: authz, Now: fixedNow,
+		Phases: nil,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -215,12 +216,15 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 	}{
 		{name: "no store", cfg: manuallock.Config{
 			Store: nil, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Now: nil,
+			Phases: nil,
 		}},
 		{name: "no namespace store", cfg: manuallock.Config{
 			Store: newStore(), Namespaces: nil, Authorizer: allowAll(), Now: nil,
+			Phases: nil,
 		}},
 		{name: "no authorizer", cfg: manuallock.Config{
 			Store: newStore(), Namespaces: fakeNamespaces{}, Authorizer: nil, Now: nil,
+			Phases: nil,
 		}},
 	}
 
@@ -882,22 +886,22 @@ func TestCoveringForLetsAnEarlierPhasePass(t *testing.T) {
 	}{
 		{
 			name: "phase started before the lock", jobID: "job-1", wantLocked: false,
-			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(-time.Minute)}},
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(-time.Minute)}, err: nil},
 		},
 		{
 			name: "phase started at the time of the lock", jobID: "job-1", wantLocked: true,
-			phases: fakePhases{jobs: map[string]time.Time{"job-1": since}},
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since}, err: nil},
 		},
 		{
 			name: "phase started after the lock", jobID: "job-1", wantLocked: true,
-			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(time.Second)}},
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(time.Second)}, err: nil},
 		},
 		{
 			name: "job with no live phase on the unit", jobID: "job-2", wantLocked: true,
-			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(-time.Minute)}},
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(-time.Minute)}, err: nil},
 		},
 		{name: "no job token", jobID: "", wantLocked: true, phases: fakePhases{
-			jobs: map[string]time.Time{"": since.Add(-time.Minute)},
+			jobs: map[string]time.Time{"": since.Add(-time.Minute)}, err: nil,
 		}},
 		{
 			name: "clock fails", jobID: "job-1", wantLocked: true,
@@ -905,7 +909,7 @@ func TestCoveringForLetsAnEarlierPhasePass(t *testing.T) {
 		},
 		{
 			name: "clock answers zero", jobID: "job-1", wantLocked: true,
-			phases: fakePhases{jobs: map[string]time.Time{"job-1": {}}},
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": {}}, err: nil},
 		},
 		{name: "no clock", jobID: "job-1", wantLocked: true, phases: nil},
 	}
@@ -951,7 +955,7 @@ func TestCoveringForKeepsTheStoreAnswer(t *testing.T) {
 
 		svc, err := manuallock.NewService(manuallock.Config{
 			Store: store, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Now: fixedNow,
-			Phases: fakePhases{jobs: map[string]time.Time{"job-1": fixedNow().Add(-time.Hour)}},
+			Phases: fakePhases{jobs: map[string]time.Time{"job-1": fixedNow().Add(-time.Hour)}, err: nil},
 		})
 		if err != nil {
 			t.Fatalf("NewService: %v", err)

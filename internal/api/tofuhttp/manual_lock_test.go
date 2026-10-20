@@ -147,7 +147,7 @@ func TestLockPassesTheJobOfTheToken(t *testing.T) {
 		want  string
 	}{
 		{name: "job token", token: jobToken, want: "job-1"},
-		{name: "access token that names a job", token: spoofedJobToken, want: ""},
+		{name: "access token that names a job", token: jobIDOnAccessToken, want: ""},
 		{name: "access token", token: adminToken, want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

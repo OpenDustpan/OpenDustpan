@@ -252,7 +252,7 @@ func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
 				t.Fatalf("Create: %v", err)
 			}
 
-			_, err = svc.StartBy(t.Context(), f.ref, u.ID, "", tc.jobID, 0)
+			_, err = svc.StartBy(t.Context(), f.ref, u.ID, stack.StartedBy{TokenID: "", JobID: tc.jobID}, 0)
 			if tc.wantError {
 				checkRefusal(t, err, locks)
 			} else if err != nil {
@@ -320,7 +320,10 @@ func TestDeleteAndRenameMeetTheManualLock(t *testing.T) {
 		call func(*stack.Service, stack.Ref) error
 	}{
 		{"Delete", func(s *stack.Service, ref stack.Ref) error { return s.Delete(t.Context(), ref, deleteEntry()) }},
-		{"ForceDelete", func(s *stack.Service, ref stack.Ref) error { return s.ForceDelete(t.Context(), ref, deleteEntry()) }},
+		{
+			"ForceDelete",
+			func(s *stack.Service, ref stack.Ref) error { return s.ForceDelete(t.Context(), ref, deleteEntry()) },
+		},
 		{"Rename", func(s *stack.Service, ref stack.Ref) error {
 			_, renameErr := s.Rename(t.Context(), ref, newName)
 

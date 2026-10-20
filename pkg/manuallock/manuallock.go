@@ -147,9 +147,9 @@ func (t Target) String() string {
 		return "namespace " + t.Space.String()
 	case KindUnit:
 		return t.Unit.String()
-	default:
-		return t.Unit.String()
 	}
+
+	return t.Unit.String()
 }
 
 // Lock is one manual lock. Holder is the subject of the principal that took

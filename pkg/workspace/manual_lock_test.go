@@ -241,13 +241,12 @@ func TestManualLockLeavesAHeldToolLockAlone(t *testing.T) {
 	}
 }
 
-// TestLockRequestOfAnEarlierJobPhasePasses proves the job ID of the request
-// reaches the manual lock port, that a request the port lets pass takes the
-// tool lock, and that a request with another job ID or none meets the lock.
-func TestLockRequestOfAnEarlierJobPhasePasses(t *testing.T) {
-	t.Parallel()
-
-	requests := []struct {
+// jobLockRequests are the two lock requests of OpenTofu that carry a job ID.
+func jobLockRequests() []struct {
+	name string
+	call func(*testing.T, *workspace.Service, fixture, string) error
+} {
+	return []struct {
 		name string
 		call func(*testing.T, *workspace.Service, fixture, string) error
 	}{
@@ -266,47 +265,88 @@ func TestLockRequestOfAnEarlierJobPhasePasses(t *testing.T) {
 			call: func(t *testing.T, s *workspace.Service, f fixture, jobID string) error {
 				t.Helper()
 
-				_, err := s.LockWithIDForJob(t.Context(), f.ws.ID, "job-1", "plan", "lock-1", jobID)
+				_, err := s.LockWithIDForJob(t.Context(), f.ws.ID, workspace.LockRequest{
+					Holder: "job-1", Reason: "plan", LockID: "lock-1", JobID: jobID,
+				})
 
 				return err
 			},
 		},
 	}
+}
 
-	for _, req := range requests {
-		for _, tc := range []struct {
-			name      string
-			jobID     string
-			wantError bool
-		}{
-			{name: "job that started before the lock", jobID: "job-1", wantError: false},
-			{name: "another job", jobID: "job-2", wantError: true},
-			{name: "no job token", jobID: "", wantError: true},
-		} {
+// jobLockResult is the outcome of a lock request with a job ID against a manual
+// lock that lets only job-1 pass.
+type jobLockResult struct {
+	err    error
+	jobs   []string
+	held   bool
+	getErr error
+}
+
+// sendJobLockRequest sends one lock request with the job ID jobID against a
+// manual lock that lets only job-1 pass.
+func sendJobLockRequest(
+	t *testing.T, call func(*testing.T, *workspace.Service, fixture, string) error, jobID string,
+) jobLockResult {
+	t.Helper()
+
+	f := newFixture(t)
+	locks := answering(heldCollectionLock())
+	locks.passJob = "job-1"
+	svc := withManualLocks(t, f, locks)
+
+	err := call(t, svc, f, jobID)
+	got, getErr := svc.GetByID(t.Context(), f.ws.ID)
+
+	return jobLockResult{err: err, jobs: locks.jobs, held: got.Lock.Locked(), getErr: getErr}
+}
+
+// jobLockCase is one job ID that a lock request carries, and whether the manual
+// lock refuses it.
+type jobLockCase struct {
+	name    string
+	jobID   string
+	refused bool
+}
+
+// checkJobLockResult checks the outcome of the lock request of tc.
+func checkJobLockResult(t *testing.T, tc *jobLockCase, res jobLockResult) {
+	t.Helper()
+
+	if tc.refused {
+		checkLockedError(t, res.err)
+	} else if res.err != nil {
+		t.Fatalf("lock request of the earlier phase = %v, want it to pass", res.err)
+	}
+
+	if len(res.jobs) != 1 || res.jobs[0] != tc.jobID {
+		t.Errorf("job IDs asked = %q, want [%q]", res.jobs, tc.jobID)
+	}
+
+	if res.getErr != nil || res.held == tc.refused {
+		t.Errorf("tool lock held = %v (%v) after the request, want %v", res.held, res.getErr, !tc.refused)
+	}
+}
+
+// TestLockRequestOfAnEarlierJobPhasePasses proves the job ID of the request
+// reaches the manual lock port, that a request the port lets pass takes the
+// tool lock, and that a request with another job ID or none meets the lock.
+func TestLockRequestOfAnEarlierJobPhasePasses(t *testing.T) {
+	t.Parallel()
+
+	jobs := []jobLockCase{
+		{"job that started before the lock", "job-1", false},
+		{"another job", "job-2", true},
+		{"no job token", "", true},
+	}
+
+	for _, req := range jobLockRequests() {
+		for _, tc := range jobs {
 			t.Run(req.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				f := newFixture(t)
-				locks := answering(heldCollectionLock())
-				locks.passJob = "job-1"
-				svc := withManualLocks(t, f, locks)
-
-				err := req.call(t, svc, f, tc.jobID)
-				if tc.wantError {
-					checkLockedError(t, err)
-				} else if err != nil {
-					t.Fatalf("lock request of the earlier phase = %v, want it to pass", err)
-				}
-
-				if len(locks.jobs) != 1 || locks.jobs[0] != tc.jobID {
-					t.Errorf("job IDs asked = %q, want [%q]", locks.jobs, tc.jobID)
-				}
-
-				got, getErr := svc.GetByID(t.Context(), f.ws.ID)
-				if getErr != nil || got.Lock.Locked() == tc.wantError {
-					t.Errorf("tool lock after the request = %+v, %v; held = %v, want %v",
-						got.Lock, getErr, got.Lock.Locked(), !tc.wantError)
-				}
+				checkJobLockResult(t, &tc, sendJobLockRequest(t, req.call, tc.jobID))
 			})
 		}
 	}
@@ -314,18 +354,19 @@ func TestLockRequestOfAnEarlierJobPhasePasses(t *testing.T) {
 
 // TestDeleteMeetsTheManualLock proves the delete of a workspace fails while a
 // manual lock covers it, names the holder and the reason, and leaves the
-// workspace in place. A workspace that no manual lock covers is deleted.
+// workspace in place. A workspace that no manual lock covers is deleted, and a
+// lock that cannot be read refuses the delete.
 func TestDeleteMeetsTheManualLock(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name    string
-		locks   func() *fakeManualLocks
+		locks   *fakeManualLocks
 		wantErr error
 	}{
-		{name: "covered", locks: func() *fakeManualLocks { return answering(heldCollectionLock()) }, wantErr: manuallock.ErrLocked},
-		{name: "not covered", locks: func() *fakeManualLocks { return failing(manuallock.ErrNotLocked) }, wantErr: nil},
-		{name: "the lock cannot be read", locks: func() *fakeManualLocks { return failing(errManualLockRead) }, wantErr: errManualLockRead},
+		{"covered", answering(heldCollectionLock()), manuallock.ErrLocked},
+		{"not covered", failing(manuallock.ErrNotLocked), nil},
+		{"the lock cannot be read", failing(errManualLockRead), errManualLockRead},
 	}
 
 	for _, tc := range cases {
@@ -333,7 +374,7 @@ func TestDeleteMeetsTheManualLock(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t)
-			svc := withManualLocks(t, f, tc.locks())
+			svc := withManualLocks(t, f, tc.locks)
 
 			err := svc.Delete(t.Context(), f.ws.Ref, retentionEntry())
 			if !errors.Is(err, tc.wantErr) {
@@ -341,16 +382,8 @@ func TestDeleteMeetsTheManualLock(t *testing.T) {
 			}
 
 			_, getErr := svc.GetByID(t.Context(), f.ws.ID)
-			if tc.wantErr == nil {
-				if !errors.Is(getErr, workspace.ErrNotFound) {
-					t.Errorf("workspace after the delete: %v, want ErrNotFound", getErr)
-				}
-
-				return
-			}
-
-			if getErr != nil {
-				t.Errorf("workspace after the refused delete: %v, want it in place", getErr)
+			if (tc.wantErr == nil) != errors.Is(getErr, workspace.ErrNotFound) {
+				t.Errorf("workspace after Delete(%v): %v", err, getErr)
 			}
 
 			if errors.Is(tc.wantErr, manuallock.ErrLocked) {

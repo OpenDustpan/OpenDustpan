@@ -306,7 +306,14 @@ func buildSecretFixture(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       newMapStackStore(),
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1080,7 +1087,14 @@ func TestSecretsMissingKey(t *testing.T) {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       newMapStackStore(),
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
@@ -1495,7 +1509,14 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       newMapStackStore(),
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
@@ -1642,7 +1663,14 @@ func newTwoStackServices(t *testing.T) twoStackServices {
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       newMapStackStore(),
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1866,7 +1894,14 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       newMapStackStore(),
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1938,11 +1973,12 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 
 	stacks, stacksErr := stack.NewService(
 		stack.Config{
-			Store:      &failingStackStore{err: err},
-			Namespaces: namespaces,
-			Now:        nil,
-			State:      nil,
-			Retention:  0,
+			Store:       &failingStackStore{err: err},
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
 		},
 	)
 	if stacksErr != nil {

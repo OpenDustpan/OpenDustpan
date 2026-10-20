@@ -18,6 +18,7 @@ var errStoreDown = errors.New("job store down")
 // nil embedded interface, which proves the clock reads nothing else.
 type getStore struct {
 	job.Store
+
 	jobs map[job.ID]job.Job
 	err  error
 }
@@ -35,6 +36,19 @@ func (s getStore) Get(_ context.Context, id job.ID) (job.Job, error) {
 	return j, nil
 }
 
+// phaseJob returns the job job-1 of unit in state, with one phase that started at
+// started, and cur as its current phase.
+func phaseJob(unit identity.Object, state job.State, cur int, started time.Time) job.Job {
+	j := jobIn(state, nil)
+	j.ID = "job-1"
+	j.Spec.Unit = unit
+	j.Current = cur
+	j.Phases = []job.Phase{phaseOf(job.PhaseApply, 1, nil)}
+	j.Phases[0].StartedAt = started
+
+	return j
+}
+
 func TestPhaseClock(t *testing.T) {
 	t.Parallel()
 
@@ -50,63 +64,49 @@ func TestPhaseClock(t *testing.T) {
 	}
 
 	ref := collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "network"}
+	one := func(j job.Job) map[job.ID]job.Job { return map[job.ID]job.Job{"job-1": j} }
 
-	mk := func(u identity.Object, state job.State, cur int) job.Job {
-		return job.Job{
-			ID: "job-1", Spec: job.Spec{Unit: u}, State: state, Current: cur,
-			Phases: []job.Phase{{StartedAt: started}},
-		}
-	}
-
+	// Each case: name, the jobs of the store, the error of the store, the
+	// expected error (nil for an answer), and the expected start.
 	cases := []struct {
 		name    string
-		store   getStore
+		jobs    map[job.ID]job.Job
+		storeEr error
 		want    error
 		wantAt  time.Time
-		wantAny bool
 	}{
-		{name: "running phase", store: getStore{jobs: map[job.ID]job.Job{"job-1": mk(unit, job.StateRunning, 0)}}, wantAt: started},
-		{name: "dispatched phase", store: getStore{jobs: map[job.ID]job.Job{"job-1": mk(unit, job.StateDispatched, 0)}}, wantAt: started},
-		{name: "canceling phase", store: getStore{jobs: map[job.ID]job.Job{"job-1": mk(unit, job.StateCanceling, 0)}}, wantAt: started},
+		{"running phase", one(phaseJob(unit, job.StateRunning, 0, started)), nil, nil, started},
+		{"dispatched phase", one(phaseJob(unit, job.StateDispatched, 0, started)), nil, nil, started},
+		{"canceling phase", one(phaseJob(unit, job.StateCanceling, 0, started)), nil, nil, started},
+		{"queued job", one(phaseJob(unit, job.StateQueued, 0, started)), nil, manuallock.ErrNoPhase, time.Time{}},
+		{"finished job", one(phaseJob(unit, job.StateSucceeded, 0, started)), nil, manuallock.ErrNoPhase, time.Time{}},
 		{
-			name: "queued job", want: manuallock.ErrNoPhase,
-			store: getStore{jobs: map[job.ID]job.Job{"job-1": mk(unit, job.StateQueued, 0)}},
+			"job of another unit",
+			one(phaseJob(other, job.StateRunning, 0, started)),
+			nil,
+			manuallock.ErrNoPhase,
+			time.Time{},
 		},
 		{
-			name: "finished job", want: manuallock.ErrNoPhase,
-			store: getStore{jobs: map[job.ID]job.Job{"job-1": mk(unit, job.StateSucceeded, 0)}},
+			"phase out of range",
+			one(phaseJob(unit, job.StateRunning, 3, started)),
+			nil,
+			manuallock.ErrNoPhase,
+			time.Time{},
 		},
-		{
-			name: "job of another unit", want: manuallock.ErrNoPhase,
-			store: getStore{jobs: map[job.ID]job.Job{"job-1": mk(other, job.StateRunning, 0)}},
-		},
-		{
-			name: "phase out of range", want: manuallock.ErrNoPhase,
-			store: getStore{jobs: map[job.ID]job.Job{"job-1": mk(unit, job.StateRunning, 3)}},
-		},
-		{name: "unknown job", want: manuallock.ErrNoPhase, store: getStore{jobs: map[job.ID]job.Job{}}},
-		{name: "store fails", wantAny: true, store: getStore{err: errStoreDown}},
+		{"unknown job", map[job.ID]job.Job{}, nil, manuallock.ErrNoPhase, time.Time{}},
+		{"store fails", nil, errStoreDown, errStoreDown, time.Time{}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := job.PhaseClock{Jobs: tc.store}.PhaseStartedAt(t.Context(), "job-1", ref)
+			clock := job.PhaseClock{Jobs: getStore{Store: nil, jobs: tc.jobs, err: tc.storeEr}}
 
-			switch {
-			case tc.wantAny:
-				if !errors.Is(err, errStoreDown) {
-					t.Fatalf("err = %v, want the store error", err)
-				}
-			case tc.want != nil:
-				if !errors.Is(err, tc.want) || !got.IsZero() {
-					t.Fatalf("got %v, %v; want %v", got, err, tc.want)
-				}
-			default:
-				if err != nil || !got.Equal(tc.wantAt) {
-					t.Fatalf("got %v, %v; want %v", got, err, tc.wantAt)
-				}
+			got, err := clock.PhaseStartedAt(t.Context(), "job-1", ref)
+			if !errors.Is(err, tc.want) || !got.Equal(tc.wantAt) {
+				t.Fatalf("got %v, %v; want %v, %v", got, err, tc.wantAt, tc.want)
 			}
 		})
 	}

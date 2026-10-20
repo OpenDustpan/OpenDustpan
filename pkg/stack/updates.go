@@ -329,16 +329,25 @@ func (s *Updates) Start(ctx context.Context, ref Ref, id UpdateID) (Started, err
 func (s *Updates) StartWithJournalVersion(
 	ctx context.Context, ref Ref, id UpdateID, journalVersion int64,
 ) (Started, error) {
-	return s.StartBy(ctx, ref, id, "", "", journalVersion)
+	return s.StartBy(ctx, ref, id, StartedBy{TokenID: "", JobID: ""}, journalVersion)
 }
 
-// StartBy starts the update like StartWithJournalVersion, for the access token
-// tokenID. The update keeps the ID, so each later lease request can check the
-// token (ADR 53). An empty tokenID starts it for no access token. jobID is the
-// job whose job token made the request, or empty: a mutating update that a job
-// starts from a phase that began before a manual lock passes that lock.
+// StartedBy names who starts an update: the access token, and the job whose job
+// token made the request.
+type StartedBy struct {
+	// TokenID is the ID of the access token. The update keeps it, so each later
+	// lease request can check the token (ADR 53). It is empty when the update
+	// starts for no access token.
+	TokenID string
+	// JobID is the job whose job token made the request, or empty. A mutating
+	// update that a job starts from a phase that began before a manual lock
+	// passes that lock.
+	JobID string
+}
+
+// StartBy starts the update like StartWithJournalVersion, for the caller by.
 func (s *Updates) StartBy(
-	ctx context.Context, ref Ref, id UpdateID, tokenID, jobID string, journalVersion int64,
+	ctx context.Context, ref Ref, id UpdateID, by StartedBy, journalVersion int64,
 ) (Started, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
@@ -362,7 +371,7 @@ func (s *Updates) StartBy(
 	// one request, the same as a job phase that started before the lock. The
 	// update that started keeps running, and the next start meets the lock.
 	if u.Mutates() {
-		if lockErr := s.checkManualLock(ctx, ref, jobID); lockErr != nil {
+		if lockErr := s.checkManualLock(ctx, ref, by.JobID); lockErr != nil {
 			return Started{}, lockErr
 		}
 	}
@@ -373,7 +382,7 @@ func (s *Updates) StartBy(
 	}
 
 	u.JournalVersion = journalVersion
-	u.TokenID = tokenID
+	u.TokenID = by.TokenID
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {

@@ -47,9 +47,7 @@ type WorkspaceService interface {
 	// client chose (ADR 49, decision 6). jobID is the job whose job token made
 	// the request, or empty: a job whose phase started before a manual lock
 	// passes that lock.
-	LockWithIDForJob(
-		ctx context.Context, id workspace.ID, holder, reason, lockID, jobID string,
-	) (workspace.Workspace, error)
+	LockWithIDForJob(ctx context.Context, id workspace.ID, req workspace.LockRequest) (workspace.Workspace, error)
 	// UnlockLock releases holder's lock when it is lockID (ADR 49, decision 6). A
 	// lock that changed after the caller read the unit is refused, not released.
 	UnlockLock(ctx context.Context, id workspace.ID, lockID, holder string) (workspace.Workspace, error)

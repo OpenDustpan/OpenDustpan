@@ -41,6 +41,12 @@ type Store interface {
 // testReason is a lock reason that a case does not care about.
 const testReason = "reason"
 
+// actionUnitLock is the audit action of a lock and of its removal.
+const actionUnitLock = "unit:lock"
+
+// wantLockEntries is the number of audit entries of a lock and its removal.
+const wantLockEntries = 2
+
 // auditPageSize is the page size that a case reads from the audit log.
 const auditPageSize = 50
 
@@ -90,7 +96,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a namespace lock covers each unit, also a unit made later", test: testNamespaceLockCovers},
 		{name: "a namespace lock does not cover another namespace", test: testNamespaceLockIsolated},
 		{name: "the nearest lock wins: unit, then collection, then namespace", test: testNearestLockWins},
-		{name: "the holder removes a namespace lock, and a force removal ends another lock", test: testNamespaceRemoval},
+		{
+			name: "the holder removes a namespace lock, and a force removal ends another lock",
+			test: testNamespaceRemoval,
+		},
 		{name: "a namespace lock writes audit entries that name the namespace", test: testNamespaceAudit},
 		{name: "the inventory shows the namespace lock as a flag", test: testNamespaceInventoryFlag},
 	}
@@ -146,14 +155,17 @@ func testAlreadyLocked(t *testing.T, s Store) {
 
 	f := newFixture(t, s)
 
-	for _, tc := range []struct {
+	cases := []struct {
 		name   string
 		target manuallock.Target
 	}{
 		{name: string(manuallock.KindUnit), target: manuallock.UnitTarget(f.web)},
 		{name: string(manuallock.KindCollection), target: manuallock.CollectionTarget(f.payments.Ref)},
 		{name: string(manuallock.KindNamespace), target: manuallock.NamespaceTarget(f.ns.Name)},
-	} {
+	}
+
+	for i := range cases {
+		tc := &cases[i]
 		f.lock(t, tc.target, alice, "first")
 
 		err := f.tryLock(t, tc.target, bob, "second")
@@ -173,7 +185,7 @@ func testTargetNotFound(t *testing.T, s Store) {
 
 	f := newFixture(t, s)
 
-	for _, tc := range []struct {
+	cases := []struct {
 		name   string
 		target manuallock.Target
 	}{
@@ -194,7 +206,10 @@ func testTargetNotFound(t *testing.T, s Store) {
 			),
 		},
 		{name: "namespace", target: manuallock.NamespaceTarget("absent")},
-	} {
+	}
+
+	for i := range cases {
+		tc := &cases[i]
 		err := f.tryLock(t, tc.target, alice, testReason)
 		if !errors.Is(err, manuallock.ErrTargetNotFound) {
 			t.Errorf("%s: err = %v, want ErrTargetNotFound", tc.name, err)
@@ -501,7 +516,7 @@ func testAuditEntries(t *testing.T, s Store) {
 
 	for i := range listing.Entries {
 		e := listing.Entries[i]
-		if e.Action != "unit:lock" {
+		if e.Action != actionUnitLock {
 			continue
 		}
 
@@ -909,23 +924,21 @@ func testNearestLockWins(t *testing.T, s Store) {
 	f.lock(t, collectionLock, bob, "collection reason")
 	f.lock(t, unitLock, alice, "unit reason")
 
-	for _, step := range []struct {
-		remove manuallock.Target
-		want   manuallock.Target
-	}{
-		{remove: manuallock.Target{}, want: unitLock},
-		{remove: unitLock, want: collectionLock},
-		{remove: collectionLock, want: namespaceLock},
-	} {
-		if step.remove.Kind != "" {
-			if _, err := s.ForceRemoveLock(t.Context(), step.remove, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
-				t.Fatalf("remove %s: %v", step.remove, err)
+	// Each step removes the nearest lock, and the next one covers the unit.
+	// The first step removes nothing.
+	removals := []*manuallock.Target{nil, &unitLock, &collectionLock}
+	wants := []manuallock.Target{unitLock, collectionLock, namespaceLock}
+
+	for i, remove := range removals {
+		if remove != nil {
+			if _, err := s.ForceRemoveLock(t.Context(), *remove, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+				t.Fatalf("remove %s: %v", remove, err)
 			}
 		}
 
 		got, err := s.CoveringLock(t.Context(), f.web)
-		if err != nil || got.Target != step.want {
-			t.Errorf("after removing %q: covering lock = %+v, %v; want the lock of %s", step.remove.Kind, got, err, step.want)
+		if err != nil || got.Target != wants[i] {
+			t.Errorf("step %d: covering lock = %+v, %v; want the lock of %s", i, got, err, wants[i])
 		}
 	}
 
@@ -943,33 +956,35 @@ func testNamespaceRemoval(t *testing.T, s Store) {
 
 	f.lock(t, target, alice, "release freeze")
 
-	if _, err := s.RemoveLock(t.Context(), target, bob, f.ns.Fence(), lockAudit(f.ns.Fence())); !errors.Is(err, manuallock.ErrNotHolder) {
+	_, err := s.RemoveLock(t.Context(), target, bob, f.ns.Fence(), lockAudit(f.ns.Fence()))
+	if !errors.Is(err, manuallock.ErrNotHolder) {
 		t.Fatalf("removal by another principal: err = %v, want ErrNotHolder", err)
 	}
 
-	if _, err := s.GetLock(t.Context(), target); err != nil {
-		t.Fatalf("lock after a refused removal: %v", err)
+	if _, getErr := s.GetLock(t.Context(), target); getErr != nil {
+		t.Fatalf("lock after a refused removal: %v", getErr)
 	}
 
-	if _, err := s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
-		t.Fatalf("removal by the holder: %v", err)
+	if _, rmErr := s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence())); rmErr != nil {
+		t.Fatalf("removal by the holder: %v", rmErr)
 	}
 
-	if _, err := s.GetLock(t.Context(), target); !errors.Is(err, manuallock.ErrNotLocked) {
-		t.Errorf("lock after the removal: err = %v, want ErrNotLocked", err)
+	if _, getErr := s.GetLock(t.Context(), target); !errors.Is(getErr, manuallock.ErrNotLocked) {
+		t.Errorf("lock after the removal: err = %v, want ErrNotLocked", getErr)
 	}
 
 	f.lock(t, target, alice, "again")
 
-	if _, err := s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
-		t.Fatalf("force removal: %v", err)
+	if _, forceErr := s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence())); forceErr != nil {
+		t.Fatalf("force removal: %v", forceErr)
 	}
 
-	if _, err := s.CoveringLock(t.Context(), f.web); !errors.Is(err, manuallock.ErrNotLocked) {
-		t.Errorf("covering lock after the force removal: err = %v, want ErrNotLocked", err)
+	if _, coverErr := s.CoveringLock(t.Context(), f.web); !errors.Is(coverErr, manuallock.ErrNotLocked) {
+		t.Errorf("covering lock after the force removal: err = %v, want ErrNotLocked", coverErr)
 	}
 
-	if _, err := s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence())); !errors.Is(err, manuallock.ErrNotLocked) {
+	_, err = s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence()))
+	if !errors.Is(err, manuallock.ErrNotLocked) {
 		t.Errorf("removal of a missing namespace lock: err = %v, want ErrNotLocked", err)
 	}
 }
@@ -994,18 +1009,18 @@ func testNamespaceAudit(t *testing.T, s Store) {
 	var locks []audit.Entry
 
 	for i := range listing.Entries {
-		if listing.Entries[i].Action == "unit:lock" {
+		if listing.Entries[i].Action == actionUnitLock {
 			locks = append(locks, listing.Entries[i])
 		}
 	}
 
-	if len(locks) != 2 {
-		t.Fatalf("lock audit entries = %d, want 2 (lock and unlock)", len(locks))
+	if len(locks) != wantLockEntries {
+		t.Fatalf("lock audit entries = %d, want %d (lock and unlock)", len(locks), wantLockEntries)
 	}
 
-	for _, e := range locks {
-		if e.ObjectID != f.ns.ID.String() {
-			t.Errorf("audit ObjectID = %q, want the ID of the namespace %q", e.ObjectID, f.ns.ID)
+	for i := range locks {
+		if locks[i].ObjectID != f.ns.ID.String() {
+			t.Errorf("audit ObjectID = %q, want the ID of the namespace %q", locks[i].ObjectID, f.ns.ID)
 		}
 	}
 }

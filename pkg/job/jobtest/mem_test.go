@@ -567,11 +567,17 @@ func (m *memDB) checkDispatch(j *job.Job, notBefore, now time.Time) error {
 // manuallock.Store.CoveringLock in the transaction of the dispatch.
 func (m *memDB) checkManualLock(j *job.Job) error {
 	unit := j.Spec.Unit
-	own := manuallock.UnitTarget(collection.UnitRef{Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName()})
+	own := manuallock.UnitTarget(
+		collection.UnitRef{Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName()},
+	)
 
 	for _, t := range []manuallock.Target{own, manuallock.NamespaceTarget(unit.Namespace())} {
 		if l, ok := m.locks[t.String()]; ok {
-			return fmt.Errorf("%w: %w", job.ErrLocked, &manuallock.LockedError{Lock: l, Noun: "unit", Name: unit.String()})
+			return fmt.Errorf(
+				"%w: %w",
+				job.ErrLocked,
+				&manuallock.LockedError{Lock: l, Noun: "unit", Name: unit.String()},
+			)
 		}
 	}
 

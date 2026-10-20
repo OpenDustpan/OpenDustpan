@@ -319,7 +319,7 @@ func testCreateLocked(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
-	lockUnit(t, h, f, "alice", "change window closed")
+	lockUnit(t, h, f)
 
 	for _, op := range []job.Operation{job.OperationRefresh, job.OperationPlan} {
 		j := newJob(f.unit, op, "")

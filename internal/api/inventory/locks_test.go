@@ -168,7 +168,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 	store := newMemLocks()
 
 	locks, err := manuallock.NewService(
-		manuallock.Config{Store: store, Namespaces: nsStore, Authorizer: authz, Now: nil},
+		manuallock.Config{Store: store, Namespaces: nsStore, Authorizer: authz, Now: nil, Phases: nil},
 	)
 	if err != nil {
 		t.Fatalf("manual lock service: %v", err)

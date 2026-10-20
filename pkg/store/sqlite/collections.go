@@ -115,9 +115,10 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
-		if lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+		lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
 			Kind: string(manuallock.KindCollection), ObjectID: id,
-		}); lockErr != nil {
+		})
+		if lockErr != nil {
 			return fmt.Errorf("delete manual lock of collection: %w", lockErr)
 		}
 

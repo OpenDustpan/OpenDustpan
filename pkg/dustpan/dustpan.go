@@ -2601,6 +2601,7 @@ func newManualLockService(cfg *settings) (*manuallock.Service, error) {
 		Namespaces: cfg.namespaceStore,
 		Authorizer: cfg.authorizer,
 		Now:        cfg.now,
+		Phases:     nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("manual lock service: %w", err)

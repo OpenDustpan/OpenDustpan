@@ -72,7 +72,13 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{store: cfg.Store, namespaces: cfg.Namespaces, authorizer: cfg.Authorizer, phases: cfg.Phases, now: now}, nil
+	return &Service{
+		store:      cfg.Store,
+		namespaces: cfg.Namespaces,
+		authorizer: cfg.Authorizer,
+		phases:     cfg.Phases,
+		now:        now,
+	}, nil
 }
 
 // Lock puts a manual lock on t for the principal p, who needs unit:lock on the
@@ -186,7 +192,7 @@ func (s *Service) Get(ctx context.Context, p identity.Principal, t Target) (Lock
 		return Lock{}, err
 	}
 
-	action := identity.ActionUnitRead
+	var action identity.Action
 
 	switch t.Kind {
 	case KindCollection:
@@ -194,6 +200,9 @@ func (s *Service) Get(ctx context.Context, p identity.Principal, t Target) (Lock
 	case KindNamespace:
 		action = identity.ActionNamespaceRead
 	case KindUnit:
+		action = identity.ActionUnitRead
+	default:
+		return Lock{}, fmt.Errorf("get %s: %w", t, ErrInvalidTarget)
 	}
 
 	if err := s.authorize(ctx, p, action, t); err != nil {
@@ -226,12 +235,14 @@ func (s *Service) CoveringFor(ctx context.Context, unit collection.UnitRef, jobI
 		return l, err
 	}
 
-	started, err := s.phases.PhaseStartedAt(ctx, jobID, unit)
-	if err != nil || started.IsZero() || !started.Before(l.Since) {
-		return l, nil
+	// The request passes only on a positive answer: a clock that fails or answers
+	// zero leaves the lock in place.
+	started, clockErr := s.phases.PhaseStartedAt(ctx, jobID, unit)
+	if passes := clockErr == nil && !started.IsZero() && started.Before(l.Since); passes {
+		return Lock{}, ErrNotLocked
 	}
 
-	return Lock{}, ErrNotLocked
+	return l, nil
 }
 
 // authorize checks that p may do action on the object of t. It fails closed:

@@ -118,7 +118,7 @@ func auditFor(fence namespace.Fence) audit.Entry {
 // lockAudit returns the audit entry of a lock or an unlock.
 func lockAudit(fence namespace.Fence) audit.Entry {
 	e := auditFor(fence)
-	e.Action = "unit:lock"
+	e.Action = actionUnitLock
 
 	return e
 }

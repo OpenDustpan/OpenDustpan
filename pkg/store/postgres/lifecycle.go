@@ -507,10 +507,11 @@ func (s *Store) purgeUnit(
 			return fmt.Errorf("delete collection membership: %w", err)
 		}
 
-		if err := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+		lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
 			Kind: string(manuallock.KindUnit), ObjectID: u.id,
-		}); err != nil {
-			return fmt.Errorf("delete manual lock: %w", err)
+		})
+		if lockErr != nil {
+			return fmt.Errorf("delete manual lock: %w", lockErr)
 		}
 
 		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{

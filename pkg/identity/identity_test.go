@@ -931,17 +931,25 @@ func TestStaticTokenHasNoKind(t *testing.T) {
 func TestJobTokenID(t *testing.T) {
 	t.Parallel()
 
+	// principalOf returns a principal with the credential and the job ID.
+	principalOf := func(cred identity.Credential, jobID string) identity.Principal {
+		return identity.Principal{
+			Subject: "", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: cred, JobID: jobID,
+		}
+	}
+
 	cases := []struct {
 		name string
 		p    identity.Principal
 		want string
 	}{
-		{name: "job token", p: identity.Principal{Credential: identity.CredentialJobToken, JobID: "job-1"}, want: "job-1"},
-		{name: "job token with no job", p: identity.Principal{Credential: identity.CredentialJobToken}, want: ""},
-		{name: "access token that names a job", p: identity.Principal{Credential: identity.CredentialAccessToken, JobID: "job-1"}, want: ""},
-		{name: "trust token that names a job", p: identity.Principal{Credential: identity.CredentialTrustToken, JobID: "job-1"}, want: ""},
-		{name: "session that names a job", p: identity.Principal{Credential: identity.CredentialSession, JobID: "job-1"}, want: ""},
-		{name: "empty credential that names a job", p: identity.Principal{JobID: "job-1"}, want: ""},
+		{name: "job token", p: principalOf(identity.CredentialJobToken, "job-1"), want: "job-1"},
+		{name: "job token with no job", p: principalOf(identity.CredentialJobToken, ""), want: ""},
+		{name: "access token that names a job", p: principalOf(identity.CredentialAccessToken, "job-1"), want: ""},
+		{name: "trust token that names a job", p: principalOf(identity.CredentialTrustToken, "job-1"), want: ""},
+		{name: "session that names a job", p: principalOf(identity.CredentialSession, "job-1"), want: ""},
+		{name: "empty credential that names a job", p: principalOf("", "job-1"), want: ""},
 	}
 
 	for _, tc := range cases {

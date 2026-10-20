@@ -199,7 +199,7 @@ func newUserHandlerWithSessions(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stStore, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: stStore, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)

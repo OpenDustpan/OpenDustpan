@@ -221,11 +221,12 @@ func newDeleteFixture(
 	store := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: queued}
 
 	svc, err := stack.NewService(stack.Config{
-		Store:      store,
-		Namespaces: namespaces,
-		Now:        func() time.Time { return now },
-		State:      st,
-		Retention:  0,
+		Store:       store,
+		Namespaces:  namespaces,
+		Now:         func() time.Time { return now },
+		State:       st,
+		Retention:   0,
+		ManualLocks: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -379,11 +380,12 @@ func TestDeleteServiceWithoutStatePassesEmptyGuard(t *testing.T) {
 	st := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil}
 
 	svc, err := stack.NewService(stack.Config{
-		Store:      st,
-		Namespaces: namespaces,
-		Now:        func() time.Time { return now },
-		State:      nil,
-		Retention:  0,
+		Store:       st,
+		Namespaces:  namespaces,
+		Now:         func() time.Time { return now },
+		State:       nil,
+		Retention:   0,
+		ManualLocks: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -728,11 +730,12 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 	st := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil}
 
 	svc, err := stack.NewService(stack.Config{
-		Store:      st,
-		Namespaces: namespaces,
-		Now:        func() time.Time { return now },
-		State:      updates,
-		Retention:  0,
+		Store:       st,
+		Namespaces:  namespaces,
+		Now:         func() time.Time { return now },
+		State:       updates,
+		Retention:   0,
+		ManualLocks: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

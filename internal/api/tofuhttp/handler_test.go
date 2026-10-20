@@ -26,11 +26,11 @@ const (
 	adminToken = "admin-token-0123456789"
 	// jobToken authenticates the job job-1 with a job token.
 	jobToken = "job-token-0123456789"
-	// spoofedJobToken authenticates an access token whose principal names a job.
-	spoofedJobToken = "spoofed-job-token-0123456789"
-	userToken       = "user-token-0123456789"
-	unitPath        = "/tofu/state/acme/net"
-	lockOne         = "lock-one"
+	// jobIDOnAccessToken authenticates an access token whose principal names a job.
+	jobIDOnAccessToken = "access-with-job-0123456789"
+	userToken          = "user-token-0123456789"
+	unitPath           = "/tofu/state/acme/net"
+	lockOne            = "lock-one"
 )
 
 // unlockedLock returns the lock of a unit that no principal holds.
@@ -77,6 +77,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 		createErr: nil,
 		writeErr:  nil,
 		lockErr:   nil,
+		lockJobs:  nil,
 		forced:    nil,
 	}
 }
@@ -123,12 +124,13 @@ func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref) (workspace.Worksp
 func (f *fakeUnits) LockWithIDForJob(
 	_ context.Context,
 	_ workspace.ID,
-	holder, reason, lockID, jobID string,
+	req workspace.LockRequest,
 ) (workspace.Workspace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.lockJobs = append(f.lockJobs, jobID)
+	holder, reason, lockID := req.Holder, req.Reason, req.LockID
+	f.lockJobs = append(f.lockJobs, req.JobID)
 
 	if f.lockErr != nil {
 		return workspace.Workspace{}, f.lockErr
@@ -258,9 +260,9 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 			Credential:     "",
 			JobID:          "",
 		}, nil
-	case jobToken, spoofedJobToken:
+	case jobToken, jobIDOnAccessToken:
 		cred := identity.CredentialJobToken
-		if token == spoofedJobToken {
+		if token == jobIDOnAccessToken {
 			// A principal that carries a job ID with another credential.
 			cred = identity.CredentialAccessToken
 		}
