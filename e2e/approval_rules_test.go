@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -58,15 +59,50 @@ func runApprovalRulesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
-	checkApprovalCreateNamespace(ctx, t, env)
-	checkApprovalDefaultLifecycle(ctx, t, env)
-	checkApprovalRuleLifecycle(ctx, t, env)
-	checkApprovalRefusals(ctx, t, env)
-	checkApprovalNeedsSignIn(ctx, t, env)
+	checkApprovalCreateNamespace(ctx, t, approvalEnv{env: env, person: ""})
+
+	ae := approvalAdmin(ctx, t, env)
+
+	checkApprovalDefaultLifecycle(ctx, t, ae)
+	checkApprovalRuleLifecycle(ctx, t, ae)
+	checkApprovalRefusals(ctx, t, ae)
+	checkApprovalNeedsSignIn(ctx, t, ae)
+	checkApprovalTokenWrites(ctx, t, ae)
+}
+
+// approvalEnv is the env with the person who administers the namespace. A
+// write signs this person in, because an access token never gives fresh
+// authentication. A read uses the access token of the env.
+type approvalEnv struct {
+	env    *e2e.Env
+	person string
+}
+
+// approvalAdmin makes a person with the admin role on the namespace.
+func approvalAdmin(ctx context.Context, t *testing.T, env *e2e.Env) approvalEnv {
+	t.Helper()
+
+	var p e2ePrincipal
+
+	body := approvalCall(ctx, t, approvalEnv{env: env, person: ""}, approvalStep{
+		step: "make the person", method: http.MethodPost, path: "/api/server/principals",
+		body: `{"subject":"` + e2e.SignInSubject("approval-admin") + `","kind":"person"}`, want: http.StatusCreated,
+	})
+
+	if err := json.Unmarshal([]byte(body), &p); err != nil || p.ID == "" {
+		t.Fatalf("decode the person: %v: %s", err, body)
+	}
+
+	approvalCall(ctx, t, approvalEnv{env: env, person: ""}, approvalStep{
+		step: "grant admin on the namespace", method: http.MethodPost, path: "/api/server/namespaces/approvals/grants",
+		body: `{"subject":"principal:` + p.ID + `","role":"admin"}`, want: http.StatusCreated,
+	})
+
+	return approvalEnv{env: env, person: p.ID}
 }
 
 // approvalStep is one installation API request and the status it must answer.
@@ -79,12 +115,25 @@ type approvalStep struct {
 }
 
 // approvalCall sends s and fails unless it answers s.want. It answers the body.
-func approvalCall(ctx context.Context, t *testing.T, env *e2e.Env, s approvalStep) string {
+func approvalCall(ctx context.Context, t *testing.T, env approvalEnv, s approvalStep) string {
 	t.Helper()
 
-	status, resp, err := env.ServerAPIStatus(ctx, s.method, s.path, s.body)
-	if err != nil {
-		t.Fatalf("%s: %s %s: %v", s.step, s.method, s.path, err)
+	var (
+		status int
+		resp   string
+	)
+
+	if env.person != "" && (s.method == http.MethodPut || s.method == http.MethodDelete) {
+		status, resp = env.env.SessionAPIStatus(
+			ctx, t, env.person, e2e.SessionRequest{Method: s.method, Path: s.path, Body: s.body},
+		)
+	} else {
+		var err error
+
+		status, resp, err = env.env.ServerAPIStatus(ctx, s.method, s.path, s.body)
+		if err != nil {
+			t.Fatalf("%s: %s %s: %v", s.step, s.method, s.path, err)
+		}
 	}
 
 	if status != s.want {
@@ -104,7 +153,7 @@ func wantBodyHas(t *testing.T, step, body string, parts ...string) {
 	}
 }
 
-func checkApprovalCreateNamespace(ctx context.Context, t *testing.T, env *e2e.Env) {
+func checkApprovalCreateNamespace(ctx context.Context, t *testing.T, env approvalEnv) {
 	t.Helper()
 
 	approvalCall(ctx, t, env, approvalStep{
@@ -114,7 +163,7 @@ func checkApprovalCreateNamespace(ctx context.Context, t *testing.T, env *e2e.En
 }
 
 // checkApprovalDefaultLifecycle sets, reads, replaces and deletes the default.
-func checkApprovalDefaultLifecycle(ctx context.Context, t *testing.T, env *e2e.Env) {
+func checkApprovalDefaultLifecycle(ctx context.Context, t *testing.T, env approvalEnv) {
 	t.Helper()
 
 	path := approvalNamespaceBase + "/approval-default"
@@ -179,7 +228,7 @@ func checkApprovalDefaultLifecycle(ctx context.Context, t *testing.T, env *e2e.E
 }
 
 // checkApprovalRuleLifecycle creates, lists, reads and deletes a rule.
-func checkApprovalRuleLifecycle(ctx context.Context, t *testing.T, env *e2e.Env) {
+func checkApprovalRuleLifecycle(ctx context.Context, t *testing.T, env approvalEnv) {
 	t.Helper()
 
 	list := approvalNamespaceBase + "/approval-rules"
@@ -240,7 +289,7 @@ func checkApprovalRuleLifecycle(ctx context.Context, t *testing.T, env *e2e.Env)
 }
 
 // checkApprovalRefusals sends invalid requests and proves each one stores nothing.
-func checkApprovalRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
+func checkApprovalRefusals(ctx context.Context, t *testing.T, env approvalEnv) {
 	t.Helper()
 
 	def := approvalNamespaceBase + "/approval-default"
@@ -278,11 +327,11 @@ func checkApprovalRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 }
 
 // checkApprovalNeedsSignIn proves that a request with no credential is refused.
-func checkApprovalNeedsSignIn(ctx context.Context, t *testing.T, env *e2e.Env) {
+func checkApprovalNeedsSignIn(ctx context.Context, t *testing.T, env approvalEnv) {
 	t.Helper()
 
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
-		status, body, err := env.ServerAPIStatusBare(ctx, method, approvalNamespaceBase+"/approval-default")
+		status, body, err := env.env.ServerAPIStatusBare(ctx, method, approvalNamespaceBase+"/approval-default")
 		if err != nil {
 			t.Fatalf("%s without a credential: %v", method, err)
 		}
@@ -291,4 +340,48 @@ func checkApprovalNeedsSignIn(ctx context.Context, t *testing.T, env *e2e.Env) {
 			t.Fatalf("%s without a credential answers %d, want 401 (%s)", method, status, body)
 		}
 	}
+}
+
+// checkApprovalTokenWrites proves that an access token never gives fresh
+// authentication: a set or a delete with the token of the env answers 403
+// and changes nothing, and a read with the token still works.
+func checkApprovalTokenWrites(ctx context.Context, t *testing.T, env approvalEnv) {
+	t.Helper()
+
+	def := approvalNamespaceBase + "/approval-default"
+	rule := approvalNamespaceBase + "/approval-rules/ops"
+
+	approvalCall(ctx, t, env, approvalStep{
+		step: "set the default with the session", method: http.MethodPut, path: def,
+		body: `{"count":2,"approvers":{"groups":["platform"]}}`, want: http.StatusOK,
+	})
+
+	for _, s := range []approvalStep{
+		{step: "set the default with a token", method: http.MethodPut, path: def, body: `{"count":3,"approvers":{}}`, want: 0},
+		{step: "delete the default with a token", method: http.MethodDelete, path: def, body: "", want: 0},
+		{step: "set a rule with a token", method: http.MethodPut, path: rule, body: `{"count":1,"approvers":{"groups":["a"]}}`, want: 0},
+		{step: "delete a rule with a token", method: http.MethodDelete, path: rule, body: "", want: 0},
+	} {
+		status, body, err := env.env.ServerAPIStatus(ctx, s.method, s.path, s.body)
+		if err != nil {
+			t.Fatalf("%s: %v", s.step, err)
+		}
+
+		if status != http.StatusForbidden || !strings.Contains(body, "recent sign-in") {
+			t.Fatalf("%s answers %d (%s), want 403 that asks for a recent sign-in", s.step, status, body)
+		}
+	}
+
+	body := approvalCall(ctx, t, env, approvalStep{
+		step: "read the default with a token", method: http.MethodGet, path: def, body: "", want: http.StatusOK,
+	})
+	wantBodyHas(t, "read the default with a token", body, `"count":2`, `"version":1`)
+
+	approvalCall(ctx, t, env, approvalStep{
+		step: "read a rule with a token", method: http.MethodGet, path: rule, body: "", want: http.StatusNotFound,
+	})
+	approvalCall(ctx, t, env, approvalStep{
+		step: "delete the default with the session", method: http.MethodDelete, path: def, body: "",
+		want: http.StatusNoContent,
+	})
 }

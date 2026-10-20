@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -54,18 +55,55 @@ func adminGates() gateAuthorizer {
 	}}
 }
 
-// newGateHandler builds a handler over a fresh store with acme and beta.
-func newGateHandler(t *testing.T, authz identity.Authorizer) (*sqlite.Store, *apiserver.Handler) {
-	t.Helper()
+// gateEnv is a handler over a fresh store with acme and beta, and a console
+// session with a fresh sign-in. It sends each write as that session: an
+// access token never gives fresh authentication. It sends each read with an
+// access token. The raw handler stays for tests of the token refusal.
+type gateEnv struct {
+	env     signInEnv
+	session *http.Cookie
+	csrf    string
+}
 
-	st, nss := openIPAllowFixture(t)
-
-	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: st, Namespaces: nss, Now: nil})
-	if err != nil {
-		t.Fatalf("gate config service: %v", err)
+// ServeHTTP sends a PUT or a DELETE as the session and any other request
+// with its own credential.
+func (g gateEnv) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+		r.Header.Del("Authorization")
+		r.AddCookie(g.session)
+		r.Header.Set(apiserver.CSRFHeader, g.csrf)
 	}
 
-	return st, gateHandler(t, st, nss, authz, svc)
+	g.env.handler.ServeHTTP(w, r)
+}
+
+// newGateEnv builds a gateEnv that authorizes with authz.
+func newGateEnv(t *testing.T, authz identity.Authorizer) gateEnv {
+	t.Helper()
+
+	e := newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: true, noPolicyRoutes: false, stored: nil, authz: authz,
+		namespaces: []namespace.Name{"acme", "beta"},
+	})
+	sess := e.freshSignIn(t)
+
+	// The session read needs an action that the test authorizer may deny, so
+	// the CSRF value comes from the session secret.
+	secret, err := session.ParseSecret(sess.Value)
+	if err != nil {
+		t.Fatalf("parse session secret: %v", err)
+	}
+
+	return gateEnv{env: e, session: sess, csrf: session.CSRFValue(secret)}
+}
+
+// newGateHandler builds a gateEnv over a fresh store with acme and beta.
+func newGateHandler(t *testing.T, authz identity.Authorizer) (*sqlite.Store, gateEnv) {
+	t.Helper()
+
+	g := newGateEnv(t, authz)
+
+	return g.env.store, g
 }
 
 // newGateHandlerWithoutStore builds a handler that mounts no gate route.
@@ -725,9 +763,9 @@ func TestGateConfigWritesAuditEntries(t *testing.T) {
 
 	for _, e := range listNamespaceEntries(t, st, "acme") {
 		if strings.Contains(e.Action, "approval") {
-			if e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess || e.Subject != "tester" ||
+			if e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess || e.Subject == "" ||
 				len(e.Changes) != 1 {
-				t.Fatalf("entry = %+v, want kind change, success, subject tester and one change", e)
+				t.Fatalf("entry = %+v, want kind change, success, a subject and one change", e)
 			}
 
 			got = append(got, e.Action)
@@ -750,9 +788,15 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 
 	read, manage := identity.ActionNamespaceReadGates, identity.ActionNamespaceManageGates
 
-	st, nss := openIPAllowFixture(t)
+	authz := gateAuthorizer{allow: map[identity.Action]namespace.Name{read: "acme", manage: "beta"}}
+	handler := newGateEnv(t, authz)
 
-	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: st, Namespaces: nss, Now: nil})
+	nss, err := namespace.NewService(namespace.Config{Store: handler.env.store, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: handler.env.store, Namespaces: nss, Now: nil})
 	if err != nil {
 		t.Fatalf("gate config service: %v", err)
 	}
@@ -766,9 +810,6 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed default: %v", err)
 	}
-
-	authz := gateAuthorizer{allow: map[identity.Action]namespace.Name{read: "acme", manage: "beta"}}
-	handler := gateHandler(t, st, nss, authz, svc)
 
 	target := gateBase + "acme" + gateDefault
 
@@ -829,5 +870,68 @@ func TestGateConfigNeedsFreshSignIn(t *testing.T) {
 	fresh := e.freshSignIn(t)
 	if rec := e.sendWithSession(t, http.MethodPut, fresh, def, platformDefault); rec.Code != http.StatusOK {
 		t.Fatalf("change from a fresh session = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGateConfigRefusesAccessTokenWrites proves that an access token never
+// gives fresh authentication: a set or a delete with a token answers 403,
+// stores nothing, changes no version and adds a failure entry. A read with
+// the token works.
+func TestGateConfigRefusesAccessTokenWrites(t *testing.T) {
+	t.Parallel()
+
+	g := newGateEnv(t, adminGates())
+	raw := g.env.handler
+	def := gateBase + "acme" + gateDefault
+	rule := gateBase + "acme" + gateRulesURL + "/ops"
+
+	// The session writes the seed, so the refused calls have a version to keep.
+	wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, def, platformDefault, ""}), http.StatusOK)
+	wantStatus(
+		t, serveGate(t, g, gateCall{http.MethodPut, rule, `{"count":1,"approvers":{"groups":["ops"]}}`, ""}),
+		http.StatusOK,
+	)
+
+	refused := []gateCall{
+		{http.MethodPut, def, `{"count":3,"approvers":{"groups":["x"]}}`, ""},
+		{http.MethodDelete, def, "", ""},
+		{http.MethodPut, rule, `{"count":3,"approvers":{"groups":["x"]}}`, ""},
+		{http.MethodDelete, rule, "", ""},
+		{http.MethodPut, gateBase + "acme" + gateRulesURL + "/new", `{"count":1,"approvers":{"groups":["ops"]}}`, ""},
+	}
+
+	for _, c := range refused {
+		rec := serveGate(t, raw, c)
+		wantStatus(t, rec, http.StatusForbidden)
+
+		if !strings.Contains(rec.Body.String(), "recent sign-in") {
+			t.Fatalf("%s %s body = %s, want a message about a recent sign-in", c.method, c.target, rec.Body.String())
+		}
+	}
+
+	var gotDefault defaultDoc
+
+	decodeGateJSON(t, serveGate(t, raw, gateCall{http.MethodGet, def, "", ""}), &gotDefault)
+
+	if gotDefault.Count != 2 || gotDefault.Version != 1 {
+		t.Fatalf("default after refused writes = %+v, want count 2, version 1", gotDefault)
+	}
+
+	wantStatus(t, serveGate(t, raw, gateCall{http.MethodGet, rule, "", ""}), http.StatusOK)
+	wantStatus(
+		t, serveGate(t, raw, gateCall{http.MethodGet, gateBase + "acme" + gateRulesURL + "/new", "", ""}),
+		http.StatusNotFound,
+	)
+
+	failures := 0
+
+	for _, e := range listNamespaceEntries(t, g.env.store, "acme") {
+		if e.Outcome == audit.OutcomeFailure && e.Action == string(identity.ActionNamespaceManageGates) {
+			failures++
+		}
+	}
+
+	if failures != len(refused) {
+		t.Fatalf("failure entries = %d, want %d", failures, len(refused))
 	}
 }

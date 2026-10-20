@@ -165,8 +165,9 @@ const (
 	ActionNamespaceReadGates Action = "namespace:read-gates"
 	// ActionNamespaceManageGates allows setting and removing the approval
 	// defaults and the approval rules of a namespace, its collections and its
-	// units. Its object is a namespace. Only the namespace administrator
-	// holds it among the built-in roles.
+	// units. Its object is a namespace. Of the namespace roles, only
+	// the administrator holds it. The account administrator and the site
+	// administrator hold it as data actions.
 	ActionNamespaceManageGates Action = "namespace:manage-gates"
 	// ActionUnitSetOverrides allows changing the override switches of a unit.
 	// Its object is a unit.

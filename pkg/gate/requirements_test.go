@@ -2,6 +2,7 @@ package gate_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -60,6 +61,14 @@ func TestDefaultRequirementsMergeAndOrder(t *testing.T) {
 			[]gate.Requirement{want("default", 5, 4, none)},
 		},
 		{
+			// The merge replaces the count only when a default is strictly
+			// higher, so on a tie the first default in the list keeps the
+			// count and gives the version.
+			"equal counts: the first default gives the version",
+			[]gate.ApprovalDefault{def(ns, 3, 2), def(col, 5, 2)},
+			[]gate.Requirement{want("default", 3, 2, none)},
+		},
+		{
 			"a narrower default cannot lower the count",
 			[]gate.ApprovalDefault{def(ns, 3, 4), def(col, 5, 1)},
 			[]gate.Requirement{want("default", 3, 4, none)},
@@ -100,7 +109,7 @@ func TestDefaultRequirementsMergeAndOrder(t *testing.T) {
 			for i := range got {
 				g, w := got[i], tt.want[i]
 				if g.Name != w.Name || g.Version != w.Version || g.Count != w.Count || g.FreshAuth != w.FreshAuth ||
-					g.TimeoutSeconds != w.TimeoutSeconds || g.AuthorMayApprove || len(g.Approvers.Groups) != len(w.Approvers.Groups) {
+					g.TimeoutSeconds != w.TimeoutSeconds || g.AuthorMayApprove || !slices.Equal(g.Approvers.Groups, w.Approvers.Groups) {
 					t.Fatalf("requirement %d = %+v, want %+v", i, g, w)
 				}
 			}

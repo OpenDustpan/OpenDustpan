@@ -480,6 +480,8 @@ func classifyRequest(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", true
+	case errors.Is(err, errFreshSession):
+		return http.StatusForbidden, errFreshSession.Error(), true
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden", true
 	case errors.Is(err, identity.ErrInvalidObject):

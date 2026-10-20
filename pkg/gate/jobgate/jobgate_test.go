@@ -3,6 +3,7 @@ package jobgate_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -252,6 +253,35 @@ func checkGate(t *testing.T, tt gateCase) {
 
 	if g.Timeout != gate.DefaultApprovalWait {
 		t.Fatalf("timeout = %s, want %s", g.Timeout, gate.DefaultApprovalWait)
+	}
+}
+
+// TestDecideNamesTheGroupsAndNeverCountsTheAuthor proves that the gate lists
+// the groups of the default by name, and that the author never counts as an
+// approver, also when the author is in an approver group: the default sets no
+// way to let the author approve.
+func TestDecideNamesTheGroupsAndNeverCountsTheAuthor(t *testing.T) {
+	t.Parallel()
+
+	d := newDecider(t, withDefaults(def(nsScope(), 2, "platform", "bo-team")), inCollection("prod"))
+	in := input(t, job.ExecutorRunner, job.OperationApply)
+
+	got, err := d.Decide(t.Context(), in)
+	if err != nil || !got.Allow {
+		t.Fatalf("Decide() = %+v, %v; want allow", got, err)
+	}
+
+	g, ok := got.Gates[job.PhaseApply]
+	if !ok {
+		t.Fatalf("gates = %+v, want a gate on the apply phase", got.Gates)
+	}
+
+	if !slices.Equal(g.Groups, []string{"platform", "bo-team"}) {
+		t.Fatalf("groups = %v, want [platform bo-team]", g.Groups)
+	}
+
+	if g.AllowSelf {
+		t.Fatalf("gate = %+v, want no self approval for %s", g, in.Principal.Subject)
 	}
 }
 

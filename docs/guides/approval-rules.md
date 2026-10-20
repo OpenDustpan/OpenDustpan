@@ -38,14 +38,12 @@ first version of that gate:
 ## Set the approval default of a namespace
 
 `PUT /api/dustpan/v1/namespaces/<namespace>/approval-default` sets the default.
-The body holds the count of approvals and the approvers:
+The request must come from a console session with a recent sign-in (see
+[Roles and actions](#roles-and-actions)). The body holds the count of approvals
+and the approvers:
 
-```sh
-curl -X PUT \
-  -H "Authorization: Bearer $DUSTPAN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"count":2,"approvers":{"groups":["platform"]}}' \
-  "https://dustpan.example/api/dustpan/v1/namespaces/acme/approval-default"
+```json
+{"count": 2, "approvers": {"groups": ["platform"]}}
 ```
 
 The server answers 200 with the stored default:
@@ -86,13 +84,17 @@ approval again. `DELETE` also takes `If-Match`.
 An approval rule has an ID, the approvers, a count and a timeout. A gate names a
 rule as `approval:<id>`.
 
-`PUT /api/dustpan/v1/namespaces/<namespace>/approval-rules/<id>` stores a rule:
+`PUT /api/dustpan/v1/namespaces/<namespace>/approval-rules/<id>` stores a rule.
+It needs a console session with a recent sign-in. The body is:
+
+```json
+{"count": 2, "approvers": {"groups": ["platform"]}, "timeoutSeconds": 86400}
+```
+
+An access token can read a rule:
 
 ```sh
-curl -X PUT \
-  -H "Authorization: Bearer $DUSTPAN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"count":2,"approvers":{"groups":["platform"]},"timeoutSeconds":86400}' \
+curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
   "https://dustpan.example/api/dustpan/v1/namespaces/acme/approval-rules/platform-review"
 ```
 
@@ -120,16 +122,18 @@ A namespace holds at most 64 approval rules. The 65th answers 422.
 
 | Step | Action | Object | Roles |
 | --- | --- | --- | --- |
-| Read a default or a rule | `namespace:read-gates` | The namespace | `admin`, `account-administrator`, `site-administrator` |
+| Read a default or a rule | `namespace:read-gates` | The namespace | `viewer`, `secret-viewer`, `auditor`, `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
 | Set or remove a default or a rule | `namespace:manage-gates` | The namespace | `admin`, `account-administrator`, `site-administrator` |
 
-The `viewer`, `auditor`, `writer` and `maintainer` roles do not hold these
-actions. A grant on another namespace gives nothing here.
+Only the `admin` role among the namespace roles can set or remove. A person
+whom a rule gates can read that rule. A grant on another namespace gives nothing
+here.
 
-A change from a console session needs a recent sign-in. If the sign-in is older
+A change needs a console session with a recent sign-in. If the sign-in is older
 than the freshness window of the installation, the server answers 401 with the
-path of a new sign-in, and changes nothing. A request with an access token has
-no sign-in age.
+path of a new sign-in, and changes nothing. An access token never gives a
+recent sign-in: a change with an access token answers 403, changes nothing, and
+adds a failure entry to the audit log. A read works with an access token.
 
 ## Errors
 
@@ -137,9 +141,9 @@ no sign-in age.
 | --- | --- |
 | 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The `If-Match` value is not one version. |
 | 401 | The request has no valid credential, or a console session must sign in again. |
-| 403 | The caller lacks the action on this namespace. |
+| 403 | The caller lacks the action on this namespace, or a change came with an access token. |
 | 404 | The namespace, the default or the rule does not exist. |
-| 409 | The stored version changed, or a final gate of a wider scope forbids the change. |
+| 409 | The stored version changed, or (rule PUT) a wider scope holds a rule with this ID. |
 | 422 | A field is outside its bounds, the ID is not valid, or a stored gate names the rule. |
 
 ## The audit log
