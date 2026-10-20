@@ -99,8 +99,8 @@ An entry holds these fields:
   `service` or `workload`. It is omitted when the server cannot name the
   kind, for example for the bootstrap admin token.
 - `jobID`: the job whose token acted, else omitted.
-- Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
-  never anything else, so a reader never confuses a tool that needed secrets
+- Kind: `tool-operation`, `reveal`, `override`, `change`, `read-access` or
+  `security`, never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
 - Outcome: `success`, `failure` or `denied`.
 - `requestID`: the request ID the server mints. The server returns it in
@@ -125,6 +125,16 @@ An entry holds these fields:
   (`1:0`) have different hashes. Because each field carries its length,
   two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
+
+## Security entries
+
+The server writes one entry of the kind `security` and the outcome `denied`
+when it stops an access that crosses a namespace boundary. Today this is a
+read, a write, a list or a delete of the content of an OpenTofu state version
+with a blob key of another namespace. The action is `blob:out-of-scope`. The
+scope is `@server`, the subject is `server`, and the object is the ID of the
+namespace of the call. The reason names the operation. The entry never holds
+the blob key that the call used.
 
 ## Force-unlock entries
 

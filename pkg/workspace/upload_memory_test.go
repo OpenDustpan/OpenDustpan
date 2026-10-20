@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 const (
@@ -423,6 +424,7 @@ func memService(tb testing.TB, base memBase, sealer workspace.Sealer) (*workspac
 		States:             base.store,
 		Blobs:              base.blobs,
 		Namespaces:         base.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             sealer,
 		Logger:             nil,
 		Now:                nil,

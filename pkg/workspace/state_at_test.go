@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // stateAtStates is the in-memory state store plus a StateAtReader that gives
@@ -37,6 +38,7 @@ func stateAtService(t *testing.T, f fixture, answer workspace.StateAt, err error
 		States:             stateAtStates{memStore: f.store, err: err, answer: answer},
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
@@ -216,10 +218,18 @@ func namedFixture(t *testing.T, names inventory.Names, logErr error) (*workspace
 	}
 
 	svc, newErr := workspace.NewService(workspace.Config{
-		ManualLocks: nil,
-		Workspaces:  f.store, States: states, Blobs: f.blobs, Namespaces: f.namespaces, Sealer: f.secrets,
-		Logger: nil, Now: func() time.Time { return *f.now }, MaxStateBytes: 64, MaxPendingVersions: 0,
-		Retention: 0,
+		ManualLocks:        nil,
+		Workspaces:         f.store,
+		States:             states,
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
+		Sealer:             f.secrets,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if newErr != nil {
 		t.Fatalf("service: %v", newErr)

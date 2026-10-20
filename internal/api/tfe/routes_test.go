@@ -518,7 +518,7 @@ func stubStateVersion() workspace.StateVersion {
 		LockID:          "lock-test",
 		Lineage:         "seed-lineage",
 		Status:          workspace.StatusFinalized,
-		Content:         "tofu/ws-test123/sv-test123/seed",
+		Content:         "namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws-test123/sv-test123/seed",
 		Outputs:         []byte(stubStateOutputs()),
 		MD5:             sum,
 		Serial:          3,

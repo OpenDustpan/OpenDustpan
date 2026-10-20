@@ -146,7 +146,7 @@ func (s *Service) admitStream(
 		return nil, err
 	}
 
-	if noteErr := s.noteAttempt(ctx, sv.ID, key, fence); noteErr != nil {
+	if noteErr := s.noteAttempt(ctx, w.Ref.Namespace, sv.ID, key, fence); noteErr != nil {
 		return nil, noteErr
 	}
 
@@ -248,7 +248,7 @@ func (s *Service) refuseStream(ctx context.Context, sw *streamWrite, cause error
 	cleanCtx, cancel := cleanupContext(ctx)
 	defer cancel()
 
-	if delErr := s.deleteBlobRetried(cleanCtx, sw.key); delErr != nil {
+	if delErr := s.blobs.deleteRetried(cleanCtx, sw.workspace.Ref.Namespace, sw.key); delErr != nil {
 		return errors.Join(cause, fmt.Errorf("delete refused blob of %s: %w", sw.version.ID, delErr))
 	}
 
@@ -317,7 +317,7 @@ func (s *Service) declarePlaceholder(
 		return StateVersion{}, "", fmt.Errorf("create state version for %s: %w", w.Ref, createErr)
 	}
 
-	key, err := attemptKey(sv)
+	key, err := s.blobs.attemptKey(ctx, w.Ref.Namespace, w.ID, sv.ID)
 	if err != nil {
 		return StateVersion{}, "", err
 	}

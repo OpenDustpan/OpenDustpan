@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 func TestParseState(t *testing.T) {
@@ -129,7 +130,7 @@ func (fakeNamespaces) CreateNamespace(_ context.Context, _ namespace.Namespace) 
 
 func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
-		ID:              namespace.NewID(),
+		ID:              testNamespaceID,
 		CreatedAt:       time.Now(),
 		Name:            name,
 		HomeRegion:      testRegion,
@@ -462,6 +463,8 @@ func (fakeBlobs) Ping(context.Context) error { return nil }
 const (
 	testRegion    = namespace.Region("eu-west")
 	testNamespace = namespace.Name("acme")
+	// testNamespaceID is the stable ID of the namespace that fakeNamespaces serves.
+	testNamespaceID = namespace.ID("ns-abcdefghijklmnopqrst")
 )
 
 // fixture wires a maintenance service over fakes with no active work. It
@@ -549,6 +552,7 @@ func newFixtureWith(
 		States:             states,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
@@ -699,6 +703,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
 		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
@@ -956,7 +961,7 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			LockID:          "",
 			Lineage:         "l1",
 			Status:          workspace.StatusFinalized,
-			Content:         "tofu/ws-1/sv-1/a1",
+			Content:         blob.Key("namespaces/" + testNamespaceID.String() + "/tofu/ws-1/sv-1/a1"),
 			Outputs:         nil,
 			// The size and MD5 of the document encryptedBlobs serves,
 			// as a stored row names them.

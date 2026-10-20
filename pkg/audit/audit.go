@@ -56,6 +56,10 @@ const (
 	// (ADR 52, decision 13): who read the authorization map, of which
 	// object, as a snapshot or a history.
 	KindReadAccess Kind = "read-access"
+	// KindSecurity records a refusal that shows a fault or an attack: the
+	// server stopped an access that crossed a boundary, for example a read of
+	// a blob key of another namespace.
+	KindSecurity Kind = "security"
 )
 
 // ServerScope is the scope of the entries of actions that are not in a
@@ -295,6 +299,16 @@ func (e Entry) validatePrincipal() error {
 	return nil
 }
 
+// knownKind reports whether k is one of the kinds of this package.
+func knownKind(k Kind) bool {
+	switch k {
+	case KindToolOperation, KindReveal, KindOverride, KindChange, KindReadAccess, KindSecurity:
+		return true
+	default:
+		return false
+	}
+}
+
 // validateHow checks the channel, kind, outcome and changes of the entry.
 func (e Entry) validateHow() error {
 	if err := validateChanges(e.Changes); err != nil {
@@ -304,8 +318,7 @@ func (e Entry) validateHow() error {
 	switch {
 	case !knownChannel(e.Channel):
 		return fmt.Errorf("%w: unknown channel %q", ErrInvalidEntry, e.Channel)
-	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride && e.Kind != KindChange &&
-		e.Kind != KindReadAccess:
+	case !knownKind(e.Kind):
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidEntry, e.Kind)
 	case e.Outcome != OutcomeSuccess && e.Outcome != OutcomeFailure && e.Outcome != OutcomeDenied:
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)

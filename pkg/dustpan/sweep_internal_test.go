@@ -160,9 +160,14 @@ func (f sweepFixture) deleteUnits(t *testing.T) []sweptUnit {
 		t.Fatalf("create workspace: %v", err)
 	}
 
+	ns, err := f.svc.namespaces.Get(ctx, "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
 	units := []sweptUnit{
 		{id: st.ID.String(), prefix: "pulumi/" + st.ID.String() + "/"},
-		{id: ws.ID.String(), prefix: "tofu/" + ws.ID.String() + "/"},
+		{id: ws.ID.String(), prefix: "namespaces/" + ns.ID.String() + "/tofu/" + ws.ID.String() + "/"},
 	}
 
 	for _, u := range units {

@@ -188,7 +188,7 @@ func (l opentofuLifecycle) purgeUnit(
 	}
 
 	l.blobs.deleteBlobs(ctx, opentofuTool, unitID, func(c context.Context) error {
-		return l.workspaces.DeletePurgedBlobs(c, id)
+		return l.workspaces.DeletePurgedBlobs(c, ns, id)
 	})
 
 	return nil
