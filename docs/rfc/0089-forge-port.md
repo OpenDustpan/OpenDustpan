@@ -96,6 +96,10 @@ RFC uses it.
   federation member accepts, never the FQDN of one member.
 - **Documentation.** The GitHub setup guide and the federation setup guide
   document the GitHub App scope and the webhook hostname (see "Consequences").
+- **Credential expiry and rotation.** The GitHub App stays the recommended
+  connection. The server records and shows the expiry of a static token,
+  and rotates a GitLab token through its `self/rotate` endpoint. A rotation
+  never retries with the old token (see "Credential expiry and rotation").
 
 The project manager decided two details of the GitHub App scope on the same
 day. They have the label "(PM decision, 2026-10-20)".
@@ -189,6 +193,7 @@ type Forge interface {
 	Reviews  // OpenReview, ReadReview, CloseReview
 	Tokens   // RepoToken
 	Events   // ParseEvent
+	Rotation // RotateSelf
 }
 ```
 
@@ -221,6 +226,7 @@ The capabilities:
 | `git-access` | `RepoToken`: a token for the git protocol, scoped or not |
 | `repo-token` | `RepoToken` with `Token.Scoped` set: one repository, read only, at most 1 hour. Only for the git credential mode `forge` of a runner step, never for the source of a job (owner decision, 2026-10-20). |
 | `events` | `ParseEvent` |
+| `self-rotate` | `RotateSelf`: a new token in place of the token of the credential |
 
 With `Push` not set, the list has no `commit` and no `review`. The
 capability `repo-token` implies `git-access`: a connection that lists
@@ -237,7 +243,7 @@ answer, a server error or a rate limit). The adapter wraps a sentinel with
 
 | Method | Does | Errors |
 | --- | --- | --- |
-| `Check()` | Calls the forge and returns the account of the credential. A connection test and a rotation call it. | `ErrAuth`, `ErrUnavailable` |
+| `Check()` | Calls the forge and returns the account of the credential. A connection test, a rotation and the periodic check call it. `Account` holds the expiry of a token (`ExpiresAt`, or `NoExpiry` for a token with no expiry) and its scopes, when the forge gives them. | `ErrAuth`, `ErrUnavailable` |
 | `Head(repo, ref)` | The commit at the head of a branch or a tag, with its time. | `ErrNotFound` |
 | `ReadFile(repo, commit, path, limit)` | The content and the blob ID of one file at one full commit ID. | `ErrNotFound`, `ErrTooLarge` |
 | `Compare(repo, base, head, limit)` | Each changed file (added, modified, deleted, renamed), the patch up to `limit` bytes with `Truncated`, and whether `base` is an ancestor of `head`. | `ErrNotFound` |
@@ -248,6 +254,7 @@ answer, a server error or a rate limit). The adapter wraps a sentinel with
 | `CloseReview(repo, id)` | Closes with no merge. A closed one returns nil. | `ErrNotFound` for a missing one, `ErrConflict` for a merged one |
 | `RepoToken(repo)` | A token for the git protocol. An app connection answers a token that reads only `repo` and expires in at most 1 hour, with `Scoped` set. A `token` connection answers its own token with `Scoped` not set. | `ErrUnsupported` when the auth kind has no token for the git protocol. `ErrNotFound` for a missing repository. The runner path refuses a token with `Scoped` not set, so the long-lived token never leaves the server. A runner never gets a token for the source of its job (owner decision, 2026-10-20). |
 | `ParseEvent(r, secrets)` | Checks the signature or token of an event against each active event secret of the registration, and returns a forge-neutral event: `ping` or `review` (`push` and `comment` wait for their consumers), with the delivery ID and, for an app, the installation ID. No call to the forge. | `ErrSignature`, `ErrInvalid`, `ErrUnsupported` for another kind |
+| `RotateSelf(expiresAt)` | Asks the forge for a new token in place of the token of the credential, and returns it with its expiry. The forge revokes the old token. The caller never calls it again with the old token after an error (see "Credential expiry and rotation"). | `ErrUnsupported` when the forge or the auth kind cannot rotate, `ErrAuth` for a refused or revoked token |
 
 The sentinels are `ErrNotFound`, `ErrConflict`, `ErrRefused`, `ErrAuth`,
 `ErrUnavailable`, `ErrTooLarge`, `ErrUnsupported`, `ErrSignature` and
@@ -343,7 +350,7 @@ a merge by a person, a signed event, a redelivery, a revoked credential).
 Each adapter runs it against a recorded or a fake API of its forge, as
 issue #886 asks for GitHub.
 
-The suite lists 63 table-driven cases (`forgetest.CaseNames`). Each case
+The suite lists 70 table-driven cases (`forgetest.CaseNames`). Each case
 has no body yet and skips with "not implemented". A case gets its body
 before an adapter implements the methods that it covers (CLAUDE.md: a new
 port method gets conformance tests before any adapter implements it). A
@@ -479,9 +486,55 @@ when its version control system has the feature.
 | `repo-token` (one repository, read, at most 1 hour) | runner git, git mode `forge` | yes | no | no (spike) | no (spike) | no |
 | `events` (signed, with a delivery ID) | review watcher, triggers, comment commands | yes | yes, a repository webhook | token only (spike) | yes (spike) | yes, through the bridge protocol |
 | Automatic redelivery of a failed event | triggers | no | no | spike | spike | bridge |
+| `self-rotate` (rotate the token through the API) | credential rotation | not needed (short-lived tokens) | no | yes, `self/rotate` | spike | bridge |
 
 The spike of Forgejo fills the column with facts, and adds a row for each
 essential that the port does not have.
+
+## Credential expiry and rotation (owner decision, 2026-10-20)
+
+**The GitHub App is the recommended connection.** Its tokens are
+short-lived, so it has nothing to rotate. A static token (`token`) is the
+fallback.
+
+**The server records the expiry of a token credential.** It reads the
+expiry when a person adds a credential set, at each `Check` call, and at a
+periodic check:
+
+- GitLab: the `self` endpoint of the token gives `expires_at` and the
+  scopes. This works for a personal, a group and a project access token.
+- GitHub: the response header `GitHub-Authentication-Token-Expiration`
+  gives the expiry of a fine-grained token (spike: confirm it on a real
+  response).
+
+The API and the console show the expiry of each credential set. A metric
+and a WARN log line tell the operator 30 days and 7 days before the expiry.
+The server flags a token with no expiry.
+
+**GitLab: rotate now, and a rotation schedule.** The REST API and the
+console have a "rotate now" action. Each connection can have a rotation
+schedule, which is optional. The server calls the `self/rotate` endpoint of
+the token (`RotateSelf`). The GitLab scope `self_rotate` is enough for this
+call. The GitLab setup guide recommends it beside `api`. The new token becomes a new credential set (the two-set rotation of
+ADR 213 decision 7). The server removes the old set after the new set
+passes `Check`.
+
+**Crash safety (hard rule).** GitLab revokes the old token at once when it
+rotates it. When a revoked token rotates again, GitLab revokes the whole
+token family. So:
+
+1. A rotation runs as a durable operation.
+2. The step that receives the new token also seals and stores it.
+3. The operation never retries with the old token.
+4. A crash between the call and the store marks the connection "needs a new
+   credential", and an alert fires.
+
+**GitHub tokens: expiry display and warnings only.** GitHub has no API that
+rotates a fine-grained personal access token. The console says so and
+recommends the GitHub App.
+
+Source: <https://docs.gitlab.com/api/personal_access_tokens/>. The GitHub
+header is a spike item.
 
 ## Webhook intake (owner decision, 2026-10-20: parse in the port, the route outside it)
 
@@ -958,6 +1011,21 @@ the kind (`github`, `gitlab`, `forgejo`) stays.
   definition of done.
 - RFC 27 keeps `apply` and `unlock` as comment commands, with the conditions
   of Q8.
+- The server records the expiry of each token credential set, answers it
+  in the API, shows it in the console, and has a metric and a WARN log line
+  at 30 days and 7 days before the expiry. A token with no expiry is flagged.
+- The REST API gets a "rotate now" custom method for a GitLab connection and
+  a rotation schedule setting for each connection (the implementation pull
+  request names them).
+- A rotation is a durable operation that stores the new token in the step
+  that receives it, and never retries with the old token. A crash marks the
+  connection "needs a new credential" and fires an alert (proposed: a test
+  of the operation stops it between the call and the store).
+- The GitLab setup guide recommends the scope `self_rotate` beside `api`.
+  The GitHub setup guide recommends the GitHub App, and says that GitHub
+  cannot rotate a fine-grained token.
+- A spike confirms the GitHub header `GitHub-Authentication-Token-Expiration`
+  on a real response.
 - Follow-up: rename the value `forge` of the git credential mode of a runner
   pool before the first release. It is a wire value in the runner reference,
   so it needs its own pull request.
@@ -1004,6 +1072,10 @@ One line for each question.
   hostname.
 - **Q11: deferred to RFC 12.** The proposed answer is A: the code location
   sets the merge method, with a merge commit as the default.
+- **Credential expiry and rotation (owner decision, 2026-10-20).** The
+  GitHub App is the recommended connection. The server records the expiry
+  of a static token and warns. A GitLab token rotates through `self/rotate`
+  as a durable operation that never retries with the old token.
 
 ## Outcome
 

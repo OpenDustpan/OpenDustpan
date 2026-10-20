@@ -187,8 +187,10 @@ type Forge interface {
 	// Capabilities returns what the forge and the auth kind of the
 	// connection can do. It makes no call to the forge.
 	Capabilities() Capabilities
-	// Check calls the forge and returns the account of the credential. A
-	// test of a new connection and a rotation of its credentials call it.
+	// Check calls the forge and returns the account of the credential,
+	// with the expiry and the scopes of a token when the forge gives them.
+	// A test of a new connection, a rotation of its credentials and the
+	// periodic check of the server call it.
 	Check(ctx context.Context) (Account, error)
 
 	Files
@@ -196,6 +198,7 @@ type Forge interface {
 	Reviews
 	Tokens
 	Events
+	Rotation
 }
 
 // Files reads the code of a repository. Write-back, triggers, the change
@@ -286,12 +289,44 @@ type Events interface {
 	ParseEvent(ctx context.Context, r EventRequest, secrets [][]byte) (Event, error)
 }
 
+// Rotation replaces the token of a connection with a new token from the
+// forge.
+type Rotation interface {
+	// RotateSelf asks the forge for a new token in place of the token of
+	// the credential, and returns the new token. The forge revokes the old
+	// token when it makes the new one. The caller seals and stores the new
+	// token in the same step that receives it. After any error, the caller
+	// never calls RotateSelf again with the old token: the forge may have
+	// rotated it already, and a second rotation with a revoked token can
+	// make the forge revoke each token made from it. expiresAt is the expiry
+	// of the new token. The zero time lets the forge choose it. It returns
+	// ErrUnsupported when the forge or the auth kind cannot rotate a token,
+	// and ErrAuth when the forge refuses the old token.
+	RotateSelf(ctx context.Context, expiresAt time.Time) (RotatedToken, error)
+}
+
+// RotatedToken is the new token of a rotation. Secret has the same form as
+// Credential.Secret. ExpiresAt is the expiry that the forge gave.
+type RotatedToken struct {
+	Secret    []byte
+	ExpiresAt time.Time
+}
+
 // Account is an account of a forge. ID is the stable ID that the forge
 // gives, for example the numeric user ID of GitHub. Login can change, so a
 // link to a principal holds the ID.
+//
+// ExpiresAt is the expiry of the token of the credential, when the forge
+// gives one. NoExpiry is true when the forge says that the token has no
+// expiry. The server flags such a token. With ExpiresAt zero and NoExpiry
+// false, the forge gave no expiry, for example for an app, whose tokens are
+// short-lived. Scopes are the scopes of the token, when the forge gives them.
 type Account struct {
-	ID    string
-	Login string
+	ID        string
+	Login     string
+	ExpiresAt time.Time
+	NoExpiry  bool
+	Scopes    []string
 }
 
 // Commit is a commit on the forge. Time is the time that the forge gives
@@ -554,6 +589,8 @@ const (
 	CapRepoToken Capability = "repo-token"
 	// CapEvents covers ParseEvent.
 	CapEvents Capability = "events"
+	// CapSelfRotate covers RotateSelf.
+	CapSelfRotate Capability = "self-rotate"
 )
 
 // Capabilities is the set of capabilities of a forge connection. With Push

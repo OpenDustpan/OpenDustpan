@@ -96,6 +96,8 @@ func cases() []testCase {
 	return []testCase{
 		// The connection.
 		{"check answers the account of the credential", "", nil},
+		{"check answers the expiry of a token that has one", "", nil},
+		{"check of a token with no expiry says so", "", nil},
 		{"open refuses another kind, a missing parameter and a bad secret, and makes no call", "", nil},
 		{"a refused credential is ErrAuth on each method", "", nil},
 		{"a missing repository is not found on each method", "", nil},
@@ -157,6 +159,13 @@ func cases() []testCase {
 		{"repo token of an app expires within one hour", forge.CapRepoToken, nil},
 		{"repo token of a token connection is not scoped", forge.CapGitAccess, nil},
 		{"a forge with repo-token also lists git-access", forge.CapRepoToken, nil},
+
+		// Rotation.
+		{"rotate self answers a new token that check accepts", forge.CapSelfRotate, nil},
+		{"rotate self revokes the old token", forge.CapSelfRotate, nil},
+		{"rotate self keeps the expiry that the call asks for", forge.CapSelfRotate, nil},
+		{"rotate self with a revoked token is ErrAuth", forge.CapSelfRotate, nil},
+		{"rotate self returns no part of the old or the new secret in an error", forge.CapSelfRotate, nil},
 
 		// Events.
 		{"parse ping event", forge.CapEvents, nil},
