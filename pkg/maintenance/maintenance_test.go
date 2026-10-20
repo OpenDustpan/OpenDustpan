@@ -513,7 +513,7 @@ func newFixtureWith(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -663,7 +663,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)

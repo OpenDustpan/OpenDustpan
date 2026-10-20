@@ -113,7 +113,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 	move := entry("unit:move")
 	move.Version = "from=none;to=payments"
 
-	m := collection.Move{Unit: unit, From: "", To: payments, ToID: paymentsCol.ID}
+	m := collection.Move{Unit: unit, From: "", To: payments, ToID: paymentsCol.ID, EndsLock: false}
 	if err := svc.SetUnit(ctx, m, move); err != nil {
 		t.Fatalf("move into payments: %v", err)
 	}

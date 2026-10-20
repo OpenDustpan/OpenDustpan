@@ -705,8 +705,8 @@ func (p pagingWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspac
 	return append([]workspace.Workspace(nil), p.items...), nil
 }
 
-func (p pagingWorkspaces) Lock(
-	_ context.Context, _ workspace.ID, _, _ string,
+func (p pagingWorkspaces) LockForJob(
+	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
 }

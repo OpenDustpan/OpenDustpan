@@ -9,8 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -136,12 +138,19 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, deleted 
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishStackInventory(
+	pubErr := publishStackInventory(
 		ctx,
 		q,
 		ref,
 		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
 	)
+	if pubErr != nil {
+		return pubErr
+	}
+
+	return refuseRestoreUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: inventoryTool, Name: stackUnitName(ref),
+	}, "stack", ref.Project.String()+"/"+ref.Stack.String())
 }
 
 // PurgeStack implements stack.Store. In one fenced transaction with the
@@ -312,12 +321,19 @@ func restoreWorkspaceRow(
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishWorkspaceInventory(
+	pubErr := publishWorkspaceInventory(
 		ctx,
 		q,
 		ref,
 		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
 	)
+	if pubErr != nil {
+		return pubErr
+	}
+
+	return refuseRestoreUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: inventoryToolOpenTofu, Name: ref.Name.String(),
+	}, "workspace", ref.Name.String())
 }
 
 // PurgeWorkspace implements workspace.Store. In one fenced transaction with
@@ -506,8 +522,11 @@ func (s *Store) purgeUnit(
 			return fmt.Errorf("delete collection membership: %w", err)
 		}
 
-		if err := q.DeleteManualLocksOfObject(ctx, u.id); err != nil {
-			return fmt.Errorf("delete manual lock: %w", err)
+		lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+			Kind: string(manuallock.KindUnit), ObjectID: u.id,
+		})
+		if lockErr != nil {
+			return fmt.Errorf("delete manual lock: %w", lockErr)
 		}
 
 		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
@@ -608,4 +627,30 @@ func purgeUnitContext(ctx context.Context, q *db.Queries, ns namespace.Name, uni
 	}
 
 	return nil
+}
+
+// refuseRestoreUnderLock returns an error that matches manuallock.ErrLocked
+// when a manual lock covers the unit that a restore has just brought back, on
+// the unit, on its collection or on its namespace. It runs in the transaction
+// of the restore, after the unit is live again, so the error rolls the restore
+// back: a lock stops every change, and a restore is a change.
+//
+// Defense in depth: the service reads the lock of the namespace before it calls
+// the store. This check stays so that the store does not rely on its caller: it
+// reads the lock of the unit, of its collection and of its namespace in the same
+// transaction as the write, and a lock that appears after the service check
+// still stops the restore.
+func refuseRestoreUnderLock(
+	ctx context.Context, q *db.Queries, unit collection.UnitRef, noun, name string,
+) error {
+	l, err := coveringLock(ctx, q, unit)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of restored %s: %w", noun, err)
+	}
+
+	return &manuallock.LockedError{Lock: l, Noun: noun, Name: unit.Namespace.String() + "/" + name}
 }

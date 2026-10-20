@@ -103,6 +103,18 @@ const (
 	CredentialTrustToken Credential = "trust-token"
 )
 
+// JobTokenID returns the job whose token authenticated the request, or the
+// empty string for every other credential. A manual lock lets a request pass
+// only on this answer, so a principal that carries a job ID with another
+// credential gets no pass.
+func (p Principal) JobTokenID() string {
+	if p.Credential != CredentialJobToken {
+		return ""
+	}
+
+	return p.JobID
+}
+
 // ActsAsPerson reports whether a person acts through the request: the
 // credential is a session or an access token, and the kind is person or
 // unknown. An empty credential counts as an access token, and an unknown
@@ -791,6 +803,12 @@ func (o Object) String() string {
 // IsUnit reports whether the reference names a unit rather than a namespace.
 func (o Object) IsUnit() bool {
 	return o.isUnit
+}
+
+// IsNamespace reports whether the reference names a namespace itself rather
+// than a unit, a collection, a principal, the caller or the installation.
+func (o Object) IsNamespace() bool {
+	return o.ns != "" && !o.isUnit && !o.isCollection && !o.isCaller && !o.isServer && o.principal == ""
 }
 
 // IsCaller reports whether the reference names the authenticated caller

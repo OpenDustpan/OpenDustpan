@@ -170,10 +170,18 @@ type UpdatesConfig struct {
 // ManualLocks is the read side of the manual locks of the shared core. The
 // start of a mutating update asks it before the stack takes its update lease.
 type ManualLocks interface {
-	// Covering returns the manual lock that covers the unit: a lock on the
-	// unit, or on the collection that holds it. It returns
-	// manuallock.ErrNotLocked when no manual lock covers the unit.
-	Covering(ctx context.Context, unit collection.UnitRef) (manuallock.Lock, error)
+	// CoveringFor returns the manual lock that covers the unit: a lock on the
+	// unit, on the collection that holds it, or on its namespace. jobID is the
+	// job whose job token made the request, or empty. The start of an update
+	// by a job whose phase started before the lock passes. It returns
+	// manuallock.ErrNotLocked when no manual lock covers the unit for the
+	// request.
+	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	// NamespaceLock returns the manual lock of the namespace, or
+	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
+	// unit has no inventory entry, so CoveringFor cannot find the lock of its
+	// namespace.
+	NamespaceLock(ctx context.Context, ns namespace.Name) (manuallock.Lock, error)
 }
 
 // Updates implements the update cycle of the Pulumi CLI: create and start an
@@ -326,14 +334,25 @@ func (s *Updates) Start(ctx context.Context, ref Ref, id UpdateID) (Started, err
 func (s *Updates) StartWithJournalVersion(
 	ctx context.Context, ref Ref, id UpdateID, journalVersion int64,
 ) (Started, error) {
-	return s.StartBy(ctx, ref, id, "", journalVersion)
+	return s.StartBy(ctx, ref, id, StartedBy{TokenID: "", JobID: ""}, journalVersion)
 }
 
-// StartBy starts the update like StartWithJournalVersion, for the access token
-// tokenID. The update keeps the ID, so each later lease request can check the
-// token (ADR 53). An empty tokenID starts it for no access token.
+// StartedBy names who starts an update: the access token, and the job whose job
+// token made the request.
+type StartedBy struct {
+	// TokenID is the ID of the access token. The update keeps it, so each later
+	// lease request can check the token (ADR 53). It is empty when the update
+	// starts for no access token.
+	TokenID string
+	// JobID is the job whose job token made the request, or empty. A mutating
+	// update that a job starts from a phase that began before a manual lock
+	// passes that lock.
+	JobID string
+}
+
+// StartBy starts the update like StartWithJournalVersion, for the caller by.
 func (s *Updates) StartBy(
-	ctx context.Context, ref Ref, id UpdateID, tokenID string, journalVersion int64,
+	ctx context.Context, ref Ref, id UpdateID, by StartedBy, journalVersion int64,
 ) (Started, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
@@ -357,7 +376,7 @@ func (s *Updates) StartBy(
 	// one request, the same as a job phase that started before the lock. The
 	// update that started keeps running, and the next start meets the lock.
 	if u.Mutates() {
-		if lockErr := s.checkManualLock(ctx, ref); lockErr != nil {
+		if lockErr := s.checkManualLock(ctx, ref, by.JobID); lockErr != nil {
 			return Started{}, lockErr
 		}
 	}
@@ -368,7 +387,7 @@ func (s *Updates) StartBy(
 	}
 
 	u.JournalVersion = journalVersion
-	u.TokenID = tokenID
+	u.TokenID = by.TokenID
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {
@@ -1683,14 +1702,22 @@ func (s *Updates) cancelJournaled(ctx context.Context, ref Ref, id UpdateID) (Up
 // checkManualLock refuses the start of a mutating update on the stack ref while
 // a manual lock covers it. The error matches ErrUpdateConflict and
 // manuallock.ErrLocked, and names the holder and the reason of the manual lock.
-func (s *Updates) checkManualLock(ctx context.Context, ref Ref) error {
-	if s.manual == nil {
+func (s *Updates) checkManualLock(ctx context.Context, ref Ref, jobID string) error {
+	return refuseManualLock(ctx, s.manual, ref, jobID)
+}
+
+// refuseManualLock returns an error that matches ErrUpdateConflict and
+// manuallock.ErrLocked while a manual lock covers the stack ref, and nil when
+// locks is nil or no lock covers the stack for the request. A lock that cannot
+// be read refuses the request: the check fails closed.
+func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID string) error {
+	if locks == nil {
 		return nil
 	}
 
-	l, err := s.manual.Covering(ctx, collection.UnitRef{
+	l, err := locks.CoveringFor(ctx, collection.UnitRef{
 		Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
-	})
+	}, jobID)
 	if errors.Is(err, manuallock.ErrNotLocked) {
 		return nil
 	}

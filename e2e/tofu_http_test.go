@@ -168,6 +168,16 @@ func runTofuHTTPManualLock(t *testing.T, env *e2e.Env, backendEnv []string) {
 	ctx := t.Context()
 	path := unitLockPath(tofuUnitRef())
 
+	// The push document for the unlocked write below, taken before the lock.
+	wsID := env.WorkspaceID(ctx, t)
+	pulled := env.Step(ctx, t, e2e.StepSpec{
+		Check: nil, Name: "http backend: state pull for the unlocked push",
+		Args: []string{"state", "pull"}, Env: backendEnv, Stdin: "", Fail: false, Redact: false,
+	}).Stdout
+	lineage, serial := overrideCurrent(t, env, "http backend: current state for the unlocked push",
+		"/api/v2/workspaces/"+wsID+"/current-state-version")
+	push := overridePushDocument(t, pulled, lineage, serial+1)
+
 	lockCall(t, env, actorA, collectionCall{
 		name: "http backend: lock the workspace", method: http.MethodPut, path: path,
 		body: lockBody(lockReasonText), want: http.StatusOK, check: nil,
@@ -182,6 +192,8 @@ func runTofuHTTPManualLock(t *testing.T, env *e2e.Env, backendEnv []string) {
 		Fail:   true,
 		Redact: false,
 	})
+
+	runTofuHTTPUnlockedPushUnderManualLock(t, env, backendEnv, push)
 
 	lockCall(t, env, actorA, collectionCall{
 		name: "http backend: remove the manual lock", method: http.MethodDelete, path: path,
@@ -490,5 +502,71 @@ func checkTofuHTTPApplied() func(e2e.Result) error {
 		}
 
 		return nil
+	}
+}
+
+// runTofuHTTPUnlockedPushUnderManualLock proves a state push without a lock ID
+// meets the manual lock, also when both unlocked-write switches are on: the
+// CLI writes to the http backend with no ?ID= and the lock refuses it. The
+// switches go off again after the step, so later scenarios see the defaults.
+// push is the state document to push, taken before the lock.
+func runTofuHTTPUnlockedPushUnderManualLock(t *testing.T, env *e2e.Env, backendEnv []string, push string) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := env.WorkspaceID(ctx, t)
+	unitSwitches := "/api/v2/workspaces/" + wsID + "/override-switches"
+	nsSwitches := "/api/server/namespaces/" + e2e.Namespace + "/override-switches"
+	const unlockedPushStep = "http backend: state push without a lock under the manual lock"
+
+	on, off := `{"allow-forced-writes":false,"allow-unlocked-writes":true}`,
+		`{"allow-forced-writes":false,"allow-unlocked-writes":false}`
+
+	overrideSwitches(t, env, "http backend: turn on the namespace switches", nsSwitches,
+		`{"allowForcedWrites":false,"allowUnlockedWrites":true}`)
+	overrideSwitches(t, env, "http backend: turn on the unit switches", unitSwitches, on)
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  checkTofuHTTPUnlockedPushRefused(env, unlockedPushStep),
+		Name:   unlockedPushStep,
+		Args:   []string{"state", "push", "-lock=false", "-"},
+		Env:    backendEnv,
+		Stdin:  push,
+		Fail:   true,
+		Redact: false,
+	})
+
+	overrideSwitches(t, env, "http backend: turn off the unit switches", unitSwitches, off)
+	overrideSwitches(t, env, "http backend: turn off the namespace switches", nsSwitches,
+		`{"allowForcedWrites":false,"allowUnlockedWrites":false}`)
+}
+
+// checkTofuHTTPUnlockedPushRefused checks a state push without a lock ID that a
+// manual lock stopped. The CLI prints the status only, so the answer of the
+// server is the proof: the POST answered 423 with lock info that names the
+// holder and the reason. It reads only the requests of the step stepName.
+func checkTofuHTTPUnlockedPushRefused(env *e2e.Env, stepName string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if out := r.Stdout + r.Stderr; !strings.Contains(out, "423") {
+			return fmt.Errorf("%w: push output lacks the status 423: %s", errUnexpected, out)
+		}
+
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			e := &entries[i]
+			if e.Step != stepName || e.Method != http.MethodPost || e.Status != http.StatusLocked {
+				continue
+			}
+
+			for _, want := range []string{e2e.Subject, lockReasonText} {
+				if !strings.Contains(e.ResponseBody, want) {
+					return fmt.Errorf("%w: 423 body lacks %q: %s", errUnexpected, want, e.ResponseBody)
+				}
+			}
+
+			return nil
+		}
+
+		return fmt.Errorf("%w: no POST answered %d", errUnexpected, http.StatusLocked)
 	}
 }

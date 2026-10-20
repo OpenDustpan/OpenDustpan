@@ -365,8 +365,8 @@ func (stubWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspace.Wo
 	return []workspace.Workspace{ws}, nil
 }
 
-func (stubWorkspaces) Lock(
-	_ context.Context, id workspace.ID, holder, _ string,
+func (stubWorkspaces) LockForJob(
+	_ context.Context, id workspace.ID, holder, _, _ string,
 ) (workspace.Workspace, error) {
 	ws, err := stubWorkspaceByID(id)
 	if err != nil {
@@ -1710,8 +1710,8 @@ func (errorWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace.Wo
 	return nil, errTestInternal
 }
 
-func (errorWorkspaces) Lock(
-	_ context.Context, _ workspace.ID, _, _ string,
+func (errorWorkspaces) LockForJob(
+	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
 }
