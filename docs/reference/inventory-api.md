@@ -19,6 +19,10 @@ page is relative to that prefix.
 | `POST /namespaces/{namespace}/collections` | `collection:create` | A new collection |
 | `GET /namespaces/{namespace}/collections/{collection}` | `collection:read` | One collection |
 | `DELETE /namespaces/{namespace}/collections/{collection}` | `collection:delete` | No body |
+| `PUT /namespaces/{namespace}/collections/{collection}/lock` | `unit:lock` | The manual lock of the collection |
+| `GET /namespaces/{namespace}/collections/{collection}/lock` | `collection:read` | The manual lock of the collection |
+| `DELETE /namespaces/{namespace}/collections/{collection}/lock` | `unit:lock`, and the caller holds the lock | No body |
+| `POST /namespaces/{namespace}/collections/{collection}/lock/force-unlock` | `unit:manage` | No body |
 | `GET /namespaces/{namespace}/context` | `namespace:read` | The context of the namespace |
 | `PATCH /namespaces/{namespace}/context` | `namespace:set-context` | The new context |
 | `DELETE /namespaces/{namespace}/context` | `namespace:set-context` | No body |
@@ -39,6 +43,12 @@ These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 - `POST /api/inventory/deleted-units/{tool}/{unitID}/restore?organization={namespace}`
 - `DELETE /api/inventory/deleted-units/{tool}/{unitID}?organization={namespace}`
 - `PUT /api/inventory/unit-collection?unit={unit reference}`
+- `PUT /api/inventory/unit-lock?unit={unit reference}`, `unit:lock`: take a manual lock. The body is `{"reason": "..."}`.
+- `GET /api/inventory/unit-lock?unit={unit reference}`, `unit:read`: read the manual lock of the unit.
+- `DELETE /api/inventory/unit-lock?unit={unit reference}`, `unit:lock`: the holder ends the lock.
+- `POST /api/inventory/unit-lock/force-unlock?unit={unit reference}`, `unit:manage`: end the lock of another person.
+
+The [manual locks guide](../guides/manual-locks.md) describes the lock routes.
 
 ## The unit list
 
@@ -56,6 +66,7 @@ These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 | `status` | The status. The field is not there when the status is not known. |
 | `resourceCount` | The count of resources. The field is not there when the count is not known. |
 | `lock` | `holder`, `since` (an RFC 3339 time in UTC) and `operation`. The field is not there when the unit is not locked. |
+| `manualLock` | The manual lock that covers the unit: `kind` (`unit` or `collection`), `object`, `holder`, `reason` and `since` (an RFC 3339 time in UTC). The field is not there when no manual lock covers the unit. It is separate from `lock`. |
 | `collection` | The name of the collection. The field is not there when the unit has none. |
 | `labels` | The labels of the unit, as an object of strings. The field is not there when the unit has no label. |
 | `consoleUrl` | The URL of the page of the unit in the console. The field is not there when the server has no public URL, and not for a unit that is deleted. |

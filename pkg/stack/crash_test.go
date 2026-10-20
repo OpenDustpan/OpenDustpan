@@ -152,6 +152,7 @@ func newCrashFixture(
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            wrappedSQL,
 		Tokens:             nil,
 		Checkpoints:        wrappedSQL,

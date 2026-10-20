@@ -142,6 +142,7 @@ func newCrashFixture(
 	namespaces := crashNamespaces(t, wrappedSQL)
 
 	service, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         wrappedSQL,
 		States:             wrappedSQL,
 		Blobs:              wrappedBlobs,

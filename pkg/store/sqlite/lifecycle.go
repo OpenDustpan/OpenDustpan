@@ -516,6 +516,10 @@ func (s *Store) purgeUnit(
 			return fmt.Errorf("delete collection membership: %w", err)
 		}
 
+		if err := q.DeleteManualLocksOfObject(ctx, u.id); err != nil {
+			return fmt.Errorf("delete manual lock: %w", err)
+		}
+
 		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
 			Tool: u.tool, UnitID: u.id, Namespace: fence.Namespace.String(), PurgedAtMs: codec.Millis(e.At),
 		})

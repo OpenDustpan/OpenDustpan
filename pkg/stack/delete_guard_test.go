@@ -700,6 +700,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 	blobs := newMemBlob(newClock())
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            mem,
 		Tokens:             nil,
 		Checkpoints:        mem,

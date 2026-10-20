@@ -30,6 +30,7 @@ import (
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -210,6 +211,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks: nil,
 		// The store never serves a request: only ActiveUpdate runs, and it
 		// answers not found. The embedded stores stay nil on purpose.
 		Updates:            coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
@@ -656,7 +658,18 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		tb.Fatalf("collection service: %v", err)
 	}
 
+	locks, err := manuallock.NewService(manuallock.Config{
+		Store:      coverageLockStore{},
+		Namespaces: coverageNamespaceStore{},
+		Authorizer: identity.AdminOnly{},
+		Now:        nil,
+	})
+	if err != nil {
+		tb.Fatalf("manual lock service: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Locks:         locks,
 		PublicURL:     "",
 		Moves:         nil,
 		Namespaces:    namespaces,
@@ -824,6 +837,34 @@ func (coverageCollectionStore) SetUnitCollection(
 
 func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.UnitRef) (collection.Ref, error) {
 	return collection.Ref{Namespace: "", Name: ""}, nil
+}
+
+// coverageLockStore holds no manual lock. It exists only so that the inventory
+// handler serves its lock routes in the route table; no request is ever served.
+type coverageLockStore struct{}
+
+func (coverageLockStore) PutLock(_ context.Context, _ manuallock.Lock, _ namespace.Fence, _ audit.Entry) error {
+	return nil
+}
+
+func (coverageLockStore) RemoveLock(
+	_ context.Context, _ manuallock.Target, _ string, _ namespace.Fence, _ audit.Entry,
+) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) ForceRemoveLock(
+	_ context.Context, _ manuallock.Target, _ namespace.Fence, _ audit.Entry,
+) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) GetLock(_ context.Context, _ manuallock.Target) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) CoveringLock(_ context.Context, _ collection.UnitRef) (manuallock.Lock, error) {
+	return manuallock.Lock{}, manuallock.ErrNotLocked
 }
 
 // coverageReader answers no unit. It exists only to build a Handler for its

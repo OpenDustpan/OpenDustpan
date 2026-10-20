@@ -40,6 +40,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	if scope == ScopeAuthorized {
 		status, message := classifyManagement(err)
 		h.logFailure(ctx, status)
+		h.logFenced(ctx, err)
 		h.writeJSON(ctx, w, status, managementError{Message: message, Code: status})
 
 		return
@@ -48,11 +49,21 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	status, body := classifyProtocol(err)
 	h.logFailure(ctx, status)
 
+	h.logFenced(ctx, err)
+
 	if status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 	}
 
 	h.writeJSON(ctx, w, status, body)
+}
+
+// logFenced logs a fenced write with its wrap context, which the answer never
+// holds.
+func (h *Handler) logFenced(ctx context.Context, err error) {
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
 }
 
 // logFailure logs the status of a failed request. The log never holds the
@@ -107,7 +118,13 @@ func classifyProtocolOther(
 		return mk(http.StatusBadRequest, protocol.ErrorInvalid)
 	case errors.Is(err, runner.ErrLimit):
 		return mk(http.StatusTooManyRequests, protocol.ErrorRateLimited)
-	case errors.Is(err, namespace.ErrFenced), errors.Is(err, namespace.ErrNotHome),
+	case errors.Is(err, namespace.ErrFenced):
+		// The copy of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return http.StatusServiceUnavailable, protocol.Error{
+			Code: protocol.ErrorUnavailable, Message: namespace.ErrFenced.Error(), Supported: "",
+		}
+	case  errors.Is(err, namespace.ErrNotHome),
 		errors.Is(err, maintenance.ErrInMaintenance):
 		return mk(http.StatusServiceUnavailable, protocol.ErrorUnavailable)
 	default:
@@ -153,7 +170,7 @@ func classifyManagementConflict(err error) (int, string) {
 	case errors.Is(err, runner.ErrRetired):
 		return http.StatusConflict, "the runner is retired"
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, "write fenced: try again"
+		return http.StatusConflict, namespace.ErrFenced.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
 	case errors.Is(err, maintenance.ErrInMaintenance):

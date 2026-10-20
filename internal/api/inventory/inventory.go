@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -56,6 +57,10 @@ type Config struct {
 	// service serves no collection route, so a namespace store that holds no
 	// collections keeps the rest of the API unchanged.
 	Collections *collection.Service
+	// Locks serves the manual lock routes. It is optional: a nil service serves
+	// no lock route, so a namespace store that holds no manual locks keeps the
+	// rest of the API unchanged.
+	Locks *manuallock.Service
 	// Moves checks the escalation of a move into a collection. It is required
 	// with Collections: a move with no checker is refused.
 	Moves         MoveChecker
@@ -82,6 +87,7 @@ type Handler struct {
 	lifecycles  map[string]coreinventory.Lifecycle
 	readScope   DeletedReadScope
 	collections *collection.Service
+	locks       *manuallock.Service
 	moves       MoveChecker
 	authn       identity.Authenticator
 	sessions    *sessionauth.Checker
@@ -133,6 +139,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		lifecycles:  cfg.Lifecycles,
 		readScope:   cfg.ReadScope,
 		collections: cfg.Collections,
+		locks:       cfg.Locks,
 		moves:       cfg.Moves,
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
@@ -206,6 +213,9 @@ type unitEntry struct {
 	Status        string     `json:"status,omitempty"`
 	ResourceCount *int64     `json:"resourceCount,omitempty"`
 	Lock          *lockEntry `json:"lock,omitempty"`
+	// ManualLock is the manual lock that covers the unit, omitted when none
+	// does. Like Lock, it is a flag and not a status.
+	ManualLock *manualLockEntry `json:"manualLock,omitempty"`
 	// Collection is the name of the collection of the unit, omitted when the
 	// unit has none (ADR 51).
 	Collection string `json:"collection,omitempty"`
@@ -252,6 +262,7 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		Status:        e.Status,
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
+		ManualLock:    toManualLockEntry(e.ManualLock),
 		Collection:    e.Collection,
 		Labels:        e.Labels,
 		ConsoleURL:    h.consoleURL(e.UnitID),
@@ -451,6 +462,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
@@ -491,8 +506,7 @@ func classify(err error) (int, string) {
 	case errors.Is(err, collection.ErrNotFound), errors.Is(err, collection.ErrUnitNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, collection.ErrAlreadyExists), errors.Is(err, collection.ErrNotEmpty),
-		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection),
-		errors.Is(err, namespace.ErrFenced):
+		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody), errors.Is(err, errMissingUnit):
 		return http.StatusBadRequest, err.Error()
@@ -522,8 +536,18 @@ func classifyChange(err error) (int, string) {
 	case errors.Is(err, maintenance.ErrInMaintenance):
 		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return classifyManualLock(err)
 	}
+}
+
+// classifyManualLock maps the errors of the manual lock routes. Any other error
+// is an internal error.
+func classifyManualLock(err error) (int, string) {
+	if status, message, ok := classifyLock(err); ok {
+		return status, message
+	}
+
+	return http.StatusInternalServerError, "internal error"
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

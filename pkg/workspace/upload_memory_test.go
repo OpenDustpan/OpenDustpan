@@ -418,6 +418,7 @@ func memService(tb testing.TB, base memBase, sealer workspace.Sealer) (*workspac
 	tb.Helper()
 
 	svc, svcErr := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         base.store,
 		States:             base.store,
 		Blobs:              base.blobs,
