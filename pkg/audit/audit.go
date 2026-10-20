@@ -152,17 +152,19 @@ func ValidateReason(reason string) error {
 		return fmt.Errorf("%w: longer than %d characters", ErrInvalidReason, MaxReasonLen)
 	}
 
-	if strings.ContainsFunc(reason, isHiddenRune) {
+	if strings.ContainsFunc(reason, IsHiddenRune) {
 		return fmt.Errorf("%w: holds a control character", ErrInvalidReason)
 	}
 
 	return nil
 }
 
-// isHiddenRune reports whether r is a control character (Cc), a format
+// IsHiddenRune reports whether r is a control character (Cc), a format
 // character (Cf, for example U+202E), a line separator (Zl, U+2028) or a
-// paragraph separator (Zp, U+2029).
-func isHiddenRune(r rune) bool {
+// paragraph separator (Zp, U+2029). Text that holds such a character can
+// look different from its bytes, so a stored text that the server shows or
+// logs refuses it.
+func IsHiddenRune(r rune) bool {
 	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 

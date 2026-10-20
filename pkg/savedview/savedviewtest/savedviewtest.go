@@ -51,14 +51,21 @@ func Run(t *testing.T, newHarness Factory) {
 	for _, tc := range cases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			// Skip before the harness is built: a skipped case must not create
+			// a database.
+			if tc.test == nil {
+				t.Skip("not implemented: waits for the first adapter")
+			}
+
 			tc.test(t, newHarness(t))
 		})
 	}
 }
 
-func notYet(t *testing.T, _ Harness) {
-	t.Helper()
-	t.Skip("not implemented: waits for the first adapter")
+// pending is a case with a name and no test yet. Run skips it.
+func pending(name string) suiteCase {
+	return suiteCase{name: name, test: nil}
 }
 
 // cases lists the rules of the Store port. Each name states one rule.
@@ -78,38 +85,42 @@ func cases() []suiteCase {
 
 func createCases() []suiteCase {
 	return []suiteCase{
-		{"create then get returns the same view", notYet},
-		{"create refuses a view that fails validation", notYet},
-		{"create refuses a second view with the same name for the same owner", notYet},
-		{"create accepts the same name for another owner", notYet},
-		{"create accepts the same name in another namespace", notYet},
-		{"create refuses the view after the largest number of views of one owner", notYet},
-		{"list is ordered by name, then ID", notYet},
-		{"list returns an empty list for an owner with no view", notYet},
-		{"a query round trip keeps the order of its labels and references", notYet},
+		pending("create then get returns the same view"),
+		pending("create refuses a view that fails validation"),
+		pending("create refuses a second view with the same name for the same owner"),
+		pending("create accepts the same name for another owner"),
+		pending("create accepts the same name in another namespace"),
+		pending("create refuses the view after the largest number of views of one owner"),
+		pending("create at the namespace cap returns ErrLimit, also for an owner with no view"),
+		pending("create accepts a query with a repeated label and a repeated reference, as the unit list does"),
+		pending("list is ordered by name, then ID"),
+		pending("list returns an empty list for an owner with no view"),
+		pending("a query round trip keeps the order of its labels and references"),
 	}
 }
 
 func visibilityCases() []suiteCase {
 	return []suiteCase{
-		{"get of the view of another owner returns not found", notYet},
-		{"get of an unknown ID returns the same error as a view of another owner", notYet},
-		{"get of a view in another namespace returns not found", notYet},
-		{"list returns the views of the owner only", notYet},
-		{"delete of the view of another owner returns not found and keeps the view", notYet},
+		pending("get of the view of another owner returns not found"),
+		pending("get of an unknown ID returns the same error as a view of another owner"),
+		pending("get of a view in another namespace returns not found"),
+		pending("list returns the views of the owner only"),
+		pending("views of a deleted principal are gone, and a new principal with the same subject sees none"),
+		pending("delete of the view of another owner returns not found and keeps the view"),
 	}
 }
 
 func writeCases() []suiteCase {
 	return []suiteCase{
-		{"create with a stale fence returns ErrFenced and stores nothing", notYet},
-		{"create with the fence of another namespace returns ErrFenced", notYet},
-		{"delete with a stale fence returns ErrFenced and keeps the view", notYet},
-		{"create appends one audit entry in the same transaction", notYet},
-		{"a create that fails appends no audit entry", notYet},
-		{"delete appends one audit entry in the same transaction", notYet},
-		{"delete of an unknown view returns not found and appends no audit entry", notYet},
-		{"concurrent creates of one name store one view", notYet},
-		{"concurrent creates at the limit store no more than the limit", notYet},
+		pending("create with a stale fence returns ErrFenced and stores nothing"),
+		pending("create with the fence of another namespace returns ErrFenced"),
+		pending("delete with a stale fence returns ErrFenced and keeps the view"),
+		pending("create appends one audit entry in the same transaction"),
+		pending("a create that fails appends no audit entry"),
+		pending("delete appends one audit entry in the same transaction"),
+		pending("delete of an unknown view returns not found and appends no audit entry"),
+		pending("concurrent creates of one name store one view"),
+		pending("concurrent creates at the limit store no more than the limit"),
+		pending("delete of a principal deletes its views and audits each view by ID only"),
 	}
 }

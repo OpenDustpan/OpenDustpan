@@ -66,7 +66,7 @@ A key and a value on a unit, for views and filters. A label never grants access 
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
 **Saved view**:
-A name for a query of the unit list, stored on the server and read through the REST API (ADR 266). A saved view holds the query and never its results. A reader runs the query again with the access of the reader, so the view shows only units that the reader can read. A saved view grants no access (ADR 51 decision 7). Who owns a view, how a view is shared and what it stores besides filters are open questions (RFC 100).
+A name for a query of the unit list, stored on the server and read through the REST API (ADR 266). A saved view holds the query and never its results. A reader runs the query again with the access of the reader, so the view shows only units that the reader can read. A saved view grants no access (ADR 51 decision 7). One person in one namespace owns a view, and a view is private first (ADR 266).
 _Avoid_: Filter preset, bookmark, smart collection (a collection holds units by explicit membership, ADR 51)
 
 **Unit lock**:

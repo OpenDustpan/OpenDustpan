@@ -12,10 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -33,6 +35,14 @@ const (
 	MaxLabelValueLen = 256
 	// MaxNameLen is the largest length of the name of a view, in characters.
 	MaxNameLen = 128
+	// MaxPerOwner is the largest number of views that one owner has in one
+	// namespace.
+	MaxPerOwner = 100
+	// MaxPerNamespace is the largest number of views in one namespace, for all
+	// owners together.
+	MaxPerNamespace = 10000
+	// MaxBodyBytes is the largest request body of a create call, in bytes.
+	MaxBodyBytes = 16 << 10
 )
 
 // idPattern is the form of a view ID: the prefix and 32 lowercase hex digits.
@@ -47,8 +57,8 @@ var (
 	// ErrExists reports that the owner already has a view with the name in the
 	// namespace.
 	ErrExists = errors.New("saved view name already used")
-	// ErrLimit reports that the owner already has the largest number of views
-	// in the namespace.
+	// ErrLimit reports that the owner already has MaxPerOwner views in the
+	// namespace, or that the namespace already has MaxPerNamespace views.
 	ErrLimit = errors.New("saved view limit reached")
 )
 
@@ -75,6 +85,12 @@ type Label struct {
 // has each label and, if the query names references, when its reference is one
 // of them. The query has the same meaning as the label and reference query
 // values of the unit list, and no other. It holds no result and no unit ID.
+//
+// A reference holds the tool of the unit. A unit that moves to another tool no
+// longer matches its reference, and a label filter still matches it.
+//
+// The unit list accepts a label or a reference that it receives twice, so a
+// query does too. A repeated reference selects the same unit once.
 type Query struct {
 	// Labels are the labels that a unit must have.
 	Labels []Label
@@ -146,10 +162,10 @@ func validateReferences(refs []string, ns namespace.Name) error {
 
 // View is a saved view: a named query in one namespace. Owner is the subject of
 // the principal that made it. A first version has personal views only, so the
-// owner is the only reader.
+// owner is the only reader. A view has no update time, because a first version
+// has no call that changes a view.
 type View struct {
 	CreatedAt time.Time
-	UpdatedAt time.Time
 	ID        ID
 	Namespace namespace.Name
 	Name      string
@@ -165,12 +181,16 @@ func (v View) Validate() error {
 
 	if !validName(v.Name) {
 		return fmt.Errorf(
-			"%w: the name has 1 to %d characters, no control character and no space at the ends",
+			"%w: the name has 1 to %d characters, no control or hidden character and no space at the ends",
 			ErrInvalid, MaxNameLen,
 		)
 	}
 
-	if v.Owner == "" || !utf8.ValidString(v.Owner) || hasControl(v.Owner) {
+	// Defense in depth: the handler takes the owner from the signed-in
+	// principal. This check stays so that a new caller of the store cannot
+	// store an owner that looks like another subject. It does not rely on the
+	// handler or on the identity provider.
+	if v.Owner == "" || !utf8.ValidString(v.Owner) || hasHidden(v.Owner) {
 		return fmt.Errorf("%w: the view has no valid owner", ErrInvalid)
 	}
 
@@ -178,9 +198,10 @@ func (v View) Validate() error {
 }
 
 // validName reports whether s is a view name: 1 to MaxNameLen characters of
-// valid UTF-8, with no control character and no space at either end.
+// valid UTF-8, with no hidden character (see audit.IsHiddenRune) and no space
+// at either end.
 func validName(s string) bool {
-	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxNameLen || hasControl(s) {
+	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxNameLen || hasHidden(s) {
 		return false
 	}
 
@@ -188,6 +209,12 @@ func validName(s string) bool {
 	last, _ := utf8.DecodeLastRuneInString(s)
 
 	return !unicode.IsSpace(first) && !unicode.IsSpace(last)
+}
+
+// hasHidden reports whether s holds a control, format, line separator or
+// paragraph separator character: the set that the audit log refuses.
+func hasHidden(s string) bool {
+	return strings.ContainsFunc(s, audit.IsHiddenRune)
 }
 
 func hasControl(s string) bool {

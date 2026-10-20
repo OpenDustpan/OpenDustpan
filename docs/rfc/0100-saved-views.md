@@ -1,16 +1,18 @@
 ---
 rfc: 100
 title: Saved views of the unit list
-status: discussing
+status: accepted
 created: 2026-10-20
+adr: 266
 ---
 
 # RFC 100. Saved views of the unit list
 
-Status: discussing. Part of [RFC 40](0040-inventory-queries.md). The owner
-decided one thing (ADR 266): a saved view is a server object with an API.
-This RFC holds the questions that follow from it. Each question has options
-and a recommendation. No question is decided.
+Status: accepted. Part of [RFC 40](0040-inventory-queries.md). The owner
+decided that a saved view is a server object with an API. The product manager
+decided the questions on 20 October 2026, under the owner's delegation.
+[ADR 266](../adr/0266-a-saved-view-is-a-server-object-with-an-api.md) records
+the decisions. The section "Outcome" gives the answers. No question is open.
 
 ## Problem
 
@@ -237,7 +239,7 @@ A saved view table joins the backup table list. A restore checks each row
 again. The idempotency record of a create stores the ID of the view, not the
 body (ADR 210 decision 6). No question: this follows from the ADRs.
 
-## First slice (when the owner accepts questions 1 to 5 and 8)
+## First slice
 
 One thin end-to-end path, with no new dependency:
 
@@ -262,4 +264,26 @@ One thin end-to-end path, with no new dependency:
 
 ## Outcome
 
-None yet.
+Accepted on 20 October 2026 by the product manager, under the owner's
+delegation: [ADR 266](../adr/0266-a-saved-view-is-a-server-object-with-an-api.md).
+
+1. A view has one owner: one person in one namespace.
+2. No sharing first, then the namespace, then a collection. A share shows the
+   name and the label values to the scope, and the server audits it.
+3. A view stores labels and references only. A reference holds the tool, so a
+   unit that moves to another tool no longer matches it. A label filter still
+   matches.
+4. The limits are constants: a name of 128 characters, 100 views for each
+   owner, 10 000 views for each namespace, a body of 16 KiB.
+5. New actions `view:create`, `view:read` and `view:delete`, with the
+   namespace as the object. The handler checks that the owner is the caller,
+   in addition to the filter of the store. The route for the units checks
+   `unit:read` for each unit. An administrator cannot read the view of another
+   person.
+6. An administrator deletes a view without reading it (`view:manage`), with an
+   audit entry, in a later slice.
+7. The views of a principal are deleted in the same transaction as the
+   principal, with one audit entry for each view that holds the view ID only.
+   A bootstrap admin token cannot create a view.
+8. Both routes: the definition and `/views/{id}/units`. A test compares them.
+9. Backup, restore and replay follow the text above.
