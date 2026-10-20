@@ -75,7 +75,6 @@ pkg/                   the public SDK (ADR 35)
   unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
   drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
   unitimport/          domain: imports of units from a source, the import ledger and the move check
-  manage/              port: the client that the CLI and the providers for OpenTofu and Pulumi use; the version pin rule; manage/managetest suite
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
   gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job

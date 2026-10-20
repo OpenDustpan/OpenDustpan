@@ -10,12 +10,14 @@ created: 2026-10-10
 Status: discussing. ADR 270 records the decisions of the project owner: a
 CLI and the OpenTofu and Pulumi providers now, from the published API
 description, with a version pin before 1.0; unit settings are not kept in the
-repository; ownership rules are managed as code through the providers. This
-RFC holds the questions that stay open. Each has options, a recommendation and
-a benchmark. Question 2 needs the owner, because it asks for a generator
-dependency. On acceptance, the answers go into an ADR. The only code is the
-client port, the version pin rule and a conformance suite skeleton in
-`pkg/manage`.
+repository; ownership rules are managed as code through the providers. ADR 270
+also records the answers to questions 1 and 4 to 8, which the product manager
+decided under the owner's delegation of 20 October 2026. Questions 2 and 3 stay
+open, because they need the owner: question 2 asks for a generator dependency,
+and question 3 asks for a new repository. This RFC stays `discussing` until the
+owner answers both. This change holds no client code. The section "The client
+port" holds the contract that the client code must meet when it lands in the
+repository that question 3 chooses.
 
 ## Problem
 
@@ -41,20 +43,32 @@ Three personas decide the options:
 Facts on `main` (checked 2026-10-20):
 
 - The tool-neutral REST API is the surface for these objects (ADR 17, ADR
-  210). Every mutating route takes an `Idempotency-Key`, and `PATCH`, `PUT` and
-  `DELETE` take `If-Match` with the `ETag` of the object (ADR 210).
+  210). ADR 210 sets the rules: every mutating route takes an
+  `Idempotency-Key`, and `PATCH`, `PUT` and `DELETE` take `If-Match` with the
+  `ETag` of the object. The routes below do not all follow these rules yet.
+- **Collections** have routes to list, create, read and delete. They have no
+  update route. A read gives no `ETag`, and no route takes `If-Match`.
+- **Approval rules** have routes to list, read, put and delete, and the
+  approval default has read, put and delete. A `PUT` without `If-Match` is an
+  unconditional upsert. No route reads `If-None-Match`, so a create-only write
+  cannot be atomic today.
+- **Ownership rules** are stored by the gate package (ADR 225 decision 9). No
+  REST route reads or writes them.
+- Every write to an approval rule or an approval default with an access token
+  is refused with `403` and a plain message. The answer has no
+  `mfa.fresh-step-required` code. This is stricter than ADR 212 decision 3,
+  which says that only a change that reduces security needs a fresh step, so a
+  change that does not reduce security works with an access token. An access
+  token never gives a fresh authentication (ADR 227 decision 6).
 - The API description (ADR 264, RFC 99) is in design. The package
   `internal/api/apidesc` holds the types and the drift check. No description is
   served yet, and no generator is chosen (RFC 99 question 6).
 - `GET /api/dustpan/v1/capabilities` is public and gives `apiVersion`
-  (`v1`) only. The server version is in `/api/server/upgrade-check`, which
-  needs `server:observe` on the installation. A provider token should not need
-  that right, so a client has no route today that gives it the server version
-  (see "Follow-up work").
-- An access token never gives a fresh authentication (ADR 227 decision 6). A
-  write that needs one answers `403` with the error code
-  `mfa.fresh-step-required`. A change to a weaker approval setting needs one
-  (ADR 225, ADR 212 decision 3), and so does an approval of a `destroy`.
+  (`v1`) and, for a signed-in caller, the installation kind. The server version
+  is in `/api/server/upgrade-check`, which needs `server:observe` on the
+  installation. A provider token should not need that right, so a client has no
+  route today that gives it the server version or the version of the
+  description.
 - Provider wrappers exist as design (ADR 170 to 179): the module
   `providerkit` builds one provider that works with OpenTofu and with the
   Pulumi CLI from one core and two thin protocol adapters, in a repository of
@@ -63,6 +77,9 @@ Facts on `main` (checked 2026-10-20):
   `freshAuthSeconds` (ADR 225 decision 1). An ownership rule has a scope, a
   mode (`enforce` or `evaluate`), path globs and a count (ADR 225 decision 9).
   A collection is a named set of units in a namespace (ADR 51).
+
+The server work that follows from these facts blocks the first provider
+release. Each item is an issue, listed in "Follow-up work".
 
 Non-goals:
 
@@ -90,7 +107,7 @@ part is the order of work, because one pull request cannot hold them.
 | B. OpenTofu provider first | Most teams use OpenTofu or Terraform syntax already. | The port is first tested through a plugin protocol, which is a heavier test. |
 | C. All three at once | One release. | A large first change, and the port can be wrong in three places. |
 
-**Recommendation: A.** The client port and the pin rule are tool-neutral, and
+**Decided in ADR 270 decision 4: A.** The client port and the pin rule are tool-neutral, and
 the CLI exercises them without a plugin protocol. The providers then add only
 their protocol adapters (ADR 176). Every endpoint lands with its e2e step first
 (`CLAUDE.md`).
@@ -102,7 +119,7 @@ each case the client library comes first and tools are thin layers over it.
 
 ### 2. A client written by hand, or generated from the description?
 
-**This question needs the owner.** A generator is a new dependency. The
+**Open. This question needs the owner.** A generator is a new dependency. The
 project asks the owner before it adds a dependency (`CLAUDE.md`), and RFC 99
 question 6 holds the trial and the license rules. ADR 264 decision 5 says that
 the CLI and the providers are generated from the published description. This
@@ -112,11 +129,11 @@ RFC does not choose a generator and does not decide this question.
 | --- | --- | --- |
 | A. Hand-written client | No generator dependency. Full control of errors, retries and `If-Match`. | A person writes each call. The client can drift from the server, which is the problem ADR 264 solves. |
 | B. Generated client from the description, behind the port | Matches the server by construction. A new route costs no call code. | Needs an approved generator and a published description (RFC 99). A generated client has awkward errors, and the port must wrap it. |
-| C. The port in `pkg/manage`, a small hand-written transport (`Idempotency-Key`, `If-Match`, cursors, error translation), and a generated typed layer behind it | The CLI and the providers depend on the port only, so a later change of the generator touches one adapter. This is the RFC 99 shape of the transport layer. | The same dependency as B. |
+| C. The port in the client repository, a small hand-written transport (`Idempotency-Key`, `If-Match`, cursors, error translation), and a generated typed layer behind it | The CLI and the providers depend on the port only, so a later change of the generator touches one adapter. This is the RFC 99 shape of the transport layer. | The same dependency as B. |
 
 **Recommendation: C, and do not start the generated layer before the owner
-approves a generator.** Until then, the port and its conformance suite are the
-contract, and a hand-written adapter for the three first kinds is enough for
+approves a generator.** Until then, the port contract in this RFC is the
+specification, and a hand-written adapter for the three first kinds is enough for
 the CLI and for the e2e tests. The hand-written adapter then follows ADR 264
 decision 5 only in part, so the owner should say whether a temporary
 hand-written adapter is acceptable. If the answer is no, the first client waits
@@ -144,12 +161,17 @@ repository, with `sdk/go` as its own module.
 
 **Recommendation: B.** One repository, with the CLI and the provider core in
 different modules, and one release that builds the CLI, the OpenTofu archive and
-the Pulumi archive (ADR 177). Before 1.0, a release of the repository pins one
-minor version of the server, so the tags move with the server (question 8).
-Check the naming rules of the OpenTofu registry and of the Pulumi plugin
-download before the owner chooses the name of the repository. If a registry
-needs a repository for each provider, option C replaces B, and the shared
-client module stays.
+the Pulumi archive (ADR 177). A client must not pull the `go.mod` of the server
+(ADR 170 decisions 3 and 4), and `pkg/` is the server SDK (ADR 35), so no client
+code goes in this repository. Before 1.0, a client release ships on the day of
+each server minor release, and it pins that minor version (question 8).
+
+**Open. This question needs the owner**, because the owner decides to create a
+repository. One check comes first: the naming rules of the OpenTofu registry
+(the repository name of a provider) and of the Pulumi plugin download (the
+repository and the release asset names). The result of this check is a
+precondition for the choice of the name. If a registry needs a repository for
+each provider, option C replaces B, and the shared client module stays.
 
 Benchmark: HashiCorp keeps `terraform-provider-tfe` and `go-tfe` in separate
 repositories. Pulumi keeps `pulumi-pulumiservice`, the provider for Pulumi
@@ -162,7 +184,7 @@ Criteria for an object in the first release. The object:
 
 1. is configuration, not state, not a secret and not a runtime record;
 2. has a stable ID and the full create, read, update and delete life cycle in
-   the REST API, with `ETag` and `If-Match`;
+   the REST API, with `ETag` and `If-Match`, and a create-only write;
 3. is a control that the regulated persona needs under review (a policy);
 4. has a conflict rule that a client can show: a change by another actor
    gives `409` or `412`, and the server changes nothing.
@@ -173,7 +195,9 @@ Criteria for an object in the first release. The object:
 | B. A. plus namespace, gate and access limit | A larger set. | Each needs its own life cycle check, and a wrong gate locks a team. |
 | C. Collections only | The smallest set. | It leaves out the policy objects that motivate the work (ADR 270 decision 3). |
 
-**Recommendation: A**, as the issue states. The next group is: namespace,
+**Decided in ADR 270 decision 5: A**, as the issue states, after the server
+work in the facts above: the collection has no update route, the ownership rule
+has no route, and a create-only write is not possible. The next group is: namespace,
 grant, gate, access limit and the unit settings. ADR 270 decision 2 puts the
 unit settings in the providers. A later RFC orders them. An object that holds a
 secret (a connection, a token) is out until question 6 and the secret rules of
@@ -198,7 +222,7 @@ A team already has collections and rules that a person made in the console.
 | B. A. plus `export` in the CLI that writes the code | Fewer typing errors. The CLI can write HCL and Pulumi YAML from the server state. | More code in the CLI. The output format is an interface to keep. |
 | C. Adopt on create | A create of an existing object takes it over. | A silent take-over: no one reviews the object that exists. It breaks the rule that a refused create changes nothing (the port returns `ErrAlreadyExists`). |
 
-**Recommendation: A in the first release, B later, never C.** The port
+**Decided in ADR 270 decision 6: A in the first release, B later, never C.** The port
 returns `ErrAlreadyExists` for a create that finds an object, and its message
 names the reference and the one command that helps (the import command of
 the tool). The import reads the object and records its version, so the first
@@ -206,8 +230,10 @@ plan shows the difference between the code and the server.
 
 Benchmark: Terraform has `import` blocks with `-generate-config-out`, and
 Pulumi has `pulumi import` with code generation, so A then B is the path that
-both tools take. Google Config Connector acquires an existing resource only
-when the manifest asks for it with an annotation, so adoption is explicit. For
+both tools take. Google Config Connector acquires an existing resource
+automatically when a manifest names a resource that exists, which is the risk
+of option C. A team can set the `abandon` deletion policy, but the take-over has
+already happened. For
 a regulated entity, an unreviewed take-over bypasses the change record (DORA
 Article 9 names ICT change management; SOC 2 CC8.1 asks that changes are
 authorized before they are made).
@@ -219,19 +245,22 @@ An access token is the credential of a script, a pipeline and a provider (ADR
 reads, never from the code, and never from the state of OpenTofu or Pulumi. A
 write that needs a fresh authentication cannot use an access token (ADR 227
 decision 6). The approval-rule write that makes a rule weaker is one of those
-writes.
+writes. Today the server refuses every access-token write to gate
+configuration, which is stricter than ADR 212 decision 3 (see the facts and the
+follow-up work).
 
 | Option | Gives | Costs |
 | --- | --- | --- |
-| A. The client returns `ErrFreshAuthRequired` and its message names the path of a new sign-in. The write changes nothing. | Matches ADR 227 with no new server code. A provider shows the error in the plan or in the apply. | A pipeline cannot weaken an approval rule. A person must do that step. |
+| A. The client returns `ErrFreshAuthRequired` and its message names the path of a new sign-in. The write changes nothing. No exemption for any token. | Matches ADR 227 with no new server code. A provider shows the error in the plan or in the apply. | A pipeline cannot weaken an approval rule. A person must do that step. |
 | B. A step-up for a person: the CLI opens a sign-in, the person completes MFA, and the CLI gets a short-lived credential that carries the fresh authentication. | A person at a terminal can apply a rule change in one run. This is how a cloud CLI works. | Needs server code and a decision of the owner, because ADR 227 says an access token never gives a fresh authentication. A new credential type is a new design. |
 | C. An exemption for a service principal. | A pipeline can change any rule. | It breaks ADR 227 and the control that the regulated persona needs. |
 | D. A change of an approval rule goes through a change order that people approve. | The review that the regulated persona wants. | The change of a policy becomes a long process, and the provider cannot show the result in one apply. |
 
-**Recommendation: A now, B in a later RFC, never C.** Under A, a pipeline
+**Decided in ADR 270 decision 7: A now, B in a later RFC, never C.** Under A, a pipeline
 can create and tighten approval rules and ownership rules, and a person must
 apply the changes that weaken them, with a fresh authentication. The error
-code is `mfa.fresh-step-required`, and the provider shows it as an error of
+code is `mfa.fresh-step-required` once the server work in the follow-up list
+is done, and the provider shows it as an error of
 the resource, not as a crash. The plan cannot know that a change needs the
 step, so the failure comes at the apply, with no partial change: a single
 `PUT` of one object either happens or does not. Each client sends a user-agent
@@ -244,7 +273,9 @@ an MFA code, which is option B. PCI DSS 4.0 requirement 8.4 asks for MFA for
 access to the cardholder data environment and for administrative access, so a
 control that needs a person is the expected design. Google Cloud can require
 reauthentication for the console and for `gcloud` with its session control.
-Option C has no benchmark in these standards.
+Option C has no benchmark in these standards. The text of the PCI DSS and
+ISO/IEC 27001 controls in this RFC was checked only against secondary sources.
+Check it against the standard before the RFC is accepted.
 
 ### 7. What happens when the provider state and the server state differ?
 
@@ -257,7 +288,7 @@ manages it. A team can also manage one object from OpenTofu and from Pulumi.
 | B. A. plus the read returns who last changed the object and when | The plan shows who made the out-of-band change. The server has this in the audit entries. | A small field on the read, or a call to the audit log. |
 | C. A reconcile loop in the server or in an agent that corrects the object. | No drift. | The server then writes objects by itself, which breaks "a person or a token is the actor" for audit. It also fights a team that uses the console on purpose. |
 
-**Recommendation: A, with B as a follow-up.** An update and a delete always
+**Decided in ADR 270 decision 8: A, with B as a follow-up.** An update and a delete always
 send the version that the read returned. A conflict returns `ErrConflict` and
 changes nothing. The provider does not retry with a newer version by itself:
 the person plans again and sees the difference. For an object that two tools
@@ -277,51 +308,154 @@ that shows the difference meets both for the objects under management.
 
 ADR 270 decision 1 asks for a version pin before 1.0. The issue asks that a
 client "refuses a server version outside its pin, with a message that names
-both versions". The code in `pkg/manage` implements a rule with the form that
-is the recommendation below, so the rule is testable now. The format is not
-decided.
+both versions". ADR 264 decision 5 says that the CLI and the providers each
+pin "the version of the description that it was generated from". That is a pin
+on the description, not on the server.
 
 | Option | Gives | Costs |
 | --- | --- | --- |
 | A. An exact version | The strictest. | Each server patch needs a new client release. |
-| B. A range `>=A <B`, with the same minor version before 1.0, and the same major version after | A patch of the server does not break the client. The range is easy to read and the message can name it. | Needs a rule for a pre-release (below). |
-| C. A pin on the version of the API description, not on the server | The description is what the client was generated from (ADR 264 decision 5). | The server version is what an operator knows. A second number to explain. |
+| B. A range `>=A <B`, with the same minor version before 1.0, and the same major version after | A patch does not break the client. The range is easy to read and the message can name it. | Needs a rule for a pre-release and for a dev build (below). |
+| C. A pin on the version of the API description only | It is what the client was generated from, and ADR 264 requires it. | The server version is what an operator knows. A second number to explain. |
 | D. A compatibility check at run time (call the operation and see if it fails) | No pin. | A client may do a half change before it fails. It does not meet the issue. |
 
-**Recommendation: B, on the server version.** The pin is `>=0.12.0 <0.13.0`
-before 1.0. The generated code carries it. The rules, which `pkg/manage` holds
-as code:
+**Decided in ADR 270 decision 9: C is required, and B on the server version
+may be added on top.** Both checks run once, before any other call. Both must
+pass.
 
-- A server version below the lower bound or at or above the upper bound is
-  refused with a message that names the server version and the pin.
-- A server version that is not a version number (`dev`, empty) is refused.
-- A pre-release of the server is accepted only when the lower bound is a
-  pre-release too, so `0.13.0-rc.1` does not pass `>=0.12.0 <0.13.0`.
-- There is no flag that skips the check, because a check that a flag skips is
-  advice. A team that must use a newer server than its client waits for the
-  client, or pins an older client.
-- The client checks the pin once at the start, before any other call.
+**The description pin.** The pin has the form `>=MIN <MAX`. A client generated
+from description `0.12.3` pins `>=0.12.0 <0.13.0` before 1.0. A description
+version outside the pin, or a server that sends none, is refused with a message
+that names the description version and the pin. The refusal has no flag that
+skips it, because a check that a flag skips is advice. A dev build of the server
+embeds a description, so it sends a version, and this check applies to it in
+full.
 
-The client needs the server version without a right that a provider token
-does not have (see the facts and the follow-up work). The version of the
-description (option C) can be an extra check later.
+**The server range.** The range has the same form. The server version rules
+are the rules of `pkg/store/schema`, so the project has one reading of a
+version:
+
+- `MAJOR.MINOR.PATCH`, with an optional leading `v`, is a release. An optional
+  pre-release follows `-`.
+- A `git describe` suffix (`-3-gabc1234`, `-dirty`) is not a pre-release. A
+  describe build counts as its tag, and the client compares that tag.
+- `dev` and a commit hash are a dev build. A dev build counts as newer than
+  every release. The client does not refuse it. It prints a warning that names
+  both versions (for example "server is a dev build; this client expects
+  >=0.12.0 <0.13.0") and continues. An empty version is not a dev build: it
+  means that the server sent nothing, and the client refuses it.
+- Build metadata after `+` is ignored. The client accepts it only when it is
+  dot-separated identifiers of `[0-9A-Za-z-]`, none empty, and the whole version
+  is at most 64 characters. Any other form is refused, not cut.
+- A release outside the range is refused with a message that names the server
+  version and the range.
+
+**Pre-release.** With a lower bound that is a pre-release, the range accepts a
+pre-release of any patch version in the range. This differs from node-semver,
+which accepts a pre-release only on the same `MAJOR.MINOR.PATCH` as a bound.
+With a lower bound that is a release, no pre-release passes, so `0.13.0-rc.1`
+does not pass `>=0.12.0 <0.13.0`.
+
+**The e2e suite.** The suite runs dev server binaries. A dev build passes the
+server range by the dev rule (with a warning), and the description pin is the
+strict check. The suite therefore has three steps: a client whose description
+pin the dev server meets, which works and prints the warning; a client with a
+different description pin, which is refused with a message that names both
+versions; and a stub server that sends a release outside the server range,
+which is refused.
 
 Benchmark: the Kubernetes version skew policy allows `kubectl` one minor
-version apart from the API server, which is a pin by minor. Terraform
-`required_providers` takes a constraint range, and the provider
-`required_version` fails with the version it found. Pulumi can pin a plugin
-version in the project file. All three refuse a version outside a range and
-name it.
+version apart from the API server, and `kubectl` warns about version skew
+instead of refusing. Terraform `required_providers` takes a constraint range,
+and `required_version` fails with the version it found. Pulumi can pin a plugin
+version in the project file. go-tfe reads `TFP-API-Version` and `X-TFE-Version`
+from `/api/v2/ping`, which is how a client learns the version. Compare each
+before the RFC is accepted.
+
+## The client port
+
+This section is the contract for the client code. It lands in the repository
+that question 3 chooses, with a conformance suite. The CLI and the providers
+call the port, and an adapter turns each call into a request to the REST API.
+The port imports no server package.
+
+### Kinds and references
+
+A reference names one object: its kind, its scope and its ID. The client checks
+the reference with an allowlist, refuses a value that is not valid, and does not
+change it. It sends no request for an invalid reference (`ErrInvalidRef`).
+
+| Kind | Scope | ID grammar |
+| --- | --- | --- |
+| `collection` | namespace | The name: 3 to 40 characters of ASCII letters, digits, `-`, `_` and inner spaces. It starts and ends with a letter or a digit. Two names that differ only in case are one name. |
+| `approval-rule` | namespace | `[a-z0-9][a-z0-9-]{0,62}`, not `default` and not `owners`. |
+| `ownership-rule` | namespace or collection | `[a-z0-9][a-z0-9-]{0,62}`. |
+
+A namespace is 1 to 100 characters of ASCII letters, digits, `-`, `_` and `.`,
+and does not start with `.` or `-`. The client encodes each path segment, so an
+inner space in a collection name goes to the path as `%20`.
+
+### Methods and errors
+
+| Method | Does | Errors |
+| --- | --- | --- |
+| `ServerVersion` | Returns the server version and the description version. | |
+| `Get(ref)` | Returns the object with its `ETag`. | `ErrNotFound` |
+| `List(kind, scope, page)` | Returns one page in a stable order, and the cursor of the next page. | `ErrInvalidRef` |
+| `Create(ref, spec)` | Makes the object. Sends `If-None-Match: *`. Never adopts. | `ErrAlreadyExists` (from `412`), `ErrInvalidSpec` |
+| `Update(object)` | Replaces or patches the object. Sends `If-Match` with the `ETag` of the read. | `ErrConflict` (from `412`), `ErrNotFound`, `ErrInvalidSpec` |
+| `Delete(ref, etag)` | Removes the object. Sends `If-Match`. | `ErrConflict` (from `412`), `ErrNotFound` |
+
+Every method also returns the error of the context, `ErrUnauthenticated`
+(`401`), `ErrForbidden` (`403`), and `ErrFreshAuthRequired` (`403` with the code
+`mfa.fresh-step-required`). The adapter wraps each error with the detail of the
+server and returns no transport error. The `ETag` is opaque. The client stores
+it and sends it back as it came.
+
+### Write rules
+
+- **`If-Match`.** An update and a delete always carry `If-Match`. A client never
+  sends one without a value, and never retries with a newer value by itself. A
+  `412` is `ErrConflict` and changes nothing.
+- **`Idempotency-Key`.** Every write carries a key of 1 to 255 printable ASCII
+  characters, for example a random UUID. A retry after a lost answer sends the
+  same key. A `409` with the code `request.idempotency-key-in-progress` means
+  the first request has not ended: the client retries later with the same key.
+  A `422` with the code `request.idempotency-key-reused` means the same key with
+  a different body: the client reports a defect and does not retry. A replay
+  answers with the header `Idempotent-Replayed: true` (ADR 210 decision 6).
+- **`PUT` or merge patch, by kind.** The client sends the whole spec with `PUT`
+  for an approval rule, an ownership rule and the approval default, because
+  those routes replace the object. For a collection, the update route is a JSON
+  Merge Patch (RFC 7396) of the fields in the spec, once the route exists. A
+  field that the spec leaves out is not changed by a patch, and it is reset by
+  a `PUT`. The client states which one a kind uses and tests both cases.
+
+### Two valid specs for each kind
+
+The conformance suite needs two valid specs for each kind, so that an update
+test changes something. The first is the base spec, and the second differs in
+one field.
+
+| Kind | Base spec | Changed spec |
+| --- | --- | --- |
+| `collection` | `{"name": "payments"}` | `{"name": "payments", "<field of the update route>": ...}`. The collection update route (follow-up work) decides this field. |
+| `approval-rule` | `{"count": 1, "approvers": {"groups": ["netops"], "users": [], "unitOwners": false}, "authorMayApprove": false, "freshAuthSeconds": null, "timeoutSeconds": null}` | the same with `"count": 2` |
+| `ownership-rule` | `{"mode": "evaluate", "paths": ["modules/network/**"], "when": "", "groups": ["netops"], "users": [], "count": 1, "freshAuthSeconds": 0}` | the same with `"count": 2` |
+
+The ownership rule fields follow ADR 225 decision 9. The server work for the
+ownership rule routes fixes them.
 
 ## Proposal
 
-1. Take ADR 270 as the decision of the owner.
-2. Build in this order: the client port and the pin rule (this change), a
-   hand-written adapter for the three first kinds when the owner approves
-   question 2 (or the generated layer when RFC 99 has a generator), the CLI,
+1. Take ADR 270 as the decision of the owner and of the product manager.
+2. Build in this order: the server work in "Follow-up work", then the client
+   (a hand-written adapter for the three first kinds when the owner approves
+   question 2, or the generated layer when RFC 99 has a generator), the CLI,
    the OpenTofu provider and the Pulumi provider.
-3. Questions 1, 3 to 8: take the recommendations above, unless the owner
-   changes one. Question 2 waits for the owner.
+3. Questions 2 and 3 wait for the owner. For question 3, present the registry
+   naming check as a precondition, and the rule that a client release ships on
+   the day of each server minor release.
 4. The e2e suite drives the real OpenTofu CLI and the real Pulumi CLI to
    create, update and delete a collection, an approval rule and an ownership
    rule, before any provider endpoint is claimed.
@@ -334,8 +468,8 @@ A client that holds a token is security code. The steps are those of ADR 250.
 
 | Step | Note |
 | --- | --- |
-| 1. Check the input | `Ref.Validate` is an allowlist for the namespace and the ID. `ParseVersion` and `ParsePin` read only the accepted forms and cap the length. The server version and the error text from the server are untrusted. |
-| 2. Encode or contain | The adapter encodes each path segment and sends JSON from typed values. A server version in an error message is quoted and cut to a fixed length. |
+| 1. Check the input | The reference check is an allowlist for the namespace and the ID. The version parser reads only the accepted forms and caps the length. The server version, the description version and the error text from the server are untrusted. |
+| 2. Encode or contain | The adapter encodes each path segment and sends JSON from typed values. A server version in an error message is quoted and cut to a fixed length. Build metadata with a character outside the allowlist is refused. |
 | 3. Limit the effect | An update and a delete always carry `If-Match`, so a stale client changes nothing. A client has a timeout and a size limit for a response. |
 | 4. Check authorization | The server checks the action on the object for every call. The client assumes nothing. |
 | 5. Fail closed | An unknown kind, a bad reference, a version outside the pin and a server with no version number all refuse. A `403` with `mfa.fresh-step-required` is an error, not a retry with another credential. |
@@ -346,15 +480,23 @@ from the environment or from a file, marks them as secret in its schema (ADR
 
 ## Follow-up work
 
-Each item is a separate issue with the label `needs-triage`:
+Each item is a separate issue with the label `needs-triage`. The first five are
+server work and block the first provider release in issue 967.
 
-- a route that gives the server version and the version of the description to
-  any signed-in caller, with no `server:observe` (needed by question 8);
-- the client adapter and the CLI, after the owner answers question 2;
-- the e2e steps for the real OpenTofu CLI and the Pulumi CLI;
-- the provider for OpenTofu and the provider for Pulumi, on `providerkit`;
-- a later RFC for a step-up sign-in of a person in the CLI (question 6,
-  option B);
+- #1230: a route that gives the server version and the version of the
+  description to any signed-in caller, with no `server:observe` (question 8);
+- #1237: a collection update route with `ETag` and `If-Match`;
+- #1238: REST routes for ownership rules;
+- #1239: create-only writes (`If-None-Match: *`) on `PUT` routes that upsert;
+- #1240: writes to gate configuration accept an access token for a change that
+  does not weaken security, and answer `mfa.fresh-step-required` for one that
+  does;
+- #1231 and #1233: the client and the CLI, and the providers, after the owner
+  answers questions 2 and 3;
+- #1232: the e2e steps for the real OpenTofu CLI and the Pulumi CLI;
+- #1234: a later RFC for a step-up sign-in of a person in the CLI (question 6,
+  option B), which must keep the rule that an access token never gives fresh
+  authentication, or go to the owner;
 - the user documentation page for the first client (ADR 214).
 
 ## Outcome
