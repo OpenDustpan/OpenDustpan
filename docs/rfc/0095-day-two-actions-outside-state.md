@@ -88,7 +88,8 @@ words of each tool. Question 1 asks for the glossary lines.
 ## ADRs this RFC would amend
 
 - **ADR 226 decision 4**, to add a fact group `actions` to `change.planned`
-  and `change.apply` (C1).
+  and `change.apply` (C1). A new group is a new minor schema version, for
+  example `change.planned/1.1` (ADR 226 decision 2).
 - **ADR 226 decision 3**, to extend the save check of a gate (C1). A gate
   that reads `count` or `types` of the group `actions` must also read
   `complete`.
@@ -100,8 +101,7 @@ words of each tool. Question 1 asks for the glossary lines.
   descriptor for the `-json` stream, because decision 5 merges standard
   output and standard error into one log.
 - **ADR 134 decision 6**, so that the launcher refuses `TF_CLI_ARGS` and
-  each `TF_CLI_ARGS_*` variable at start of a `refresh` step (D). A new group is a new minor schema version, for
-  example `change.planned/1.1` (ADR 226 decision 2).
+  each `TF_CLI_ARGS_*` variable at start of a `refresh` step (D).
 - **ADR 194 decision 4**, to add each planned action invocation to "Needs
   attention" (C3).
 - **ADR 100 decision 4**, so that a `refresh` job plans first (D). Today the
@@ -339,8 +339,13 @@ missing fact would fire on every Pulumi plan, so we do not recommend it.
 A gate "an action of type X in collection prod needs an approval" then reads:
 
 ```cedar
-context.actions.available == false || context.actions.types.contains("example_reboot_instance")
+context.unit.tool == "opentofu" &&
+  (context.actions.available == false ||
+   (context.actions.complete && context.actions.types.contains("example_reboot_instance")))
 ```
+
+The `context.unit.tool == "opentofu"` term keeps the gate from firing on every
+Pulumi plan, and the term `complete` satisfies the save check.
 
 For the Pulumi CLI, `plan.resourceTypes` (ADR 226 decision 4) has the types
 of `command` resource steps already, so a gate on `command:remote:Command`
@@ -443,7 +448,7 @@ unit.
 | Check at the boundary | The parser reads `action_invocations` and the `action_*` messages with a strict schema. It accepts known message types, known trigger events, `onFailure` values and the fields `invoke_action_trigger`, `lifecycle_action_trigger` and `calling_resource_address` from the allowlist only. An unknown top-level key gives `available == false`, never "none". Each address must match the address grammar of the tool. A plan holds at most 1,000 invocations. Each string is at most 4 KiB of strict UTF-8. The parser refuses a plan or a message that fails, and never fixes it. | a plan with each bad field and with an unknown top-level key, sent to the parser with the other layers skipped. A plan with no action keys gives `available == true` and `count == 0` |
 | Encode or contain | The server never stores `config_values`, only `configDigest`. The server deletes CR, LF and control characters from each text before it writes a log or an audit entry. The launcher masks each secret in `error` and `progress`. SQL uses placeholders only. | a `message` with CR, LF, a secret of the job and a SQL character |
 | Limit the effect | Size limits as above. A progress log has the size limit of a job log. The fact group holds types, not values. A drift job has fixed steps, a clean environment and a plan check (D). | a plan with 1,001 invocations, a progress stream above the log limit, a drift job with `TF_CLI_ARGS=-invoke=...` |
-| Authorize at use | Each read checks `job:read` or `job:read-plans` on the unit of the row. A runner writes rows only for the job of its claim. | a job token of unit A that writes a row of unit B |
+| Authorize at use | Each read checks `job:read` for the metadata and `job:read-logs` for `progress` and `error`, on the unit of the row. A runner writes rows only for the job of its claim. | a job token of unit A that writes a row of unit B. A principal with `job:read-plans` only does not get `error` (test `TestActionInvocationReadsWithoutLogsHideError`) |
 | Fail closed and record | A parse error or an unknown key sets `actions.available` to `false`, and each built-in gate fails closed on it. A line in the merged log never sets a row to `completed` (B2a). An unplanned invocation fails the phase. Each refusal writes an audit entry. | a plan that the parser refuses: the gate denies and an audit entry exists |
 
 ### F. The first slice
@@ -506,8 +511,9 @@ The owner keeps these. Each recommendation is the author's.
    the approvals and the isolation of an apply? Recommendation: not now.
    Decide after the spike, when the real shape is known.
 5. Does a plan with a planned invocation turn off auto-apply by default,
-   as a warning does (ADR 229 decision 3)? Recommendation: yes, a built-in gate with
-   outcome `warn` that a namespace can set to `enforce`.
+   as a warning does (ADR 229 decision 3)? Recommendation: yes, a built-in
+   gate in `enforce` mode with outcome `warn`. A namespace can change the
+   outcome to an approval or to `deny` (ADR 224 decision 7, ADR 229 decision 3).
 6. CLI-driven OpenTofu runs show no action to the server, and `-lock=false`
    skips the manual lock (C4). Is a plan upload from the CI shim (RFC 94) the
    answer, or do the docs only state the limit? Recommendation: state the
