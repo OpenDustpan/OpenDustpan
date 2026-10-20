@@ -10,25 +10,34 @@ import (
 	"strings"
 )
 
-// ServerAPIStatusTyped sends one installation API request with token as a
-// Bearer credential and contentType as the Content-Type, and returns its
-// status, headers and body. A contentType of "" sends none. A step uses it for
-// a route that needs a media type other than JSON, for example the merge
-// patch of the preferences.
-func (e *Env) ServerAPIStatusTyped(
-	ctx context.Context, token, method, path, contentType, body string,
-) (APIResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, strings.NewReader(body))
+// TypedRequest is one request of ServerAPIStatusTyped. An empty Token sends no
+// credential, and an empty ContentType sends no Content-Type.
+type TypedRequest struct {
+	Token       string
+	Method      string
+	Path        string
+	ContentType string
+	Body        string
+}
+
+// ServerAPIStatusTyped sends one installation API request with the Token as a
+// Bearer credential and the ContentType as the Content-Type, and returns its
+// status, headers and body. A step uses it for a route that needs a media type
+// other than JSON, for example the merge patch of the preferences.
+func (e *Env) ServerAPIStatusTyped(ctx context.Context, in TypedRequest) (APIResponse, error) {
+	method, path := in.Method, in.Path
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, strings.NewReader(in.Body))
 	if err != nil {
 		return APIResponse{}, fmt.Errorf("build %s %s: %w", method, path, err)
 	}
 
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if in.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+in.Token)
 	}
 
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+	if in.ContentType != "" {
+		req.Header.Set("Content-Type", in.ContentType)
 	}
 
 	resp, err := e.client.Do(req)

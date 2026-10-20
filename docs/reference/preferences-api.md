@@ -125,6 +125,11 @@ installation scope. The entry has the names of the changed fields, for example
 `language` and `terminalSchemes.dark`, and the credential of the request. It
 never has the values.
 
+A `PATCH` that the server refuses changes nothing and writes one entry with the
+same action. The outcome is `denied` for a caller that is not a person, and
+`failure` for any other refusal. The entry names no value and no field of the
+request. A refused `GET` writes no entry.
+
 A backup holds the preferences of each person, and a restore brings them back
 with the person. A restore checks each stored value with the same rules as the
 route. The preferences of a person go away when the person goes away.

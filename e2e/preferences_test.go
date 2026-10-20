@@ -59,34 +59,52 @@ func TestPreferences(t *testing.T) {
 	}
 }
 
-// prefsCall sends one request to the preferences route and decodes the answer.
-func prefsCall(
-	ctx context.Context, t *testing.T, env *e2e.Env, token, method, contentType, body string,
-) (e2e.APIResponse, prefsAnswer) {
+// prefsReq is one request to the preferences route and the status that the
+// step expects.
+type prefsReq struct {
+	token       string
+	method      string
+	contentType string
+	body        string
+	want        int
+}
+
+// prefsGet reads the preferences with token.
+func prefsGet(token string, want int) prefsReq {
+	return prefsReq{token: token, method: http.MethodGet, contentType: "", body: "", want: want}
+}
+
+// prefsPatch sends a merge patch with token.
+func prefsPatch(token, body string, want int) prefsReq {
+	return prefsReq{token: token, method: http.MethodPatch, contentType: prefsPatchType, body: body, want: want}
+}
+
+// prefsCall sends one request and decodes the answer.
+func prefsCall(ctx context.Context, t *testing.T, env *e2e.Env, in prefsReq) (e2e.APIResponse, prefsAnswer) {
 	t.Helper()
 
-	resp, err := env.ServerAPIStatusTyped(ctx, token, method, prefsRoute, contentType, body)
+	resp, err := env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
+		Token: in.token, Method: in.method, Path: prefsRoute, ContentType: in.contentType, Body: in.body,
+	})
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, prefsRoute, err)
+		t.Fatalf("%s %s: %v", in.method, prefsRoute, err)
 	}
 
 	var doc prefsAnswer
 	if err := json.Unmarshal([]byte(resp.Body), &doc); err != nil && resp.Status != http.StatusUnauthorized {
-		t.Fatalf("%s %s answered %d with %q, not a JSON object: %v", method, prefsRoute, resp.Status, resp.Body, err)
+		t.Fatalf("%s %s answered %d with %q, not a JSON object: %v", in.method, prefsRoute, resp.Status, resp.Body, err)
 	}
 
 	return resp, doc
 }
 
-// prefsStep sends a request and fails unless it answers want.
-func prefsStep(
-	ctx context.Context, t *testing.T, env *e2e.Env, token, method, contentType, body string, want int,
-) prefsAnswer {
+// prefsStep sends a request and fails unless it answers the status that it names.
+func prefsStep(ctx context.Context, t *testing.T, env *e2e.Env, in prefsReq) prefsAnswer {
 	t.Helper()
 
-	resp, doc := prefsCall(ctx, t, env, token, method, contentType, body)
-	if resp.Status != want {
-		t.Fatalf("%s %s %s answers %d, want %d (%s)", method, prefsRoute, body, resp.Status, want, resp.Body)
+	resp, doc := prefsCall(ctx, t, env, in)
+	if resp.Status != in.want {
+		t.Fatalf("%s %s %s answers %d, want %d (%s)", in.method, prefsRoute, in.body, resp.Status, in.want, resp.Body)
 	}
 
 	return doc
@@ -149,14 +167,14 @@ func preferencesPerson(ctx context.Context, t *testing.T, env *e2e.Env, name str
 func preferencesReadAndChange(ctx context.Context, t *testing.T, env *e2e.Env, aliceToken, bobToken string) {
 	t.Helper()
 
-	doc := prefsStep(ctx, t, env, aliceToken, http.MethodGet, "", "", http.StatusOK)
+	doc := prefsStep(ctx, t, env, prefsGet(aliceToken, http.StatusOK))
 	if doc.Theme != "default" || doc.DateStyle != "locale" || doc.Language != nil || doc.UpdatedAt != nil {
 		t.Fatalf("defaults = %+v, want theme default, dateStyle locale, no language and no updatedAt", doc)
 	}
 
-	changed := prefsStep(ctx, t, env, aliceToken, http.MethodPatch, prefsPatchType,
+	changed := prefsStep(ctx, t, env, prefsPatch(aliceToken,
 		`{"theme":"terminal","language":"ar","formattingLocale":"ar-EG","digits":"latn","timeZone":"Asia/Riyadh"}`,
-		http.StatusOK)
+		http.StatusOK))
 
 	have := strings.Join([]string{
 		changed.Theme, prefsText(changed.Language), prefsText(changed.FormattingLocale), prefsText(changed.Digits),
@@ -166,26 +184,32 @@ func preferencesReadAndChange(ctx context.Context, t *testing.T, env *e2e.Env, a
 		t.Fatalf("PATCH answer = %+v, want the changed fields and an updatedAt", changed)
 	}
 
-	read := prefsStep(ctx, t, env, aliceToken, http.MethodGet, "", "", http.StatusOK)
+	read := prefsStep(ctx, t, env, prefsGet(aliceToken, http.StatusOK))
 	if prefsJSON(t, read) != prefsJSON(t, changed) {
 		t.Fatalf("GET after PATCH = %s, want %s", prefsJSON(t, read), prefsJSON(t, changed))
 	}
 
 	// A person never reads the preferences of another person.
-	if other := prefsStep(ctx, t, env, bobToken, http.MethodGet, "", "", http.StatusOK); other.Theme != "default" ||
+	if other := prefsStep(ctx, t, env, prefsGet(bobToken, http.StatusOK)); other.Theme != "default" ||
 		other.Language != nil {
 		t.Fatalf("preferences of bob = %+v, want the defaults", other)
 	}
 
-	// The same patch again changes nothing, also not updatedAt.
-	again := prefsStep(ctx, t, env, aliceToken, http.MethodPatch, prefsPatchType, `{"language":"ar"}`, http.StatusOK)
-	if again.UpdatedAt == nil || *again.UpdatedAt != *changed.UpdatedAt {
-		t.Fatalf("updatedAt after a patch that changes nothing = %v, want %d", again.UpdatedAt, *changed.UpdatedAt)
+	preferencesNoOpAndReset(ctx, t, env, aliceToken, *changed.UpdatedAt)
+}
+
+// preferencesNoOpAndReset proves that a patch that changes nothing keeps
+// updatedAt, and that null resets a field and a field that the patch leaves out
+// keeps its value.
+func preferencesNoOpAndReset(ctx context.Context, t *testing.T, env *e2e.Env, token string, updatedAt int64) {
+	t.Helper()
+
+	again := prefsStep(ctx, t, env, prefsPatch(token, `{"language":"ar"}`, http.StatusOK))
+	if again.UpdatedAt == nil || *again.UpdatedAt != updatedAt {
+		t.Fatalf("updatedAt after a patch that changes nothing = %v, want %d", again.UpdatedAt, updatedAt)
 	}
 
-	// null resets a field, and a field that the patch leaves out keeps its value.
-	reset := prefsStep(ctx, t, env, aliceToken, http.MethodPatch, prefsPatchType,
-		`{"digits":null,"language":null}`, http.StatusOK)
+	reset := prefsStep(ctx, t, env, prefsPatch(token, `{"digits":null,"language":null}`, http.StatusOK))
 	if reset.Digits != nil || reset.Language != nil || reset.Theme != "terminal" || reset.TimeZone == nil {
 		t.Fatalf("PATCH null answer = %+v, want digits and language reset and the rest kept", reset)
 	}
@@ -203,33 +227,34 @@ func preferencesRefusals(ctx context.Context, t *testing.T, env *e2e.Env, token 
 		{"a zone with a path", `{"timeZone":"../../etc/passwd"}`, "preferences.field-invalid"},
 		{"an extension in the formatting locale", `{"formattingLocale":"ar-u-nu-latn"}`, "preferences.field-invalid"},
 	} {
-		doc := prefsStep(ctx, t, env, token, http.MethodPatch, prefsPatchType, step.body, http.StatusBadRequest)
+		doc := prefsStep(ctx, t, env, prefsPatch(token, step.body, http.StatusBadRequest))
 		if doc.ErrorCode != step.code {
 			t.Fatalf("%s: errorCode = %q, want %q", step.name, doc.ErrorCode, step.code)
 		}
 	}
 
-	digits := prefsStep(ctx, t, env, token, http.MethodPatch, prefsPatchType, `{"digits":"deva"}`, http.StatusBadRequest)
+	digits := prefsStep(ctx, t, env, prefsPatch(token, `{"digits":"deva"}`, http.StatusBadRequest))
 	for _, want := range []string{"latn", "arab", "null"} {
 		if !strings.Contains(digits.Message, want) {
 			t.Fatalf("the 400 for digits says %q, want it to name %s", digits.Message, want)
 		}
 	}
 
-	doc := prefsStep(ctx, t, env, token, http.MethodPatch, "application/json", `{"theme":"default"}`,
-		http.StatusUnsupportedMediaType)
-	if doc.ErrorCode != "preferences.media-type-unsupported" {
+	notPatch := prefsReq{
+		token: token, method: http.MethodPatch, contentType: "application/json", body: `{"theme":"default"}`,
+		want: http.StatusUnsupportedMediaType,
+	}
+	if doc := prefsStep(ctx, t, env, notPatch); doc.ErrorCode != "preferences.media-type-unsupported" {
 		t.Fatalf("415 errorCode = %q", doc.ErrorCode)
 	}
 
 	big := `{"language":"` + strings.Repeat("a", 5000) + `"}`
-
-	doc = prefsStep(ctx, t, env, token, http.MethodPatch, prefsPatchType, big, http.StatusRequestEntityTooLarge)
-	if doc.ErrorCode != "preferences.body-too-large" {
-		t.Fatalf("413 errorCode = %q", doc.ErrorCode)
+	tooLarge := prefsStep(ctx, t, env, prefsPatch(token, big, http.StatusRequestEntityTooLarge))
+	if tooLarge.ErrorCode != "preferences.body-too-large" {
+		t.Fatalf("413 errorCode = %q", tooLarge.ErrorCode)
 	}
 
-	if read := prefsStep(ctx, t, env, token, http.MethodGet, "", "", http.StatusOK); read.Theme != "terminal" {
+	if read := prefsStep(ctx, t, env, prefsGet(token, http.StatusOK)); read.Theme != "terminal" {
 		t.Fatalf("theme = %q after refused patches, want terminal", read.Theme)
 	}
 }
@@ -252,26 +277,25 @@ func preferencesCallers(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}, &token)
 
 	// The bootstrap admin token has no person record, so it is no person.
-	for name, secret := range map[string]string{"a service principal": token.Secret, "the bootstrap admin": ""} {
-		if secret == "" {
-			secret = env.TokenA()
-		}
-
-		for _, method := range []string{http.MethodGet, http.MethodPatch} {
-			doc := prefsStep(ctx, t, env, secret, method, prefsPatchType, `{"theme":"terminal"}`, http.StatusForbidden)
-			if doc.ErrorCode != "preferences.person-required" {
-				t.Fatalf("%s %s: errorCode = %q, want preferences.person-required", name, method, doc.ErrorCode)
+	for name, secret := range map[string]string{"a service principal": token.Secret, "the bootstrap admin": env.TokenA()} {
+		for _, req := range []prefsReq{
+			prefsGet(secret, http.StatusForbidden), prefsPatch(secret, `{"theme":"terminal"}`, http.StatusForbidden),
+		} {
+			if doc := prefsStep(ctx, t, env, req); doc.ErrorCode != "preferences.person-required" {
+				t.Fatalf("%s %s: errorCode = %q, want preferences.person-required", name, req.method, doc.ErrorCode)
 			}
 		}
 	}
 
-	if resp, _ := prefsCall(ctx, t, env, "", http.MethodGet, "", ""); resp.Status != http.StatusUnauthorized {
+	resp, _ := prefsCall(ctx, t, env, prefsGet("", http.StatusUnauthorized))
+	if resp.Status != http.StatusUnauthorized {
 		t.Fatalf("GET with no credential answers %d, want 401", resp.Status)
 	}
 }
 
-// preferencesAudit proves that the changes of the steps wrote one entry each,
-// and the patches that change nothing and the refused patches wrote none.
+// preferencesAudit proves the entries of the steps: one success entry for each
+// real change, and one entry for each refused patch. The patches that change
+// nothing wrote none, and neither did a refused read.
 func preferencesAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -280,22 +304,20 @@ func preferencesAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
-	count := 0
+	counts := map[string]int{}
 
 	for i := range entries {
-		if entries[i].Action != "preferences-changed" {
-			continue
-		}
-
-		count++
-
-		if entries[i].Outcome != "success" || !strings.HasPrefix(entries[i].Object, "principal:") {
-			t.Fatalf("preferences entry = %+v, want a success on a principal", entries[i])
+		if entries[i].Action == "preferences-changed" {
+			counts[entries[i].Outcome]++
 		}
 	}
 
-	// Two real changes of alice: the change and the reset.
-	if count != 2 {
-		t.Fatalf("preferences-changed entries = %d, want 2: one for each real change", count)
+	// Two real changes of alice (the change and the reset), nine patches that
+	// the checks of the body or of the media type refused, and two patches of a
+	// caller that is not a person.
+	want := map[string]int{"success": 2, "failure": 9, "denied": 2}
+	if len(counts) != len(want) || counts["success"] != want["success"] || counts["failure"] != want["failure"] ||
+		counts["denied"] != want["denied"] {
+		t.Fatalf("preferences-changed entries by outcome = %v, want %v", counts, want)
 	}
 }

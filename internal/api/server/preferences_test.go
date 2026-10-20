@@ -193,11 +193,28 @@ func (r response) errorOf(t *testing.T) apiError {
 	return out
 }
 
-// prefsEntries returns the preferences entries of the audit log.
+// prefsEntries returns the entries of the audit log of the changes that
+// succeeded.
 func (e prefsEnv) prefsEntries(t *testing.T) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 200})
+	return e.entriesWith(t, func(o audit.Outcome) bool { return o == audit.OutcomeSuccess })
+}
+
+// prefsRefusals returns the entries of the audit log of the changes that a
+// refusal stopped.
+func (e prefsEnv) prefsRefusals(t *testing.T) []audit.Entry {
+	t.Helper()
+
+	return e.entriesWith(t, func(o audit.Outcome) bool { return o != audit.OutcomeSuccess })
+}
+
+// entriesWith returns the preferences entries with an outcome that keep says
+// to keep.
+func (e prefsEnv) entriesWith(t *testing.T, keep func(audit.Outcome) bool) []audit.Entry {
+	t.Helper()
+
+	listing, err := e.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 500})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}
@@ -205,7 +222,7 @@ func (e prefsEnv) prefsEntries(t *testing.T) []audit.Entry {
 	var out []audit.Entry
 
 	for i := range listing.Entries {
-		if listing.Entries[i].Action == preferences.AuditAction {
+		if listing.Entries[i].Action == preferences.AuditAction && keep(listing.Entries[i].Outcome) {
 			out = append(out, listing.Entries[i])
 		}
 	}
@@ -404,18 +421,36 @@ func TestPreferencesNeedTheRightCaller(t *testing.T) {
 		{name: "a person with no record", token: tokenGhost, want: http.StatusForbidden, code: person},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	// The group ends when its parallel cases end, so the checks below see
+	// every entry.
+	t.Run("callers", func(t *testing.T) {
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
 
-			for _, got := range []response{e.get(t, tc.token), e.patch(t, tc.token, `{"theme":"terminal"}`)} {
-				checkRefusal(t, got, tc.want, tc.code)
-			}
-		})
-	}
+				for _, got := range []response{e.get(t, tc.token), e.patch(t, tc.token, `{"theme":"terminal"}`)} {
+					checkRefusal(t, got, tc.want, tc.code)
+				}
+			})
+		}
+	})
 
 	if n := len(e.prefsEntries(t)); n != 0 {
-		t.Errorf("entries = %d, want 0: a refused request writes none", n)
+		t.Errorf("entries = %d, want 0: a refused request changes nothing", n)
+	}
+
+	// The PATCH of each of the four callers that are not a person wrote one
+	// entry with the outcome denied. A GET writes none, and neither does a
+	// request with no valid credential.
+	refusals := e.prefsRefusals(t)
+	if len(refusals) != 4 {
+		t.Fatalf("refusal entries = %d, want 4 (%+v)", len(refusals), refusals)
+	}
+
+	for _, entry := range refusals {
+		if entry.Outcome != audit.OutcomeDenied || entry.Object != "preferences" || len(entry.Changes) != 0 {
+			t.Errorf("refusal entry = %+v, want the outcome denied on preferences, with no change", entry)
+		}
 	}
 }
 
@@ -578,23 +613,27 @@ func TestPreferencesPatchRefusals(t *testing.T) {
 
 	e := newPrefsEnv(t)
 
-	for _, tc := range patchRefusals() {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	// The group ends when its parallel cases end, so the checks below see
+	// every entry.
+	t.Run("bodies", func(t *testing.T) {
+		for _, tc := range patchRefusals() {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
 
-			got := e.patch(t, tokenTester, tc.body)
-			checkRefusal(t, got, http.StatusBadRequest, tc.code)
+				got := e.patch(t, tokenTester, tc.body)
+				checkRefusal(t, got, http.StatusBadRequest, tc.code)
 
-			args := got.errorOf(t).ErrorArgs
-			switch {
-			case tc.field == "" && len(args) != 0:
-				t.Errorf("errorArgs = %v, want none", args)
-			case tc.field != "" && (len(args) != 1 || args["field"] != tc.field):
-				t.Errorf("errorArgs = %v, want the field %s", args, tc.field)
-			default:
-			}
-		})
-	}
+				args := got.errorOf(t).ErrorArgs
+				switch {
+				case tc.field == "" && len(args) != 0:
+					t.Errorf("errorArgs = %v, want none", args)
+				case tc.field != "" && (len(args) != 1 || args["field"] != tc.field):
+					t.Errorf("errorArgs = %v, want the field %s", args, tc.field)
+				default:
+				}
+			})
+		}
+	})
 
 	// A refused patch changes nothing, also when the other members are good.
 	if got := e.patch(t, tokenTester, `{"theme":"terminal","digits":"deva"}`); got.status != http.StatusBadRequest {
@@ -607,6 +646,19 @@ func TestPreferencesPatchRefusals(t *testing.T) {
 
 	if n := len(e.prefsEntries(t)); n != 0 {
 		t.Errorf("entries = %d, want 0", n)
+	}
+
+	// Each refused patch wrote one failure entry. No entry names a value or a
+	// field of the request.
+	refusals := e.prefsRefusals(t)
+	if want := len(patchRefusals()) + 1; len(refusals) != want {
+		t.Fatalf("refusal entries = %d, want %d", len(refusals), want)
+	}
+
+	for _, entry := range refusals {
+		if entry.Outcome != audit.OutcomeFailure || entry.Object != "preferences" || len(entry.Changes) != 0 {
+			t.Errorf("refusal entry = %+v, want the outcome failure on preferences, with no change", entry)
+		}
 	}
 }
 

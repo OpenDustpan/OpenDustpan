@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/preferences"
 )
@@ -227,7 +228,8 @@ func (h *Handler) getPreferences(w http.ResponseWriter, r *http.Request, p ident
 // JSON merge patch (IETF RFC 7396): a field that the body leaves out keeps its
 // value, and null sets a field back to its default. It answers 200 with the
 // full document, also for a patch that changes nothing. Such a patch does not
-// change updatedAt and writes no audit entry.
+// change updatedAt and writes no audit entry. A refused patch changes nothing
+// and writes one failure entry.
 func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -237,48 +239,77 @@ func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
-	if !p.ActsAsPerson() {
-		h.writeError(ctx, w, errPreferencesNotPerson)
-
-		return
-	}
-
-	if !mergePatchContentType(r) {
-		w.Header().Set("Accept-Patch", mergePatchType)
-		h.writeError(ctx, w, errPreferencesMediaType)
-
-		return
-	}
-
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, preferences.MaxBodyBytes))
-	if tooLarge, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && tooLarge.Limit > 0 {
-		h.writeError(ctx, w, errPreferencesTooLarge)
-
-		return
-	}
-
+	patch, err := readPreferencesPatch(w, r, p)
 	if err != nil {
-		h.writeError(ctx, w, errPreferencesBody)
-
-		return
-	}
-
-	patch, err := preferences.ParsePatch(body)
-	if err != nil {
-		h.writeError(ctx, w, preferencesError(err))
+		h.refusePatch(w, r, p, err)
 
 		return
 	}
 
 	res, err := h.preferences.Update(ctx, p, patch, callerEntry(r, p, identity.ActionCallerManagePreferences))
 	if err != nil {
-		h.writeError(ctx, w, preferencesError(err))
+		h.refusePatch(w, r, p, preferencesError(err))
 
 		return
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
 	h.writeJSON(ctx, w, http.StatusOK, preferencesOf(res.Document))
+}
+
+// readPreferencesPatch reads and checks the request of a PATCH: the caller is
+// a person, the content type is the merge patch type, the body is within the
+// limit, and the patch passes every check of its fields. It returns a coded
+// error for each refusal.
+func readPreferencesPatch(w http.ResponseWriter, r *http.Request, p identity.Principal) (preferences.Patch, error) {
+	// Defense in depth: the service refuses a caller that is not a person
+	// too. This check stays so that the body of such a caller is never read.
+	if !p.ActsAsPerson() {
+		return nil, errPreferencesNotPerson
+	}
+
+	if !mergePatchContentType(r) {
+		w.Header().Set("Accept-Patch", mergePatchType)
+
+		return nil, errPreferencesMediaType
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, preferences.MaxBodyBytes))
+	if tooLarge, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && tooLarge.Limit > 0 {
+		return nil, errPreferencesTooLarge
+	}
+
+	if err != nil {
+		return nil, errPreferencesBody
+	}
+
+	patch, err := preferences.ParsePatch(body)
+	if err != nil {
+		return nil, preferencesError(err)
+	}
+
+	return patch, nil
+}
+
+// refusePatch answers the refusal err of a PATCH and writes one entry for the
+// refused change, best effort: a lost entry never changes the answer. The
+// entry has the action of the change with the outcome denied, for a caller that
+// is not a person, and the outcome failure for any other refusal. It names no
+// value of the request. A refused request that the server cannot attribute to
+// a change (a store in maintenance mode answers 503) writes none.
+func (h *Handler) refusePatch(w http.ResponseWriter, r *http.Request, p identity.Principal, err error) {
+	if coded, ok := errors.AsType[*codedError](err); ok && coded.status < http.StatusInternalServerError {
+		outcome := audit.OutcomeFailure
+		if errors.Is(err, errPreferencesNotPerson) {
+			outcome = audit.OutcomeDenied
+		}
+
+		h.appendServerChange(r, p, serverChange{
+			at: h.now(), action: identity.Action(preferences.AuditAction), object: "preferences", outcome: outcome,
+		})
+	}
+
+	h.writeError(r.Context(), w, err)
 }
 
 // mergePatchContentType reports whether the Content-Type of r is the merge
