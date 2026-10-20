@@ -5814,9 +5814,8 @@ func checkInventoryUnlocked(ctx context.Context, t *testing.T, env *e2e.Env, ref
 		}
 	}
 
-	if filtered := findInventoryUnit(
-		readInventoryUnitsQuery(ctx, t, env, namespaceOf(ref), "state=locked"), ref,
-	); filtered != nil {
+	filtered := findInventoryUnit(readInventoryUnitsQuery(ctx, t, env, namespaceOf(ref), "state=locked"), ref)
+	if filtered != nil {
 		t.Fatalf("the list with state=locked holds the unlocked entry %q", ref)
 	}
 }
