@@ -1,0 +1,20 @@
+# The @integer samples of the cardinal plural rules of CLDR 47
+# (cldr-core 47.0.0, supplemental/plurals.json). A "~" is an inclusive range.
+# The "..." that ends a CLDR list is left out. Format: language category samples.
+af one 1
+af other 0, 2~16, 100, 1000, 10000, 100000, 1000000
+ar zero 0
+ar one 1
+ar two 2
+ar few 3~10, 103~110, 1003
+ar many 11~26, 111, 1011
+ar other 100~102, 200~202, 300~302, 400~402, 500~502, 600, 1000, 10000, 100000, 1000000
+he one 1
+he two 2
+he other 0, 3~17, 100, 1000, 10000, 100000, 1000000
+ru one 1, 21, 31, 41, 51, 61, 71, 81, 101, 1001
+ru few 2~4, 22~24, 32~34, 42~44, 52~54, 62, 102, 1002
+ru many 0, 5~19, 100, 1000, 10000, 100000, 1000000
+uk one 1, 21, 31, 41, 51, 61, 71, 81, 101, 1001
+uk few 2~4, 22~24, 32~34, 42~44, 52~54, 62, 102, 1002
+uk many 0, 5~19, 100, 1000, 10000, 100000, 1000000

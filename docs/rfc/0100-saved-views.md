@@ -220,7 +220,7 @@ construction. A view whose owner ID is not a local principal matches no
 reader, also after a failover. The delete of the views is cleanup: each
 namespace runs it with its own fence, for example as a durable operation on
 the primary, and not in the transaction that deletes the principal. A private
-view that nobody can open has no use, so the cleanup removes it. A shared view
+view that nobody can open has no use, so the cleanup deletes it. A shared view
 stays when sharing exists (question 2), and its owner becomes the namespace.
 
 ### 8. How does a client read a view?
