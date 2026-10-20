@@ -327,8 +327,11 @@ func ParseSettings(text string) (Settings, error) {
 
 // ParseStored reads the stored text of a row for a read. It drops each field
 // that fails its check, and each member that is not a field, and returns the
-// names of the dropped members, in order. It never returns the value of a
-// dropped member. Text that is not one JSON object of strings with no
+// names of the dropped fields, in order. For a member that is not a field it
+// returns the fixed word "unknown-field" and never its name, because the name
+// is text of a row that anyone who wrote the row chose: it can hold a line
+// break, a control character or a forged log line, and the caller logs it. It
+// never returns the value of a dropped member. Text that is not one JSON object of strings with no
 // repeated key gives no settings, and the one name "document". So a stored
 // value that fails a check never stops a person from reading or changing
 // the preferences. ParseSettings is the strict form.
@@ -348,7 +351,7 @@ func ParseStored(text string) (Settings, []string) {
 	for _, name := range sortedKeys(members) {
 		v, err := textOrNull(name, members[name])
 		if err != nil || v == nil || checkValue(name, *v) != nil {
-			dropped = append(dropped, name)
+			dropped = append(dropped, droppedName(name))
 
 			continue
 		}
@@ -363,3 +366,20 @@ func ParseStored(text string) (Settings, []string) {
 
 // storedDocument names a stored text that is not a document of members.
 const storedDocument = "document"
+
+// storedUnknown stands for the name of a stored member that is not a field.
+const storedUnknown = "unknown-field"
+
+// droppedName returns name when it is the name of a field, and else the fixed
+// word storedUnknown.
+//
+// Defense in depth: the log of Load takes only what this function gives. The
+// caller does not clean the name again, and this function does not rely on
+// the log handler to escape it.
+func droppedName(name string) string {
+	if _, ok := specOf(name); ok {
+		return name
+	}
+
+	return storedUnknown
+}

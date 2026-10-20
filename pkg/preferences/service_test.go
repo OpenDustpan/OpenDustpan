@@ -2,6 +2,7 @@ package preferences_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -309,6 +310,41 @@ func TestLoadAndDocumentAt(t *testing.T) {
 
 	if doc := settings.DocumentAt(at); doc.Language != "he" || !doc.UpdatedAt.Equal(at) {
 		t.Errorf("DocumentAt = %+v", doc)
+	}
+}
+
+// TestLoadLogsAFixedWordForAnUnknownMember proves that Load never logs the name
+// of a stored member that is not a field. The name is text of a row, so a
+// line break or a forged field in it would write a false line to the log.
+func TestLoadLogsAFixedWordForAnUnknownMember(t *testing.T) {
+	t.Parallel()
+
+	names := []string{"a\nb", "x\"\nlevel=ERROR msg=forged", "\x00\x1b[31mred", strings.Repeat("n", 3000)}
+
+	for _, name := range names {
+		var out strings.Builder
+
+		log := slog.New(slog.NewTextHandler(&out, nil))
+
+		text, err := json.Marshal(map[string]string{name: "x", "theme": "terminal"})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		settings, _ := preferences.Load(string(text), 1, log)
+		if len(settings) != 1 || settings["theme"] != "terminal" {
+			t.Errorf("name %q: Load = %v, want the theme only", name, settings)
+		}
+
+		lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+		if len(lines) != 1 || !strings.Contains(lines[0], "field=unknown-field") {
+			t.Errorf("name %q: log = %q, want one line with the fixed word", name, out.String())
+		}
+
+		if strings.Contains(out.String(), "forged") || strings.Contains(out.String(), "nnnnnn") ||
+			strings.ContainsAny(out.String(), "\x00\x1b") {
+			t.Errorf("name %q: the log holds text of the name: %q", name, out.String())
+		}
 	}
 }
 

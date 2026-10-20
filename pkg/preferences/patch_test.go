@@ -1,6 +1,7 @@
 package preferences_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -405,7 +406,12 @@ func TestParseStoredDropsWhatFailsACheck(t *testing.T) {
 			preferences.Settings{"theme": "terminal"},
 			[]string{"timeZone"},
 		},
-		{"an unknown member", `{"nope":"x","language":"he"}`, preferences.Settings{"language": "he"}, []string{"nope"}},
+		{
+			"an unknown member",
+			`{"nope":"x","language":"he"}`,
+			preferences.Settings{"language": "he"},
+			[]string{"unknown-field"},
+		},
 		{"a value that is not text", `{"theme":3}`, preferences.Settings{}, []string{"theme"}},
 		{"not an object", `[1]`, preferences.Settings{}, []string{"document"}},
 		{"a repeated member", `{"theme":"terminal","theme":"default"}`, preferences.Settings{}, []string{"document"}},
@@ -416,6 +422,42 @@ func TestParseStoredDropsWhatFailsACheck(t *testing.T) {
 		got, dropped := preferences.ParseStored(tc.text)
 		if !maps.Equal(got, tc.want) || !slices.Equal(dropped, tc.dropped) {
 			t.Errorf("%s: ParseStored = %v, %v; want %v, %v", tc.name, got, dropped, tc.want, tc.dropped)
+		}
+	}
+}
+
+// TestParseStoredNeverReturnsTheNameOfAnUnknownMember proves that the name of
+// a stored member that is not a field does not reach the caller. A row can come
+// from a restore or from an older version, and the caller logs the names. A
+// name with a line break, a control character, an escape sequence, a forged
+// log field or a great length must give the fixed word and nothing else.
+func TestParseStoredNeverReturnsTheNameOfAnUnknownMember(t *testing.T) {
+	t.Parallel()
+
+	hostile := []string{
+		"a\nb",
+		"level=ERROR msg=forged",
+		"\x00\x1b[31mred",
+		"x\r\ny",
+		"theme ",
+		"Theme",
+		"\u202eevil",
+		strings.Repeat("n", 3000),
+	}
+
+	for _, name := range hostile {
+		text, err := json.Marshal(map[string]string{name: "x", "language": "he"})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		got, dropped := preferences.ParseStored(string(text))
+		if len(got) != 1 || got["language"] != "he" {
+			t.Errorf("name %q: settings = %v, want the language only", name, got)
+		}
+
+		if !slices.Equal(dropped, []string{"unknown-field"}) {
+			t.Errorf("name %q: dropped = %q, want only the fixed word", name, dropped)
 		}
 	}
 }

@@ -83,6 +83,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a stored field that fails a check is dropped and never locks the person out", test: testStoredBadField},
 		{name: "a change with a version writes only when the version is the stored one", test: testIfMatch},
 		{name: "each change gives a version above the one before it", test: testVersionRises},
+		{
+			name: "updates at the same time with the same version let exactly one win",
+			test: testConcurrentIfMatch,
+		},
 	}
 
 	for _, tc := range cases {
@@ -966,6 +970,63 @@ func testIfMatch(t *testing.T, s Store) {
 	_, err = s.Update(t.Context(), p.id, set(preferences.FieldTheme, "default"), entry(p.id, at(3)), &version)
 	if err != nil {
 		t.Errorf("Update with the stored version: %v", err)
+	}
+}
+
+// Several updates at the same time carry the version that the caller read.
+// Exactly one of them applies. The others return ErrPreconditionFailed and
+// write nothing, so the audit log holds one entry more than before, not one
+// for each update. The check runs in the transaction of the write, so a store
+// that only compared the version before the transaction would let two win.
+func testConcurrentIfMatch(t *testing.T, s Store) {
+	t.Helper()
+
+	p := mustPrincipal(t, s, "alice", principal.KindPerson)
+	first := update(t, s, p, 1, set(preferences.FieldTheme, "terminal"))
+	version := first.Document.Version()
+	entries := len(changeEntries(t, s))
+	values := []string{"fr", "de", "ru", "uk", "he", "ar"}
+
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		succeeded int
+		refused   int
+	)
+
+	for i, v := range values {
+		wg.Go(func() {
+			ifMatch := version
+
+			_, err := s.Update(t.Context(), p.id, set(preferences.FieldLanguage, v), entry(p.id, at(i+2)), &ifMatch)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				succeeded++
+			case errors.Is(err, preferences.ErrPreconditionFailed):
+				refused++
+			default:
+				t.Errorf("concurrent Update(%s) with the same version: %v", v, err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if succeeded != 1 || refused != len(values)-1 {
+		t.Fatalf("%d updates won and %d were refused, want 1 and %d", succeeded, refused, len(values)-1)
+	}
+
+	if n := len(changeEntries(t, s)); n != entries+1 {
+		t.Errorf("preferences entries = %d, want %d: one winner writes one entry", n, entries+1)
+	}
+
+	got := get(t, s, p).Language
+	if !slices.Contains(values, got) {
+		t.Errorf("language = %q, want the value of the winner, one of %v", got, values)
 	}
 }
 
