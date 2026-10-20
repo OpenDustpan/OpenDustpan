@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -224,7 +225,8 @@ func (s *Store) TouchSession(
 	return nil
 }
 
-// EndSession implements session.Store.
+// EndSession implements session.Store. It only reduces access, so it runs in
+// maintenance mode and the maintenance journal records it.
 func (s *Store) EndSession(ctx context.Context, id string, reason session.EndReason, e audit.Entry) error {
 	if err := session.ValidEndReason(reason); err != nil {
 		return err
@@ -233,7 +235,9 @@ func (s *Store) EndSession(ctx context.Context, id string, reason session.EndRea
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	rev := revocation{kind: maintenance.RevokedSession, target: id, endReason: string(reason)}
+
+	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
 		n, err := q.EndSession(ctx, db.EndSessionParams{AtMs: codec.Millis(e.At), EndReason: string(reason), ID: id})
 		if err != nil {
 			return fmt.Errorf("end session: %w", err)

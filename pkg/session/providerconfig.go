@@ -237,6 +237,16 @@ type ProviderConfigStore interface {
 	// session of a principal whose subject starts with SubjectPrefix(p.ID),
 	// at e.At with ReasonEnded, and writes e through WithSessionsEnded.
 	UpdateProviderConfig(ctx context.Context, p ProviderConfig, e audit.Entry) error
+	// DisableProviderConfig sets the provider id to disabled when its stored
+	// version is version, and sets the version to version+1 and the update
+	// time to updatedAt. Nothing else of the provider changes. In the same
+	// write it ends every active session of a principal whose subject starts
+	// with SubjectPrefix(id), at e.At with ReasonEnded, and writes e through
+	// WithSessionsEnded. It only narrows access, so it runs in maintenance
+	// mode, and UpdateProviderConfig, which can enable a provider and change
+	// its issuer and client, does not. It returns ErrProviderNotFound for an
+	// unknown ID and ErrProviderChanged for another stored version.
+	DisableProviderConfig(ctx context.Context, id string, version int64, updatedAt time.Time, e audit.Entry) error
 	// DeleteProviderConfig deletes the provider id. It returns
 	// ErrProviderNotFound for an unknown ID, and ErrProviderInUse while a
 	// principal, also a deleted one, has a subject that starts with
