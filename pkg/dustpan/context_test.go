@@ -50,6 +50,7 @@ const ctxReadOnlyRole = "rol-read-only"
 // stack web/prod in acme, and the Pulumi stack web/prod in other.
 type contextWorld struct {
 	srv        *dustpan.Server
+	store      *sqlite.Store
 	workspace  string
 	stack      string
 	otherStack string
@@ -59,7 +60,7 @@ type contextWorld struct {
 // wanda (writer on acme), vera (viewer on acme), olga (viewer on other) and
 // sam (no grant). The token ctxAdminToken signs in an administrator of the
 // installation.
-func newContextWorld(t *testing.T) contextWorld {
+func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -169,7 +170,7 @@ func newContextWorld(t *testing.T) contextWorld {
 		t.Fatalf("key wrapper: %v", err)
 	}
 
-	srv, err := dustpan.NewServer(
+	srv, err := dustpan.NewServer(append([]dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -183,12 +184,12 @@ func newContextWorld(t *testing.T) contextWorld {
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
-	)
+	}, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
 
-	w := contextWorld{srv: srv, workspace: "", stack: "", otherStack: ""}
+	w := contextWorld{srv: srv, store: st, workspace: "", stack: "", otherStack: ""}
 	w.seed(t)
 
 	return w

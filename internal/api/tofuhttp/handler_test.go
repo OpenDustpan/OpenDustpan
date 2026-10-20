@@ -741,3 +741,42 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 		t.Fatalf("entry = %+v, want denied, the unit, the lock action and the reason of the lock refusal", e)
 	}
 }
+
+// TestOverrideRefusalsAreAudited proves the domain layer of the denial audit:
+// a state write that the workspace refuses because the forced-write switch is
+// off answers 403 and writes a denied entry with the forced-write action.
+func TestOverrideRefusalsAreAudited(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingAudit{Store: nil, err: nil, entries: nil, mu: sync.Mutex{}}
+	units := newFakeUnits(true)
+	units.writeErr = fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+
+	h, err := tofuhttp.NewHandler(tofuhttp.Config{
+		Authenticator: tokenAuth{}, Authorizer: userAuthz{}, Logger: slog.New(slog.DiscardHandler),
+		Workspaces: units, Namespaces: fakeNamespaces{}, Audit: store,
+		Gate: nil, OnAuditFailure: nil,
+		DenialLimiter: nil,
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	rec := do(h, http.MethodPost, unitPath, `{"version":4}`, bearer(userToken))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("refused override: status %d, want 403; body %q", rec.Code, rec.Body.String())
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if len(store.entries) != 1 {
+		t.Fatalf("entries = %+v, want one denied entry", store.entries)
+	}
+
+	e := store.entries[0]
+	if e.Outcome != audit.OutcomeDenied || e.Action != string(identity.ActionUnitWriteForced) ||
+		e.Kind != audit.KindOverride || e.Object != "opentofu:acme/net" || e.Subject != "bob" {
+		t.Fatalf("entry = %+v, want denied, kind override, the forced-write action and the unit", e)
+	}
+}

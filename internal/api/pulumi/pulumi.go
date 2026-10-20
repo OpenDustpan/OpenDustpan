@@ -191,7 +191,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter),
+			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
+			WithSurface("pulumi"),
 		mux:         newPatternMux(),
 		routes:      nil,
 		deltaCutoff: cfg.CheckpointDeltaCutoff,

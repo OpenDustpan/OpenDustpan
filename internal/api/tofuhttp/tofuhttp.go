@@ -149,7 +149,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces: cfg.Namespaces,
 		audit:      cfg.Audit,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter),
+			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
+			WithSurface("tofu-http"),
 		gate:   cfg.Gate,
 		mux:    http.NewServeMux(),
 		routes: nil,

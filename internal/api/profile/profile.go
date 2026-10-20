@@ -94,7 +94,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, nil, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter),
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("profile"),
 		sessions: cfg.Sessions,
 		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,

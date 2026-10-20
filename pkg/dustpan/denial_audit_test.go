@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -324,5 +325,59 @@ func checkLimiterScopes(t *testing.T, st chainStore) {
 
 	if !aggregate || !flushed || !missing {
 		t.Fatalf("aggregate = %v, flush = %v, missing namespace = %v, want all true", aggregate, flushed, missing)
+	}
+}
+
+// TestRunFlushesDenialCountsAtShutdown proves Run writes the counts that the
+// limiter holds back before it returns, so the store is still open for the
+// write: after Run returns, the namespace holds the entry of the first refusal
+// and the entry that counts the others.
+func TestRunFlushesDenialCountsAtShutdown(t *testing.T) {
+	t.Parallel()
+
+	ln := openTestListener(t)
+	w := newContextWorld(t, dustpan.WithListener(ln))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := runServer(ctx, w.srv)
+
+	waitForTCP(t, ln.Addr().String())
+
+	call := deniedCall{
+		method: http.MethodPost, target: "/api/dustpan/v1/namespaces/acme/collections",
+		body: `{"name":"c1"}`, scheme: "token",
+	}
+
+	for range 5 {
+		if code, body := w.callAs(t, call, ctxServiceToken); code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403: %s", code, body)
+		}
+	}
+
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	list, err := w.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 100})
+	if err != nil {
+		t.Fatalf("list acme entries: %v", err)
+	}
+
+	var first, counted bool
+
+	for i := range list.Entries {
+		e := list.Entries[i]
+		if e.Subject != "svc-reader" || e.Outcome != audit.OutcomeDenied {
+			continue
+		}
+
+		first = first || strings.HasPrefix(e.Reason, "denied by policy on ")
+		counted = counted || strings.Contains(e.Reason, "4 further refusals in the last window")
+	}
+
+	if !first || !counted {
+		t.Fatalf("first entry = %v, count entry = %v, want both after Run returned", first, counted)
 	}
 }

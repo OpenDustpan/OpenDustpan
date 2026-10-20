@@ -32,11 +32,13 @@ package server
 // after the fact in the same scope, as well as possible.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -218,12 +220,33 @@ func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, o
 
 	res, err := op(w, r, h.access, c)
 	if err != nil {
+		refused := denials.Denial{Action: identity.Action(c.e.Action), Object: c.obj, Reason: ""}
+		h.recordEscalation(ctx, r, c.p, refused, err)
 		h.writeError(ctx, w, err)
 
 		return res, false
 	}
 
 	return res, true
+}
+
+// reasonEscalation is the reason of the entry of a grant that gives more than
+// the granter holds.
+const reasonEscalation = "grant gives more than the granter holds"
+
+// recordEscalation writes the audit entry of a change that the access service
+// refused with access.ErrEscalation. The 403 alone leaves no trace, and the
+// check of the manage action above passed, so no other layer writes an entry.
+// It does nothing for any other error.
+func (h *Handler) recordEscalation(
+	ctx context.Context, r *http.Request, p identity.Principal, d denials.Denial, err error,
+) {
+	if !errors.Is(err, access.ErrEscalation) {
+		return
+	}
+
+	d.Reason = reasonEscalation
+	h.guard.Record(ctx, r, p, d)
 }
 
 // Route paths of the roles and the grants.
@@ -741,6 +764,7 @@ func (h *Handler) serveRevokeGrantByID(
 
 	revoked, err := h.access.RevokeByID(ctx, callerEntry(r, p, actions.manage), p, id)
 	if err != nil {
+		h.recordEscalation(ctx, r, p, denials.Denial{Action: actions.manage, Object: obj, Reason: ""}, err)
 		h.writeError(ctx, w, err)
 		h.appendObjectChange(r, p, obj, serverChange{
 			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),

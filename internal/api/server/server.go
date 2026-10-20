@@ -214,7 +214,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn: cfg.Authenticator,
 		authz: cfg.Authorizer,
 		guard: denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter),
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("installation"),
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		backups:        cfg.Backups,

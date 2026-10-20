@@ -157,7 +157,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		sessions:   cfg.Sessions,
 		logger:     cfg.Logger,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
-			WithLimiter(cfg.DenialLimiter),
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("runner"),
 		release:   cfg.Release,
 		serverURL: cfg.ServerURL,
 		now:       now,

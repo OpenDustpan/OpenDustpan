@@ -35,7 +35,11 @@ const (
 // of a principal.
 const AggregateMark = "*"
 
-// Key names one stream of denials.
+// Key names one stream of denials. The Kind of a unit holds its tool, for
+// example "unit:opentofu", so a stack and a workspace in one namespace have
+// separate keys. The Kind also starts with the name of the adapter, so the
+// refusals of two adapters of one tool have separate keys. The sets of tools
+// and adapters are fixed in code, so the keys stay bounded.
 type Key struct {
 	Principal string
 	Action    string

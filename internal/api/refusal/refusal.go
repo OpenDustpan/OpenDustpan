@@ -79,6 +79,7 @@ type Recorder struct {
 	logger     *slog.Logger
 	onFailure  func()
 	limiter    *denylimit.Limiter
+	surface    string
 }
 
 // Denial is what a refusal was about: the action, the object and the reason.
@@ -102,6 +103,16 @@ func (r *Recorder) WithLimiter(l *denylimit.Limiter) *Recorder {
 	return r
 }
 
+// WithSurface names the adapter of r and returns r. The name is part of the
+// key of the limiter, so the refusals of two adapters of one tool (the
+// TFE-compatible API and the OpenTofu HTTP backend) in one window write one
+// entry each. The names are fixed in code, so the keys stay bounded.
+func (r *Recorder) WithSurface(name string) *Recorder {
+	r.surface = Clean(name, maxSubjectBytes)
+
+	return r
+}
+
 // New returns a Recorder. OnFailure runs when an append fails. Nil means no
 // counter.
 func New(
@@ -117,6 +128,7 @@ func New(
 		namespaces: namespaces,
 		logger:     logger,
 		onFailure:  onFailure,
+		surface:    "",
 		limiter: denylimit.New(
 			denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, Now: nil, MaxKeysPerPrincipal: 0},
 		),
@@ -184,7 +196,7 @@ func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Pri
 	decision := r.limiter.Allow(denylimit.Key{
 		Principal: subject,
 		Action:    string(action),
-		Kind:      objectKind(obj),
+		Kind:      r.keyKind(obj),
 		Scope:     target.key,
 	})
 
@@ -258,6 +270,8 @@ func (r *Recorder) resolve(ctx context.Context, scope namespace.Name) target {
 		t.ns = &ns
 	default:
 		// Another error: the append reads the namespace again and reports it.
+		// The raw scope is request text, so the key holds a cleaned, bounded copy.
+		t.key = Clean(scope.String(), maxSubjectBytes)
 	}
 
 	return t
@@ -348,13 +362,26 @@ func (r *Recorder) appendServer(ctx context.Context, entry audit.Entry) error {
 	return nil
 }
 
+// keyKind returns the kind in the key of the limiter: the kind of obj, after
+// the surface of r when it has one.
+func (r *Recorder) keyKind(obj identity.Object) string {
+	if r.surface == "" {
+		return objectKind(obj)
+	}
+
+	return r.surface + "/" + objectKind(obj)
+}
+
 // objectKind names the kind of obj for the key of the limiter.
 func objectKind(obj identity.Object) string {
 	switch {
 	case obj.IsServer():
 		return "server"
 	case obj.IsUnit():
-		return "unit"
+		// The tool is in the kind: a stack and a workspace in one namespace
+		// are different objects. The set of tools is fixed, so the keys stay
+		// bounded; Clean cuts the text in any case.
+		return "unit:" + Clean(obj.Tool(), maxSubjectBytes)
 	case obj.IsCollection():
 		return "collection"
 	case obj.IsPrincipal():

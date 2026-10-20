@@ -499,3 +499,92 @@ func TestRecordWithNoRequest(t *testing.T) {
 		t.Fatalf("entry = %+v, validate = %v, want a valid entry with no address and no user agent", e, err)
 	}
 }
+
+// TestToolsAreSeparateKeys checks that one principal, action and namespace
+// write one entry for each tool: a refusal for an OpenTofu workspace must not
+// hide a refusal for a Pulumi stack in the same window.
+func TestToolsAreSeparateKeys(t *testing.T) {
+	t.Parallel()
+
+	lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	store, failures := newFakeStore(nil), 0
+	rec := newRecorder(t, store, lim, &failures)
+
+	for _, tool := range []string{"opentofu", "pulumi"} {
+		obj, err := identity.UnitObject(tool, "team", "net")
+		if err != nil {
+			t.Fatalf("unit object %s: %v", tool, err)
+		}
+
+		for range 3 {
+			deny(t, rec, request(t, "/api/x"), person("bo@example.com"), obj)
+		}
+	}
+
+	if lim.Len() != 2 || len(store.entries) != 2 {
+		t.Fatalf("tracked keys = %d and entries = %d, want 2 and 2", lim.Len(), len(store.entries))
+	}
+}
+
+// brokenNamespaces fails every read with an error that is not ErrNotFound.
+type brokenNamespaces struct{}
+
+var errBrokenNamespaces = errors.New("namespace store is down")
+
+func (brokenNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, errBrokenNamespaces
+}
+
+// TestRawScopeIsCleanedInTheKey checks that a namespace name with control
+// characters, read while the namespace store fails, reaches the key of the
+// limiter cleaned and cut to the bound.
+func TestRawScopeIsCleanedInTheKey(t *testing.T) {
+	t.Parallel()
+
+	lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	failures := 0
+	rec := refusal.New(fakeAuthorizer{err: identity.ErrDenied}, newFakeStore(nil), brokenNamespaces{},
+		slog.New(slog.DiscardHandler), func() { failures++ }).WithLimiter(lim)
+
+	hostile := namespace.Name("a\r\nb\x1b\u202e" + strings.Repeat("x", 600))
+
+	for range 2 {
+		deny(t, rec, request(t, "/api/x"), person("bo@example.com"), identity.NamespaceObject(hostile))
+	}
+
+	pending := lim.Drain()
+	if len(pending) != 1 {
+		t.Fatalf("pending = %+v, want one key", pending)
+	}
+
+	scope := pending[0].Key.Scope
+	if strings.ContainsAny(scope, "\r\n\x1b\u202e") || len(scope) > 255 {
+		t.Fatalf("scope in the key = %q (%d bytes), want it cleaned and at most 255 bytes", scope, len(scope))
+	}
+}
+
+// TestSurfacesAreSeparateKeys checks that two adapters that share a limiter
+// write one entry each for the same principal, action and unit in one window.
+func TestSurfacesAreSeparateKeys(t *testing.T) {
+	t.Parallel()
+
+	lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	store, failures := newFakeStore(nil), 0
+
+	obj, err := identity.UnitObject("opentofu", "team", "net")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	for _, surface := range []string{"tfe", "tofu-http"} {
+		rec := newRecorder(t, store, lim, &failures).WithSurface(surface)
+
+		for range 3 {
+			deny(t, rec, request(t, "/api/x"), person("bo@example.com"), obj)
+		}
+	}
+
+	if lim.Len() != 2 || len(store.entries) != 2 {
+		t.Fatalf("tracked keys = %d and entries = %d, want 2 and 2", lim.Len(), len(store.entries))
+	}
+}

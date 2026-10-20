@@ -180,6 +180,8 @@ These refusals write an entry:
 
 - An OpenTofu `UNLOCK` that names a lock that is not the current lock, and an `UNLOCK` that finds the lock changed or held by another principal. The `action` is `unit:lock`.
 - The removal of a manual lock by a principal that is not the holder, and a removal that finds the lock changed. The `action` is the action of the route: `unit:lock` for the removal, `unit:manage` for the force-unlock.
+- A grant or a role that gives more than the principal who makes it holds. The `action` is the action of the route, and the `reason` is `grant gives more than the granter holds`.
+- A state write or a force-unlock that the workspace refuses because the forced-write or unlocked-write switch is off or not granted. The `action` is `unit:write-forced` or `unit:write-unlocked`, the `kind` is `override` and the `reason` is `override refused`.
 
 The `reason` says which refusal it was.
 A manual lock that is already held answers 409. A manual lock that does not exist answers 404. Neither writes an entry, because they report the state of the object.
@@ -191,10 +193,14 @@ The server writes the entry also when the client closes the connection. A write 
 
 A principal that sends many refused requests must not fill the log.
 All APIs of the server share one limit.
-For each principal, action, kind of object and scope, the server writes the first denial in a window of 1 minute.
+For each principal, action, API, kind of object and scope, the server writes the first denial in a window of 1 minute.
 It counts each other denial of that key in the window and writes nothing for it.
 The count goes out in the `reason` of the first entry of the next window (`N further refusals since the last entry`).
 When the principal stops, the first denial of any principal after the window writes one entry with the action and the count (`N further refusals in the last window were not recorded one by one`).
+The kind of a stack or a workspace includes its tool (`unit:pulumi`, `unit:opentofu`).
+A refusal on a workspace does not hide a refusal on a stack in the same namespace.
+The API is part of the key too.
+A refusal on the TFE-compatible API and a refusal on the OpenTofu HTTP backend write one entry each.
 Each namespace that does not exist counts as the same scope, so a principal cannot make keys with names that it invents.
 
 The server tracks at most 4096 keys, and at most 64 keys for each principal.
