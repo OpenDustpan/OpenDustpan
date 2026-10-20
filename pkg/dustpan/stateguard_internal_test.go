@@ -252,6 +252,17 @@ func TestPrincipalSubjectsRefuseAnEmptySubject(t *testing.T) {
 	}
 }
 
+func TestPrincipalSubjectsRefuseAnUnknownCredential(t *testing.T) {
+	t.Parallel()
+
+	for _, credential := range []identity.Credential{"unknown", "Session", "job-token ", "x\ny"} {
+		_, err := principalSubjects{}.Subject(t.Context(), gatePrincipal("alice", identity.KindPerson, credential))
+		if !errors.Is(err, identity.ErrDenied) {
+			t.Fatalf("Subject(credential %q) = %v, want identity.ErrDenied", credential, err)
+		}
+	}
+}
+
 func TestNoGateServiceWithoutGateStoreOrInventory(t *testing.T) {
 	t.Parallel()
 

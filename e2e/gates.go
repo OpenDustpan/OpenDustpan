@@ -52,7 +52,7 @@ func (e *Env) withGateStore(ctx context.Context, ns namespace.Name, fn func(gate
 
 // PutGate saves g in the namespace ns as a new gate.
 func (e *Env) PutGate(ctx context.Context, ns namespace.Name, g gate.Gate) error {
-	g.CheckedWith = gate.CheckedWith{Engine: "e2e", Schema: gate.SchemaVersion{
+	g.CheckedWith = gate.CheckedWith{Engine: actor, Schema: gate.SchemaVersion{
 		Subject: string(g.DecisionPoint), Major: 1, Minor: 0,
 	}}
 

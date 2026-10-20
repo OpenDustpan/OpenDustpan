@@ -67,6 +67,7 @@ const (
 	SubjectB = "admin-2"
 
 	region         = "e2e"
+	actor          = "e2e"
 	tokenBytes     = 24
 	commandTimeout = 2 * time.Minute
 	waitDelay      = 5 * time.Second

@@ -260,8 +260,11 @@ func (principalSubjects) Subject(_ context.Context, p identity.Principal) (gate.
 		kind = gate.PrincipalService
 	}
 
-	credential := gate.CredentialAccessToken
+	var credential gate.CredentialKind
 
+	// The empty credential counts as an access token. A value that this
+	// switch does not know is refused: the gates must not treat a new kind
+	// of credential as an access token.
 	switch p.Credential {
 	case identity.CredentialSession:
 		credential = gate.CredentialSession
@@ -269,9 +272,10 @@ func (principalSubjects) Subject(_ context.Context, p identity.Principal) (gate.
 		credential = gate.CredentialJobToken
 	case identity.CredentialTrustToken:
 		credential = gate.CredentialTrustToken
-	case identity.CredentialAccessToken:
+	case identity.CredentialAccessToken, "":
 		credential = gate.CredentialAccessToken
 	default:
+		return gate.Subject{}, fmt.Errorf("%w: the principal has an unknown kind of credential", identity.ErrDenied)
 	}
 
 	return gate.Subject{
