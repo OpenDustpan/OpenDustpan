@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -343,7 +344,7 @@ func newServiceBackedHandlerOf(
 		},
 		CheckpointEpochs: fakeEpochs{},
 		DenialLimiter:    nil,
-	})
+	}, apiserver.WithPreferences(preferences.NewService(st, st, nil)))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -717,6 +718,7 @@ var routeBodies = map[string]string{
 	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
+	"PATCH /api/dustpan/v1/me/preferences":                                    `{"theme":"terminal"}`,
 }
 
 // routeGrantBody is the body of each grant route: a role that no seeded
@@ -1038,7 +1040,17 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
+	setRouteContentType(req, route)
+
 	return req
+}
+
+// setRouteContentType gives the PATCH of the preferences the merge patch
+// type, which the route requires.
+func setRouteContentType(req *http.Request, route apiserver.Route) {
+	if route.Method == http.MethodPatch && route.Path == "/api/dustpan/v1/me/preferences" {
+		req.Header.Set("Content-Type", "application/merge-patch+json")
+	}
 }
 
 // routeOwner is the {principal} of a route, and for a route of one

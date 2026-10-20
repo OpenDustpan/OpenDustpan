@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -190,14 +191,25 @@ type Handler struct {
 	workers        WorkerSource
 	signIn         *signInState
 	kind           installation.Kind
+	preferences    *preferences.Service
 	mux            *patternMux
 	routes         []Route
+}
+
+// Option sets an optional dependency of a Handler that NewHandler builds.
+type Option func(*Handler)
+
+// WithPreferences sets the service of the preferences of a person. Without
+// it, or with nil, the store keeps none and the preferences routes answer
+// 501. Both SQL adapters keep them.
+func WithPreferences(svc *preferences.Service) Option {
+	return func(h *Handler) { h.preferences = svc }
 }
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
 // Namespaces, Maintenance and Metrics are required. Backups is optional: nil
 // means no backup target is configured.
-func NewHandler(cfg Config) (*Handler, error) {
+func NewHandler(cfg Config, opts ...Option) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -247,12 +259,17 @@ func NewHandler(cfg Config) (*Handler, error) {
 		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
+		preferences:    nil,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
 
 	if h.now == nil {
 		h.now = time.Now
+	}
+
+	for _, opt := range opts {
+		opt(h)
 	}
 
 	h.routes = h.buildRoutes()
@@ -400,6 +417,14 @@ type errorResponse struct {
 const maintenanceRetryAfter = "30"
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if coded, ok := errors.AsType[*codedError](err); ok {
+		h.writeJSON(ctx, w, coded.status, codedResponse{
+			Message: coded.message, Code: coded.status, ErrorCode: coded.code, ErrorArgs: coded.args,
+		})
+
+		return
+	}
+
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text

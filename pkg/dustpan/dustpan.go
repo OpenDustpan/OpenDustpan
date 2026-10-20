@@ -81,6 +81,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
+	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -2589,12 +2590,29 @@ func newServerHandler(
 		SignIn:        deps.signIn,
 
 		InstallationKind: cfg.installationKind,
-	})
+	}, serverapi.WithPreferences(newPreferencesService(cfg)))
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}
 
 	return handler, nil
+}
+
+// newPreferencesService builds the preferences service from the namespace
+// store, or returns nil when the store keeps no preferences or no principals.
+// Both SQL adapters keep both. A nil service makes the routes answer 501.
+func newPreferencesService(cfg *settings) *preferences.Service {
+	store, ok := cfg.namespaceStore.(preferences.Store)
+	if !ok {
+		return nil
+	}
+
+	people, ok := cfg.namespaceStore.(preferences.People)
+	if !ok {
+		return nil
+	}
+
+	return preferences.NewService(store, people, cfg.now)
 }
 
 // serverAuditOf returns the audit store of the scope @server, or nil when the
@@ -3235,7 +3253,8 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
-	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"):
+	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"),
+		strings.HasPrefix(name, v1Prefix+"me/"):
 		return adapterServer
 	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
 		return "inventory"
