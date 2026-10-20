@@ -1237,6 +1237,7 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	opts := []dustpan.Option{dustpan.WithComponents(set)}
 	opts = append(opts, durableStoreOption(st)...)
 	opts = append(opts, runnerStoreOption(st)...)
+	opts = append(opts, jobStoreOption(st)...)
 	opts = append(opts, dustpan.WithInstallationKind(f.kind()), dustpan.WithInstallationKindStore(st))
 
 	return append(opts, profileStoreOption(st, wrapper)...), nil
@@ -1263,6 +1264,19 @@ func runnerStoreOption(st store) []dustpan.Option {
 		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
 	case postgresStore:
 		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
+	default:
+		return nil
+	}
+}
+
+// jobStoreOption returns the option of the job store for st, or nil when st
+// keeps no jobs.
+func jobStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithJobStore(s.Jobs())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithJobStore(s.Jobs())}
 	default:
 		return nil
 	}

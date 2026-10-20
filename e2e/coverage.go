@@ -15,6 +15,7 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
@@ -26,9 +27,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -77,6 +80,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
+	jobRoutes := coverageJobRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := make(
@@ -97,6 +101,8 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		)+len(
 			profileRoutes,
 		)+len(
+			jobRoutes,
+		)+len(
 			server,
 		)+probeRouteCount,
 	)
@@ -107,6 +113,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	out = append(out, auditRoutes...)
 	out = append(out, contextRoutes...)
 	out = append(out, profileRoutes...)
+	out = append(out, jobRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -742,6 +749,35 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 	return out
 }
 
+// coverageJobRoutes returns the jobs adapter's route table.
+func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := jobsapi.NewHandler(jobsapi.Config{
+		Namespaces:     namespaces,
+		Jobs:           struct{ job.Store }{nil},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("jobs handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // coverageProfileRoutes returns the routes of the profile API. The stores
 // are empty shells: they exist only to build a Handler for its route table.
 func coverageProfileRoutes(tb testing.TB) []RouteRef {
@@ -1041,6 +1077,43 @@ func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
 	return svc
 }
 
+// coverageGateConfig holds no approval default and no approval rule: the route
+// table needs a gate configuration service, and the coverage gate never
+// serves a request.
+type coverageGateConfig struct{}
+
+func (coverageGateConfig) ApprovalDefault(context.Context, gate.Scope) (gate.ApprovalDefault, error) {
+	return gate.ApprovalDefault{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutApprovalDefault(
+	context.Context, gate.ApprovalDefault, int64, audit.Entry,
+) (gate.ApprovalDefault, error) {
+	return gate.ApprovalDefault{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteApprovalDefault(context.Context, gate.Scope, int64, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
+func (coverageGateConfig) ApprovalRules(context.Context, gate.Scope) ([]gate.ApprovalRule, error) {
+	return nil, nil
+}
+
+func (coverageGateConfig) ApprovalRule(context.Context, gate.Scope, gate.ID) (gate.ApprovalRule, error) {
+	return gate.ApprovalRule{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutApprovalRule(
+	context.Context, gate.ApprovalRule, int64, audit.Entry,
+) (gate.ApprovalRule, error) {
+	return gate.ApprovalRule{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteApprovalRule(context.Context, gate.ObjectRef, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
 // coverageSessionPolicyStore holds the default session policy: the route
 // table needs a session policy service, and the coverage gate never serves
 // a request.
@@ -1100,6 +1173,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     coverageIPAllowlists(tb),
+		Gates:            coverageGateConfig{},
 		SessionPolicy:    coverageSessionPolicies(tb),
 		SignIn:           nil,
 		CheckpointEpochs: nil,
@@ -1216,10 +1290,12 @@ func CoverageAllowlist() []AllowEntry {
 		devAllowEntries(),
 		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),
+		approvalRuleAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
+		jobAllowEntries(),
 	)
 }
 
@@ -1601,6 +1677,42 @@ func ipAllowlistAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: ipAllowlistCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// approvalRuleCoveringTest names the test that proves the approval default and
+// approval rule routes instead of a CLI: no CLI sets an approval rule.
+const approvalRuleCoveringTest = "TestApprovalRules"
+
+// approvalRuleAllowEntries returns the routes of the approval defaults and the
+// approval rules of a namespace. The steps of approvalRuleCoveringTest drive
+// each one through the real server on each store.
+func approvalRuleAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages approval rules. " +
+		"The harness step calls it through the real server and checks the answer."
+
+	const (
+		defaultPath = "/api/dustpan/v1/namespaces/{namespace}/approval-default"
+		rulesPath   = "/api/dustpan/v1/namespaces/{namespace}/approval-rules"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, defaultPath},
+		{http.MethodPut, defaultPath},
+		{http.MethodDelete, defaultPath},
+		{http.MethodGet, rulesPath},
+		{http.MethodGet, rulesPath + "/{id}"},
+		{http.MethodPut, rulesPath + "/{id}"},
+		{http.MethodDelete, rulesPath + "/{id}"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: approvalRuleCoveringTest, Reason: reason,
 		})
 	}
 
@@ -2209,4 +2321,17 @@ func manualLockAllowEntries() []AllowEntry {
 		{Method: http.MethodDelete, Path: path, CoveringTest: test, Reason: reason},
 		{Method: http.MethodPost, Path: path + "/force-unlock", CoveringTest: test, Reason: reason},
 	}
+}
+
+// jobAllowEntries covers the route that reads a job. No CLI reads a job: the
+// console and the clients of the API do. The harness steps of TestJobsAPI
+// read a job, a job that the caller may not read and a job that does not
+// exist through the API.
+func jobAllowEntries() []AllowEntry {
+	return []AllowEntry{{
+		Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
+		CoveringTest: "TestJobsAPI",
+		Reason: "Console and client route: no CLI reads a job. The harness steps of TestJobsAPI read a job " +
+			"through the API.",
+	}}
 }

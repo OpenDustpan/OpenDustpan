@@ -67,6 +67,7 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 		Audit:            st,
 		OnAuditFailure:   nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    policies,
 		DeletedUnits:     nil,
 		AuditChain:       nil,

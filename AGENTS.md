@@ -78,12 +78,14 @@ pkg/                   the public SDK (ADR 35)
   unitimport/          domain: imports of units from a source, the import ledger and the move check
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
+  gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
   api/objectcontext/   HTTP adapter for the tool-neutral context API (also used by the console)
+  api/jobs/            HTTP adapter for the tool-neutral jobs API
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, token/...  helpers shared across packages

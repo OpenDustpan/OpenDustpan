@@ -57,6 +57,8 @@ sql:
             go_type: bool
           - column: runners.draining
             go_type: bool
+          - column: jobs.current_changes
+            go_type: bool
   - engine: postgresql
     schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql

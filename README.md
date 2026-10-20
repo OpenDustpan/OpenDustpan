@@ -300,6 +300,8 @@ How-to guides:
   the units that a delete keeps until its retention period ends.
 - [Manual locks](docs/guides/manual-locks.md): stop OpenTofu locks and Pulumi updates on a
   stack, a workspace or a collection, with a reason, and end the lock.
+- [Approval defaults and approval rules](docs/guides/approval-rules.md): turn on
+  approval before apply for a namespace, and store named approval rules.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the

@@ -159,6 +159,16 @@ const (
 	// covers the read: the list shows the network layout of the operator, so
 	// only a manager may read it.
 	ActionNamespaceManageIPAllowlist Action = "namespace:manage-ip-allowlist"
+	// ActionNamespaceReadGates allows reading the approval defaults and the
+	// approval rules of a namespace, its collections and its units. Its
+	// object is a namespace.
+	ActionNamespaceReadGates Action = "namespace:read-gates"
+	// ActionNamespaceManageGates allows setting and removing the approval
+	// defaults and the approval rules of a namespace, its collections and its
+	// units. Its object is a namespace. Of the namespace roles, only
+	// the administrator holds it. The account administrator and the site
+	// administrator hold it as data actions.
+	ActionNamespaceManageGates Action = "namespace:manage-gates"
 	// ActionUnitSetOverrides allows changing the override switches of a unit.
 	// Its object is a unit.
 	ActionUnitSetOverrides Action = "unit:set-overrides"
