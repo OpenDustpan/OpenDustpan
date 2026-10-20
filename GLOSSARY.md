@@ -1198,7 +1198,7 @@ The state item of a unit that no redaction can target (ADR 150, ADR 151). For a 
 _Avoid_: Current item, head
 
 **Item key**:
-The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
+The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `namespaces/<namespace ID>/item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
 _Avoid_: Version key, derived key, data key (that is the one key of a scope)
 
 **Redaction**:

@@ -78,10 +78,6 @@ func TestItemKeyID(t *testing.T) {
 		t.Fatalf("parse %q = %q, %v", id, parsed, err)
 	}
 
-	if got, want := id.Object().String(), "item-keys/"+string(id); got != want {
-		t.Errorf("object = %q, want %q", got, want)
-	}
-
 	for _, bad := range []string{"", "ik-", "key-1", "ik-A", "ik-a/b"} {
 		if _, err := secret.ParseItemKeyID(bad); !errors.Is(err, secret.ErrInvalidItemRef) {
 			t.Errorf("parse %q err = %v, want ErrInvalidItemRef", bad, err)
