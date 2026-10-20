@@ -637,8 +637,8 @@ suite checks both with real state before the ADR (question 8).
 **What a team's own CI and a laptop receive.** The team can point its CLI at
 the mirror (layers 1 and 2 in its own configuration) and receive the same
 hashes. The server cannot see the binary that ran, the CLI configuration, or
-the network of that CI or laptop. So a laptop gets no enforcement. A write
-from a team's CI gets the audit finding or the fact of layer 5, and no more.
+the network of that CI or laptop. So a laptop receives no enforcement. A write
+from a team's CI receives the audit finding or the fact of layer 5, and no more.
 A security team that needs all five layers runs its writes on runners of
 OpenDustpan with egress on, and a gate at `state.write` can refuse writes
 that do not come from a job (ADR 224 decision 16 already gives the facts for
@@ -775,7 +775,7 @@ team asks for one community provider for OpenTofu in the namespace
 `payments`. The security team approves that one version once.
 
 **What slice 1 gives that persona.** Layers 1 and 2 only. After the
-approval, a job whose launcher writes the block gets that provider from the
+approval, a job whose launcher writes the block receives that provider from the
 mirror only, with the admitted hashes, for every admitted platform, and the
 lock file from the server pins them. The slice **does not** stop a provider
 that the runner image brings, a provider in a plugin cache, a provider that
