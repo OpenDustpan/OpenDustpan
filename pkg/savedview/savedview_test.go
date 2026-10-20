@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/savedview"
 )
 
@@ -137,7 +138,7 @@ func TestViewValidate(t *testing.T) {
 			ID:        validID,
 			Namespace: "acme",
 			Name:      "Payments, production",
-			Owner:     "user:alice",
+			Owner:     "prn-0123456789abcdefghij",
 			Query:     labels(savedview.Label{Key: "team", Value: "payments"}),
 		}
 	}
@@ -164,12 +165,17 @@ func TestViewValidate(t *testing.T) {
 		{"name with a zero width space", func(v *savedview.View) { v.Name = "a\u200bb" }, false},
 		{"name with a paragraph separator", func(v *savedview.View) { v.Name = "a\u2029b" }, false},
 		{"name not UTF-8", func(v *savedview.View) { v.Name = "\xff" }, false},
-		{"owner with a right-to-left override", func(v *savedview.View) { v.Owner = "user:a\u202eb" }, false},
-		{"owner with a line separator", func(v *savedview.View) { v.Owner = "user:a\u2028b" }, false},
-		{"owner with a zero width space", func(v *savedview.View) { v.Owner = "user:a\u200bb" }, false},
+		{"owner with a right-to-left override", func(v *savedview.View) { v.Owner = "prn-a\u202eb" }, false},
+		{"owner with a line separator", func(v *savedview.View) { v.Owner = "prn-a\u2028b" }, false},
+		{"owner with a zero width space", func(v *savedview.View) { v.Owner = "prn-a\u200bb" }, false},
+		{"owner is a subject", func(v *savedview.View) { v.Owner = "user:alice" }, false},
+		{"owner is a group ID", func(v *savedview.View) { v.Owner = "grp-0123456789abcdefghij" }, false},
+		{"owner is the prefix only", func(v *savedview.View) { v.Owner = principal.IDPrefix }, false},
+		{"owner too long", func(v *savedview.View) { v.Owner = "prn-" + strings.Repeat("a", 61) }, false},
+		{"owner of the largest length", func(v *savedview.View) { v.Owner = "prn-" + strings.Repeat("a", 60) }, true},
 		{"bad ID", func(v *savedview.View) { v.ID = "x" }, false},
 		{"no owner", func(v *savedview.View) { v.Owner = "" }, false},
-		{"owner with a control character", func(v *savedview.View) { v.Owner = "user:a\r\nb" }, false},
+		{"owner with a control character", func(v *savedview.View) { v.Owner = "prn-a\r\nb" }, false},
 		{"bad query", func(v *savedview.View) { v.Query.References = []string{"pulumi:other/a/b"} }, false},
 	}
 

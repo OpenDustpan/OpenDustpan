@@ -1,6 +1,6 @@
 # 266. A saved view is a server object with an API
 
-Status: accepted · 2026-10-18. Records decision 40.3 of the owner. Decisions 2 to 9 are decided by the product manager under the owner's delegation of 20 October 2026. Accepts RFC 100. Extends ADR 17
+Status: accepted · 2026-10-18. Records decision 40.3 of the owner. Decisions 2 to 9 are decided by the product manager under the owner's delegation of 20 October 2026. Accepts RFC 100. Extends ADR 17.
 
 ## Context
 
@@ -23,8 +23,10 @@ Decisions 2 to 9 hold those answers.
    a link. A view that only the browser of one person stores is not a saved
    view.
 2. **A view has one owner: one person in one namespace.** The owner is the
-   subject of the principal that made the view. The namespace is the namespace
-   of the path.
+   ID of the principal that made the view (the form `prn-...`), not the
+   subject. The ID is stable and no principal gets it again. A new principal
+   with the same subject has a new ID, so it sees no view of the old
+   principal. The namespace is the namespace of the path.
 3. **A view is private first.** The order of sharing is: no sharing, then the
    namespace, then a collection. A share shows the name and the label values
    of the view to the scope, and the server writes an audit entry for it. A
@@ -47,12 +49,18 @@ Decisions 2 to 9 hold those answers.
    shared identity actions file, in the first implementation slice.
 7. **An administrator can delete a view without reading it** with the action
    `view:manage` and an audit entry. This lands in a slice after the first.
-8. **The views of a principal are deleted with the principal.** The delete
-   happens in the same transaction as the delete of the principal. The audit
-   log keeps one entry for each deleted view, with the view ID and not the
-   name. The retention of the audit log does not become shorter. A bootstrap
-   admin token cannot create a saved view. It gets 403 with a message that
-   tells the caller to sign in as a person.
+8. **The owner ID is the security control. The delete of the views of a
+   principal is cleanup.** A view whose owner ID is not the ID of a local
+   principal matches no reader and fails closed. This holds after a failover
+   too, when the principal does not exist in the new primary. Each namespace
+   runs the cleanup with its own fence, for example as a durable operation on
+   the primary. The cleanup does not run in the transaction that deletes the
+   principal. The audit log keeps one entry for each deleted view, with the
+   view ID and not the name. The retention of the audit log does not become
+   shorter. Only a person creates a saved view. Every other kind of principal
+   gets 403 with the same message, which tells the caller to sign in as a
+   person. These kinds are the bootstrap admin token, a service, a namespace,
+   a job and a runner.
 9. **A client reads a view in two ways:** the definition route, and the route
    `/views/{id}/units` that runs the query on the server. A test runs one
    query through both routes and compares the results. Backup, restore and
@@ -67,4 +75,7 @@ Decisions 2 to 9 hold those answers.
 - A saved view needs its docs page in the pull request that makes it visible
   (ADR 214).
 - A person who leaves takes the views away with them. A view of a deleted
-  principal cannot be read by a new principal with the same subject.
+  principal cannot be read by a new principal with the same subject, because
+  the owner is the ID and not the subject. The cleanup of the views can run
+  later than the delete of the principal, and the view stays closed until it
+  runs.

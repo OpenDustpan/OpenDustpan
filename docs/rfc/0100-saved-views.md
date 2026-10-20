@@ -56,10 +56,10 @@ A saved view has:
 | --- | --- |
 | `id` | `view-` and 32 lowercase hex digits. Unique in the installation. It never changes. |
 | `namespace` | The namespace of the view. It is part of the path. |
-| `name` | 1 to 128 characters, no control character, no space at either end. |
-| `owner` | The subject of the principal that made the view. |
+| `name` | 1 to 128 characters, no hidden character (Cc, Cf, Zl, Zp), no space at either end. |
+| `owner` | The ID of the principal that made the view (`prn-...`). The ID never changes and no principal gets it again. It is not the subject. |
 | `query` | `labels` (key and value) and `references`, with the limits of the unit list. |
-| `createdAt`, `updatedAt` | Times in UTC. |
+| `createdAt` | Time in UTC. |
 
 The view holds a query and **never its results**. The call that reads the
 units of a view runs the query again, with the code path of the unit list,
@@ -212,10 +212,15 @@ Options:
 - **B. The views are deleted with the principal**, in the same transaction.
 - **C. The views stay and a namespace administrator deletes them.**
 
-**Recommendation: B for private views.** A private view that nobody can open
-has no use. A shared view stays when sharing exists (question 2), and its
-owner becomes the namespace. The shape of the principal removal decides the
-detail, so this question may need an answer from that work.
+**Recommendation: B for private views, with the owner ID as the control.**
+The owner of a view is the ID of the principal, and no principal gets an ID
+again. So a new principal with the same subject sees nothing, by
+construction. A view whose owner ID is not a local principal matches no
+reader, also after a failover. The delete of the views is cleanup: each
+namespace runs it with its own fence, for example as a durable operation on
+the primary, and not in the transaction that deletes the principal. A private
+view that nobody can open has no use, so the cleanup removes it. A shared view
+stays when sharing exists (question 2), and its owner becomes the namespace.
 
 ### 8. How does a client read a view?
 
@@ -267,7 +272,7 @@ One thin end-to-end path, with no new dependency:
 Accepted on 20 October 2026 by the product manager, under the owner's
 delegation: [ADR 266](../adr/0266-a-saved-view-is-a-server-object-with-an-api.md).
 
-1. A view has one owner: one person in one namespace.
+1. A view has one owner: one person in one namespace. The owner is the ID of the principal.
 2. No sharing first, then the namespace, then a collection. A share shows the
    name and the label values to the scope, and the server audits it.
 3. A view stores labels and references only. A reference holds the tool, so a
@@ -282,8 +287,10 @@ delegation: [ADR 266](../adr/0266-a-saved-view-is-a-server-object-with-an-api.md
    person.
 6. An administrator deletes a view without reading it (`view:manage`), with an
    audit entry, in a later slice.
-7. The views of a principal are deleted in the same transaction as the
-   principal, with one audit entry for each view that holds the view ID only.
-   A bootstrap admin token cannot create a view.
+7. The owner of a view is the ID of the principal, never the subject. A view
+   whose owner is not a local principal matches no reader. The delete of the
+   views of a principal is cleanup that each namespace runs with its own fence,
+   with one audit entry for each view that holds the view ID only. Only a
+   person creates a view. Every other kind of principal gets 403.
 8. Both routes: the definition and `/views/{id}/units`. A test compares them.
 9. Backup, restore and replay follow the text above.

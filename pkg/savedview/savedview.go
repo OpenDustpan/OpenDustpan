@@ -17,9 +17,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 const (
@@ -43,6 +45,9 @@ const (
 	MaxPerNamespace = 10000
 	// MaxBodyBytes is the largest request body of a create call, in bytes.
 	MaxBodyBytes = 16 << 10
+	// maxOwnerLen is the largest length of an owner, in bytes. It is the
+	// largest length of a principal ID.
+	maxOwnerLen = 64
 )
 
 // idPattern is the form of a view ID: the prefix and 32 lowercase hex digits.
@@ -160,9 +165,12 @@ func validateReferences(refs []string, ns namespace.Name) error {
 	return nil
 }
 
-// View is a saved view: a named query in one namespace. Owner is the subject of
-// the principal that made it. A first version has personal views only, so the
-// owner is the only reader. A view has no update time, because a first version
+// View is a saved view: a named query in one namespace. Owner is the ID of the
+// principal that made it, in the form "prn-...". The ID never changes and the
+// installation never uses it again, so a new principal with the same subject
+// is a different owner. A view whose owner is not a principal of the
+// installation matches no reader. A first version has personal views only, so
+// the owner is the only reader. A view has no update time, because a first version
 // has no call that changes a view.
 type View struct {
 	CreatedAt time.Time
@@ -188,13 +196,21 @@ func (v View) Validate() error {
 
 	// Defense in depth: the handler takes the owner from the signed-in
 	// principal. This check stays so that a new caller of the store cannot
-	// store an owner that looks like another subject. It does not rely on the
-	// handler or on the identity provider.
-	if v.Owner == "" || !utf8.ValidString(v.Owner) || hasHidden(v.Owner) {
+	// store an owner that is not a principal ID, for example a subject that
+	// another principal can have later. It does not rely on the handler or on
+	// the identity provider.
+	if !validOwner(v.Owner) {
 		return fmt.Errorf("%w: the view has no valid owner", ErrInvalid)
 	}
 
 	return v.Query.Validate(v.Namespace)
+}
+
+// validOwner reports whether s is the ID of a principal: the principal prefix
+// and the ID characters, at most maxOwnerLen bytes. The check does not parse
+// the ID.
+func validOwner(s string) bool {
+	return len(s) > len(principal.IDPrefix) && strings.HasPrefix(s, principal.IDPrefix) && ident.Valid(s, maxOwnerLen)
 }
 
 // validName reports whether s is a view name: 1 to MaxNameLen characters of

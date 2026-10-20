@@ -7,9 +7,12 @@
 package savedviewtest
 
 import (
+	"errors"
 	"slices"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/savedview"
 )
@@ -105,7 +108,10 @@ func visibilityCases() []suiteCase {
 		pending("get of an unknown ID returns the same error as a view of another owner"),
 		pending("get of a view in another namespace returns not found"),
 		pending("list returns the views of the owner only"),
-		pending("views of a deleted principal are gone, and a new principal with the same subject sees none"),
+		{
+			name: "views of a deleted principal are gone, and a new principal with the same subject sees none",
+			test: testNewPrincipalSameSubjectSeesNone,
+		},
 		pending("delete of the view of another owner returns not found and keeps the view"),
 	}
 }
@@ -121,6 +127,96 @@ func writeCases() []suiteCase {
 		pending("delete of an unknown view returns not found and appends no audit entry"),
 		pending("concurrent creates of one name store one view"),
 		pending("concurrent creates at the limit store no more than the limit"),
-		pending("delete of a principal deletes its views and audits each view by ID only"),
+		pending("cleanup of the views of a principal deletes them and audits each view by ID only"),
+	}
+}
+
+// Owners of the two principals in the case below. The owner of a view is the
+// ID of a principal, never its subject. The second principal has the same
+// subject as the first, because the first was deleted, and has a new ID.
+const (
+	ownerDeleted = "prn-aaaaaaaaaaaaaaaaaaaa"
+	ownerNew     = "prn-bbbbbbbbbbbbbbbbbbbb"
+)
+
+// testNewPrincipalSameSubjectSeesNone creates views for the ID of a principal,
+// then reads as a new principal that has the same subject and another ID. The
+// store sees only the ID, so the new principal gets no view.
+func testNewPrincipalSameSubjectSeesNone(t *testing.T, h Harness) {
+	t.Helper()
+
+	const (
+		ns  = "acme"
+		vid = savedview.ID("view-0123456789abcdef0123456789abcdef")
+	)
+
+	fence := h.Namespace(t, ns)
+	v := savedview.View{
+		CreatedAt: time.UnixMilli(1),
+		ID:        vid,
+		Namespace: ns,
+		Name:      "Payments",
+		Owner:     ownerDeleted,
+		Query: savedview.Query{
+			Labels:     []savedview.Label{{Key: "team", Value: "payments"}},
+			References: nil,
+		},
+	}
+
+	err := h.Store.Create(t.Context(), v, fence, auditEntry(ns, "create"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, err = h.Store.Get(t.Context(), ns, vid, ownerNew)
+	if !errors.Is(err, savedview.ErrNotFound) {
+		t.Fatalf("get as the new principal = %v, want ErrNotFound", err)
+	}
+
+	views, err := h.Store.List(t.Context(), ns, ownerNew)
+	if err != nil || len(views) != 0 {
+		t.Fatalf("list as the new principal = %v, %v; want no view", views, err)
+	}
+
+	// The new principal cannot delete the view, and the view stays.
+	err = h.Store.Delete(t.Context(), ns, vid, ownerNew, fence, auditEntry(ns, "delete"))
+	if !errors.Is(err, savedview.ErrNotFound) {
+		t.Fatalf("delete as the new principal = %v, want ErrNotFound", err)
+	}
+
+	_, err = h.Store.Get(t.Context(), ns, vid, ownerDeleted)
+	if err != nil {
+		t.Fatalf("get as the first principal: %v", err)
+	}
+}
+
+// auditEntry returns a valid audit entry for a write of a view in ns.
+func auditEntry(ns namespace.Name, action string) audit.Entry {
+	return audit.Entry{
+		At:            time.UnixMilli(1),
+		Namespace:     ns,
+		Subject:       "alice",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "view:" + action,
+		Object:        ns.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "192.0.2.1",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		PrincipalKind: "",
+		JobID:         "",
+		Reason:        "",
 	}
 }
