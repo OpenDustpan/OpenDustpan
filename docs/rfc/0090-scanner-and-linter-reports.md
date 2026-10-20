@@ -153,13 +153,15 @@ the strongest binding, A1 and A3 give the widest reach.
 ### C. Severity
 
 1. **A fixed map.** Take the rule property `security-severity`
-   (a number). The bands, with no gap: below 0.1 or above 10, or not a
-   number, is no value and the `level` map applies; from 0.1 up to but not
+   (a number). The bands, with no gap: a number below 0 or above 10, or a
+   value that is not a number, is no value and the `level` map applies; from
+   0 up to but not including 0.1 is `info`; from 0.1 up to but not
    including 4.0 is `low`; from 4.0 up to but not including 7.0 is
    `medium`; from 7.0 up to but not including 9.0 is `high`; from 9.0 to
    10.0 is `critical`. With no value, map `level`: `error` to `high`,
-   `warning` to `medium`, `note` to `low`, `none` to `info`. A value of 0
-   is `info`. Cheap; it is wrong for tools that put all results at `error`
+   `warning` to `medium`, `note` to `low`, `none` to `info`. The test
+   `TestSeverityBands` holds the boundary values 0, 0.05, 0.1, 4.0, 7.0,
+   9.0, 10, -0.1, 10.1 and a string. Cheap; it is wrong for tools that put all results at `error`
    or `warning`.
 2. **The fixed map, plus overrides** by scanner and rule ID, stored on a
    namespace, a collection or a unit. More work; teams can correct a bad
@@ -228,12 +230,16 @@ A new fact group `scannerFindings` at `change.planned` and `change.apply`.
 The counts are per plan, and they are monotonic:
 
 - A fact counts the union of all accepted reports that are bound to the
-  plan (same plan ID and SHA-256 of `plan-display`). A later upload adds to
-  the union and never lowers a count. A finding that is in one accepted
-  report stays in the count even when a newer report of the same scanner
-  does not have it.
-- Eviction (the 1,000 reports per unit limit, retention) never removes a
-  report that is bound to a stored plan still in retention.
+  plan (same plan ID and SHA-256 of `plan-display`). The union counts each
+  fingerprint once, at the highest mapped severity among all accepted
+  reports of the plan. A later upload adds to the union and never lowers a
+  count. A finding that is in one accepted report stays in the count even
+  when a newer report of the same scanner does not have it, or has it at a
+  lower severity. The test is `TestUnionCountsFingerprintOnceAtHighestSeverity`.
+- Eviction never removes a report that is bound to a stored plan still in
+  retention. When all retained reports of a unit are plan-bound and the
+  limit is reached, the server refuses the upload and writes an audit
+  entry. It never evicts (`TestUploadRefusesWhenAllRetainedReportsPlanBound`).
 - A report that was rejected is not accepted, and it adds nothing.
 
 | Field | Meaning |
@@ -241,8 +247,8 @@ The counts are per plan, and they are monotonic:
 | `available` | `true` only when at least one accepted report is bound to this plan and the producer read it; `false` when the producer fails (see "The producer port") |
 | `unexcepted` | a record of counts by severity: `critical`, `high`, `medium`, `low`, `info` |
 | `excepted` | the same counts for excepted scanner findings |
-| `scanners` | the set of scanner names with an accepted report for this plan |
-| `uploaders` | for each scanner, the set of uploader credential kinds: `job-token`, `trust-token`, `access-token` |
+| `scanners` | the set of scanner names with an accepted report for this plan; at most 32 names |
+| `trustedScanners` | the set of scanner names with an accepted report from a trusted producer (see "Trust model"); a subset of `scanners` |
 | `rejected` | the count of rejected uploads for this plan |
 
 "Rejected" means a refused upload (parse error, limit, bad binding). It is
@@ -261,9 +267,25 @@ when { !context.scannerFindings.available ||
        context.scannerFindings.unexcepted.high > 0 }
 ```
 
-with outcome `deny` or `approval:<rule>`. A gate that must trust the report
-more can also read `uploaders` and require a runner-produced report (see
-"Trust model"). Options for the built-in gates: none (a starter pack in
+with outcome `deny` or `approval:<rule>`. This plain form only checks for
+mistakes: a report from a CI can be empty or forged (see "Trust model").
+The enforced form reads `trustedScanners` and the truncation path, and
+fails closed:
+
+```cedar
+when { context.document.truncated.contains("scannerFindings.trustedScanners") ||
+       !context.scannerFindings.available ||
+       !context.scannerFindings.trustedScanners.contains("trivy") ||
+       context.scannerFindings.unexcepted.critical > 0 ||
+       context.scannerFindings.unexcepted.high > 0 }
+```
+
+Cedar has no open map (ADR 226), so the fact holds sets of strings and no
+map from a scanner to its uploaders. Both `scanners` and `trustedScanners`
+join the list of sets in ADR 226 decision 14, and are emptied last. A gate
+that reads them fails closed when their path is in `document.truncated`.
+Because a document holds at most 32 scanner names of 64 bytes each, this
+is rare, but the rule holds. Options for the built-in gates: none (a starter pack in
 `evaluate` mode), or a built-in gate like
 `builtin/mandatory-resource-policy` (question 6).
 
@@ -282,37 +304,58 @@ decision 6), so that a retry in CI does not store a second report.
 | `POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/scanner-reports` | `unit:upload-scanner-report` (new) | the unit |
 | `GET .../units/{unit_id}/scanner-reports`, `GET .../scanner-reports/{id}` | `unit:read` | the unit |
 | `GET .../scanner-reports/{id}/raw` | `unit:read-scanner-reports` (new) and, for a plan-bound report, `job:read-plans` and `unit:read-secrets` | the unit |
-| `GET .../units/{unit_id}/scanner-findings` | `unit:read` | the unit |
+| `GET .../units/{unit_id}/scanner-findings` | `unit:read` (see "Secrets from plan JSON" for the fields of a plan-bound finding) | the unit |
 | `POST`, `DELETE .../units/{unit_id}/finding-exceptions[/{id}]` | `unit:except-scanner-finding` (new) | the unit |
 
 The upload names its subject in query parameters: `plan=<pln-ID>` with
 `planSha256=<hex>`, or `commit=<sha>`. It also names `scanner` and
 `scannerVersion` when the report does not. Each change passes the policy
-check of ADR 17. A job token of a plan phase may hold
-`unit:upload-scanner-report` for its own unit only.
+check of ADR 17. A job token never holds `unit:upload-scanner-report`: ADR
+133 decision 12 gives the job token to the tool, so the scanned IaC code
+can use it. The action is open to the credential kinds `session`,
+`access-token` and `trust-token` (ADR 226 decision 5). A trusted report
+(see "Trust model") does not use this route. An external check or a server
+phase writes it through the `scanreport` port, under its own producer kind.
+
+### The plan digest for a CI
+
+A CI that reads the masked plan cannot compute the SHA-256 of the stored
+`plan-display` part, because the stored part is unmasked. Recommendation:
+the plan metadata (the answer that names the plan) returns the digest of
+the stored part, and the CI passes it back as `planSha256`. The server
+compares it with the stored digest at upload (`TestUploadRefusesPlanDigestMismatch`).
+The digest does not reveal the content, and a reader needs `unit:read`
+only. Option: the CI computes the digest of the masked plan, and the
+server keeps a second digest for the masked answer. That is a second path
+to keep consistent, so the author does not recommend it.
 
 ### Secrets from plan JSON
 
 The `plan-display` part is stored unmasked in the server (ADR 102: the
-route answers masked, and `reveal=true` needs `unit:read-secrets`). A
-scanner that reads plan JSON can therefore copy a secret value into its
-SARIF. Rules:
+route answers masked, and `reveal=true` needs `unit:read-secrets`). The
+server cannot find secret values in free text (ADR 102). A scanner that
+reads plan JSON can therefore copy a secret value into the message text of
+its SARIF, and no mask can remove it. Rules:
 
 - Rows never store `snippet`, `contextRegion`, `codeFlows` or `fixes` of a
-  SARIF result, and the parser drops them. The message text is stored; it
-  can still hold a value, so it goes through the same redaction as other
-  history items (ADR 151) before it is stored or shown.
-- The raw report of a plan-bound scan needs `job:read-plans` and
-  `unit:read-secrets` on the unit, or the same masking as the readable plan.
-  The route answers masked by default, and unmasked only with those actions.
-- Rows and the raw report fall under the redaction path and the item key of
-  history items (ADR 151) and the history policy (ADR 152). A secret that is
-  later registered is masked in the stored rows by the same job as for plans.
+  SARIF result, and the parser drops them.
+- For a plan-bound finding, the message text, the file path, the line and
+  the raw report need `job:read-plans` and `unit:read-secrets` on the unit.
+  A read of them by a person writes an audit entry of the kind `reveal`,
+  with the rules of ADR 240. With `unit:read` only, a reader gets the
+  scanner, the rule ID, the mapped severity, the fingerprint and the
+  address. A commit-bound finding scans source code, not plan JSON, and a
+  reader with `unit:read` gets its message text.
+- ADR 151 applies only as item-key sealing and shredding of whole items.
+  The raw report and the message texts of a report are sealed with the item
+  key of the report. A shred of the item removes them all. There is no
+  text masking, and no job that masks stored rows later.
 
 ### Limits and rules at the boundary (proposal)
 
 An input over a limit or against a rule is refused. It is never cut down
-to fit. Each rule below has one test, named after the rule.
+to fit, with one named exception: the locations of a result (the row for
+`locations`). Each rule below has one test, named after the rule.
 
 | Rule | Test name |
 | --- | --- |
@@ -321,13 +364,22 @@ to fit. Each rule below has one test, named after the rule.
 | JSON depth at most 64, found by a token-stream pre-pass before the main decode. | `TestParseRefusesDeepJSON` |
 | A duplicate JSON key in one object is refused, found by the same pre-pass. | `TestParseRefusesDuplicateKeys` |
 | At most 20 runs, 25,000 results in total and 25,000 rules per report. | `TestParseRefusesOverRunResultRuleCount` |
-| Per result: 10 locations kept (GitHub keeps 1,000; 10 is enough for display); `ruleId` 1 to 256 bytes from an allowlist of characters; `message.text` at most 4 KiB. | `TestParseRefusesLongRuleID`, `TestParseRefusesBadRuleIDChars`, `TestParseRefusesLongMessage` |
+| Per result: `ruleId` 1 to 256 bytes from an allowlist of characters; `message.text` at most 4 KiB. | `TestParseRefusesLongRuleID`, `TestParseRefusesBadRuleIDChars`, `TestParseRefusesLongMessage` |
+| **The one exception:** the parser keeps the first 10 `locations` of a result and drops the rest (10 is enough for display; GitHub keeps 1,000). The report shows the count of dropped locations. | `TestParseDropsLocationsOverTen` |
 | Every field named `*.markdown` is dropped, never stored. | `TestParseDropsMarkdownFields` |
 | The `properties` bag is dropped, except the keys the severity map reads (`security-severity`), each value at most 64 bytes; at most 32 keys and 4 KiB per bag. | `TestParseDropsUnknownProperties`, `TestParseRefusesOverBigProperties` |
 | Message templates (`message.id`, `{0}` placeholders) are not expanded. Only `message.text` is read. | `TestParseDoesNotExpandMessageTemplates` |
 | `artifactLocation.uri` is percent-decoded once, then refused if it has a scheme, an absolute path, a backslash, a NUL, a `..` segment, or a `uriBaseId` outside an allowlist (`%SRCROOT%`, none). The server never opens a file from it. | `TestParseRefusesBadArtifactURI` (one case each), `TestParseRefusesUnknownURIBaseID` |
 | `helpUri`: `https` only, no userinfo, at most 2 KiB. The server never fetches it, and the console never links it automatically; it shows it as text with its host. | `TestParseRefusesBadHelpURI`, `TestConsoleShowsHelpURIAsText` |
-| At most 100 uploads per unit per hour, and 1,000 stored reports per unit. The oldest go first, except a report bound to a stored plan in retention (see G). | `TestUploadRateLimit`, `TestEvictionKeepsPlanBoundReports` |
+| At most 100 uploads per unit per hour, and 1,000 stored reports per unit. The oldest commit-bound report goes first. A report bound to a stored plan in retention never goes. When all retained reports are plan-bound, the upload is refused with an audit entry (see G). | `TestUploadRateLimit`, `TestEvictionKeepsPlanBoundReports`, `TestUploadRefusesWhenAllRetainedReportsPlanBound` |
+| Query `scanner`: 1 to 64 bytes from the allowlist `[a-z0-9][a-z0-9._-]*`. When the report also names its tool (`tool.driver.name`), the two must be equal. The server does not change a name to make it valid. | `TestUploadRefusesBadScannerName`, `TestUploadRefusesScannerNameMismatch` |
+| Query `scannerVersion`: 1 to 64 bytes from `[0-9A-Za-z.+_-]`. | `TestUploadRefusesBadScannerVersion` |
+| Query `commit`: 40 or 64 lowercase hex characters. | `TestUploadRefusesBadCommit` |
+| Query `plan`: the plan ID syntax (`pln-` and the fixed ID characters), at most 64 bytes. `planSha256`: 64 lowercase hex characters. Exactly one subject: `plan` with `planSha256`, or `commit`. | `TestUploadRefusesBadPlanID`, `TestUploadRefusesBadPlanSha256`, `TestUploadRefusesBadSubject` |
+| Header `Idempotency-Key`: 1 to 128 bytes from `[A-Za-z0-9._:-]`. | `TestUploadRefusesBadIdempotencyKey` |
+| File path: at most 1,024 bytes (after the rules for `artifactLocation.uri` above). Line and column: integers from 1 to 10,000,000. | `TestParseRefusesLongURI`, `TestParseRefusesBadLine` |
+| Address and URN strings (from a logical location or from plan JSON): valid UTF-8, 1 to 1,024 bytes, no control character (C0, DEL), so no CR and no LF. They are stored as opaque text. | `TestParseRefusesBadAddress` |
+| `partialFingerprints`: at most 16 keys; each key at most 64 bytes and each value at most 256 bytes, valid UTF-8 without control characters. They feed the fingerprint (D). | `TestParseRefusesBadPartialFingerprints` |
 
 ### Trust model
 
@@ -336,14 +388,22 @@ a hostile uploader. A hostile uploader can send an empty SARIF, a report
 that omits findings, or a scanner name of their choice, and the server
 cannot tell. The RFC does not claim more.
 
-To let a gate ask for more, the fact carries the credential kind of the
-uploader for each report: `job-token` (a runner job), `trust-token` (a
-workload identity, ADR 54) or `access-token` (a person or a token in CI).
-A gate can then require `uploaders["trivy"].contains("job-token")`, which is
-a report that a runner produced. An enforced scan gate needs this, and so it
-needs runner jobs with stored plans. Self-declared scanner names in the
-report are stored as given and are shown as "declared by the uploader"; the
-fact `scanners` is made from them and has the same limit.
+A report with a job token is the weakest kind, not the strongest. ADR 133
+decision 12 gives the job token to the tool, so the scanned IaC code can
+use it and forge the report. A job token never gets the upload action, and
+a plan-phase job cannot upload.
+
+A trusted report comes only from a producer that the scanned code cannot
+reach: an external check (option A3, ADR 226 decision 10) or a server phase
+(option A4). Each report stores its producer kind: `ci-upload` (the
+credential kind `session`, `access-token` or `trust-token`, kept for
+display), `external-check` or `server-phase`. Only the last two are
+trusted. The fact `trustedScanners` is the set of scanner names with an
+accepted report from a trusted producer. An enforced scan gate reads
+`trustedScanners` (see G), so it needs A3 or A4, and so it needs runner jobs
+with stored plans. Self-declared scanner names in the report are stored as
+given and are shown as "declared by the uploader". For a trusted producer,
+the server sets the scanner name, not the report.
 
 ### Defense in depth: one line per layer (ADR 250)
 
@@ -430,7 +490,9 @@ from a CI.
 
 ## Open questions
 
-The owner keeps these. Each has the recommendation of the reviewer.
+The owner keeps these. Where a question has a recommendation, it is the
+author's, informed by review. Questions 1 to 4 have one. The other
+questions have none yet.
 
 1. Names: "scanner finding", "scanner report", "finding exception" and the
    package `pkg/scanreport`, or other words? The glossary needs them before
