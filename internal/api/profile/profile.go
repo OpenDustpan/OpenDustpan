@@ -47,6 +47,10 @@ type Config struct {
 	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
 	// writes none.
 	Audit audit.Store
+	// Namespaces reads the namespace of an entry that the shared denial limiter
+	// flushes for a key of another adapter. Nil makes such a flush entry fail
+	// with a count in OnAuditFailure.
+	Namespaces refusal.Namespaces
 	// OnAuditFailure, when set, runs once for each refusal whose entry could not
 	// be written, so the server can count it.
 	OnAuditFailure func()
@@ -94,7 +98,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		profiles: cfg.Profiles,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
-		guard: refusal.New(cfg.Authorizer, cfg.Audit, nil, cfg.Logger, cfg.OnAuditFailure).
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
 			WithLimiter(cfg.DenialLimiter).
 			WithSurface("profile"),
 		sessions: cfg.Sessions,

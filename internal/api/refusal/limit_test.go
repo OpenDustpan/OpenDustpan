@@ -264,7 +264,7 @@ func TestRecordWritesADomainRefusal(t *testing.T) {
 
 	rec.Record(t.Context(), request(t, "/api/inventory/unit-lock"), person("bo@example.com"), refusal.Denial{
 		Action: identity.ActionUnitManage, Object: identity.NamespaceObject("team"),
-		Reason: "not the holder of the lock\r\n",
+		Reason: "not the holder of the lock\r\n", Window: 0,
 	})
 
 	if len(store.entries) != 1 {
@@ -487,7 +487,10 @@ func TestRecordWithNoRequest(t *testing.T) {
 	rec := newRecorder(t, store, nil, &failures)
 
 	rec.Record(t.Context(), nil, person("bo@example.com"), refusal.Denial{
-		Action: identity.ActionUnitManage, Object: identity.NamespaceObject("team"), Reason: "not the holder",
+		Action: identity.ActionUnitManage,
+		Object: identity.NamespaceObject("team"),
+		Reason: "not the holder",
+		Window: 0,
 	})
 
 	if len(store.entries) != 1 {
