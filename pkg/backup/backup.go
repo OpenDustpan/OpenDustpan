@@ -42,12 +42,16 @@ const (
 // The tables of durable operations: one row for each operation, one row for
 // each recorded step, and one row for each schedule. The sign-in failure
 // budget is a windowed count in the database: the live rows stay across the
-// swap of a restore, as the claim tokens and the next runs do.
+// swap of a restore, as the claim tokens and the next runs do. So does the
+// row of the last audit chain check and the marks of checkpoint mismatches
+// do too: a restore must not clear a mark.
 const (
 	TableDurableOperations = "durable_operations"
 	TableDurableSteps      = "durable_steps"
 	TableDurableSchedules  = "durable_schedules"
 	TableSignInFailures    = "sign_in_failures"
+	TableAuditChainCheck   = "audit_chain_check"
+	TableAuditChainMark    = "audit_chain_mark"
 )
 
 // The tables of the replay records of the Idempotency-Key header, the server

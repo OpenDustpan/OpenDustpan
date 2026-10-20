@@ -85,7 +85,9 @@ type Store interface {
 	// ErrLocked while the workspace is locked, ErrPendingState while it has a
 	// pending state version, ErrNotFound if no live workspace has ref, namespace.ErrNotFound if the namespace does not
 	// exist, namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry
-	// if e fails validation or names another namespace.
+	// if e fails validation or names another namespace. While a manual lock
+	// covers the workspace, its collection or its namespace, the error matches
+	// ErrLocked and manuallock.ErrLocked.
 	DeleteWorkspace(ctx context.Context, ref Ref, fence namespace.Fence, d inventory.Deletion) error
 	DeletedStore
 }

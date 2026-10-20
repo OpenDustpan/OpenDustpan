@@ -164,6 +164,18 @@ func (c *Cluster) URL(i int) string {
 	return ""
 }
 
+// SchemaURL returns the URL of the schema of the cluster, for a test that
+// reads the rows of the database. The URL names a TCP host.
+func (c *Cluster) SchemaURL() string {
+	return c.schemaURL
+}
+
+// BlobDir returns the directory of the blob store that every server of the
+// cluster shares, for a test that reads or changes a blob.
+func (c *Cluster) BlobDir() string {
+	return c.blobDir
+}
+
 // Do sends a request with Token to server i and returns the status and the
 // body. The token goes in the scheme that the API of path reads: "Bearer"
 // for the installation API and the TFE-compatible API, "token" for the
