@@ -21,10 +21,20 @@ type fakeManualLocks struct {
 	lock  manuallock.Lock
 	err   error
 	asked []collection.UnitRef
+	// passJob, when set, is the job whose request the lock does not refuse.
+	passJob string
+	jobs    []string
 }
 
-func (f *fakeManualLocks) Covering(_ context.Context, unit collection.UnitRef) (manuallock.Lock, error) {
+func (f *fakeManualLocks) CoveringFor(
+	_ context.Context, unit collection.UnitRef, jobID string,
+) (manuallock.Lock, error) {
 	f.asked = append(f.asked, unit)
+	f.jobs = append(f.jobs, jobID)
+
+	if f.passJob != "" && jobID == f.passJob {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
 
 	if f.err != nil {
 		return manuallock.Lock{}, f.err
@@ -35,12 +45,12 @@ func (f *fakeManualLocks) Covering(_ context.Context, unit collection.UnitRef) (
 
 // answering returns a port that answers with lock.
 func answering(lock manuallock.Lock) *fakeManualLocks {
-	return &fakeManualLocks{lock: lock, err: nil, asked: nil}
+	return &fakeManualLocks{lock: lock, err: nil, asked: nil, passJob: "", jobs: nil}
 }
 
 // failing returns a port that answers with err.
 func failing(err error) *fakeManualLocks {
-	return &fakeManualLocks{lock: heldCollectionLock(), err: err, asked: nil}
+	return &fakeManualLocks{lock: heldCollectionLock(), err: err, asked: nil, passJob: "", jobs: nil}
 }
 
 // heldCollectionLock is a manual lock of alice on the collection acme/payments.
@@ -227,5 +237,76 @@ func TestManualLockLeavesAHeldToolLockAlone(t *testing.T) {
 
 	if _, err := svc.Lock(t.Context(), f.ws.ID, "ci", "plan"); !errors.Is(err, manuallock.ErrLocked) {
 		t.Errorf("lock after the unlock: err = %v, want the manual lock to refuse it", err)
+	}
+}
+
+// TestLockRequestOfAnEarlierJobPhasePasses proves the job ID of the request
+// reaches the manual lock port, that a request the port lets pass takes the
+// tool lock, and that a request with another job ID or none meets the lock.
+func TestLockRequestOfAnEarlierJobPhasePasses(t *testing.T) {
+	t.Parallel()
+
+	requests := []struct {
+		name string
+		call func(*testing.T, *workspace.Service, fixture, string) error
+	}{
+		{
+			name: "LockForJob",
+			call: func(t *testing.T, s *workspace.Service, f fixture, jobID string) error {
+				t.Helper()
+
+				_, err := s.LockForJob(t.Context(), f.ws.ID, "job-1", "plan", jobID)
+
+				return err
+			},
+		},
+		{
+			name: "LockWithIDForJob",
+			call: func(t *testing.T, s *workspace.Service, f fixture, jobID string) error {
+				t.Helper()
+
+				_, err := s.LockWithIDForJob(t.Context(), f.ws.ID, "job-1", "plan", "lock-1", jobID)
+
+				return err
+			},
+		},
+	}
+
+	for _, req := range requests {
+		for _, tc := range []struct {
+			name      string
+			jobID     string
+			wantError bool
+		}{
+			{name: "job that started before the lock", jobID: "job-1", wantError: false},
+			{name: "another job", jobID: "job-2", wantError: true},
+			{name: "no job token", jobID: "", wantError: true},
+		} {
+			t.Run(req.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				f := newFixture(t)
+				locks := answering(heldCollectionLock())
+				locks.passJob = "job-1"
+				svc := withManualLocks(t, f, locks)
+
+				err := req.call(t, svc, f, tc.jobID)
+				if tc.wantError {
+					checkLockedError(t, err)
+				} else if err != nil {
+					t.Fatalf("lock request of the earlier phase = %v, want it to pass", err)
+				}
+
+				if len(locks.jobs) != 1 || locks.jobs[0] != tc.jobID {
+					t.Errorf("job IDs asked = %q, want [%q]", locks.jobs, tc.jobID)
+				}
+
+				got, getErr := svc.GetByID(t.Context(), f.ws.ID)
+				if getErr != nil || got.Lock.Locked() == tc.wantError {
+					t.Errorf("tool lock after the request = %+v, %v; held = %v, want %v",
+						got.Lock, getErr, got.Lock.Locked(), !tc.wantError)
+				}
+			})
+		}
 	}
 }

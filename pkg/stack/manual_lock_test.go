@@ -21,10 +21,20 @@ type fakeManualLocks struct {
 	lock  manuallock.Lock
 	err   error
 	asked []collection.UnitRef
+	// passJob, when set, is the job whose request the lock does not refuse.
+	passJob string
+	jobs    []string
 }
 
-func (f *fakeManualLocks) Covering(_ context.Context, unit collection.UnitRef) (manuallock.Lock, error) {
+func (f *fakeManualLocks) CoveringFor(
+	_ context.Context, unit collection.UnitRef, jobID string,
+) (manuallock.Lock, error) {
 	f.asked = append(f.asked, unit)
+	f.jobs = append(f.jobs, jobID)
+
+	if f.passJob != "" && jobID == f.passJob {
+		return manuallock.Lock{}, manuallock.ErrNotLocked
+	}
 
 	if f.err != nil {
 		return manuallock.Lock{}, f.err
@@ -45,12 +55,12 @@ func heldCollectionLock() manuallock.Lock {
 
 // answering returns a port that answers with the held lock.
 func answering() *fakeManualLocks {
-	return &fakeManualLocks{lock: heldCollectionLock(), err: nil, asked: nil}
+	return &fakeManualLocks{lock: heldCollectionLock(), err: nil, asked: nil, passJob: "", jobs: nil}
 }
 
 // failing returns a port that answers with err.
 func failing(err error) *fakeManualLocks {
-	return &fakeManualLocks{lock: heldCollectionLock(), err: err, asked: nil}
+	return &fakeManualLocks{lock: heldCollectionLock(), err: err, asked: nil, passJob: "", jobs: nil}
 }
 
 // planOf returns a plan of the kind, as a dry run or not.
@@ -207,6 +217,48 @@ func TestStartWithoutAManualLock(t *testing.T) {
 
 			if errors.Is(err, stack.ErrUpdateConflict) {
 				t.Errorf("err = %v: a read failure is not a conflict", err)
+			}
+		})
+	}
+}
+
+// TestStartOfAnEarlierJobPhasePasses proves the job ID of the request reaches
+// the manual lock port, that the start the port lets pass runs, and that a
+// start with another job ID or none meets the lock.
+func TestStartOfAnEarlierJobPhasePasses(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		jobID     string
+		wantError bool
+	}{
+		{name: "job that started before the lock", jobID: "job-1", wantError: false},
+		{name: "another job", jobID: "job-2", wantError: true},
+		{name: "no job token", jobID: "", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdates(t)
+			locks := answering()
+			locks.passJob = "job-1"
+			svc := withManualLocks(t, f, locks)
+
+			u, err := svc.Create(t.Context(), f.ref, planOf(stack.KindUpdate, false))
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			_, err = svc.StartBy(t.Context(), f.ref, u.ID, "", tc.jobID, 0)
+			if tc.wantError {
+				checkRefusal(t, err, locks)
+			} else if err != nil {
+				t.Fatalf("start of the earlier phase = %v, want it to pass", err)
+			}
+
+			if len(locks.jobs) != 1 || locks.jobs[0] != tc.jobID {
+				t.Errorf("job IDs asked = %q, want [%q]", locks.jobs, tc.jobID)
 			}
 		})
 	}

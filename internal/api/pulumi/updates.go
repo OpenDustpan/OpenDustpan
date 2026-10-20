@@ -446,7 +446,7 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity
 
 	journal := h.journalVersionFor(r.UserAgent(), offer)
 
-	started, err := h.updates.StartBy(ctx, ref, id, p.TokenID, int64(journal))
+	started, err := h.updates.StartBy(ctx, ref, id, p.TokenID, p.JobTokenID(), int64(journal))
 	if err != nil {
 		h.writeError(ctx, w, err)
 

@@ -270,7 +270,7 @@ func startBenchLease(
 		b.Fatalf("create update: %v", err)
 	}
 
-	started, err := updates.StartBy(ctx, ref, u.ID, tokenID, 0)
+	started, err := updates.StartBy(ctx, ref, u.ID, tokenID, "", 0)
 	if err != nil {
 		b.Fatalf("start update: %v", err)
 	}

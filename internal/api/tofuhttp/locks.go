@@ -191,7 +191,7 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 		return
 	}
 
-	_, err = h.ws.LockWithID(ctx, ws.ID, c.principal.Subject, info.Info, info.ID)
+	_, err = h.ws.LockWithIDForJob(ctx, ws.ID, c.principal.Subject, info.Info, info.ID, c.principal.JobTokenID())
 	if errors.Is(err, workspace.ErrLocked) || errors.Is(err, workspace.ErrConcurrentModification) {
 		h.writeHeld(ctx, w, c, err)
 

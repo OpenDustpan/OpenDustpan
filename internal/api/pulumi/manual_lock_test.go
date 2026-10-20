@@ -17,7 +17,7 @@ type manualLockHolder struct {
 	lock manuallock.Lock
 }
 
-func (m manualLockHolder) Covering(context.Context, collection.UnitRef) (manuallock.Lock, error) {
+func (m manualLockHolder) CoveringFor(context.Context, collection.UnitRef, string) (manuallock.Lock, error) {
 	return m.lock, nil
 }
 

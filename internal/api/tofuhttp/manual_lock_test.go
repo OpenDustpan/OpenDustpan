@@ -134,3 +134,36 @@ func checkManualInfo(t *testing.T, body []byte, w manualInfoWant) {
 		t.Errorf("Info = %q, want the force-unlock route", info.Info)
 	}
 }
+
+// TestLockPassesTheJobOfTheToken proves the job ID reaches the lock service
+// only for a request that a job token authenticated. An access token whose
+// principal names a job gets no pass.
+func TestLockPassesTheJobOfTheToken(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{name: "job token", token: jobToken, want: "job-1"},
+		{name: "access token that names a job", token: spoofedJobToken, want: ""},
+		{name: "access token", token: adminToken, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(true)
+			h := newTestHandler(t, units)
+
+			rec := do(h, "LOCK", unitPath, lockBody(lockOne, "ci"), bearer(tc.token))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			if len(units.lockJobs) != 1 || units.lockJobs[0] != tc.want {
+				t.Errorf("job IDs of the lock requests = %q, want [%q]", units.lockJobs, tc.want)
+			}
+		})
+	}
+}

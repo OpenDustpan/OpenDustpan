@@ -275,10 +275,13 @@ type Config struct {
 // ManualLocks is the read side of the manual locks of the shared core. A lock
 // request of OpenTofu asks it before the workspace takes its own lock.
 type ManualLocks interface {
-	// Covering returns the manual lock that covers the unit: a lock on the
-	// unit, or on the collection that holds it. It returns
-	// manuallock.ErrNotLocked when no manual lock covers the unit.
-	Covering(ctx context.Context, unit collection.UnitRef) (manuallock.Lock, error)
+	// CoveringFor returns the manual lock that covers the unit: a lock on the
+	// unit, on the collection that holds it, or on its namespace. jobID is the
+	// job whose job token made the request, or empty. The lock request of a
+	// job whose phase started before the lock passes. It returns
+	// manuallock.ErrNotLocked when no manual lock covers the unit for the
+	// request.
+	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
 }
 
 // lockStripes is the number of striped mutexes serializing declares and
@@ -548,6 +551,13 @@ func (s *Service) List(ctx context.Context, ns namespace.Name) ([]Workspace, err
 
 // Lock locks the workspace for holder, the subject of the calling principal.
 func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Workspace, error) {
+	return s.LockForJob(ctx, id, holder, reason, "")
+}
+
+// LockForJob is Lock for a request that carries the job token of the job
+// jobID, or no job token when jobID is empty. A job whose phase started before
+// a manual lock passes that lock.
+func (s *Service) LockForJob(ctx context.Context, id ID, holder, reason, jobID string) (Workspace, error) {
 	if holder == "" {
 		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
 	}
@@ -556,7 +566,7 @@ func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Works
 	// transactions. A manual lock that commits between them is missed by this
 	// one request, the same as a job phase that started before the lock. The
 	// next request meets the lock.
-	if err := s.checkManualLock(ctx, id); err != nil {
+	if err := s.checkManualLock(ctx, id, jobID); err != nil {
 		return Workspace{}, err
 	}
 
@@ -570,6 +580,15 @@ func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Works
 // names it again in each write (ADR 49, decision 6). An ID that is empty, too
 // long or has characters outside the lock ID set fails with ErrInvalidLockID.
 func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID string) (Workspace, error) {
+	return s.LockWithIDForJob(ctx, id, holder, reason, lockID, "")
+}
+
+// LockWithIDForJob is LockWithID for a request that carries the job token of
+// the job jobID, or no job token when jobID is empty. A job whose phase started
+// before a manual lock passes that lock.
+func (s *Service) LockWithIDForJob(
+	ctx context.Context, id ID, holder, reason, lockID, jobID string,
+) (Workspace, error) {
 	if holder == "" {
 		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
 	}
@@ -582,7 +601,7 @@ func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID 
 	// transactions. A manual lock that commits between them is missed by this
 	// one request, the same as a job phase that started before the lock. The
 	// next request meets the lock.
-	if err := s.checkManualLock(ctx, id); err != nil {
+	if err := s.checkManualLock(ctx, id, jobID); err != nil {
 		return Workspace{}, err
 	}
 
@@ -2569,7 +2588,7 @@ func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy tim
 // checkManualLock refuses a lock request on the workspace id while a manual
 // lock covers it. The error matches ErrLocked and manuallock.ErrLocked, and
 // names the holder and the reason of the manual lock.
-func (s *Service) checkManualLock(ctx context.Context, id ID) error {
+func (s *Service) checkManualLock(ctx context.Context, id ID, jobID string) error {
 	if s.manual == nil {
 		return nil
 	}
@@ -2579,9 +2598,9 @@ func (s *Service) checkManualLock(ctx context.Context, id ID) error {
 		return err
 	}
 
-	l, err := s.manual.Covering(ctx, collection.UnitRef{
+	l, err := s.manual.CoveringFor(ctx, collection.UnitRef{
 		Namespace: w.Ref.Namespace, Tool: InventoryTool, Name: w.Ref.Name.String(),
-	})
+	}, jobID)
 	if errors.Is(err, manuallock.ErrNotLocked) {
 		return nil
 	}
