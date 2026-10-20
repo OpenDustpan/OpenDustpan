@@ -7,17 +7,24 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
-// DevBackupFlag is the start flag that lets a production installation
-// restore a backup that a dev installation made. It is a flag of the command
-// line only: no environment variable, no configuration file and no setting of
-// the API sets it. Each refusal names it after plain words.
-const DevBackupFlag = "--unsafe-allow-restoring-dev-installation-backups-into-production"
+// MaxReportedSubjectBytes is the longest subject that an audit entry, the
+// restore record, a log line or an API answer carries. It equals the longest
+// subject that the API makes. A subject from a backup is untrusted: the code
+// removes CR, LF and every other control character from it and cuts it to
+// this length before it writes it.
+const MaxReportedSubjectBytes = 255
+
+// MaxAuditedPrincipals is the most removed principals that get an entry of
+// their own in the audit log of one restore. One summary entry holds the rest.
+const MaxAuditedPrincipals = 100
 
 // Sentinel errors of the dev data rules of a restore.
 var (
 	// ErrDevBackupRefused reports that a production installation refuses to
-	// restore a backup that a dev installation made, because the server did
-	// not start with DevBackupFlag. The restore changes nothing.
+	// restore a backup that holds dev data, because the server did not start
+	// with the setting that allows it. The backup claims the kind dev, or the
+	// staged data holds a dev subject. The restore changes nothing. The API
+	// answers with status 409.
 	ErrDevBackupRefused = errors.New("a production installation refuses a backup from a dev installation")
 	// ErrManifestKindInvalid reports a manifest with no installation kind, or
 	// with a value that is not a known kind. The backup is not valid and the
@@ -29,17 +36,39 @@ var (
 	ErrDevStripIncomplete = errors.New("the strip of dev data did not finish")
 )
 
-// StageKindChecker is the second refusal of a dev backup. The store adapter
-// calls it inside its own stage step, with the kind that it reads from its own
-// database. It does not rely on the check of the restore service or on the
-// check of the manifest.
-type StageKindChecker interface {
-	// CheckStageKind returns ErrDevBackupRefused when the live database is of
-	// the kind production, the backup is of the kind dev and allowDev is
-	// false. It returns ErrManifestKindInvalid when backupKind is not a known
-	// kind. It returns an error that wraps installation.ErrUnavailable when
-	// the live kind cannot be read. It changes nothing.
-	CheckStageKind(ctx context.Context, backupKind installation.Kind, allowDev bool) error
+// KindReader reads the installation kind without a claim. The backup export
+// reads the kind of its own database through it, so a backup never records a
+// kind that a caller passed in. A store adapter implements it after the
+// conformance suite in pkg/store/storetest checks it.
+type KindReader interface {
+	// ReadKind returns the kind that the database holds. It returns
+	// installation.ErrUnavailable when no kind is claimed yet, when the row
+	// is missing, when the kind cannot be read, and when the stored value is
+	// not a known kind. The export then fails and writes no backup. It
+	// changes nothing.
+	ReadKind(ctx context.Context) (installation.Kind, error)
+}
+
+// StageOptions carries to the stage call what the stage call needs to refuse
+// a dev backup by itself. A caller cannot skip the check: the stage call
+// takes the options as an argument, and the adapter compares them with the
+// live kind that it reads from its own database.
+type StageOptions struct {
+	// BackupKind is the kind that the manifest claims. The manifest is not
+	// authenticated, so the claim is never the only input to the decision.
+	BackupKind installation.Kind
+	// AllowDev is true when the server started with the setting that allows a
+	// dev backup in a production installation.
+	AllowDev bool
+}
+
+// DevReportRecorder stores the removal report in the restore record before
+// the swap. The restores table survives the swap, so the report is still
+// there if the audit entries cannot be written.
+type DevReportRecorder interface {
+	// RecordDevReport stores report in the record of restore id. It returns
+	// ErrRestoreNotFound for an unknown ID.
+	RecordDevReport(ctx context.Context, id RestoreID, report DevStripReport) error
 }
 
 // DevRemovalClass names one class of data that the strip removes.
@@ -49,7 +78,8 @@ type DevRemovalClass string
 // own count in the audit entry of the restore.
 const (
 	// RemovedPrincipals counts principals with a subject that starts with the
-	// reserved prefix, without regard to case.
+	// reserved prefix. The match is the one of principal.IsDevSubject: the
+	// first 4 bytes, ASCII case-insensitive.
 	RemovedPrincipals DevRemovalClass = "principals"
 	// RemovedGrants counts grants of a removed principal.
 	RemovedGrants DevRemovalClass = "grants"
@@ -64,6 +94,13 @@ const (
 	RemovedSignInRequests DevRemovalClass = "sign-in-requests"
 	// RemovedProviders counts sign-in providers with the reserved provider ID.
 	RemovedProviders DevRemovalClass = "providers"
+	// RemovedTempAdmins counts temp_admins rows, matched by the principal ID
+	// of a removed principal and by a subject with the reserved prefix.
+	RemovedTempAdmins DevRemovalClass = "temp-admins"
+	// RemovedApprovers counts dev subjects removed from the approvers and
+	// owners of approval rules and ownership rules. The rule stays, so a
+	// rule with no approver left cannot be met and the gate refuses.
+	RemovedApprovers DevRemovalClass = "approvers"
 	// RemovedDangling counts grants, group memberships, sessions and tokens
 	// that name a principal that does not exist, or a subject with the
 	// reserved prefix and no principal row. Data that was already wrong
@@ -75,7 +112,10 @@ const (
 // with it. The audit entry of the restore names the subject, never a token or
 // a session ID.
 type DevRemoval struct {
+	// Subject has no control character and at most MaxReportedSubjectBytes.
 	Subject string
+	// SubjectCut is true when the cleaning cut Subject.
+	SubjectCut bool
 	// Counts holds the count of removed rows for each class, without
 	// RemovedPrincipals and RemovedDangling.
 	Counts map[DevRemovalClass]int64
@@ -84,28 +124,49 @@ type DevRemoval struct {
 // DevStripReport is what a strip removed, or, for a check-only restore, what
 // it would remove.
 type DevStripReport struct {
-	// Principals holds one entry for each removed principal.
+	// Principals holds one entry for each removed principal, up to
+	// MaxAuditedPrincipals.
 	Principals []DevRemoval
+	// OtherPrincipals is the number of removed principals beyond the entries
+	// of Principals. OtherCounts is the sum of their row counts. One summary
+	// entry in the audit log holds both.
+	OtherPrincipals int64
+	OtherCounts     map[DevRemovalClass]int64
 	// Classes holds the total count for each class, with the classes that
 	// have no principal: RemovedProviders and RemovedDangling.
 	Classes map[DevRemovalClass]int64
 }
 
+// DevStripMode tells StripDevStaged to look or to remove.
+type DevStripMode int
+
+// Modes of the strip.
+const (
+	// DevStripDetect reports what the staging area holds and removes nothing.
+	// The restore service runs it on every restore of a production
+	// installation, and for a check-only restore.
+	DevStripDetect DevStripMode = iota
+	// DevStripRemove removes the data, then proves that none remains.
+	DevStripRemove
+)
+
 // DevStripper removes dev principals and everything that depends on them from
 // the staged restore data. The restore service calls it after the stage step
-// and before the apply step, so the live data never holds a dev principal
-// from the backup, and a failure leaves the live data unchanged.
+// and its count checks, and before the apply step. It never touches a live
+// table, so a failure leaves the live data unchanged. It runs on the restore
+// that keeps the access tables too, for the staged tables that the swap takes.
 type DevStripper interface {
-	// StripDevStaged removes from the staging area the data of the classes of
-	// DevRemovalClass, then proves that the staging area holds no principal
-	// with the reserved prefix and no row that names one. The reserved prefix
-	// is compared without regard to case. It never trusts the
-	// foreign keys of the staged data: it also removes rows that name a
-	// missing principal. It returns ErrDevStripIncomplete when data remains
-	// or when a step fails, and it leaves the staging area for the caller to
-	// discard. With dryRun true it removes nothing and reports what it would
-	// remove. It never removes an audit entry.
-	StripDevStaged(ctx context.Context, dryRun bool) (DevStripReport, error)
+	// StripDevStaged works on the staging area. The classes are those of
+	// DevRemovalClass. The match of a subject is the one of
+	// principal.IsDevSubject, in SQL, for both adapters. It never trusts the
+	// foreign keys of the staged data: it also finds rows that name a missing
+	// principal. With DevStripDetect it removes nothing and returns the
+	// report. With DevStripRemove it removes, then proves that the staging
+	// area holds no principal with the reserved prefix and no row that names
+	// one. It returns ErrDevStripIncomplete when data remains or a step
+	// fails, and it leaves the staging area for the caller to discard. It
+	// never removes an audit entry or a decision record.
+	StripDevStaged(ctx context.Context, mode DevStripMode) (DevStripReport, error)
 }
 
 // RestoreWarningCode identifies a warning that the answer of a restore
@@ -114,11 +175,17 @@ type RestoreWarningCode string
 
 // Codes of restore warnings.
 const (
-	// WarnDevBackupIntoProduction says that the restore removes the dev
+	// WarnDevBackupIntoProduction says that the restore removed the dev
 	// people and their grants, that this may break things that depend on
-	// them, and that restoring a dev backup into a production installation is
-	// not recommended.
+	// them, and that we do not recommend this restore.
 	WarnDevBackupIntoProduction RestoreWarningCode = "dev-backup-into-production"
+	// WarnProductionBackupIntoDev is an info warning: a dev installation
+	// restored a production backup, so production tokens and sessions now
+	// sit in a dev data directory.
+	WarnProductionBackupIntoDev RestoreWarningCode = "production-backup-into-dev"
+	// WarnAuditAppendFailed says that the restore finished but an audit
+	// entry could not be written. The restore record holds the report.
+	WarnAuditAppendFailed RestoreWarningCode = "audit-append-failed"
 )
 
 // RestoreWarning is a warning in the answer of the restore API. The restore
