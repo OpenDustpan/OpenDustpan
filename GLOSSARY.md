@@ -65,6 +65,11 @@ _Avoid_: Routing rule, assignment rule
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
+**Unit state**:
+One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The `locked` state follows the unit lock, which stays the source (ADR 213 decision 9). The drift statuses are three of the states.
+_Avoid_: Unit status (for the set), winning status, health
+_Copy says_: the tool's own words on its own pages. "Approval wait" is the human word for `awaiting-approval`.
+
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
 _Avoid_: Lease (for the inventory field), unit status
