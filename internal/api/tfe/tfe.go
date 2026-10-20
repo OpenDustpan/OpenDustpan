@@ -88,9 +88,10 @@ type WorkspaceReader interface {
 
 // WorkspaceLocker is what the lock routes need.
 type WorkspaceLocker interface {
-	// Lock locks the workspace for holder, the subject of the calling
-	// principal.
-	Lock(ctx context.Context, id workspace.ID, holder, reason string) (workspace.Workspace, error)
+	// LockForJob locks the workspace for holder, the subject of the calling
+	// principal. jobID is the job whose job token made the request, or empty:
+	// a job whose phase started before a manual lock passes that lock.
+	LockForJob(ctx context.Context, id workspace.ID, holder, reason, jobID string) (workspace.Workspace, error)
 	// Unlock releases holder's lock.
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
 	// ForceUnlockLock releases the lock whoever holds it, when it matches

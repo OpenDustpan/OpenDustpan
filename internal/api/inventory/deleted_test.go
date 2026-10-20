@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -623,6 +624,16 @@ func TestRestoreUnitErrors(t *testing.T) {
 			want: http.StatusNotFound,
 		},
 		{name: "fenced", target: restoreTarget, body: "{}", err: namespace.ErrFenced, want: http.StatusConflict},
+		{
+			name: "manual lock", target: restoreTarget, body: "{}", err: &manuallock.LockedError{
+				Lock: manuallock.Lock{
+					Since:  time.Date(2026, time.October, 9, 9, 0, 0, 0, time.UTC),
+					Target: manuallock.NamespaceTarget("acme"), Holder: "alice", Reason: "freeze",
+				},
+				Noun: "stack", Name: "acme/web/prod",
+			},
+			want: http.StatusConflict,
+		},
 		{
 			name: "not home", target: restoreTarget, body: "{}", err: namespace.ErrNotHome,
 			want: http.StatusMisdirectedRequest,

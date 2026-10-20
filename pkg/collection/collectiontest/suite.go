@@ -533,7 +533,7 @@ func testMoveRecreatedTarget(t *testing.T, s Store) {
 
 	err := s.SetUnitCollection(
 		t.Context(),
-		collection.Move{Unit: unit, From: "", To: target.Ref, ToID: checked},
+		collection.Move{Unit: unit, From: "", To: target.Ref, ToID: checked, EndsLock: false},
 		ns.Fence(),
 		auditFor(ns.Fence()),
 	)
@@ -567,7 +567,7 @@ func testMoveStaleSource(t *testing.T, s Store) {
 	// The caller read "no collection" before the first move, so its source is stale.
 	err := s.SetUnitCollection(
 		t.Context(),
-		collection.Move{Unit: unit, From: "", To: second.Ref, ToID: collectionID(t, s, second.Ref)},
+		collection.Move{Unit: unit, From: "", To: second.Ref, ToID: collectionID(t, s, second.Ref), EndsLock: false},
 		ns.Fence(),
 		auditFor(ns.Fence()),
 	)
@@ -692,7 +692,7 @@ func setUnit(
 
 	return from, s.SetUnitCollection(
 		t.Context(),
-		collection.Move{Unit: unit, From: from, To: to, ToID: collectionID(t, s, to)},
+		collection.Move{Unit: unit, From: from, To: to, ToID: collectionID(t, s, to), EndsLock: false},
 		fence,
 		auditFor(fence),
 	)

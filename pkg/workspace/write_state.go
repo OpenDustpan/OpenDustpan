@@ -127,6 +127,15 @@ func (s *Service) admitStream(
 		return nil, fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
 
+	// A write without a lock ID passes the workspace lock when the caller may
+	// override it. A manual lock stops it all the same: the lock covers every
+	// change to the workspace.
+	if unlocked {
+		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
+			return nil, fmt.Errorf("write state of %s: %w", w.Ref, lockErr)
+		}
+	}
+
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return nil, err

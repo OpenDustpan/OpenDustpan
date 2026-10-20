@@ -192,10 +192,11 @@ func moveUnit(t *testing.T, svc *collection.Service, to collection.Ref, at time.
 	}
 
 	m := collection.Move{
-		Unit: collection.UnitRef{Namespace: to.Namespace, Tool: "pulumi", Name: "app/prod"},
-		From: "",
-		To:   to,
-		ToID: target.ID,
+		Unit:     collection.UnitRef{Namespace: to.Namespace, Tool: "pulumi", Name: "app/prod"},
+		From:     "",
+		To:       to,
+		ToID:     target.ID,
+		EndsLock: false,
 	}
 	if err := svc.SetUnit(t.Context(), m, nsChange(at, to.Namespace, "unit:app/prod")); err != nil {
 		t.Fatalf("move unit: %v", err)

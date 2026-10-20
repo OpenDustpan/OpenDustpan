@@ -68,6 +68,15 @@ func (f *fixture) lock(t *testing.T, target manuallock.Target, holder, reason st
 	}
 }
 
+// forceRemove ends the lock on target and fails the test on an error.
+func (f *fixture) forceRemove(t *testing.T, target manuallock.Target) {
+	t.Helper()
+
+	if _, err := f.s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+		t.Fatalf("ForceRemoveLock %s: %v", target, err)
+	}
+}
+
 // put moves unit into c, as the collection service does.
 func (f *fixture) put(t *testing.T, unit collection.UnitRef, c collection.Collection) {
 	t.Helper()
@@ -78,7 +87,7 @@ func (f *fixture) put(t *testing.T, unit collection.UnitRef, c collection.Collec
 		from = cur.Name
 	}
 
-	m := collection.Move{Unit: unit, From: from, To: c.Ref, ToID: c.ID}
+	m := collection.Move{Unit: unit, From: from, To: c.Ref, ToID: c.ID, EndsLock: true}
 	if err := f.s.SetUnitCollection(t.Context(), m, f.ns.Fence(), auditFor(f.ns.Fence())); err != nil {
 		t.Fatalf("SetUnitCollection %v: %v", unit, err)
 	}
@@ -118,7 +127,7 @@ func auditFor(fence namespace.Fence) audit.Entry {
 // lockAudit returns the audit entry of a lock or an unlock.
 func lockAudit(fence namespace.Fence) audit.Entry {
 	e := auditFor(fence)
-	e.Action = "unit:lock"
+	e.Action = actionUnitLock
 
 	return e
 }

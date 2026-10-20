@@ -33,11 +33,14 @@ Chef facts into its inventory. Their facts can be data sources of a unit.
 A follow-up sends data out. It never reads the inventory of AWX back.
 
 **Names (proposal, question 1).** The glossary lists "Hook" as a word to
-avoid (decision point), and RFC 95 calls "hook" a Pulumi word. "Webhook"
+avoid (decision point), and RFC 95 (a proposal, not accepted) calls "hook" a
+Pulumi word. "Webhook"
 is on the _Avoid_ list of _External adapter_. This RFC uses **follow-up**
 for the stored rule and **follow-up call** for one attempt series against
-one target. AWX and Ansible Automation Platform are systems that a
-follow-up calls. They are not part of OpenDustpan.
+one target. "Follow-up" means only the stored rule. ADR 100 decision 12 and
+other texts use "follow-up" in the general sense, and they keep that sense
+(see the glossary lines at the end). AWX and Ansible Automation Platform are
+systems that a follow-up calls. They are not part of OpenDustpan.
 
 ## What is decided already
 
@@ -54,13 +57,20 @@ follow-up calls. They are not part of OpenDustpan.
   hosts and CIDR ranges (one port each) is the only way to reach a private
   address. An always-denied list (link-local, cloud metadata, multicast)
   has no override. `--egress-public-only` ignores each CIDR entry. Today
-  the allowlist covers model calls only.
+  the allowlist covers model calls only. ADR 210 decision 7 renamed the
+  egress actions of ADR 129: the operator's action is now
+  `installation:manage-settings`.
 - **ADR 226 decision 10: external checks.** A signed request before a
   decision, with a signed callback. That is a fact producer before an
-  apply. A follow-up comes after the apply and decides nothing.
+  apply. A follow-up comes after the apply and decides nothing. Its request
+  signature is the one of ADR 114 decision 8 (kept by ADR 226 decision 10).
+  It is not the scheme of ADR 145 decision 21, which the webhook kind of
+  this RFC uses (section E).
 - **ADR 100, ADR 101: jobs.** A job has fixed phase kinds (`plan`, `apply`,
   `deliver`, `verify`). A person's own CLI or CI also writes state, with
-  no job.
+  no job. ADR 100 decision 15: a final OpenTofu state version (the release
+  of the state lock) closes a write-back job. The server cannot tell from
+  that release what the tool did (section A).
 - **ADR 13, ADR 12.** Shared code names a stack or a workspace a unit. Copy
   keeps each tool's words.
 - **ADR 210.** Routes under `/api/dustpan/v1/`, actions `<area>:<verb>`,
@@ -75,11 +85,17 @@ follow-up calls. They are not part of OpenDustpan.
 - ADR 145 decision 5: two new notification types, `unit.applied` (section
   A), so subscriptions get the same signal, and `follow-up.failed`
   (section C).
+- ADR 149 decision 10: it seals secrets for a sink only. A follow-up needs
+  the same sealing for the AWX credential, bound to the target (section D).
+- ADR 210: the new actions `namespace:read-follow-ups`,
+  `namespace:manage-follow-ups` and `namespace:manage-follow-up-targets`
+  (section F).
 
 ## Facts from primary sources
 
 Checked on 2026-10-20 against the AWX source on `devel` (commit
-`6fc51b6d25b5bf3ad7efa66cc4e62bdb27177027`, 2026-10-15), and the Red Hat
+`6fc51b6d25b5bf3ad7efa66cc4e62bdb27177027`, 2026-10-15), the AWX tag
+`24.6.1` (the last tag, which self-hosters run), and the Red Hat
 documentation of Ansible Automation Platform 2.6.
 
 **Start a job template.** The AWX route says `launch`. This RFC says "start".
@@ -91,20 +107,28 @@ documentation of Ansible Automation Platform 2.6.
   (<https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/develop-assembly_controller_api_auth_methods>).
 - A successful start answers `201` with `job` (the job ID), a `Location`
   header, and `ignored_fields` (`awx/api/views/__init__.py`, lines 2795 to
-  2812). A missing password answers `400`, a template that cannot start
-  `405`, and an inventory or credential that the user cannot use `403`
+  2812). A start has no dedupe: two requests make two jobs. A workflow job
+  template answers `workflow_job` in place of `job`. A missing password
+  answers `400`, a template that cannot start `405`, and an inventory or
+  credential that the user cannot use `403`
   (`awx/api/templates/api/job_template_launch.md`).
 - Fields accepted at start (`JobLaunchSerializer` in
   `awx/api/serializers.py`, lines 4873 to 4890): `extra_vars` (JSON),
   `inventory`, `credentials`, `limit`, `execution_environment`, `labels`,
   `forks`, `job_slice_count`, `timeout`, `instance_groups`, and more.
 - AWX accepts a field only when the template asks for it on start
-  (`ask_limit_on_launch`, `ask_inventory_on_launch`, and so on). Else AWX
-  ignores the field and lists it in `ignored_fields`. An extra variable is
-  accepted when `ask_variables_on_launch` is set, or when an enabled survey
-  names it and the value passes the survey rules. Else AWX rejects it into
-  `ignored_fields` (`awx/main/models/mixins.py`, lines 255 to 300). So a
-  start can succeed and still drop the variables that OpenDustpan sent.
+  (`ask_limit_on_launch`, `ask_inventory_on_launch`, and so on). So `limit`
+  is accepted only with `ask_limit_on_launch`. Else AWX ignores the field
+  and lists it in `ignored_fields`.
+- With `ask_variables_on_launch` true, AWX accepts every extra variable.
+  With it false, AWX accepts a variable only when an enabled survey names
+  it. `ignored_fields` lists only the keys that the template does not allow
+  (`awx/main/models/mixins.py`, lines 255 to 300). A value that fails a
+  survey rule does not go to `ignored_fields`: the start answers `400`. A
+  key that equals the value of the template itself is dropped with no
+  message. So a start can succeed and still drop variables that OpenDustpan
+  sent, and an empty `ignored_fields` does not prove that every value
+  arrived.
 - A `GET` of the same start route tells whether the template can start
   with no input: `can_start_without_user_input`,
   `variables_needed_to_start`, `passwords_needed_to_start`,
@@ -113,21 +137,29 @@ documentation of Ansible Automation Platform 2.6.
 **Job status.** `GET /api/v2/jobs/{id}/`. The `status` values are `new`,
 `pending`, `waiting`, `running`, `successful`, `failed`, `error` and
 `canceled` (`awx/main/models/unified_jobs.py`, lines 82 to 91). The last
-four are terminal. AWX has no idempotency key on start: two start
-requests make two jobs.
+four are terminal. AWX stores the extra variables of a start in plain text
+on the job. `GET /api/v2/jobs/{id}/` answers `extra_vars`. AWX refuses a
+list of jobs that is filtered by `extra_vars` (`403`), but
+`GET /api/v2/job_templates/{id}/jobs/` lists jobs with their creation time
+(section C uses both).
 
 **Authentication.**
 
-- AWX `devel` has session, basic and JWT authentication only
-  (`awx/settings/defaults.py`, line 376). The JWT comes from the platform
-  gateway. AWX `devel` has no OAuth2 token routes of its own any more.
-  Basic authentication is on by default (`AUTH_BASIC_ENABLED = True`, line
-  402).
-- On Ansible Automation Platform 2.6, a person creates an OAuth2 token at
-  `POST /api/gateway/v1/tokens/` and sends it as
-  `Authorization: Bearer <token>`. An administrator can turn off basic
-  authentication of the gateway (the documentation page above). The
-  scopes of a token are not on that page (question 7).
+- AWX `24.6.1` still has OAuth2 personal access tokens at
+  `POST /api/v2/tokens/`, with the scopes `read` and `write`. They go as
+  `Authorization: Bearer <token>`. AWX `devel` deleted them in commit
+  `268ca7c78` (issue 15666), and no tag ships that change. So `devel` has
+  session, basic and JWT authentication only (`awx/settings/defaults.py`,
+  line 376). This RFC treats AWX `devel` without tokens as out of scope for
+  the first slice.
+- On Ansible Automation Platform 2.5 and later, a person creates an OAuth2
+  token at `POST /api/gateway/v1/tokens/`. The controller API is under
+  `/api/controller/v2/`. A start needs the scope `write`. An administrator
+  can turn off basic authentication of the gateway (the documentation page
+  above).
+- Basic authentication is on by default in AWX (`AUTH_BASIC_ENABLED =
+  True`, line 402). This RFC does not use it in the first slice
+  (question 7).
 
 **Callbacks and receivers.**
 
@@ -142,18 +174,21 @@ requests make two jobs.
   pretend to be a forge. This RFC rejects that.
 - An AWX notification template of the type webhook can `POST` or `PUT` to
   a URL when a job ends, with custom headers and basic authentication
-  (`awx/main/notifications/webhook_backend.py`). It follows up to 5
-  redirects and has no HMAC signature. A callback into OpenDustpan would
-  need a new inbound route (option D2).
+  (`awx/main/notifications/webhook_backend.py`). It follows up to 4
+  redirects (301 and 307 only) and has no HMAC signature. A callback
+  into OpenDustpan would need a new inbound route (option D2).
 
 **Jinja in extra variables.** The AWX setting `ALLOW_JINJA_IN_EXTRA_VARS`
 is `template` by default: Jinja is allowed only in the variables of the
 saved template, not in variables given at start. The other values are
 `always` and `never`. Its help text says that Jinja in start variables
 "can use Jinja2 templates to run arbitrary Python" (`awx/main/conf.py`,
-line 319, and `awx/settings/defaults.py`, line 503). OpenDustpan cannot read
-this setting without an AWX administrator token. So an output value with
-`{{` reaches a template engine on an AWX installation set to `always`.
+line 319, and `awx/settings/defaults.py`, line 503). With the default
+`template`, AWX marks a start value that holds `{{` as `!unsafe` and does not
+refuse it: the playbook gets literal text, with no message to the caller.
+OpenDustpan cannot read this setting without an AWX administrator token. So
+an output value with `{{` reaches a template engine on an AWX installation
+set to `always`.
 
 ## Options and recommendations
 
@@ -161,20 +196,47 @@ this setting without an AWX administrator token. So an output value with
 
 - **A1. Job states only** (`job.succeeded` of an `apply` job). This misses
   each apply from a person's own CLI or CI, which is most applies today.
-- **A2. Each final state change of a unit**, whatever wrote it: a final
-  state version of a workspace, or a Pulumi update `up` or `destroy` that
+- **A2. Each final write of a unit**, whatever wrote it: a final state
+  version of a workspace, or a Pulumi update `up` or `destroy` that
   succeeded. One signal, `unit.applied`, in the transaction of the write.
   It names the unit, the state version serial or the update version, and
   the job ID when a job made the change.
 - **A3. A change order** (ADR 190) that applied all its units: one call
   with the outputs of each unit.
 
-**Recommendation: A2 first, A3 later (question 3).** `unit.applied` is also
-a new notification type, so a subscription can use it. Its dedupe key is
-the unit ID and the serial or the update version, so a retried write makes
-one signal. A follow-up selects units by a filter: one unit, a collection,
-or `opentofu:shop/*`, with the same matcher as a subscription filter. A
-`pulumi preview`, a plan, and a `refresh` fire nothing.
+**What the server knows.** For a Pulumi update, the server knows the result.
+For OpenTofu, it knows only that the state lock released with a new state
+version (ADR 100 decision 15). That release is the same for a successful
+apply, a failed partial apply, a refresh-only apply, `state rm`, `import`,
+`state push` and `destroy`. So `unit.applied` for OpenTofu means "a final
+state version", and nothing more. It does not say that an apply succeeded.
+The options for what fires a follow-up of an OpenTofu workspace:
+
+- **A2a. Each final serial.** A partial apply, a refresh and a `state rm`
+  start the AWX job. This is wrong for most playbooks.
+- **A2b. Only when a mapped output value changed.** OpenTofu does not know
+  an apply from a refresh, but the values of the mapped outputs do show a
+  change. The call compares the SHA-256 of the mapped values with the hash
+  of the last call of the same follow-up and unit that was not `skipped`.
+  The first signal for a unit always fires. A refresh that changes no
+  mapped output fires nothing.
+- **A2c. A setting for each follow-up**, `fireOn`: `output-change` (A2b) or
+  `each-serial` (A2a).
+
+**Destroy.** A `destroy` leaves no outputs. When the state version has no
+outputs at all, the follow-up makes no call and writes no failure entry. A
+state version that has some outputs but lacks a mapped one ends
+`output-refused` (section D).
+
+**Recommendation: A2 with A2c, and the default `output-change`. A3 later
+(question 3).** `unit.applied` is also a new notification type, so a
+subscription can use it. Its dedupe key is the unit ID and the serial or the
+update version, so a retried write makes one signal. A follow-up selects
+units by a filter: one unit, a collection, or `opentofu:shop/*`, with the
+same matcher as a subscription filter. A `pulumi preview` and a plan fire
+nothing. In the first slice the Pulumi CLI is out, so the docs say that a
+follow-up of a workspace starts after a change of a mapped output, not after
+a proof of success.
 
 ### B. Where follow-ups live
 
@@ -206,10 +268,27 @@ The recommendation: no coalescing in the first slice.
 **Retries.** The schedule of ADR 145 decision 18. Retry only when the
 target cannot have acted: a refused connection, a failed TLS handshake,
 `429`, or `503` with `Retry-After`. A timeout after the request was sent,
-`502` and `504` make the outcome `unknown`, because AWX has no idempotency
-key. An `unknown` call does not retry by itself. A person redelivers it
-after a check in AWX. `egress.ErrRefused` and other `4xx` stop at once
-(`abandoned`).
+`500`, `502` and `504` make the outcome `unknown`, because AWX has no
+idempotency key and `500` may come after AWX made the job. An `unknown` call
+does not retry by itself. `egress.ErrRefused` and other `4xx` stop at once
+(`abandoned`). A `400` is the class `awx-input-refused` (section D).
+
+**Reconciliation before a redeliver.** Before a person redelivers an
+`unknown` call, the server looks for the job that the first attempt may have
+made:
+
+1. `GET /job_templates/{id}/jobs/?created__gte=<time of the send minus 5
+   minutes>`. The 5 minutes cover clock skew between the two servers. At most
+   100 jobs.
+2. For each job, `GET /jobs/{id}/` and read `extra_vars` for the value of
+   `dustpan_call_id`. The server keeps no other part of `extra_vars`.
+3. When a job has the call ID, the call records that job ID and the status
+   `started`, and no second start is sent. When no job has it, the redeliver
+   goes on.
+
+**Rate.** Each follow-up has a minimum interval between two starts (default
+60 seconds, from 0 seconds to 24 hours). A call that comes earlier waits. It
+is not dropped. This limits the AWX jobs that a loop of applies can make.
 
 **Dead letter.** An `abandoned` or `unknown` call stays in the call
 history, sends the notification `follow-up.failed`, and can be redelivered
@@ -232,11 +311,19 @@ sender refuses. The options:
   `--egress-public-only` apply unchanged.
 - **E3. E2 and a target list of the namespace.** A target must match an
   entry of the installation (purpose `follow-up`) and an entry of the
-  namespace list. Each list stops a target alone.
+  namespace list. Each list stops a target alone, because the namespace
+  list has its own action (section F): the people who edit follow-ups
+  cannot widen it.
+- **E4. A runner of the namespace in the private network** makes the call
+  (ADR 101, ADR 130). This reaches an AWX on a private address on an
+  installation that runs `--egress-public-only`, where E1 to E3 cannot. It
+  needs a decision on how a runner gets the sealed credential for one
+  request, so it is not in the first slice.
 
-**Recommendation: E3.** On a multitenant installation, the operator keeps
-`--egress-public-only` on, so no tenant reaches a private address. The URL
-check runs at the save, at the test, and before each attempt. The dial
+**Recommendation: E3 in the first slice, and E4 later for installations with
+`--egress-public-only`.** On a multitenant installation, the operator keeps
+`--egress-public-only` on, so no tenant reaches a private address by E3. The
+URL check runs at the save, at the test, and before each attempt. The dial
 guard checks each resolved address.
 
 ### D. The AWX kind
@@ -246,27 +333,67 @@ guard checks each resolved address.
 fixed `limit` and an optional fixed inventory ID. OpenDustpan sends
 `limit` and `inventory` only when the follow-up sets them.
 
-**Credential.** One OAuth2 token of the platform gateway, or a user and a
-password where only basic authentication exists (question 7). It is a
-secret item sealed for the follow-up, in the way of ADR 149 decision 10.
-The API answers it never, also not at the create, because the person typed
-it. A change of the target, the credential or the mapping suspends the
-follow-up, and a person resumes it, as ADR 149 decision 12 does for a sink.
+**Credential.** One OAuth2 bearer token: an AWX 24.x personal access token,
+or a gateway token of Ansible Automation Platform 2.5 and later, with the
+scope `write` (question 7). It is a secret item sealed for the follow-up, in
+the way of ADR 149 decision 10. The API answers it never, also not at the
+create, because the person typed it.
 
-**Output mapping.** An explicit list of pairs `{output, variable}`. No
-wildcard, no "all outputs". A variable name matches `^[a-z_][a-z0-9_]{0,63}$`
-and is not a name that Ansible reserves (for example `ansible_*`,
-`hostvars`, `inventory_hostname`). OpenDustpan adds two variables of its
-own: `dustpan_call_id` and `dustpan_unit`. `extra_vars` goes as a JSON
-object, never as a YAML string.
+**The credential is bound to its target.** At seal time, the server binds
+the credential to the origin of the target (scheme, host and port), the
+template ID, the fixed inventory ID and the fixed `limit`. The binding is
+part of the sealed item, in the way ADR 145 decision 13 binds the secrets of
+a sink to the sink. Any change of one of these four values deletes the
+credential, and the person must enter it again. "Sent only to the origin of
+the target" means the origin at seal time. Before each request, the server
+compares the bound origin with the origin that it will dial. A mismatch
+fails the call, and the token never leaves the server. A change of the
+credential or of the mapping suspends the follow-up, and a person resumes
+it, as ADR 149 decision 12 does for a sink. A person with
+`namespace:manage-follow-ups` can so never point a stored token at a
+host that the token owner did not choose.
+
+**Output mapping.** An explicit list of entries `{output, variable, type,
+pattern}`. No wildcard, no "all outputs". A variable name matches
+`^[a-z_][a-z0-9_]{0,63}$` and is not a name that Ansible reserves (for
+example `ansible_*`, `hostvars`, `inventory_hostname`). OpenDustpan adds two
+variables of its own: `dustpan_call_id` and `dustpan_unit`. `extra_vars`
+goes as a JSON object, never as a YAML string.
+
+**Who controls the playbook input.** A person who can write the state of a
+unit controls its outputs, and so controls the input of the playbook: the
+host list that AWX connects to, a path, a flag. This holds with no Jinja at
+all. So each mapped variable has a required `type` (`ip-list`, `host-name`,
+`number`, `bool`, or `string` with a required anchored RE2 `pattern` of at
+most 256 bytes). The save refuses a mapping with no type. Before each
+send, a value that does not match its type or pattern ends the call
+`output-refused` and sends nothing (an allowlist, not a clean-up). The user
+documentation tells teams to use survey types and choices for each variable,
+and a fixed `limit` and a fixed inventory, and to write playbooks that take
+no host or path from a variable that a unit writer can set.
+
+**Variables that the template allows.** When the template has
+`ask_variables_on_launch` false and a survey, AWX puts a key that the survey
+does not name into `ignored_fields`, and answers `400` for a value that
+fails a survey rule. **Recommendation: the documentation requires a survey
+entry for each mapped variable and for `dustpan_call_id` and `dustpan_unit`.**
+The save and the test read the survey spec (`GET .../survey_spec/`) and the
+start route, and refuse a template with a survey that lacks one of the names
+and with `ask_variables_on_launch` false. The other way: make the two
+`dustpan_*` variables optional and out of the ignored check. This RFC does
+not choose it, because `dustpan_call_id` is the key of the reconciliation.
 
 **Sensitive outputs.** An output that the tool marks as sensitive (an
 OpenTofu `sensitive` output, a Pulumi secret) is never sent. The save
 refuses a mapping that names an output that is sensitive in the latest
 version. Before each send, the call checks the version that fired it
 again. When a mapped output is sensitive or missing there, the call fails
-with `output-refused` and sends nothing. The issue asks for an opt-in to
-send secret values. This RFC does not propose one (question 2).
+with `output-refused` and sends nothing. AWX stores the extra variables of a
+start in plain text on the job, so a secret in `extra_vars` would stay
+readable on the job. The playbook takes a secret from its own source. The
+issue asks for an opt-in to send secret values. **Recommendation: never for
+the AWX kind.** If ever, only the webhook kind, with `unit:read-secrets`
+checked at each send and a reveal entry for each call (question 2).
 
 **Start and watch.**
 
@@ -274,9 +401,17 @@ send secret values. This RFC does not propose one (question 2).
    `can_start_without_user_input` is false, the call fails with
    `awx-needs-input`, and lists the names of the missing variables.
 2. `POST` the start. The call records the AWX job ID.
-3. When `ignored_fields` is not empty, the call records the field names
-   (names only) and ends `failed` with `awx-fields-ignored`. The AWX job
-   still runs. Option: `warn` instead of `failed` (question 5).
+   An answer with `workflow_job` and no `job` means that the ID is a
+   workflow template. The first slice supports job templates only. The save
+   refuses an ID that is not a job template, and an answer of this shape
+   ends `unknown` with the class `awx-unexpected-answer`, because a workflow
+   started. Workflow job templates need their own start and status routes
+   and come in a later slice.
+3. A `400` ends `abandoned` with the class `awx-input-refused` (for
+   example a value that fails a survey rule, or a missing password). When
+   `ignored_fields` is not empty, the call records the field names (names
+   only) and ends `failed` with `awx-fields-ignored`. The AWX job still
+   runs. Option: `warn` instead of `failed` (question 5).
 4. The call reads `GET /jobs/{id}/` every 15 seconds, then doubles the wait
    up to 5 minutes, until a terminal `status` or the end of its watch time
    (default 6 hours, from 1 minute to 24 hours). It stores the status, the
@@ -329,7 +464,8 @@ webhook kind has no watch.
 | `POST .../follow-ups/{id}/test` | `namespace:manage-follow-ups` | namespace |
 | `GET .../follow-ups/{id}/calls[/{call}]` | `namespace:read-follow-ups` | namespace |
 | `POST .../follow-ups/{id}/calls/{call}/redeliver` | `namespace:manage-follow-ups` | namespace |
-| `GET`, `PUT .../namespaces/{ns}/follow-up-targets` | `namespace:manage-follow-ups` | namespace |
+| `GET .../namespaces/{ns}/follow-up-targets` | `namespace:read-follow-ups` | namespace |
+| `PUT .../namespaces/{ns}/follow-up-targets` | `namespace:manage-follow-up-targets` | namespace |
 
 **The creator decides what flows out**, as ADR 145 decision 15 and ADR 149
 decision 11 do. The last person who saved or resumed a follow-up is its
@@ -339,11 +475,20 @@ and collection grants. Else the follow-up is suspended and the call is
 `skipped`. So a follow-up never sends an output that its creator cannot
 read.
 
+**The target list has its own action.** The namespace target list is the
+second stop of E3. If the same action edited it, a person who edits
+follow-ups could widen the list, and each list would not stop a target
+alone. So `namespace:manage-follow-up-targets` is a separate action, and a
+namespace administrator holds it by default. Without it, the claim that each
+list stops a target alone would not hold.
+
 **Credentials.** The options: one action for all (above), or a second
 action `namespace:bind-follow-up-credentials`, so a platform team holds
 the AWX token and an application team edits the mapping. A change of the
-mapping suspends the follow-up in both options. **Recommendation: one
-action, with the suspend (question 6).**
+mapping suspends the follow-up in both options, and a change of the target,
+the template, the inventory or the `limit` deletes the credential (section
+D). **Recommendation: one action, and only with that binding (question
+6).** The target list needs its own action in either option.
 
 **Call history.** A reader with `namespace:read-follow-ups` sees the state,
 the class of the last error, the HTTP status, the AWX job ID and status,
@@ -351,10 +496,12 @@ the names in `ignored_fields`, and the SHA-256 of the payload. Never the
 output values and never the credential.
 
 **Audit.** A create, a change, a delete, a resume, a test and a redeliver
-write one entry each, of the kind `change`. A refusal writes one entry of
-the kind `denied`: a target outside the allowlist, a refused output, a
-suspend for lost access. A delivered call writes no entry. The call
-history is its record.
+write one entry each, of the kind `change`. Each AWX start request writes
+one entry of the kind `change` before the server sends it, with the call ID,
+the follow-up, the template ID and no value. The job ID is in the call
+history. A refusal writes one entry of the kind `denied`: a target outside
+the allowlist, a refused output, a suspend for lost access. A delivered
+webhook call writes no entry. The call history is its record.
 
 **Gates.** A follow-up starts no gate in this RFC. The apply already passed
 the gates of its decision points. Option: a fact `followUps` at
@@ -367,28 +514,32 @@ the gates of its decision points. Option: a fact `followUps` at
 | --- | --- | --- | --- | --- | --- |
 | Follow-up document (API) | Allowlist for each field. URL scheme `https`. Variable name pattern. Reserved names refused | Values stored as typed fields, never as text that a template reads | 100 follow-ups, 50 outputs | `namespace:manage-follow-ups` on the route, the store checks the fence | Unknown field refused (`422`). Denial audited |
 | Target URL and DNS | `egress.CheckURL` at save | Dial guard on each resolved address. No redirect. No proxy | Connect 10 s, request 30 s | Installation list and namespace list, both before each attempt | Refusal is `abandoned`, `denied` entry |
-| Output values (from tool state) | JSON value types only. Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
-| Credential | Length and character set at save | Sealed secret item, opened in memory for one request. Sent only to the origin of the target | One credential for each follow-up | Store refuses an item sealed for another follow-up or scope | Item that does not open: call fails, nothing sent |
+| Output values (from tool state). A unit writer controls them | JSON value types only. The type and the pattern of each mapped variable, with refusal of a non-match. Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
+| Credential | Length and character set at save | Sealed secret item, opened in memory for one request. Sent only to the origin that the item is bound to at seal time | One credential for each follow-up | Store refuses an item sealed for another follow-up, scope, origin, template, inventory or `limit` | Item that does not open: call fails, nothing sent |
 | AWX answer | Parse a fixed schema: `job` as a positive integer, `status` from the eight values, `ignored_fields` keys only | Store parsed fields only, never the raw body. Strip control characters from names | Body at most `egress.MaxBodyBytes`, 100 names of 64 bytes | A job ID is only shown, never used for another call | Unknown status or bad JSON: `unknown`, no retry |
 | Webhook answer | Status code only | No body stored, except an excerpt of at most 512 bytes of a non-`2xx` answer, with no control characters and the secret filter applied | 512 bytes | Shown only with `namespace:read-follow-ups` | Non-`2xx`: retry or `abandoned` |
 
 **No template injection.** OpenDustpan renders no template. The mapping is
 names to names. A value is data and goes through a JSON encoder. The Jinja
 check of the AWX kind is a defense-in-depth layer: it does not rely on the
-AWX setting `ALLOW_JINJA_IN_EXTRA_VARS`, and that setting does not rely on
-it. Each needs a test that sends `{{ lookup('pipe', 'id') }}` as an output
-value.
+AWX setting `ALLOW_JINJA_IN_EXTRA_VARS` (which marks such a value `!unsafe`
+without a message under `template`), and that setting does not rely on it.
+The type and pattern check is a third layer and relies on neither. Each
+needs a test that sends `{{ lookup('pipe', 'id') }}` as an output value.
+The path of a unit writer to the playbook input (section D) is a named
+path of this table: the row of output values covers it.
 
 ### H. Overlap
 
-- **RFC 95 (day-two actions).** RFC 95 records actions that a tool runs in
+- **RFC 95 (day-two actions, a proposal).** RFC 95 records actions that a tool runs in
   its own apply. A follow-up is an action that OpenDustpan starts after
   the apply. Both can show on the same apply. The names stay apart.
 - **The CI shim (RFC 94).** A team's CI can call AWX itself. A follow-up
   also covers applies from a laptop, and keeps the AWX token out of CI.
-- **External checks (ADR 226 decision 10).** Same signature family, other
-  side of the apply: a check produces facts before the apply, a follow-up
-  acts after it.
+- **External checks (ADR 226 decision 10).** Other side of the apply: a
+  check produces facts before the apply, a follow-up acts after it. The
+  signature differs: a check uses the scheme of ADR 114 decision 8, and the
+  webhook kind of a follow-up uses the scheme of ADR 145 decision 21.
 
 ## The first slice
 
@@ -401,14 +552,21 @@ the host addresses from `tofu output` into the AWX form.
 **What ships.**
 
 1. The notification type `unit.applied`, for OpenTofu final state versions
-   only.
+   only, and the fire rule `output-change`.
 2. Follow-ups of the AWX kind only, for one unit or a collection, with
    polling.
-3. The purpose `follow-up` on the installation allowlist, and the namespace
-   target list.
+3. The purpose `follow-up` on the installation allowlist, the namespace
+   target list with its own action, and the sealed credential bound to its
+   target.
 4. The routes and actions of section F, the call history, the audit
    entries, and the call on the state version page of the workspace in the console.
-5. The user documentation page (ADR 214).
+5. The user documentation page (ADR 214): survey types, a fixed `limit`
+   and inventory, and the `dustpan_*` survey entries.
+6. A hostile-input test for each cell of table G that the slice ships: the
+   rows of the follow-up document, the target URL, the output values, the
+   credential and the AWX answer, so 25 tests. Each test sends hostile input
+   straight to its step, as if the other steps had failed. The row of the
+   webhook answer ships with the webhook kind.
 
 The webhook kind, Pulumi stacks and change orders come in later slices.
 
@@ -429,7 +587,14 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
    only.
 5. Check that the call history shows the AWX job `42` as `successful`.
 6. Negative steps:
-   - A mapping of `db_password` fails at save.
+   - A second apply that changes no mapped output starts no job. A
+     `tofu destroy` starts no job and writes no failure entry.
+   - A mapping of `db_password` fails at save. A mapping with no type fails
+     at save.
+   - A change of the target URL deletes the credential, and the call after
+     it fails with no request to the fake AWX.
+   - An output value that does not match its pattern ends `output-refused`.
+   - A fake AWX answer `400` ends `awx-input-refused` with no retry.
    - An output value with `{{` ends `output-refused`, and the fake AWX
      gets nothing.
    - The server refuses a target outside the namespace list, and writes a
@@ -441,18 +606,25 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
 1. Is "follow-up" the right name? Other options: "apply trigger",
    "post-apply call".
 2. May a follow-up ever send a sensitive output, with an opt-in that the
-   issue mentions? This RFC says never.
+   issue mentions? This RFC says never for the AWX kind, because AWX keeps
+   the extra variables in plain text. If ever, only the webhook kind, with
+   `unit:read-secrets` checked at each send and a reveal entry for each
+   call.
 3. Does a follow-up for a change order (one call with all units) come in a
    later slice, or never?
 4. When applies come faster than calls end, do older pending calls of the
    same unit become `superseded`, or does each call go out in order?
 5. Do ignored AWX fields fail the call (this RFC) or only warn?
 6. One action for follow-ups and their credentials, or a second action to
-   bind a credential?
-7. Which credential types does the AWX kind accept: a gateway OAuth2
-   token only, or also a user and a password for AWX with basic
-   authentication? Which token scope does a start need? This needs a
-   check against a running Ansible Automation Platform 2.6.
+   bind a credential? One action is acceptable only with the binding of the
+   credential to its target (section D). The target list needs its own
+   action in either case.
+7. Which credential types does the AWX kind accept? This RFC recommends
+   bearer tokens only: an AWX 24.x personal access token or a gateway token
+   of Ansible Automation Platform 2.5 and later, with the scope `write`, for
+   a dedicated AWX user that has the Execute role on one template. Basic
+   authentication comes later, and only as an explicit choice. AWX `devel`
+   without tokens is out of scope for the first slice.
 8. Does a gate see, through a fact at `change.planned`, that an apply will
    start follow-ups?
 9. Do follow-up targets get a CA bundle of their own for an AWX with an
@@ -465,7 +637,9 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
 - **Follow-up**: a stored rule of a namespace that starts one external job
   after a unit applies, with selected outputs. Its kinds are `awx` and
   `webhook`. _Avoid_: hook (that is a decision point or a Pulumi word),
-  trigger, post-apply action.
+  trigger, post-apply action. The word means only this stored rule. ADR 100
+  decision 12 and other texts use "follow-up" in the general sense (what
+  happens next), and they keep that sense.
 - **Follow-up call**: one series of attempts of one follow-up for one
   `unit.applied` signal, with the ID prefix `fuc-`. _Avoid_: delivery
   (that is a notification), run, job (that is ours).

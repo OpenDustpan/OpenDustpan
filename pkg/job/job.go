@@ -59,6 +59,12 @@ var (
 	// resources while a change freeze of the namespace is active, without
 	// break-glass.
 	ErrFrozen = errors.New("a change freeze of the namespace is active")
+	// ErrLocked reports a start or a dispatch of any phase while a manual lock
+	// covers the unit: a lock on the unit, on its collection or on its
+	// namespace. Break-glass does not pass it. The store wraps the error of
+	// the lock (manuallock.LockedError), which names the holder and the
+	// reason. A phase that runs already is not affected.
+	ErrLocked = errors.New("a manual lock covers the unit")
 	// ErrPolicyDenied reports a start that the policy decision denied.
 	ErrPolicyDenied = errors.New("policy denied the job")
 	// ErrFinished reports a cancel or an approval of a job that already
