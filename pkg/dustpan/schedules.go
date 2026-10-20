@@ -35,6 +35,7 @@ const (
 	deletedScheduleName     = "deleted-sweep"
 	signInPruneScheduleName = "signin-prune"
 	idempotencyScheduleName = "idempotency-sweep"
+	auditChainScheduleName  = "audit-chain-check"
 
 	jobScheduleVersion = 1
 )
@@ -48,6 +49,7 @@ const (
 	kindDeleted     durable.Kind = deletedScheduleName
 	kindSignInPrune durable.Kind = signInPruneScheduleName
 	kindIdempotency durable.Kind = idempotencyScheduleName
+	kindAuditChain  durable.Kind = auditChainScheduleName
 )
 
 // durableOwner returns the owner name of the job runner: the instance ID
@@ -93,6 +95,13 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	if s.chain != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: auditChainScheduleName, Kind: kindAuditChain, Version: jobScheduleVersion,
+			Interval: s.auditChainPeriod(), Input: nil,
+		})
+	}
+
 	return specs
 }
 
@@ -102,66 +111,42 @@ func (s *Server) jobKinds() []durable.KindSpec {
 	var kinds []durable.KindSpec
 
 	if s.tokens != nil {
-		kinds = append(kinds, durable.KindSpec{
-			Kind:       kindInactivity,
-			Version:    jobScheduleVersion,
-			MinVersion: jobScheduleVersion,
-			Steps: []durable.Step{
-				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-					s.sweepOnce(ctx)
-
-					return nil, nil
-				}},
-			},
-		})
+		kinds = append(kinds, jobKind(kindInactivity, s.sweepOnce))
 	}
 
 	if s.deleted != nil {
-		kinds = append(kinds, durable.KindSpec{
-			Kind:       kindDeleted,
-			Version:    jobScheduleVersion,
-			MinVersion: jobScheduleVersion,
-			Steps: []durable.Step{
-				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-					s.sweepDeletedOnce(ctx)
-
-					return nil, nil
-				}},
-			},
-		})
+		kinds = append(kinds, jobKind(kindDeleted, s.sweepDeletedOnce))
 	}
 
 	if s.signInRequests != nil {
-		kinds = append(kinds, durable.KindSpec{
-			Kind:       kindSignInPrune,
-			Version:    jobScheduleVersion,
-			MinVersion: jobScheduleVersion,
-			Steps: []durable.Step{
-				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-					s.pruneSignInRequestsOnce(ctx)
-
-					return nil, nil
-				}},
-			},
-		})
+		kinds = append(kinds, jobKind(kindSignInPrune, s.pruneSignInRequestsOnce))
 	}
 
 	if s.idempotency != nil {
-		kinds = append(kinds, durable.KindSpec{
-			Kind:       kindIdempotency,
-			Version:    jobScheduleVersion,
-			MinVersion: jobScheduleVersion,
-			Steps: []durable.Step{
-				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-					s.sweepIdempotencyOnce(ctx)
+		kinds = append(kinds, jobKind(kindIdempotency, s.sweepIdempotencyOnce))
+	}
 
-					return nil, nil
-				}},
-			},
-		})
+	if s.chain != nil {
+		kinds = append(kinds, jobKind(kindAuditChain, s.chain.check))
 	}
 
 	return kinds
+}
+
+// jobKind returns the runner kind of a job with one step that runs body.
+func jobKind(kind durable.Kind, body func(context.Context)) durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       kind,
+		Version:    jobScheduleVersion,
+		MinVersion: jobScheduleVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				body(ctx)
+
+				return nil, nil
+			}},
+		},
+	}
 }
 
 // jobPollShare is the part of the shortest schedule interval between two
