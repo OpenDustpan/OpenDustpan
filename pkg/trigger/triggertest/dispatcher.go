@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/cron"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/trigger"
@@ -24,6 +25,7 @@ func dispatcherCases() []suiteCase {
 		{"dispatcher: scheduled refuses a trigger that is off, unknown or not a schedule", caseScheduledRefusals},
 		{"dispatcher: manual starts the plan of any kind for the caller", caseManual},
 		{"dispatcher: manual refuses a trigger that is off or unknown", caseManualRefusals},
+		{"dispatcher: a stored row that no longer validates starts no plan", caseInvalidRow},
 		{"dispatcher: a start that the job service refuses is an error and no start", caseStartRefused},
 	}
 }
@@ -314,7 +316,7 @@ func caseManual(t *testing.T, h Harness, rec *Recorder) {
 		s := &starts[i]
 
 		if s.Actor.Principal.Subject != actor.Principal.Subject || s.Req.Reason == "" ||
-			s.Req.IdempotencyKey != trigger.ManualKey(s.Req.Trigger, now) {
+			s.Req.IdempotencyKey != trigger.ManualKey(s.Req.Trigger, actor.Principal.Subject, now) {
 			t.Errorf("start = %+v, want the actor of the caller and a manual key", *s)
 		}
 	}
@@ -366,5 +368,53 @@ func caseStartRefused(t *testing.T, h Harness, rec *Recorder) {
 
 	if got := rec.Starts(); len(got) != 0 {
 		t.Errorf("refused starts were recorded: %v", got)
+	}
+}
+
+// caseInvalidRow stores rows that Validate refuses, as a row of another version
+// would be, and fires each. The dispatcher must fail closed.
+func caseInvalidRow(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	if h.StoreRaw == nil {
+		t.Skip("the harness has no raw store hook")
+	}
+
+	a, b := unit(acme, "a"), unit(acme, "b")
+
+	h.Namespace(t, string(acme))
+
+	badSchedule := withFrequency(scheduleTrigger("s1", a), cronOf("* * * * *"), true)
+	badFollows := followsTrigger("f1", b, unit(other, "a"))
+
+	h.StoreRaw(t, badSchedule)
+	h.StoreRaw(t, badFollows)
+
+	_, err := h.Dispatcher.Scheduled(t.Context(), acme, "s1", at(0))
+	wantErr(t, "scheduled", err, trigger.ErrInvalid)
+
+	_, err = h.Dispatcher.Manual(t.Context(), ActorOf("user:ada"), manual("s1", at(0)))
+	wantErr(t, "manual of a schedule trigger", err, trigger.ErrInvalid)
+
+	_, err = h.Dispatcher.Manual(t.Context(), ActorOf("user:ada"), manual("f1", at(0)))
+	wantErr(t, "manual of a follows trigger", err, trigger.ErrInvalid)
+
+	// This row is a follower of a by its source, so Upstream finds it. Its
+	// outcome carries the refusal, and no plan starts.
+	withFreq := followsTrigger("f2", b, a)
+	withFreq.Frequency = trigger.Frequency{Preset: cron.PresetDaily, Cron: ""}
+	h.StoreRaw(t, withFreq)
+
+	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: h.Versions.Final(t, a)})
+	must(t, "upstream", err)
+
+	if len(out) != 1 || out[0].Job != "" {
+		t.Fatalf("outcomes = %+v, want one outcome and no job", out)
+	}
+
+	wantErr(t, "upstream outcome", out[0].Err, trigger.ErrInvalid)
+
+	if len(rec.Starts()) != 0 {
+		t.Errorf("rows that do not validate started %v", rec.Starts())
 	}
 }

@@ -1,16 +1,18 @@
 ---
 rfc: 24
 title: Run triggers and orchestration between units
-status: discussing
+status: accepted
 created: 2026-10-10
+adr: 153, 267
 ---
 
 # RFC 24. Run triggers and orchestration between units
 
-Status: discussing.
-[ADR 266](../adr/0266-run-triggers-start-a-plan-through-the-job-service.md)
-records the decisions of the owner. This text lists the open questions, with
-the options and a recommendation for each. The product manager decides them.
+Status: accepted
+([ADR 267](../adr/0267-run-triggers-start-a-plan-through-the-job-service.md)).
+The ADR records the decisions of the owner and the answers of the product
+manager. This text keeps the questions, with the options and a recommendation
+for each. The Outcome section lists the answers.
 The ports are in `pkg/trigger` and the cron parser is in `pkg/cron`. No
 adapter, no route and no job code exists yet.
 
@@ -30,14 +32,14 @@ a timetable, and a plan of one unit after another unit applies.
 
 | Source | Decision |
 | --- | --- |
-| ADR 266 decision 1 | A trigger belongs to one unit. Its kind is `review-request-push`, `schedule` or `follows`. |
-| ADR 266 decisions 2 and 3 | A trigger starts a plan, through the job service. |
-| ADR 266 decision 4 and ADR 258 decision 3 | An unattended start has no exemption. A scheduled job that writes waits for a person at the built-in gate. |
-| ADR 266 decision 5 | The runner pool is the only routing key. |
-| ADR 266 decision 6 and ADR 263 decision 15 | The frequency is a preset or a cron expression of 5 fields in UTC, with a minimum interval of 1 hour. |
-| ADR 266 decision 7 and ADR 263 decision 14 | A schedule uses the durable schedule, and fires once per period across instances. |
-| ADR 266 decisions 8 and 9 | A `follows` trigger names a source unit. The server refuses a cycle at save. |
-| ADR 266 decision 10 and ADR 153 decision 2 | A `follows` trigger is a declared dependency edge. |
+| ADR 267 decision 1 | A trigger belongs to one unit. Its kind is `review-request-push`, `schedule` or `follows`. |
+| ADR 267 decisions 2 and 9 | A trigger starts a plan, through the job service. |
+| ADR 267 decision 3 and ADR 258 decision 3 | An unattended start has no exemption. A scheduled job that writes waits for a person at the built-in gate. |
+| ADR 267 decision 4 | The runner pool is the only routing key. |
+| ADR 267 decision 5 and ADR 263 decision 15 | The frequency is a preset or a cron expression of 5 fields in UTC, with a minimum interval of 1 hour. |
+| ADR 267 decision 6 and ADR 263 decision 14 | A schedule uses the durable schedule, and fires once per period across instances. |
+| ADR 267 decision 7 | A `follows` trigger names a source unit. The server refuses a cycle at save. |
+| ADR 267 decision 11 and ADR 153 decision 2 | A `follows` trigger is a declared dependency edge. |
 | ADR 213 decision 1 | A job reads the outputs of another unit with a sharing rule and the grants of its starter. |
 | ADR 100 decision 10 | A plan phase never holds the unit. |
 
@@ -156,7 +158,7 @@ Each question has the options and a recommendation. The product manager decides.
      switch of the gate (ADR 258 decision 3).
    - (c) Per trigger, with the approval rules as the only control.
 
-   *Recommendation: (a) for the slices of this RFC.* ADR 266 decision 2
+   *Recommendation: (a) for the slices of this RFC.* ADR 267 decision 9
    already fixes a plan for the first slices. Decide (b) with real use. (c) is
    against ADR 258 decision 3.
 6. **How the server finds and reports a cycle.**
@@ -164,7 +166,7 @@ Each question has the options and a recommendation. The product manager decides.
    - (b) Allow it and stop at run time with a depth limit.
    - (c) Both.
 
-   *Recommendation: (c).* ADR 266 decision 9 fixes (a). `CheckCycle` is the one
+   *Recommendation: (c).* ADR 267 decision 7 fixes (a). `CheckCycle` is the one
    rule, and each adapter calls it in the transaction of `Put`, with a lock
    that serializes the writes of one namespace, so two saves at once cannot each
    pass. A depth
@@ -253,8 +255,43 @@ them need the job claimer (issue 1162) and the job service (issue 1165).
 
 ## Outcome
 
-Accepted in part as
-[ADR 266](../adr/0266-run-triggers-start-a-plan-through-the-job-service.md)
-on 2026-10-20: the owner's decisions on the kinds, the plan, the job service,
-the unattended start, the runner pool, the schedule and the `follows` trigger.
-The questions above stay open.
+Accepted as
+[ADR 267](../adr/0267-run-triggers-start-a-plan-through-the-job-service.md)
+on 2026-10-20. The owner decided the kinds, the plan, the job service, the
+unattended start, the runner pool, the schedule and the `follows` trigger
+(decisions 1 to 8). The product manager decided the questions under the
+owner's delegation of 20 October 2026 (decisions 9 to 23):
+
+1. **"A applies"** uses only what the server can see. For the Pulumi CLI, an
+   update of the kind `update` counts. For OpenTofu over the state backend,
+   any final state version counts, because the request does not say which
+   command wrote it. The docs page says so. A run on a workstation counts.
+   The idempotency is per state version, and the limits of question 9 apply.
+2. **The field `when`** has the default `applied`. The value `outputs-changed`
+   comes later.
+3. **The principal** is the namespace service principal, which holds only the
+   action that starts a plan. A read of the outputs of the source uses the
+   intersection of that principal and the grants of the person who last saved
+   the trigger, checked at each read, and it fails closed. If that person loses
+   access, the trigger needs a new save, and the console says so. The trigger
+   stores its last saver, and the audit entry of each start names the trigger
+   and the saver. At save, the saver must hold `unit:read` on the source.
+4. **The source kinds** are `schedule`, `forge` and a new `trigger`. A manual
+   fire keeps the source kind of the caller (`api`) and records the trigger ID.
+   If a later decision lets a trigger apply, the scope of the schedule gate must
+   also cover `trigger`.
+5. **No trigger applies** in these slices.
+6. **Cycles** are refused at save, with one serialized write path for each
+   namespace, and a depth guard at run time.
+7. **One `trigger.schedule` tick** runs each minute, and the store keeps the
+   next slot of each trigger. After an outage, at most one catch-up run starts,
+   for the latest missed slot. `ClaimDue` checks that a slot is a time that the
+   schedule gives.
+8. **A push** matches the repository and the branch. The list `paths` defaults
+   to the working directory of the code location of the unit. A fork starts
+   nothing. A newer push replaces the older plan.
+9. **Limits** are 20 triggers for each unit and 50 followers for each source.
+   An administrator can change them.
+10. **No follow across namespaces.**
+11. **Run order** goes to a separate RFC.
+12. **No other kinds now.** Use the REST API.

@@ -39,13 +39,17 @@ type Versions struct {
 // its plans through the Starter that the Factory received. Namespace makes
 // the namespace name and returns its current fence. Audited is an optional
 // hook: a case that needs it skips when it is nil. It returns the number of
-// audit entries of the namespace.
+// audit entries of the namespace. StoreRaw is another optional hook: it
+// writes tr into the store without Validate and without the cycle check, as
+// a row of another version or a restore would. A case that needs it skips when
+// it is nil.
 type Harness struct {
 	Store      trigger.Store
 	Dispatcher trigger.Dispatcher
 	Namespace  func(t *testing.T, name string) namespace.Fence
 	Versions   Versions
 	Audited    func(t *testing.T, ns string) int
+	StoreRaw   func(t *testing.T, tr trigger.Trigger)
 }
 
 // Factory returns a fresh harness for one subtest. The dispatcher of the
@@ -170,6 +174,8 @@ const (
 	doubleClickSpan = 20 * time.Second
 	// otherZoneOffset is the offset in seconds of a zone that is not UTC.
 	otherZoneOffset = 3600
+	// concurrentRounds is the number of rounds of the case with two saves at once.
+	concurrentRounds = 50
 	// oneDay is the distance of two slots of a daily schedule.
 	oneDay = 24 * time.Hour
 )

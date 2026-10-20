@@ -26,13 +26,21 @@ type Store interface {
 	// caller stamps the time and the actor on e.
 	//
 	// It returns:
-	//   - ErrInvalid when t.Validate fails, and when a replace changes the unit
-	//     or the kind.
+	//   - ErrInvalid when t.Validate fails (except for a self-follow, below),
+	//     and when a replace changes the unit or the kind.
 	//   - ErrCycle (a *CycleError) when t closes a loop of follows triggers. A
 	//     trigger that is off closes none. So switching a trigger on is
 	//     checked as a new write.
 	//   - namespace.ErrFenced when the fence is stale or belongs to another
 	//     namespace than t.Unit.
+	//
+	// A follows trigger whose source is its own unit returns ErrCycle, not
+	// ErrInvalid.
+	//
+	// An adapter serializes the trigger writes of one namespace, for example
+	// with a lock row of the namespace or with SERIALIZABLE transactions. So
+	// two saves at the same time cannot each pass the cycle check over the
+	// same rows and then both commit.
 	//
 	// On every error the store changes nothing. Put does not check access. The
 	// caller checks the actions on the unit, and on the source unit of a
@@ -108,6 +116,12 @@ type Outcome struct {
 // checks nothing about the people who set the triggers: the Store caller did
 // that at save. A start that the job service refuses is an error of that start.
 //
+// Defense in depth: each method runs Trigger.Validate on the trigger that it
+// reads, and fails closed with ErrInvalid. A stored row that another version
+// wrote, or that a restore brought back, and that no longer validates, starts
+// no plan. The Store checks the same value at save and does not replace this
+// check.
+//
 // The dispatcher starts a plan with the principal of the trigger for the
 // events that no person starts. Which principal that is, and what it may
 // do, is not decided yet. A manual fire uses the actor of the caller.
@@ -134,7 +148,8 @@ type Dispatcher interface {
 	Upstream(ctx context.Context, applied Applied) ([]Outcome, error)
 	// Manual starts the plan of a trigger now, for the principal of actor. A
 	// person uses it to test a trigger. The idempotency key is
-	// ManualKey(req.Trigger, req.Now), so a double click gives one job. It
+	// ManualKey(req.Trigger, actor, req.Now), so a double click gives one job
+	// and two people who fire one trigger in one minute give two. It
 	// returns ErrNotFound, ErrDisabled, ErrInvalid, and the errors of
 	// Starter.StartPlan.
 	Manual(ctx context.Context, actor job.Actor, req ManualRequest) (job.ID, error)
@@ -174,7 +189,22 @@ func (a Applied) Validate() error {
 		return fmt.Errorf("%w: an applied event names its state version", ErrInvalid)
 	}
 
+	// Defense in depth: the version goes into an idempotency key, so the
+	// check allows only the bytes that keep the key in one piece. The tool
+	// package that sends the event checks the version too.
+	for i := range len(a.Version) {
+		if !versionByte(a.Version[i]) {
+			return fmt.Errorf("%w: a state version has a byte that is not in a-z, A-Z, 0-9, \"-\", \"_\" or \".\"",
+				ErrInvalid)
+		}
+	}
+
 	return nil
+}
+
+// versionByte reports whether c is a byte that a state version ID may have.
+func versionByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.'
 }
 
 // ScheduleKey returns the idempotency key of the plan that the schedule
@@ -190,8 +220,10 @@ func UpstreamKey(id ID, version string) string {
 	return fmt.Sprintf("trigger:%s:upstream:%s", id, version)
 }
 
-// ManualKey returns the idempotency key of a manual fire of the trigger id at
-// now, to the minute. A double click gets one key.
-func ManualKey(id ID, now time.Time) string {
-	return fmt.Sprintf("trigger:%s:manual:%d", id, now.UTC().Truncate(time.Minute).Unix())
+// ManualKey returns the idempotency key of a manual fire of the trigger id by
+// the person with the subject actor, at now, to the minute. A double click of
+// one person gets one key. Another person gets another key, so the click of
+// one person never hides the fire of another.
+func ManualKey(id ID, actor string, now time.Time) string {
+	return fmt.Sprintf("trigger:%s:manual:%q:%d", id, actor, now.UTC().Truncate(time.Minute).Unix())
 }

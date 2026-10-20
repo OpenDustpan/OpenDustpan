@@ -354,15 +354,19 @@ func TestKeys(t *testing.T) {
 		t.Error("UpstreamKey is the same for two versions")
 	}
 
-	if trigger.ManualKey("t1", slot) != trigger.ManualKey("t1", slot.Add(30*time.Second)) ||
-		trigger.ManualKey("t1", slot) == trigger.ManualKey("t1", slot.Add(time.Minute)) {
+	if trigger.ManualKey("t1", "user:ada", slot) != trigger.ManualKey("t1", "user:ada", slot.Add(30*time.Second)) ||
+		trigger.ManualKey("t1", "user:ada", slot) == trigger.ManualKey("t1", "user:ada", slot.Add(time.Minute)) {
 		t.Error("ManualKey is not one key for each minute")
+	}
+
+	if trigger.ManualKey("t1", "user:ada", slot) == trigger.ManualKey("t1", "user:bob", slot) {
+		t.Error("ManualKey is the same for two actors")
 	}
 
 	// A key of one kind never equals a key of another kind.
 	keys := map[string]bool{}
 	for _, k := range []string{
-		trigger.ScheduleKey("t1", slot), trigger.UpstreamKey("t1", "1"), trigger.ManualKey("t1", slot),
+		trigger.ScheduleKey("t1", slot), trigger.UpstreamKey("t1", "1"), trigger.ManualKey("t1", "user:ada", slot),
 	} {
 		if keys[k] {
 			t.Errorf("key %q repeats", k)
@@ -383,9 +387,28 @@ func TestAppliedValidate(t *testing.T) {
 		"no version":   {Unit: unit("a"), Version: ""},
 		"long version": {Unit: unit("a"), Version: strings.Repeat("v", trigger.MaxVersionBytes+1)},
 		"no unit":      {Unit: noUnit(), Version: "v-1"},
+		"control byte": {Unit: unit("a"), Version: "v-1\n"},
+		"colon":        {Unit: unit("a"), Version: "v:1"},
+		"space":        {Unit: unit("a"), Version: "v 1"},
 	} {
 		if err := a.Validate(); !errors.Is(err, trigger.ErrInvalid) {
 			t.Errorf("%s: Validate() = %v, want ErrInvalid", name, err)
 		}
+	}
+}
+
+func TestCycleErrorNames(t *testing.T) {
+	t.Parallel()
+
+	path := []graph.Unit{unit("a"), unit("b"), unit("a")}
+
+	plain := &trigger.CycleError{Path: path, Names: nil}
+	if got, want := plain.Error(), "trigger closes a loop of units: a -> b -> a"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+
+	named := &trigger.CycleError{Path: path, Names: map[graph.Unit]string{unit("a"): "stack prod"}}
+	if got, want := named.Error(), "trigger closes a loop of units: stack prod -> b -> stack prod"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }

@@ -87,6 +87,10 @@ func (m *mem) Get(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.
 		return trigger.Trigger{}, fmt.Errorf("get: %w", err)
 	}
 
+	if _, err := namespace.ParseName(string(ns)); err != nil {
+		return trigger.Trigger{}, fmt.Errorf("get: %w: %w", trigger.ErrInvalid, err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -141,6 +145,10 @@ func (m *mem) Followers(_ context.Context, source graph.Unit) ([]trigger.Trigger
 func (m *mem) Delete(_ context.Context, ns namespace.Name, id trigger.ID, fence namespace.Fence, _ audit.Entry) error {
 	if err := id.Validate(); err != nil {
 		return fmt.Errorf("delete: %w", err)
+	}
+
+	if _, err := namespace.ParseName(string(ns)); err != nil {
+		return fmt.Errorf("delete: %w: %w", trigger.ErrInvalid, err)
 	}
 
 	m.mu.Lock()
@@ -202,6 +210,12 @@ func (m *mem) Upstream(ctx context.Context, applied trigger.Applied) ([]trigger.
 		t := followers[i]
 		key := trigger.UpstreamKey(t.ID, applied.Version)
 
+		if err := t.Validate(); err != nil {
+			out = append(out, trigger.Outcome{Trigger: t.ID, Job: "", Err: fmt.Errorf("trigger %s: %w", t.ID, err)})
+
+			continue
+		}
+
 		id, err := m.start(ctx, triggertest.ActorOf("trigger:test"), t, key, "unit "+applied.Unit.ID+" applied")
 		out = append(out, trigger.Outcome{Trigger: t.ID, Job: id, Err: err})
 	}
@@ -215,7 +229,9 @@ func (m *mem) Manual(ctx context.Context, actor job.Actor, req trigger.ManualReq
 		return "", err
 	}
 
-	return m.start(ctx, actor, t, trigger.ManualKey(req.Trigger, req.Now), "manual: "+req.Reason)
+	key := trigger.ManualKey(req.Trigger, actor.Principal.Subject, req.Now)
+
+	return m.start(ctx, actor, t, key, "manual: "+req.Reason)
 }
 
 func (m *mem) checkFence(f namespace.Fence, ns namespace.Name) error {
@@ -247,6 +263,12 @@ func (m *mem) fire(ctx context.Context, ns namespace.Name, id trigger.ID) (trigg
 		return t, err
 	}
 
+	// Defense in depth: the store checked the trigger at save, and this check
+	// stays for a row that another version wrote or a restore brought back.
+	if err := t.Validate(); err != nil {
+		return t, fmt.Errorf("trigger %s: %w", id, err)
+	}
+
 	if !t.Enabled {
 		return t, trigger.ErrDisabled
 	}
@@ -268,6 +290,14 @@ func (m *mem) start(ctx context.Context, actor job.Actor, t trigger.Trigger, key
 	}
 
 	return id, nil
+}
+
+// storeRaw writes t without Validate and without the cycle check.
+func (m *mem) storeRaw(t trigger.Trigger) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.triggers[key{ns: t.Unit.Namespace, id: t.ID}] = t
 }
 
 func (m *mem) writeVersion(u graph.Unit, final bool) string {
@@ -302,6 +332,7 @@ func TestConformance(t *testing.T) {
 				Final:        func(_ *testing.T, u graph.Unit) string { return m.writeVersion(u, true) },
 				Intermediate: func(_ *testing.T, u graph.Unit) string { return m.writeVersion(u, false) },
 			},
+			StoreRaw: func(_ *testing.T, tr trigger.Trigger) { m.storeRaw(tr) },
 			Audited: func(_ *testing.T, ns string) int {
 				m.mu.Lock()
 				defer m.mu.Unlock()

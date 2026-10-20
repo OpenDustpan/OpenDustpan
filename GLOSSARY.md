@@ -668,7 +668,7 @@ The setting that turns on drift checks. A unit, a collection or a namespace has 
 _Avoid_: Drift policy (a policy alone names no object), drift trigger
 
 **Trigger**:
-A rule of one unit that starts a plan of that unit on its own (ADR 266). It has one kind: `review-request-push`, `schedule` or `follows`. A trigger starts a plan and nothing else. The job passes through the job service, so the gates, the approval rules, the freezes and the manual locks apply. A trigger has no pool: the job takes the runner pool of the unit settings.
+A rule of one unit that starts a plan of that unit on its own (ADR 267). It has one kind: `review-request-push`, `schedule` or `follows`. A trigger starts a plan and nothing else. The job passes through the job service, so the gates, the approval rules, the freezes and the manual locks apply. A trigger has no pool: the job takes the runner pool of the unit settings.
 _Avoid_: Run trigger (except for the TFE-compatible object of that name), webhook (an inbound webhook is another idea), automation, hook
 _Copy says_: "trigger". On the page of one tool, that tool's own words: "plan" for OpenTofu and "preview" for the Pulumi CLI.
 

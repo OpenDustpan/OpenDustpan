@@ -2,7 +2,9 @@ package triggertest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/cron"
@@ -29,6 +31,8 @@ func storeCases() []suiteCase {
 		{"store: list returns the triggers of one unit ordered by ID", caseList},
 		{"store: followers returns the enabled followers of one source", caseFollowers},
 		{"store: a trigger is invisible to another namespace", caseNamespaceIsolation},
+		{"store: two saves at once cannot close a loop", casePutConcurrentCycle},
+		{"store: get and delete refuse an invalid namespace", caseInvalidNamespace},
 		{"store: a write appends an audit entry", caseAudit},
 	}
 }
@@ -434,6 +438,73 @@ func caseNamespaceIsolation(t *testing.T, h Harness, _ *Recorder) {
 
 	if len(list) != 0 {
 		t.Errorf("a trigger of one namespace is listed in another: %v", list)
+	}
+}
+
+// casePutConcurrentCycle puts "a follows b" and "b follows a" at the same
+// time, many times over. Each round has the same two saves, and exactly one of
+// them must win. An adapter that does not serialize the writes of a namespace
+// lets both pass the cycle check.
+func casePutConcurrentCycle(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	fence := h.Namespace(t, string(acme))
+
+	for round := range concurrentRounds {
+		x := unit(acme, fmt.Sprintf("x%d", round))
+		y := unit(acme, fmt.Sprintf("y%d", round))
+		triggers := []trigger.Trigger{
+			followsTrigger(trigger.ID(fmt.Sprintf("p%d", round)), x, y),
+			followsTrigger(trigger.ID(fmt.Sprintf("q%d", round)), y, x),
+		}
+		errs := make([]error, len(triggers))
+
+		var wg sync.WaitGroup
+
+		start := make(chan struct{})
+
+		for i := range triggers {
+			wg.Go(func() {
+				<-start
+
+				errs[i] = h.Store.Put(t.Context(), triggers[i], fence, auditOf("trigger:put"))
+			})
+		}
+
+		close(start)
+		wg.Wait()
+
+		refused := 0
+
+		for _, err := range errs {
+			switch {
+			case err == nil:
+			case errors.Is(err, trigger.ErrCycle):
+				refused++
+			default:
+				t.Fatalf("round %d: put = %v, want nil or ErrCycle", round, err)
+			}
+		}
+
+		if refused != 1 {
+			t.Fatalf("round %d: %d saves got ErrCycle, want exactly 1 (errors %v)", round, refused, errs)
+		}
+	}
+}
+
+func caseInvalidNamespace(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	fence := h.Namespace(t, string(acme))
+
+	for _, ns := range []namespace.Name{"", "bad ns", "..", "acme\n"} {
+		wantErr(t, fmt.Sprintf("get in %q", ns), getErr(t, h, ns, "s1"), trigger.ErrInvalid)
+		wantErr(
+			t,
+			fmt.Sprintf("delete in %q", ns),
+			h.Store.Delete(t.Context(), ns, "s1", fence, auditOf("trigger:delete")),
+			trigger.ErrInvalid,
+		)
 	}
 }
 

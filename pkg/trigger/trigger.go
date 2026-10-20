@@ -227,7 +227,7 @@ func (t Trigger) validateSource() error {
 	}
 
 	if t.Source == t.Unit {
-		return &CycleError{Path: []graph.Unit{t.Unit, t.Unit}}
+		return &CycleError{Path: []graph.Unit{t.Unit, t.Unit}, Names: nil}
 	}
 
 	return nil
@@ -239,15 +239,25 @@ func (t Trigger) validateSource() error {
 // until the last unit, which is the first again.
 type CycleError struct {
 	Path []graph.Unit
+	// Names optionally maps a unit of Path to the name that the tool of the
+	// unit uses. An adapter that knows the names fills it, so the text says
+	// "stack" or "workspace" words. Error uses the unit ID for a unit with no
+	// entry.
+	Names map[graph.Unit]string
 }
 
-// Error names the path. It shows at most MaxPathShown units, as unit IDs.
+// Error names the path. It shows at most MaxPathShown units, by name or by unit ID.
 func (e *CycleError) Error() string {
 	shown := e.Path[:min(len(e.Path), MaxPathShown)]
 	ids := make([]string, 0, len(shown))
 
 	for _, u := range shown {
-		ids = append(ids, u.ID)
+		name, ok := e.Names[u]
+		if !ok || name == "" {
+			name = u.ID
+		}
+
+		ids = append(ids, name)
 	}
 
 	more := ""
@@ -293,7 +303,7 @@ func CheckCycle(existing []Trigger, t Trigger) error {
 	// The new edge is source -> unit. A loop exists when the source can be
 	// reached from the unit.
 	if path, ok := findPath(next, t.Unit, t.Source); ok {
-		return &CycleError{Path: append([]graph.Unit{t.Source}, path...)}
+		return &CycleError{Path: append([]graph.Unit{t.Source}, path...), Names: nil}
 	}
 
 	return nil
