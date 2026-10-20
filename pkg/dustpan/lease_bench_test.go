@@ -208,7 +208,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      s.principals,
-			Guard:      nil,
+			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        now,

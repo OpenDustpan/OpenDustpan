@@ -26,7 +26,15 @@ func newSignInFixture(t *testing.T) signInFixture {
 	st := openStore(t)
 
 	svc, err := principal.NewService(
-		principal.Config{TempAdmins: nil, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      st,
+			Guard:      principal.AdminOnlyGuard{},
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -166,7 +174,14 @@ func TestSignInPrincipalRefusesDisabled(t *testing.T) {
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      disabledStore{Store: st}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store: disabledStore{
+			Store: st,
+		},
+		Guard:      principal.AdminOnlyGuard{},
+		Namespaces: nil,
+		Tokens:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -298,7 +313,15 @@ func TestSignInRefusesTempAdmin(t *testing.T) {
 	st := openStore(t)
 
 	svc, err := principal.NewService(
-		principal.Config{TempAdmins: st, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: st,
+			Store:      st,
+			Guard:      principal.AdminOnlyGuard{},
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
