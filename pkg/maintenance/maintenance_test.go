@@ -519,6 +519,7 @@ func newFixtureWith(
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            f.updates,
 		Tokens:             nil,
 		Checkpoints:        fakeCheckpoints{},
@@ -537,6 +538,7 @@ func newFixtureWith(
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.workspaces,
 		States:             states,
 		Blobs:              blobs,
@@ -667,6 +669,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            f.updates,
 		Tokens:             nil,
 		Checkpoints:        fakeCheckpoints{},
@@ -685,6 +688,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.workspaces,
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},

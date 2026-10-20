@@ -113,6 +113,7 @@ func maintainerActions() []identity.Action {
 		identity.ActionUnitManage,
 		identity.ActionUnitMove,
 		identity.ActionUnitRestore,
+		identity.ActionUnitLock,
 		identity.ActionCollectionCreate,
 		identity.ActionCollectionUpdate,
 		identity.ActionCollectionDelete,

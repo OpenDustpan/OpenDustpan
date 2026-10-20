@@ -4195,6 +4195,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	inventorySchemeScenario(t, env)
 	// The collection routes move the e2e workspace between two collections (ADR 51).
 	collectionsScenario(t, env)
+	// The manual lock routes stop an OpenTofu plan until the lock goes.
+	manualLockRoutesScenario(t, env)
 	// The context routes: the workspace reads the owners of its namespace.
 	tofuContextScenario(t, env)
 

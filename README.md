@@ -298,6 +298,8 @@ How-to guides:
   namespace and the check of their chain.
 - [Deleted units](docs/guides/deleted-units.md): list, restore and purge
   the units that a delete keeps until its retention period ends.
+- [Manual locks](docs/guides/manual-locks.md): stop OpenTofu locks and Pulumi updates on a
+  stack, a workspace or a collection, with a reason, and end the lock.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
