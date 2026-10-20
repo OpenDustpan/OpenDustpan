@@ -488,7 +488,17 @@ func classifyRegistry(err error) (int, string) {
 // a second start 409, and a server with no backup target 503 that names the
 // setting.
 func classifyBackup(err error) (int, string, bool) {
+	if text, ok := backup.RefusalText(err); ok {
+		// The refusal of a dev backup carries its own text, which names the
+		// setting that allows it. It holds no driver detail.
+		return http.StatusConflict, text, true
+	}
+
 	switch {
+	case errors.Is(err, backup.ErrDevBackupRefused):
+		return http.StatusConflict, backup.ErrDevBackupRefused.Error(), true
+	case errors.Is(err, backup.ErrManifestKindInvalid):
+		return http.StatusConflict, backup.ErrManifestKindInvalid.Error(), true
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return http.StatusConflict, "a backup is already running", true
 	case errors.Is(err, backup.ErrAlreadyExists):

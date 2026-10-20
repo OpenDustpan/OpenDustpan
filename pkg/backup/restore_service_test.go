@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -92,6 +94,33 @@ type restoreServiceLive struct {
 	kept       int
 	bumped     int
 	keepingErr error
+	dev        devLiveState
+}
+
+// devLiveState holds what the fake live store does for the dev data ports.
+// A test sets the kind, the reports of the strip and the errors; the fake
+// records what the service asks for.
+type devLiveState struct {
+	kind    installation.Kind
+	kindErr error
+	// detect and remove are the reports of the two strip modes. stripErr
+	// fails the mode.
+	detect   backup.DevStripReport
+	remove   backup.DevStripReport
+	stripErr map[backup.DevStripMode]error
+	// dropped is the count that the keeping swap reports.
+	dropped int64
+	// order, when set, logs "strip-detect", "strip-remove", "record" and
+	// "apply" in the order the service calls them.
+	order *orderLog
+	// appendErr fails the audit appends after the swap.
+	appendErr error
+
+	stageOpts []backup.StageOptions
+	strips    []backup.DevStripMode
+	records   []backup.DevStripReport
+	appends   []audit.Entry
+	discards  int
 }
 
 func (l *restoreServiceLive) ExportPortable(
@@ -136,10 +165,18 @@ func (l *restoreServiceLive) StagePortable(
 		}
 	}
 
+	l.mu.Lock()
+	l.dev.stageOpts = append(l.dev.stageOpts, opts)
+	l.mu.Unlock()
+
 	return l.checks.StagePortable(ctx, open, want, files, opts)
 }
 
 func (l *restoreServiceLive) DiscardStaging(ctx context.Context) error {
+	l.mu.Lock()
+	l.dev.discards++
+	l.mu.Unlock()
+
 	return l.checks.DiscardStaging(ctx)
 }
 
@@ -149,6 +186,10 @@ func (l *restoreServiceLive) ApplyStaging(_ context.Context) error {
 
 	l.applied++
 	l.bumped++
+
+	if l.dev.order != nil {
+		l.dev.order.add("apply")
+	}
 
 	return nil
 }
@@ -166,7 +207,11 @@ func (l *restoreServiceLive) ApplyStagingKeepingAccess(ctx context.Context) (bac
 		return backup.KeepAccessResult{}, keepingErr
 	}
 
-	return backup.KeepAccessResult{}, l.ApplyStaging(ctx)
+	l.mu.Lock()
+	dropped := l.dev.dropped
+	l.mu.Unlock()
+
+	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, l.ApplyStaging(ctx)
 }
 
 func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, error) {
@@ -178,23 +223,87 @@ func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, err
 	return 1, nil
 }
 
-// ReadKind, StripDevStaged and RecordDevReport satisfy the dev data ports of
-// backup.RestoreLive. The service does not call them yet, so the fake holds
-// no state for them.
+// ReadKind implements backup.KindReader with the kind of the test.
 func (l *restoreServiceLive) ReadKind(_ context.Context) (installation.Kind, error) {
-	return installation.KindProduction, nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.dev.kindErr != nil {
+		return "", l.dev.kindErr
+	}
+
+	return l.dev.kind, nil
 }
 
+// StripDevStaged implements backup.DevStripper with the reports of the test.
 func (l *restoreServiceLive) StripDevStaged(
-	_ context.Context, _ backup.DevStripMode,
+	_ context.Context, mode backup.DevStripMode,
 ) (backup.DevStripReport, error) {
-	return backup.DevStripReport{Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil}, nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.dev.strips = append(l.dev.strips, mode)
+
+	if l.dev.order != nil {
+		l.dev.order.add(map[backup.DevStripMode]string{
+			backup.DevStripDetect: "strip-detect", backup.DevStripRemove: "strip-remove",
+		}[mode])
+	}
+
+	if err := l.dev.stripErr[mode]; err != nil {
+		return backup.DevStripReport{}, err
+	}
+
+	if mode == backup.DevStripDetect {
+		return l.dev.detect, nil
+	}
+
+	return l.dev.remove, nil
 }
 
+// RecordDevReport implements backup.DevReportRecorder: it keeps each report
+// and stores it in the row of the registry, like the adapters do.
 func (l *restoreServiceLive) RecordDevReport(
-	_ context.Context, _ backup.RestoreID, _ backup.DevStripReport,
+	ctx context.Context, id backup.RestoreID, report backup.DevStripReport,
 ) error {
-	return nil
+	l.mu.Lock()
+	l.dev.records = append(l.dev.records, report)
+
+	if l.dev.order != nil {
+		l.dev.order.add("record")
+	}
+	l.mu.Unlock()
+
+	return l.registry.setDevReport(ctx, id, report)
+}
+
+// AppendServer implements the server audit port that the service writes to
+// after the swap.
+func (l *restoreServiceLive) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.dev.appendErr != nil {
+		return audit.Entry{}, l.dev.appendErr
+	}
+
+	l.dev.appends = append(l.dev.appends, e)
+
+	return e, nil
+}
+
+// devSnapshot returns a copy of the dev state, under the lock.
+func (l *restoreServiceLive) devSnapshot() devLiveState {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	snap := l.dev
+	snap.stageOpts = slices.Clone(l.dev.stageOpts)
+	snap.strips = slices.Clone(l.dev.strips)
+	snap.records = slices.Clone(l.dev.records)
+	snap.appends = slices.Clone(l.dev.appends)
+
+	return snap
 }
 
 // liveCounts counts the applies and fences of the fake live store.
@@ -392,6 +501,23 @@ func (r *restoreServiceRegistry) FailRunningRestores(_ context.Context, endedAt 
 
 // dropAll removes every restore row, emulating the swap that replaces the
 // live data with staged data predating the rows.
+// setDevReport stores the report in the row, like RecordDevReport of an
+// adapter. An unknown ID reports backup.ErrRestoreNotFound.
+func (r *restoreServiceRegistry) setDevReport(_ context.Context, id backup.RestoreID, report backup.DevStripReport) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	row, ok := r.rows[id]
+	if !ok {
+		return backup.ErrRestoreNotFound
+	}
+
+	row.DevReport = &report
+	r.rows[id] = row
+
+	return nil
+}
+
 func (r *restoreServiceRegistry) dropAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -523,23 +649,22 @@ func (e *stubBackupExporter) ExportPortable(
 func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 	t.Helper()
 
+	return newRestoreServiceSetupWith(t, func(*backup.RestoreConfig) {})
+}
+
+// newRestoreServiceSetupWith is newRestoreServiceSetup with a change to the
+// config of the restore service, for example the setting that allows a dev
+// backup.
+func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)) *restoreServiceSetup {
+	t.Helper()
+
 	setup := newCheckSetup(t)
 	regs := newRestoreServiceRegistry()
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
-	live := &restoreServiceLive{
-		checks:     setup.live,
-		registry:   regs,
-		mu:         sync.Mutex{},
-		stageBlock: nil,
-		applyGate:  nil,
-		stageCalls: 0,
-		applied:    0,
-		kept:       0,
-		bumped:     0,
-		keepingErr: nil,
-	}
+	live := newRestoreServiceLive(setup.live, regs)
+	live.dev.order = order
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
@@ -557,20 +682,25 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 		t.Fatalf("new backup service: %v", err)
 	}
 
-	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        live,
-		Registry:    regs,
-		Backups:     backups,
-		Maintenance: maint,
-		Blobs:       blobs,
-		Target:      setup.target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
-	})
+	cfg := backup.RestoreConfig{
+		Live:            live,
+		Registry:        regs,
+		Backups:         backups,
+		Maintenance:     maint,
+		Blobs:           blobs,
+		Target:          setup.target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
+		Now:             nil,
+		Logger:          nil,
+	}
+	change(&cfg)
+
+	service, err := backup.NewRestoreService(cfg)
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
 	}
@@ -1233,18 +1363,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	backupRegs := newFakeRegistry()
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: nil}
 	blobs := newMemStore()
-	live := &restoreServiceLive{
-		checks:     check.live,
-		registry:   regs,
-		mu:         sync.Mutex{},
-		stageBlock: nil,
-		applyGate:  nil,
-		stageCalls: 0,
-		applied:    0,
-		kept:       0,
-		bumped:     0,
-		keepingErr: nil,
-	}
+	live := newRestoreServiceLive(check.live, regs)
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: nil},
@@ -1689,18 +1808,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
-	live := &restoreServiceLive{
-		checks:     check.live,
-		registry:   regs,
-		mu:         sync.Mutex{},
-		stageBlock: nil,
-		applyGate:  nil,
-		stageCalls: 0,
-		applied:    0,
-		kept:       0,
-		bumped:     0,
-		keepingErr: nil,
-	}
+	live := newRestoreServiceLive(check.live, regs)
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
@@ -2143,4 +2251,52 @@ type fixedKind installation.Kind
 // ReadKind implements backup.KindReader.
 func (k fixedKind) ReadKind(_ context.Context) (installation.Kind, error) {
 	return installation.Kind(k), nil
+}
+
+// emptyReport returns a strip report that names no removal.
+func emptyReport() backup.DevStripReport {
+	return backup.DevStripReport{
+		Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil, Approvers: nil, Warnings: nil,
+	}
+}
+
+// newRestoreServiceLive returns the fake live store over the check store and
+// the registry. It is a production installation with no dev data in the staged
+// data.
+func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry) *restoreServiceLive {
+	return &restoreServiceLive{
+		checks:     checks,
+		registry:   regs,
+		mu:         sync.Mutex{},
+		stageBlock: nil,
+		applyGate:  nil,
+		stageCalls: 0,
+		applied:    0,
+		kept:       0,
+		bumped:     0,
+		keepingErr: nil,
+		dev: devLiveState{
+			kind: installation.KindProduction, kindErr: nil, detect: emptyReport(), remove: emptyReport(),
+			stripErr: map[backup.DevStripMode]error{}, dropped: 0, order: nil, appendErr: nil,
+			stageOpts: nil, strips: nil, records: nil, appends: nil, discards: 0,
+		},
+	}
+}
+
+// maintenanceCounts counts the enters and leaves of the fake maintenance.
+type maintenanceCounts struct {
+	enters int
+	leaves int
+}
+
+func (m *restoreServiceMaintenance) counts() maintenanceCounts {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return maintenanceCounts{enters: m.enters, leaves: m.leaves}
+}
+
+// sleepBriefly waits a few milliseconds, for the polls of the tests.
+func sleepBriefly() {
+	time.Sleep(10 * time.Millisecond)
 }

@@ -292,6 +292,7 @@ type serveFlags struct {
 	s3Endpoint                   string
 	s3Region                     string
 	backupTarget                 string
+	allowDevBackups              bool
 	logLevel                     string
 	logFormat                    string
 	components                   string
@@ -455,6 +456,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag(cli.UnsafeAllowDevBackupsFlag).Bool(fs, &f.allowDevBackups)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
@@ -1022,7 +1024,14 @@ func (f *serveFlags) serveWithStores(
 		return optErr
 	}
 	opts = append(opts, f.backupOptions(backupTarget)...)
+	opts = append(opts, f.devBackupOptions()...)
 	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
+
+	if f.allowDevBackups {
+		logger.WarnContext(ctx, "This server lets a production installation restore a backup of a dev installation. "+
+			"A restore removes the dev users and their data. We do not recommend this.",
+			slog.String("flag", "--"+cli.UnsafeAllowDevBackupsFlag))
+	}
 
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks
@@ -1543,6 +1552,17 @@ func (f *serveFlags) backupOptions(target blob.Store) []dustpan.Option {
 	}
 
 	return []dustpan.Option{dustpan.WithBackupTarget(target, strings.TrimSpace(f.backupTarget))}
+}
+
+// devBackupOptions returns the NewServer options for a dev backup in a
+// production installation. The flag is the only source of the setting: it has
+// no variable and no configuration file key. The hint names the flag in code
+// quotes for the refusal text.
+func (f *serveFlags) devBackupOptions() []dustpan.Option {
+	return []dustpan.Option{
+		dustpan.WithAllowDevBackups(f.allowDevBackups),
+		dustpan.WithAllowDevHint("`--" + cli.UnsafeAllowDevBackupsFlag + "`"),
+	}
 }
 
 // checkTLSFlags requires both TLS files or none. It names the missing one,

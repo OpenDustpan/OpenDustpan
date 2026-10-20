@@ -230,6 +230,13 @@ func (s *RestoreService) Start(
 		}
 	}
 
+	// A dev backup into a production installation is refused here, before the
+	// row exists, so the caller gets the refusal at once.
+	warnings, devErr := s.startDevCheck(ctx, req.BackupID)
+	if devErr != nil {
+		return fmt.Errorf("begin restore %s: %w", id, devErr)
+	}
+
 	create := RestoreRecord{
 		StartedAt:   s.now().UTC(),
 		EndedAt:     time.Time{},
@@ -239,10 +246,22 @@ func (s *RestoreService) Start(
 		RequestedBy: req.RequestedBy,
 		Error:       "",
 		State:       RestoreChecking,
+		DevReport:   nil,
 	}
 
 	if createErr := s.registry.CreateRestore(ctx, create); createErr != nil {
 		return fmt.Errorf("create restore %s: %w", id, createErr)
+	}
+
+	if len(warnings) > 0 {
+		// The warnings are on the row from the start, so the answer of the
+		// start carries them. The restore replaces them with what it finds.
+		report := emptyDevReport()
+		report.Warnings = warnings
+
+		if recordErr := s.live.RecordDevReport(ctx, id, report); recordErr != nil {
+			s.logger.ErrorContext(ctx, "record the restore warnings failed", slog.String("restore_id", id.String()))
+		}
 	}
 
 	s.trackRestore(create)

@@ -1446,3 +1446,56 @@ func checkFailedRow(t *testing.T, row backup.Record, now time.Time) {
 		t.Fatalf("backup times = %v to %v, want %v to %v", row.StartedAt, row.EndedAt, now, now)
 	}
 }
+
+// The three stores below shadow one dev data port of the SQLite store with a
+// method of another signature, so the store holds every other port and fails
+// the type assertion to the missing one.
+type (
+	noKindReaderStore struct{ *sqlite.Store }
+	noStripperStore   struct{ *sqlite.Store }
+	noRecorderStore   struct{ *sqlite.Store }
+)
+
+func (noKindReaderStore) ReadKind() {}
+
+func (noStripperStore) StripDevStaged() {}
+
+func (noRecorderStore) RecordDevReport() {}
+
+// TestServerWithoutDevPortsDoesNotStart proves that no restore route works
+// with a store that lacks a dev data port: the server does not start, and the
+// error names the port. A production restore never skips the kind check, the
+// strip or the report because a port is missing.
+func TestServerWithoutDevPortsDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		wrap    func(*sqlite.Store) namespace.Store
+		missing string
+	}{
+		{name: "no KindReader", wrap: func(s *sqlite.Store) namespace.Store { return noKindReaderStore{s} }, missing: "KindReader"},
+		{name: "no DevStripper", wrap: func(s *sqlite.Store) namespace.Store { return noStripperStore{s} }, missing: "DevStripper"},
+		{name: "no DevReportRecorder", wrap: func(s *sqlite.Store) namespace.Store { return noRecorderStore{s} }, missing: "DevReportRecorder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+			target := openBackupTarget(t)
+
+			srv, err := dustpan.NewServer(append(
+				fullServerOptions(t, st, blobs, authn),
+				dustpan.WithNamespaceStore(tc.wrap(st)),
+				dustpan.WithBackupTarget(target, "dir:/var/backups"),
+			)...)
+			if err == nil {
+				t.Fatalf("NewServer with a store that lacks %s started, want a start error (server %v)", tc.missing, srv)
+			}
+
+			if !strings.Contains(err.Error(), "lacks "+tc.missing) {
+				t.Fatalf("start error = %q, want it to name %s", err, tc.missing)
+			}
+		})
+	}
+}

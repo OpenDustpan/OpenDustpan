@@ -621,3 +621,58 @@ func TestRestoreCommandRetriesTransientMissing(t *testing.T) {
 
 	checkRestoreOutput(t, out, "succeeded")
 }
+
+// TestRestoreCommandWarnsAboutADevBackup proves that the command reads the
+// manifest first and prints the notice before it starts the restore, and that
+// it prints the warnings and the dev data that the server answers.
+//
+//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
+func TestRestoreCommandWarnsAboutADevBackup(t *testing.T) {
+	var order []string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/server/backups/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		order = append(order, "manifest")
+
+		_, _ = io.WriteString(w, `{"id":"`+restoreBackupTestID+`","state":"succeeded","manifest":{"installationKind":"dev"}}`)
+	})
+	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
+		order = append(order, "start")
+
+		w.WriteHeader(http.StatusAccepted)
+
+		_, _ = io.WriteString(w, `{"id":"`+restoreTestID+`","warnings":[{"code":"dev-backup-into-production","text":"first text"}]}`)
+	})
+	mux.HandleFunc("GET /api/server/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"`+restoreTestID+`","state":"succeeded","backupID":"`+restoreBackupTestID+`",`+
+			`"warnings":[{"code":"dev-backup-into-production","text":"first text"},{"code":"audit-append-failed","text":"second text"}],`+
+			`"devData":{"principals":2,"classes":{"grants":3,"principals":2}}}`)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	t.Setenv(adminTokenEnvVar, "dev-token")
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"--server", server.URL, "--backup", restoreBackupTestID}
+	if err := restoreCommand(t.Context(), args, &stdout, &stderr); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	if len(order) < 2 || order[0] != "manifest" || order[1] != "start" {
+		t.Fatalf("calls = %v, want the manifest read before the start", order)
+	}
+
+	if !strings.Contains(stderr.String(), "this backup is from a dev installation") ||
+		!strings.Contains(stderr.String(), "--unsafe-allow-restoring-dev-installation-backups-into-production") {
+		t.Fatalf("stderr = %q, want the notice that names the flag", stderr.String())
+	}
+
+	out := stdout.String()
+	if strings.Count(out, "warning: first text") != 1 || !strings.Contains(out, "warning: second text") ||
+		!strings.Contains(out, "dev data: 2 principals; grants 3, principals 2") {
+		t.Fatalf("stdout = %q, want each warning once and the dev data line", out)
+	}
+}

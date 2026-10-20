@@ -45,7 +45,12 @@ func writeServeSettings(out *strings.Builder) {
 			file = "`" + s.File + "`"
 		}
 
-		out.WriteString("| `--" + s.Flag + "` | `" + s.Env + "` | " + file + " | " + s.Reference + " |\n")
+		env := "(none)"
+		if s.Env != "" {
+			env = "`" + s.Env + "`"
+		}
+
+		out.WriteString("| `--" + s.Flag + "` | " + env + " | " + file + " | " + s.Reference + " |\n")
 	}
 
 	out.WriteString("\n")

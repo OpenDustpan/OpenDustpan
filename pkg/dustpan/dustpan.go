@@ -185,6 +185,8 @@ type settings struct {
 	checkpointDeltaCutoff int
 	backupTarget          blob.Store
 	backupTargetName      string
+	allowDevBackups       bool
+	allowDevHint          string
 	ipAllowlists          *ipAllowlistSettings
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
@@ -537,6 +539,22 @@ func ipAllowlistConfig(o *settings) *ipAllowlistSettings {
 // no request field, header or query value sets it.
 func WithBackupTarget(target blob.Store, name string) Option {
 	return func(o *settings) { o.backupTarget, o.backupTargetName = target, name }
+}
+
+// WithAllowDevBackups lets a production installation restore a backup of a
+// dev installation. The restore then removes the dev people and their data
+// from the staged data and warns. The default is false. Only code sets it: no
+// environment variable, configuration file or API setting reaches this option,
+// and an embedder passes it in Go code only.
+func WithAllowDevBackups(allow bool) Option {
+	return func(o *settings) { o.allowDevBackups = allow }
+}
+
+// WithAllowDevHint sets the words that the refusal of a dev backup uses to
+// name how to allow it, for example the flag in code quotes. An empty hint
+// leaves the sentence out. The default is empty.
+func WithAllowDevHint(hint string) Option {
+	return func(o *settings) { o.allowDevHint = hint }
 }
 
 // Server is a configured OpenDustpan server.
@@ -2832,6 +2850,13 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 		return nil, errBackupNeedsRegistry
 	}
 
+	// A store that cannot read its kind cannot run a restore either: the
+	// error names every port of backup.RestoreLive that the store lacks.
+	kinds, ok := cfg.namespaceStore.(backup.KindReader)
+	if !ok {
+		return nil, restoreLiveError(cfg.namespaceStore)
+	}
+
 	maxSQL := int64(0)
 	if strings.HasPrefix(strings.TrimSpace(cfg.backupTargetName), "s3://") {
 		maxSQL = backup.S3ObjectLimit
@@ -2844,6 +2869,7 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Kinds:       kinds,
 		Registry:    registry,
 		Blobs:       cfg.blobStore,
 		StateOpener: opener,
@@ -2858,13 +2884,6 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 	}
 
 	return service, nil
-}
-
-// restoreBase is RestoreLive without the ports of the dev data rules.
-type restoreBase interface {
-	backup.CheckStore
-	backup.Applier
-	backup.Fencer
 }
 
 // newRestoreService builds the installation restore service when a backup
@@ -2885,20 +2904,14 @@ func newRestoreService(
 		return nil, errBackupNeedsRegistry
 	}
 
+	// The compiler checks that backup.RestoreLive holds the ports of the dev
+	// data rules, and this assertion checks the namespace store at the start.
+	// A store that lacks one of them cannot run a restore, and the server does
+	// not start: a production restore never skips the kind check, the strip or
+	// the report because a port is missing.
 	live, ok := cfg.namespaceStore.(backup.RestoreLive)
 	if !ok {
-		_, base := cfg.namespaceStore.(restoreBase)
-		if base {
-			// The store restores but lacks the ports of the dev data rules.
-			// Fail closed: run no restore, and keep the server up.
-			cfg.logger.Warn("restore is off: the namespace store lacks the dev data ports " +
-				"(KindReader, DevStripper, DevReportRecorder)")
-
-			//nolint:nilnil // Nil without an error means the server runs no restore.
-			return nil, nil
-		}
-
-		return nil, errRestoreNeedsLive
+		return nil, restoreLiveError(cfg.namespaceStore)
 	}
 
 	registry, ok := cfg.namespaceStore.(backup.RestoreRegistry)
@@ -2931,14 +2944,49 @@ func newRestoreService(
 		Region:      cfg.region.String(),
 		AfterApply:  afterRestore(steps...),
 		Admit:       admit,
-		Now:         cfg.now,
-		Logger:      cfg.logger,
+
+		AllowDevBackups: cfg.allowDevBackups,
+		AllowDevHint:    cfg.allowDevHint,
+		Now:             cfg.now,
+		Logger:          cfg.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)
 	}
 
 	return service, nil
+}
+
+// restoreLiveError returns errRestoreNeedsLive with the name of each port of
+// backup.RestoreLive that store lacks.
+func restoreLiveError(store any) error {
+	var missing []string
+
+	check := func(name string, ok bool) {
+		if !ok {
+			missing = append(missing, name)
+		}
+	}
+
+	_, ok := store.(backup.CheckStore)
+	check("CheckStore", ok)
+
+	_, ok = store.(backup.Applier)
+	check("Applier", ok)
+
+	_, ok = store.(backup.Fencer)
+	check("Fencer", ok)
+
+	_, ok = store.(backup.KindReader)
+	check("KindReader", ok)
+
+	_, ok = store.(backup.DevStripper)
+	check("DevStripper", ok)
+
+	_, ok = store.(backup.DevReportRecorder)
+	check("DevReportRecorder", ok)
+
+	return fmt.Errorf("%w: the store lacks %s", errRestoreNeedsLive, strings.Join(missing, ", "))
 }
 
 // restoreStep is one after-apply step of a restore.

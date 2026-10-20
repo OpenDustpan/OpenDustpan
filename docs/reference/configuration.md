@@ -33,6 +33,7 @@ the same list.
 | `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | `s3-endpoint` | (none: AWS) |
 | `--s3-region` | `DUSTPAN_S3_REGION` | `s3-region` | `us-east-1` |
 | `--backup-target` | `DUSTPAN_BACKUP_TARGET` | `backup-target` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
+| `--unsafe-allow-restoring-dev-installation-backups-into-production` | (none) | (none) | false. Only the flag sets it. No variable and no configuration file key sets it, and the server writes one warning to the log at each start with the flag. Without it, a production installation refuses to restore a backup of a dev installation, and a restore of any backup removes the dev users and their data from the staged data |
 | `--key-encryption-key-file` | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | `key-encryption-key-file` | `dustpan.key` next to the SQLite file, or `./dustpan.key` for PostgreSQL |
 | `--generate-key-encryption-key` | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | `generate-key-encryption-key` | (none: ask on a terminal, else refuse). Set `true` to make the key file with no prompt |
 | `--max-checkpoint-bytes` | `DUSTPAN_MAX_CHECKPOINT_BYTES` | `max-checkpoint-bytes` | `0`: 32 MiB, the largest Pulumi checkpoint |

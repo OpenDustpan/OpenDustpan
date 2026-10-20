@@ -6,6 +6,15 @@ import "opendustpan.org/opendustpan/pkg/history"
 // test proves it equals history.DefaultRetention.
 const retentionDefault = "9600h"
 
+// unsafeAllowDevBackupsFlag is the flag that lets a production installation
+// restore a backup of a dev installation. The name says that the choice is
+// unsafe. The flag has no variable and no configuration file key.
+const unsafeAllowDevBackupsFlag = "unsafe-allow-restoring-dev-installation-backups-into-production"
+
+// UnsafeAllowDevBackupsFlag is the name of the flag that lets a production
+// installation restore a backup of a dev installation.
+const UnsafeAllowDevBackupsFlag = unsafeAllowDevBackupsFlag
+
 // defaultFalse is the default of the bool declarations: no opt-in without
 // an explicit flag or variable.
 const defaultFalse = "false"
@@ -403,6 +412,16 @@ var Settings = []*Setting{
 		"backup", "", "",
 		"backup ID to check or restore, for example bkp-aaa",
 		referenceNone,
+	),
+	boolSetting(
+		unsafeAllowDevBackupsFlag, "",
+		"let a production installation restore a backup of a dev installation; the restore removes the dev "+
+			"users and their data. We do not recommend this. Only this flag sets it: no variable, no "+
+			"configuration file key and no API setting",
+		"false. Only the flag sets it. No variable and no configuration file key sets it, and the "+
+			"server writes one warning to the log at each start with the flag. Without it, a production "+
+			"installation refuses to restore a backup of a dev installation, and a restore of any backup "+
+			"removes the dev users and their data from the staged data",
 	),
 	boolSetting(
 		"check-only", "",

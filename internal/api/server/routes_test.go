@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -727,6 +728,7 @@ func newRouteTestBackups(
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    st,
+		Kinds:       st,
 		Registry:    st,
 		Blobs:       live,
 		StateOpener: nil,
@@ -750,7 +752,7 @@ func newRouteTestRestores(
 	t.Helper()
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        devPortsLive{Store: st},
+		Live:        st,
 		Registry:    st,
 		Backups:     service,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal),
@@ -760,8 +762,11 @@ func newRouteTestRestores(
 		Region:      "test",
 		AfterApply:  nil,
 		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+
+		AllowDevBackups: false,
+		AllowDevHint:    "",
+		Now:             nil,
+		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1518,6 +1523,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    stubBackupExporter{},
+		Kinds:       productionKind{},
 		Registry:    stubBackupRegistry{},
 		Blobs:       live,
 		StateOpener: nil,
@@ -1634,4 +1640,13 @@ func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, e
 		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
 		FinishedBlobPurges: 0, PendingBlobPurges: 0,
 	}, nil
+}
+
+// productionKind is a backup.KindReader of a production installation, for the
+// route tests that stub the exporter.
+type productionKind struct{}
+
+// ReadKind implements backup.KindReader.
+func (productionKind) ReadKind(_ context.Context) (installation.Kind, error) {
+	return installation.KindProduction, nil
 }

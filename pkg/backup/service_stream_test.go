@@ -149,18 +149,7 @@ func restoreStreamedBackup(
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
-	live := &restoreServiceLive{
-		checks:     liveChecks,
-		registry:   regs,
-		mu:         sync.Mutex{},
-		stageBlock: nil,
-		applyGate:  nil,
-		stageCalls: 0,
-		applied:    0,
-		kept:       0,
-		bumped:     0,
-		keepingErr: nil,
-	}
+	live := newRestoreServiceLive(liveChecks, regs)
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Kinds:       fixedKind(installation.KindProduction),

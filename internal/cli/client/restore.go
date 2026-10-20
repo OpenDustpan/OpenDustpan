@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -91,7 +92,22 @@ type RestoreStartRequest struct {
 // restoreStartResponse answers a started restore: its ID. The backup taken
 // before the apply appears in the polled status row, not here.
 type restoreStartResponse struct {
-	ID string `json:"id"`
+	ID       string           `json:"id"`
+	Warnings []RestoreWarning `json:"warnings"`
+}
+
+// RestoreWarning is a warning of a restore: a stable code and the text for
+// the operator. The restore goes on after a warning.
+type RestoreWarning struct {
+	Code string `json:"code"`
+	Text string `json:"text"`
+}
+
+// RestoreDevData states the dev data of a restore: the removal of a restore
+// that ran, or, for a check-only restore, the removal that it would make.
+type RestoreDevData struct {
+	Principals int64            `json:"principals"`
+	Classes    map[string]int64 `json:"classes"`
 }
 
 // RestoreManifest holds the manifest fields the command prints: the SQL
@@ -109,7 +125,21 @@ type RestoreStatusResponse struct {
 	PreBackupID string           `json:"preBackupID"`
 	Error       string           `json:"error"`
 	Manifest    *RestoreManifest `json:"manifest"`
+	Warnings    []RestoreWarning `json:"warnings"`
+	DevData     *RestoreDevData  `json:"devData"`
 }
+
+// devBackupKind is the value of installationKind in the manifest of a backup
+// of a dev installation.
+const devBackupKind = "dev"
+
+// devBackupNotice is what the command prints before it starts a restore of a
+// backup of a dev installation. The server decides: it refuses the restore
+// unless it started with the setting that allows it.
+const devBackupNotice = "warning: this backup is from a dev installation. " +
+	"A production installation refuses it unless the server started with " +
+	"`--unsafe-allow-restoring-dev-installation-backups-into-production`. " +
+	"A restore that the server allows removes the dev users and their data. We do not recommend this restore."
 
 // RestoreCommand runs `opendustpan restore`: it starts a restore, waits until
 // it leaves checking and applying, and prints the ID, the state and the
@@ -135,6 +165,11 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 
+	// Read the manifest first, so the warning comes before the restore
+	// starts. A backup that cannot be read here gets its own error from the
+	// restore, so this read never stops the command.
+	warnDevBackup(ctx, restoreReadParams{client: client, server: server, token: token, backupID: id}, stderr)
+
 	started, err := startRestore(ctx, startRestoreParams{
 		client:    client,
 		server:    server,
@@ -159,6 +194,10 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 
 	if err := writeRestoreReport(stdout, doc, f.checkOnly); err != nil {
+		return err
+	}
+
+	if err := writeRestoreWarnings(stdout, started.Warnings, doc); err != nil {
 		return err
 	}
 
@@ -536,6 +575,84 @@ func writeRestoreReport(stdout io.Writer, doc RestoreStatusResponse, checkOnly b
 		if _, err := fmt.Fprintln(stdout, "check only: no data changed"); err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// backupKindResponse holds the one field that the notice reads from the
+// answer of GET /api/server/backups/{id}.
+type backupKindResponse struct {
+	Manifest *struct {
+		InstallationKind string `json:"installationKind"`
+	} `json:"manifest"`
+}
+
+// warnDevBackup prints the notice about a dev backup when the manifest of the
+// backup says dev. A failed read prints nothing: the restore reports it.
+func warnDevBackup(ctx context.Context, params restoreReadParams, stderr io.Writer) {
+	endpoint := backupEndpoint(params.server, "/api/server/backups/"+url.PathEscape(params.backupID))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return
+	}
+
+	backupAuth(req, params.token)
+
+	resp, err := params.client.Do(req)
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below.
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var doc backupKindResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRestoreStatusBytes)).Decode(&doc); err != nil {
+		return
+	}
+
+	if doc.Manifest != nil && doc.Manifest.InstallationKind == devBackupKind {
+		_, _ = fmt.Fprintln(stderr, devBackupNotice) //nolint:errcheck // A failed notice never stops the restore.
+	}
+}
+
+// writeRestoreWarnings prints the warnings that the server answered, once
+// each, and the dev data that the restore removed or would remove.
+func writeRestoreWarnings(stdout io.Writer, started []RestoreWarning, doc RestoreStatusResponse) error {
+	printed := map[string]bool{}
+
+	for _, w := range slices.Concat(started, doc.Warnings) {
+		if printed[w.Code] {
+			continue
+		}
+
+		printed[w.Code] = true
+
+		if _, err := fmt.Fprintf(stdout, "warning: %s\n", w.Text); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+	}
+
+	if doc.DevData == nil {
+		return nil
+	}
+
+	classes := make([]string, 0, len(doc.DevData.Classes))
+	for class, n := range doc.DevData.Classes {
+		classes = append(classes, fmt.Sprintf("%s %d", class, n))
+	}
+
+	slices.Sort(classes)
+
+	if _, err := fmt.Fprintf(stdout, "dev data: %d principals; %s\n", doc.DevData.Principals, strings.Join(classes, ", ")); err != nil {
+		return fmt.Errorf("write output: %w", err)
 	}
 
 	return nil

@@ -207,10 +207,6 @@ func (s *RestoreService) stripStaged(ctx context.Context, run *devRun) error {
 func (s *RestoreService) recordDevReport(ctx context.Context, id RestoreID, run *devRun) error {
 	run.report.Warnings = run.warnings()
 
-	if len(run.report.Warnings) == 0 && run.report.Empty() {
-		return nil
-	}
-
 	if err := s.live.RecordDevReport(ctx, id, run.report); err != nil {
 		return fmt.Errorf("record the dev data report of restore %s: %w", id, err)
 	}
@@ -363,4 +359,43 @@ func countsText(counts map[DevRemovalClass]int64) string {
 	}
 
 	return " (" + strings.Join(classes, " ") + ")"
+}
+
+// RefusalText returns the text of a refused dev backup for an operator, with
+// the words of AllowDevHint, and false when err is no such refusal.
+func RefusalText(err error) (string, bool) {
+	var refusal *devRefusal
+	if errors.As(err, &refusal) {
+		return refusal.Text(), true
+	}
+
+	return "", false
+}
+
+// startDevCheck is the check of Start: it reads the manifest of the backup
+// and the live kind, and refuses a dev backup into a production installation
+// at once, before the restore row exists, so the API answers 409 and no
+// restore starts. A manifest that cannot be read is no refusal here: the
+// restore reads it again and fails with its own error. The check runs again
+// in the restore, on the pinned manifest. It returns the warnings that the
+// kinds already decide.
+func (s *RestoreService) startDevCheck(ctx context.Context, id ID) ([]RestoreWarningCode, error) {
+	manifest, err := readManifest(ctx, s.target, id)
+	if err != nil {
+		return nil, nil //nolint:nilerr // The restore reads the manifest again and reports its error.
+	}
+
+	run, err := s.devKinds(ctx, pinnedManifest{kind: manifest.InstallationKind})
+	if err != nil {
+		return nil, err
+	}
+
+	switch {
+	case run.production() && run.backup == installation.KindDev:
+		return []RestoreWarningCode{WarnDevBackupIntoProduction}, nil
+	case run.live == installation.KindDev && run.backup == installation.KindProduction:
+		return []RestoreWarningCode{WarnProductionBackupIntoDev}, nil
+	default:
+		return nil, nil
+	}
 }

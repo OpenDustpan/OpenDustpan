@@ -360,6 +360,16 @@ type fixture struct {
 func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *fixture {
 	t.Helper()
 
+	return newFixtureKind(t, exporter, fixedKind(installation.KindProduction), maxSQL)
+}
+
+// newFixtureKind is newFixture with the reader that gives the installation
+// kind of the database.
+func newFixtureKind(
+	t *testing.T, exporter backup.PortableExporter, kinds backup.KindReader, maxSQL int64,
+) *fixture {
+	t.Helper()
+
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	registry := newFakeRegistry()
 	source := newMemStore()
@@ -367,7 +377,7 @@ func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *f
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
-		Kinds:       fixedKind(installation.KindProduction),
+		Kinds:       kinds,
 		Registry:    registry,
 		Blobs:       source,
 		StateOpener: nil,
@@ -1078,4 +1088,12 @@ func TestCheckRefusesNoTarget(t *testing.T) {
 	if err := backup.Check(t.Context(), nil, "bkp-aaa"); !errors.Is(err, backup.ErrMissingDependency) {
 		t.Fatalf("check without a target: err = %v, want ErrMissingDependency", err)
 	}
+}
+
+// count returns the number of objects in the store.
+func (m *memStore) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return len(m.objects)
 }
