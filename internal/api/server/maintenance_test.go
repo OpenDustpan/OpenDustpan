@@ -77,6 +77,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -407,6 +408,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 
 	_, err := apiserver.NewHandler(apiserver.Config{
 		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},

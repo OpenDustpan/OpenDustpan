@@ -842,6 +842,21 @@ UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
 
+-- name: GetInstallationKind :one
+-- The installation kind: dev, production or NULL before the first claim. The
+-- migration seeds the one row; a missing row is a fault.
+SELECT kind
+FROM installation
+WHERE id = 1;
+
+-- name: ClaimInstallationKind :execrows
+-- Stores the kind in the seeded row only when no kind is stored: a
+-- compare-and-set, so several instances on one new database all claim and one
+-- wins. It changes nothing when a kind is stored or the row is missing.
+UPDATE installation
+SET kind = $1
+WHERE id = 1 AND kind IS NULL;
+
 -- name: CreateRestore :execrows
 INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

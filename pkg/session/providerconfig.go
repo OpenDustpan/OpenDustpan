@@ -52,6 +52,11 @@ func ValidProviderID(id string) bool {
 	return providerIDPattern.MatchString(id)
 }
 
+// DevProviderID is the provider ID that the dev sign-in of opendustpan dev
+// uses for its sessions. No configured or stored provider can have it, so a
+// provider cannot compose the subject of the dev person ("dev:admin").
+const DevProviderID = "dev"
+
 // SubjectPrefix returns the prefix of the subject of each person who signs
 // in with the provider id: the subject is "<provider ID>:<sub>".
 func SubjectPrefix(id string) string {
@@ -113,6 +118,10 @@ func (p ProviderConfig) Validate() error {
 func (p ProviderConfig) validateNames() error {
 	if !ValidProviderID(p.ID) {
 		return fmt.Errorf("%w: the provider ID %q does not match %s", ErrInvalidProvider, p.ID, providerIDPattern)
+	}
+
+	if p.ID == DevProviderID {
+		return fmt.Errorf("%w: the provider ID %q is reserved for the dev sign-in", ErrInvalidProvider, p.ID)
 	}
 
 	if err := p.validateMode(); err != nil {

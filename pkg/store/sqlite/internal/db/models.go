@@ -315,6 +315,7 @@ type ImportsPurged struct {
 type Installation struct {
 	ID    int64
 	State string
+	Kind  sql.NullString
 }
 
 type InstallationSecretKey struct {

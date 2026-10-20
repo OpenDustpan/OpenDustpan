@@ -133,6 +133,7 @@ func newBackupFixture(
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -554,6 +555,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},

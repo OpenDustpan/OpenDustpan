@@ -166,7 +166,8 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
-		Version:       "",
+		Version:          "",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
@@ -223,7 +224,8 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
-		Version:       "v0.3.0",
+		Version:          "v0.3.0",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: "v0.1.0"},
 			{Version: 2, Name: "0002_contract.sql", MinBinaryVersion: "v0.10.0"},
@@ -264,6 +266,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -351,6 +354,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 		Version:       "test",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
@@ -410,6 +414,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 		Version:       "test",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},

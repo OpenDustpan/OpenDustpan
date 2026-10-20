@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -125,6 +126,9 @@ type Config struct {
 	// session cookie authenticates nothing. With SignIn set, Principals is
 	// required.
 	SignIn *SignIn
+	// InstallationKind is the kind that the capabilities document answers
+	// to a signed-in caller. Empty means production.
+	InstallationKind installation.Kind
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -173,6 +177,7 @@ type Handler struct {
 	auditSinks     AuditSinkSource
 	workers        WorkerSource
 	signIn         *signInState
+	kind           installation.Kind
 	mux            *patternMux
 	routes         []Route
 }
@@ -185,7 +190,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
-	signIn, err := newSignInState(cfg.SignIn)
+	signIn, err := newSignInState(cfg.SignIn, cfg.InstallationKind)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +222,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		auditSinks:     cfg.AuditSinks,
 		workers:        cfg.Workers,
 		signIn:         signIn,
+		kind:           cfg.InstallationKind,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}

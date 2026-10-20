@@ -539,6 +539,40 @@ type SignInInput struct {
 // break-glass account or a temporary administrator, and ErrInvalid or
 // ErrReservedSubject for a subject that is not valid.
 func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInInput) (Principal, bool, error) {
+	// Defense in depth: Validate refuses the subject too, but only for a
+	// principal that this call makes. This check runs before the read, so
+	// a provider that composes "dev:admin" never reaches the dev person
+	// that already exists.
+	if IsDevSubject(in.Subject) {
+		return Principal{}, false, fmt.Errorf(
+			"%w: %q starts with %q, which only the dev sign-in of opendustpan dev uses",
+			ErrReservedSubject,
+			in.Subject,
+			DevSubjectPrefix,
+		)
+	}
+
+	return s.signIn(ctx, e, in, Principal.Validate)
+}
+
+// SignInDevAdministrator returns the person DevAdminSubject for the dev
+// sign-in of opendustpan dev, and makes it when none exists: a local person
+// with no grant and no group. It takes no subject, so it cannot make any
+// other principal. It is the only path that makes a principal with a subject
+// that starts with DevSubjectPrefix. It returns the errors of
+// SignInPrincipal, and created is true when it made the person.
+func (s *Service) SignInDevAdministrator(
+	ctx context.Context, e audit.Entry, displayName string,
+) (Principal, bool, error) {
+	in := SignInInput{Subject: DevAdminSubject, Source: SourceLocal, Names: []string{displayName}, Create: true}
+
+	return s.signIn(ctx, e, in, Principal.validateDevAdministrator)
+}
+
+// signIn is SignInPrincipal. validate checks the principal that it makes.
+func (s *Service) signIn(
+	ctx context.Context, e audit.Entry, in SignInInput, validate func(Principal) error,
+) (Principal, bool, error) {
 	p, err := s.store.GetPrincipalBySubject(ctx, in.Subject)
 
 	switch {
@@ -563,7 +597,7 @@ func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInI
 		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
-	if validErr := p.Validate(); validErr != nil {
+	if validErr := validate(p); validErr != nil {
 		return Principal{}, false, validErr
 	}
 

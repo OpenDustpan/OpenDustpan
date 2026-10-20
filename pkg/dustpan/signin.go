@@ -17,6 +17,8 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -57,13 +59,27 @@ var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 // errSignInSetup reports a sign-in configuration that the server cannot use.
 var errSignInSetup = errors.New("console sign-in")
 
+// noDevAdmin is the administrator of a server with no dev sign-in.
+//
+//nolint:gochecknoglobals // A frozen zero value.
+var noDevAdmin = identity.Principal{
+	TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+	Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+}
+
+// hasStaticSignIn reports whether cfg names a sign-in that needs no stored
+// provider: a provider of the configuration, or the dev sign-in.
+func hasStaticSignIn(cfg *settings) bool {
+	return len(cfg.oidcProviders) > 0 || cfg.devSignIn != nil
+}
+
 // newSignIn returns the console sign-in of cfg, or nil when cfg has none.
 // The sign-in runs when cfg names a provider, or when the store keeps the
 // providers of the API and cfg has an HTTPS public URL. With a store that
 // keeps them, the API manages the providers in addition to those of cfg.
 func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Service) (*serverapi.SignIn, error) {
 	stores, stored := cfg.namespaceStore.(providerStores)
-	if len(cfg.oidcProviders) == 0 && (!stored || !storedSignInReady(cfg, policies)) {
+	if !hasStaticSignIn(cfg) && (!stored || !storedSignInReady(cfg, policies)) {
 		return nil, nil //nolint:nilnil // No provider is a valid setup: the sign-in routes stay unmounted.
 	}
 
@@ -91,7 +107,11 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 
 	in := &serverapi.SignIn{
 		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...),
+		Origins: append([]string{origin}, cfg.allowedOrigins...), DevCode: nil, DevAdmin: noDevAdmin,
+	}
+
+	if cfg.devSignIn != nil {
+		in.DevCode, in.DevAdmin = cfg.devSignIn.Code, cfg.devSignIn.Admin
 	}
 
 	if cfg.gate != nil {
@@ -193,7 +213,7 @@ func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Poli
 		return nil, nil, err
 	}
 
-	if cfg.sessionCookies, err = sessionCookies(signIn); err != nil {
+	if cfg.sessionCookies, err = sessionCookies(signIn, cfg.installationKind); err != nil {
 		return nil, nil, err
 	}
 
@@ -203,12 +223,17 @@ func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Poli
 // sessionCookies returns the session cookie check of the APIs other than
 // the installation API, with the sessions and the origins of in. A nil in
 // gives a nil check: those APIs then take access tokens only.
-func sessionCookies(in *serverapi.SignIn) (*sessionauth.Checker, error) {
+func sessionCookies(in *serverapi.SignIn, kind installation.Kind) (*sessionauth.Checker, error) {
 	if in == nil {
 		return nil, nil //nolint:nilnil // No sign-in is a valid setup: the APIs take access tokens only.
 	}
 
-	c, err := sessionauth.New(in.Sessions, in.Origins)
+	var opts []sessionauth.Option
+	if kind != installation.KindDev {
+		opts = append(opts, sessionauth.RefuseDevSubjects())
+	}
+
+	c, err := sessionauth.New(in.Sessions, in.Origins, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errSignInSetup, err)
 	}
@@ -356,6 +381,10 @@ func signInProvider(
 	if !providerIDPattern.MatchString(p.ID) {
 		return none, fmt.Errorf("%w: provider ID %q is not 1 to 32 lower-case letters, digits and hyphens "+
 			"that start with a letter", errSignInSetup, p.ID)
+	}
+
+	if p.ID == session.DevProviderID {
+		return none, fmt.Errorf("%w: provider ID %q is reserved for the dev sign-in", errSignInSetup, p.ID)
 	}
 
 	if slices.ContainsFunc(earlier, func(e serverapi.SignInProvider) bool { return e.ID == p.ID }) {

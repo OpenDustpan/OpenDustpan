@@ -279,7 +279,7 @@ func hostReason(flagValue string, in hostIO, stderr io.Writer) (string, error) {
 // runHostCreate opens the database with no migration and makes the
 // temporary administrator of in.
 func runHostCreate(ctx context.Context, database string, in hostInput, stderr io.Writer) (hostMade, error) {
-	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler), openNoMigrate)
+	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler), openNoMigrate, "")
 	if errors.Is(err, schema.ErrMigrationsPending) {
 		return hostMade{}, fmt.Errorf(
 			"%w: database %s has pending migrations: back up the database, "+

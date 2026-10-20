@@ -333,6 +333,10 @@ func TestSignInProvidersRefusals(t *testing.T) {
 			"set a new provider ID only if the identity provider changed", http.StatusConflict,
 		},
 		{http.MethodGet, "/api/server/sign-in-providers/none", "", "not found", http.StatusNotFound},
+		{
+			http.MethodPost, "/api/server/sign-in-providers", strings.Replace(e.betaBody(), `"beta"`, `"dev"`, 1),
+			"reserved for the dev sign-in", http.StatusBadRequest,
+		},
 	} {
 		rec := e.adminDo(t, tc.method, tc.target, tc.body)
 		if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.want) {

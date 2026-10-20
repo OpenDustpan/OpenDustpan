@@ -17,6 +17,9 @@ import (
 // ErrBadName reports a migration file not named NNNN_description.sql.
 var ErrBadName = errors.New("migration file must be named NNNN_description.sql")
 
+// ErrDuplicateVersion reports two migration files with the same version.
+var ErrDuplicateVersion = errors.New("two migration files have the same version")
+
 // Inspect returns the schema state for recorded versions against the
 // embedded migrations: the newest recorded version, the newest embedded
 // version, the names of the embedded migrations the database does not
@@ -178,6 +181,15 @@ func Load(fsys fs.FS, dir string) ([]Migration, error) {
 	slices.SortFunc(migrations, func(a, b Migration) int {
 		return int(a.Version - b.Version)
 	})
+
+	for i := 1; i < len(migrations); i++ {
+		if migrations[i].Version == migrations[i-1].Version {
+			return nil, fmt.Errorf(
+				"%w: %s and %s: give one of them a new version",
+				ErrDuplicateVersion, migrations[i-1].Name, migrations[i].Name,
+			)
+		}
+	}
 
 	return migrations, nil
 }

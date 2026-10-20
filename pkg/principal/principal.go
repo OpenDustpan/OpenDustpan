@@ -310,6 +310,21 @@ type Member struct {
 // look like. Subjects from an identity provider do not come through this
 // check.
 func ValidateSubject(s string) error {
+	if err := checkSubjectForm(s); err != nil {
+		return err
+	}
+
+	if IsDevSubject(s) {
+		return fmt.Errorf("%w: %q starts with %q, which only the dev sign-in of opendustpan dev uses",
+			ErrReservedSubject, s, DevSubjectPrefix)
+	}
+
+	return nil
+}
+
+// checkSubjectForm checks the form of a subject and that no bootstrap admin
+// token can use it. It does not check the prefix of the dev sign-in.
+func checkSubjectForm(s string) error {
 	if !subjectPattern.MatchString(s) {
 		return fmt.Errorf("%w: subject %q: use 1 to 255 ASCII letters, digits and . _ @ + : / -, "+
 			"starting with a letter or a digit", ErrInvalid, s)
@@ -320,6 +335,26 @@ func ValidateSubject(s string) error {
 	}
 
 	return nil
+}
+
+// Subjects of the dev sign-in of opendustpan dev. The prefix is reserved:
+// ValidateSubject refuses each subject that starts with it, and a server of
+// the kind production refuses to authenticate a principal with such a
+// subject.
+const (
+	// DevSubjectPrefix starts the subject of each principal of the dev
+	// sign-in. No other path makes a principal with a subject that starts
+	// with it.
+	DevSubjectPrefix = "dev:"
+	// DevAdminSubject is the subject of the person that the one-time code of
+	// opendustpan dev signs in.
+	DevAdminSubject = DevSubjectPrefix + "admin"
+)
+
+// IsDevSubject reports whether s starts with DevSubjectPrefix, without regard
+// to case.
+func IsDevSubject(s string) bool {
+	return len(s) >= len(DevSubjectPrefix) && strings.EqualFold(s[:len(DevSubjectPrefix)], DevSubjectPrefix)
 }
 
 // subjectPattern is the form of a subject made through the API.
@@ -397,6 +432,26 @@ func (p Principal) Validate() error {
 		return err
 	}
 
+	return p.validateFields()
+}
+
+// validateDevAdministrator is Validate for the one principal that the dev
+// sign-in makes: it accepts the subject DevAdminSubject and no other subject
+// with the prefix of the dev sign-in.
+func (p Principal) validateDevAdministrator() error {
+	if p.Subject != DevAdminSubject {
+		return fmt.Errorf("%w: %q is not the subject of the dev sign-in", ErrReservedSubject, p.Subject)
+	}
+
+	if err := checkSubjectForm(p.Subject); err != nil {
+		return err
+	}
+
+	return p.validateFields()
+}
+
+// validateFields checks the fields of p other than the subject.
+func (p Principal) validateFields() error {
 	if err := validateText("display name", p.DisplayName, maxDisplayNameLength); err != nil {
 		return err
 	}

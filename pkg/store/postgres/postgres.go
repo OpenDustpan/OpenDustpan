@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -60,6 +61,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// kind is the installation kind of the command that opens the store.
+	// Empty means no check before the migrations.
+	kind installation.Kind
 	// noMigrate makes Open apply no migration and refuse a database with
 	// a pending one.
 	noMigrate bool
@@ -74,6 +78,15 @@ type Option func(*Store)
 // minimum refuses.
 func WithBinaryVersion(version string) Option {
 	return func(s *Store) { s.binaryVersion = version }
+}
+
+// WithInstallationKind sets the installation kind of the command that opens
+// the database. When the database already holds a kind, Open compares it with
+// kind before it applies a migration, and returns an error that wraps
+// installation.ErrKindMismatch without a change when the two differ. A
+// database that holds no kind yet passes the check: the claim decides.
+func WithInstallationKind(kind installation.Kind) Option {
+	return func(s *Store) { s.kind = kind }
 }
 
 // WithoutMigrate makes Open check the schema and apply no migration. Open
@@ -132,7 +145,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
-		binaryVersion: "", gate: nil, noMigrate: false,
+		binaryVersion: "", gate: nil, kind: "", noMigrate: false,
 	}
 	s.gate = gatestore.New(gateRunner{s: s})
 
@@ -806,7 +819,12 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		return migrateTx(ctx, tx, all, migrateRules{binaryVersion: s.binaryVersion, noMigrate: s.noMigrate})
+		return migrateTx(
+			ctx,
+			tx,
+			all,
+			migrateRules{binaryVersion: s.binaryVersion, kind: s.kind, noMigrate: s.noMigrate},
+		)
 	})
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -819,6 +837,7 @@ func (s *Store) migrate(ctx context.Context) error {
 // of the binary, and whether the caller applies no migration.
 type migrateRules struct {
 	binaryVersion string
+	kind          installation.Kind
 	noMigrate     bool
 }
 
@@ -852,6 +871,10 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, rules mi
 	plan, err := migrate.Check(recorded, all, rules.binaryVersion)
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
+	}
+
+	if err := checkKind(ctx, tx, rules.kind); err != nil {
+		return err
 	}
 
 	if rules.noMigrate && len(plan.Pending) > 0 {
