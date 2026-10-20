@@ -152,6 +152,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	w.Header().Set("Cache-Control", "no-store")
 	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
 }

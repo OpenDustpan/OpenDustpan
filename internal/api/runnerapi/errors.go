@@ -39,6 +39,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	if scope == ScopeAuthorized {
 		status, message := classifyManagement(err)
 		h.logFailure(ctx, status)
+		h.logFenced(ctx, err)
 		h.writeJSON(ctx, w, status, managementError{Message: message, Code: status})
 
 		return
@@ -47,15 +48,21 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	status, body := classifyProtocol(err)
 	h.logFailure(ctx, status)
 
-	if errors.Is(err, namespace.ErrFenced) {
-		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
-	}
+	h.logFenced(ctx, err)
 
 	if status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 	}
 
 	h.writeJSON(ctx, w, status, body)
+}
+
+// logFenced logs a fenced write with its wrap context, which the answer never
+// holds.
+func (h *Handler) logFenced(ctx context.Context, err error) {
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
 }
 
 // logFailure logs the status of a failed request. The log never holds the
