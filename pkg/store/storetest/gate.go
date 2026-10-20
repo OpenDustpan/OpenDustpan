@@ -411,7 +411,7 @@ func (d gateDomain) CreateUnit(
 
 	move := collection.Move{
 		Unit: collection.UnitRef{Namespace: ns, Tool: tool, Name: name}, From: "",
-		To: target.Ref, ToID: target.ID,
+		To: target.Ref, ToID: target.ID, EndsLock: false,
 	}
 	if err = d.s.SetUnitCollection(ctx, move, n.Fence(), gateEntry(ns, "unit:set-collection")); err != nil {
 		return fmt.Errorf("move unit %s: %w", name, err)
@@ -1153,7 +1153,7 @@ func testGateJoinFinal(t *testing.T, s GateStore, tc gateUnitCase) {
 	for _, tt := range tests {
 		move := collection.Move{
 			Unit: collection.UnitRef{Namespace: "acme", Tool: tc.tool, Name: tt.unit}, From: "", To: target.Ref,
-			ToID: target.ID,
+			ToID: target.ID, EndsLock: false,
 		}
 
 		err = s.SetUnitCollection(t.Context(), move, fence, gateEntry("acme", "unit:set-collection"))

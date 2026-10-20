@@ -84,6 +84,7 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 
 	_, err = h.ws.WriteState(ctx, ws.ID, in, auth, r.Body)
 	if err != nil {
+		h.recordOverrideRefusal(ctx, r, c.principal, obj, err)
 		h.writeStateRefusal(ctx, w, c, err)
 
 		return
@@ -192,6 +193,7 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 	}
 
 	if err != nil {
+		h.recordOverrideRefusal(ctx, r, c.principal, obj, err)
 		h.writeError(ctx, w, err)
 
 		return

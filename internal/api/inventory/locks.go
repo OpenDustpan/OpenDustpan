@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -31,11 +32,15 @@ const unitLockPath = "/api/inventory/unit-lock"
 // collectionLockPath is the route of the manual lock of one collection.
 const collectionLockPath = v1Prefix + "/namespaces/{namespace}/collections/{collection}/lock"
 
+// namespaceLockPath is the route of the manual lock of a whole namespace.
+const namespaceLockPath = v1Prefix + "/namespaces/{namespace}/lock"
+
 // lockRoutes returns the manual lock rows of the route table. Reading a lock
 // needs read access to the object. Taking a lock and removing your own lock
 // need unit:lock on the object, and a force-unlock needs unit:manage on it.
 // The object of a collection route is the collection, so a grant on the
-// collection or on its namespace reaches it.
+// collection or on its namespace reaches it. The object of a namespace route is
+// the namespace, so only a grant on the namespace reaches it.
 func (h *Handler) lockRoutes() []Route {
 	unit := func(method, path string, action identity.Action, serve RouteHandler) Route {
 		return Route{
@@ -63,6 +68,19 @@ func (h *Handler) lockRoutes() []Route {
 		}
 	}
 
+	space := func(method, path string, action identity.Action, serve RouteHandler) Route {
+		return Route{
+			Method:           method,
+			Path:             path,
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{action},
+			Resolve:          resolveCollectionNamespace,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            serve,
+		}
+	}
+
 	return []Route{
 		unit(http.MethodPut, unitLockPath, identity.ActionUnitLock, h.putLock),
 		unit(http.MethodGet, unitLockPath, identity.ActionUnitRead, h.getLock),
@@ -72,12 +90,17 @@ func (h *Handler) lockRoutes() []Route {
 		coll(http.MethodGet, collectionLockPath, identity.ActionCollectionRead, h.getLock),
 		coll(http.MethodDelete, collectionLockPath, identity.ActionUnitLock, h.deleteLock),
 		coll(http.MethodPost, collectionLockPath+"/force-unlock", identity.ActionUnitManage, h.forceUnlock),
+		space(http.MethodPut, namespaceLockPath, identity.ActionUnitLock, h.putLock),
+		space(http.MethodGet, namespaceLockPath, identity.ActionNamespaceRead, h.getLock),
+		space(http.MethodDelete, namespaceLockPath, identity.ActionUnitLock, h.deleteLock),
+		space(http.MethodPost, namespaceLockPath+"/force-unlock", identity.ActionUnitManage, h.forceUnlock),
 	}
 }
 
-// lockEntryDocument is a manual lock as the console reads it. Kind is "unit" or
-// "collection". Object is the unit reference, or <namespace>/<collection>. Since
-// is an RFC 3339 time in UTC.
+// lockEntryDocument is a manual lock as the console reads it. Kind is "unit",
+// "collection" or "namespace". Object is the unit reference,
+// <namespace>/<collection>, or the name of the namespace. Since is an RFC 3339
+// time in UTC.
 //
 // Contract: never remove or rename these fields.
 type lockEntryDocument struct {
@@ -94,11 +117,18 @@ type lockEntryDocument struct {
 // Contract: never remove or rename these fields.
 type manualLockEntry = lockEntryDocument
 
-// lockTarget returns the object of a lock route: the unit or the collection that
-// the route resolved.
+// lockTarget returns the object of a lock route: the unit, the collection or the
+// namespace that the route resolved. An object of another kind gives a target
+// that is not valid, which the lock service refuses.
 func lockTarget(obj identity.Object) manuallock.Target {
-	if obj.IsCollection() {
+	switch {
+	case obj.IsCollection():
 		return manuallock.CollectionTarget(collectionRef(obj))
+	case obj.IsNamespace():
+		return manuallock.NamespaceTarget(obj.Namespace())
+	case !obj.IsUnit():
+		// A unit target with no name is not valid: the lock service refuses it.
+		return manuallock.UnitTarget(collection.UnitRef{Namespace: "", Tool: "", Name: ""})
 	}
 
 	return manuallock.UnitTarget(collection.UnitRef{
@@ -108,11 +138,16 @@ func lockTarget(obj identity.Object) manuallock.Target {
 
 // lockObjectName returns the name that a lock document shows for its object.
 func lockObjectName(t manuallock.Target) string {
-	if t.Kind == manuallock.KindCollection {
+	switch t.Kind {
+	case manuallock.KindCollection:
 		return t.Collection.String()
+	case manuallock.KindNamespace:
+		return t.Space.String()
+	case manuallock.KindUnit:
+		return t.Unit.String()
+	default:
+		return ""
 	}
-
-	return t.Unit.String()
 }
 
 // toLockDocument maps a manual lock to its wire shape.
@@ -155,7 +190,7 @@ func (h *Handler) putLock(w http.ResponseWriter, r *http.Request, p identity.Pri
 
 	l, err := h.locks.Lock(ctx, p, lockTarget(obj), reason, entry)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: ""}, err)
 
 		return
 	}
@@ -185,7 +220,7 @@ func (h *Handler) deleteLock(w http.ResponseWriter, r *http.Request, p identity.
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "unlock")
 
 	if err := h.locks.Unlock(ctx, p, lockTarget(obj), entry); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: ""}, err)
 
 		return
 	}
@@ -203,12 +238,41 @@ func (h *Handler) forceUnlock(w http.ResponseWriter, r *http.Request, p identity
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitManage, "force-unlock")
 
 	if err := h.locks.ForceUnlock(ctx, p, lockTarget(obj), entry); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitManage, Object: obj, Reason: ""}, err)
 
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Reasons of the audit entries of the lock refusals that the service decides.
+const (
+	reasonNotHolder   = "lock held by another principal"
+	reasonLockChanged = "lock changed during the removal"
+)
+
+// writeLockFailure answers the error of a lock route. A removal that the
+// service refuses because the principal does not hold the lock, or because the
+// lock changed, writes an audit entry of the outcome denied: the route check
+// has allowed the request, so the middleware has not recorded it. A lock that
+// is already held, and an object with no lock, are state and not refusals, and
+// write no entry. d holds the action and the object of the route.
+func (h *Handler) writeLockFailure(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, d refusal.Denial, err error,
+) {
+	switch {
+	case errors.Is(err, manuallock.ErrNotHolder):
+		d.Reason = reasonNotHolder
+		h.guard.Record(r.Context(), r, p, d)
+	case errors.Is(err, manuallock.ErrLockChanged):
+		d.Reason = reasonLockChanged
+		h.guard.Record(r.Context(), r, p, d)
+	default:
+		// State and other errors write no entry.
+	}
+
+	h.writeError(r.Context(), w, err)
 }
 
 // lockAuditEntry returns the audit entry of a lock change. version names the
@@ -256,7 +320,7 @@ func classifyLock(err error) (int, string, bool) {
 	case errors.Is(err, manuallock.ErrTargetNotFound), errors.Is(err, manuallock.ErrNotLocked):
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, manuallock.ErrAlreadyLocked), errors.Is(err, manuallock.ErrNotHolder),
-		errors.Is(err, manuallock.ErrLockChanged):
+		errors.Is(err, manuallock.ErrLockChanged), errors.Is(err, manuallock.ErrLocked):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, manuallock.ErrReasonRequired), errors.Is(err, manuallock.ErrInvalidTarget),
 		errors.Is(err, audit.ErrInvalidReason), errors.Is(err, errLockBody):

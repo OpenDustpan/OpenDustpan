@@ -1,5 +1,6 @@
 // Package manuallock models manual locks: a lock that a person puts on one
-// unit or on one collection, with a reason that everyone sees.
+// unit, on one collection or on a whole namespace, with a reason that everyone
+// sees.
 //
 // A manual lock is separate from the lock of a tool. A tool lock (an OpenTofu
 // lock, a Pulumi update lease) is taken and released by the tool. A manual
@@ -9,7 +10,8 @@
 //
 // A lock on a collection covers each unit that is in the collection now. A
 // unit that joins the collection is covered from that moment, and a unit that
-// leaves it is not.
+// leaves it is not. A lock on a namespace covers each unit of the namespace,
+// also a unit that someone creates later.
 //
 // The package is tool-neutral: a unit is named by its tool, its namespace and
 // the tool's own name, and the package never parses that name.
@@ -48,13 +50,14 @@ var (
 	// read it: another principal ended the lock and took a new one. The new
 	// lock stays. Read the lock again and decide again.
 	ErrLockChanged = errors.New("manual lock changed during the removal: read the lock again")
-	// ErrTargetNotFound reports that the unit or the collection to lock does
-	// not exist.
-	ErrTargetNotFound = errors.New("stack, workspace or collection to lock not found")
+	// ErrTargetNotFound reports that the unit, the collection or the
+	// namespace to lock does not exist.
+	ErrTargetNotFound = errors.New("stack, workspace, collection or namespace to lock not found")
 	// ErrReasonRequired reports a lock without a reason.
 	ErrReasonRequired = errors.New("a manual lock needs a reason: provide a reason of 1 to 500 characters")
-	// ErrInvalidTarget reports a target that names no unit and no collection.
-	ErrInvalidTarget = errors.New("invalid manual lock: name a stack, workspace or collection")
+	// ErrInvalidTarget reports a target that names no unit, no collection and
+	// no namespace.
+	ErrInvalidTarget = errors.New("invalid manual lock: name a stack, workspace, collection or namespace")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -68,33 +71,53 @@ const (
 	KindUnit Kind = "unit"
 	// KindCollection is a lock on one collection and on each unit in it.
 	KindCollection Kind = "collection"
+	// KindNamespace is a lock on a namespace and on each unit in it.
+	KindNamespace Kind = "namespace"
 )
 
-// Target names the object of a manual lock: one unit or one collection. Only
-// the field of its Kind is set.
+// Target names the object of a manual lock: one unit, one collection or one
+// namespace. Only the field of its Kind is set.
 type Target struct {
 	Kind       Kind
 	Unit       collection.UnitRef
 	Collection collection.Ref
+	// Space is the namespace of a KindNamespace target.
+	Space namespace.Name
 }
 
 // UnitTarget returns the target for the unit u.
 func UnitTarget(u collection.UnitRef) Target {
-	return Target{Kind: KindUnit, Unit: u, Collection: collection.Ref{Namespace: "", Name: ""}}
+	return Target{Kind: KindUnit, Unit: u, Collection: collection.Ref{Namespace: "", Name: ""}, Space: ""}
 }
 
 // CollectionTarget returns the target for the collection ref.
 func CollectionTarget(ref collection.Ref) Target {
-	return Target{Kind: KindCollection, Unit: collection.UnitRef{Namespace: "", Tool: "", Name: ""}, Collection: ref}
+	return Target{
+		Kind: KindCollection, Unit: collection.UnitRef{Namespace: "", Tool: "", Name: ""}, Collection: ref, Space: "",
+	}
 }
 
-// Namespace returns the namespace of the object.
-func (t Target) Namespace() namespace.Name {
-	if t.Kind == KindCollection {
-		return t.Collection.Namespace
+// NamespaceTarget returns the target for the whole namespace ns.
+func NamespaceTarget(ns namespace.Name) Target {
+	return Target{
+		Kind: KindNamespace, Unit: collection.UnitRef{Namespace: "", Tool: "", Name: ""},
+		Collection: collection.Ref{Namespace: "", Name: ""}, Space: ns,
 	}
+}
 
-	return t.Unit.Namespace
+// Namespace returns the namespace of the object. For a KindNamespace target it
+// is the locked namespace itself.
+func (t Target) Namespace() namespace.Name {
+	switch t.Kind {
+	case KindCollection:
+		return t.Collection.Namespace
+	case KindNamespace:
+		return t.Space
+	case KindUnit:
+		return t.Unit.Namespace
+	default:
+		return ""
+	}
 }
 
 // Valid reports whether the target names one object.
@@ -104,18 +127,26 @@ func (t Target) Valid() error {
 		return nil
 	case t.Kind == KindCollection && t.Collection.Namespace != "" && t.Collection.Name != "":
 		return nil
+	case t.Kind == KindNamespace && t.Space != "":
+		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrInvalidTarget, t.Kind)
 	}
 }
 
 // String returns the object for a log line or an error that wraps a store
-// failure: "collection <namespace>/<name>", or the unit reference
-// "<tool>:<namespace>/<name>". It names no noun for a unit, because each tool
-// has its own word for it. A refusal that a person reads uses LockedError.
+// failure: "namespace <name>", "collection <namespace>/<name>", or the unit
+// reference "<tool>:<namespace>/<name>". It names no noun for a unit, because
+// each tool has its own word for it. A refusal that a person reads uses
+// LockedError.
 func (t Target) String() string {
-	if t.Kind == KindCollection {
+	switch t.Kind {
+	case KindCollection:
 		return "collection " + t.Collection.String()
+	case KindNamespace:
+		return "namespace " + t.Space.String()
+	case KindUnit:
+		return t.Unit.String()
 	}
 
 	return t.Unit.String()
@@ -188,7 +219,8 @@ type LockedError struct {
 // Error returns the text of the refusal. A lock on the unit gives
 // "<noun> <name> has a manual lock by ...". A lock on the collection of the
 // unit gives "<noun> <name> is in collection <ref>, which has a manual lock
-// by ...".
+// by ...". A lock on the namespace gives "<noun> <name> is in namespace
+// <name>, which has a manual lock by ...".
 func (e *LockedError) Error() string {
 	noun := e.Noun
 	if noun == "" {
@@ -197,7 +229,7 @@ func (e *LockedError) Error() string {
 
 	noun, name := SafeText(noun), SafeText(e.Name)
 
-	if e.Lock.Target.Kind == KindCollection {
+	if e.Lock.Target.Kind == KindCollection || e.Lock.Target.Kind == KindNamespace {
 		return fmt.Sprintf("%s %s is in %s, which has a manual lock %s",
 			noun, name, SafeText(e.Lock.Target.String()), e.Lock.Detail())
 	}
@@ -216,8 +248,8 @@ func (e *LockedError) Is(target error) bool {
 // pkg/manuallock/manuallocktest.
 type Store interface {
 	// PutLock records l and appends e. It returns ErrAlreadyLocked when the
-	// object has a manual lock, ErrTargetNotFound when the unit or the
-	// collection does not exist, and namespace.ErrFenced when the fence is
+	// object has a manual lock, ErrTargetNotFound when the unit, the
+	// collection or the namespace does not exist, and namespace.ErrFenced when the fence is
 	// stale. The audit entry names the object and the reason.
 	PutLock(ctx context.Context, l Lock, fence namespace.Fence, e audit.Entry) error
 	// RemoveLock removes the manual lock of t and appends e, with the holder
@@ -235,11 +267,17 @@ type Store interface {
 	// as RemoveLock, except ErrNotHolder.
 	ForceRemoveLock(ctx context.Context, t Target, fence namespace.Fence, e audit.Entry) (Lock, error)
 	// GetLock returns the manual lock of t, or ErrNotLocked. It does not
-	// look at the collection of a unit.
+	// look at the collection or the namespace of a unit.
 	GetLock(ctx context.Context, t Target) (Lock, error)
 	// CoveringLock returns the manual lock that covers the unit: its own
-	// lock, or else the lock of the collection it is in now. The Target of
-	// the answer is the object that holds the lock. It returns ErrNotLocked
-	// when no lock covers the unit or the unit does not exist.
+	// lock, or else the lock of the collection it is in now, or else the
+	// lock of its namespace. The Target of the answer is the object that
+	// holds the lock. It returns ErrNotLocked when no lock covers the unit
+	// or the unit does not exist.
 	CoveringLock(ctx context.Context, unit collection.UnitRef) (Lock, error)
+	// CoveringLocks returns every manual lock that covers the unit, in one
+	// read: the lock of the unit first, then the lock of its collection, then
+	// the lock of its namespace. It returns ErrNotLocked, and never an empty
+	// list, when no lock covers the unit or the unit does not exist.
+	CoveringLocks(ctx context.Context, unit collection.UnitRef) ([]Lock, error)
 }

@@ -2,12 +2,14 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
 // DurableStore keeps the durable operations, the job schedules and the
@@ -209,8 +211,11 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 		Backoff:      durable.Backoff{Base: 0, Max: 0},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
 		WriteTimeout: 0,
-		Logger:       s.logger,
-		Rand:         nil,
+		// Maintenance mode refuses the checked writes of a job. The operation
+		// waits, and the wait counts no attempt.
+		Deferred: func(err error) bool { return errors.Is(err, maintenance.ErrInMaintenance) },
+		Logger:   s.logger,
+		Rand:     nil,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("job runner: %w", err)

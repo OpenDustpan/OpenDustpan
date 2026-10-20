@@ -91,7 +91,7 @@ func (h *Handler) lockWorkspace(
 
 	reason := lockReason(body)
 
-	locked, err := h.workspaces.Lock(ctx, id, p.Subject, reason)
+	locked, err := h.workspaces.LockForJob(ctx, id, p.Subject, reason, p.JobTokenID())
 	if err != nil {
 		if errors.Is(err, workspace.ErrLocked) {
 			h.writeConflict(ctx, w, h.lockRefusalDetail(ctx, id, err))
@@ -120,7 +120,7 @@ func (h *Handler) lockWorkspace(
 func (h *Handler) retryLock(
 	ctx context.Context, w http.ResponseWriter, id workspace.ID, p identity.Principal, reason string,
 ) {
-	locked, err := h.workspaces.Lock(ctx, id, p.Subject, reason)
+	locked, err := h.workspaces.LockForJob(ctx, id, p.Subject, reason, p.JobTokenID())
 	if err == nil {
 		h.writeWorkspace(ctx, w, http.StatusOK, p, locked)
 
@@ -304,6 +304,7 @@ func (h *Handler) forceUnlockWorkspace(
 		ctx, id, expect, p.Subject, allow, record, forceUnlockEntry(r, p, obj, attrs.Reason),
 	)
 	if err != nil {
+		h.recordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, err)
 
 		return

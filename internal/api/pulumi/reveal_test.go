@@ -90,7 +90,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -150,6 +150,7 @@ func newRevealFixtureWithSessions(
 		Audit:                   cfg.store,
 		OnAuditFailure:          cfg.onFail,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

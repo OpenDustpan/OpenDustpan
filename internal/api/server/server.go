@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -100,6 +102,10 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter. Nil means a limiter of this handler
+	// only.
+	DenialLimiter *denylimit.Limiter
 	// AuditChain reads the state of the audit chain and approves a waiting
 	// change. Nil means the store keeps no audit chain: the audit chain
 	// routes answer 501.
@@ -153,6 +159,7 @@ type JournalReporter interface {
 type Handler struct {
 	authn          identity.Authenticator
 	authz          identity.Authorizer
+	guard          *denials.Recorder
 	logger         *slog.Logger
 	namespaces     *namespace.Service
 	backups        *backup.Service
@@ -195,9 +202,20 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
+	// The audit store keeps the entries of refused requests when it also keeps
+	// the entries of each namespace. Otherwise denialStore stays nil and a
+	// refusal writes no entry.
+	var denialStore audit.Store
+	if st, ok := cfg.Audit.(audit.Store); ok {
+		denialStore = st
+	}
+
 	h := &Handler{
-		authn:          cfg.Authenticator,
-		authz:          cfg.Authorizer,
+		authn: cfg.Authenticator,
+		authz: cfg.Authorizer,
+		guard: denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("installation"),
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		backups:        cfg.Backups,
@@ -371,12 +389,20 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
+// maintenanceRetryAfter is the Retry-After value, in seconds, of an
+// installation API write that maintenance mode refused.
+const maintenanceRetryAfter = "30"
+
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+	}
+
+	if errors.Is(err, maintenance.ErrInMaintenance) {
+		w.Header().Set("Retry-After", maintenanceRetryAfter)
 	}
 
 	if errors.Is(err, namespace.ErrFenced) {
@@ -554,6 +580,8 @@ func classifyMaintenance(err error) (int, string, bool) {
 		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
 	case errors.Is(err, audit.ErrChainNeedsPerson):
 		return http.StatusForbidden, audit.ErrChainNeedsPerson.Error(), true
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later", true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
 	default:

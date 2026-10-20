@@ -561,12 +561,16 @@ SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
-       cl.since_ms AS collection_manual_since_ms
+       cl.since_ms AS collection_manual_since_ms,
+       nl.holder AS namespace_manual_holder, nl.reason AS namespace_manual_reason,
+       nl.since_ms AS namespace_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
 LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = $1
 ORDER BY i.tool, i.name;
 
@@ -577,12 +581,16 @@ SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
-       cl.since_ms AS collection_manual_since_ms
+       cl.since_ms AS collection_manual_since_ms,
+       nl.holder AS namespace_manual_holder, nl.reason AS namespace_manual_reason,
+       nl.since_ms AS namespace_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
 LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.unit_id = $1;
 
 -- name: ListInventoryUnitLabels :many
@@ -851,6 +859,17 @@ WHERE id = 1;
 UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
+
+-- name: SetLockTimeout :exec
+-- Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
+-- The timeout is a PostgreSQL duration text, for example 10000ms.
+SELECT set_config('lock_timeout', sqlc.arg(timeout)::text, true);
+
+-- name: LockWritesExclusive :exec
+-- Takes the exclusive form of the write lock for this transaction. It waits
+-- for every write transaction in flight, and holds every later write back
+-- until this transaction ends. Each write transaction takes the shared form.
+SELECT pg_advisory_xact_lock(sqlc.arg(class)::int, hashtext(current_schema()));
 
 -- name: GetInstallationKind :one
 -- The installation kind: dev, production or NULL before the first claim. The
@@ -3238,23 +3257,27 @@ DELETE FROM manual_locks
 WHERE kind = $1 AND object_id = $2 AND holder = $3 AND since_ms = $4;
 
 -- name: DeleteManualLocksOfObject :exec
--- Removes the manual lock of one object by its stable ID. The purge of a unit
--- and the delete of a collection call it in the same transaction as their own
--- rows.
+-- Removes the manual lock of one object by its kind and its stable ID. The purge
+-- of a unit and the delete of a collection call it in the same transaction as
+-- their own rows. Defense in depth: the kind is in the filter too, so that an ID
+-- of one kind never removes the lock of another kind.
 DELETE FROM manual_locks
-WHERE object_id = $1;
+WHERE kind = $1 AND object_id = $2;
 
 -- name: GetCoveringManualLocks :one
--- The manual locks that can cover one unit: its own lock, and the lock of the
--- collection it is in now. No row means that the inventory holds no such unit.
+-- The manual locks that can cover one unit: its own lock, the lock of the
+-- collection it is in now, and the lock of its namespace. No row means that the inventory holds no such unit.
 SELECT ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
        cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       nl.holder AS namespace_holder, nl.reason AS namespace_reason, nl.since_ms AS namespace_since_ms,
        c.name AS collection_name
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
 LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3;
 
 

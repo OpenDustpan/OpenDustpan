@@ -410,7 +410,14 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stubStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       stubStackStore{},
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -433,6 +440,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -445,6 +453,16 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 // enforcement tests can tell authorization apart from backend failures. It
 // returns the handler and the store that records created stacks.
 func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handler, *recordingStackStore) {
+	t.Helper()
+
+	return newAuditedEnforcingHandler(t, authz, nil)
+}
+
+// newAuditedEnforcingHandler is newEnforcingHandler with an audit store for the
+// entries of refused requests.
+func newAuditedEnforcingHandler(
+	t *testing.T, authz identity.Authorizer, entries audit.Store,
+) (*pulumi.Handler, *recordingStackStore) {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -465,7 +483,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -485,8 +503,9 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   nil,
+		Audit:                   entries,
 		OnAuditFailure:          nil,
+		DenialLimiter:           nil,
 		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
@@ -1557,7 +1576,7 @@ func newDeleteHandlerWithAudit(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1601,6 +1620,7 @@ func newDeleteHandlerWithAudit(
 		Audit:                   auditStore,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

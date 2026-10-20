@@ -2649,14 +2649,20 @@ func (q *Queries) DeleteManualLock(ctx context.Context, arg DeleteManualLockPara
 
 const deleteManualLocksOfObject = `-- name: DeleteManualLocksOfObject :exec
 DELETE FROM manual_locks
-WHERE object_id = $1
+WHERE kind = $1 AND object_id = $2
 `
 
-// Removes the manual lock of one object by its stable ID. The purge of a unit
-// and the delete of a collection call it in the same transaction as their own
-// rows.
-func (q *Queries) DeleteManualLocksOfObject(ctx context.Context, objectID string) error {
-	_, err := q.db.Exec(ctx, deleteManualLocksOfObject, objectID)
+type DeleteManualLocksOfObjectParams struct {
+	Kind     string
+	ObjectID string
+}
+
+// Removes the manual lock of one object by its kind and its stable ID. The purge
+// of a unit and the delete of a collection call it in the same transaction as
+// their own rows. Defense in depth: the kind is in the filter too, so that an ID
+// of one kind never removes the lock of another kind.
+func (q *Queries) DeleteManualLocksOfObject(ctx context.Context, arg DeleteManualLocksOfObjectParams) error {
+	_, err := q.db.Exec(ctx, deleteManualLocksOfObject, arg.Kind, arg.ObjectID)
 	return err
 }
 
@@ -4038,12 +4044,15 @@ func (q *Queries) GetCollectionNameByID(ctx context.Context, arg GetCollectionNa
 const getCoveringManualLocks = `-- name: GetCoveringManualLocks :one
 SELECT ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
        cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       nl.holder AS namespace_holder, nl.reason AS namespace_reason, nl.since_ms AS namespace_since_ms,
        c.name AS collection_name
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
 LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3
 `
 
@@ -4060,11 +4069,14 @@ type GetCoveringManualLocksRow struct {
 	CollectionHolder  pgtype.Text
 	CollectionReason  pgtype.Text
 	CollectionSinceMs pgtype.Int8
+	NamespaceHolder   pgtype.Text
+	NamespaceReason   pgtype.Text
+	NamespaceSinceMs  pgtype.Int8
 	CollectionName    pgtype.Text
 }
 
-// The manual locks that can cover one unit: its own lock, and the lock of the
-// collection it is in now. No row means that the inventory holds no such unit.
+// The manual locks that can cover one unit: its own lock, the lock of the
+// collection it is in now, and the lock of its namespace. No row means that the inventory holds no such unit.
 func (q *Queries) GetCoveringManualLocks(ctx context.Context, arg GetCoveringManualLocksParams) (GetCoveringManualLocksRow, error) {
 	row := q.db.QueryRow(ctx, getCoveringManualLocks, arg.Namespace, arg.Tool, arg.Name)
 	var i GetCoveringManualLocksRow
@@ -4075,6 +4087,9 @@ func (q *Queries) GetCoveringManualLocks(ctx context.Context, arg GetCoveringMan
 		&i.CollectionHolder,
 		&i.CollectionReason,
 		&i.CollectionSinceMs,
+		&i.NamespaceHolder,
+		&i.NamespaceReason,
+		&i.NamespaceSinceMs,
 		&i.CollectionName,
 	)
 	return i, err
@@ -4645,12 +4660,16 @@ SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
-       cl.since_ms AS collection_manual_since_ms
+       cl.since_ms AS collection_manual_since_ms,
+       nl.holder AS namespace_manual_holder, nl.reason AS namespace_manual_reason,
+       nl.since_ms AS namespace_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
 LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.unit_id = $1
 `
 
@@ -4673,6 +4692,9 @@ type GetInventoryEntryByUnitIDRow struct {
 	CollectionManualHolder  pgtype.Text
 	CollectionManualReason  pgtype.Text
 	CollectionManualSinceMs pgtype.Int8
+	NamespaceManualHolder   pgtype.Text
+	NamespaceManualReason   pgtype.Text
+	NamespaceManualSinceMs  pgtype.Int8
 }
 
 // One live unit by its stable ID, which is unique in the installation.
@@ -4698,6 +4720,9 @@ func (q *Queries) GetInventoryEntryByUnitID(ctx context.Context, unitID string) 
 		&i.CollectionManualHolder,
 		&i.CollectionManualReason,
 		&i.CollectionManualSinceMs,
+		&i.NamespaceManualHolder,
+		&i.NamespaceManualReason,
+		&i.NamespaceManualSinceMs,
 	)
 	return i, err
 }
@@ -9012,12 +9037,16 @@ SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms
        COALESCE(c.name, '') AS collection,
        ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
        cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
-       cl.since_ms AS collection_manual_since_ms
+       cl.since_ms AS collection_manual_since_ms,
+       nl.holder AS namespace_manual_holder, nl.reason AS namespace_manual_reason,
+       nl.since_ms AS namespace_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
 LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = $1
 ORDER BY i.tool, i.name
 `
@@ -9041,6 +9070,9 @@ type ListInventoryRow struct {
 	CollectionManualHolder  pgtype.Text
 	CollectionManualReason  pgtype.Text
 	CollectionManualSinceMs pgtype.Int8
+	NamespaceManualHolder   pgtype.Text
+	NamespaceManualReason   pgtype.Text
+	NamespaceManualSinceMs  pgtype.Int8
 }
 
 func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListInventoryRow, error) {
@@ -9071,6 +9103,9 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 			&i.CollectionManualHolder,
 			&i.CollectionManualReason,
 			&i.CollectionManualSinceMs,
+			&i.NamespaceManualHolder,
+			&i.NamespaceManualReason,
+			&i.NamespaceManualSinceMs,
 		); err != nil {
 			return nil, err
 		}
@@ -10986,6 +11021,18 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 	return i, err
 }
 
+const lockWritesExclusive = `-- name: LockWritesExclusive :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext(current_schema()))
+`
+
+// Takes the exclusive form of the write lock for this transaction. It waits
+// for every write transaction in flight, and holds every later write back
+// until this transaction ends. Each write transaction takes the shared form.
+func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockWritesExclusive, class)
+	return err
+}
+
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
@@ -12596,6 +12643,17 @@ type SetLastSignInParams struct {
 
 func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) error {
 	_, err := q.db.Exec(ctx, setLastSignIn, arg.AtMs, arg.ID)
+	return err
+}
+
+const setLockTimeout = `-- name: SetLockTimeout :exec
+SELECT set_config('lock_timeout', $1::text, true)
+`
+
+// Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
+// The timeout is a PostgreSQL duration text, for example 10000ms.
+func (q *Queries) SetLockTimeout(ctx context.Context, timeout string) error {
+	_, err := q.db.Exec(ctx, setLockTimeout, timeout)
 	return err
 }
 

@@ -22,7 +22,9 @@ type manualLockedWorkspaces struct {
 	lock manuallock.Lock
 }
 
-func (m manualLockedWorkspaces) Lock(_ context.Context, id workspace.ID, _, _ string) (workspace.Workspace, error) {
+func (m manualLockedWorkspaces) LockForJob(
+	_ context.Context, id workspace.ID, _, _, _ string,
+) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}
@@ -80,6 +82,7 @@ func TestLockRefusedByAManualLock(t *testing.T) {
 				Gate:           nil,
 				MaxStateBytes:  0,
 				OnAuditFailure: nil,
+				DenialLimiter:  nil,
 			})
 			if err != nil {
 				t.Fatalf("handler: %v", err)

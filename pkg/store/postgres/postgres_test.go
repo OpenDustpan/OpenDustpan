@@ -812,19 +812,32 @@ func TestRestoreConformance(t *testing.T) {
 	})
 }
 
-// restoreAuditMaintenance enters and leaves maintenance mode around a
-// restore at once: the audit-entry test runs no concurrent work.
-type restoreAuditMaintenance struct{}
+// restoreAuditMaintenance enters and leaves maintenance mode in the stored
+// installation state, as the maintenance service does for a restore: the
+// restore then runs with the real state check, and the audit entry after the
+// swap must pass it.
+type restoreAuditMaintenance struct {
+	state maintenance.Store
+}
 
 // Enter implements backup.RestoreMaintenance.
-func (restoreAuditMaintenance) Enter(
-	_ context.Context, _ bool,
+func (m restoreAuditMaintenance) Enter(
+	ctx context.Context, _ bool,
 ) (maintenance.EnterResult, error) {
+	err := m.state.SetStateIf(ctx, maintenance.StateNormal, maintenance.StateMaintenance)
+	if err != nil {
+		return maintenance.EnterResult{Canceled: nil}, fmt.Errorf("enter maintenance mode: %w", err)
+	}
+
 	return maintenance.EnterResult{Canceled: nil}, nil
 }
 
 // Leave implements backup.RestoreMaintenance.
-func (restoreAuditMaintenance) Leave(_ context.Context) error {
+func (m restoreAuditMaintenance) Leave(ctx context.Context) error {
+	if err := m.state.SetState(ctx, maintenance.StateNormal); err != nil {
+		return fmt.Errorf("leave maintenance mode: %w", err)
+	}
+
 	return nil
 }
 
@@ -952,7 +965,7 @@ func newRestoreAuditServices(
 		Live:        st,
 		Registry:    st,
 		Backups:     backups,
-		Maintenance: restoreAuditMaintenance{},
+		Maintenance: restoreAuditMaintenance{state: st},
 		Blobs:       live,
 		Target:      target,
 		Key:         nil,

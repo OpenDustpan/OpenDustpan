@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -49,6 +50,15 @@ type Domain interface {
 	// SetStateVersion makes version the current state version of unit, as
 	// a state write of its tool does.
 	SetStateVersion(ctx context.Context, fence namespace.Fence, unit identity.Object, version string) error
+	// PutManualLock puts a manual lock on target, as manuallock.Store does:
+	// a lock on a unit covers that unit, a lock on a namespace covers each unit
+	// of it. The store of jobs reads the lock in the transaction of a
+	// dispatch. The suite locks a unit and a namespace only: the coverage by a
+	// collection is the one of manuallock.Store.CoveringLock, which the suite
+	// of that port proves.
+	PutManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target, holder, reason string) error
+	// RemoveManualLock removes the manual lock of target.
+	RemoveManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target) error
 	// AuditEntries returns the audit entries of the namespace ns, in the
 	// order of their append.
 	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
@@ -73,6 +83,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"create with a dispatch obeys the one-change rule", testCreateUnitBusy},
 		{"after ErrUnitBusy, a create with no dispatch waits with unit-busy", testCreateWaits},
 		{"create with a dispatch obeys a freeze", testCreateFrozen},
+		{"create with a dispatch obeys a manual lock, and the job waits locked", testCreateLocked},
 		{"create above the open jobs of a unit is ErrLimit", testCreateLimit},
 		{"a write on an older version is ErrConflict", testApplyConflict},
 		{"an event that the state does not allow changes nothing", testApplyTransition},
@@ -83,6 +94,12 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a change dispatch in a freeze is ErrFrozen", testFrozen},
 		{"break-glass passes a freeze", testBreakGlass},
 		{"a dispatch after the freeze ends", testFreezeEnds},
+		{"a dispatch of a unit with a manual lock is ErrLocked, plan phases too", testLocked},
+		{"a manual lock of the namespace stops the dispatch of each unit in it", testNamespaceLocked},
+		{"break-glass does not pass a manual lock", testBreakGlassNotPastLock},
+		{"a queued locked job keeps its queue timeout and dispatches after the unlock", testLockedQueue},
+		{"a phase that runs when the lock arrives runs to its end", testLockRunsOn},
+		{"a refused dispatch of a locked unit writes no audit entry", testLockedAuditRollback},
 		{"a cancel of a dispatched job cancels its operation", testCancelDispatched},
 		{"a cancel of a running job requests the cancel of its operation", testCancelRunning},
 		{"a takeover is a new claim on the same operation", testTakeover},

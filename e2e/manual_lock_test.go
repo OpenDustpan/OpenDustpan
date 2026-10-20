@@ -262,7 +262,18 @@ func TestManualLockStopsBothTools(t *testing.T) {
 	}
 }
 
-func runManualLockOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) {
+// lockE2E is a server with an OpenTofu workspace and a Pulumi stack that both
+// work, and the two CLIs that drive them.
+type lockE2E struct {
+	env       *e2e.Env
+	pulumiCLI e2e.Install
+	tofuCLI   e2e.Install
+	qualified string
+}
+
+// newLockE2E installs both CLIs, starts the server on store, and proves that
+// both units work before any lock.
+func newLockE2E(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) lockE2E {
 	t.Helper()
 
 	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
@@ -301,6 +312,15 @@ func runManualLockOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) {
 	env.Step(ctx, t, step("pulumi stack init other", nil, "stack", "init", "other"))
 	env.Step(ctx, t, step("pulumi stack select", nil, "stack", "select", qualified))
 	env.Step(ctx, t, step("pulumi up before the lock", nil, "up", "--yes", "--non-interactive"))
+
+	return lockE2E{env: env, pulumiCLI: pulumiCLI, tofuCLI: tofuCLI, qualified: qualified}
+}
+
+func runManualLockOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) {
+	t.Helper()
+
+	lab := newLockE2E(t, fetcher, store)
+	ctx, env, pulumiCLI, tofuCLI := t.Context(), lab.env, lab.pulumiCLI, lab.tofuCLI
 
 	// Both units go into one collection, and the collection gets the lock. The
 	// workspace holds a tool lock first, so the test can force-unlock it later.
@@ -383,5 +403,111 @@ func runManualLockOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) {
 	env.Step(ctx, t, step("tofu plan after the unlock", nil, "plan", "-input=false", "-no-color"))
 
 	env.SetCLI(pulumiCLI)
+	env.Step(ctx, t, step("pulumi up after the unlock", nil, "up", "--yes", "--non-interactive"))
+}
+
+// TestManualLockOnNamespaceStopsTheChangeRoutes proves, on each store, that a
+// manual lock on a namespace stops every unit in it: the lock life cycle works
+// on the namespace route, `tofu plan` takes its remote lock and fails,
+// and the Pulumi CLI fails to update, import, rename and remove the stack, with
+// a message that names the holder, the reason and the namespace. The stack and
+// the workspace are in no collection. After the unlock, both tools work.
+func TestManualLockOnNamespaceStopsTheChangeRoutes(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skipf("the combined suite needs Linux, not %s", runtime.GOOS)
+	}
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runNamespaceLockOnStore(t, fetcher, db)
+		})
+	}
+}
+
+// outputNamesTheNamespaceLock checks that the output of a refused CLI names the
+// holder, the reason and the locked namespace.
+func outputNamesTheNamespaceLock(r e2e.Result) error {
+	if err := outputNamesTheLock(r); err != nil {
+		return err
+	}
+
+	if out := r.Stdout + r.Stderr; !strings.Contains(out, "in namespace "+e2e.Namespace) {
+		return fmt.Errorf("%w: output lacks the namespace: %s", errUnexpected, out)
+	}
+
+	return nil
+}
+
+func runNamespaceLockOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) {
+	t.Helper()
+
+	lab := newLockE2E(t, fetcher, store)
+	ctx, env := t.Context(), lab.env
+	namespacePath := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/lock"
+
+	// The export that the import step sends back, taken before the lock.
+	exported := env.Step(ctx, t, step("stack export before the namespace lock", nil, "stack", "export"))
+	importPath := writeImportFile(t, exported.Stdout)
+
+	lockLifecycle(t, env, "namespace", namespacePath, namespacePath+"/force-unlock")
+
+	lockCall(t, env, actorA, collectionCall{
+		name: "lock the namespace", method: http.MethodPut, path: namespacePath, body: lockBody(lockReasonText),
+		want: http.StatusOK, check: collectionHolds(`"kind":"namespace"`),
+	})
+
+	// The inventory shows the flag on both units, though neither is in a collection.
+	lockCall(t, env, actorA, collectionCall{
+		name: "the inventory flags both units", method: http.MethodGet,
+		path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units", body: "", want: http.StatusOK,
+		check: func(body string) error {
+			if got := strings.Count(body, `"kind":"namespace"`); got < 2 {
+				return fmt.Errorf("%w: %d namespace flags in %s, want at least 2", errAnswerLacksFragment, got, body)
+			}
+
+			return nil
+		},
+	})
+
+	env.Step(ctx, t, failStep("pulumi up under the namespace lock", outputNamesTheNamespaceLock,
+		"up", "--yes", "--non-interactive"))
+	env.Step(ctx, t, failStep("pulumi stack import under the namespace lock", outputNamesTheNamespaceLock,
+		"stack", "import", "--file", importPath))
+	env.Step(ctx, t, failStep("pulumi stack rename under the namespace lock", outputNamesTheNamespaceLock,
+		"stack", "rename", lab.qualified+"-renamed", "--stack", lab.qualified))
+	env.Step(ctx, t, failStep("pulumi stack rm under the namespace lock", outputNamesTheNamespaceLock,
+		"stack", "rm", "--yes", "--force", "--stack", lab.qualified))
+
+	// Preview still works: it changes nothing.
+	env.Step(ctx, t, step("pulumi preview under the namespace lock", nil, "preview", "--non-interactive"))
+
+	env.SetCLI(lab.tofuCLI)
+
+	stepName := "tofu plan under the namespace lock"
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: checkPlanRefusedByManualLock(env, stepName), Name: stepName,
+		Args: []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
+		Env:  nil, Stdin: "", Fail: true, Redact: false,
+	})
+
+	lockCall(t, env, actorA, collectionCall{
+		name: "unlock the namespace", method: http.MethodDelete, path: namespacePath, body: "",
+		want: http.StatusNoContent, check: nil,
+	})
+
+	env.Step(ctx, t, step("tofu plan after the unlock", nil, "plan", "-input=false", "-no-color"))
+
+	env.SetCLI(lab.pulumiCLI)
+	env.Step(ctx, t, step("pulumi stack import after the unlock", nil, "stack", "import", "--file", importPath))
 	env.Step(ctx, t, step("pulumi up after the unlock", nil, "up", "--yes", "--non-interactive"))
 }

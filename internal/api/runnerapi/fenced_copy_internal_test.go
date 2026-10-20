@@ -131,7 +131,7 @@ func writeErrorOf(t *testing.T, scope Scope, err error) (*httptest.ResponseRecor
 		buf bytes.Buffer
 	)
 
-	h.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	h.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	rec := httptest.NewRecorder()
 	h.writeError(t.Context(), rec, scope, err)

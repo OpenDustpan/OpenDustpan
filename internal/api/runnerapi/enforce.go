@@ -94,7 +94,7 @@ func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.
 
 	obj := identity.NamespaceObject(ns.Name)
 
-	if err = h.authz.Authorize(ctx, p, identity.ActionNamespaceRead, obj); err != nil {
+	if err = h.guard.Authorize(ctx, r, p, identity.ActionNamespaceRead, obj); err != nil {
 		if errors.Is(err, identity.ErrDenied) {
 			return r, errNotFound
 		}
@@ -103,7 +103,7 @@ func (h *Handler) checkAuthorized(r *http.Request, route Route, c *call) (*http.
 	}
 
 	for _, action := range route.Actions {
-		if err = h.authz.Authorize(ctx, p, action, obj); err != nil {
+		if err = h.guard.Authorize(ctx, r, p, action, obj); err != nil {
 			return r, fmt.Errorf("authorize %s: %w", action, err)
 		}
 	}

@@ -12,11 +12,13 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -55,6 +57,8 @@ type memDB struct {
 	keys    map[string]job.ID
 	freezes map[string]*job.Freeze
 	audit   map[namespace.Name][]audit.Entry
+	// locks maps the String of a manual lock target to the lock.
+	locks map[string]manuallock.Lock
 }
 
 func newMemDB() *memDB {
@@ -69,6 +73,7 @@ func newMemDB() *memDB {
 		keys:    map[string]job.ID{},
 		freezes: map[string]*job.Freeze{},
 		audit:   map[namespace.Name][]audit.Entry{},
+		locks:   map[string]manuallock.Lock{},
 	}
 }
 
@@ -90,6 +95,36 @@ func (m *memDB) CreateUnit(_ context.Context, fence namespace.Fence, tool, name 
 	}
 
 	return o.WithUnitID(ident.NewID("unt-")), nil
+}
+
+// PutManualLock implements jobtest.Domain.
+func (m *memDB) PutManualLock(
+	_ context.Context, fence namespace.Fence, target manuallock.Target, holder, reason string,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	m.locks[target.String()] = manuallock.Lock{Since: time.Now().UTC(), Target: target, Holder: holder, Reason: reason}
+
+	return nil
+}
+
+// RemoveManualLock implements jobtest.Domain.
+func (m *memDB) RemoveManualLock(_ context.Context, fence namespace.Fence, target manuallock.Target) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	delete(m.locks, target.String())
+
+	return nil
 }
 
 // BumpFence implements jobtest.Domain.
@@ -502,7 +537,17 @@ func (m *memDB) open(ns namespace.Name, unitID string) int {
 // checkDispatch checks the rules of the dispatch of the current phase of j
 // at now: the unit index, the freeze and the plans.
 func (m *memDB) checkDispatch(j *job.Job, notBefore, now time.Time) error {
-	if j.Current >= len(j.Phases) || !j.Phases[j.Current].Kind.Changes() {
+	if j.Current >= len(j.Phases) {
+		return nil
+	}
+
+	// The manual lock stops the dispatch of every phase, and no break-glass
+	// passes it.
+	if err := m.checkManualLock(j); err != nil {
+		return err
+	}
+
+	if !j.Phases[j.Current].Kind.Changes() {
 		return nil
 	}
 
@@ -515,6 +560,28 @@ func (m *memDB) checkDispatch(j *job.Job, notBefore, now time.Time) error {
 	}
 
 	return m.checkPlans(j, notBefore)
+}
+
+// checkManualLock returns ErrLocked when a manual lock covers the unit of j: the
+// lock of the unit, else the lock of its namespace. It stands for the read of
+// manuallock.Store.CoveringLock in the transaction of the dispatch.
+func (m *memDB) checkManualLock(j *job.Job) error {
+	unit := j.Spec.Unit
+	own := manuallock.UnitTarget(
+		collection.UnitRef{Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName()},
+	)
+
+	for _, t := range []manuallock.Target{own, manuallock.NamespaceTarget(unit.Namespace())} {
+		if l, ok := m.locks[t.String()]; ok {
+			return fmt.Errorf(
+				"%w: %w",
+				job.ErrLocked,
+				&manuallock.LockedError{Lock: l, Noun: "unit", Name: unit.String()},
+			)
+		}
+	}
+
+	return nil
 }
 
 // checkUnit stands for the partial unique index on the unit of the jobs

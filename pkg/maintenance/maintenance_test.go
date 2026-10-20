@@ -512,7 +512,7 @@ func newFixtureWith(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -662,7 +662,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1242,10 +1242,11 @@ func TestEnterCatchesRacedStart(t *testing.T) {
 	}
 }
 
-// TestForceEnterCancelsRacedStart proves the re-check after the write with
-// force: an update that starts between the enter check and its write is
-// canceled too and named in the result.
-func TestForceEnterCancelsRacedStart(t *testing.T) {
+// TestForceEnterRefusesRacedStart proves the re-check after the write with
+// force: maintenance mode refuses the cancel of an update that starts between
+// the enter check and the write, so the enter moves back to normal and names
+// it. The next force enter cancels it before the write and succeeds.
+func TestForceEnterRefusesRacedStart(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
@@ -1257,24 +1258,41 @@ func TestForceEnterCancelsRacedStart(t *testing.T) {
 		t.Fatalf("parse stack reference: %v", err)
 	}
 
+	raced := true
+
 	f.state.onSetIf = func() {
-		if f.state.state == maintenance.StateNormal {
+		if raced && f.state.state == maintenance.StateNormal {
+			raced = false
+
 			addRunningUpdate(f, other, "u2", "stk-test00000000000002")
 		}
 	}
 
+	_, err = f.service.Enter(ctx, true)
+	if !errors.Is(err, maintenance.ErrActiveWork) || !strings.Contains(err.Error(), "pulumi:acme/web/staging") {
+		t.Fatalf("force enter with a raced start: err = %v, want ErrActiveWork naming pulumi:acme/web/staging", err)
+	}
+
+	assertState(t, f, maintenance.StateNormal)
+
 	res, err := f.service.Enter(ctx, true)
 	if err != nil {
-		t.Fatalf("force enter with a raced start: %v", err)
+		t.Fatalf("second force enter: %v", err)
 	}
 
-	want := []string{"pulumi:acme/web/prod", "pulumi:acme/web/staging"}
-	if len(res.Canceled) != len(want) || res.Canceled[0] != want[0] || res.Canceled[1] != want[1] {
-		t.Fatalf("force enter canceled = %v, want %v", res.Canceled, want)
+	if len(res.Canceled) != 1 || res.Canceled[0] != "pulumi:acme/web/staging" {
+		t.Fatalf("second force enter canceled = %v, want [pulumi:acme/web/staging]", res.Canceled)
 	}
 
-	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateMaintenance {
-		t.Fatalf("state after a raced forced enter = %q, %v, want maintenance without error", got, err)
+	assertState(t, f, maintenance.StateMaintenance)
+}
+
+// assertState fails the test when the stored state is not want.
+func assertState(t *testing.T, f *fixture, want maintenance.State) {
+	t.Helper()
+
+	if got, err := f.service.Get(t.Context()); err != nil || got != want {
+		t.Fatalf("state = %q, %v, want %q without error", got, err, want)
 	}
 }
 

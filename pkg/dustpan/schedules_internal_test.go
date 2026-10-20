@@ -161,6 +161,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		auditChainEvery:  0,
 		components:       AllComponents(),
 		watch:            nil,
+		flushDenials:     nil,
 	}
 }
 

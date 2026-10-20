@@ -904,10 +904,10 @@ func checkForcedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace) 
 	}
 
 	if !ns.AllowForcedWrites || !wrow.AllowForcedWrites {
-		return fmt.Errorf(
-			"%w: the forced-write switch of the namespace or of the workspace is off",
+		return workspace.NewOverrideRefusedError(workspace.OverrideForced, fmt.Sprintf(
+			"%s: the forced-write switch of the namespace or of the workspace is off",
 			workspace.ErrOverrideRefused,
-		)
+		))
 	}
 
 	return nil
@@ -947,10 +947,10 @@ func checkUnlockedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace
 	}
 
 	if !ns.AllowUnlockedWrites || !wrow.AllowUnlockedWrites {
-		return fmt.Errorf(
-			"%w: the unlocked-write switch of the namespace or of the workspace is off",
+		return workspace.NewOverrideRefusedError(workspace.OverrideUnlocked, fmt.Sprintf(
+			"%s: the unlocked-write switch of the namespace or of the workspace is off",
 			workspace.ErrOverrideRefused,
-		)
+		))
 	}
 
 	return nil

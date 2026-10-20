@@ -45,7 +45,11 @@ type fakeStore struct {
 	fenceSeen namespace.Fence
 }
 
-func (s *fakeStore) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+func (s *fakeStore) Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append: %w", err)
+	}
+
 	s.fenceSeen = fence
 
 	if s.failWith != nil {
@@ -57,7 +61,11 @@ func (s *fakeStore) Append(_ context.Context, fence namespace.Fence, e audit.Ent
 	return e, nil
 }
 
-func (s *fakeStore) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+func (s *fakeStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return audit.Entry{}, fmt.Errorf("append: %w", err)
+	}
+
 	if s.failWith != nil {
 		return audit.Entry{}, s.failWith
 	}
@@ -109,6 +117,9 @@ type refusalCase struct {
 	wantErr    error
 	wantEntry  bool
 	wantFailed bool
+	// inServerScope is true when the entry lands in the installation scope
+	// although the object names a namespace.
+	inServerScope bool
 }
 
 func TestAuthorizeRecordsRefusals(t *testing.T) {
@@ -116,74 +127,81 @@ func TestAuthorizeRecordsRefusals(t *testing.T) {
 
 	cases := []refusalCase{
 		{
-			name:       "refused write writes a denied entry in the namespace",
-			authz:      identity.ErrDenied,
-			subject:    "bo@example.com",
-			obj:        identity.NamespaceObject("team"),
-			store:      newFakeStore(nil),
-			wantErr:    identity.ErrDenied,
-			wantEntry:  true,
-			wantFailed: false,
+			name:          "refused write writes a denied entry in the namespace",
+			authz:         identity.ErrDenied,
+			subject:       "bo@example.com",
+			obj:           identity.NamespaceObject("team"),
+			store:         newFakeStore(nil),
+			wantErr:       identity.ErrDenied,
+			wantEntry:     true,
+			wantFailed:    false,
+			inServerScope: false,
 		},
 		{
-			name:       "allowed action writes nothing",
-			authz:      nil,
-			subject:    "ann@example.com",
-			obj:        identity.NamespaceObject("team"),
-			store:      newFakeStore(nil),
-			wantErr:    nil,
-			wantEntry:  false,
-			wantFailed: false,
+			name:          "allowed action writes nothing",
+			authz:         nil,
+			subject:       "ann@example.com",
+			obj:           identity.NamespaceObject("team"),
+			store:         newFakeStore(nil),
+			wantErr:       nil,
+			wantEntry:     false,
+			wantFailed:    false,
+			inServerScope: false,
 		},
 		{
-			name:       "error that is not a refusal writes nothing",
-			authz:      errStoreDown,
-			subject:    "bo@example.com",
-			obj:        identity.NamespaceObject("team"),
-			store:      newFakeStore(nil),
-			wantErr:    errStoreDown,
-			wantEntry:  false,
-			wantFailed: false,
+			name:          "error that is not a refusal writes an entry",
+			authz:         errStoreDown,
+			subject:       "bo@example.com",
+			obj:           identity.NamespaceObject("team"),
+			store:         newFakeStore(nil),
+			wantErr:       errStoreDown,
+			wantEntry:     true,
+			wantFailed:    false,
+			inServerScope: false,
 		},
 		{
-			name:       "guest writes nothing",
-			authz:      identity.ErrDenied,
-			subject:    "",
-			obj:        identity.NamespaceObject("team"),
-			store:      newFakeStore(nil),
-			wantErr:    identity.ErrDenied,
-			wantEntry:  false,
-			wantFailed: false,
+			name:          "guest writes nothing",
+			authz:         identity.ErrDenied,
+			subject:       "",
+			obj:           identity.NamespaceObject("team"),
+			store:         newFakeStore(nil),
+			wantErr:       identity.ErrDenied,
+			wantEntry:     false,
+			wantFailed:    false,
+			inServerScope: false,
 		},
 		{
-			name:       "failed append keeps the refusal and counts the failure",
-			authz:      identity.ErrDenied,
-			subject:    "bo@example.com",
-			obj:        identity.NamespaceObject("team"),
-			store:      newFakeStore(errDiskFull),
-			wantErr:    identity.ErrDenied,
-			wantEntry:  false,
-			wantFailed: true,
+			name:          "failed append keeps the refusal and counts the failure",
+			authz:         identity.ErrDenied,
+			subject:       "bo@example.com",
+			obj:           identity.NamespaceObject("team"),
+			store:         newFakeStore(errDiskFull),
+			wantErr:       identity.ErrDenied,
+			wantEntry:     false,
+			wantFailed:    true,
+			inServerScope: false,
 		},
 		{
-			name:       "unknown namespace keeps the refusal and counts the failure",
-			authz:      identity.ErrDenied,
-			subject:    "bo@example.com",
-			obj:        identity.NamespaceObject("gone"),
-			store:      newFakeStore(nil),
-			wantErr:    identity.ErrDenied,
-			wantEntry:  false,
-			wantFailed: true,
+			name:          "unknown namespace writes the entry in the installation scope",
+			authz:         identity.ErrDenied,
+			subject:       "bo@example.com",
+			obj:           identity.NamespaceObject("gone"),
+			store:         newFakeStore(nil),
+			wantErr:       identity.ErrDenied,
+			wantEntry:     true,
+			wantFailed:    false,
+			inServerScope: true,
 		},
 		{
-			name:       "installation object writes the server scope",
-			authz:      identity.ErrDenied,
-			subject:    "bo@example.com",
-			obj:        identity.ServerObject(),
-			store:      newFakeStore(nil),
-			wantErr:    identity.ErrDenied,
-			wantEntry:  true,
-			wantFailed: false,
+			name:          "installation object writes the server scope",
+			authz:         identity.ErrDenied,
+			subject:       "bo@example.com",
+			obj:           identity.ServerObject(),
+			store:         newFakeStore(nil),
+			wantErr:       identity.ErrDenied,
+			wantEntry:     true,
+			wantFailed:    false,
+			inServerScope: false,
 		},
 	}
 
@@ -267,7 +285,7 @@ func checkRefusal(t *testing.T, tc refusalCase) {
 
 	checkEntry(t, tc, tc.store.entries[0])
 
-	if !tc.obj.IsServer() && tc.store.fenceSeen.FailoverVersion != 3 {
+	if !tc.obj.IsServer() && !tc.inServerScope && tc.store.fenceSeen.FailoverVersion != 3 {
 		t.Fatalf("append fence %+v, want the namespace fence", tc.store.fenceSeen)
 	}
 }
@@ -285,7 +303,7 @@ func checkEntry(t *testing.T, tc refusalCase, e audit.Entry) {
 	}
 
 	wantScope := tc.obj.Namespace()
-	if tc.obj.IsServer() {
+	if tc.obj.IsServer() || tc.inServerScope {
 		wantScope = audit.ServerScope
 	}
 

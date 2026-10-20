@@ -552,7 +552,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -597,6 +597,7 @@ func newUpdateFixtureWithAuthenticator(
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -2774,7 +2775,8 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 
 	stacks, err := stack.NewService(stack.Config{
 		Store: stores, Namespaces: namespaces, Now: nil, State: nil,
-		Retention: 0,
+		Retention:   0,
+		ManualLocks: nil,
 	})
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -2818,6 +2820,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		CheckpointDeltaCutoff:   -1,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
+		DenialLimiter:           nil,
 	})
 	if !errors.Is(err, pulumi.ErrInvalidCutoff) {
 		t.Fatalf("negative cutoff: err = %v, want %v", err, pulumi.ErrInvalidCutoff)
