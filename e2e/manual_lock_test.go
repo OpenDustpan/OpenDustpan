@@ -372,6 +372,10 @@ func runManualLockOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Store) {
 				return fmt.Errorf("%w: %d manualLock flags in %s, want 2", errAnswerLacksFragment, got, body)
 			}
 
+			if got := strings.Count(body, `"state":"locked"`); got != 2 {
+				return fmt.Errorf("%w: %d locked states in %s, want 2", errAnswerLacksFragment, got, body)
+			}
+
 			return nil
 		},
 	})
