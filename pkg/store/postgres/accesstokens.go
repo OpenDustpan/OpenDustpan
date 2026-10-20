@@ -204,8 +204,10 @@ func endedOrMissing(ctx context.Context, q *db.Queries, id string) error {
 
 // TouchToken implements accesstoken.Store.
 func (s *Store) TouchToken(ctx context.Context, id string, at time.Time, every time.Duration) error {
-	err := s.queries.TouchAccessToken(ctx, db.TouchAccessTokenParams{
-		AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		return q.TouchAccessToken(ctx, db.TouchAccessTokenParams{
+			AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("touch access token: %w", err)

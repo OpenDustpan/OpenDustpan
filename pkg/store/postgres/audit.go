@@ -401,6 +401,21 @@ func (s *Store) inFencedUpdateTx(
 	})
 }
 
+// inControlFencedUpdateTx runs fn as inFencedUpdateTx does, with no
+// installation state check. The audit chain markers of a chain change use it:
+// the change holds maintenance mode while it runs.
+func (s *Store) inControlFencedUpdateTx(
+	ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error,
+) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		if err := checkFenceForUpdate(ctx, q, fence); err != nil {
+			return err
+		}
+
+		return fn(q)
+	})
+}
+
 // checkFenceForUpdate holds the namespace row of fence FOR UPDATE and
 // checks its failover version. It returns namespace.ErrNotFound for a
 // missing namespace and namespace.ErrFenced for a stale version.

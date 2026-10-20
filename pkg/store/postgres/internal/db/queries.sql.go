@@ -10752,6 +10752,18 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 	return i, err
 }
 
+const lockWritesExclusive = `-- name: LockWritesExclusive :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext(current_schema()))
+`
+
+// Takes the exclusive form of the write lock for this transaction. It waits
+// for every write transaction in flight, and holds every later write back
+// until this transaction ends. Each write transaction takes the shared form.
+func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockWritesExclusive, class)
+	return err
+}
+
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1

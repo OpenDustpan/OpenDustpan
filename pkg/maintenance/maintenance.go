@@ -45,11 +45,9 @@ const maintenanceSubject = "maintenance"
 const maintenanceReason = "maintenance mode started"
 
 // DefaultCacheLimit bounds how long a Watcher trusts its read of the
-// installation state. It is short on purpose: the restore apply step of a
-// later issue must wait until every instance can see maintenance mode, and
-// that wait can only be short while this limit is short. RFC 60 proposes the
-// wait: the apply step waits twice the limit plus a clock-skew bound after
-// the enter, then reads the state again before it copies any data.
+// installation state. The limit only saves reads for the HTTP gate and the
+// probes. A write never uses it: each write transaction reads the stored
+// state itself (ErrInMaintenance).
 const DefaultCacheLimit = 2 * time.Second
 
 // Sentinel errors returned by this package and by Store implementations.
@@ -59,6 +57,13 @@ var (
 	// ErrActiveWork reports that entering maintenance mode found a running
 	// update or run. The error text names each one as a unit reference.
 	ErrActiveWork = errors.New("cannot enter maintenance mode while work is active")
+	// ErrInMaintenance reports a write that the store refused because the
+	// installation is in maintenance mode. A store adapter checks the stored
+	// state in each write transaction, so the refusal holds on every instance
+	// at once, at installation scope too, and without a wait for a cache.
+	// A store that cannot read the state refuses the write with
+	// ErrUnavailable: it never admits the write.
+	ErrInMaintenance = errors.New("the installation is in maintenance mode")
 	// ErrStateChanged reports that a conditional write found another state
 	// than expected: another instance entered or left first. The caller
 	// re-reads the state instead of overwriting it.
@@ -637,8 +642,10 @@ func unitObject(tool string, ns namespace.Name, name string) (string, error) {
 }
 
 // Watcher reads the installation state with a short cache limit, so every
-// request does not read the database. The zero value is not usable: call
-// NewWatcher.
+// request does not read the database. It only gives the HTTP gate a cheap
+// early refusal. It never decides a write: the store checks the stored state
+// in each write transaction, so a cached or kept state cannot admit a write.
+// The zero value is not usable: call NewWatcher.
 type Watcher struct {
 	store Store
 	now   func() time.Time

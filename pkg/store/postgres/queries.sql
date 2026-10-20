@@ -842,6 +842,12 @@ UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
 
+-- name: LockWritesExclusive :exec
+-- Takes the exclusive form of the write lock for this transaction. It waits
+-- for every write transaction in flight, and holds every later write back
+-- until this transaction ends. Each write transaction takes the shared form.
+SELECT pg_advisory_xact_lock(sqlc.arg(class)::int, hashtext(current_schema()));
+
 -- name: GetInstallationKind :one
 -- The installation kind: dev, production or NULL before the first claim. The
 -- migration seeds the one row; a missing row is a fault.
