@@ -178,9 +178,7 @@ func TestExportRecordsTheKindOfItsOwnDatabase(t *testing.T) {
 			fix := newFixtureKind(t, &stubExporter{sum: testSummary(), data: sql, err: nil}, tc.read, 0)
 
 			_, err := fix.service.Run(t.Context(), "bkp-none")
-			if !errors.Is(err, installation.ErrUnavailable) {
-				t.Fatalf("run: err = %v, want ErrUnavailable", err)
-			}
+			assertRunFailed(t, err, installation.ErrUnavailable)
 
 			assertNoManifest(t, fix.target, "bkp-none")
 			assertFailed(t, fix.registry, "bkp-none")

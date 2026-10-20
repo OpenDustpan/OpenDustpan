@@ -311,9 +311,9 @@ func WithInstallationKind(kind installation.Kind) Option {
 // file opened through another spelling shares the one guard. A hard link to
 // the database file is not detected.
 //
-// Open leaves running backup rows alone: crash recovery inspects them before
-// the server marks them failed with FailRunningBackups at start, and offline
-// commands open stores that no server owns.
+// Open leaves running backup rows alone: their operations continue on the
+// next claim after a crash, and offline commands open stores that no server
+// owns.
 func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

@@ -383,6 +383,16 @@ func objectRuleCases(fx *fixtures) []StoreCase {
 			Checks:   "An approval rule with the ID of a rule of a wider scope returns ErrFinal.",
 		},
 		{
+			Name:     "rule-fields-must-be-valid",
+			Port:     PortObjects,
+			Method:   gate.Objects[gate.ApprovalRule].Put,
+			Kinds:    []Kind{KindApprovalRule},
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "Put of an approval rule with a count outside 1 to 10, no approver, an empty approver name, a window outside 0 and 60 to 900 seconds, or a timeout outside 1 hour to 30 days returns ErrInvalid, stores nothing and appends no entry.",
+		},
+		{
 			Name:     "rule-over-narrower-rule",
 			Port:     PortObjects,
 			Method:   gate.Objects[gate.ApprovalRule].Put,
@@ -500,6 +510,16 @@ func settingsCases(fx *fixtures) []StoreCase {
 			Policies: nil,
 			Want:     nil,
 			Checks:   "PutApprovalDefault stores each field, follows the version rules of Objects.Put, and appends its entry.",
+		},
+		{
+			Name:     "approval-default-fields-must-be-valid",
+			Port:     PortSettings,
+			Method:   gate.Settings.PutApprovalDefault,
+			Kinds:    nil,
+			Scopes:   []gate.Scope{fx.acme},
+			Policies: nil,
+			Want:     gate.ErrInvalid,
+			Checks:   "PutApprovalDefault with a count outside 1 to 10, a window outside 0 and 60 to 900 seconds, or an empty approver name returns ErrInvalid, stores nothing and appends no entry.",
 		},
 		{
 			Name:     "approval-default-not-at-installation",
