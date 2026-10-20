@@ -117,6 +117,10 @@ type Config struct {
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
+	// Workers reports the components of the process and the state of the
+	// worker, and refuses the start of a durable operation when no worker
+	// claimed or renewed a claim. Nil means no refusal and an empty report.
+	Workers WorkerSource
 	// SignIn is the console sign-in through OpenID Connect providers. Nil
 	// means no sign-in: the sign-in routes are not mounted, and the
 	// session cookie authenticates nothing. With SignIn set, Principals is
@@ -171,6 +175,7 @@ type Handler struct {
 	now            func() time.Time
 	auditChain     AuditChain
 	auditSinks     AuditSinkSource
+	workers        WorkerSource
 	signIn         *signInState
 	kind           installation.Kind
 	mux            *patternMux
@@ -215,6 +220,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		onAuditFailure: cfg.OnAuditFailure,
 		now:            cfg.Now,
 		auditSinks:     cfg.AuditSinks,
+		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
 		mux:            newPatternMux(),
@@ -397,7 +403,7 @@ func classifyIdentity(err error) (int, string, bool) {
 // classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
 	for _, try := range []func(error) (int, string, bool){
-		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity,
+		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
 	} {
 		if status, message, ok := try(err); ok {
 			return status, message

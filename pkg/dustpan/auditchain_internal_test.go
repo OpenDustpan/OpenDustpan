@@ -1011,3 +1011,52 @@ func TestRestoredLogCheckCountsAFailedCallAsNotChecked(t *testing.T) {
 		t.Fatalf("metrics after a failed call:\n%s\nwant one check error", got)
 	}
 }
+
+// TestChainRunnerClaimsBeatAndUseTheLease proves that the runner of the audit
+// chain migration claims through the claim recorder: a worker with no job
+// schedule that only polls for a migration still writes its heartbeat.
+func TestChainRunnerClaimsBeatAndUseTheLease(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	cfg := defaultSettings()
+	cfg.namespaceStore = st
+	cfg.auditChain = audit.ChainOn
+	cfg.components = Components{api: false, worker: true}
+	cfg.durableStore = st.DurableOperations()
+	cfg.instanceID = "worker-1"
+	cfg.operationLease = time.Minute
+	cfg.watch = newWorkerWatch(cfg)
+
+	chain, err := newAuditChain(cfg, nil)
+	if err != nil || chain == nil {
+		t.Fatalf("new audit chain = %v, %v", chain, err)
+	}
+
+	if beat, beatErr := st.DurableOperations().LastBeat(t.Context()); beatErr != nil || beat.Owner != "" {
+		t.Fatalf("heartbeat before the claim = %+v, %v; want none", beat, beatErr)
+	}
+
+	if runErr := chain.runner.RunOnce(t.Context()); !errors.Is(runErr, durable.ErrNoWork) {
+		t.Fatalf("run once = %v, want %v", runErr, durable.ErrNoWork)
+	}
+
+	beat, err := st.DurableOperations().LastBeat(t.Context())
+	if err != nil {
+		t.Fatalf("read heartbeat: %v", err)
+	}
+
+	if beat.Owner != "worker-1" {
+		t.Fatalf("heartbeat owner after the claim = %q, want worker-1", beat.Owner)
+	}
+}

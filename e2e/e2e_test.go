@@ -55,10 +55,6 @@ const (
 	// healthReadyPath and healthLivePath are the probe paths (ADR 34).
 	healthReadyPath = "/health/ready"
 	healthLivePath  = "/health/live"
-	// readyOKBody is the readiness body when every check passes.
-	readyOKBody = `{"status":"ok"}`
-	// readyStoreFailedBody is the readiness body when only the store fails.
-	readyStoreFailedBody = `{"status":"unavailable","failed":["store"]}`
 	// readyWaitTimeout bounds the wait for the readiness status to change
 	// after the proxy closes or reopens. The probe itself has a 2-second
 	// limit per check, so this covers several probes.
@@ -962,8 +958,15 @@ func checkRecoveredDatabase(ctx context.Context, env *e2e.Env) error {
 		return err
 	}
 
-	if strings.TrimSpace(body) != readyOKBody {
-		return fmt.Errorf("%w: GET %s body %q, want %q", errUnexpected, healthReadyPath, body, readyOKBody)
+	var doc readyDoc
+
+	if jsonErr := json.Unmarshal([]byte(body), &doc); jsonErr != nil {
+		return fmt.Errorf("%w: GET %s body %q is not JSON: %w", errUnexpected, healthReadyPath, body, jsonErr)
+	}
+
+	if doc.Status != "ok" || len(doc.Failed) != 0 || len(doc.Components) == 0 {
+		return fmt.Errorf("%w: GET %s body %q, want status ok, no failed and a components list",
+			errUnexpected, healthReadyPath, body)
 	}
 
 	return nil
@@ -1048,8 +1051,46 @@ func checkStoppedBody(status int, body string) error {
 		}
 	}
 
-	if trimmed != readyStoreFailedBody {
-		return fmt.Errorf("%w: GET %s body %q, want %q", errUnexpected, healthReadyPath, body, readyStoreFailedBody)
+	return checkStoppedFields(trimmed)
+}
+
+// readyComponent is one component in the readiness body.
+type readyComponent struct {
+	Name   string   `json:"name"`
+	Status string   `json:"status"`
+	Failed []string `json:"failed"`
+}
+
+// readyDoc is the readiness body.
+type readyDoc struct {
+	Status     string           `json:"status"`
+	Failed     []string         `json:"failed"`
+	Components []readyComponent `json:"components"`
+}
+
+// checkStoppedFields proves the 503 body keeps the fields status and failed
+// and lists the components of the process.
+func checkStoppedFields(body string) error {
+	var doc readyDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: GET %s body %q is not JSON: %w", errUnexpected, healthReadyPath, body, err)
+	}
+
+	if doc.Status != "unavailable" || !slices.Equal(doc.Failed, []string{"store"}) {
+		return fmt.Errorf("%w: GET %s body %q, want status unavailable and failed [store]",
+			errUnexpected, healthReadyPath, body)
+	}
+
+	if len(doc.Components) == 0 {
+		return fmt.Errorf("%w: GET %s body %q lists no components", errUnexpected, healthReadyPath, body)
+	}
+
+	for _, component := range doc.Components {
+		if component.Status != "unavailable" || !slices.Contains(component.Failed, "store") {
+			return fmt.Errorf("%w: GET %s component %q is %q with failed %v, want unavailable with store",
+				errUnexpected, healthReadyPath, component.Name, component.Status, component.Failed)
+		}
 	}
 
 	return nil
