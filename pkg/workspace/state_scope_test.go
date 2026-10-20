@@ -11,8 +11,8 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
-	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // spyBlobs counts the calls that reach the blob store.
@@ -438,15 +438,14 @@ func TestRefusalRecordFailureStillRefuses(t *testing.T) {
 var errRecordDown = errors.New("audit log down")
 
 // checkOneRefusal checks that the recorder holds exactly one refusal, in the
-// namespace of the call, for op.
+// namespace of the call, for op, with a known place.
 func checkOneRefusal(t *testing.T, e *scopeEnv, op string) {
 	t.Helper()
 
 	got := e.refusals.All()
-	want := []workspacetest.Refusal{{Namespace: e.acme.ID, Op: op}}
-
-	if len(got) != 1 || got[0] != want[0] {
-		t.Fatalf("refusals = %+v, want %+v", got, want)
+	if len(got) != 1 || got[0].Namespace != e.acme.ID || got[0].Op != op ||
+		(got[0].Where != secret.OutsideNamespace && got[0].Where != secret.OutsideDirectory) {
+		t.Fatalf("refusals = %+v, want one %s refusal in %s", got, op, e.acme.ID)
 	}
 }
 

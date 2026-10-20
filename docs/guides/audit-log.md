@@ -126,16 +126,6 @@ An entry holds these fields:
   two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
 
-## Security entries
-
-The server writes one entry of the kind `security` and the outcome `denied`
-when it stops an access that crosses a namespace boundary. Today this is a
-read, a write, a list or a delete of the content of an OpenTofu state version
-with a blob key of another namespace. The action is `blob:out-of-scope`. The
-scope is `@server`, the subject is `server`, and the object is the ID of the
-namespace of the call. The reason names the operation. The entry never holds
-the blob key that the call used.
-
 ## Force-unlock entries
 
 Each force-unlock of an OpenTofu workspace writes one entry of the kind
@@ -163,6 +153,25 @@ lock that it finds. Each release writes one `change` entry with the action
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.
+
+## Security entries
+
+The server writes one entry of the kind `security` and the outcome `denied`
+when it stops an access that crosses a namespace boundary. Today this is a
+read, a write, a list or a delete of one of these blobs, with a blob key of
+another namespace, or with a key of its own namespace that is outside the
+directory of these blobs:
+
+- an item key blob, in the `item-keys` directory of the namespace;
+- the content of an OpenTofu state version, in the `tofu` directory of the
+  namespace.
+
+The action is `blob:out-of-scope`. The scope is `@server`, the subject is
+`server`, and the object is the ID of the namespace of the call. The reason
+names the blob, the operation, and whether the key was outside the namespace
+or outside the directory of the blob in the namespace, for example
+`state blob get refused: key outside the namespace`. The entry never holds the
+blob key that the call used.
 
 ## Denial entries
 

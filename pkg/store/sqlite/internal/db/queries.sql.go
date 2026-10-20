@@ -1223,6 +1223,35 @@ func (q *Queries) CountRunningJournaledUpdates(ctx context.Context) (int64, erro
 	return count, err
 }
 
+const countSavedViewsInNamespace = `-- name: CountSavedViewsInNamespace :one
+SELECT COUNT(*) FROM saved_views
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+`
+
+func (q *Queries) CountSavedViewsInNamespace(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSavedViewsInNamespace, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSavedViewsOfOwner = `-- name: CountSavedViewsOfOwner :one
+SELECT COUNT(*) FROM saved_views
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1) AND owner = ?2
+`
+
+type CountSavedViewsOfOwnerParams struct {
+	Namespace string
+	Owner     string
+}
+
+func (q *Queries) CountSavedViewsOfOwner(ctx context.Context, arg CountSavedViewsOfOwnerParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSavedViewsOfOwner, arg.Namespace, arg.Owner)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSession = `-- name: CountSession :one
 SELECT COUNT(*) FROM sessions WHERE id = ?
 `
@@ -2626,6 +2655,26 @@ DELETE FROM runners WHERE pool_id = ?1
 func (q *Queries) DeleteRunnerPoolRunners(ctx context.Context, poolID string) error {
 	_, err := q.db.ExecContext(ctx, deleteRunnerPoolRunners, poolID)
 	return err
+}
+
+const deleteSavedView = `-- name: DeleteSavedView :execrows
+DELETE FROM saved_views
+WHERE saved_views.id = ?1 AND saved_views.owner = ?2
+  AND saved_views.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?3)
+`
+
+type DeleteSavedViewParams struct {
+	ID        string
+	Owner     string
+	Namespace string
+}
+
+func (q *Queries) DeleteSavedView(ctx context.Context, arg DeleteSavedViewParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSavedView, arg.ID, arg.Owner, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteScopeGateObjects = `-- name: DeleteScopeGateObjects :exec
@@ -5370,6 +5419,43 @@ func (q *Queries) GetRunnerSession(ctx context.Context, id string) (GetRunnerSes
 	return i, err
 }
 
+const getSavedView = `-- name: GetSavedView :one
+SELECT v.id, n.name AS namespace, v.owner, v.name, v.query_json, v.created_at_ms
+FROM saved_views AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = ?1 AND v.id = ?2 AND v.owner = ?3
+`
+
+type GetSavedViewParams struct {
+	Namespace string
+	ID        string
+	Owner     string
+}
+
+type GetSavedViewRow struct {
+	ID          string
+	Namespace   string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
+// The owner is part of the key: a view of another owner reads as no row.
+func (q *Queries) GetSavedView(ctx context.Context, arg GetSavedViewParams) (GetSavedViewRow, error) {
+	row := q.db.QueryRowContext(ctx, getSavedView, arg.Namespace, arg.ID, arg.Owner)
+	var i GetSavedViewRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Owner,
+		&i.Name,
+		&i.QueryJson,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getSecretKey = `-- name: GetSecretKey :one
 SELECT namespace, stack_id, wrapper_id, ciphertext, created_at_ms
 FROM secret_keys
@@ -7463,6 +7549,41 @@ func (q *Queries) InsertRunnerSession(ctx context.Context, arg InsertRunnerSessi
 		arg.CreatedAtMs,
 	)
 	return err
+}
+
+const insertSavedView = `-- name: InsertSavedView :execrows
+INSERT INTO saved_views (id, namespace_id, owner, name, query_json, created_at_ms)
+VALUES (
+    ?1, (SELECT n.id FROM namespaces AS n WHERE n.name = ?2),
+    ?3, ?4, ?5, ?6
+)
+ON CONFLICT (namespace_id, owner, name) DO NOTHING
+`
+
+type InsertSavedViewParams struct {
+	ID          string
+	Namespace   string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A view of the same
+// owner with the same name in the namespace is not written.
+func (q *Queries) InsertSavedView(ctx context.Context, arg InsertSavedViewParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertSavedView,
+		arg.ID,
+		arg.Namespace,
+		arg.Owner,
+		arg.Name,
+		arg.QueryJson,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertWorkspaceBlameItem = `-- name: InsertWorkspaceBlameItem :exec
@@ -10528,6 +10649,93 @@ func (q *Queries) ListRunners(ctx context.Context, poolID string) ([]ListRunners
 			&i.RetiredAtMs,
 			&i.LastSeenAtMs,
 			&i.JoinedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSavedViewIDsOfOwner = `-- name: ListSavedViewIDsOfOwner :many
+SELECT v.id
+FROM saved_views AS v
+WHERE v.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1) AND v.owner = ?2
+ORDER BY v.id
+`
+
+type ListSavedViewIDsOfOwnerParams struct {
+	Namespace string
+	Owner     string
+}
+
+func (q *Queries) ListSavedViewIDsOfOwner(ctx context.Context, arg ListSavedViewIDsOfOwnerParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSavedViewIDsOfOwner, arg.Namespace, arg.Owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSavedViewsOfOwner = `-- name: ListSavedViewsOfOwner :many
+SELECT v.id, n.name AS namespace, v.owner, v.name, v.query_json, v.created_at_ms
+FROM saved_views AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = ?1 AND v.owner = ?2
+ORDER BY v.name, v.id
+`
+
+type ListSavedViewsOfOwnerParams struct {
+	Namespace string
+	Owner     string
+}
+
+type ListSavedViewsOfOwnerRow struct {
+	ID          string
+	Namespace   string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
+func (q *Queries) ListSavedViewsOfOwner(ctx context.Context, arg ListSavedViewsOfOwnerParams) ([]ListSavedViewsOfOwnerRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSavedViewsOfOwner, arg.Namespace, arg.Owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSavedViewsOfOwnerRow
+	for rows.Next() {
+		var i ListSavedViewsOfOwnerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Owner,
+			&i.Name,
+			&i.QueryJson,
+			&i.CreatedAtMs,
 		); err != nil {
 			return nil, err
 		}

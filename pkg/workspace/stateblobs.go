@@ -7,12 +7,11 @@ import (
 	"io"
 	"slices"
 	"strings"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // stateBlobDir is the directory, inside the scope of one namespace, of the
@@ -27,17 +26,10 @@ const (
 	opList   = "list"
 )
 
-// errUnknownBlobOp reports an operation name that the recorder does not know.
-var errUnknownBlobOp = errors.New("unknown blob operation")
-
-// OutOfScopeRecorder records that a call tried to use a blob key outside the
-// namespace of the call. A recorder never holds the key of the call: the key
-// can name another namespace, and it can hold text that an attacker chose.
-type OutOfScopeRecorder interface {
-	// RecordOutOfScope records one refusal in the namespace ns, for the
-	// operation op ("put", "get", "delete" or "list"). It returns an error
-	// when it cannot record the refusal.
-	RecordOutOfScope(ctx context.Context, ns namespace.ID, op string) error
+// StateBlobFamily is the family of the state content blobs, as the audit entry
+// of a refusal names it.
+func StateBlobFamily() secret.OutOfScopeFamily {
+	return secret.OutOfScopeFamily{Blobs: "state blob", Dir: strings.TrimSuffix(stateBlobDir, "/")}
 }
 
 // stateBlobs reads and writes the state content blobs. It builds a
@@ -46,11 +38,12 @@ type OutOfScopeRecorder interface {
 // key is namespaces/<namespace ID>/tofu/<workspace ID>/<state version ID>/<attempt>.
 //
 // A call with a key of another namespace returns blob.ErrOutOfScope before
-// any call to the store, and writes one refusal to the OutOfScopeRecorder.
+// any call to the store, and writes one refusal to the
+// secret.OutOfScopeRecorder.
 type stateBlobs struct {
 	store      blob.Store
 	namespaces *namespace.Service
-	refusals   OutOfScopeRecorder
+	refusals   secret.OutOfScopeRecorder
 }
 
 // view returns the view of the store for the namespace called name, with the
@@ -98,7 +91,7 @@ func (b *stateBlobs) put(ctx context.Context, name namespace.Name, key blob.Key,
 		return err
 	}
 
-	return b.refuse(ctx, id, opPut, v.Put(ctx, key, r))
+	return b.refuse(ctx, id, opPut, v.Put(ctx, key, r), secret.OutOfScopePlace(v, key))
 }
 
 // get opens the blob under key, in the namespace called name. It returns
@@ -112,7 +105,7 @@ func (b *stateBlobs) get(ctx context.Context, name namespace.Name, key blob.Key)
 
 	r, err := v.Get(ctx, key)
 	if err != nil {
-		return nil, b.refuse(ctx, id, opGet, err)
+		return nil, b.refuse(ctx, id, opGet, err, secret.OutOfScopePlace(v, key))
 	}
 
 	return r, nil
@@ -127,7 +120,7 @@ func (b *stateBlobs) delete(ctx context.Context, name namespace.Name, key blob.K
 		return err
 	}
 
-	return b.refuse(ctx, id, opDelete, v.Delete(ctx, key))
+	return b.refuse(ctx, id, opDelete, v.Delete(ctx, key), secret.OutOfScopePlace(v, key))
 }
 
 // deleteRetried is delete with a retry of a transient failure after a short
@@ -138,7 +131,7 @@ func (b *stateBlobs) deleteRetried(ctx context.Context, name namespace.Name, key
 		return err
 	}
 
-	return b.refuse(ctx, id, opDelete, blob.DeleteRetried(ctx, v, key))
+	return b.refuse(ctx, id, opDelete, blob.DeleteRetried(ctx, v, key), secret.OutOfScopePlace(v, key))
 }
 
 // list returns the blobs of the workspace ws, in the namespace called name.
@@ -150,7 +143,7 @@ func (b *stateBlobs) list(ctx context.Context, name namespace.Name, ws ID) ([]bl
 
 	objects, err := v.List(ctx, v.Prefix()+stateBlobDir+ws.String()+"/")
 	if err != nil {
-		return nil, b.refuse(ctx, id, opList, fmt.Errorf("list state blobs: %w", err))
+		return nil, b.refuse(ctx, id, opList, fmt.Errorf("list state blobs: %w", err), secret.OutsideNamespace)
 	}
 
 	return objects, nil
@@ -178,7 +171,7 @@ func (b *stateBlobs) scopedKey(
 	}
 
 	if !strings.HasPrefix(key.String(), v.Prefix()+stateBlobDir) {
-		return nil, "", b.refuse(ctx, id, op, blob.ErrOutOfScope)
+		return nil, "", b.refuse(ctx, id, op, blob.ErrOutOfScope, secret.OutOfScopePlace(v, key))
 	}
 
 	return v, id, nil
@@ -203,7 +196,9 @@ const stateKeyRestParts = 3
 // It returns blob.ErrOutOfScope, joined with the error of the recorder when
 // the record fails, so the caller still sees the refusal. Any other error, and
 // nil, pass through.
-func (b *stateBlobs) refuse(ctx context.Context, ns namespace.ID, op string, err error) error {
+func (b *stateBlobs) refuse(
+	ctx context.Context, ns namespace.ID, op string, err error, where secret.OutOfScopeWhere,
+) error {
 	if !errors.Is(err, blob.ErrOutOfScope) {
 		return err
 	}
@@ -213,7 +208,7 @@ func (b *stateBlobs) refuse(ctx context.Context, ns namespace.ID, op string, err
 	recCtx, cancel := cleanupContext(ctx)
 	defer cancel()
 
-	if recErr := b.refusals.RecordOutOfScope(recCtx, ns, op); recErr != nil {
+	if recErr := b.refusals.RecordOutOfScope(recCtx, ns, op, where); recErr != nil {
 		return errors.Join(blob.ErrOutOfScope, fmt.Errorf("record the refusal: %w", recErr))
 	}
 
@@ -260,82 +255,3 @@ func ParseStateBlobKey(key blob.Key) (StateBlobKey, error) {
 // stateBlobKeyParts is the number of parts of a whole state content key:
 // "namespaces", the namespace ID, "tofu", then the three parts of the rest.
 const stateBlobKeyParts = 3 + stateKeyRestParts
-
-// Fields of the audit entry of a refusal.
-const (
-	// ActionBlobOutOfScope is the action of the audit entry of a refusal.
-	ActionBlobOutOfScope = "blob:out-of-scope"
-	// outOfScopeSubject is the subject of that entry: the server itself.
-	outOfScopeSubject = "server"
-)
-
-// AuditOutOfScope is an OutOfScopeRecorder that writes one audit entry of the
-// kind security in the scope @server.
-type AuditOutOfScope struct {
-	entries audit.ServerStore
-	now     func() time.Time
-}
-
-var _ OutOfScopeRecorder = (*AuditOutOfScope)(nil)
-
-// NewAuditOutOfScope returns an OutOfScopeRecorder that appends to entries. now
-// may be nil; it then is time.Now.
-func NewAuditOutOfScope(entries audit.ServerStore, now func() time.Time) (*AuditOutOfScope, error) {
-	if entries == nil {
-		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
-	}
-
-	if now == nil {
-		now = time.Now
-	}
-
-	return &AuditOutOfScope{entries: entries, now: now}, nil
-}
-
-// RecordOutOfScope appends the entry. The object is the ID of the namespace of
-// the call, and the reason names op. The entry never holds the refused key.
-func (a *AuditOutOfScope) RecordOutOfScope(ctx context.Context, ns namespace.ID, op string) error {
-	switch op {
-	case opPut, opGet, opDelete, opList:
-	default:
-		return fmt.Errorf("record out-of-scope refusal: %w %q", errUnknownBlobOp, op)
-	}
-
-	if _, err := namespace.ParseID(ns.String()); err != nil {
-		return fmt.Errorf("record out-of-scope refusal: %w", err)
-	}
-
-	entry := audit.Entry{
-		At:            a.now().UTC(),
-		Namespace:     audit.ServerScope,
-		Subject:       outOfScopeSubject,
-		IDPSubject:    "",
-		TokenID:       "",
-		Action:        ActionBlobOutOfScope,
-		Object:        ns.String(),
-		Version:       "",
-		ValuePath:     "",
-		ValueCount:    nil,
-		Changes:       nil,
-		SourceIP:      "",
-		UserAgent:     "",
-		Channel:       audit.ChannelAPI,
-		Kind:          audit.KindSecurity,
-		Outcome:       audit.OutcomeDenied,
-		RequestID:     "",
-		ObjectID:      "",
-		PrevHash:      "",
-		Hash:          "",
-		Sequence:      0,
-		FenceVersion:  0,
-		PrincipalKind: "",
-		JobID:         "",
-		Reason:        "state blob " + op + " refused: key outside the namespace",
-	}
-
-	if _, err := a.entries.AppendServer(ctx, entry); err != nil {
-		return fmt.Errorf("append audit entry: %w", err)
-	}
-
-	return nil
-}

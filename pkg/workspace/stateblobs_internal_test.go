@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 const (
@@ -24,7 +25,6 @@ const (
 var (
 	errNotUsed   = errors.New("not used")
 	errAuditDown = errors.New("audit log down")
-	errLogDown   = errors.New("log down")
 )
 
 // scopeNamespace returns a namespace of the tests.
@@ -143,7 +143,7 @@ type refusalLog struct {
 	err error
 }
 
-func (l *refusalLog) RecordOutOfScope(_ context.Context, ns namespace.ID, op string) error {
+func (l *refusalLog) RecordOutOfScope(_ context.Context, ns namespace.ID, op string, _ secret.OutOfScopeWhere) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -477,32 +477,48 @@ func (s *serverEntries) AppendServer(_ context.Context, e audit.Entry) (audit.En
 	return e, nil
 }
 
-// TestAuditOutOfScope proves the audit entry of a refusal: kind security,
-// outcome denied, scope @server, the namespace of the call as the object, and
-// no blob key.
+// TestAuditOutOfScope proves the audit entry of a refusal of a state blob,
+// through the shared recorder with the family of the state blobs: kind
+// security, outcome denied, scope @server, the namespace of the call as the
+// object, a reason that names the state blobs and the place, and no blob key.
 func TestAuditOutOfScope(t *testing.T) {
 	t.Parallel()
 
 	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.FixedZone("x", 3600))
 	entries := &serverEntries{got: nil, err: nil}
 
-	rec, err := NewAuditOutOfScope(entries, func() time.Time { return at })
+	rec, err := secret.NewAuditOutOfScope(entries, audit.ChannelAPI, StateBlobFamily(), func() time.Time { return at })
 	if err != nil {
 		t.Fatalf("new recorder: %v", err)
 	}
 
 	for _, op := range []string{opPut, opGet, opDelete, opList} {
-		if recordErr := rec.RecordOutOfScope(context.Background(), acmeID, op); recordErr != nil {
+		recordErr := rec.RecordOutOfScope(context.Background(), acmeID, op, secret.OutsideNamespace)
+		if recordErr != nil {
 			t.Fatalf("record %s: %v", op, recordErr)
 		}
 	}
 
-	if len(entries.got) != 4 {
-		t.Fatalf("entries = %d, want 4", len(entries.got))
+	recordErr := rec.RecordOutOfScope(context.Background(), acmeID, opGet, secret.OutsideDirectory)
+	if recordErr != nil {
+		t.Fatalf("record outside the directory: %v", recordErr)
+	}
+
+	if len(entries.got) != 5 {
+		t.Fatalf("entries = %d, want 5", len(entries.got))
 	}
 
 	for i, e := range entries.got {
 		checkSecurityEntry(t, i, e, at)
+	}
+
+	if got, want := entries.got[1].Reason, "state blob get refused: key outside the namespace"; got != want {
+		t.Errorf("reason = %q, want %q", got, want)
+	}
+
+	want := "state blob get refused: key outside the tofu directory of the namespace"
+	if got := entries.got[4].Reason; got != want {
+		t.Errorf("reason = %q, want %q", got, want)
 	}
 }
 
@@ -516,61 +532,13 @@ func checkSecurityEntry(t *testing.T, i int, e audit.Entry, at time.Time) {
 	}
 
 	if e.Kind != audit.KindSecurity || e.Outcome != audit.OutcomeDenied || e.Namespace != audit.ServerScope ||
-		e.Action != ActionBlobOutOfScope || e.Object != acmeID.String() || e.Subject != "server" ||
+		e.Action != secret.ActionBlobOutOfScope || e.Object != acmeID.String() || e.Subject != "server" ||
 		!e.At.Equal(at) || e.At.Location() != time.UTC {
 		t.Errorf("entry %d = %+v, want a denied security entry in @server for the namespace", i, e)
 	}
 
 	if strings.Contains(e.Reason, "namespaces/") || strings.Contains(e.Reason, "tofu/") {
 		t.Errorf("reason %q holds a key", e.Reason)
-	}
-}
-
-// TestAuditOutOfScopeRefusesBadInput proves that the recorder fails closed: an
-// unknown operation, an invalid namespace ID, a failed append and a missing
-// store each give an error and no entry.
-func TestAuditOutOfScopeRefusesBadInput(t *testing.T) {
-	t.Parallel()
-
-	if _, err := NewAuditOutOfScope(nil, nil); !errors.Is(err, ErrMissingDependency) {
-		t.Fatalf("new recorder without a store: err = %v, want ErrMissingDependency", err)
-	}
-
-	entries := &serverEntries{got: nil, err: nil}
-
-	rec, err := NewAuditOutOfScope(entries, nil)
-	if err != nil {
-		t.Fatalf("new recorder: %v", err)
-	}
-
-	bad := []struct {
-		name string
-		ns   namespace.ID
-		op   string
-	}{
-		{"an unknown operation", acmeID, "list\nforged"},
-		{"an empty operation", acmeID, ""},
-		{"an empty namespace ID", "", opGet},
-		{"a namespace ID with a line break", "ns-a\nb", opGet},
-	}
-
-	for _, tc := range bad {
-		if recordErr := rec.RecordOutOfScope(context.Background(), tc.ns, tc.op); recordErr == nil {
-			t.Errorf("%s: record succeeded, want an error", tc.name)
-		}
-	}
-
-	if len(entries.got) != 0 {
-		t.Fatalf("entries = %d, want none", len(entries.got))
-	}
-
-	failing, err := NewAuditOutOfScope(&serverEntries{got: nil, err: errLogDown}, nil)
-	if err != nil {
-		t.Fatalf("new recorder: %v", err)
-	}
-
-	if recordErr := failing.RecordOutOfScope(context.Background(), acmeID, opGet); !errors.Is(recordErr, errLogDown) {
-		t.Fatalf("record on a failing store: err = %v, want the store error", recordErr)
 	}
 }
 

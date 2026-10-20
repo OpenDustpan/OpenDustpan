@@ -6,16 +6,17 @@ import (
 	"sync"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // Refusal is one recorded refusal of a blob key outside a namespace.
 type Refusal struct {
 	Namespace namespace.ID
 	Op        string
+	Where     secret.OutOfScopeWhere
 }
 
-// Refusals is a workspace.OutOfScopeRecorder that keeps each refusal in
+// Refusals is a secret.OutOfScopeRecorder that keeps each refusal in
 // memory. It is safe for concurrent use.
 type Refusals struct {
 	mu      sync.Mutex
@@ -25,7 +26,7 @@ type Refusals struct {
 	Err error
 }
 
-var _ workspace.OutOfScopeRecorder = (*Refusals)(nil)
+var _ secret.OutOfScopeRecorder = (*Refusals)(nil)
 
 // NewRefusals returns an empty recorder.
 func NewRefusals() *Refusals {
@@ -33,11 +34,13 @@ func NewRefusals() *Refusals {
 }
 
 // RecordOutOfScope keeps the refusal.
-func (r *Refusals) RecordOutOfScope(_ context.Context, ns namespace.ID, op string) error {
+func (r *Refusals) RecordOutOfScope(
+	_ context.Context, ns namespace.ID, op string, where secret.OutOfScopeWhere,
+) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.entries = append(r.entries, Refusal{Namespace: ns, Op: op})
+	r.entries = append(r.entries, Refusal{Namespace: ns, Op: op, Where: where})
 
 	return r.Err
 }

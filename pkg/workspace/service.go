@@ -258,7 +258,7 @@ type Config struct {
 	Namespaces *namespace.Service
 	// OutOfScope records each refusal of a blob key outside the namespace of
 	// a call. It is required: a refusal must reach the audit log.
-	OutOfScope OutOfScopeRecorder
+	OutOfScope secret.OutOfScopeRecorder
 	// Sealer seals state blobs and outputs documents with the data key of
 	// the workspace scope. It is required: every stored version is sealed.
 	Sealer Sealer
