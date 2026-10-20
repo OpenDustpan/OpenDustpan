@@ -270,9 +270,14 @@ owner's delegation of 20 October 2026 (decisions 9 to 23):
 2. **The field `when`** has the default `applied`. The value `outputs-changed`
    comes later.
 3. **The principal** is the namespace service principal, which holds only the
-   action that starts a plan. A read of the outputs of the source uses the
-   intersection of that principal and the grants of the person who last saved
-   the trigger, checked at each read, and it fails closed. If that person loses
+   action that starts a plan. For a job that a trigger starts, check 2 of
+   ADR 213 decision 1 uses the current grants of the trigger's last saver:
+   `unit:read` on the source, plus `unit:read-secrets` for a secret output.
+   Check 1 (the output-sharing rule) still applies. The server checks at each
+   read and fails closed. A saver that is missing, deleted or disabled means
+   deny, and the admin flag is never rebuilt (treated as false). The
+   namespace service principal gets no read action. The job carries the
+   trigger ID, so that the read handler can find the saver. If that person loses
    access, the trigger needs a new save, and the console says so. The trigger
    stores its last saver, and the audit entry of each start names the trigger
    and the saver. At save, the saver must hold `unit:read` on the source.

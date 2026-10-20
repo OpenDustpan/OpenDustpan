@@ -1,6 +1,6 @@
 # 267. Run triggers: three kinds, a plan only, started through the job service
 
-Status: accepted · 2026-10-20. Records decisions 24.1, 24.3 and 6.1 of the owner, and the scope and the acceptance criteria that the owner wrote in issue 909. Decisions 9 to 23 are decided by the product manager under the owner's delegation of 20 October 2026. Accepts RFC 24 and answers its questions 1 to 12. Uses ADR 153 decisions 2 and 5, ADR 258 decision 3 and ADR 263 decisions 14 and 15
+Status: accepted · 2026-10-20. Records decisions 24.1, 24.3 and 6.1 of the owner, and the scope and the acceptance criteria that the owner wrote in issue 909. Decisions 9 to 23 are decided by the product manager under the owner's delegation of 20 October 2026. Accepts RFC 24 and answers its questions 1 to 12. Uses ADR 153 decisions 2 and 5, ADR 213 decision 1, ADR 258 decision 3 and ADR 263 decisions 14 and 15
 
 ## Context
 
@@ -92,9 +92,16 @@ durable schedule and one cron parser.
 14. **The principal of a start that no person makes (question 3).**
     - The start runs as the namespace service principal. That principal holds
       only the action that starts a plan.
-    - For a read of the outputs of the source, the check uses the
-      intersection of that principal and the grants of the person who last
-      saved the trigger. The server checks it at each read and fails closed.
+    - For a job that a trigger starts, check 2 of ADR 213 decision 1 uses
+      the current grants of the trigger's last saver: `unit:read` on the
+      source, plus `unit:read-secrets` for a secret output. Check 1 (the
+      output-sharing rule) still applies.
+    - The server checks at each read and fails closed. A saver that is
+      missing, deleted or disabled means deny. The server never rebuilds the
+      admin flag. It treats the flag as false.
+    - The namespace service principal that starts the plan gets no read
+      action. The job carries the trigger ID, so that the read handler can
+      find the saver.
     - If that person loses access, the trigger needs a new save, and the
       console says so.
     - The trigger stores its last saver. The audit entry of each start names

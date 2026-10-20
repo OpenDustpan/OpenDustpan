@@ -16,8 +16,10 @@ import (
 // checks it in the transaction of the write, as every other store does. A
 // write appends its audit entry in that transaction (fail closed).
 //
-// The store keeps no schedule clock. How a schedule trigger gets its
-// ticks is not decided yet. The slice that adds it adds the port for it.
+// The store keeps no schedule clock. A schedule trigger gets its ticks from
+// a claim of due slots, with an atomic claim for each slot, so that two
+// instances fire one slot once. The schedule-trigger slice adds the port
+// method ClaimDue for it, with conformance cases first.
 type Store interface {
 	// Put creates the trigger t, or replaces the trigger of the same ID. A
 	// replace cannot change the unit or the kind. In one transaction it checks
@@ -40,7 +42,9 @@ type Store interface {
 	// An adapter serializes the trigger writes of one namespace, for example
 	// with a lock row of the namespace or with SERIALIZABLE transactions. So
 	// two saves at the same time cannot each pass the cycle check over the
-	// same rows and then both commit.
+	// same rows and then both commit. An adapter that uses SERIALIZABLE
+	// transactions retries a serialization failure inside Put, so the caller
+	// sees only nil or ErrCycle, and never a serialization error.
 	//
 	// On every error the store changes nothing. Put does not check access. The
 	// caller checks the actions on the unit, and on the source unit of a
@@ -122,9 +126,12 @@ type Outcome struct {
 // no plan. The Store checks the same value at save and does not replace this
 // check.
 //
-// The dispatcher starts a plan with the principal of the trigger for the
-// events that no person starts. Which principal that is, and what it may
-// do, is not decided yet. A manual fire uses the actor of the caller.
+// For an event that no person starts, the dispatcher starts the plan as the
+// namespace service principal. That principal holds only the action that
+// starts a plan. For a job that a trigger starts, reads of the outputs of the
+// source use the current grants of the last saver of the trigger, and the
+// server denies when that saver is missing, deleted or disabled. A manual
+// fire uses the actor of the caller.
 //
 // The kind review-request-push has no method yet. It joins when the Forge
 // port exists.
@@ -139,9 +146,11 @@ type Dispatcher interface {
 	// Upstream starts a plan for each enabled follows trigger whose source is
 	// applied.Unit. It checks with the job store that applied.Version is a
 	// final state version of that unit, and returns ErrVersionMismatch with
-	// no start otherwise. The idempotency key of each start is
-	// UpstreamKey(id, applied.Version), so a second call for one apply starts
-	// nothing new. It
+	// no start otherwise. An event for a version older than the last final
+	// version that the job store recorded for the unit also returns
+	// ErrVersionMismatch, because the newer version fires. The idempotency key
+	// of each start is UpstreamKey(id, applied.Version), so a second call for
+	// one apply starts nothing new. It
 	// returns one Outcome for each trigger, ordered by trigger ID. A unit that
 	// nothing follows gives no outcome and no error. It returns ErrInvalid for
 	// a value that fails validation.
@@ -170,7 +179,8 @@ type ManualRequest struct {
 // Applied is the event that the source of a follows trigger has applied. The
 // tool package that wrote the final state version of the run sends it, whether
 // a job, a workstation or a pipeline ran the tool. The server knows an apply by
-// that version, not by a job.
+// that version, not by a job. The sender filters the events: the Pulumi
+// adapter sends only for an update of the kind update.
 type Applied struct {
 	// Unit is the unit that applied.
 	Unit graph.Unit

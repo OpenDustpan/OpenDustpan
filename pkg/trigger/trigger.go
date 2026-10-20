@@ -282,8 +282,8 @@ func (e *CycleError) Unwrap() error {
 //
 // Every store adapter calls it in the transaction of Put, over the triggers
 // that it reads in that transaction. So all adapters apply one rule. It is a
-// layer of its own: a runtime check of the dispatcher, if one is added, does
-// not replace it.
+// layer of its own: the depth check of the dispatcher at run time, which the
+// limits slice adds, does not replace it.
 func CheckCycle(existing []Trigger, t Trigger) error {
 	if t.Kind != KindFollows || !t.Enabled {
 		return nil
