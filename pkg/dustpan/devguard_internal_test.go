@@ -78,7 +78,13 @@ func warnServer(t *testing.T, kind installation.Kind, subjects ...string) (*Serv
 	})
 
 	svc, err := principal.NewService(principal.Config{
-		TempAdmins: nil, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      st,
+		Guard:      principal.AdminOnlyGuard{},
+		Namespaces: nil,
+		Tokens:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
