@@ -48,6 +48,10 @@ var (
 	ErrExpiryLimit = errors.New("durable operation holders stopped without an end write too often")
 	// ErrStepPanic reports a step that panicked.
 	ErrStepPanic = errors.New("durable operation step panicked")
+	// ErrDeferred reports an attempt that the runner released without a
+	// failure because a step error matched RunnerConfig.Deferred. RunOnce
+	// returns it, and Run waits the claim backoff before the next claim.
+	ErrDeferred = errors.New("durable operation deferred")
 	// errStepsDone stops the renewal after the last step.
 	errStepsDone = errors.New("steps done")
 	// errLeaseDeadline stops the work when the claim comes near its expiry
@@ -127,7 +131,13 @@ type RunnerConfig struct {
 	// WriteTimeout bounds each write that ends an attempt, also after ctx
 	// ended.
 	WriteTimeout time.Duration
-	Logger       *slog.Logger
+	// Deferred, when it is not nil, reports whether a step error means that
+	// the operation must wait and not fail, for example because the
+	// installation is in maintenance mode. The runner then releases the claim
+	// with no failure, so the attempt does not count toward MaxAttempts, and
+	// waits the claim backoff before it claims again. Nil defers nothing.
+	Deferred func(err error) bool
+	Logger   *slog.Logger
 	// Rand returns a number in [0, 1) for the jitter of Backoff.
 	Rand func() float64
 }
@@ -319,6 +329,12 @@ func (r *Runner) Run(ctx context.Context) {
 			failures = 0
 
 			wait(ctx, r.cfg.PollEvery)
+		case errors.Is(err, ErrDeferred):
+			// The attempt waits for a state change. The backoff grows while
+			// the wait lasts, and the runner logged the deferral.
+			failures++
+
+			wait(ctx, r.cfg.ClaimBackoff.Delay(failures, r.cfg.Rand))
 		default:
 			failures++
 
@@ -395,6 +411,11 @@ func (r *Runner) runClaimed(ctx context.Context, op Operation, claimedAt time.Ti
 		// After a cancel, Release ends the operation canceled. At shutdown,
 		// it returns the operation to pending for another instance.
 		r.release(ctx, claim, log)
+	case stepErr != nil && r.cfg.Deferred != nil && r.cfg.Deferred(stepErr):
+		log.InfoContext(ctx, "durable operation deferred", slog.String("error", ErrorClass(stepErr)))
+		r.release(ctx, claim, log)
+
+		return ErrDeferred
 	case stepErr != nil:
 		r.fail(ctx, claim, op, stepErr, log)
 	default:

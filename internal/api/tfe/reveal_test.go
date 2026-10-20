@@ -210,6 +210,7 @@ func newRevealHandler(
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: onFail,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

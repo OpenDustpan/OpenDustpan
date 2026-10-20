@@ -57,6 +57,7 @@ func sweepChainServer(
 		deletedEvery:     0,
 		idempotency:      nil,
 		idempotencyEvery: 0,
+		flushDenials:     nil,
 	}
 }
 

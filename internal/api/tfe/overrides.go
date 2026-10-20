@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -95,6 +96,27 @@ func (h *Handler) allowance(
 // permits reports whether the principal may do action on obj.
 func (h *Handler) permits(ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object) bool {
 	return h.authz.Authorize(ctx, p, action, obj) == nil
+}
+
+// recordOverrideRefusal writes the audit entry of a write that the workspace
+// refused because an override is off or not granted. The switch check in the
+// domain and the permits check above write none, and the 403 alone leaves no
+// trace. It does nothing for any other error.
+func (h *Handler) recordOverrideRefusal(
+	ctx context.Context, r *http.Request, p identity.Principal, obj identity.Object, err error,
+) {
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
+		return
+	}
+
+	// The action comes from the typed refusal, never from its text. A refusal
+	// without a type is a forced write.
+	action := identity.ActionUnitWriteForced
+	if override, ok := workspace.RefusedOverride(err); ok && override == workspace.OverrideUnlocked {
+		action = identity.ActionUnitWriteUnlocked
+	}
+
+	h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: obj, Reason: "override refused"})
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the

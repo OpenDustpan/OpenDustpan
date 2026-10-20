@@ -77,6 +77,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		},
 		CheckpointEpochs: nil,
 		InstallationKind: installation.KindDev,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler with the sign-in: %v", err)

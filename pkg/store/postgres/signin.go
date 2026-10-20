@@ -23,8 +23,16 @@ func (s *Store) AddFailure(
 		return authgate.FailureCount{}, authgate.ErrInvalidWindow
 	}
 
-	row, err := s.queries.AddSignInFailure(ctx, db.AddSignInFailureParams{
-		Source: source, LengthMs: length.Milliseconds(),
+	var row db.AddSignInFailureRow
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		row, err = q.AddSignInFailure(ctx, db.AddSignInFailureParams{
+			Source: source, LengthMs: length.Milliseconds(),
+		})
+
+		return err
 	})
 	if err != nil {
 		return authgate.FailureCount{}, fmt.Errorf("add sign-in failure: %w", err)
@@ -41,7 +49,15 @@ func (s *Store) AddFailure(
 // deletes every window that ended age or longer ago on the clock of the
 // store.
 func (s *Store) PruneFailures(ctx context.Context, age time.Duration) (int64, error) {
-	deleted, err := s.queries.PruneSignInFailures(ctx, age.Milliseconds())
+	var deleted int64
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		deleted, err = q.PruneSignInFailures(ctx, age.Milliseconds())
+
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("prune sign-in failures: %w", err)
 	}
@@ -53,7 +69,15 @@ func (s *Store) PruneFailures(ctx context.Context, age time.Duration) (int64, er
 // deletes every window that ended age or longer ago on now, which the caller
 // passes instead of the clock of the store.
 func (s *Store) PruneFailuresAt(ctx context.Context, now time.Time, age time.Duration) (int64, error) {
-	deleted, err := s.queries.PruneSignInFailuresAt(ctx, now.UnixMilli()-age.Milliseconds())
+	var deleted int64
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		deleted, err = q.PruneSignInFailuresAt(ctx, now.UnixMilli()-age.Milliseconds())
+
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("prune sign-in failures: %w", err)
 	}

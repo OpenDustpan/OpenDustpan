@@ -85,7 +85,7 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 
 	var changed int64
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		n, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
 			State:   string(next),
 			State_2: string(expected),
