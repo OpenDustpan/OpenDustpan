@@ -1,9 +1,10 @@
 // Package savedviewtest is the conformance suite of the Store port of package
 // savedview. A new adapter runs Run with a Factory.
 //
-// The suite is a skeleton: each case has its name and its rule in the comment,
-// and skips until the first adapter exists. The cases are written before the
-// adapter, so that the adapter has a target.
+// Most cases are a skeleton: each has its name, and it skips until the first
+// adapter exists. One case has a body already: a new principal with the same
+// subject as a deleted principal sees none of its views. The cases are written
+// before the adapter, so that the adapter has a target.
 package savedviewtest
 
 import (
@@ -109,7 +110,7 @@ func visibilityCases() []suiteCase {
 		pending("get of a view in another namespace returns not found"),
 		pending("list returns the views of the owner only"),
 		{
-			name: "views of a deleted principal are gone, and a new principal with the same subject sees none",
+			name: "a new principal with the same subject gets, lists and deletes none of the views of the old principal ID",
 			test: testNewPrincipalSameSubjectSeesNone,
 		},
 		pending("delete of the view of another owner returns not found and keeps the view"),

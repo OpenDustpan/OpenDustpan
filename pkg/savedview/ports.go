@@ -15,8 +15,8 @@ import (
 //
 // Every read names the owner who asks, by the ID of the principal. The store
 // returns only the views of that owner. A view whose owner is not a local
-// principal matches no reader, so it fails closed. So a caller that skips its own check cannot read the view of another
-// person.
+// principal matches no reader, so it fails closed. So a caller that skips its
+// own check cannot read the view of another person.
 type Store interface {
 	// Create stores v. It returns:
 	//   - ErrInvalid when v.Validate fails.

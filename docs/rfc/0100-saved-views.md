@@ -209,10 +209,11 @@ administrator route. The delete of a principal (question 7) covers the leaver.
 Options:
 
 - **A. The views stay.** Nobody can reach them.
-- **B. The views are deleted with the principal**, in the same transaction.
+- **B'. The views are deleted by a cleanup of each namespace**, with its own
+  fence, and not in the transaction that deletes the principal.
 - **C. The views stay and a namespace administrator deletes them.**
 
-**Recommendation: B for private views, with the owner ID as the control.**
+**Recommendation: B' for private views, with the owner ID as the control.**
 The owner of a view is the ID of the principal, and no principal gets an ID
 again. So a new principal with the same subject sees nothing, by
 construction. A view whose owner ID is not a local principal matches no
