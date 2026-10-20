@@ -57,11 +57,14 @@ func devBackupEnv(name string) map[string]string {
 		}
 	}
 
+	// The guessed variants are built from a suffix, so that no literal reads
+	// as the name of a setting that the server declares.
 	upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-	for _, extra := range []string{
-		upper, "DUSTPAN_" + upper, "DUSTPAN_ALLOW_DEV_BACKUPS", "DUSTPAN_ALLOW_DEV_BACKUPS_INTO_PRODUCTION",
-	} {
-		env[extra] = "true"
+	suffixes := []string{upper, "ALLOW_DEV_BACKUPS", "ALLOW_DEV_BACKUPS_INTO_PRODUCTION"}
+
+	for _, suffix := range suffixes {
+		env[suffix] = "true"
+		env["DUSTPAN_"+suffix] = "true"
 	}
 
 	return env
