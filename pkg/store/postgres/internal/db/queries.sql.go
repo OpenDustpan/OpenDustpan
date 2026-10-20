@@ -2779,6 +2779,15 @@ func (q *Queries) DeleteObjectOwners(ctx context.Context, arg DeleteObjectOwners
 	return err
 }
 
+const deletePersonPreferences = `-- name: DeletePersonPreferences :exec
+DELETE FROM person_preferences WHERE principal_id = $1
+`
+
+func (q *Queries) DeletePersonPreferences(ctx context.Context, principalID string) error {
+	_, err := q.db.Exec(ctx, deletePersonPreferences, principalID)
+	return err
+}
+
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = $1
 WHERE id = $2 AND namespace = $3 AND deleted_at_ms IS NULL
@@ -5356,6 +5365,29 @@ func (q *Queries) GetOIDCProviderIssuer(ctx context.Context, providerID string) 
 	var issuer string
 	err := row.Scan(&issuer)
 	return issuer, err
+}
+
+const getPersonPreferences = `-- name: GetPersonPreferences :one
+SELECT p.id, pp.document, pp.updated_at_ms
+FROM principals AS p
+LEFT JOIN person_preferences AS pp ON pp.principal_id = p.id
+WHERE p.id = $1 AND p.kind = 'person' AND p.deleted_at_ms IS NULL
+`
+
+type GetPersonPreferencesRow struct {
+	ID          string
+	Document    pgtype.Text
+	UpdatedAtMs pgtype.Int8
+}
+
+// One row for a live person, with the stored preferences when the person has
+// a row. No row means no live person: a service, a deleted principal or an
+// unknown ID.
+func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPersonPreferencesRow, error) {
+	row := q.db.QueryRow(ctx, getPersonPreferences, id)
+	var i GetPersonPreferencesRow
+	err := row.Scan(&i.ID, &i.Document, &i.UpdatedAtMs)
+	return i, err
 }
 
 const getPrincipal = `-- name: GetPrincipal :one
@@ -11566,6 +11598,30 @@ func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	return err
 }
 
+const lockPersonPreferences = `-- name: LockPersonPreferences :one
+SELECT p.id, pp.document, pp.updated_at_ms
+FROM principals AS p
+LEFT JOIN person_preferences AS pp ON pp.principal_id = p.id
+WHERE p.id = $1 AND p.kind = 'person' AND p.deleted_at_ms IS NULL
+FOR NO KEY UPDATE OF p
+`
+
+type LockPersonPreferencesRow struct {
+	ID          string
+	Document    pgtype.Text
+	UpdatedAtMs pgtype.Int8
+}
+
+// GetPersonPreferences that locks the row of the person until the end of the
+// transaction. Two updates of one person, and the end of the person, wait for
+// each other here, so no update loses the change of another.
+func (q *Queries) LockPersonPreferences(ctx context.Context, id string) (LockPersonPreferencesRow, error) {
+	row := q.db.QueryRow(ctx, lockPersonPreferences, id)
+	var i LockPersonPreferencesRow
+	err := row.Scan(&i.ID, &i.Document, &i.UpdatedAtMs)
+	return i, err
+}
+
 const lockRunnerHandoffToken = `-- name: LockRunnerHandoffToken :one
 SELECT sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms
 FROM runner_handoff_tokens
@@ -14506,6 +14562,23 @@ func (q *Queries) UpsertObjectContext(ctx context.Context, arg UpsertObjectConte
 		arg.UpdatedAtMs,
 		arg.UpdatedBy,
 	)
+	return err
+}
+
+const upsertPersonPreferences = `-- name: UpsertPersonPreferences :exec
+INSERT INTO person_preferences (principal_id, document, updated_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT (principal_id) DO UPDATE SET document = excluded.document, updated_at_ms = excluded.updated_at_ms
+`
+
+type UpsertPersonPreferencesParams struct {
+	PrincipalID string
+	Document    string
+	UpdatedAtMs int64
+}
+
+func (q *Queries) UpsertPersonPreferences(ctx context.Context, arg UpsertPersonPreferencesParams) error {
+	_, err := q.db.Exec(ctx, upsertPersonPreferences, arg.PrincipalID, arg.Document, arg.UpdatedAtMs)
 	return err
 }
 

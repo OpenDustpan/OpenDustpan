@@ -407,6 +407,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteJobBackupTables(),
 		sqliteProfileBackupTables(),
 		sqliteManualLockBackupTables(),
+		sqlitePreferenceBackupTables(),
 	)
 }
 

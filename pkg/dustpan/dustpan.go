@@ -808,7 +808,9 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 
 	cfg.authenticator = authn
 	cfg.authorizer = allowlistGate(identity.SelfAllowed{
-		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
+		Next: cfg.authorizer, Actions: []identity.Action{
+			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences,
+		},
 	}, cfg.ipAllowlists)
 
 	return nil
