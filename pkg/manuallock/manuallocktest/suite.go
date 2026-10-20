@@ -41,6 +41,12 @@ type Store interface {
 // testReason is a lock reason that a case does not care about.
 const testReason = "reason"
 
+// actionUnitLock is the audit action of a lock and of its removal.
+const actionUnitLock = "unit:lock"
+
+// wantLockEntries is the number of audit entries of a lock and its removal.
+const wantLockEntries = 2
+
 // auditPageSize is the page size that a case reads from the audit log.
 const auditPageSize = 50
 
@@ -79,13 +85,26 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a unit lock covers the unit only", test: testUnitLockCovers},
 		{name: "a collection lock covers its units", test: testCollectionLockCovers},
 		{name: "a unit that joins a locked collection is covered", test: testJoinCovered},
+		{name: "every covering lock is listed, unit first", test: testCoveringLocksListsAll},
 		{name: "a unit that leaves a locked collection is not covered", test: testLeaveNotCovered},
+		{name: "a move out of a locked collection needs the right to end the lock", test: testLeaveNeedsEndsLock},
+		{name: "a restore under a manual lock is refused and rolled back", test: testRestoreUnderLock},
 		{name: "the lock of the unit wins over the lock of its collection", test: testUnitLockWins},
 		{name: "a lock does not cross a namespace", test: testNamespaceIsolation},
 		{name: "a deleted collection takes its lock with it", test: testCollectionDeleteDropsLock},
 		{name: "a Pulumi stack keeps its lock through a rename", test: testStackRename},
 		{name: "the inventory shows the lock as a flag", test: testInventoryFlag},
 		{name: "a tool lock never changes a manual lock", test: testToolLockIndependent},
+		{name: "lock a namespace and read the lock", test: testLockNamespace},
+		{name: "a namespace lock covers each unit, also a unit made later", test: testNamespaceLockCovers},
+		{name: "a namespace lock does not cover another namespace", test: testNamespaceLockIsolated},
+		{name: "the nearest lock wins: unit, then collection, then namespace", test: testNearestLockWins},
+		{
+			name: "the holder removes a namespace lock, and a force removal ends another lock",
+			test: testNamespaceRemoval,
+		},
+		{name: "a namespace lock writes audit entries that name the namespace", test: testNamespaceAudit},
+		{name: "the inventory shows the namespace lock as a flag", test: testNamespaceInventoryFlag},
 	}
 
 	for _, tc := range cases {
@@ -139,13 +158,17 @@ func testAlreadyLocked(t *testing.T, s Store) {
 
 	f := newFixture(t, s)
 
-	for _, tc := range []struct {
+	cases := []struct {
 		name   string
 		target manuallock.Target
 	}{
 		{name: string(manuallock.KindUnit), target: manuallock.UnitTarget(f.web)},
 		{name: string(manuallock.KindCollection), target: manuallock.CollectionTarget(f.payments.Ref)},
-	} {
+		{name: string(manuallock.KindNamespace), target: manuallock.NamespaceTarget(f.ns.Name)},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
 		f.lock(t, tc.target, alice, "first")
 
 		err := f.tryLock(t, tc.target, bob, "second")
@@ -165,7 +188,7 @@ func testTargetNotFound(t *testing.T, s Store) {
 
 	f := newFixture(t, s)
 
-	for _, tc := range []struct {
+	cases := []struct {
 		name   string
 		target manuallock.Target
 	}{
@@ -185,7 +208,11 @@ func testTargetNotFound(t *testing.T, s Store) {
 				collection.Ref{Namespace: f.ns.Name, Name: mustName(t, "absent")},
 			),
 		},
-	} {
+		{name: "namespace", target: manuallock.NamespaceTarget("absent")},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
 		err := f.tryLock(t, tc.target, alice, testReason)
 		if !errors.Is(err, manuallock.ErrTargetNotFound) {
 			t.Errorf("%s: err = %v, want ErrTargetNotFound", tc.name, err)
@@ -492,7 +519,7 @@ func testAuditEntries(t *testing.T, s Store) {
 
 	for i := range listing.Entries {
 		e := listing.Entries[i]
-		if e.Action != "unit:lock" {
+		if e.Action != actionUnitLock {
 			continue
 		}
 
@@ -564,6 +591,50 @@ func testCollectionLockCovers(t *testing.T, s Store) {
 	}
 }
 
+// testCoveringLocksListsAll proves CoveringLocks answers each lock that covers
+// the unit, the unit first, then its collection, then its namespace, and that
+// a unit which no lock covers gets ErrNotLocked and never an empty list.
+func testCoveringLocksListsAll(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+
+	if locks, err := s.CoveringLocks(t.Context(), f.web); !errors.Is(err, manuallock.ErrNotLocked) || len(locks) != 0 {
+		t.Fatalf("no lock: %+v, %v; want ErrNotLocked and no lock", locks, err)
+	}
+
+	f.put(t, f.web, f.payments)
+	f.lock(t, manuallock.NamespaceTarget(f.ns.Name), alice, testReason)
+	f.lock(t, manuallock.CollectionTarget(f.payments.Ref), alice, testReason)
+	f.lock(t, manuallock.UnitTarget(f.web), alice, testReason)
+
+	locks, err := s.CoveringLocks(t.Context(), f.web)
+	if err != nil {
+		t.Fatalf("CoveringLocks: %v", err)
+	}
+
+	want := []manuallock.Target{
+		manuallock.UnitTarget(f.web),
+		manuallock.CollectionTarget(f.payments.Ref),
+		manuallock.NamespaceTarget(f.ns.Name),
+	}
+
+	if len(locks) != len(want) {
+		t.Fatalf("CoveringLocks = %d locks, want %d: %+v", len(locks), len(want), locks)
+	}
+
+	for i, target := range want {
+		if locks[i].Target != target {
+			t.Errorf("lock %d target = %s, want %s", i, locks[i].Target, target)
+		}
+	}
+
+	first, err := s.CoveringLock(t.Context(), f.web)
+	if err != nil || first.Target != want[0] {
+		t.Errorf("CoveringLock = %+v, %v; want the lock of the unit", first, err)
+	}
+}
+
 func testJoinCovered(t *testing.T, s Store) {
 	t.Helper()
 
@@ -592,6 +663,154 @@ func testLeaveNotCovered(t *testing.T, s Store) {
 
 	if _, err := s.CoveringLock(t.Context(), f.web); !errors.Is(err, manuallock.ErrNotLocked) {
 		t.Errorf("after the move to another collection: err = %v, want ErrNotLocked", err)
+	}
+}
+
+// testLeaveNeedsEndsLock proves the store refuses, in the transaction of the
+// move, a move out of a collection with a manual lock when the caller may not
+// end the lock. The unit stays covered. The same move with the right to end the
+// lock goes through, and a move out of a collection with no lock needs no right.
+func testLeaveNeedsEndsLock(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	f.put(t, f.web, f.payments)
+	f.lock(t, manuallock.CollectionTarget(f.payments.Ref), alice, testReason)
+
+	m := collection.Move{
+		Unit:     f.web,
+		From:     f.payments.Ref.Name,
+		To:       f.platform.Ref,
+		ToID:     f.platform.ID,
+		EndsLock: false,
+	}
+
+	err := s.SetUnitCollection(t.Context(), m, f.ns.Fence(), auditFor(f.ns.Fence()))
+	if !errors.Is(err, collection.ErrMoveOutOfLockedCollection) {
+		t.Fatalf("move out without the right to end the lock: err = %v, want ErrMoveOutOfLockedCollection", err)
+	}
+
+	if got, covErr := s.CoveringLock(t.Context(), f.web); covErr != nil || got.Holder != alice {
+		t.Errorf("after the refused move: covering lock = %+v, %v; want the lock of the collection", got, covErr)
+	}
+
+	// A move inside the same collection ends no coverage.
+	same := collection.Move{
+		Unit:     f.web,
+		From:     f.payments.Ref.Name,
+		To:       f.payments.Ref,
+		ToID:     f.payments.ID,
+		EndsLock: false,
+	}
+	if sameErr := s.SetUnitCollection(t.Context(), same, f.ns.Fence(), auditFor(f.ns.Fence())); sameErr != nil {
+		t.Errorf("move into the same collection: %v", sameErr)
+	}
+
+	m.EndsLock = true
+	if allowErr := s.SetUnitCollection(t.Context(), m, f.ns.Fence(), auditFor(f.ns.Fence())); allowErr != nil {
+		t.Fatalf("move out with the right to end the lock: %v", allowErr)
+	}
+
+	// platform has no lock: leaving it needs no right.
+	back := collection.Move{
+		Unit:     f.web,
+		From:     f.platform.Ref.Name,
+		To:       f.payments.Ref,
+		ToID:     f.payments.ID,
+		EndsLock: false,
+	}
+	if backErr := s.SetUnitCollection(t.Context(), back, f.ns.Fence(), auditFor(f.ns.Fence())); backErr != nil {
+		t.Errorf("move out of a collection with no lock: %v", backErr)
+	}
+}
+
+// testRestoreUnderLock proves the restore of a deleted workspace and of a
+// deleted stack is refused, and rolled back, while a manual lock covers the
+// place the unit comes back to: its collection or its namespace. The unit stays
+// deleted. After the lock goes, the restore works.
+func testRestoreUnderLock(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+
+	t.Run("workspace in a locked collection", func(t *testing.T) {
+		f.put(t, f.web, f.payments)
+		restoreWorkspaceUnderLock(t, f, f.web, manuallock.CollectionTarget(f.payments.Ref))
+	})
+	t.Run("workspace in a locked namespace", func(t *testing.T) {
+		restoreWorkspaceUnderLock(t, f, f.api, manuallock.NamespaceTarget(f.ns.Name))
+	})
+	t.Run("stack in a locked namespace", func(t *testing.T) {
+		restoreStackUnderLock(t, f, manuallock.NamespaceTarget(f.ns.Name))
+	})
+}
+
+// restoreWorkspaceUnderLock deletes the workspace unit, takes the lock target,
+// and checks the restore against it.
+func restoreWorkspaceUnderLock(t *testing.T, f *fixture, unit collection.UnitRef, target manuallock.Target) {
+	t.Helper()
+
+	ctx, fence := t.Context(), f.ns.Fence()
+
+	ws, err := f.s.GetWorkspace(ctx, workspace.Ref{Namespace: f.ns.Name, Name: workspace.Name(unit.Name)})
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+
+	deletion := inventory.Deletion{Entry: auditFor(fence), PurgeAfter: now().Add(time.Hour)}
+	if delErr := f.s.DeleteWorkspace(ctx, ws.Ref, fence, deletion); delErr != nil {
+		t.Fatalf("DeleteWorkspace: %v", delErr)
+	}
+
+	f.lock(t, target, alice, testReason)
+
+	_, restoreErr := f.s.RestoreWorkspace(ctx, ws.ID, "", fence, auditFor(fence))
+	if !errors.Is(restoreErr, manuallock.ErrLocked) {
+		t.Fatalf("restore under the %s lock: err = %v, want ErrLocked", target.Kind, restoreErr)
+	}
+
+	if _, getErr := f.s.GetWorkspace(ctx, ws.Ref); !errors.Is(getErr, workspace.ErrNotFound) {
+		t.Errorf("workspace after the refused restore: err = %v, want ErrNotFound", getErr)
+	}
+
+	f.forceRemove(t, target)
+
+	if _, restoreErr := f.s.RestoreWorkspace(ctx, ws.ID, "", fence, auditFor(fence)); restoreErr != nil {
+		t.Errorf("restore after the lock goes: %v", restoreErr)
+	}
+}
+
+// restoreStackUnderLock deletes a stack, takes the lock target, and checks the
+// restore against it.
+func restoreStackUnderLock(t *testing.T, f *fixture, target manuallock.Target) {
+	t.Helper()
+
+	ctx, fence := t.Context(), f.ns.Fence()
+	st := newPulumiStack(f.ns.Name, "web", "prod")
+
+	if err := f.s.CreateStack(ctx, st, fence); err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+
+	deletion := inventory.Deletion{Entry: auditFor(fence), PurgeAfter: now().Add(time.Hour)}
+	if err := f.s.ForceDeleteStack(ctx, st.Ref, fence, deletion); err != nil {
+		t.Fatalf("ForceDeleteStack: %v", err)
+	}
+
+	f.lock(t, target, alice, testReason)
+
+	if _, err := f.s.RestoreStack(ctx, st.ID, "", fence, auditFor(fence)); !errors.Is(err, manuallock.ErrLocked) {
+		t.Fatalf("restore under the %s lock: err = %v, want ErrLocked", target.Kind, err)
+	}
+
+	if _, err := f.s.GetStack(ctx, st.Ref); !errors.Is(err, stack.ErrNotFound) {
+		t.Errorf("stack after the refused restore: err = %v, want ErrNotFound", err)
+	}
+
+	f.forceRemove(t, target)
+
+	if _, err := f.s.RestoreStack(ctx, st.ID, "", fence, auditFor(fence)); err != nil {
+		t.Errorf("restore after the lock goes: %v", err)
 	}
 }
 
@@ -812,4 +1031,223 @@ func hasChange(e audit.Entry, key, old string) bool {
 	}
 
 	return false
+}
+
+func testLockNamespace(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	target := manuallock.NamespaceTarget(f.ns.Name)
+
+	f.lock(t, target, alice, "release freeze")
+
+	got, err := s.GetLock(t.Context(), target)
+	if err != nil {
+		t.Fatalf("GetLock: %v", err)
+	}
+
+	want := manuallock.Lock{Since: now(), Target: target, Holder: alice, Reason: "release freeze"}
+	if got != want {
+		t.Errorf("lock = %+v, want %+v", got, want)
+	}
+
+	if _, err := s.GetLock(t.Context(), manuallock.UnitTarget(f.web)); !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Errorf("GetLock of a unit: err = %v, want ErrNotLocked: GetLock does not read the namespace", err)
+	}
+}
+
+func testNamespaceLockCovers(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	target := manuallock.NamespaceTarget(f.ns.Name)
+
+	f.lock(t, target, alice, testReason)
+
+	later := createWorkspace(t, s, f.ns, "later")
+	stk := newPulumiStack(f.ns.Name, "proj", "dev")
+
+	if err := s.CreateStack(t.Context(), stk, f.ns.Fence()); err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+
+	pulumi := collection.UnitRef{Namespace: f.ns.Name, Tool: toolPulumi, Name: "proj/dev"}
+
+	for _, unit := range []collection.UnitRef{f.web, f.api, later, pulumi} {
+		got, err := s.CoveringLock(t.Context(), unit)
+		if err != nil || got.Holder != alice || got.Target != target {
+			t.Errorf("%s: covering lock = %+v, %v; want the lock of the namespace", unit, got, err)
+		}
+	}
+
+	missing := collection.UnitRef{Namespace: f.ns.Name, Tool: toolOpenTofu, Name: "absent"}
+	if _, err := s.CoveringLock(t.Context(), missing); !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Errorf("missing unit: err = %v, want ErrNotLocked", err)
+	}
+}
+
+func testNamespaceLockIsolated(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	other := newNamespace(t, s, "globex")
+	twin := createWorkspace(t, s, other, "web")
+
+	f.lock(t, manuallock.NamespaceTarget(f.ns.Name), alice, testReason)
+
+	if _, err := s.CoveringLock(t.Context(), twin); !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Errorf("unit of another namespace: err = %v, want ErrNotLocked", err)
+	}
+
+	l := manuallock.Lock{Since: now(), Target: manuallock.NamespaceTarget(f.ns.Name), Holder: alice, Reason: testReason}
+	if err := s.PutLock(t.Context(), l, other.Fence(), auditFor(other.Fence())); err == nil {
+		t.Error("PutLock of a namespace with the fence of another namespace succeeded")
+	}
+}
+
+func testNearestLockWins(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	f.put(t, f.web, f.payments)
+
+	namespaceLock := manuallock.NamespaceTarget(f.ns.Name)
+	collectionLock := manuallock.CollectionTarget(f.payments.Ref)
+	unitLock := manuallock.UnitTarget(f.web)
+
+	f.lock(t, namespaceLock, alice, "namespace reason")
+	f.lock(t, collectionLock, bob, "collection reason")
+	f.lock(t, unitLock, alice, "unit reason")
+
+	// Each step removes the nearest lock, and the next one covers the unit.
+	// The first step removes nothing.
+	removals := []*manuallock.Target{nil, &unitLock, &collectionLock}
+	wants := []manuallock.Target{unitLock, collectionLock, namespaceLock}
+
+	for i, remove := range removals {
+		if remove != nil {
+			if _, err := s.ForceRemoveLock(t.Context(), *remove, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+				t.Fatalf("remove %s: %v", remove, err)
+			}
+		}
+
+		got, err := s.CoveringLock(t.Context(), f.web)
+		if err != nil || got.Target != wants[i] {
+			t.Errorf("step %d: covering lock = %+v, %v; want the lock of %s", i, got, err, wants[i])
+		}
+	}
+
+	// The unit that is in no collection meets the namespace lock first.
+	if got, err := s.CoveringLock(t.Context(), f.api); err != nil || got.Target != namespaceLock {
+		t.Errorf("unit in no collection: covering lock = %+v, %v; want the lock of the namespace", got, err)
+	}
+}
+
+func testNamespaceRemoval(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	target := manuallock.NamespaceTarget(f.ns.Name)
+
+	f.lock(t, target, alice, "release freeze")
+
+	_, err := s.RemoveLock(t.Context(), target, bob, f.ns.Fence(), lockAudit(f.ns.Fence()))
+	if !errors.Is(err, manuallock.ErrNotHolder) {
+		t.Fatalf("removal by another principal: err = %v, want ErrNotHolder", err)
+	}
+
+	if _, getErr := s.GetLock(t.Context(), target); getErr != nil {
+		t.Fatalf("lock after a refused removal: %v", getErr)
+	}
+
+	if _, rmErr := s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence())); rmErr != nil {
+		t.Fatalf("removal by the holder: %v", rmErr)
+	}
+
+	if _, getErr := s.GetLock(t.Context(), target); !errors.Is(getErr, manuallock.ErrNotLocked) {
+		t.Errorf("lock after the removal: err = %v, want ErrNotLocked", getErr)
+	}
+
+	f.lock(t, target, alice, "again")
+
+	if _, forceErr := s.ForceRemoveLock(t.Context(), target, f.ns.Fence(), lockAudit(f.ns.Fence())); forceErr != nil {
+		t.Fatalf("force removal: %v", forceErr)
+	}
+
+	if _, coverErr := s.CoveringLock(t.Context(), f.web); !errors.Is(coverErr, manuallock.ErrNotLocked) {
+		t.Errorf("covering lock after the force removal: err = %v, want ErrNotLocked", coverErr)
+	}
+
+	_, err = s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence()))
+	if !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Errorf("removal of a missing namespace lock: err = %v, want ErrNotLocked", err)
+	}
+}
+
+func testNamespaceAudit(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	target := manuallock.NamespaceTarget(f.ns.Name)
+
+	f.lock(t, target, alice, "release freeze")
+
+	if _, err := s.RemoveLock(t.Context(), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+		t.Fatalf("RemoveLock: %v", err)
+	}
+
+	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Number: 1, Size: auditPageSize})
+	if err != nil {
+		t.Fatalf("List audit: %v", err)
+	}
+
+	var locks []audit.Entry
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == actionUnitLock {
+			locks = append(locks, listing.Entries[i])
+		}
+	}
+
+	if len(locks) != wantLockEntries {
+		t.Fatalf("lock audit entries = %d, want %d (lock and unlock)", len(locks), wantLockEntries)
+	}
+
+	for i := range locks {
+		if locks[i].ObjectID != f.ns.ID.String() {
+			t.Errorf("audit ObjectID = %q, want the ID of the namespace %q", locks[i].ObjectID, f.ns.ID)
+		}
+	}
+}
+
+func testNamespaceInventoryFlag(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	f.put(t, f.web, f.payments)
+
+	f.lock(t, manuallock.NamespaceTarget(f.ns.Name), alice, "namespace reason")
+
+	wantNamespace := &inventory.ManualLock{
+		Since:  now(),
+		Kind:   string(manuallock.KindNamespace),
+		Object: f.ns.Name.String(),
+		Holder: alice,
+		Reason: "namespace reason",
+	}
+
+	got := flags(t, s, f.ns.Name)
+	for _, name := range []string{f.web.Name, f.api.Name} {
+		if got[name] == nil || *got[name] != *wantNamespace {
+			t.Errorf("flag of %s = %+v, want %+v", name, got[name], wantNamespace)
+		}
+	}
+
+	f.lock(t, manuallock.CollectionTarget(f.payments.Ref), bob, "collection reason")
+
+	if got := flags(t, s, f.ns.Name)[f.web.Name]; got == nil || got.Kind != string(manuallock.KindCollection) {
+		t.Errorf("flag of the member with both locks = %+v, want the lock of the collection", got)
+	}
+
+	checkGetUnitFlags(t, s, f.ns.Name)
 }

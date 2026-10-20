@@ -67,7 +67,9 @@ func newRealStack(t *testing.T) *realStack {
 		t.Fatalf("create namespace: %v", createErr)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: st, Namespaces: namespaces, Now: nil, State: nil, Retention: 0})
+	stacks, err := stack.NewService(
+		stack.Config{Store: st, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}

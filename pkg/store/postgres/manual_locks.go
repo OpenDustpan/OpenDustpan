@@ -133,40 +133,79 @@ func (s *Store) GetLock(ctx context.Context, t manuallock.Target) (manuallock.Lo
 // CoveringLock implements manuallock.Store. The lock of the unit wins over the
 // lock of its collection.
 func (s *Store) CoveringLock(ctx context.Context, unit collection.UnitRef) (manuallock.Lock, error) {
-	row, err := s.queries.GetCoveringManualLocks(ctx, db.GetCoveringManualLocksParams{
+	return coveringLock(ctx, s.queries, unit)
+}
+
+// coveringLock is CoveringLock in the transaction of q. A restore reads the lock
+// of the unit it has just brought back, in its own transaction.
+func coveringLock(ctx context.Context, q *db.Queries, unit collection.UnitRef) (manuallock.Lock, error) {
+	locks, err := coveringLocks(ctx, q, unit)
+	if err != nil {
+		return manuallock.Lock{}, err
+	}
+
+	return locks[0], nil
+}
+
+// CoveringLocks implements manuallock.Store. It reads the row of the unit once,
+// so the answer is one consistent view of the three locks.
+func (s *Store) CoveringLocks(ctx context.Context, unit collection.UnitRef) ([]manuallock.Lock, error) {
+	return coveringLocks(ctx, s.queries, unit)
+}
+
+// coveringLocks returns every manual lock that covers the unit, the lock of the
+// unit first, then the lock of its collection, then the lock of its namespace.
+// It returns ErrNotLocked, and never an empty list, when none covers the unit.
+func coveringLocks(ctx context.Context, q *db.Queries, unit collection.UnitRef) ([]manuallock.Lock, error) {
+	row, err := q.GetCoveringManualLocks(ctx, db.GetCoveringManualLocksParams{
 		Namespace: unit.Namespace.String(),
 		Tool:      unit.Tool,
 		Name:      unit.Name,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return manuallock.Lock{}, manuallock.ErrNotLocked
+		return nil, manuallock.ErrNotLocked
 	}
 
 	if err != nil {
-		return manuallock.Lock{}, fmt.Errorf("select covering manual lock: %w", err)
+		return nil, fmt.Errorf("select covering manual lock: %w", err)
 	}
 
+	var locks []manuallock.Lock
+
 	if row.UnitHolder.Valid {
-		return manuallock.Lock{
+		locks = append(locks, manuallock.Lock{
 			Since:  codec.FromMillis(row.UnitSinceMs.Int64),
 			Target: manuallock.UnitTarget(unit),
 			Holder: row.UnitHolder.String,
 			Reason: row.UnitReason.String,
-		}, nil
+		})
 	}
 
 	if row.CollectionHolder.Valid {
 		ref := collection.Ref{Namespace: unit.Namespace, Name: collection.Name(row.CollectionName.String)}
 
-		return manuallock.Lock{
+		locks = append(locks, manuallock.Lock{
 			Since:  codec.FromMillis(row.CollectionSinceMs.Int64),
 			Target: manuallock.CollectionTarget(ref),
 			Holder: row.CollectionHolder.String,
 			Reason: row.CollectionReason.String,
-		}, nil
+		})
 	}
 
-	return manuallock.Lock{}, manuallock.ErrNotLocked
+	if row.NamespaceHolder.Valid {
+		locks = append(locks, manuallock.Lock{
+			Since:  codec.FromMillis(row.NamespaceSinceMs.Int64),
+			Target: manuallock.NamespaceTarget(unit.Namespace),
+			Holder: row.NamespaceHolder.String,
+			Reason: row.NamespaceReason.String,
+		})
+	}
+
+	if len(locks) == 0 {
+		return nil, manuallock.ErrNotLocked
+	}
+
+	return locks, nil
 }
 
 // manualLockObject returns the stable ID of the object of t: the unit ID of
@@ -175,6 +214,19 @@ func (s *Store) CoveringLock(ctx context.Context, unit collection.UnitRef) (manu
 func manualLockObject(ctx context.Context, q *db.Queries, t manuallock.Target) (string, error) {
 	if err := t.Valid(); err != nil {
 		return "", err
+	}
+
+	if t.Kind == manuallock.KindNamespace {
+		row, err := q.GetNamespace(ctx, t.Space.String())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("%w: %s", manuallock.ErrTargetNotFound, t)
+		}
+
+		if err != nil {
+			return "", fmt.Errorf("select namespace: %w", err)
+		}
+
+		return row.ID, nil
 	}
 
 	if t.Kind == manuallock.KindCollection {
@@ -257,7 +309,7 @@ func endedLockChanges(l manuallock.Lock) []audit.Change {
 
 // inventoryManualFlag converts the manual lock columns of an inventory row into
 // the flag of the entry. The lock of the unit wins over the lock of its
-// collection. It returns nil when no lock covers the unit.
+// collection, and that wins over the lock of its namespace. It returns nil when no lock covers the unit.
 func inventoryManualFlag(row db.ListInventoryRow) *inventory.ManualLock {
 	switch {
 	case row.UnitManualHolder.Valid:
@@ -275,6 +327,14 @@ func inventoryManualFlag(row db.ListInventoryRow) *inventory.ManualLock {
 			Object: row.Namespace + "/" + row.Collection,
 			Holder: row.CollectionManualHolder.String,
 			Reason: row.CollectionManualReason.String,
+		}
+	case row.NamespaceManualHolder.Valid:
+		return &inventory.ManualLock{
+			Since:  codec.FromMillis(row.NamespaceManualSinceMs.Int64),
+			Kind:   string(manuallock.KindNamespace),
+			Object: row.Namespace,
+			Holder: row.NamespaceManualHolder.String,
+			Reason: row.NamespaceManualReason.String,
 		}
 	default:
 		return nil

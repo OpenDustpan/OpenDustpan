@@ -39,9 +39,9 @@ _Avoid_: Unit ID, path, address
 _Copy says_: the name of the stack or the workspace, with its tool and namespace. `<tool>:<namespace>/<name>` stays in the API.
 
 **Manual lock**:
-A lock that a person puts on one unit or on one collection, with a reason of at most 500 characters. While it covers a unit, a lock request of a tool for that unit fails and names the holder and the reason. It covers each unit that is in the collection now. The holder unlocks it, or a person with `unit:manage` on the object force-unlocks it with an audit entry. A tool force-unlock never ends it. The inventory shows it as a flag that is apart from the unit lock (ADR 213 decision 10).
+A lock that a person puts on one unit, on one collection or on a whole namespace, with a reason of at most 500 characters. While it covers a unit, a lock request of a tool for that unit fails and names the holder and the reason. No new job of the unit starts, and a queued phase does not dispatch. A phase that already runs runs to its end. It covers each unit that is in the collection or in the namespace now. The holder unlocks it, or a person with `unit:manage` on the object force-unlocks it with an audit entry. A tool force-unlock never ends it. The inventory shows it as a flag that is apart from the unit lock (ADR 213 decision 10).
 _Avoid_: Freeze (that is a schedule of a namespace), hold, pause
-_Copy says_: "manual lock", on a stack, a workspace or a collection. Both stacks and workspaces: "stacks and workspaces". The `unit:lock` and `unit:manage` action names stay in the API.
+_Copy says_: "manual lock", on a stack, a workspace, a collection or a namespace. Both stacks and workspaces: "stacks and workspaces". The `unit:lock` and `unit:manage` action names stay in the API.
 
 **State**:
 The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state and may read it. A read masks secret values (ADR 41).
