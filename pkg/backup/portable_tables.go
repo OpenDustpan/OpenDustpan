@@ -45,6 +45,7 @@ const (
 	portColAtMs          = "at_ms"
 	portColScopeKey      = "scope_key"
 	portColSeq           = "seq"
+	portColOwner         = "owner"
 	portColBody          = "body"
 )
 
@@ -315,7 +316,7 @@ func portableSpec() []PortableTable {
 			Table: "object_context_owners",
 			OrderBy: []string{
 				portColNamespaceID,
-				"owner",
+				portColOwner,
 				portColObjectKind,
 				portColObjectID,
 				portColResourceKey,
@@ -323,7 +324,7 @@ func portableSpec() []PortableTable {
 			},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "owner", Kind: KindText},
+				{Name: portColOwner, Kind: KindText},
 				{Name: portColObjectKind, Kind: KindText},
 				{Name: portColObjectID, Kind: KindText},
 				{Name: portColResourceKey, Kind: KindText},
@@ -705,5 +706,6 @@ func portableSpec() []PortableTable {
 		portableProfileTables(),
 		portableManualLockTables(),
 		portablePreferenceTables(),
+		portableSavedViewTables(),
 	)
 }

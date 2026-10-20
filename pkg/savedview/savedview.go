@@ -4,8 +4,9 @@
 // again with the access of the reader, so a view cannot show a unit that the
 // reader cannot read. A saved view grants no access.
 //
-// This package holds the types and the port only. It has no adapter, no route
-// and no SQL yet.
+// This package holds the types, the Store port and the Service that adds the
+// fence, the ID and the audit entry to a write. The SQL adapters live in
+// pkg/store. The HTTP routes live in the inventory API.
 package savedview
 
 import (
@@ -20,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -27,14 +29,14 @@ import (
 const (
 	// MaxLabelFilters is the largest number of label filters in one query. It
 	// is the limit of the unit list.
-	MaxLabelFilters = 10
+	MaxLabelFilters = inventory.MaxLabelFilters
 	// MaxReferenceFilters is the largest number of reference filters in one
 	// query. It is the limit of the unit list.
-	MaxReferenceFilters = 20
+	MaxReferenceFilters = inventory.MaxReferenceFilters
 	// MaxLabelKeyLen is the largest length of a label key, in bytes.
-	MaxLabelKeyLen = 128
+	MaxLabelKeyLen = inventory.MaxLabelKeyLen
 	// MaxLabelValueLen is the largest length of a label value, in characters.
-	MaxLabelValueLen = 256
+	MaxLabelValueLen = inventory.MaxLabelValueLen
 	// MaxNameLen is the largest length of the name of a view, in characters.
 	MaxNameLen = 128
 	// MaxPerOwner is the largest number of views that one owner has in one
@@ -120,14 +122,14 @@ func validateLabels(labels []Label) error {
 	}
 
 	for i, l := range labels {
-		if !validLabelKey(l.Key) {
+		if !inventory.ValidLabelKey(l.Key) {
 			return fmt.Errorf(
 				"%w: label %d: the key has 1 to %d characters: letters, digits and . _ : / -",
 				ErrInvalid, i+1, MaxLabelKeyLen,
 			)
 		}
 
-		if !validLabelValue(l.Value) {
+		if !inventory.ValidLabelValue(l.Value) {
 			return fmt.Errorf(
 				"%w: label %d: the value has at most %d characters and no control character",
 				ErrInvalid, i+1, MaxLabelValueLen,
@@ -148,7 +150,7 @@ func validateReferences(refs []string, ns namespace.Name) error {
 		// accepts a control character. A view is stored text that the server
 		// later logs and shows, so this check stays and does not rely on the
 		// parser.
-		if !utf8.ValidString(ref) || hasControl(ref) {
+		if !utf8.ValidString(ref) || inventory.HasControl(ref) {
 			return fmt.Errorf("%w: reference %d: use a unit reference", ErrInvalid, i+1)
 		}
 
@@ -199,17 +201,18 @@ func (v View) Validate() error {
 	// store an owner that is not a principal ID, for example a subject that
 	// another principal can have later. It does not rely on the handler or on
 	// the identity provider.
-	if !validOwner(v.Owner) {
+	if !ValidOwner(v.Owner) {
 		return fmt.Errorf("%w: the view has no valid owner", ErrInvalid)
 	}
 
 	return v.Query.Validate(v.Namespace)
 }
 
-// validOwner reports whether s is the ID of a principal: the principal prefix
+// ValidOwner reports whether s is the ID of a principal: the principal prefix
 // and the ID characters, at most maxOwnerLen bytes. The check does not parse
-// the ID.
-func validOwner(s string) bool {
+// the ID. A store uses it to refuse a cleanup for an owner that cannot be a
+// principal.
+func ValidOwner(s string) bool {
 	return len(s) > len(principal.IDPrefix) && strings.HasPrefix(s, principal.IDPrefix) && ident.Valid(s, maxOwnerLen)
 }
 
@@ -231,39 +234,4 @@ func validName(s string) bool {
 // paragraph separator character: the set that the audit log refuses.
 func hasHidden(s string) bool {
 	return strings.ContainsFunc(s, audit.IsHiddenRune)
-}
-
-func hasControl(s string) bool {
-	for _, c := range s {
-		if unicode.IsControl(c) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// validLabelKey reports whether s is a label key: 1 to MaxLabelKeyLen letters,
-// digits and the characters . _ : / -.
-func validLabelKey(s string) bool {
-	if s == "" || len(s) > MaxLabelKeyLen {
-		return false
-	}
-
-	for _, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == '.', c == '_', c == ':', c == '/', c == '-':
-		default:
-			return false
-		}
-	}
-
-	return true
-}
-
-// validLabelValue reports whether s is a label value: 0 to MaxLabelValueLen
-// characters of valid UTF-8, with no control character.
-func validLabelValue(s string) bool {
-	return utf8.ValidString(s) && utf8.RuneCountInString(s) <= MaxLabelValueLen && !hasControl(s)
 }

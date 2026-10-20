@@ -3401,3 +3401,46 @@ ON CONFLICT (principal_id) DO UPDATE SET document = excluded.document, updated_a
 
 -- name: DeletePersonPreferences :exec
 DELETE FROM person_preferences WHERE principal_id = sqlc.arg(principal_id);
+
+-- name: InsertSavedView :execrows
+-- The caller checks the fence in the same transaction. A view of the same
+-- owner with the same name in the namespace is not written.
+INSERT INTO saved_views (id, namespace_id, owner, name, query_json, created_at_ms)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(owner), sqlc.arg(name), sqlc.arg(query_json), sqlc.arg(created_at_ms)
+)
+ON CONFLICT (namespace_id, owner, name) DO NOTHING;
+
+-- name: CountSavedViewsOfOwner :one
+SELECT COUNT(*) FROM saved_views
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND owner = sqlc.arg(owner);
+
+-- name: CountSavedViewsInNamespace :one
+SELECT COUNT(*) FROM saved_views
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetSavedView :one
+-- The owner is part of the key: a view of another owner reads as no row.
+SELECT v.id, n.name AS namespace, v.owner, v.name, v.query_json, v.created_at_ms
+FROM saved_views AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.id = sqlc.arg(id) AND v.owner = sqlc.arg(owner);
+
+-- name: ListSavedViewsOfOwner :many
+SELECT v.id, n.name AS namespace, v.owner, v.name, v.query_json, v.created_at_ms
+FROM saved_views AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND v.owner = sqlc.arg(owner)
+ORDER BY v.name, v.id;
+
+-- name: DeleteSavedView :execrows
+DELETE FROM saved_views
+WHERE saved_views.id = sqlc.arg(id) AND saved_views.owner = sqlc.arg(owner)
+  AND saved_views.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListSavedViewIDsOfOwner :many
+SELECT v.id
+FROM saved_views AS v
+WHERE v.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND v.owner = sqlc.arg(owner)
+ORDER BY v.id;

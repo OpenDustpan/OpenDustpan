@@ -636,6 +636,15 @@ type RunnerSession struct {
 	CreatedAtMs    int64
 }
 
+type SavedView struct {
+	ID          string
+	NamespaceID string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
 type SchemaMigration struct {
 	Version          int64
 	Name             string

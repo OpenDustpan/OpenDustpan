@@ -152,6 +152,7 @@ var Tables = []string{
 	"profile_revisions",
 	"manual_locks",
 	TablePersonPreferences,
+	"saved_views",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

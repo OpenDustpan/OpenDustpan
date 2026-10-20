@@ -111,6 +111,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyProfileTables()...)
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
+	tables = append(tables, pgCopySavedViewTables()...)
 
 	return tables
 }
@@ -907,6 +908,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 
 	if idsErr := checkStagedNamespaceIDs(ctx, s.pool, in.staging); idsErr != nil {
 		return backup.Summary{}, idsErr
+	}
+
+	if viewsErr := checkStagedSavedViews(ctx, s.pool, in.staging); viewsErr != nil {
+		return backup.Summary{}, viewsErr
 	}
 
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
