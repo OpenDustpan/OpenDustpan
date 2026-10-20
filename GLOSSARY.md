@@ -65,6 +65,10 @@ _Avoid_: Routing rule, assignment rule
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
+**Saved view**:
+A name for a query of the unit list, stored on the server and read through the REST API (ADR 266). A saved view holds the query and never its results. A reader runs the query again with the access of the reader, so the view shows only units that the reader can read. A saved view grants no access (ADR 51 decision 7). Who owns a view, how a view is shared and what it stores besides filters are open questions (RFC 100).
+_Avoid_: Filter preset, bookmark, smart collection (a collection holds units by explicit membership, ADR 51)
+
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
 _Avoid_: Lease (for the inventory field), unit status

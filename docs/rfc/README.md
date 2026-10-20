@@ -88,7 +88,7 @@ both together.
 | [37](0037-federation.md) | Namespace placement and routing | draft; hosted multitenancy decided (ADR 215), opt-in routing and replication in RFC 79 |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |
-| [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
+| [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft; saved views in RFC 100, a saved view is a server object with an API (ADR 266) |
 | [41](0041-agent-interface.md) | An interface for AI agents | draft |
 | [42](0042-migration-import.md) | Migration from other backends and operators | accepted (ADR 29); the import resource and the source adapters decided by ADRs 241 to 244 |
 | [43](0043-ephemeral-units.md) | Ephemeral units and time to live | draft |
@@ -145,3 +145,4 @@ both together.
 | [96](0096-follow-ups-after-an-apply.md) | Follow-ups after an apply, which start an AWX job template or send a signed webhook with selected outputs | draft |
 | [97](0097-test-reports-on-stacks-and-workspaces.md) | Test reports on stacks and workspaces, an extension of RFC 90 to test results | draft |
 | [98](0098-chat-sinks-one-sender-a-renderer-for-each-platform.md) | Chat sinks, with one sender and a renderer for each chat platform (ADR 262) | discussing |
+| [100](0100-saved-views.md) | Saved views of the unit list, a part of RFC 40 | discussing; a saved view is a server object with an API (ADR 266) |
