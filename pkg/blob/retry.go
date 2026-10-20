@@ -2,6 +2,7 @@ package blob
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -14,7 +15,10 @@ func deleteBackoff() []time.Duration {
 
 // DeleteRetried removes the object under key from s, and retries a failed
 // delete after a short backoff. Deleting a missing key is not an error. It
-// stops when ctx ends and returns the last error.
+// stops when ctx ends and returns the last error. It does not retry an error
+// that a retry cannot change: a key outside the scope of a view
+// (ErrOutOfScope), a key that is not valid (ErrInvalidKey) and an ended
+// context.
 func DeleteRetried(ctx context.Context, s Store, key Key) error {
 	var err error
 
@@ -23,7 +27,7 @@ func DeleteRetried(ctx context.Context, s Store, key Key) error {
 			return nil
 		}
 
-		if wait == 0 {
+		if wait == 0 || permanent(err) {
 			break
 		}
 
@@ -39,4 +43,11 @@ func DeleteRetried(ctx context.Context, s Store, key Key) error {
 	}
 
 	return fmt.Errorf("delete blob: %w", err)
+}
+
+// permanent reports whether err is an error that the same call returns again,
+// so a retry only waits.
+func permanent(err error) bool {
+	return errors.Is(err, ErrOutOfScope) || errors.Is(err, ErrInvalidKey) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
