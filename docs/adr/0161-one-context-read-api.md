@@ -1,6 +1,6 @@
 # 161. One tool-neutral context read API
 
-Status: accepted · 2026-10-17. Decisions 1 and 3 superseded in part by ADR 166. Route paths superseded in part by ADR 210
+Status: accepted · 2026-10-17. Decisions 1 and 3 superseded in part by ADR 166. Route paths superseded in part by ADR 210. Open question 2 answered by ADR 263
 
 ## Context
 

@@ -73,7 +73,7 @@ both together.
 | [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entries (ADR 212) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
-| [25](0025-drift-detection.md) | Drift detection and remediation | draft; a person approves a remediation by a built-in gate (ADR 258) |
+| [25](0025-drift-detection.md) | Drift detection and remediation | discussing; a person approves a remediation by a built-in gate (ADR 258); detection is a plan-only refresh job (ADR 263) |
 | [26](0026-unit-status.md) | Unit status in the inventory | draft; a lock is a flag, with manual locks (ADR 213) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
 | [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | accepted |
