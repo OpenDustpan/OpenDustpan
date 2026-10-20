@@ -180,8 +180,20 @@ func backupDev(t *testing.T, dir, targetDir string) string {
 	})
 
 	service, err := backup.NewService(backup.Config{
-		Exporter: st, Kinds: st, Registry: st, Blobs: blobs, StateOpener: nil, Target: target,
-		TargetName: "dir:" + targetDir, Now: nil, Version: "e2e", MaxSQLBytes: 0,
+		Exporter:    st,
+		Kinds:       st,
+		Registry:    st,
+		Operations:  st.DurableOperationsPort(),
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
+		Blobs:       blobs,
+		StateOpener: nil,
+		Target:      target,
+		TargetName:  "dir:" + targetDir,
+		Now:         nil,
+		Version:     "e2e",
+		MaxSQLBytes: 0,
 	})
 	if err != nil {
 		t.Fatalf("backup service: %v", err)

@@ -3065,22 +3065,42 @@ func (q *Queries) ExpireRunnerClaimsWithoutSession(ctx context.Context, runnerID
 	return err
 }
 
-const failRunningBackups = `-- name: FailRunningBackups :exec
+const failEndedBackups = `-- name: FailEndedBackups :execrows
 UPDATE backups
-SET state = 'failed', error = ?, ended_at_ms = ?
+SET state = 'failed',
+    error = COALESCE(NULLIF((
+        SELECT o.last_error FROM durable_operations AS o
+        WHERE o.start_key = ?1 || backups.id), ''), ?2),
+    ended_at_ms = ?3
 WHERE state = 'running'
+  AND EXISTS (
+      SELECT 1 FROM durable_operations AS o
+      WHERE o.start_key = ?1 || backups.id
+        AND o.kind = ?4
+        AND o.state IN ('failed', 'canceled'))
 `
 
-type FailRunningBackupsParams struct {
-	Error     string
+type FailEndedBackupsParams struct {
+	Prefix    string
+	Fallback  string
 	EndedAtMs int64
+	Kind      string
 }
 
-// Marks every running backup failed. The server calls it at start, after a
-// stop during a backup.
-func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackupsParams) error {
-	_, err := q.db.ExecContext(ctx, failRunningBackups, arg.Error, arg.EndedAtMs)
-	return err
+// Marks failed each running backup whose operation ended failed or canceled
+// without a finish write. The error text is the last error of the
+// operation, or sqlc.arg('fallback') when it holds none.
+func (q *Queries) FailEndedBackups(ctx context.Context, arg FailEndedBackupsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failEndedBackups,
+		arg.Prefix,
+		arg.Fallback,
+		arg.EndedAtMs,
+		arg.Kind,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const failRunningRestores = `-- name: FailRunningRestores :exec

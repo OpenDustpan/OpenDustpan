@@ -792,12 +792,22 @@ UPDATE backups
 SET state = ?, error = ?, ended_at_ms = ?
 WHERE id = ? AND state = 'running';
 
--- name: FailRunningBackups :exec
--- Marks every running backup failed. The server calls it at start, after a
--- stop during a backup.
+-- name: FailEndedBackups :execrows
+-- Marks failed each running backup whose operation ended failed or canceled
+-- without a finish write. The error text is the last error of the
+-- operation, or sqlc.arg('fallback') when it holds none.
 UPDATE backups
-SET state = 'failed', error = ?, ended_at_ms = ?
-WHERE state = 'running';
+SET state = 'failed',
+    error = COALESCE(NULLIF((
+        SELECT o.last_error FROM durable_operations AS o
+        WHERE o.start_key = sqlc.arg('prefix') || backups.id), ''), sqlc.arg('fallback')),
+    ended_at_ms = sqlc.arg('ended_at_ms')
+WHERE state = 'running'
+  AND EXISTS (
+      SELECT 1 FROM durable_operations AS o
+      WHERE o.start_key = sqlc.arg('prefix') || backups.id
+        AND o.kind = sqlc.arg('kind')
+        AND o.state IN ('failed', 'canceled'));
 
 -- name: GetInstallationState :one
 -- The installation state: normal or maintenance. The migration seeds the

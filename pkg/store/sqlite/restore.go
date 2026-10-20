@@ -101,8 +101,6 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 
 // FinishRestore implements backup.RestoreRegistry: it moves the running
 // restore id to state with the error text and the end time.
-//
-//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
 func (s *Store) FinishRestore(
 	ctx context.Context, id backup.RestoreID, state backup.RestoreState, errText string, endedAt time.Time,
 ) (backup.RestoreRecord, error) {

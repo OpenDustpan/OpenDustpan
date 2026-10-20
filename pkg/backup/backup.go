@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 // Dialect names the SQL dialect that holds the data.
@@ -235,6 +236,11 @@ type Summary struct {
 // cannot import; a test pins the two.
 const BaselineSchemaVersion = 100
 
+// EndedWithoutFinishText is the error text of a backup row that
+// Registry.FailEndedBackups marks failed when its operation holds no error
+// text, for example after a cancel.
+const EndedWithoutFinishText = "the backup operation ended before the backup finished"
+
 // RestoredRunningText is the error text of a backup row that a restore
 // brought back as running: the backup was running when it took the
 // snapshot that the restore applied, so no process runs it here.
@@ -272,29 +278,71 @@ var (
 	ErrInvalidID = errors.New("invalid backup ID")
 )
 
+// OperationKind is the kind of the durable operation that runs one backup.
+// The api component starts it with the backup row, and the worker component
+// runs it.
+const OperationKind durable.Kind = "backup"
+
+// OperationVersion is the version of the steps of OperationKind.
+const OperationVersion = 1
+
+// The steps of the backup operation, in order. StepWrite writes the SQL part,
+// the blobs and the manifest to the target. StepFinish records the end of the
+// backup row.
+const (
+	StepWrite  = "write"
+	StepFinish = "finish"
+)
+
+// OperationKeyPrefix starts the start key of each backup operation. The key
+// is the prefix and the backup ID, so one backup has one operation.
+const OperationKeyPrefix = "backup:"
+
+// OperationKey returns the start key of the operation that runs backup id.
+func OperationKey(id ID) string {
+	return OperationKeyPrefix + id.String()
+}
+
 // Registry tracks the backups table: one row for each backup that this
 // installation made. Rows carry no fence: they describe the installation,
-// not one namespace. A server that starts marks every running row failed.
+// not one namespace. A backup in progress is a durable operation: its row
+// ends only through a write that carries the fence of its claim, so an
+// instance that lost the claim cannot change the row.
 type Registry interface {
-	// CreateBackup stores r as a running backup. It returns ErrAlreadyExists
-	// if the ID is taken, and ErrAlreadyRunning when another backup of the
-	// installation is running: one backup runs at a time, across every
-	// instance on the database.
+	// CreateBackup stores r as it is. It returns ErrAlreadyExists if the ID
+	// is taken, and ErrAlreadyRunning when r is running and another backup of
+	// the installation is running: one backup runs at a time, across every
+	// instance on the database. It starts no operation: a running row that
+	// this method stores has no process that finishes it.
 	CreateBackup(ctx context.Context, r Record) error
+	// StartBackup stores r as a running backup and starts the operation start
+	// in one transaction, so a running row always has an operation, and an
+	// operation of a refused row never exists. It returns ErrAlreadyExists
+	// if the ID is taken, and ErrAlreadyRunning when another backup is
+	// running. A failed start changes nothing.
+	StartBackup(ctx context.Context, r Record, start durable.StartRequest) error
 	// FinishBackup moves the running backup id to state, which is
-	// StateSucceeded or StateFailed, with the error text and the end time.
-	// Callers send only those two states; any other state reports
-	// ErrNotRunning. It returns the finished row, ErrNotFound if id does not exist, or
-	// ErrNotRunning if the row is not running.
-	FinishBackup(ctx context.Context, id ID, state State, errText string, endedAt time.Time) (Record, error)
+	// StateSucceeded or StateFailed, with the error text and the end time,
+	// and records the step f.Step, in one transaction that checks the claim
+	// of f first. It returns the finished row. It returns durable.ErrClaimLost
+	// when f is not the live claim, durable.ErrCanceled after a cancel, and
+	// durable.ErrStepDone when the operation already recorded the step; then
+	// it changes nothing. It returns ErrNotFound if id does not exist, and
+	// ErrNotRunning if the row is not running or state is another state; then
+	// it records no step. Callers must handle the result.
+	FinishBackup(
+		ctx context.Context, f durable.StepFence, id ID, state State, errText string, endedAt time.Time,
+	) (Record, error)
 	// GetBackup returns the backup row id, or ErrNotFound.
 	GetBackup(ctx context.Context, id ID) (Record, error)
 	// ListBackups returns every backup row, newest first.
 	ListBackups(ctx context.Context) ([]Record, error)
-	// FailRunningBackups marks every running row failed with the error text
-	// and the end time. The server calls it at start, after a stop during a
-	// backup.
-	FailRunningBackups(ctx context.Context, endedAt time.Time, errText string) error
+	// FailEndedBackups marks failed each running row whose operation ended
+	// failed or canceled without a finish write, for example after too many
+	// holders stopped. The error text is the last error of the operation. It
+	// returns the number of rows that it changed. A row whose operation runs
+	// or waits stays as it is.
+	FailEndedBackups(ctx context.Context, endedAt time.Time) (int, error)
 }
 
 // Inspector lists the tables that the schema holds. The conformance suite

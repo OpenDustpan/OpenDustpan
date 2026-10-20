@@ -3380,20 +3380,39 @@ func (q *Queries) ExtendDurableClaim(ctx context.Context, arg ExtendDurableClaim
 	return err
 }
 
-const failRunningBackups = `-- name: FailRunningBackups :exec
-UPDATE backups
-SET state = 'failed', error = $1, ended_at_ms = $2
-WHERE state = 'running'
+const failEndedBackups = `-- name: FailEndedBackups :execrows
+UPDATE backups AS b
+SET state = 'failed',
+    error = COALESCE(NULLIF(o.last_error, ''), $1::text),
+    ended_at_ms = $2
+FROM durable_operations AS o
+WHERE b.state = 'running'
+  AND o.start_key = $3::text || b.id
+  AND o.kind = $4
+  AND o.state IN ('failed', 'canceled')
 `
 
-type FailRunningBackupsParams struct {
-	Error     string
+type FailEndedBackupsParams struct {
+	Fallback  string
 	EndedAtMs pgtype.Int8
+	Prefix    string
+	Kind      string
 }
 
-func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackupsParams) error {
-	_, err := q.db.Exec(ctx, failRunningBackups, arg.Error, arg.EndedAtMs)
-	return err
+// Marks failed each running backup whose operation ended failed or canceled
+// without a finish write. The error text is the last error of the
+// operation, or the fallback when it holds none.
+func (q *Queries) FailEndedBackups(ctx context.Context, arg FailEndedBackupsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failEndedBackups,
+		arg.Fallback,
+		arg.EndedAtMs,
+		arg.Prefix,
+		arg.Kind,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const failRunningRestores = `-- name: FailRunningRestores :exec

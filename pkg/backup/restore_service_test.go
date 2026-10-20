@@ -676,10 +676,12 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 	live := newRestoreServiceLive(setup.live, regs)
 	live.dev.order = order
 
+	backupRegs := newFakeRegistry()
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Kinds:       fixedKind(installation.KindProduction),
-		Registry:    newFakeRegistry(),
+		Registry:    backupRegs,
+		Operations:  backupRegs.ops,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
 		Target:      setup.target,
@@ -687,6 +689,9 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		Now:         nil,
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)
@@ -1387,6 +1392,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: nil},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
+		Operations:  backupRegs.ops,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
 		Target:      check.target,
@@ -1394,6 +1400,9 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Now:         nil,
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)
@@ -1828,7 +1837,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 	check := newCheckSetup(t)
 	regs := newRestoreServiceRegistry()
 	backupRegs := newFakeRegistry()
-	backupRegs.failGet = errFakeDriver
+	backupRegs.failGetsAfter(2, errFakeDriver)
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
@@ -1838,6 +1847,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
+		Operations:  backupRegs.ops,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
 		Target:      check.target,
@@ -1845,6 +1855,9 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 		Now:         nil,
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)

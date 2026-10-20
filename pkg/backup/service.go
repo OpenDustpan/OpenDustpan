@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/md5" //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
 	"crypto/sha256"
@@ -10,12 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
@@ -36,6 +39,9 @@ var (
 	// ErrAlreadyRunning reports a second backup started while one runs. Only
 	// one backup runs at a time.
 	ErrAlreadyRunning = errors.New("backup already running")
+	// ErrFailed reports that Run ended a backup as failed. The text after it
+	// is the error text of the registry row.
+	ErrFailed = errors.New("backup failed")
 	// ErrTooLarge reports a SQL part over the target object limit.
 	ErrTooLarge = errors.New("backup SQL part too large")
 )
@@ -147,6 +153,19 @@ type Config struct {
 	// MaxSQLBytes bounds the SQL part; zero means no limit. Targets with an
 	// object limit, such as S3-compatible storage, set S3ObjectLimit.
 	MaxSQLBytes int64
+	// Operations keeps the durable operation of each backup. The registry
+	// starts the operation in the transaction of the backup row, so both
+	// must name one database.
+	Operations durable.Store
+	// Owner names this instance in the claims on backup operations, for
+	// status only. An empty Owner means "backup".
+	Owner string
+	// Lease is the time from a claim or a renewal to its expiry. Zero means
+	// the default of the durable runner. The runner renews the claim while a
+	// step runs, so a slow backup keeps its claim.
+	Lease time.Duration
+	// Logger receives the messages of the runner. Nil discards them.
+	Logger *slog.Logger
 }
 
 // Service runs backups of a whole installation into a blob.Store target.
@@ -161,8 +180,9 @@ type Service struct {
 	now        func() time.Time
 	version    string
 	maxSQL     int64
-	mu         sync.Mutex
-	running    bool
+	runner     *durable.Runner
+	lease      time.Duration
+	logger     *slog.Logger
 }
 
 // StateOpener opens sealed OpenTofu state blobs of the live store for the
@@ -190,6 +210,8 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	case cfg.Target == nil:
 		return nil, fmt.Errorf("%w: target", ErrMissingDependency)
+	case cfg.Operations == nil:
+		return nil, fmt.Errorf("%w: durable operations", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -202,7 +224,7 @@ func NewService(cfg Config) (*Service, error) {
 		version = "dev"
 	}
 
-	return &Service{
+	s := &Service{
 		exporter:   cfg.Exporter,
 		kinds:      cfg.Kinds,
 		registry:   cfg.Registry,
@@ -213,54 +235,167 @@ func NewService(cfg Config) (*Service, error) {
 		now:        now,
 		version:    version,
 		maxSQL:     cfg.MaxSQLBytes,
-		mu:         sync.Mutex{},
-		running:    false,
-	}, nil
+		runner:     nil,
+		lease:      cmp.Or(cfg.Lease, durable.DefaultLease),
+		logger:     cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
+	}
+
+	runner, err := s.newRunner(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	s.runner = runner
+
+	return s, nil
 }
 
-// Run captures the SQL data in one read transaction, writes it to
-// backups/<id>/sql/<table>.jsonl.gz, copies each blob the SQL data names to blobs/<blob key>,
-// and writes backups/<id>/manifest.json last. A blob the target already holds
-// is not copied again. It returns ErrAlreadyRunning while another backup
-// runs. A failed backup marks its registry row failed with the error text and
-// leaves no manifest. It returns the finished registry row. Run blocks until
-// the backup ends; Start begins one in the background instead.
+// Run starts backup id and blocks until it ends. It captures the SQL data in
+// one read transaction, writes it to backups/<id>/sql/<table>.jsonl.gz,
+// copies each blob the SQL data names to blobs/<blob key>, and writes
+// backups/<id>/manifest.json last. A blob the target already holds is not
+// copied again. It returns ErrAlreadyRunning while another backup runs. A
+// failed backup marks its registry row failed with the error text and leaves
+// no manifest. It returns the finished registry row, or ErrFailed with the
+// error text of the row.
+//
+// Run claims the operation of the backup itself, as a worker does, and
+// polls the row while another instance holds it. A caller that needs no
+// answer starts a backup with Start instead.
 func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
-	started, err := s.begin(ctx, id)
-	if err != nil {
+	if err := s.Start(ctx, id); err != nil {
 		return Record{}, err
 	}
 
-	defer s.release()
+	for {
+		row, err := s.registry.GetBackup(ctx, id)
+		if err != nil {
+			return Record{}, fmt.Errorf("read backup %s: %w", id, err)
+		}
 
-	if backupErr := s.backup(ctx, id, started.startedAt, started.manifestKey); backupErr != nil {
-		return Record{}, s.markFailed(ctx, id, backupErr)
+		switch row.State {
+		case StateSucceeded:
+			return row, nil
+		case StateFailed:
+			return Record{}, fmt.Errorf("%w: %s", ErrFailed, row.Error)
+		case StateRunning:
+		default:
+			return Record{}, fmt.Errorf("backup %s has the state %q: %w", id, row.State, ErrCorrupt)
+		}
+
+		runErr := s.runner.RunOnce(ctx)
+		if ctx.Err() != nil {
+			return Record{}, fmt.Errorf("wait for backup %s: %w", id, ctx.Err())
+		}
+
+		if runErr != nil {
+			// No work: another instance holds the operation. Read the row
+			// again after a pause.
+			sleep(ctx, runPoll)
+		}
 	}
-
-	done, err := s.registry.FinishBackup(ctx, id, StateSucceeded, "", s.now().UTC())
-	if err != nil {
-		return Record{}, fmt.Errorf("finish backup %s: %w", id, err)
-	}
-
-	return done, nil
 }
 
-// Start begins backup id in the background and returns at once, so an HTTP
-// handler answers 202 before the backup ends. It claims the single backup
-// slot and stores id as a running row before it returns, so a second Start
-// while one runs answers ErrAlreadyRunning and a GET sees the row at once.
-// The background work detaches from ctx: a canceled request never stops the
-// backup. The result lands in the registry row, where Get and ReadManifest
-// show it: callers poll until the row leaves running.
+// runPoll is the pause of Run between two reads of the row while another
+// instance holds the operation.
+const runPoll = 100 * time.Millisecond
+
+// sleep waits d or until ctx is done.
+func sleep(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+// Start stores id as a running row and starts the durable operation that
+// runs the backup, in one transaction, and returns at once, so an HTTP
+// handler answers 202 before the backup ends. It does not run the backup: a
+// worker of any instance claims the operation. A second Start while one
+// backup runs answers ErrAlreadyRunning, and a GET sees the row at once. A
+// canceled request never stops the backup. The result lands in the registry
+// row, where Get and ReadManifest show it: callers poll until the row leaves
+// running. When the instance that runs the backup stops, another instance
+// takes the operation over after the lease ends.
 func (s *Service) Start(ctx context.Context, id ID) error {
-	started, err := s.begin(ctx, id)
-	if err != nil {
-		return err
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
-	go s.finish(context.WithoutCancel(ctx), id, started)
+	id, err := ParseID(id.String())
+	if err != nil {
+		return fmt.Errorf("begin backup %s: %w", id, err)
+	}
+
+	startedAt := s.now().UTC()
+
+	input, err := json.Marshal(operationInput{ID: id, StartedAt: startedAt})
+	if err != nil {
+		return fmt.Errorf("encode input of backup %s: %w", id, err)
+	}
+
+	start, err := s.runner.StartRequest(OperationKind, OperationKey(id), input)
+	if err != nil {
+		return fmt.Errorf("begin backup %s: %w", id, err)
+	}
+
+	create := Record{
+		StartedAt: startedAt,
+		EndedAt:   time.Time{},
+		ID:        id,
+		Target:    s.targetName,
+		Error:     "",
+		State:     StateRunning,
+	}
+
+	if err := s.registry.StartBackup(ctx, create, start); err != nil {
+		return fmt.Errorf("create backup %s: %w", id, err)
+	}
 
 	return nil
+}
+
+// Work claims and runs backup operations until ctx ends, and marks failed
+// the backup rows whose operation ended without a finish write. A worker
+// process calls it. When ctx ends during a backup, the runner releases the
+// claim, so another instance, or this one after a restart, continues the
+// backup. Work returns after the loops stopped.
+func (s *Service) Work(ctx context.Context) {
+	var wg sync.WaitGroup
+
+	wg.Go(func() { s.runner.Run(ctx) })
+	wg.Go(func() { s.failEnded(ctx) })
+
+	wg.Wait()
+}
+
+// operationInput is the input of a backup operation.
+type operationInput struct {
+	ID        ID        `json:"id"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+// readInput decodes and checks the input of a backup operation. An input
+// that fails is permanent: no retry changes it.
+func readInput(op durable.Operation) (operationInput, blob.Key, error) {
+	var in operationInput
+	if err := json.Unmarshal(op.Input, &in); err != nil {
+		return operationInput{}, "", durable.Permanent(fmt.Errorf("decode backup input: %w", err))
+	}
+
+	if _, err := ParseID(in.ID.String()); err != nil {
+		return operationInput{}, "", durable.Permanent(err)
+	}
+
+	manifestKey, err := blob.ParseKey("backups/" + in.ID.String() + "/manifest.json")
+	if err != nil {
+		return operationInput{}, "", durable.Permanent(fmt.Errorf("backup %s: %w", in.ID, err))
+	}
+
+	return in, manifestKey, nil
 }
 
 // MaxSQLBytes returns the SQL part limit the service enforces. Zero means
@@ -337,111 +472,166 @@ func (s *Service) PreserveAfterRestore(ctx context.Context, rec Record) error {
 	return nil
 }
 
-// startedBackup holds the keys and start time of a claimed backup row. Run
-// uses them at once; Start hands them to its background work.
-type startedBackup struct {
-	manifestKey blob.Key
-	startedAt   time.Time
-}
-
-// begin claims the single backup slot and stores id as a running row,
-// returning the keys and start time the backup writes. The caller holds the
-// slot: Run releases it when it returns, Start when its background work ends.
-// A begin error holds no slot, so the caller releases nothing.
-func (s *Service) begin(ctx context.Context, id ID) (startedBackup, error) {
-	if err := ctx.Err(); err != nil {
-		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
-	}
-
-	if err := s.claim(); err != nil {
-		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
-	}
-
-	manifestKey, err := blob.ParseKey("backups/" + id.String() + "/manifest.json")
+// newRunner builds the runner that claims and runs the backup operations.
+func (s *Service) newRunner(cfg Config) (*durable.Runner, error) {
+	runner, err := durable.NewRunner(durable.RunnerConfig{
+		Store: cfg.Operations,
+		Owner: cmp.Or(cfg.Owner, "backup"),
+		Kinds: []durable.KindSpec{{
+			Kind:       OperationKind,
+			Version:    OperationVersion,
+			MinVersion: OperationVersion,
+			Steps: []durable.Step{
+				{Name: StepWrite, Run: s.stepWrite},
+				{Name: StepFinish, Run: s.stepFinish},
+			},
+		}},
+		Lease:        cfg.Lease,
+		RenewEvery:   0,
+		PollEvery:    0,
+		MaxAttempts:  0,
+		ExpiryLimit:  0,
+		Backoff:      durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout: 0,
+		Deferred:     nil,
+		Logger:       cfg.Logger,
+		Rand:         nil,
+	})
 	if err != nil {
-		s.release()
-
-		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
+		return nil, fmt.Errorf("backup runner: %w", err)
 	}
 
-	startedAt := s.now().UTC()
-
-	create := Record{
-		StartedAt: startedAt,
-		EndedAt:   time.Time{},
-		ID:        id,
-		Target:    s.targetName,
-		Error:     "",
-		State:     StateRunning,
-	}
-
-	if createErr := s.registry.CreateBackup(ctx, create); createErr != nil {
-		s.release()
-
-		return startedBackup{}, fmt.Errorf("create backup %s: %w", id, createErr)
-	}
-
-	return startedBackup{manifestKey: manifestKey, startedAt: startedAt}, nil
+	return runner, nil
 }
 
-// finish completes a backup that Start began: it exports the SQL part, copies
-// the named blobs, writes the manifest last, and records the result in the
-// registry row. It releases the slot when the work ends. Errors land in the
-// row, where Get shows them to the operator.
-func (s *Service) finish(ctx context.Context, id ID, started startedBackup) {
-	backupErr := s.backup(ctx, id, started.startedAt, started.manifestKey)
+// failEnded marks failed the rows of backups whose operation ended failed
+// or canceled, once in each lease period, until ctx ends. The finish step
+// does that itself for a backup error. This loop covers an operation that the
+// runner ended with no step: too many holders stopped, a step that panicked,
+// or a cancel. Without it such a row would stay running and refuse the next
+// backup.
+func (s *Service) failEnded(ctx context.Context) {
+	ticker := time.NewTicker(s.lease)
+	defer ticker.Stop()
 
-	// The slot goes free before the row records the result, so a client
-	// that reads the final state can start the next backup at once. The
-	// slot only guards the work above; the row write touches no object of
-	// this backup.
-	s.release()
-
-	if backupErr != nil {
-		// Background result: the registry row records the outcome, and a
-		// finish failure leaves the row running for the next server start
-		// to mark failed.
-		_ = s.markFailed(ctx, id, backupErr) //nolint:errcheck // The row is the record.
-
-		return
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// A failure here is not final: the next period tries again, and
+			// the row stays running until then.
+			n, err := s.registry.FailEndedBackups(ctx, s.now().UTC())
+			if err != nil && ctx.Err() == nil {
+				s.logger.WarnContext(ctx, "backup rows of ended operations were not marked failed",
+					slog.String("error", durable.ErrorClass(err)))
+			} else if n > 0 {
+				s.logger.WarnContext(ctx, "backups ended without a finish write were marked failed",
+					slog.Int("backups", n))
+			}
+		}
 	}
-
-	// Background result, as above.
-	end := s.now().UTC()
-	_, _ = s.registry.FinishBackup(ctx, id, StateSucceeded, "", end) //nolint:errcheck // The row is the record.
 }
 
-// markFailed marks backup id failed with the error text. It returns the
-// backup error, joined with the finish error when marking fails too.
-func (s *Service) markFailed(ctx context.Context, id ID, backupErr error) error {
-	_, finishErr := s.registry.FinishBackup(ctx, id, StateFailed, backupErr.Error(), s.now().UTC())
-	if finishErr != nil {
-		return errors.Join(backupErr, fmt.Errorf("mark backup %s failed: %w", id, finishErr))
+// stepWrite writes the SQL part, the blobs and the manifest to the target.
+// Every write goes to a key that depends on the backup ID only, so a second
+// run of the step after a takeover writes the same keys again and the
+// target needs no fence. A stop of the runner (the context ends) returns
+// with no write to the row: the next claim runs the step again. Any other
+// error marks the row failed with the fence of this claim and ends the
+// operation.
+func (s *Service) stepWrite(ctx context.Context, sc durable.StepContext) ([]byte, error) {
+	in, manifestKey, err := readInput(sc.Operation)
+	if err != nil {
+		return nil, err
 	}
 
-	return backupErr
+	backupErr := s.clearPartial(ctx, in.ID, manifestKey)
+	if backupErr == nil {
+		backupErr = s.backup(ctx, in.ID, in.StartedAt, manifestKey)
+	}
+
+	if backupErr == nil {
+		return nil, nil
+	}
+
+	if ctx.Err() != nil {
+		return nil, backupErr
+	}
+
+	return nil, s.failRow(ctx, sc.Fence, in.ID, backupErr)
 }
 
-// claim takes the single backup slot, or reports ErrAlreadyRunning.
-func (s *Service) claim() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.running {
-		return ErrAlreadyRunning
+// clearPartial removes the objects under backups/<id>/ that an earlier run of
+// the step left, the manifest first. The target creates each key once, so a
+// run after a takeover would fail with blob.ErrExists on the table files
+// otherwise. The manifest goes first, so a half-cleared backup never looks
+// complete. The copies under blobs/ stay: the copy keeps the first copy of a
+// blob and checks it against the live bytes.
+func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key) error {
+	left, err := s.target.List(ctx, "backups/"+id.String())
+	if err != nil {
+		return fmt.Errorf("list objects of backup %s: %w", id, err)
 	}
 
-	s.running = true
+	keys := make([]blob.Key, 0, len(left))
+
+	for _, obj := range left {
+		if obj.Key != manifestKey {
+			keys = append(keys, obj.Key)
+		}
+	}
+
+	if slices.ContainsFunc(left, func(obj blob.Object) bool { return obj.Key == manifestKey }) {
+		keys = slices.Insert(keys, 0, manifestKey)
+	}
+
+	for _, key := range keys {
+		if err := s.target.Delete(ctx, key); err != nil {
+			return fmt.Errorf("delete object %s of backup %s: %w", key, id, err)
+		}
+	}
 
 	return nil
 }
 
-// release frees the single backup slot.
-func (s *Service) release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// failRow marks backup id failed under fence and returns the error that ends
+// the operation: the backup error as a permanent error, or the error of the
+// write when the claim is lost or the operation is canceled, which the
+// runner reads as a stop.
+func (s *Service) failRow(ctx context.Context, fence durable.StepFence, id ID, backupErr error) error {
+	_, finishErr := s.registry.FinishBackup(ctx, fence, id, StateFailed, backupErr.Error(), s.now().UTC())
 
-	s.running = false
+	switch {
+	case finishErr == nil:
+		return durable.Permanent(backupErr)
+	case errors.Is(finishErr, durable.ErrClaimLost), errors.Is(finishErr, durable.ErrCanceled):
+		return finishErr
+	default:
+		return durable.Permanent(errors.Join(backupErr, fmt.Errorf("mark backup %s failed: %w", id, finishErr)))
+	}
+}
+
+// stepFinish moves the row to succeeded and records the step in one
+// transaction. A claim that was lost writes nothing. A row that is not
+// running any more ends the operation failed.
+func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byte, error) {
+	in, _, err := readInput(sc.Operation)
+	if err != nil {
+		return nil, err
+	}
+
+	_, finishErr := s.registry.FinishBackup(ctx, sc.Fence, in.ID, StateSucceeded, "", s.now().UTC())
+
+	switch {
+	case finishErr == nil:
+		return nil, nil
+	case errors.Is(finishErr, durable.ErrClaimLost), errors.Is(finishErr, durable.ErrCanceled):
+		return nil, finishErr
+	default:
+		return nil, durable.Permanent(fmt.Errorf("finish backup %s: %w", in.ID, finishErr))
+	}
 }
 
 // backup exports the SQL part, copies the named blobs, and writes the

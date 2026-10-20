@@ -833,10 +833,19 @@ UPDATE backups
 SET state = $1, error = $2, ended_at_ms = $3
 WHERE id = $4 AND state = 'running';
 
--- name: FailRunningBackups :exec
-UPDATE backups
-SET state = 'failed', error = $1, ended_at_ms = $2
-WHERE state = 'running';
+-- name: FailEndedBackups :execrows
+-- Marks failed each running backup whose operation ended failed or canceled
+-- without a finish write. The error text is the last error of the
+-- operation, or the fallback when it holds none.
+UPDATE backups AS b
+SET state = 'failed',
+    error = COALESCE(NULLIF(o.last_error, ''), sqlc.arg('fallback')::text),
+    ended_at_ms = sqlc.arg('ended_at_ms')
+FROM durable_operations AS o
+WHERE b.state = 'running'
+  AND o.start_key = sqlc.arg('prefix')::text || b.id
+  AND o.kind = sqlc.arg('kind')
+  AND o.state IN ('failed', 'canceled');
 
 -- name: GetInstallationState :one
 -- The installation state: normal or maintenance. The migration seeds the
