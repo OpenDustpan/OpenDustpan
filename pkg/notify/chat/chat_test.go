@@ -9,12 +9,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify/chat"
 )
 
-func TestToolValid(t *testing.T) {
+func TestPlatformValid(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		tool chat.Tool
-		want bool
+		platform chat.Platform
+		want     bool
 	}{
 		{chat.Slack, true},
 		{chat.Teams, true},
@@ -27,13 +27,13 @@ func TestToolValid(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		if got := tc.tool.Valid(); got != tc.want {
-			t.Errorf("Tool(%q).Valid() = %v, want %v", tc.tool, got, tc.want)
+		if got := tc.platform.Valid(); got != tc.want {
+			t.Errorf("Platform(%q).Valid() = %v, want %v", tc.platform, got, tc.want)
 		}
 	}
 
-	if got := len(chat.Tools()); got != 4 {
-		t.Errorf("len(Tools()) = %d, want 4", got)
+	if got := len(chat.Platforms()); got != 4 {
+		t.Errorf("len(Platforms()) = %d, want 4", got)
 	}
 }
 
@@ -42,12 +42,15 @@ func TestContentValidate(t *testing.T) {
 
 	valid := func() chat.Content {
 		return chat.Content{
-			Product:  "Acme Deploy",
-			Title:    "Job failed",
-			Summary:  "The job failed.",
-			Severity: notify.SeverityCritical,
-			Fields:   []chat.Field{{Label: "Namespace", Value: "shop"}},
-			Links:    []notify.Link{{Title: "Open", URL: "https://console.example/jobs/1", Kind: notify.LinkConsole}},
+			NotificationID: "ntf_1",
+			Product:        "Acme Deploy",
+			Title:          "Job failed",
+			Summary:        "The job failed.",
+			Severity:       notify.SeverityCritical,
+			Fields:         []chat.Field{{Label: "Namespace", Value: "shop"}},
+			Links: []notify.Link{
+				{Title: "Open", URL: "https://console.example/jobs/1", Kind: notify.LinkConsole},
+			},
 		}
 	}
 
@@ -58,6 +61,21 @@ func TestContentValidate(t *testing.T) {
 	}{
 		{"valid", func(*chat.Content) {}, true},
 		{"empty summary", func(c *chat.Content) { c.Summary = "" }, true},
+		{"line feed in the summary", func(c *chat.Content) { c.Summary = "one\ntwo" }, true},
+		{"no notification ID", func(c *chat.Content) { c.NotificationID = "" }, false},
+		{"notification ID with a slash", func(c *chat.Content) { c.NotificationID = "a/b" }, false},
+		{
+			"long notification ID",
+			func(c *chat.Content) { c.NotificationID = strings.Repeat("n", chat.MaxIDLen+1) },
+			false,
+		},
+		{"CR in the title", func(c *chat.Content) { c.Title = "a\rb" }, false},
+		{"NUL in the summary", func(c *chat.Content) { c.Summary = "a\x00b" }, false},
+		{"tab in a label", func(c *chat.Content) { c.Fields[0].Label = "a\tb" }, false},
+		{"RLO in a value", func(c *chat.Content) { c.Fields[0].Value = "a\u202eb" }, false},
+		{"isolate in the product", func(c *chat.Content) { c.Product = "a\u2066b" }, false},
+		{"C1 control in a link title", func(c *chat.Content) { c.Links[0].Title = "a\u0085b" }, false},
+		{"invalid UTF-8 in the title", func(c *chat.Content) { c.Title = "a\xffb" }, false},
 		{"no product", func(c *chat.Content) { c.Product = "" }, false},
 		{"long product", func(c *chat.Content) { c.Product = strings.Repeat("p", chat.MaxProductLen+1) }, false},
 		{"no title", func(c *chat.Content) { c.Title = "" }, false},
