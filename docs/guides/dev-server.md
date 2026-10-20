@@ -254,6 +254,11 @@ curl -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" http://127.0.0.1:8080/api/d
 A caller with no sign-in gets `apiVersion` only.
 The audit entry of each start records the kind.
 
+A backup records the kind of its installation.
+A production server refuses to restore a backup of a dev installation, unless you start it with `--unsafe-allow-restoring-dev-installation-backups-into-production`.
+Also then, the restore deletes the person `dev:admin` and all other data of dev people.
+The [backup guide](backup-restore-upgrade.md#restore-a-backup-of-a-dev-installation) shows the steps.
+
 ## Keep the stacks and workspaces of a trial
 
 No command and no flag turns a dev installation into a production installation.

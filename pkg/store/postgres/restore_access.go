@@ -15,23 +15,24 @@ import (
 // staged backup, and swaps the schemas in one transaction. A kept grant or
 // principal that names a namespace or a unit the staged backup does not hold
 // reports ErrRestoreAccessMismatch and changes nothing.
-func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
+func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAccessResult, error) {
 	s.stagingMu.Lock()
 	defer s.stagingMu.Unlock()
 
 	if s.stagingSchema == "" {
-		return backup.ErrCorrupt
+		return backup.KeepAccessResult{}, backup.ErrCorrupt
 	}
 
 	staging := s.stagingSchema
 
-	if err := s.swapStagingSchemaKeepingAccess(ctx, staging); err != nil {
-		return err
+	result, err := s.swapStagingSchemaKeepingAccess(ctx, staging)
+	if err != nil {
+		return backup.KeepAccessResult{}, err
 	}
 
 	s.stagingSchema = ""
 
-	return nil
+	return result, nil
 }
 
 // swapStagingSchemaKeepingAccess copies the live access tables over the
@@ -40,9 +41,13 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 // Principals merge by ID: existing ones are updated, extra ones are deleted,
 // and missing ones are inserted last. The transaction locks the live access
 // tables first, so a revoke between the copy and the swap cannot be lost.
-func (s *Store) swapStagingSchemaKeepingAccess(ctx context.Context, staging string) error {
+func (s *Store) swapStagingSchemaKeepingAccess(
+	ctx context.Context, staging string,
+) (backup.KeepAccessResult, error) {
+	var result backup.KeepAccessResult
+
 	if !hasStagingPrefix(staging) {
-		return fmt.Errorf("apply staging schema %q: %w", staging, backup.ErrCorrupt)
+		return result, fmt.Errorf("apply staging schema %q: %w", staging, backup.ErrCorrupt)
 	}
 
 	opts := pgx.TxOptions{
@@ -53,31 +58,57 @@ func (s *Store) swapStagingSchemaKeepingAccess(ctx context.Context, staging stri
 		CommitQuery:    "",
 	}
 
-	return inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
-		var live string
+	err := inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
+		dropped, txErr := s.keepAccessTx(ctx, tx, staging)
+		result.DroppedTempAdmins = dropped
 
-		if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
-			return fmt.Errorf("read live schema: %w", err)
-		}
-
-		if live == "" || live == staging {
-			return fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
-		}
-
-		if err := lockLiveAccessTables(ctx, tx, live); err != nil {
-			return err
-		}
-
-		if s.keepAccessHook != nil {
-			s.keepAccessHook(ctx, tx, live)
-		}
-
-		if err := keepAccessTables(ctx, tx, live, staging); err != nil {
-			return err
-		}
-
-		return swapSchemas(ctx, tx, live, staging)
+		return txErr
 	})
+
+	return result, err
+}
+
+// keepAccessTx runs the keep-access swap in tx and returns the count of
+// dropped temp_admins rows.
+func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, staging string) (int64, error) {
+	var live string
+
+	if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
+		return 0, fmt.Errorf("read live schema: %w", err)
+	}
+
+	if live == "" || live == staging {
+		return 0, fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
+	}
+
+	// The check covers the whole staging area, also the access tables that
+	// the swap does not take, and runs before any write.
+	if err := checkSwapDev(ctx, tx, staging); err != nil {
+		return 0, err
+	}
+
+	if err := lockLiveAccessTables(ctx, tx, live); err != nil {
+		return 0, err
+	}
+
+	if s.keepAccessHook != nil {
+		s.keepAccessHook(ctx, tx, live)
+	}
+
+	if err := keepAccessTables(ctx, tx, live, staging); err != nil {
+		return 0, err
+	}
+
+	// The swap takes temp_admins from the backup and keeps the live
+	// principals, which keepAccessTables put into the staged schema. So a
+	// staged row can name a principal that the live principals table does
+	// not hold.
+	dropped, err := dropDanglingTempAdmins(ctx, tx, staging)
+	if err != nil {
+		return 0, err
+	}
+
+	return dropped, swapSchemas(ctx, tx, live, staging)
 }
 
 // swapSchemas moves the live schema aside, moves the staged schema live,

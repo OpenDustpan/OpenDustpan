@@ -156,7 +156,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		beforeLockDelete: nil, stateLockWait: 0,
 		binaryVersion: "", gate: nil, kind: "", noMigrate: false,
 	}
-	s.gate = gatestore.New(gateRunner{s: s})
+	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	for _, opt := range opts {
 		opt(s)

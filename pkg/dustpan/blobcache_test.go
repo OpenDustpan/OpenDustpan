@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/blobfault"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -122,6 +123,12 @@ func TestBlobCacheLeavesOtherReadsUncached(t *testing.T) {
 
 	st, blobs, authn := requireServerPorts(t)
 	counted := &keyCounter{Store: blobs, mu: sync.Mutex{}, gets: map[string]int{}}
+
+	// A server claims its installation kind at start, and the backup records
+	// it.
+	if _, claimErr := st.ClaimKind(t.Context(), installation.KindProduction); claimErr != nil {
+		t.Fatalf("claim the installation kind: %v", claimErr)
+	}
 
 	target, err := fs.Open(t.TempDir())
 	if err != nil {

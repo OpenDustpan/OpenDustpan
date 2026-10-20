@@ -4708,7 +4708,7 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 }
 
 const getRestore = `-- name: GetRestore :one
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 WHERE id = ?
 `
@@ -4725,6 +4725,7 @@ func (q *Queries) GetRestore(ctx context.Context, id string) (Restore, error) {
 		&i.StartedAtMs,
 		&i.EndedAtMs,
 		&i.Error,
+		&i.DevReport,
 	)
 	return i, err
 }
@@ -9564,7 +9565,7 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 }
 
 const listRestores = `-- name: ListRestores :many
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 ORDER BY started_at_ms DESC, id ASC
 `
@@ -9587,6 +9588,7 @@ func (q *Queries) ListRestores(ctx context.Context) ([]Restore, error) {
 			&i.StartedAtMs,
 			&i.EndedAtMs,
 			&i.Error,
+			&i.DevReport,
 		); err != nil {
 			return nil, err
 		}
@@ -12328,6 +12330,27 @@ type SetPendingContentKeyParams struct {
 // matches no row, so a late attempt reports no change.
 func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingContentKeyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setPendingContentKey, arg.ContentKey, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setRestoreDevReport = `-- name: SetRestoreDevReport :execrows
+UPDATE restores
+SET dev_report = ?
+WHERE id = ?
+`
+
+type SetRestoreDevReportParams struct {
+	DevReport string
+	ID        string
+}
+
+// Stores the report of the dev data of one restore, with the codes of its
+// warnings. A restore that does not exist matches no row.
+func (q *Queries) SetRestoreDevReport(ctx context.Context, arg SetRestoreDevReportParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setRestoreDevReport, arg.DevReport, arg.ID)
 	if err != nil {
 		return 0, err
 	}

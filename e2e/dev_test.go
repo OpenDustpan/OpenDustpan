@@ -522,7 +522,7 @@ func devSignInLink(t *testing.T, bin string) {
 	t.Helper()
 
 	server := startPlainDev(t, bin)
-	banner := server.out.String()
+	banner := server.waitBanner(t, "#code=")
 
 	match := devCodePattern.FindStringSubmatch(banner)
 	if match == nil {
@@ -619,7 +619,7 @@ func devEphemeral(t *testing.T, bin string) {
 		t.Fatalf("the temporary directory holds %v, %v, want one directory\n%s", entries, err, cmd.out.String())
 	}
 
-	banner := cmd.out.String()
+	banner := cmd.waitBanner(t, "dev deletes this directory at stop")
 	if !strings.Contains(banner, "dev deletes this directory at stop") {
 		t.Fatalf("the banner does not say that a stop deletes the data:\n%s", banner)
 	}
@@ -879,4 +879,27 @@ func waitReady(t *testing.T, base string, out *ptyBuffer) {
 	}
 
 	t.Fatalf("the server at %s was not ready:\n%s", base, out.String())
+}
+
+// waitBanner waits until the output of dev holds want. The pseudo terminal
+// copies the output on its own goroutine, so the output can lag behind the
+// address file that the test waits for first.
+func (d *devServer) waitBanner(t *testing.T, want string) string {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+
+	for !strings.Contains(d.out.String(), want) {
+		select {
+		case <-ctx.Done():
+			return d.out.String()
+		case <-tick.C:
+		}
+	}
+
+	return d.out.String()
 }

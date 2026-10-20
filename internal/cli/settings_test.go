@@ -356,7 +356,9 @@ func TestFileKeysAreUnique(t *testing.T) {
 	}
 
 	for _, s := range cli.ServeFlags() {
-		if s.File == "" && s.Flag != "config" {
+		// The setting that lets a production installation restore a dev backup
+		// has no file key and no variable on purpose: only the flag sets it.
+		if s.File == "" && s.Flag != "config" && s.Flag != cli.UnsafeAllowDevBackupsFlag {
 			t.Errorf("serve flag --%s has no file key", s.Flag)
 		}
 	}

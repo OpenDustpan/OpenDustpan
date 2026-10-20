@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // keepWait bounds one wait for the parked restore, the blocked write, or
@@ -82,7 +83,7 @@ func openSeededKeepStore(t *testing.T) *Store {
 		t.Fatalf("export portable: %v", exportErr)
 	}
 
-	if _, stageErr := s.StagePortable(t.Context(), sink.read, sum, files); stageErr != nil {
+	if _, stageErr := s.StagePortable(t.Context(), sink.read, sum, files, storetest.StageAs(t, s)); stageErr != nil {
 		t.Fatalf("stage portable: %v", stageErr)
 	}
 
@@ -147,7 +148,8 @@ func TestKeepAccessHoldsWriteLockAcrossSwap(t *testing.T) {
 	applyDone := make(chan error, 1)
 
 	go func() {
-		applyDone <- s.ApplyStagingKeepingAccess(ctx)
+		_, err := s.ApplyStagingKeepingAccess(ctx)
+		applyDone <- err
 	}()
 
 	awaitKeepSignal(t, entered)

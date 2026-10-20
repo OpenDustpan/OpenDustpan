@@ -196,3 +196,15 @@ func TestEveryStoreCaseRuns(t *testing.T) {
 		}
 	}
 }
+
+func newDevHarness(*testing.T) gatetest.Harness {
+	s := newMemStoreOfKind(true)
+
+	return gatetest.Harness{Store: s, Domain: s}
+}
+
+func TestApprovers(t *testing.T) {
+	t.Parallel()
+
+	gatetest.RunApprovers(t, newHarness, newDevHarness)
+}
