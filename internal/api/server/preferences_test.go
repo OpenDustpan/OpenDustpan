@@ -100,7 +100,7 @@ type response struct {
 func (e prefsEnv) call(t *testing.T, token, method, contentType, body string) response {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), method, prefsPath, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(testContext(t), method, prefsPath, strings.NewReader(body))
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -144,6 +144,15 @@ type prefsDoc struct {
 	Digits             *string     `json:"digits"`
 	ResolvedLanguage   *string     `json:"resolvedLanguage"`
 	UpdatedAt          *int64      `json:"updatedAt"`
+}
+
+// testContext returns a context that a cleanup of the test can use. The
+// context of a test ends before its cleanup runs, so this one keeps the values
+// and never ends.
+func testContext(t *testing.T) context.Context {
+	t.Helper()
+
+	return context.WithoutCancel(t.Context())
 }
 
 // prefsScheme holds the color scheme of each color mode.
@@ -214,7 +223,7 @@ func (e prefsEnv) prefsRefusals(t *testing.T) []audit.Entry {
 func (e prefsEnv) entriesWith(t *testing.T, keep func(audit.Outcome) bool) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 500})
+	listing, err := e.st.List(testContext(t), audit.ServerScope, audit.Page{Number: 1, Size: 500})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}
@@ -421,35 +430,42 @@ func TestPreferencesNeedTheRightCaller(t *testing.T) {
 		{name: "a person with no record", token: tokenGhost, want: http.StatusForbidden, code: person},
 	}
 
-	// The group ends when its parallel cases end, so the checks below see
-	// every entry.
-	t.Run("callers", func(t *testing.T) {
-		for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
+	// The parallel cases end before a cleanup runs, so the check sees every entry.
+	t.Cleanup(func() { checkCallerRefusals(t, e) })
 
-				for _, got := range []response{e.get(t, tc.token), e.patch(t, tc.token, `{"theme":"terminal"}`)} {
-					checkRefusal(t, got, tc.want, tc.code)
-				}
-			})
-		}
-	})
+	for i := range tests {
+		tc := &tests[i]
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, got := range []response{e.get(t, tc.token), e.patch(t, tc.token, `{"theme":"terminal"}`)} {
+				checkRefusal(t, got, tc.want, tc.code)
+			}
+		})
+	}
+}
+
+// checkCallerRefusals checks the entries that the requests of the callers
+// wrote: none for a change, and one with the outcome denied for the PATCH of
+// each of the four callers that are not a person. A GET writes none, and
+// neither does a request with no valid credential.
+func checkCallerRefusals(t *testing.T, e prefsEnv) {
+	t.Helper()
 
 	if n := len(e.prefsEntries(t)); n != 0 {
 		t.Errorf("entries = %d, want 0: a refused request changes nothing", n)
 	}
 
-	// The PATCH of each of the four callers that are not a person wrote one
-	// entry with the outcome denied. A GET writes none, and neither does a
-	// request with no valid credential.
 	refusals := e.prefsRefusals(t)
 	if len(refusals) != 4 {
 		t.Fatalf("refusal entries = %d, want 4 (%+v)", len(refusals), refusals)
 	}
 
-	for _, entry := range refusals {
+	for i := range refusals {
+		entry := &refusals[i]
 		if entry.Outcome != audit.OutcomeDenied || entry.Object != "preferences" || len(entry.Changes) != 0 {
-			t.Errorf("refusal entry = %+v, want the outcome denied on preferences, with no change", entry)
+			t.Errorf("refusal entry = %+v, want the outcome denied on preferences, with no change", *entry)
 		}
 	}
 }
@@ -613,32 +629,32 @@ func TestPreferencesPatchRefusals(t *testing.T) {
 
 	e := newPrefsEnv(t)
 
-	// The group ends when its parallel cases end, so the checks below see
-	// every entry.
-	t.Run("bodies", func(t *testing.T) {
-		for _, tc := range patchRefusals() {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
+	// The parallel cases end before a cleanup runs, so the check sees every entry.
+	t.Cleanup(func() { checkBodyRefusals(t, e) })
 
-				got := e.patch(t, tokenTester, tc.body)
-				checkRefusal(t, got, http.StatusBadRequest, tc.code)
+	cases := patchRefusals()
 
-				args := got.errorOf(t).ErrorArgs
-				switch {
-				case tc.field == "" && len(args) != 0:
-					t.Errorf("errorArgs = %v, want none", args)
-				case tc.field != "" && (len(args) != 1 || args["field"] != tc.field):
-					t.Errorf("errorArgs = %v, want the field %s", args, tc.field)
-				default:
-				}
-			})
-		}
-	})
+	for i := range cases {
+		tc := cases[i]
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkRefusedBody(t, e, tc)
+		})
+	}
 
 	// A refused patch changes nothing, also when the other members are good.
 	if got := e.patch(t, tokenTester, `{"theme":"terminal","digits":"deva"}`); got.status != http.StatusBadRequest {
 		t.Fatalf("mixed patch = %d, want 400", got.status)
 	}
+}
+
+// checkBodyRefusals checks that the refused patches changed nothing, and that
+// each wrote one failure entry. No entry names a value or a field of the
+// request.
+func checkBodyRefusals(t *testing.T, e prefsEnv) {
+	t.Helper()
 
 	if got := e.get(t, tokenTester).doc(t); got.Theme != "default" || got.UpdatedAt != nil {
 		t.Errorf("document = %+v, want the defaults: a refused patch changes nothing", got)
@@ -648,17 +664,35 @@ func TestPreferencesPatchRefusals(t *testing.T) {
 		t.Errorf("entries = %d, want 0", n)
 	}
 
-	// Each refused patch wrote one failure entry. No entry names a value or a
-	// field of the request.
 	refusals := e.prefsRefusals(t)
 	if want := len(patchRefusals()) + 1; len(refusals) != want {
 		t.Fatalf("refusal entries = %d, want %d", len(refusals), want)
 	}
 
-	for _, entry := range refusals {
+	for i := range refusals {
+		entry := &refusals[i]
 		if entry.Outcome != audit.OutcomeFailure || entry.Object != "preferences" || len(entry.Changes) != 0 {
-			t.Errorf("refusal entry = %+v, want the outcome failure on preferences, with no change", entry)
+			t.Errorf("refusal entry = %+v, want the outcome failure on preferences, with no change", *entry)
 		}
+	}
+}
+
+// checkRefusedBody sends the body of tc and checks the 400, the code and the
+// arguments of the answer.
+func checkRefusedBody(t *testing.T, e prefsEnv, tc refusal) {
+	t.Helper()
+
+	got := e.patch(t, tokenTester, tc.body)
+	checkRefusal(t, got, http.StatusBadRequest, tc.code)
+
+	args := got.errorOf(t).ErrorArgs
+
+	switch {
+	case tc.field == "" && len(args) != 0:
+		t.Errorf("errorArgs = %v, want none", args)
+	case tc.field != "" && (len(args) != 1 || args["field"] != tc.field):
+		t.Errorf("errorArgs = %v, want the field %s", args, tc.field)
+	default:
 	}
 }
 
