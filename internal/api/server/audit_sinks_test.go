@@ -62,6 +62,7 @@ func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) *apiser
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		AuditChain:       nil,
 		AuditSinks:       source,

@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -1076,6 +1077,43 @@ func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
 	return svc
 }
 
+// coverageGateConfig holds no approval default and no approval rule: the route
+// table needs a gate configuration service, and the coverage gate never
+// serves a request.
+type coverageGateConfig struct{}
+
+func (coverageGateConfig) ApprovalDefault(context.Context, gate.Scope) (gate.ApprovalDefault, error) {
+	return gate.ApprovalDefault{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutApprovalDefault(
+	context.Context, gate.ApprovalDefault, int64, audit.Entry,
+) (gate.ApprovalDefault, error) {
+	return gate.ApprovalDefault{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteApprovalDefault(context.Context, gate.Scope, int64, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
+func (coverageGateConfig) ApprovalRules(context.Context, gate.Scope) ([]gate.ApprovalRule, error) {
+	return nil, nil
+}
+
+func (coverageGateConfig) ApprovalRule(context.Context, gate.Scope, gate.ID) (gate.ApprovalRule, error) {
+	return gate.ApprovalRule{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) PutApprovalRule(
+	context.Context, gate.ApprovalRule, int64, audit.Entry,
+) (gate.ApprovalRule, error) {
+	return gate.ApprovalRule{}, gate.ErrNotFound
+}
+
+func (coverageGateConfig) DeleteApprovalRule(context.Context, gate.ObjectRef, audit.Entry) error {
+	return gate.ErrNotFound
+}
+
 // coverageSessionPolicyStore holds the default session policy: the route
 // table needs a session policy service, and the coverage gate never serves
 // a request.
@@ -1135,6 +1173,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     coverageIPAllowlists(tb),
+		Gates:            coverageGateConfig{},
 		SessionPolicy:    coverageSessionPolicies(tb),
 		SignIn:           nil,
 		CheckpointEpochs: nil,
@@ -1251,6 +1290,7 @@ func CoverageAllowlist() []AllowEntry {
 		devAllowEntries(),
 		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),
+		approvalRuleAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
@@ -1637,6 +1677,42 @@ func ipAllowlistAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: ipAllowlistCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// approvalRuleCoveringTest names the test that proves the approval default and
+// approval rule routes instead of a CLI: no CLI sets an approval rule.
+const approvalRuleCoveringTest = "TestApprovalRules"
+
+// approvalRuleAllowEntries returns the routes of the approval defaults and the
+// approval rules of a namespace. The steps of approvalRuleCoveringTest drive
+// each one through the real server on each store.
+func approvalRuleAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages approval rules. " +
+		"The harness step calls it through the real server and checks the answer."
+
+	const (
+		defaultPath = "/api/dustpan/v1/namespaces/{namespace}/approval-default"
+		rulesPath   = "/api/dustpan/v1/namespaces/{namespace}/approval-rules"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, defaultPath},
+		{http.MethodPut, defaultPath},
+		{http.MethodDelete, defaultPath},
+		{http.MethodGet, rulesPath},
+		{http.MethodGet, rulesPath + "/{id}"},
+		{http.MethodPut, rulesPath + "/{id}"},
+		{http.MethodDelete, rulesPath + "/{id}"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: approvalRuleCoveringTest, Reason: reason,
 		})
 	}
 

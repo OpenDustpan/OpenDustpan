@@ -193,3 +193,29 @@ func (e *Env) browserDo(ctx context.Context, tb testing.TB, client *http.Client,
 
 	return resp.StatusCode, string(body)
 }
+
+// SessionAPIStatus signs in the person principalID with a fresh sign-in
+// through the test provider of an env from NewEnvWithSignIn, sends one
+// installation API request with that console session and its CSRF value, and
+// returns the status and the body of the answer. The subject of the person
+// must be SignInSubject of its provider subject. It fails the test when the
+// sign-in or the request cannot run.
+func (e *Env) SessionAPIStatus(
+	ctx context.Context, tb testing.TB, principalID string, req SessionRequest,
+) (int, string) {
+	tb.Helper()
+
+	idpSubject := e.signInSubjectOf(ctx, tb, principalID)
+	browser := e.BrowserClient(tb)
+	csrf := e.signInAs(ctx, tb, browser, idpSubject)
+
+	return e.browserDo(ctx, tb, browser, browserRequest{
+		method: req.Method, target: e.URL + req.Path, body: req.Body,
+		header: http.Header{"X-Dustpan-Csrf": {csrf}, "Content-Type": {"application/json"}},
+	})
+}
+
+// SessionRequest is one installation API request of SessionAPIStatus.
+type SessionRequest struct {
+	Method, Path, Body string
+}

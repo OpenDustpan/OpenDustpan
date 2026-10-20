@@ -173,6 +173,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,

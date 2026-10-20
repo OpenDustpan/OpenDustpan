@@ -72,6 +72,7 @@ func newSweepHandler(
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,

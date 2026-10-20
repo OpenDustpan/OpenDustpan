@@ -136,7 +136,6 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		secretWrapper:    nil,
 		workspaces:       nil,
 		backups:          nil,
-		backupRegistry:   nil,
 		restores:         nil,
 		restoreRegistry:  nil,
 		now:              nil,

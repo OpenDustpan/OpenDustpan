@@ -3,8 +3,6 @@ package backup_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -625,32 +623,9 @@ func (e *stubBackupExporter) ExportPortable(
 		e.order.add("export")
 	}
 
-	path := backup.PortablePath("namespaces")
-
-	w, err := sink(path)
-	if err != nil {
-		return backup.Summary{}, nil, fmt.Errorf("open stub table file: %w", err)
-	}
-
-	if _, err := w.Write(e.data); err != nil {
-		return backup.Summary{}, nil, fmt.Errorf("write stub export: %w", err)
-	}
-
-	if err := w.Close(); err != nil {
-		return backup.Summary{}, nil, fmt.Errorf("close stub table file: %w", err)
-	}
-
-	digest := sha256.Sum256(e.data)
-	file := backup.PortableFile{
-		Table:   "namespaces",
-		Path:    path,
-		SHA256:  hex.EncodeToString(digest[:]),
-		Columns: nil,
-		Rows:    0,
-		Size:    int64(len(e.data)),
-	}
-
-	return e.sum, []backup.PortableFile{file}, nil
+	// Every table gets a file, as the real export does: a backup without a
+	// file for each table is corrupt, and the finish step checks the files.
+	return writeTestTableFile(sink, e.data, e.sum)
 }
 
 // newRestoreServiceSetup builds the fakes and the RestoreService under test.
@@ -676,10 +651,12 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 	live := newRestoreServiceLive(setup.live, regs)
 	live.dev.order = order
 
+	backupRegs := newFakeRegistry()
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Kinds:       fixedKind(installation.KindProduction),
-		Registry:    newFakeRegistry(),
+		Registry:    backupRegs,
+		Operations:  backupRegs.ops,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
 		Target:      setup.target,
@@ -687,6 +664,9 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		Now:         nil,
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)
@@ -1387,6 +1367,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: nil},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
+		Operations:  backupRegs.ops,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
 		Target:      check.target,
@@ -1394,6 +1375,9 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Now:         nil,
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)
@@ -1828,7 +1812,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 	check := newCheckSetup(t)
 	regs := newRestoreServiceRegistry()
 	backupRegs := newFakeRegistry()
-	backupRegs.failGet = errFakeDriver
+	backupRegs.failGetsAfter(2, errFakeDriver)
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
@@ -1838,6 +1822,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
+		Operations:  backupRegs.ops,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
 		Target:      check.target,
@@ -1845,6 +1830,9 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 		Now:         nil,
 		Version:     "test-1.0",
 		MaxSQLBytes: 0,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new backup service: %v", err)

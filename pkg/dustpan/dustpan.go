@@ -70,6 +70,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -110,6 +111,9 @@ var (
 	// errBackupNeedsRegistry reports a backup target with a namespace store
 	// that cannot track backups.
 	errBackupNeedsRegistry = errors.New("backup target needs a namespace store that tracks backups")
+	// errBackupNeedsOperations reports a backup target with a namespace store
+	// that keeps no durable operations.
+	errBackupNeedsOperations = errors.New("backup target needs a namespace store that keeps durable operations")
 	// errRestoreNeedsLive reports a backup target with a namespace store
 	// that cannot check, apply or fence a restore.
 	errRestoreNeedsLive = errors.New("backup target needs a namespace store that restores")
@@ -133,10 +137,6 @@ const (
 	// through headers.
 	maxHeaderBytes = 65536
 )
-
-// backupStoppedText marks a backup that was running when the server stopped.
-// FailRunningBackups writes it at the next start (ADR 30 decision 9).
-const backupStoppedText = "server stopped during backup"
 
 // restoreStoppedText marks a restore that was running when the server
 // stopped. FailRunningRestores writes it at the next start (ADR 38 decision
@@ -582,7 +582,6 @@ type Server struct {
 	secretWrapper   secret.Wrapper
 	workspaces      *workspace.Service
 	backups         *backup.Service
-	backupRegistry  backup.Registry
 	restores        *backup.RestoreService
 	restoreRegistry backup.RestoreRegistry
 	now             func() time.Time
@@ -969,7 +968,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		return nil, err
 	}
 
-	backupRegistry, restoreRegistry := registriesOf(cfg.namespaceStore)
+	restoreRegistry := restoreRegistryOf(cfg.namespaceStore)
 
 	srv := &Server{
 		flushDenials: denialFlusher(cfg, svc, observed),
@@ -982,7 +981,6 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		secretWrapper:    cfg.secretWrapper,
 		workspaces:       svc.workspaces,
 		backups:          backups,
-		backupRegistry:   backupRegistry,
 		restores:         adapters.restores,
 		restoreRegistry:  restoreRegistry,
 		now:              cfg.now,
@@ -1013,25 +1011,16 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	return srv, nil
 }
 
-// registriesOf returns the backup and restore registries that the namespace
-// store keeps, or nil for a store that keeps none.
+// restoreRegistryOf returns the restore registry that the namespace store
+// keeps, or nil for a store that keeps none.
 //
-//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the ports.
-func registriesOf(store namespace.Store) (backup.Registry, backup.RestoreRegistry) {
-	var (
-		backups  backup.Registry
-		restores backup.RestoreRegistry
-	)
-
-	if reg, ok := store.(backup.Registry); ok {
-		backups = reg
-	}
-
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
+func restoreRegistryOf(store namespace.Store) backup.RestoreRegistry {
 	if reg, ok := store.(backup.RestoreRegistry); ok {
-		restores = reg
+		return reg
 	}
 
-	return backups, restores
+	return nil
 }
 
 // adapters holds the HTTP adapters that routes mounts.
@@ -1595,6 +1584,9 @@ func newSessionPolicyService(cfg *settings) (*session.Policies, error) {
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
+// Handler serves requests only. A backup that a request starts waits for a
+// worker. An SDK user who serves Handler without Run must call Work on the
+// service that Backups returns, or no instance runs the backup.
 func (s *Server) Handler() http.Handler {
 	return s.handler
 }
@@ -1666,14 +1658,7 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}
 
-	srv := &http.Server{
-		Addr:              ln.Addr().String(),
-		Handler:           s.handler,
-		ReadHeaderTimeout: readHeaderTimeout,
-		IdleTimeout:       idleTimeout,
-		MaxHeaderBytes:    maxHeaderBytes,
-		TLSConfig:         tlsCfg,
-	}
+	srv := s.newHTTPServer(ln, tlsCfg)
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
@@ -1699,8 +1684,15 @@ func (s *Server) Run(ctx context.Context) error {
 	shipCtx, stopShipper := context.WithCancel(ctx)
 	waitShipper := s.workerOnly(func() func() { return s.startAuditShipper(shipCtx) })
 
+	// The backup worker releases its claim when Run returns, so another
+	// instance, or this one after a restart, continues a backup in progress.
+	backupCtx, stopBackups := context.WithCancel(ctx)
+	waitBackups := s.workerOnly(func() func() { return s.startBackupWorker(backupCtx) })
+
 	defer func() {
 		s.flushDenialCounts(ctx)
+		stopBackups()
+		waitBackups()
 		stopCheck()
 		waitCheck()
 		stopShipper()
@@ -1710,6 +1702,33 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// newHTTPServer returns the HTTP server that serves the handler on ln.
+func (s *Server) newHTTPServer(ln net.Listener, tlsCfg *tls.Config) *http.Server {
+	return &http.Server{
+		Addr:              ln.Addr().String(),
+		Handler:           s.handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+		TLSConfig:         tlsCfg,
+	}
+}
+
+// startBackupWorker claims and runs backup operations until ctx is done. The
+// returned function waits until the worker stopped. Without a backup service
+// there is nothing to run.
+func (s *Server) startBackupWorker(ctx context.Context) func() {
+	if s.backups == nil {
+		return func() {}
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() { s.backups.Work(ctx) })
+
+	return wg.Wait
 }
 
 // flushDenialCounts writes the counts of refused requests that no entry carries
@@ -2007,9 +2026,8 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 	return nil
 }
 
-// runStartUp runs the start-up steps of Run in order: the key check and the
-// running backups of startUp (ADR 23, ADR 30 decision 9), then the running
-// restores of failStoppedRestores. A done context during
+// runStartUp runs the start-up steps of Run in order: the key check of
+// startUp (ADR 23), then the running restores of failStoppedRestores. A done context during
 // the steps is a stop, not a failure, so it answers nil: the caller asked
 // the server to stop.
 func (s *Server) runStartUp(ctx context.Context) error {
@@ -2095,10 +2113,11 @@ func (s *Server) fenceStoppedRestore(ctx context.Context) error {
 	return nil
 }
 
-// startUp runs the start-up steps of Run in order: the key check of ADR 23,
-// then marking every running backup failed (ADR 30 decision 9). The store
-// adapters already name the backup step in their error text, so startUp
-// adds no second prefix.
+// startUp runs the start-up steps of Run in order: the key check of ADR 23.
+// It writes no backup row: a running backup is a durable operation, and the
+// instance that holds its claim, or another one after the lease ends, owns
+// the row. The store adapters already name the step in their error text, so
+// startUp adds no second prefix.
 func (s *Server) startUp(ctx context.Context) error {
 	if err := s.claimInstallationKind(ctx); err != nil {
 		return err
@@ -2116,23 +2135,7 @@ func (s *Server) startUp(ctx context.Context) error {
 		}
 	}
 
-	return s.failStoppedBackups(ctx)
-}
-
-// failStoppedBackups marks every running backup failed: the server stopped
-// during it. A backup runs in the process that took the request, which has
-// the api component. A process without it must not fail the backups of the
-// others when it starts.
-func (s *Server) failStoppedBackups(ctx context.Context) error {
-	if s.backupRegistry == nil || !s.components.Has(ComponentAPI) {
-		return nil
-	}
-
-	return s.backupRegistry.FailRunningBackups(
-		ctx,
-		s.now().UTC(),
-		backupStoppedText,
-	)
+	return nil
 }
 
 // isLoopbackListenAddr reports whether addr binds only the loopback
@@ -2541,6 +2544,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	gates, err := newGateConfigService(cfg, deps.services.namespaces)
+	if err != nil {
+		return nil, err
+	}
+
 	var sinks serverapi.AuditSinkSource
 	if cfg.auditShipper != nil {
 		sinks = cfg.auditShipper
@@ -2562,6 +2570,7 @@ func newServerHandler(
 		Access:           grants,
 		Tokens:           deps.services.tokens,
 		IPAllowlists:     allow,
+		Gates:            gatesPort(gates),
 		SessionPolicy:    deps.policies,
 		Audit:            serverAuditOf(cfg.namespaceStore),
 		CheckpointEpochs: checkpointEpochsOf(deps.chain),
@@ -2989,6 +2998,11 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 		opener = uncachedStateOpener{workspaces: svc.workspaces}
 	}
 
+	ops, err := backupOperations(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
 		Kinds:       kinds,
@@ -3000,12 +3014,40 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 		Now:         cfg.now,
 		Version:     cfg.version,
 		MaxSQLBytes: maxSQL,
+		Operations:  ops,
+		Owner:       durableOwner(cfg),
+		Lease:       cfg.operationLease,
+		Logger:      cfg.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup service: %w", err)
 	}
 
 	return service, nil
+}
+
+// backupOperations returns the durable operations of the namespace store,
+// where the backup operations live next to the backup rows. Its claims go
+// through the claim recorder of the worker watch, so a worker that runs only
+// a backup still writes its heartbeat.
+//
+//nolint:ireturn // The port is the result: the store adapters and the tracking wrapper both serve it.
+func backupOperations(cfg *settings) (durable.Store, error) {
+	p, ok := cfg.namespaceStore.(durableStoreProvider)
+	if !ok || p == nil {
+		return nil, errBackupNeedsOperations
+	}
+
+	ops := p.DurableOperationsPort()
+	if ops == nil {
+		return nil, errBackupNeedsOperations
+	}
+
+	if cfg.watch != nil {
+		return trackingOps{Store: ops, watch: cfg.watch}, nil
+	}
+
+	return ops, nil
 }
 
 // newRestoreService builds the installation restore service when a backup

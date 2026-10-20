@@ -93,6 +93,7 @@ func viewerActions() []identity.Action {
 		identity.ActionCollectionRead,
 		identity.ActionUnitRead,
 		identity.ActionProfileRead,
+		identity.ActionNamespaceReadGates,
 	}
 }
 

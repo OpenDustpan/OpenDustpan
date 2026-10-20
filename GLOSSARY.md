@@ -65,6 +65,11 @@ _Avoid_: Routing rule, assignment rule
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
+**Unit state**:
+One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The server derives `locked` at read time from the unit lock, which stays the only source (ADR 265 decision 5). The drift statuses are three of the states.
+_Avoid_: Unit status (for the set), winning status, health
+_Copy says_: the tool's own words on its own pages. "Approval wait" is the human word for `awaiting-approval`.
+
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
 _Avoid_: Lease (for the inventory field), unit status
@@ -166,6 +171,10 @@ _Avoid_: Feature flag, plugin, add-on, module (alone)
 **Capabilities document**:
 The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 211). `apiVersion` is public, so the console reads it before the sign-in. The module list needs `caller:read`, so the console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
 _Avoid_: Feature list, handshake, capability (alone)
+
+**API description**:
+The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The SDKs, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
+_Avoid_: Swagger file, API spec, OpenAPI spec, schema file
 
 **Forge connection**:
 The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).
@@ -649,6 +658,23 @@ _Avoid_: Quota (the catalog quota is another concept), storage quota
 **Unmanaged resource**:
 A cloud resource that does not have exactly one unit that manages it. It has three kinds. **Not in any unit**: the state of no unit holds the resource, and only a cloud sweep can find it. **Left behind**: only deleted units hold its resource key. **Managed twice**: two or more live units hold its resource key, from one tool or from both (ADR 163).
 _Avoid_: Orphan (that is a stored file), ghost resource, shadow resource
+
+**Drift**:
+A difference between the state of a unit and the real resources that the state names. A change outside the tool causes it, for example a manual edit in a cloud console. A cloud resource that no unit manages is not drift. It is an unmanaged resource (ADR 163).
+_Avoid_: Out-of-band change (except to name a cause), configuration drift
+
+**Drift check**:
+A job with the operation `refresh` and one phase, `plan`, that finds drift (ADR 263). It changes no resource and writes no state version. OpenTofu runs a refresh-only plan and the Pulumi CLI runs a refresh preview. It starts on its own only when a drift schedule is on, and a person can start it at any time. Remediation is a separate job (ADR 258).
+_Avoid_: Drift run (older ADRs only), drift scan (a scan is a Sweep), health assessment
+_Copy says_: "drift check" for both tools. On the page of one tool, that tool's own words: "refresh-only plan" for OpenTofu and "refresh preview" for the Pulumi CLI.
+
+**Drift result**:
+What one finished drift check reports: the unit, the job and the time. It also lists the address of each resource that differs. It holds no attribute value. A unit keeps its latest drift result. The **drift status** follows from it: `drifted`, `in-sync` or `unknown`. The status `drifted` is one badge of the unit among others.
+_Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
+
+**Drift schedule**:
+The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
+_Avoid_: Drift policy (a policy alone names no object), drift trigger
 
 **Catalog**:
 The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
