@@ -26,17 +26,28 @@ func ownerN(n int) string {
 // testRef is a valid unit reference in the namespace acme.
 const testRef = "pulumi:acme/web/prod"
 
+const (
+	// testTimeMs is the creation time of the views of the cases, in Unix
+	// milliseconds.
+	testTimeMs = 1_700_000_000_000
+	// labelKeyTeam, labelValuePayments and subjectAlice are the values that the
+	// cases use for a label and for the subject of the audit entries.
+	labelKeyTeam       = "team"
+	labelValuePayments = "payments"
+	subjectAlice       = "alice"
+)
+
 // newView returns a valid view of owner in ns with a new ID and a query with
 // one label.
 func newView(ns namespace.Name, owner, name string) savedview.View {
 	return savedview.View{
-		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		CreatedAt: time.UnixMilli(testTimeMs).UTC(),
 		ID:        savedview.NewID(),
 		Namespace: ns,
 		Name:      name,
 		Owner:     owner,
 		Query: savedview.Query{
-			Labels:     []savedview.Label{{Key: "team", Value: "payments"}},
+			Labels:     []savedview.Label{{Key: labelKeyTeam, Value: labelValuePayments}},
 			References: nil,
 		},
 	}
@@ -59,7 +70,7 @@ func auditEntry(ns namespace.Name, action string) audit.Entry {
 	return audit.Entry{
 		At:            time.UnixMilli(1),
 		Namespace:     ns,
-		Subject:       "alice",
+		Subject:       subjectAlice,
 		IDPSubject:    "",
 		TokenID:       "",
 		Action:        "view:" + action,
@@ -90,9 +101,9 @@ func staleFence(f namespace.Fence) namespace.Fence {
 	return namespace.Fence{Namespace: f.Namespace, FailoverVersion: f.FailoverVersion + 1}
 }
 
-// auditCount returns the number of audit entries of ns.
-func auditCount(t *testing.T, h Harness, ns string) int {
+// auditCount returns the number of audit entries of the namespace acme.
+func auditCount(t *testing.T, h Harness) int {
 	t.Helper()
 
-	return len(h.Audit(t, ns))
+	return len(h.Audit(t, "acme"))
 }

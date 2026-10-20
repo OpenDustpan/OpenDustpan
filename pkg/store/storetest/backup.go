@@ -314,8 +314,10 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 	}
 
 	entry := audit.Entry{
-		At: now(), Namespace: acme.Name, Subject: "alice", Action: "view:create", Object: acme.Name.String(),
-		SourceIP: "192.0.2.1", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+		At: now(), Namespace: acme.Name, Subject: "alice", IDPSubject: "", TokenID: "", Action: "view:create",
+		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
+		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
 	}
 
 	for i, query := range []savedview.Query{

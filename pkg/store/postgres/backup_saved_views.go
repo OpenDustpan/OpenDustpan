@@ -16,7 +16,7 @@ func pgCopySavedViewTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
 			table:   "saved_views",
-			columns: []string{"id", pgColNamespaceID, "owner", pgColName, "query_json", pgColCreatedAtMs},
+			columns: []string{"id", pgColNamespaceID, pgColOwner, pgColName, "query_json", pgColCreatedAtMs},
 			orderBy: []string{"id"},
 		},
 	}
@@ -42,17 +42,15 @@ func checkStagedSavedViews(ctx context.Context, pool *pgxpool.Pool, staging stri
 	defer rows.Close()
 
 	for rows.Next() {
-		var (
-			id, ns, owner, name, queryJSON string
-			createdAtMs                    int64
-		)
+		var row viewstore.Row
 
-		if scanErr := rows.Scan(&id, &ns, &owner, &name, &queryJSON, &createdAtMs); scanErr != nil {
+		scanErr := rows.Scan(&row.ID, &row.Namespace, &row.Owner, &row.Name, &row.QueryJSON, &row.CreatedAtMs)
+		if scanErr != nil {
 			return fmt.Errorf("read staged saved views: %w", backup.ErrExportRead)
 		}
 
-		if _, viewErr := viewstore.View(id, ns, owner, name, queryJSON, createdAtMs); viewErr != nil {
-			return fmt.Errorf("staged saved view %q is not valid: %w: %w", id, viewErr, backup.ErrCorrupt)
+		if _, viewErr := viewstore.View(row); viewErr != nil {
+			return fmt.Errorf("staged saved view %q is not valid: %w: %w", row.ID, viewErr, backup.ErrCorrupt)
 		}
 	}
 

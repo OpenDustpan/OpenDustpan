@@ -12,6 +12,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/savedview"
 )
 
+// entriesAfterDelete is the number of audit entries after a create and a delete.
+const entriesAfterDelete = 2
+
 func writeCases() []suiteCase {
 	return []suiteCase{
 		{name: "create with a stale fence returns ErrFenced and stores nothing", test: testCreateStaleFence},
@@ -48,7 +51,7 @@ func testCreateStaleFence(t *testing.T, h Harness) {
 		t.Fatalf("list = %v, %v; want none", views, err)
 	}
 
-	if got := auditCount(t, h, "acme"); got != 0 {
+	if got := auditCount(t, h); got != 0 {
 		t.Fatalf("audit entries = %d, want 0", got)
 	}
 }
@@ -87,7 +90,7 @@ func testDeleteStaleFence(t *testing.T, h Harness) {
 		t.Fatalf("view after the fenced delete: %v", err)
 	}
 
-	if got := auditCount(t, h, "acme"); got != 1 {
+	if got := auditCount(t, h); got != 1 {
 		t.Fatalf("audit entries = %d, want 1 (the create)", got)
 	}
 }
@@ -144,17 +147,19 @@ func testFailedCreateNoAudit(t *testing.T, h Harness) {
 		"invalid":       {newView("acme", ownerA, ""), fence, savedview.ErrInvalid},
 		"stale fence":   {newView("acme", ownerA, "Other"), staleFence(fence), namespace.ErrFenced},
 		"other fence":   {newView("acme", ownerA, "Other"), h.Namespace(t, "beta"), namespace.ErrFenced},
-		"owner is name": {newView("acme", "alice", "Other"), fence, savedview.ErrInvalid},
+		"owner is name": {newView("acme", subjectAlice, "Other"), fence, savedview.ErrInvalid},
 	}
 
-	for name, tc := range failures {
+	for name := range failures {
+		tc := failures[name]
+
 		err := h.Store.Create(t.Context(), tc.view, tc.fence, auditEntry("acme", "create"))
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: create = %v, want %v", name, err, tc.want)
 		}
 	}
 
-	if got := auditCount(t, h, "acme"); got != 1 {
+	if got := auditCount(t, h); got != 1 {
 		t.Fatalf("audit entries = %d, want 1: a failed create appends none", got)
 	}
 }
@@ -187,8 +192,8 @@ func testDeleteAudit(t *testing.T, h Harness) {
 		t.Fatalf("second delete = %v, want ErrNotFound", err)
 	}
 
-	if got := auditCount(t, h, "acme"); got != 2 {
-		t.Fatalf("audit entries = %d, want 2", got)
+	if got := auditCount(t, h); got != entriesAfterDelete {
+		t.Fatalf("audit entries = %d, want %d", got, entriesAfterDelete)
 	}
 }
 
@@ -202,7 +207,7 @@ func testDeleteUnknown(t *testing.T, h Harness) {
 		t.Fatalf("delete of an unknown view = %v, want ErrNotFound", err)
 	}
 
-	if got := auditCount(t, h, "acme"); got != 0 {
+	if got := auditCount(t, h); got != 0 {
 		t.Fatalf("audit entries = %d, want 0", got)
 	}
 }
@@ -247,7 +252,7 @@ func testConcurrentSameName(t *testing.T, h Harness) {
 		t.Fatalf("list = %d views, %v; want 1", len(views), err)
 	}
 
-	if got := auditCount(t, h, "acme"); got != 1 {
+	if got := auditCount(t, h); got != 1 {
 		t.Fatalf("audit entries = %d, want 1", got)
 	}
 }
@@ -304,15 +309,17 @@ func testConcurrentLimit(t *testing.T, h Harness) {
 func testCleanup(t *testing.T, h Harness) {
 	t.Helper()
 
-	const secretName = "Reorg of the payments team"
+	const privateName = "Reorg of the payments team"
 
 	mine := []savedview.View{
-		newView("acme", ownerA, secretName), newView("acme", ownerA, "Second"), newView("acme", ownerA, "Third"),
+		newView("acme", ownerA, privateName), newView("acme", ownerA, "Second"), newView("acme", ownerA, "Third"),
 	}
 	keep := []savedview.View{newView("acme", ownerB, "Payments"), newView("beta", ownerA, "Other namespace")}
 
-	for _, v := range append(append([]savedview.View{}, mine...), keep...) {
-		mustCreate(t, h, v)
+	for _, list := range [][]savedview.View{mine, keep} {
+		for i := range list {
+			mustCreate(t, h, list[i])
+		}
 	}
 
 	before := len(h.Audit(t, "acme"))
@@ -324,36 +331,48 @@ func testCleanup(t *testing.T, h Harness) {
 		t.Fatalf("cleanup = %d, %v; want %d", n, err, len(mine))
 	}
 
-	for _, v := range mine {
-		if _, err := h.Store.Get(t.Context(), "acme", v.ID, ownerA); !errors.Is(err, savedview.ErrNotFound) {
-			t.Errorf("get %s after cleanup = %v, want ErrNotFound", v.ID, err)
+	checkCleanedViews(t, h, mine, keep)
+	checkCleanupEntries(t, h.Audit(t, "acme")[before:], mine, privateName)
+}
+
+// checkCleanedViews checks that the views in gone are gone and the views in
+// kept stay.
+func checkCleanedViews(t *testing.T, h Harness, gone, kept []savedview.View) {
+	t.Helper()
+
+	for i := range gone {
+		if _, err := h.Store.Get(t.Context(), "acme", gone[i].ID, ownerA); !errors.Is(err, savedview.ErrNotFound) {
+			t.Errorf("get %s after cleanup = %v, want ErrNotFound", gone[i].ID, err)
 		}
 	}
 
-	for _, v := range keep {
-		if _, err := h.Store.Get(t.Context(), v.Namespace, v.ID, v.Owner); err != nil {
-			t.Errorf("view %s of another owner or namespace after cleanup: %v", v.ID, err)
+	for i := range kept {
+		if _, err := h.Store.Get(t.Context(), kept[i].Namespace, kept[i].ID, kept[i].Owner); err != nil {
+			t.Errorf("view %s of another owner or namespace after cleanup: %v", kept[i].ID, err)
 		}
 	}
+}
 
-	entries := h.Audit(t, "acme")
-	added := entries[before:]
+// checkCleanupEntries checks that the cleanup appended one entry for each view
+// in gone, with the view ID and without the name.
+func checkCleanupEntries(t *testing.T, added []audit.Entry, gone []savedview.View, name string) {
+	t.Helper()
 
-	if len(added) != len(mine) {
-		t.Fatalf("cleanup appended %d audit entries, want %d (one for each view)", len(added), len(mine))
+	if len(added) != len(gone) {
+		t.Fatalf("cleanup appended %d audit entries, want %d (one for each view)", len(added), len(gone))
 	}
 
 	seen := map[string]bool{}
 
-	for _, entry := range added {
-		seen[entry.ObjectID] = true
+	for i := range added {
+		seen[added[i].ObjectID] = true
 
-		assertEntryHoldsNoName(t, entry, secretName)
+		assertEntryHoldsNoName(t, added[i], name)
 	}
 
-	for _, v := range mine {
-		if !seen[string(v.ID)] {
-			t.Errorf("no audit entry for the view %s", v.ID)
+	for i := range gone {
+		if !seen[string(gone[i].ID)] {
+			t.Errorf("no audit entry for the view %s", gone[i].ID)
 		}
 	}
 }
@@ -362,7 +381,8 @@ func testCleanup(t *testing.T, h Harness) {
 func assertEntryHoldsNoName(t *testing.T, e audit.Entry, name string) {
 	t.Helper()
 
-	if e.Action != "view:delete" || e.ObjectID == "" || len(e.Changes) != 0 || strings.Contains(fmt.Sprintf("%+v", e), name) {
+	if e.Action != "view:delete" || e.ObjectID == "" || len(e.Changes) != 0 ||
+		strings.Contains(fmt.Sprintf("%+v", e), name) {
 		t.Fatalf("audit entry of a cleanup = %+v: want the action, the view ID, no change and no name", e)
 	}
 }
@@ -397,14 +417,14 @@ func testCleanupNone(t *testing.T, h Harness) {
 
 	mustCreate(t, h, newView("acme", ownerB, "Payments"))
 
-	before := auditCount(t, h, "acme")
+	before := auditCount(t, h)
 
 	n, err := h.Store.DeleteOwned(t.Context(), "acme", ownerA, h.Namespace(t, "acme"), auditEntry("acme", "delete"))
 	if err != nil || n != 0 {
 		t.Fatalf("cleanup = %d, %v; want 0 and no error", n, err)
 	}
 
-	if got := auditCount(t, h, "acme"); got != before {
+	if got := auditCount(t, h); got != before {
 		t.Fatalf("audit entries = %d, want %d", got, before)
 	}
 }
@@ -419,7 +439,7 @@ func testCleanupBadOwner(t *testing.T, h Harness) {
 
 	fence := h.Namespace(t, "acme")
 
-	for _, owner := range []string{"", "prn-%", "%", "alice", "' OR '1'='1"} {
+	for _, owner := range []string{"", "prn-%", "%", subjectAlice, "' OR '1'='1"} {
 		n, err := h.Store.DeleteOwned(t.Context(), "acme", owner, fence, auditEntry("acme", "delete"))
 		if n != 0 || err == nil {
 			t.Errorf("cleanup of owner %q = %d, %v; want 0 and an error", owner, n, err)

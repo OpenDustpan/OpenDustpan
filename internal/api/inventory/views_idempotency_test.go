@@ -13,6 +13,11 @@ const (
 	replayedHeader = "Idempotent-Replayed"
 )
 
+// keyedCreate returns a create of the view body with the token.
+func keyedCreate(token, body string) *viewCall {
+	return &viewCall{method: http.MethodPost, target: viewsPath, token: token, body: body}
+}
+
 // TestViewCreateReplayKeepsTheIDAndNotTheView proves the record of a create
 // keeps the ID of the view and not the view. The first request makes the view.
 // A replay with the same key and the same body makes no second view, and it
@@ -22,14 +27,14 @@ func TestViewCreateReplayKeepsTheIDAndNotTheView(t *testing.T) {
 
 	f := newViewFixture(t)
 
-	first := f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1")
+	first := f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
 	if first.status != http.StatusCreated {
 		t.Fatalf("first create = %d (%s)", first.status, first.body)
 	}
 
-	id := f.createViewIDFromBody(t, first.body)
+	id := idOfBody(t, first.body)
 
-	replay := f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1")
+	replay := f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
 	if replay.status != http.StatusConflict || !strings.Contains(replay.body, id) ||
 		!strings.Contains(replay.body, "request.idempotency-key-replayed-secret") {
 		t.Fatalf("replay = %d (%s), want 409, the code and the ID %s", replay.status, replay.body, id)
@@ -46,20 +51,28 @@ func TestViewCreateReplayKeepsTheIDAndNotTheView(t *testing.T) {
 		t.Fatalf("list after the replay = %s, want one view", list.body)
 	}
 
-	var creates int
-
-	for _, e := range f.auditEntries(t) {
-		if e.Action == "view:create" {
-			creates++
-		}
-	}
-
-	if creates != 1 {
+	if creates := countActions(t, f, "view:create"); creates != 1 {
 		t.Fatalf("%d create entries in the audit log, want 1", creates)
 	}
 }
 
-func (f *viewFixture) createViewIDFromBody(t *testing.T, body string) string {
+// countActions returns the number of audit entries of acme with the action.
+func countActions(t *testing.T, f *viewFixture, action string) int {
+	t.Helper()
+
+	count := 0
+
+	entries := f.auditEntries(t)
+	for i := range entries {
+		if entries[i].Action == action {
+			count++
+		}
+	}
+
+	return count
+}
+
+func idOfBody(t *testing.T, body string) string {
 	t.Helper()
 
 	_, after, ok := strings.Cut(body, `"id":"`)
@@ -72,117 +85,115 @@ func (f *viewFixture) createViewIDFromBody(t *testing.T, body string) string {
 	return id
 }
 
-func TestViewIdempotencyRules(t *testing.T) {
+func TestViewIdempotencyReusedKeyAnswers422(t *testing.T) {
 	t.Parallel()
 
-	t.Run("the same key with another body answers 422", func(t *testing.T) {
-		t.Parallel()
+	f := newViewFixture(t)
+	f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
 
-		f := newViewFixture(t)
-		f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1")
+	res := f.doKeyed(t, "key-1", keyedCreate(tokenAna, `{"name":"Other"}`))
+	if res.status != http.StatusUnprocessableEntity || !strings.Contains(res.body, "request.idempotency-key-reused") {
+		t.Fatalf("reused key = %d (%s), want 422", res.status, res.body)
+	}
+}
 
-		res := f.do(t, http.MethodPost, viewsPath, tokenAna, `{"name":"Other"}`, keyHeader, "key-1")
-		if res.status != http.StatusUnprocessableEntity || !strings.Contains(res.body, "request.idempotency-key-reused") {
-			t.Fatalf("reused key = %d (%s), want 422", res.status, res.body)
+func TestViewIdempotencyKeyIsNotSharedBetweenPeople(t *testing.T) {
+	t.Parallel()
+
+	f := newViewFixture(t)
+	f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
+
+	res := f.doKeyed(t, "key-1", keyedCreate(tokenBob, payments))
+	if res.status != http.StatusCreated {
+		t.Fatalf("the same key from another person = %d (%s), want a new view", res.status, res.body)
+	}
+}
+
+// TestViewIdempotencyKeyBelongsToThePrincipalID proves that a new principal with
+// the same subject does not replay the key of the old principal, so it learns
+// no view ID of the old principal.
+func TestViewIdempotencyKeyBelongsToThePrincipalID(t *testing.T) {
+	t.Parallel()
+
+	f := newViewFixture(t)
+	f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
+	f.people.replace("ana", "prn-anaanaanaanaanaana9")
+
+	res := f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
+	if res.status != http.StatusCreated {
+		t.Fatalf("create by the new principal = %d (%s), want 201 and no replay of the old ID", res.status, res.body)
+	}
+}
+
+func TestViewIdempotencyRefusedCreateIsNotStored(t *testing.T) {
+	t.Parallel()
+
+	f := newViewFixture(t)
+
+	if res := f.doKeyed(t, "key-1", keyedCreate(tokenAna, `{"name":""}`)); res.status != http.StatusBadRequest {
+		t.Fatalf("invalid create = %d", res.status)
+	}
+
+	// The same key works after the fix.
+	res := f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
+	if res.status != http.StatusCreated {
+		t.Fatalf("create with the same key after a 400 = %d (%s), want 201", res.status, res.body)
+	}
+}
+
+func TestViewIdempotencyDeleteReplaysThe204(t *testing.T) {
+	t.Parallel()
+
+	f := newViewFixture(t)
+	id := f.createView(t, tokenAna, payments)
+	del := &viewCall{method: http.MethodDelete, target: viewsPath + "/" + id, token: tokenAna, body: ""}
+
+	first := f.doKeyed(t, "del-1", del)
+	replay := f.doKeyed(t, "del-1", del)
+
+	if first.status != http.StatusNoContent || replay.status != http.StatusNoContent ||
+		replay.header.Get(replayedHeader) != "true" {
+		t.Fatalf("delete = %d, replay = %d (replayed %q), want 204 twice", first.status, replay.status,
+			replay.header.Get(replayedHeader))
+	}
+}
+
+func TestViewIdempotencyInvalidKeyAnswers400(t *testing.T) {
+	t.Parallel()
+
+	f := newViewFixture(t)
+
+	for _, key := range []string{emptyKey, strings.Repeat("k", 256), "key\twith tab"} {
+		res := f.doKeyed(t, key, keyedCreate(tokenAna, payments))
+		if res.status != http.StatusBadRequest {
+			t.Errorf("key %q = %d (%s), want 400", key, res.status, res.body)
 		}
-	})
+	}
+}
 
-	t.Run("a key is not shared between people", func(t *testing.T) {
-		t.Parallel()
+func TestViewIdempotencyReplayChecksTheActionAgain(t *testing.T) {
+	t.Parallel()
 
-		f := newViewFixture(t)
-		f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1")
+	f := newViewFixture(t)
+	f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
 
-		if res := f.do(t, http.MethodPost, viewsPath, tokenBob, payments, keyHeader, "key-1"); res.status != http.StatusCreated {
-			t.Fatalf("the same key from another person = %d (%s), want a new view", res.status, res.body)
-		}
-	})
+	f.authz.deny(identity.ActionViewCreate)
 
-	t.Run("a new principal with the same subject does not replay the key of the old one", func(t *testing.T) {
-		t.Parallel()
+	if res := f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments)); res.status != http.StatusForbidden {
+		t.Fatalf("replay without the action = %d, want 403", res.status)
+	}
+}
 
-		f := newViewFixture(t)
-		f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1")
-		f.people.replace("ana", "prn-anaanaanaanaanaana9")
+func TestViewIdempotencyWithNoReplayStoreRefusesTheHeader(t *testing.T) {
+	t.Parallel()
 
-		res := f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1")
-		if res.status != http.StatusCreated {
-			t.Fatalf("create by the new principal = %d (%s), want 201 and no replay of the old ID", res.status, res.body)
-		}
-	})
+	f := newViewFixtureWith(t, viewFixtureOptions{views: nil, noIdempotency: true})
 
-	t.Run("a refused create is not stored", func(t *testing.T) {
-		t.Parallel()
+	res := f.doKeyed(t, "key-1", keyedCreate(tokenAna, payments))
+	if res.status != http.StatusBadRequest {
+		t.Fatalf("create with a key and no store = %d (%s), want 400", res.status, res.body)
+	}
 
-		f := newViewFixture(t)
-
-		if res := f.do(t, http.MethodPost, viewsPath, tokenAna, `{"name":""}`, keyHeader, "key-1"); res.status != http.StatusBadRequest {
-			t.Fatalf("invalid create = %d", res.status)
-		}
-
-		// The same key works after the fix.
-		if res := f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1"); res.status != http.StatusCreated {
-			t.Fatalf("create with the same key after a 400 = %d (%s), want 201", res.status, res.body)
-		}
-	})
-
-	t.Run("a delete replays the 204", func(t *testing.T) {
-		t.Parallel()
-
-		f := newViewFixture(t)
-		id := f.createView(t, tokenAna, payments)
-
-		first := f.do(t, http.MethodDelete, viewsPath+"/"+id, tokenAna, "", keyHeader, "del-1")
-		replay := f.do(t, http.MethodDelete, viewsPath+"/"+id, tokenAna, "", keyHeader, "del-1")
-
-		if first.status != http.StatusNoContent || replay.status != http.StatusNoContent ||
-			replay.header.Get(replayedHeader) != "true" {
-			t.Fatalf("delete = %d, replay = %d (replayed %q), want 204 twice", first.status, replay.status,
-				replay.header.Get(replayedHeader))
-		}
-	})
-
-	t.Run("an invalid key answers 400", func(t *testing.T) {
-		t.Parallel()
-
-		f := newViewFixture(t)
-
-		for _, key := range []string{"", strings.Repeat("k", 256), "key\twith tab"} {
-			res := f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, key)
-			if res.status != http.StatusBadRequest {
-				t.Errorf("key %q = %d (%s), want 400", key, res.status, res.body)
-			}
-		}
-	})
-
-	t.Run("a replay checks the action again", func(t *testing.T) {
-		t.Parallel()
-
-		f := newViewFixture(t)
-		f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1")
-
-		f.authz.denyAction[identity.ActionViewCreate] = true
-
-		if res := f.do(t, http.MethodPost, viewsPath, tokenAna, payments, keyHeader, "key-1"); res.status != http.StatusForbidden {
-			t.Fatalf("replay without the action = %d, want 403", res.status)
-		}
-	})
-
-	t.Run("a server with no replay store refuses the header", func(t *testing.T) {
-		t.Parallel()
-
-		f := newViewFixtureWith(t, viewFixtureOptions{views: nil, noIdempotency: true})
-
-		for _, call := range []struct{ method, target, body string }{
-			{http.MethodPost, viewsPath, payments},
-		} {
-			res := f.do(t, call.method, call.target, tokenAna, call.body, keyHeader, "key-1")
-			if res.status != http.StatusBadRequest {
-				t.Fatalf("%s with a key and no store = %d (%s), want 400", call.method, res.status, res.body)
-			}
-		}
-
-		// Without the header the route works.
-		f.createView(t, tokenAna, payments)
-	})
+	// Without the header the route works.
+	f.createView(t, tokenAna, payments)
 }

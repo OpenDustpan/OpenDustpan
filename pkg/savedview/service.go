@@ -30,7 +30,7 @@ func NewID() ID {
 	var b [16]byte
 
 	// crypto/rand.Read does not return an error on any supported platform.
-	_, _ = rand.Read(b[:]) //nolint:errcheck // See above.
+	_, _ = rand.Read(b[:])
 
 	return ID(idPrefix + hex.EncodeToString(b[:]))
 }
@@ -86,17 +86,17 @@ type Caller struct {
 }
 
 // check refuses a caller that is not a person with a valid owner.
-func (c Caller) check() error {
+func (c *Caller) check() error {
 	// Defense in depth: the HTTP adapter checks the kind too. This check stays
 	// so that a new caller of the service cannot act for a service principal,
 	// a job or a bootstrap token. It does not rely on the adapter or on the
 	// store. It is an allowlist: a kind that is not "person", also an empty or
 	// unknown kind, is refused.
-	if c.Principal.Kind != identity.KindPerson || c.Principal.JobID != "" {
+	if c == nil || c.Principal.Kind != identity.KindPerson || c.Principal.JobID != "" {
 		return ErrNotPerson
 	}
 
-	if !validOwner(c.Owner) {
+	if !ValidOwner(c.Owner) {
 		return ErrNotPerson
 	}
 
@@ -106,7 +106,7 @@ func (c Caller) check() error {
 // Create makes a view of the caller in ns. It returns ErrNotPerson,
 // ErrInvalid, ErrExists, ErrLimit, namespace.ErrNotFound or
 // namespace.ErrFenced.
-func (s *Service) Create(ctx context.Context, c Caller, ns namespace.Name, name string, q Query) (View, error) {
+func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, name string, q Query) (View, error) {
 	if err := c.check(); err != nil {
 		return View{}, err
 	}
@@ -129,7 +129,7 @@ func (s *Service) Create(ctx context.Context, c Caller, ns namespace.Name, name 
 }
 
 // Get returns the view id of the caller in ns, or ErrNotFound.
-func (s *Service) Get(ctx context.Context, c Caller, ns namespace.Name, id ID) (View, error) {
+func (s *Service) Get(ctx context.Context, c *Caller, ns namespace.Name, id ID) (View, error) {
 	if err := c.check(); err != nil {
 		return View{}, err
 	}
@@ -147,7 +147,7 @@ func (s *Service) Get(ctx context.Context, c Caller, ns namespace.Name, id ID) (
 }
 
 // List returns the views of the caller in ns, ordered by name, then ID.
-func (s *Service) List(ctx context.Context, c Caller, ns namespace.Name) ([]View, error) {
+func (s *Service) List(ctx context.Context, c *Caller, ns namespace.Name) ([]View, error) {
 	if err := c.check(); err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (s *Service) List(ctx context.Context, c Caller, ns namespace.Name) ([]View
 
 // Delete removes the view id of the caller in ns. It returns ErrNotFound for
 // a view that the caller does not own.
-func (s *Service) Delete(ctx context.Context, c Caller, ns namespace.Name, id ID) error {
+func (s *Service) Delete(ctx context.Context, c *Caller, ns namespace.Name, id ID) error {
 	if err := c.check(); err != nil {
 		return err
 	}
@@ -195,7 +195,7 @@ func (s *Service) Delete(ctx context.Context, c Caller, ns namespace.Name, id ID
 // rest. The retry is safe because a namespace with no view of the owner gives
 // 0 and no entry.
 func (s *Service) RemoveOwner(ctx context.Context, owner string) (int, error) {
-	if !validOwner(owner) {
+	if !ValidOwner(owner) {
 		return 0, fmt.Errorf("%w: the owner is not a principal ID", ErrInvalid)
 	}
 
@@ -234,7 +234,7 @@ func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence
 
 // entry makes the audit entry of one write. It names the view by ID and never
 // by name: a name can hold private text.
-func (s *Service) entry(c Caller, ns namespace.Name, id ID, verb string) audit.Entry {
+func (s *Service) entry(c *Caller, ns namespace.Name, id ID, verb string) audit.Entry {
 	e := c.By
 	e.At = s.now().UTC()
 	e.Namespace = ns

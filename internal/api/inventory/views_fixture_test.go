@@ -136,7 +136,7 @@ type scriptedAuthorizer struct {
 }
 
 func (a *scriptedAuthorizer) Authorize(
-	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+	_ context.Context, _ identity.Principal, action identity.Action, obj identity.Object,
 ) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -150,8 +150,36 @@ func (a *scriptedAuthorizer) Authorize(
 	return nil
 }
 
-func (*scriptedAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+func (*scriptedAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
 	return identity.AdminScope(p), nil
+}
+
+// reset forgets the calls that the authorizer recorded.
+func (a *scriptedAuthorizer) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.asked = nil
+}
+
+// deny makes the authorizer refuse the action, and only that action.
+func (a *scriptedAuthorizer) deny(action identity.Action) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.denyAction = map[identity.Action]bool{action: true}
+}
+
+// denyUnit makes the authorizer refuse unit:read on the unit reference.
+func (a *scriptedAuthorizer) denyUnit(reference string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.denyUnits[reference] = true
 }
 
 func (a *scriptedAuthorizer) calls() []recordedCall {
@@ -207,7 +235,7 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	var views savedview.Store = store.SavedViews()
+	views := store.SavedViews()
 	if opts.views != nil {
 		views = opts.views(views)
 	}
@@ -270,22 +298,51 @@ type viewResult struct {
 	body   string
 }
 
+// emptyKey makes doKeyed send the Idempotency-Key header with an empty value.
+const emptyKey = "<empty>"
+
+// viewCall is one request.
+type viewCall struct {
+	method string
+	target string
+	token  string
+	body   string
+}
+
 // do sends one request and returns the answer.
-func (f *viewFixture) do(t *testing.T, method, target, token, body string, header ...string) viewResult {
+func (f *viewFixture) do(t *testing.T, method, target, token, body string) viewResult {
+	t.Helper()
+
+	return f.send(t, &viewCall{method: method, target: target, token: token, body: body}, "")
+}
+
+// doKeyed sends one request with the Idempotency-Key header and returns the
+// answer.
+func (f *viewFixture) doKeyed(t *testing.T, key string, c *viewCall) viewResult {
+	t.Helper()
+
+	return f.send(t, c, key)
+}
+
+func (f *viewFixture) send(t *testing.T, c *viewCall, key string) viewResult {
 	t.Helper()
 
 	var reader io.Reader = http.NoBody
-	if body != "" {
-		reader = strings.NewReader(body)
+	if c.body != "" {
+		reader = strings.NewReader(c.body)
 	}
 
-	req := httptest.NewRequestWithContext(t.Context(), method, target, reader)
-	if token != "" {
-		req.Header.Set("Authorization", "token "+token)
+	req := httptest.NewRequestWithContext(t.Context(), c.method, c.target, reader)
+	if c.token != "" {
+		req.Header.Set("Authorization", "token "+c.token)
 	}
 
-	for i := 0; i+1 < len(header); i += 2 {
-		req.Header.Set(header[i], header[i+1])
+	switch key {
+	case "":
+	case emptyKey:
+		req.Header.Set(keyHeader, "")
+	default:
+		req.Header.Set(keyHeader, key)
 	}
 
 	rec := httptest.NewRecorder()
@@ -314,14 +371,13 @@ func (f *viewFixture) createView(t *testing.T, token, body string) string {
 	return doc.ID
 }
 
-// auditActions returns the action and the object ID of each audit entry of
-// acme, oldest first.
-func (f *viewFixture) auditEntries(t *testing.T) []audit.Entry {
-	t.Helper()
+// auditEntries returns the audit entries of acme, oldest first.
+func (f *viewFixture) auditEntries(tb testing.TB) []audit.Entry {
+	tb.Helper()
 
-	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(tb.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
 	if err != nil {
-		t.Fatalf("list audit: %v", err)
+		tb.Fatalf("list audit: %v", err)
 	}
 
 	entries := listing.Entries
@@ -332,6 +388,19 @@ func (f *viewFixture) auditEntries(t *testing.T) []audit.Entry {
 
 // ownerBlindStore is a saved view store with a bug on purpose: when blind is
 // set, a read ignores the owner and returns the view of any owner.
+// newOwnerBlindStore wraps inner. The store is honest until setBlind turns the
+// bug on.
+func newOwnerBlindStore(inner savedview.Store) *ownerBlindStore {
+	return &ownerBlindStore{Store: inner, blind: false, last: savedview.View{
+		CreatedAt: time.Time{},
+		ID:        "",
+		Namespace: "",
+		Name:      "",
+		Owner:     "",
+		Query:     savedview.Query{Labels: nil, References: nil},
+	}, mu: sync.Mutex{}}
+}
+
 type ownerBlindStore struct {
 	savedview.Store
 
@@ -344,7 +413,7 @@ func (s *ownerBlindStore) Create(
 	ctx context.Context, v savedview.View, f namespace.Fence, e audit.Entry,
 ) error {
 	if err := s.Store.Create(ctx, v, f, e); err != nil {
-		return err //nolint:wrapcheck // A test double.
+		return err
 	}
 
 	s.mu.Lock()
@@ -365,7 +434,7 @@ func (s *ownerBlindStore) Get(
 		return last, nil
 	}
 
-	return s.Store.Get(ctx, ns, id, owner) //nolint:wrapcheck // A test double.
+	return s.Store.Get(ctx, ns, id, owner)
 }
 
 func (s *ownerBlindStore) List(ctx context.Context, ns namespace.Name, owner string) ([]savedview.View, error) {
@@ -377,9 +446,10 @@ func (s *ownerBlindStore) List(ctx context.Context, ns namespace.Name, owner str
 		return []savedview.View{last}, nil
 	}
 
-	return s.Store.List(ctx, ns, owner) //nolint:wrapcheck // A test double.
+	return s.Store.List(ctx, ns, owner)
 }
 
+//nolint:revive // argument-limit: the signature is the one of savedview.Store.
 func (s *ownerBlindStore) Delete(
 	ctx context.Context, ns namespace.Name, id savedview.ID, owner string, f namespace.Fence, e audit.Entry,
 ) error {
@@ -389,10 +459,18 @@ func (s *ownerBlindStore) Delete(
 
 	// The blind delete would remove the view of ana for bob.
 	if blind && last.ID == id {
-		return s.Store.Delete(ctx, ns, id, last.Owner, f, e) //nolint:wrapcheck // A test double.
+		return s.Store.Delete(ctx, ns, id, last.Owner, f, e)
 	}
 
-	return s.Store.Delete(ctx, ns, id, owner, f, e) //nolint:wrapcheck // A test double.
+	return s.Store.Delete(ctx, ns, id, owner, f, e)
+}
+
+// setBlind turns the bug on or off.
+func (s *ownerBlindStore) setBlind(blind bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.blind = blind
 }
 
 // findBlind returns the blind store of f.

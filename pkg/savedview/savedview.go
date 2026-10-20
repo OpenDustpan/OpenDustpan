@@ -201,7 +201,7 @@ func (v View) Validate() error {
 	// store an owner that is not a principal ID, for example a subject that
 	// another principal can have later. It does not rely on the handler or on
 	// the identity provider.
-	if !validOwner(v.Owner) {
+	if !ValidOwner(v.Owner) {
 		return fmt.Errorf("%w: the view has no valid owner", ErrInvalid)
 	}
 
@@ -213,10 +213,6 @@ func (v View) Validate() error {
 // the ID. A store uses it to refuse a cleanup for an owner that cannot be a
 // principal.
 func ValidOwner(s string) bool {
-	return validOwner(s)
-}
-
-func validOwner(s string) bool {
 	return len(s) > len(principal.IDPrefix) && strings.HasPrefix(s, principal.IDPrefix) && ident.Valid(s, maxOwnerLen)
 }
 
@@ -239,4 +235,3 @@ func validName(s string) bool {
 func hasHidden(s string) bool {
 	return strings.ContainsFunc(s, audit.IsHiddenRune)
 }
-

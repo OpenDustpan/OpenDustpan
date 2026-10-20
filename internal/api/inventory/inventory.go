@@ -140,11 +140,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
-	now := cfg.Now
-	if now == nil {
-		now = time.Now
-	}
-
 	publicURL, err := parsePublicURL(cfg.PublicURL)
 	if err != nil {
 		return nil, err
@@ -174,7 +169,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 			WithSurface("inventory"),
 		publicURL: publicURL,
 		logger:    cfg.Logger,
-		now:       now,
+		now:       clockOf(cfg.Now),
 		mux:       newPatternMux(),
 		routes:    nil,
 	}
@@ -185,6 +180,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// clockOf returns now, or time.Now when now is nil.
+func clockOf(now func() time.Time) func() time.Time {
+	if now == nil {
+		return time.Now
+	}
+
+	return now
 }
 
 // parsePublicURL parses the public URL of the server. An empty value is no
@@ -514,7 +518,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message, ErrorCode: ""})
 }
 
 // classifyAuth maps the errors of the authentication and the

@@ -74,20 +74,31 @@ func decodeQuery(s string) (savedview.Query, error) {
 	return q, nil
 }
 
+// Row is a saved view row as the database holds it. Namespace is the name of
+// the namespace.
+type Row struct {
+	ID          string
+	Namespace   string
+	Owner       string
+	Name        string
+	QueryJSON   string
+	CreatedAtMs int64
+}
+
 // View builds the view of a stored row and checks it again with
 // savedview.View.Validate. It returns ErrCorrupt for a row that fails.
-func View(id, ns, owner, name, queryJSON string, createdAtMs int64) (savedview.View, error) {
-	q, err := decodeQuery(queryJSON)
+func View(r Row) (savedview.View, error) {
+	q, err := decodeQuery(r.QueryJSON)
 	if err != nil {
 		return savedview.View{}, err
 	}
 
 	v := savedview.View{
-		CreatedAt: time.UnixMilli(createdAtMs).UTC(),
-		ID:        savedview.ID(id),
-		Namespace: namespace.Name(ns),
-		Name:      name,
-		Owner:     owner,
+		CreatedAt: time.UnixMilli(r.CreatedAtMs).UTC(),
+		ID:        savedview.ID(r.ID),
+		Namespace: namespace.Name(r.Namespace),
+		Name:      r.Name,
+		Owner:     r.Owner,
 		Query:     q,
 	}
 

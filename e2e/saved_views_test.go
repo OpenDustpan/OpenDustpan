@@ -12,19 +12,23 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// e2eView decodes a saved view.
+// e2eViewLabel, e2eViewQuery and e2eView decode a saved view.
+type e2eViewLabel struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type e2eViewQuery struct {
+	Labels     []e2eViewLabel `json:"labels"`
+	References []string       `json:"references"`
+}
+
 type e2eView struct {
-	ID        string `json:"id"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Query     struct {
-		Labels []struct {
-			Key   string `json:"key"`
-			Value string `json:"value"`
-		} `json:"labels"`
-		References []string `json:"references"`
-	} `json:"query"`
-	CreatedAt string `json:"createdAt"`
+	ID        string       `json:"id"`
+	Namespace string       `json:"namespace"`
+	Name      string       `json:"name"`
+	Query     e2eViewQuery `json:"query"`
+	CreatedAt string       `json:"createdAt"`
 }
 
 // e2eViewList decodes the list of saved views.
@@ -32,11 +36,13 @@ type e2eViewList struct {
 	Views []e2eView `json:"views"`
 }
 
-// e2eUnitPage decodes one page of the unit list.
+// e2eUnitRow and e2eUnitPage decode one page of the unit list.
+type e2eUnitRow struct {
+	Reference string `json:"reference"`
+}
+
 type e2eUnitPage struct {
-	Units []struct {
-		Reference string `json:"reference"`
-	} `json:"units"`
+	Units []e2eUnitRow `json:"units"`
 }
 
 // TestSavedViewsAPI drives the saved view routes with the real server, on each
@@ -61,6 +67,15 @@ func TestSavedViewsAPI(t *testing.T) {
 	}
 }
 
+// viewScenario holds what the steps share: the server, the path of the views,
+// and the tokens of the two persons.
+type viewScenario struct {
+	env  *e2e.Env
+	path string
+	ana  string
+	bob  string
+}
+
 func runSavedViewsOnStore(t *testing.T, store e2e.Store) {
 	t.Helper()
 
@@ -72,6 +87,26 @@ func runSavedViewsOnStore(t *testing.T, store e2e.Store) {
 	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, e2e.NoCLI(), store)
 
 	checkReady(ctx, t, env)
+	createTaggedStacks(ctx, t, env)
+
+	s := &viewScenario{
+		env:  env,
+		path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/views",
+		ana:  savedViewPerson(ctx, t, env, "ana@example.com"),
+		bob:  savedViewPerson(ctx, t, env, "bob@example.com"),
+	}
+
+	created := s.create(ctx, t)
+
+	s.reads(ctx, t, &created)
+	s.units(ctx, t, &created)
+	s.refusals(ctx, t, &created)
+	s.delete(ctx, t, &created)
+}
+
+// createTaggedStacks makes three stacks with tags through the API.
+func createTaggedStacks(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
 
 	for _, body := range []struct{ project, stack, tags string }{
 		{"web", "dev", `{"team":"payments"}`},
@@ -84,29 +119,19 @@ func runSavedViewsOnStore(t *testing.T, store e2e.Store) {
 			t.Fatalf("create stack %s/%s = %d, %v (%s)", body.project, body.stack, resp.Status, err, resp.Body)
 		}
 	}
-
-	ana, anaToken := savedViewPerson(ctx, t, env, "ana@example.com")
-	_, bobToken := savedViewPerson(ctx, t, env, "bob@example.com")
-	_ = ana
-
-	path := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/views"
-	created := checkViewCreate(ctx, t, env, anaToken, path)
-
-	checkViewReads(ctx, t, env, anaToken, path, created)
-	checkViewUnits(ctx, t, env, anaToken, path, created)
-	checkViewRefusals(ctx, t, env, bobToken, path, created)
-	checkViewDelete(ctx, t, env, anaToken, path, created)
 }
 
 // savedViewPerson makes a person with a viewer grant on the scenario
-// namespace and returns the person and a personal token.
-func savedViewPerson(ctx context.Context, t *testing.T, env *e2e.Env, idpSubject string) (e2ePrincipal, string) {
+// namespace and returns a personal token.
+func savedViewPerson(ctx context.Context, t *testing.T, env *e2e.Env, idpSubject string) string {
 	t.Helper()
 
 	var person e2ePrincipal
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"` + e2e.SignInSubject(idpSubject) + `","kind":"person"}`,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject(idpSubject) + `","kind":"person"}`,
 		http.StatusCreated,
 	}, &person)
 
@@ -115,33 +140,44 @@ func savedViewPerson(ctx context.Context, t *testing.T, env *e2e.Env, idpSubject
 		`{"subject":"principal:` + person.ID + `","role":"viewer"}`, http.StatusCreated,
 	}, nil)
 
-	return person, env.PersonalToken(ctx, t, person.ID, "views").Secret
+	return env.PersonalToken(ctx, t, person.ID, "views").Secret
 }
 
-// viewCall sends one request with token and checks the status.
-func viewCall(ctx context.Context, t *testing.T, env *e2e.Env, token, method, path, body string, want int) string {
+// e2eViewRequest is one request of a step.
+type e2eViewRequest struct {
+	token  string
+	method string
+	path   string
+	body   string
+	want   int
+}
+
+// call sends one request and checks the status.
+func (s *viewScenario) call(ctx context.Context, t *testing.T, r e2eViewRequest) string {
 	t.Helper()
 
-	status, got, err := env.ServerAPIStatusAs(ctx, token, method, path, body)
+	status, got, err := s.env.ServerAPIStatusAs(ctx, r.token, r.method, r.path, r.body)
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
+		t.Fatalf("%s %s: %v", r.method, r.path, err)
 	}
 
-	if status != want {
-		t.Fatalf("%s %s = %d (%s), want %d", method, path, status, got, want)
+	if status != r.want {
+		t.Fatalf("%s %s = %d (%s), want %d", r.method, r.path, status, got, r.want)
 	}
 
 	return got
 }
 
-func checkViewCreate(ctx context.Context, t *testing.T, env *e2e.Env, token, path string) e2eView {
+func (s *viewScenario) create(ctx context.Context, t *testing.T) e2eView {
 	t.Helper()
 
 	body := `{"name":"Payments","query":{"labels":[{"key":"team","value":"payments"}],"references":[]}}`
+	post := func(payload string, want int) string {
+		return s.call(ctx, t, e2eViewRequest{s.ana, http.MethodPost, s.path, payload, want})
+	}
 
 	var created e2eView
-	if err := json.Unmarshal([]byte(viewCall(ctx, t, env, token, http.MethodPost, path, body, http.StatusCreated)),
-		&created); err != nil {
+	if err := json.Unmarshal([]byte(post(body, http.StatusCreated)), &created); err != nil {
 		t.Fatalf("decode the created view: %v", err)
 	}
 
@@ -151,19 +187,20 @@ func checkViewCreate(ctx context.Context, t *testing.T, env *e2e.Env, token, pat
 	}
 
 	// The same name for the same person is a conflict, and a bad body is a 400.
-	viewCall(ctx, t, env, token, http.MethodPost, path, body, http.StatusConflict)
-	viewCall(ctx, t, env, token, http.MethodPost, path, `{"name":""}`, http.StatusBadRequest)
-	viewCall(ctx, t, env, token, http.MethodPost, path, `{"name":"x","extra":1}`, http.StatusBadRequest)
+	post(body, http.StatusConflict)
+	post(`{"name":""}`, http.StatusBadRequest)
+	post(`{"name":"x","extra":1}`, http.StatusBadRequest)
 
 	return created
 }
 
-func checkViewReads(ctx context.Context, t *testing.T, env *e2e.Env, token, path string, created e2eView) {
+func (s *viewScenario) reads(ctx context.Context, t *testing.T, created *e2eView) {
 	t.Helper()
 
 	var list e2eViewList
-	if err := json.Unmarshal([]byte(viewCall(ctx, t, env, token, http.MethodGet, path, "", http.StatusOK)),
-		&list); err != nil {
+
+	listed := s.call(ctx, t, e2eViewRequest{s.ana, http.MethodGet, s.path, "", http.StatusOK})
+	if err := json.Unmarshal([]byte(listed), &list); err != nil {
 		t.Fatalf("decode the view list: %v", err)
 	}
 
@@ -172,8 +209,9 @@ func checkViewReads(ctx context.Context, t *testing.T, env *e2e.Env, token, path
 	}
 
 	var got e2eView
-	if err := json.Unmarshal([]byte(viewCall(ctx, t, env, token, http.MethodGet, path+"/"+created.ID, "",
-		http.StatusOK)), &got); err != nil {
+
+	one := s.call(ctx, t, e2eViewRequest{s.ana, http.MethodGet, s.path + "/" + created.ID, "", http.StatusOK})
+	if err := json.Unmarshal([]byte(one), &got); err != nil {
 		t.Fatalf("decode the view: %v", err)
 	}
 
@@ -182,14 +220,20 @@ func checkViewReads(ctx context.Context, t *testing.T, env *e2e.Env, token, path
 	}
 }
 
-// checkViewUnits opens the view and compares its page with the page of the same
-// query in the unit list.
-func checkViewUnits(ctx context.Context, t *testing.T, env *e2e.Env, token, path string, created e2eView) {
+// units opens the view and compares its page with the page of the same query in
+// the unit list.
+func (s *viewScenario) units(ctx context.Context, t *testing.T, created *e2eView) {
 	t.Helper()
 
-	opened := viewCall(ctx, t, env, token, http.MethodGet, path+"/"+created.ID+"/units", "", http.StatusOK)
-	listed := viewCall(ctx, t, env, token, http.MethodGet,
-		"/api/dustpan/v1/namespaces/"+e2e.Namespace+"/units?label=team%3Dpayments", "", http.StatusOK)
+	opened := s.call(
+		ctx,
+		t,
+		e2eViewRequest{s.ana, http.MethodGet, s.path + "/" + created.ID + "/units", "", http.StatusOK},
+	)
+	listed := s.call(ctx, t, e2eViewRequest{
+		s.ana, http.MethodGet, "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units?label=team%3Dpayments", "",
+		http.StatusOK,
+	})
 
 	if opened != listed {
 		t.Fatalf("units of the view = %s, units of the same query = %s", opened, listed)
@@ -201,24 +245,25 @@ func checkViewUnits(ctx context.Context, t *testing.T, env *e2e.Env, token, path
 	}
 
 	// A filter in the request would change the query of the view.
-	viewCall(ctx, t, env, token, http.MethodGet, path+"/"+created.ID+"/units?label=team%3Dplatform", "",
-		http.StatusBadRequest)
+	s.call(ctx, t, e2eViewRequest{
+		s.ana, http.MethodGet, s.path + "/" + created.ID + "/units?label=team%3Dplatform", "", http.StatusBadRequest,
+	})
 }
 
-// checkViewRefusals proves that the bootstrap token and another person read
-// no view of the first person.
-func checkViewRefusals(ctx context.Context, t *testing.T, env *e2e.Env, otherToken, path string, created e2eView) {
+// refusals proves that the bootstrap token and another person read no view of
+// the first person.
+func (s *viewScenario) refusals(ctx context.Context, t *testing.T, created *e2eView) {
 	t.Helper()
 
 	// The bootstrap token is not a person: every view route answers 403.
 	for _, call := range []struct{ method, path, body string }{
-		{http.MethodGet, path, ""},
-		{http.MethodGet, path + "/" + created.ID, ""},
-		{http.MethodGet, path + "/" + created.ID + "/units", ""},
-		{http.MethodPost, path, `{"name":"Admin"}`},
-		{http.MethodDelete, path + "/" + created.ID, ""},
+		{http.MethodGet, s.path, ""},
+		{http.MethodGet, s.path + "/" + created.ID, ""},
+		{http.MethodGet, s.path + "/" + created.ID + "/units", ""},
+		{http.MethodPost, s.path, `{"name":"Admin"}`},
+		{http.MethodDelete, s.path + "/" + created.ID, ""},
 	} {
-		status, body, err := env.APIStatus(ctx, call.method, call.path, call.body)
+		status, body, err := s.env.APIStatus(ctx, call.method, call.path, call.body)
 		if err != nil || status != http.StatusForbidden || !strings.Contains(body, "sign in as a person") {
 			t.Fatalf("%s %s as the bootstrap token = %d, %v (%s), want 403 and the person message",
 				call.method, call.path, status, err, body)
@@ -226,22 +271,31 @@ func checkViewRefusals(ctx context.Context, t *testing.T, env *e2e.Env, otherTok
 	}
 
 	// Another person: the same 404 as an unknown view, and an empty list.
-	viewCall(ctx, t, env, otherToken, http.MethodGet, path+"/"+created.ID, "", http.StatusNotFound)
-	viewCall(ctx, t, env, otherToken, http.MethodGet, path+"/"+created.ID+"/units", "", http.StatusNotFound)
-	viewCall(ctx, t, env, otherToken, http.MethodDelete, path+"/"+created.ID, "", http.StatusNotFound)
+	for _, suffix := range []string{"", "/units"} {
+		s.call(
+			ctx,
+			t,
+			e2eViewRequest{s.bob, http.MethodGet, s.path + "/" + created.ID + suffix, "", http.StatusNotFound},
+		)
+	}
+
+	s.call(ctx, t, e2eViewRequest{s.bob, http.MethodDelete, s.path + "/" + created.ID, "", http.StatusNotFound})
 
 	var list e2eViewList
-	if err := json.Unmarshal([]byte(viewCall(ctx, t, env, otherToken, http.MethodGet, path, "", http.StatusOK)),
-		&list); err != nil || len(list.Views) != 0 {
+
+	listed := s.call(ctx, t, e2eViewRequest{s.bob, http.MethodGet, s.path, "", http.StatusOK})
+	if err := json.Unmarshal([]byte(listed), &list); err != nil || len(list.Views) != 0 {
 		t.Fatalf("view list of another person = %+v, %v; want none", list, err)
 	}
 }
 
-func checkViewDelete(ctx context.Context, t *testing.T, env *e2e.Env, token, path string, created e2eView) {
+func (s *viewScenario) delete(ctx context.Context, t *testing.T, created *e2eView) {
 	t.Helper()
 
-	viewCall(ctx, t, env, token, http.MethodDelete, path+"/"+created.ID, "", http.StatusNoContent)
-	viewCall(ctx, t, env, token, http.MethodGet, path+"/"+created.ID, "", http.StatusNotFound)
-	viewCall(ctx, t, env, token, http.MethodDelete, path+"/"+created.ID, "", http.StatusNotFound)
-	viewCall(ctx, t, env, token, http.MethodGet, path+"/"+created.ID+"/units", "", http.StatusNotFound)
+	target := s.path + "/" + created.ID
+
+	s.call(ctx, t, e2eViewRequest{s.ana, http.MethodDelete, target, "", http.StatusNoContent})
+	s.call(ctx, t, e2eViewRequest{s.ana, http.MethodGet, target, "", http.StatusNotFound})
+	s.call(ctx, t, e2eViewRequest{s.ana, http.MethodDelete, target, "", http.StatusNotFound})
+	s.call(ctx, t, e2eViewRequest{s.ana, http.MethodGet, target + "/units", "", http.StatusNotFound})
 }

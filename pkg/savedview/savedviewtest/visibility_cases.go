@@ -90,8 +90,8 @@ func testListOwnerOnly(t *testing.T, h Harness) {
 	b1 := newView("acme", ownerB, "One")
 	other := newView("beta", ownerA, "Three")
 
-	for _, v := range []savedview.View{a1, a2, b1, other} {
-		mustCreate(t, h, v)
+	for _, v := range []*savedview.View{&a1, &a2, &b1, &other} {
+		mustCreate(t, h, *v)
 	}
 
 	views, err := h.Store.List(t.Context(), "acme", ownerA)
@@ -100,8 +100,8 @@ func testListOwnerOnly(t *testing.T, h Harness) {
 	}
 
 	ids := make([]savedview.ID, 0, len(views))
-	for _, v := range views {
-		ids = append(ids, v.ID)
+	for i := range views {
+		ids = append(ids, views[i].ID)
 	}
 
 	if !slices.Equal(ids, []savedview.ID{a1.ID, a2.ID}) {
@@ -120,7 +120,7 @@ func testDeleteOtherOwner(t *testing.T, h Harness) {
 	v := newView("acme", ownerA, "Payments")
 	mustCreate(t, h, v)
 
-	before := auditCount(t, h, "acme")
+	before := auditCount(t, h)
 
 	err := h.Store.Delete(t.Context(), "acme", v.ID, ownerB, h.Namespace(t, "acme"), auditEntry("acme", "delete"))
 	if !errors.Is(err, savedview.ErrNotFound) {
@@ -131,7 +131,7 @@ func testDeleteOtherOwner(t *testing.T, h Harness) {
 		t.Fatalf("view after a refused delete: %v", err)
 	}
 
-	if got := auditCount(t, h, "acme"); got != before {
+	if got := auditCount(t, h); got != before {
 		t.Fatalf("audit entries = %d, want %d: a refused delete appends none", got, before)
 	}
 }
@@ -148,7 +148,7 @@ func testReaderWithoutPrincipalID(t *testing.T, h Harness) {
 
 	fence := h.Namespace(t, "acme")
 
-	for _, reader := range []string{"", "alice", "prn-%", "prn-_aaaaaaaaaaaaaaaaaaa", "' OR '1'='1", ownerA + " ", "PRN-AAAAAAAAAAAAAAAAAAAA"} {
+	for _, reader := range []string{"", subjectAlice, "prn-%", "prn-_aaaaaaaaaaaaaaaaaaa", "' OR '1'='1", ownerA + " ", "PRN-AAAAAAAAAAAAAAAAAAAA"} {
 		if _, err := h.Store.Get(t.Context(), "acme", v.ID, reader); !errors.Is(err, savedview.ErrNotFound) {
 			t.Errorf("get as %q = %v, want ErrNotFound", reader, err)
 		}

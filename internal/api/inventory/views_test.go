@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,19 +14,41 @@ import (
 	"opendustpan.org/opendustpan/pkg/savedview"
 )
 
-// viewDoc decodes a saved view.
-type viewDoc struct {
-	ID        string `json:"id"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"createdAt"`
-	Query     struct {
-		Labels     []struct{ Key, Value string } `json:"labels"`
-		References []string                      `json:"references"`
-	} `json:"query"`
+// viewLabelDoc, viewQueryDoc and viewDoc decode a saved view.
+type viewLabelDoc struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
-const payments = `{"name":"Payments","query":{"labels":[{"key":"team","value":"payments"}],"references":[]}}`
+type viewQueryDoc struct {
+	Labels     []viewLabelDoc `json:"labels"`
+	References []string       `json:"references"`
+}
+
+type viewDoc struct {
+	ID        string       `json:"id"`
+	Namespace string       `json:"namespace"`
+	Name      string       `json:"name"`
+	CreatedAt string       `json:"createdAt"`
+	Query     viewQueryDoc `json:"query"`
+}
+
+const (
+	payments  = `{"name":"Payments","query":{"labels":[{"key":"team","value":"payments"}],"references":[]}}`
+	noViews   = `{"views":[]}`
+	notPerson = "only a person has saved views: sign in as a person"
+)
+
+func decodeView(t *testing.T, body string) viewDoc {
+	t.Helper()
+
+	var doc viewDoc
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+
+	return doc
+}
 
 func TestViewLifecycle(t *testing.T) {
 	t.Parallel()
@@ -37,26 +60,11 @@ func TestViewLifecycle(t *testing.T) {
 		t.Fatalf("create = %d (%s)", created.status, created.body)
 	}
 
-	var doc viewDoc
-	if err := json.Unmarshal([]byte(created.body), &doc); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	doc := decodeView(t, created.body)
+	checkCreatedView(t, &created, &doc)
 
-	if err := savedview.ID(doc.ID).Validate(); err != nil || doc.Namespace != "acme" || doc.Name != "Payments" ||
-		doc.CreatedAt == "" || len(doc.Query.Labels) != 1 || doc.Query.References == nil {
-		t.Fatalf("created view = %+v (%v)", doc, err)
-	}
-
-	if want := viewsPath + "/" + doc.ID; created.header.Get("Location") != want {
-		t.Fatalf("Location = %q, want %q", created.header.Get("Location"), want)
-	}
-
-	// The answer never holds the owner: the principal ID stays on the server.
-	if strings.Contains(created.body, "prn-") {
-		t.Fatalf("the answer holds the owner: %s", created.body)
-	}
-
-	if got := f.do(t, http.MethodGet, viewsPath+"/"+doc.ID, tokenAna, ""); got.status != http.StatusOK || got.body != created.body {
+	got := f.do(t, http.MethodGet, viewsPath+"/"+doc.ID, tokenAna, "")
+	if got.status != http.StatusOK || got.body != created.body {
 		t.Fatalf("get = %d %s, want the created view %s", got.status, got.body, created.body)
 	}
 
@@ -65,22 +73,50 @@ func TestViewLifecycle(t *testing.T) {
 		t.Fatalf("list = %d %s", list.status, list.body)
 	}
 
-	if dup := f.do(t, http.MethodPost, viewsPath, tokenAna, payments); dup.status != http.StatusConflict {
+	dup := f.do(t, http.MethodPost, viewsPath, tokenAna, payments)
+	if dup.status != http.StatusConflict {
 		t.Fatalf("second create with the same name = %d, want 409", dup.status)
 	}
 
-	if del := f.do(t, http.MethodDelete, viewsPath+"/"+doc.ID, tokenAna, ""); del.status != http.StatusNoContent || del.body != "" {
+	del := f.do(t, http.MethodDelete, viewsPath+"/"+doc.ID, tokenAna, "")
+	if del.status != http.StatusNoContent || del.body != "" {
 		t.Fatalf("delete = %d %q, want 204 and no body", del.status, del.body)
 	}
 
+	checkViewIsGone(t, f, doc.ID)
+}
+
+// checkCreatedView checks the answer of a create.
+func checkCreatedView(t *testing.T, res *viewResult, doc *viewDoc) {
+	t.Helper()
+
+	if err := savedview.ID(doc.ID).Validate(); err != nil || doc.Namespace != "acme" || doc.Name != "Payments" ||
+		doc.CreatedAt == "" || len(doc.Query.Labels) != 1 || doc.Query.References == nil {
+		t.Fatalf("created view = %+v (%v)", doc, err)
+	}
+
+	if want := viewsPath + "/" + doc.ID; res.header.Get("Location") != want {
+		t.Fatalf("Location = %q, want %q", res.header.Get("Location"), want)
+	}
+
+	// The answer never holds the owner: the principal ID stays on the server.
+	if strings.Contains(res.body, "prn-") {
+		t.Fatalf("the answer holds the owner: %s", res.body)
+	}
+}
+
+// checkViewIsGone checks that a deleted view answers 404 and leaves an empty list.
+func checkViewIsGone(t *testing.T, f *viewFixture, id string) {
+	t.Helper()
+
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
-		if gone := f.do(t, method, viewsPath+"/"+doc.ID, tokenAna, ""); gone.status != http.StatusNotFound {
+		if gone := f.do(t, method, viewsPath+"/"+id, tokenAna, ""); gone.status != http.StatusNotFound {
 			t.Fatalf("%s after delete = %d, want 404", method, gone.status)
 		}
 	}
 
 	empty := f.do(t, http.MethodGet, viewsPath, tokenAna, "")
-	if empty.status != http.StatusOK || strings.TrimSpace(empty.body) != `{"views":[]}` {
+	if empty.status != http.StatusOK || strings.TrimSpace(empty.body) != noViews {
 		t.Fatalf("list after delete = %d %s", empty.status, empty.body)
 	}
 }
@@ -90,12 +126,12 @@ func TestViewLifecycle(t *testing.T) {
 func TestViewCreateRefusesInvalidBodies(t *testing.T) {
 	t.Parallel()
 
-	manyLabels := make([]string, 11)
+	manyLabels := make([]string, savedview.MaxLabelFilters+1)
 	for i := range manyLabels {
 		manyLabels[i] = fmt.Sprintf(`{"key":"k%d","value":"v"}`, i)
 	}
 
-	manyRefs := make([]string, 21)
+	manyRefs := make([]string, savedview.MaxReferenceFilters+1)
 	for i := range manyRefs {
 		manyRefs[i] = fmt.Sprintf(`"pulumi:acme/web/p%d"`, i)
 	}
@@ -113,7 +149,7 @@ func TestViewCreateRefusesInvalidBodies(t *testing.T) {
 		{"name of 129 characters", `{"name":"` + strings.Repeat("a", 129) + `"}`},
 		{"space at the start", `{"name":" Payments"}`},
 		{"space at the end", `{"name":"Payments "}`},
-		{"zero width space", "{\"name\":\"Pay​ments\"}"},
+		{"zero width space", "{\"name\":\"Pay\u200bments\"}"},
 		{"line separator", "{\"name\":\"Pay ments\"}"},
 		{"newline escape", `{"name":"Pay\nments"}`},
 		{"NUL escape", `{"name":"Pay\u0000ments"}`},
@@ -127,7 +163,8 @@ func TestViewCreateRefusesInvalidBodies(t *testing.T) {
 		{"empty label key", `{"name":"x","query":{"labels":[{"key":"","value":"c"}]}}`},
 		{"label key with equals", `{"name":"x","query":{"labels":[{"key":"a=b","value":"c"}]}}`},
 		{"label value with a control character", `{"name":"x","query":{"labels":[{"key":"a","value":"b\u0007"}]}}`},
-		{"label value over 256 characters", `{"name":"x","query":{"labels":[{"key":"a","value":"` + strings.Repeat("v", 257) + `"}]}}`},
+		{"label value over 256 characters", `{"name":"x","query":{"labels":[{"key":"a","value":"` +
+			strings.Repeat("v", 257) + `"}]}}`},
 		{"reference of another namespace", `{"name":"x","query":{"references":["pulumi:other/web/prod"]}}`},
 		{"reference that is a namespace", `{"name":"x","query":{"references":["acme"]}}`},
 		{"reference with a control character", `{"name":"x","query":{"references":["pulumi:acme/web\n/prod"]}}`},
@@ -146,7 +183,8 @@ func TestViewCreateRefusesInvalidBodies(t *testing.T) {
 				t.Fatalf("create = %d (%s), want 400", res.status, res.body)
 			}
 
-			if list := f.do(t, http.MethodGet, viewsPath, tokenAna, ""); strings.TrimSpace(list.body) != `{"views":[]}` {
+			list := f.do(t, http.MethodGet, viewsPath, tokenAna, "")
+			if strings.TrimSpace(list.body) != noViews {
 				t.Fatalf("a refused create stored a view: %s", list.body)
 			}
 		})
@@ -173,8 +211,10 @@ func TestViewCreateAcceptsBoundaryValues(t *testing.T) {
 		{"empty query", `{"name":"x","query":{}}`},
 		{"ten labels and twenty references", `{"name":"x","query":{"labels":[` + strings.Join(labels, ",") +
 			`],"references":[` + strings.Join(refs, ",") + `]}}`},
-		{"label value of 256 characters", `{"name":"x","query":{"labels":[{"key":"a","value":"` + strings.Repeat("v", 256) + `"}]}}`},
-		{"label key of 128 characters", `{"name":"x","query":{"labels":[{"key":"` + strings.Repeat("k", 128) + `","value":"v"}]}}`},
+		{"label value of 256 characters", `{"name":"x","query":{"labels":[{"key":"a","value":"` +
+			strings.Repeat("v", 256) + `"}]}}`},
+		{"label key of 128 characters", `{"name":"x","query":{"labels":[{"key":"` + strings.Repeat("k", 128) +
+			`","value":"v"}]}}`},
 	}
 
 	for _, tc := range tests {
@@ -206,6 +246,17 @@ func TestViewLimitPerOwner(t *testing.T) {
 	f.createView(t, tokenBob, `{"name":"one more"}`)
 }
 
+// viewRoutes lists the five routes of the saved views for the view id.
+func viewRoutes(id string) []viewCall {
+	return []viewCall{
+		{method: http.MethodPost, target: viewsPath, token: "", body: payments},
+		{method: http.MethodGet, target: viewsPath, token: "", body: ""},
+		{method: http.MethodGet, target: viewsPath + "/" + id, token: "", body: ""},
+		{method: http.MethodGet, target: viewsPath + "/" + id + "/units", token: "", body: ""},
+		{method: http.MethodDelete, target: viewsPath + "/" + id, token: "", body: ""},
+	}
+}
+
 // TestViewsAreRefusedForEveryCallerThatIsNotAPerson sends each route as each
 // kind of caller that must not own a view. Every answer is the same 403 with
 // the same message, and the refusal is audited.
@@ -223,8 +274,6 @@ func TestViewsAreRefusedForEveryCallerThatIsNotAPerson(t *testing.T) {
 		"person whose record is of another kind": tokenOther,
 	}
 
-	const wantMessage = "only a person has saved views: sign in as a person"
-
 	for name, token := range callers {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -232,16 +281,17 @@ func TestViewsAreRefusedForEveryCallerThatIsNotAPerson(t *testing.T) {
 			f := newViewFixture(t)
 			id := f.createView(t, tokenAna, payments)
 
-			for _, call := range []struct{ method, target, body string }{
-				{http.MethodPost, viewsPath, payments},
-				{http.MethodGet, viewsPath, ""},
-				{http.MethodGet, viewsPath + "/" + id, ""},
-				{http.MethodGet, viewsPath + "/" + id + "/units", ""},
-				{http.MethodDelete, viewsPath + "/" + id, ""},
-			} {
+			for _, call := range viewRoutes(id) {
 				res := f.do(t, call.method, call.target, token, call.body)
-				if res.status != http.StatusForbidden || !strings.Contains(res.body, wantMessage) {
-					t.Fatalf("%s %s = %d (%s), want 403 and %q", call.method, call.target, res.status, res.body, wantMessage)
+				if res.status != http.StatusForbidden || !strings.Contains(res.body, notPerson) {
+					t.Fatalf(
+						"%s %s = %d (%s), want 403 and %q",
+						call.method,
+						call.target,
+						res.status,
+						res.body,
+						notPerson,
+					)
 				}
 			}
 
@@ -250,18 +300,33 @@ func TestViewsAreRefusedForEveryCallerThatIsNotAPerson(t *testing.T) {
 				t.Fatalf("view after the refusals = %d", got.status)
 			}
 
-			var denied int
-
-			for _, e := range f.auditEntries(t) {
-				if e.Outcome == audit.OutcomeDenied {
-					denied++
-				}
-			}
-
-			if denied == 0 {
-				t.Fatalf("the refusals left no denial entry in the audit log")
+			if denied := deniedEntries(t, f); denied == 0 {
+				t.Fatal("the refusals left no denial entry in the audit log")
 			}
 		})
+	}
+}
+
+// deniedEntries returns the number of denial entries in the audit log of acme.
+func deniedEntries(t *testing.T, f *viewFixture) int {
+	t.Helper()
+
+	denied := 0
+
+	entries := f.auditEntries(t)
+	for i := range entries {
+		if entries[i].Outcome == audit.OutcomeDenied {
+			denied++
+		}
+	}
+
+	return denied
+}
+
+// readsAndDelete lists the routes that take a view ID and a person.
+func readsAndDelete() []struct{ method, suffix string } {
+	return []struct{ method, suffix string }{
+		{http.MethodGet, ""}, {http.MethodGet, "/units"}, {http.MethodDelete, ""},
 	}
 }
 
@@ -273,13 +338,11 @@ func TestViewOfAnotherPersonIsNotFound(t *testing.T) {
 
 	f := newViewFixture(t)
 	id := f.createView(t, tokenAna, payments)
-	unknown := savedview.NewID()
+	unknown := string(savedview.NewID())
 
-	for _, call := range []struct{ method, suffix string }{
-		{http.MethodGet, ""}, {http.MethodGet, "/units"}, {http.MethodDelete, ""},
-	} {
+	for _, call := range readsAndDelete() {
 		other := f.do(t, call.method, viewsPath+"/"+id+call.suffix, tokenBob, "")
-		missing := f.do(t, call.method, viewsPath+"/"+string(unknown)+call.suffix, tokenBob, "")
+		missing := f.do(t, call.method, viewsPath+"/"+unknown+call.suffix, tokenBob, "")
 
 		if other.status != http.StatusNotFound || other.body != missing.body {
 			t.Fatalf("%s%s as another person = %d %s; an unknown view = %d %s; want the same 404",
@@ -287,7 +350,7 @@ func TestViewOfAnotherPersonIsNotFound(t *testing.T) {
 		}
 	}
 
-	if list := f.do(t, http.MethodGet, viewsPath, tokenBob, ""); strings.TrimSpace(list.body) != `{"views":[]}` {
+	if list := f.do(t, http.MethodGet, viewsPath, tokenBob, ""); strings.TrimSpace(list.body) != noViews {
 		t.Fatalf("list as another person = %s", list.body)
 	}
 
@@ -307,15 +370,14 @@ func TestViewOfANewPrincipalWithTheSameSubject(t *testing.T) {
 
 	f.people.replace("ana", "prn-anaanaanaanaanaana9")
 
-	for _, call := range []struct{ method, suffix string }{
-		{http.MethodGet, ""}, {http.MethodGet, "/units"}, {http.MethodDelete, ""},
-	} {
-		if res := f.do(t, call.method, viewsPath+"/"+id+call.suffix, tokenAna, ""); res.status != http.StatusNotFound {
+	for _, call := range readsAndDelete() {
+		res := f.do(t, call.method, viewsPath+"/"+id+call.suffix, tokenAna, "")
+		if res.status != http.StatusNotFound {
 			t.Fatalf("%s%s as the new principal = %d, want 404", call.method, call.suffix, res.status)
 		}
 	}
 
-	if list := f.do(t, http.MethodGet, viewsPath, tokenAna, ""); strings.TrimSpace(list.body) != `{"views":[]}` {
+	if list := f.do(t, http.MethodGet, viewsPath, tokenAna, ""); strings.TrimSpace(list.body) != noViews {
 		t.Fatalf("list as the new principal = %s", list.body)
 	}
 
@@ -330,7 +392,10 @@ func TestViewHandlerChecksTheOwner(t *testing.T) {
 	t.Parallel()
 
 	f := newViewFixtureWith(t, viewFixtureOptions{
-		views: func(inner savedview.Store) savedview.Store { return &ownerBlindStore{Store: inner, blind: false} },
+		views: func(inner savedview.Store) savedview.Store {
+			return newOwnerBlindStore(inner)
+		},
+		noIdempotency: false,
 	})
 
 	// ana makes a view with the honest store. Then the store turns blind.
@@ -341,37 +406,39 @@ func TestViewHandlerChecksTheOwner(t *testing.T) {
 		t.Fatal("the fixture holds no blind store")
 	}
 
-	blind.blind = true
+	blind.setBlind(true)
 
-	for _, call := range []struct{ method, suffix string }{
-		{http.MethodGet, ""}, {http.MethodGet, "/units"}, {http.MethodDelete, ""},
-	} {
+	for _, call := range readsAndDelete() {
 		res := f.do(t, call.method, viewsPath+"/"+id+call.suffix, tokenBob, "")
 		if res.status != http.StatusNotFound {
-			t.Fatalf("%s%s as bob with a blind store = %d (%s), want 404", call.method, call.suffix, res.status, res.body)
+			t.Fatalf(
+				"%s%s as bob with a blind store = %d (%s), want 404",
+				call.method,
+				call.suffix,
+				res.status,
+				res.body,
+			)
 		}
 	}
 
 	list := f.do(t, http.MethodGet, viewsPath, tokenBob, "")
-	if list.status != http.StatusOK || strings.TrimSpace(list.body) != `{"views":[]}` {
+	if list.status != http.StatusOK || strings.TrimSpace(list.body) != noViews {
 		t.Fatalf("list as bob with a blind store = %d %s, want no view", list.status, list.body)
 	}
 
-	// The blind store also hides nothing from the owner.
-	if own := f.do(t, http.MethodGet, viewsPath+"/"+id, tokenAna, ""); own.status != http.StatusOK {
-		t.Fatalf("get as the owner = %d", own.status)
-	}
+	// The owner still reads the view, with the blind store and without it.
+	for _, blindNow := range []bool{true, false} {
+		blind.setBlind(blindNow)
 
-	// The view of ana is still there.
-	blind.blind = false
-
-	if own := f.do(t, http.MethodGet, viewsPath+"/"+id, tokenAna, ""); own.status != http.StatusOK {
-		t.Fatalf("view after the attempts = %d", own.status)
+		if own := f.do(t, http.MethodGet, viewsPath+"/"+id, tokenAna, ""); own.status != http.StatusOK {
+			t.Fatalf("get as the owner (blind %v) = %d", blindNow, own.status)
+		}
 	}
 }
 
-// TestViewPathValuesAreAllowlisted sends hostile view IDs and namespaces.
-func TestViewPathValuesAreAllowlisted(t *testing.T) {
+// TestViewViewIDsAreAllowlisted sends hostile view IDs to every route that
+// takes one.
+func TestViewViewIDsAreAllowlisted(t *testing.T) {
 	t.Parallel()
 
 	f := newViewFixture(t)
@@ -385,18 +452,22 @@ func TestViewPathValuesAreAllowlisted(t *testing.T) {
 	}
 
 	for _, id := range ids {
-		for _, suffix := range []string{"", "/units"} {
-			res := f.do(t, http.MethodGet, viewsPath+"/"+id+suffix, tokenAna, "")
+		for _, call := range readsAndDelete() {
+			res := f.do(t, call.method, viewsPath+"/"+id+call.suffix, tokenAna, "")
 			if res.status != http.StatusNotFound && res.status != http.StatusBadRequest {
-				t.Errorf("GET view %q%s = %d, want 404 or 400", id, suffix, res.status)
+				t.Errorf("%s view %q%s = %d, want 404 or 400", call.method, id, call.suffix, res.status)
 			}
 		}
-
-		if res := f.do(t, http.MethodDelete, viewsPath+"/"+id, tokenAna, ""); res.status != http.StatusNotFound &&
-			res.status != http.StatusBadRequest {
-			t.Errorf("DELETE view %q = %d, want 404 or 400", id, res.status)
-		}
 	}
+}
+
+// TestViewNamespacesAreAllowlisted sends hostile namespace names, and methods
+// that no route serves.
+func TestViewNamespacesAreAllowlisted(t *testing.T) {
+	t.Parallel()
+
+	f := newViewFixture(t)
+	f.createView(t, tokenAna, payments)
 
 	for _, ns := range []string{"Acme", "ac me", "-", "%00", "unknown", strings.Repeat("a", 300)} {
 		target := "/api/dustpan/v1/namespaces/" + url.PathEscape(ns) + "/views"
@@ -430,7 +501,10 @@ func TestViewActions(t *testing.T) {
 		{"list", http.MethodGet, "", "", []identity.Action{identity.ActionViewRead}},
 		{"get", http.MethodGet, "/ID", "", []identity.Action{identity.ActionViewRead}},
 		{"delete", http.MethodDelete, "/ID", "", []identity.Action{identity.ActionViewDelete}},
-		{"units", http.MethodGet, "/ID/units", "", []identity.Action{identity.ActionViewRead, identity.ActionNamespaceRead}},
+		{
+			"units", http.MethodGet, "/ID/units", "",
+			[]identity.Action{identity.ActionViewRead, identity.ActionNamespaceRead},
+		},
 	}
 
 	for _, tc := range tests {
@@ -442,7 +516,7 @@ func TestViewActions(t *testing.T) {
 			target := viewsPath + strings.ReplaceAll(tc.suffix, "ID", id)
 
 			// Allowed: the actions are asked on the namespace.
-			f.authz.asked = nil
+			f.authz.reset()
 			f.do(t, tc.method, target, tokenBob, tc.body)
 
 			for _, action := range tc.actions {
@@ -452,7 +526,7 @@ func TestViewActions(t *testing.T) {
 			}
 
 			for _, action := range tc.actions {
-				f.authz.denyAction = map[identity.Action]bool{action: true}
+				f.authz.deny(action)
 
 				if res := f.do(t, tc.method, target, tokenBob, tc.body); res.status != http.StatusForbidden {
 					t.Fatalf("%s with %s denied = %d (%s), want 403", tc.name, action, res.status, res.body)
@@ -490,37 +564,80 @@ func TestViewAuditEntries(t *testing.T) {
 		t.Fatalf("view audit entries = %+v, want a create and a delete", views)
 	}
 
-	for _, e := range views {
-		if e.ObjectID != id || e.Subject != "ana" || e.Object != "acme" || e.Outcome != audit.OutcomeSuccess ||
-			e.PrincipalKind != audit.PrincipalKindPerson || strings.Contains(fmt.Sprintf("%+v", e), "Reorg") {
-			t.Fatalf("audit entry = %+v: want the view ID and no name", e)
-		}
+	for i := range views {
+		checkViewEntry(t, &views[i], id)
 	}
 }
 
-// TestViewQueryParameter proves that a view answers the units of its query
-// only. A request to the units route that carries a filter answers 400.
+func checkViewEntry(t *testing.T, e *audit.Entry, id string) {
+	t.Helper()
+
+	if e.ObjectID != id || e.Subject != "ana" || e.Object != "acme" || e.Outcome != audit.OutcomeSuccess ||
+		e.PrincipalKind != audit.PrincipalKindPerson || strings.Contains(fmt.Sprintf("%+v", *e), "Reorg") {
+		t.Fatalf("audit entry = %+v: want the view ID and no name", *e)
+	}
+}
+
+// TestViewUnitsRouteTakesPagingOnly proves that a view answers the units of its
+// query only. A request to the units route that carries a filter answers 400.
 func TestViewUnitsRouteTakesPagingOnly(t *testing.T) {
 	t.Parallel()
 
 	f := newViewFixture(t)
 	id := f.createView(t, tokenAna, payments)
 
-	for _, q := range []string{
-		"label=team%3Dplatform", "reference=pulumi%3Aacme%2Fweb%2Fprod", "at=1700000000000", "sort=name", "organization=acme",
-		"pageSize=1&label=x%3Dy", "pageToken=x&other=1",
-	} {
+	queries := []string{
+		"label=team%3Dplatform", "reference=pulumi%3Aacme%2Fweb%2Fprod", "at=1700000000000", "sort=name",
+		"organization=acme", "pageSize=1&label=x%3Dy", "pageToken=x&other=1",
+		"pageSize=0", "pageSize=501", "pageSize=x", "pageToken=%%%", "pageToken=e30",
+	}
+
+	for _, q := range queries {
 		res := f.do(t, http.MethodGet, viewsPath+"/"+id+"/units?"+q, tokenAna, "")
 		if res.status != http.StatusBadRequest {
 			t.Errorf("units with %q = %d (%s), want 400", q, res.status, res.body)
 		}
 	}
+}
 
-	for _, q := range []string{"pageSize=0", "pageSize=501", "pageSize=x", "pageToken=%%%", "pageToken=e30"} {
-		res := f.do(t, http.MethodGet, viewsPath+"/"+id+"/units?"+q, tokenAna, "")
-		if res.status != http.StatusBadRequest {
-			t.Errorf("units with %q = %d (%s), want 400", q, res.status, res.body)
-		}
+// unitQuery is one query, as the view stores it and as the unit list takes it.
+type unitQuery struct {
+	name   string
+	stored string // the stored query, as JSON
+	params string // the same query as query values of the unit list
+}
+
+func unitQueries() []unitQuery {
+	return []unitQuery{
+		{"no filter", `{}`, ""},
+		{"one label", `{"labels":[{"key":"team","value":"payments"}]}`, "label=team%3Dpayments"},
+		{
+			"two labels", `{"labels":[{"key":"team","value":"payments"},{"key":"tier","value":"prod"}]}`,
+			"label=team%3Dpayments&label=tier%3Dprod",
+		},
+		{
+			"a label twice", `{"labels":[{"key":"app","value":"web"},{"key":"app","value":"web"}]}`,
+			"label=app%3Dweb&label=app%3Dweb",
+		},
+		{"labels that no unit has", `{"labels":[{"key":"team","value":"nobody"}]}`, "label=team%3Dnobody"},
+		{"one reference", `{"references":["pulumi:acme/web/prod"]}`, "reference=pulumi%3Aacme%2Fweb%2Fprod"},
+		{
+			"a reference twice", `{"references":["pulumi:acme/web/prod","pulumi:acme/web/prod"]}`,
+			"reference=pulumi%3Aacme%2Fweb%2Fprod&reference=pulumi%3Aacme%2Fweb%2Fprod",
+		},
+		{
+			"two references", `{"references":["pulumi:acme/web/prod","opentofu:acme/network"]}`,
+			"reference=pulumi%3Aacme%2Fweb%2Fprod&reference=opentofu%3Aacme%2Fnetwork",
+		},
+		{
+			"a reference of a unit that does not exist", `{"references":["pulumi:acme/web/gone"]}`,
+			"reference=pulumi%3Aacme%2Fweb%2Fgone",
+		},
+		{
+			"label and reference",
+			`{"labels":[{"key":"team","value":"payments"}],"references":["pulumi:acme/web/dev"]}`,
+			"label=team%3Dpayments&reference=pulumi%3Aacme%2Fweb%2Fdev",
+		},
 	}
 }
 
@@ -529,76 +646,66 @@ func TestViewUnitsRouteTakesPagingOnly(t *testing.T) {
 func TestViewUnitsAreTheUnitsOfTheSameQuery(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name   string
-		query  string // the stored query, as JSON
-		params string // the same query as query values of the unit list
-	}{
-		{"no filter", `{}`, ""},
-		{"one label", `{"labels":[{"key":"team","value":"payments"}]}`, "label=team%3Dpayments"},
-		{"two labels", `{"labels":[{"key":"team","value":"payments"},{"key":"tier","value":"prod"}]}`,
-			"label=team%3Dpayments&label=tier%3Dprod"},
-		{"a label twice", `{"labels":[{"key":"app","value":"web"},{"key":"app","value":"web"}]}`,
-			"label=app%3Dweb&label=app%3Dweb"},
-		{"labels that no unit has", `{"labels":[{"key":"team","value":"nobody"}]}`, "label=team%3Dnobody"},
-		{"one reference", `{"references":["pulumi:acme/web/prod"]}`, "reference=pulumi%3Aacme%2Fweb%2Fprod"},
-		{"a reference twice", `{"references":["pulumi:acme/web/prod","pulumi:acme/web/prod"]}`,
-			"reference=pulumi%3Aacme%2Fweb%2Fprod&reference=pulumi%3Aacme%2Fweb%2Fprod"},
-		{"two references", `{"references":["pulumi:acme/web/prod","opentofu:acme/network"]}`,
-			"reference=pulumi%3Aacme%2Fweb%2Fprod&reference=opentofu%3Aacme%2Fnetwork"},
-		{"a reference of a unit that does not exist", `{"references":["pulumi:acme/web/gone"]}`,
-			"reference=pulumi%3Aacme%2Fweb%2Fgone"},
-		{"label and reference", `{"labels":[{"key":"team","value":"payments"}],"references":["pulumi:acme/web/dev"]}`,
-			"label=team%3Dpayments&reference=pulumi%3Aacme%2Fweb%2Fdev"},
-	}
-
-	for _, tc := range tests {
+	for _, tc := range unitQueries() {
 		for _, size := range []int{0, 1, 2} {
 			t.Run(fmt.Sprintf("%s with page size %d", tc.name, size), func(t *testing.T) {
 				t.Parallel()
 
 				f := newViewFixture(t)
-				id := f.createView(t, tokenAna, `{"name":"q","query":`+tc.query+`}`)
+				id := f.createView(t, tokenAna, `{"name":"q","query":`+tc.stored+`}`)
 
-				compareUnitPages(t, f, tokenAna, viewsPath+"/"+id+"/units", unitsPath, tc.params, size)
+				compareUnitPages(t, &pageComparison{
+					fixture: f, token: tokenAna, viewTarget: viewsPath + "/" + id + "/units", params: tc.params,
+					size: size,
+				})
 			})
 		}
 	}
 }
 
+// pageComparison names the two routes that compareUnitPages reads.
+type pageComparison struct {
+	fixture    *viewFixture
+	token      string
+	viewTarget string
+	params     string
+	size       int
+}
+
+// pageQuery returns the paging query values of one page.
+func pageQuery(size int, token string) url.Values {
+	q := url.Values{}
+
+	if size > 0 {
+		q.Set("pageSize", strconv.Itoa(size))
+	}
+
+	if token != "" {
+		q.Set("pageToken", token)
+	}
+
+	return q
+}
+
 // compareUnitPages reads the pages of both routes and compares them: the same
 // units, the same next page token and the same JSON.
-func compareUnitPages(t *testing.T, f *viewFixture, token, viewTarget, listTarget, params string, size int) {
+func compareUnitPages(t *testing.T, c *pageComparison) {
 	t.Helper()
 
-	var viewToken, listToken string
+	var token string
 
 	for page := range 10 {
-		viewQ, listQ := url.Values{}, url.Values{}
-
-		if size > 0 {
-			viewQ.Set("pageSize", fmt.Sprint(size))
-			listQ.Set("pageSize", fmt.Sprint(size))
+		listURL := unitsPath + "?" + pageQuery(c.size, token).Encode()
+		if c.params != "" {
+			listURL += "&" + c.params
 		}
 
-		if viewToken != "" {
-			viewQ.Set("pageToken", viewToken)
-		}
-
-		if listToken != "" {
-			listQ.Set("pageToken", listToken)
-		}
-
-		listURL := listTarget + "?" + listQ.Encode()
-		if params != "" {
-			listURL += "&" + params
-		}
-
-		opened := f.do(t, http.MethodGet, viewTarget+"?"+viewQ.Encode(), token, "")
-		listed := f.do(t, http.MethodGet, listURL, token, "")
+		opened := c.fixture.do(t, http.MethodGet, c.viewTarget+"?"+pageQuery(c.size, token).Encode(), c.token, "")
+		listed := c.fixture.do(t, http.MethodGet, listURL, c.token, "")
 
 		if opened.status != http.StatusOK || listed.status != http.StatusOK || opened.body != listed.body {
-			t.Fatalf("page %d: view units = %d %s; unit list = %d %s", page, opened.status, opened.body, listed.status, listed.body)
+			t.Fatalf("page %d: view units = %d %s; unit list = %d %s",
+				page, opened.status, opened.body, listed.status, listed.body)
 		}
 
 		var next struct {
@@ -613,7 +720,7 @@ func compareUnitPages(t *testing.T, f *viewFixture, token, viewTarget, listTarge
 			return
 		}
 
-		viewToken, listToken = next.Next, next.Next
+		token = next.Next
 	}
 
 	t.Fatal("the pages never ended")
@@ -621,7 +728,7 @@ func compareUnitPages(t *testing.T, f *viewFixture, token, viewTarget, listTarge
 
 // TestViewUnitsCheckUnitReadForEachUnit proves the units of a view are the units
 // the caller may read: a unit that the caller may not read is not in the page,
-// as in the unit list, and it does not change the next page token.
+// as in the unit list.
 func TestViewUnitsCheckUnitReadForEachUnit(t *testing.T) {
 	t.Parallel()
 
@@ -633,10 +740,11 @@ func TestViewUnitsCheckUnitReadForEachUnit(t *testing.T) {
 		t.Fatalf("units = %s, want both stacks", all.body)
 	}
 
-	f.authz.denyUnits = map[string]bool{"pulumi:acme/web/prod": true}
+	f.authz.denyUnit("pulumi:acme/web/prod")
 
 	limited := f.do(t, http.MethodGet, viewsPath+"/"+id+"/units", tokenAna, "")
-	if limited.status != http.StatusOK || strings.Contains(limited.body, "web/prod") || !strings.Contains(limited.body, "web/dev") {
+	if limited.status != http.StatusOK || strings.Contains(limited.body, "web/prod") ||
+		!strings.Contains(limited.body, "web/dev") {
 		t.Fatalf("units with unit:read denied on web/prod = %d %s", limited.status, limited.body)
 	}
 
@@ -646,25 +754,24 @@ func TestViewUnitsCheckUnitReadForEachUnit(t *testing.T) {
 		t.Fatalf("unit list = %s, view units = %s: want the same page", listed.body, limited.body)
 	}
 
-	// A reference does not grant access: a view of a unit the caller may not
-	// read opens as an empty page.
-	only := f.createView(t, tokenAna, `{"name":"r","query":{"references":["pulumi:acme/web/prod"]}}`)
+	if !containsCall(f.authz.calls(), recordedCall{action: identity.ActionUnitRead, object: "pulumi:acme/web/prod"}) {
+		t.Fatalf("unit:read was never asked on the unit (calls %v)", f.authz.calls())
+	}
+}
 
-	res := f.do(t, http.MethodGet, viewsPath+"/"+only+"/units", tokenAna, "")
+// TestViewOfAUnitThatTheCallerCannotReadOpensEmpty proves a reference does not
+// grant access: the view of a unit that the caller may not read opens as an
+// empty page.
+func TestViewOfAUnitThatTheCallerCannotReadOpensEmpty(t *testing.T) {
+	t.Parallel()
+
+	f := newViewFixture(t)
+	id := f.createView(t, tokenAna, `{"name":"r","query":{"references":["pulumi:acme/web/prod"]}}`)
+
+	f.authz.denyUnit("pulumi:acme/web/prod")
+
+	res := f.do(t, http.MethodGet, viewsPath+"/"+id+"/units", tokenAna, "")
 	if res.status != http.StatusOK || strings.Contains(res.body, "web/prod") {
 		t.Fatalf("units of a view of a unit the caller may not read = %d %s", res.status, res.body)
-	}
-
-	// The check is asked for each unit, on the unit.
-	asked := false
-
-	for _, c := range f.authz.calls() {
-		if c.action == identity.ActionUnitRead && c.object == "pulumi:acme/web/prod" {
-			asked = true
-		}
-	}
-
-	if !asked {
-		t.Fatalf("unit:read was never asked on the unit (calls %v)", f.authz.calls())
 	}
 }

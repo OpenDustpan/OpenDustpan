@@ -10,7 +10,7 @@ func portableSavedViewTables() []PortableTable {
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "owner", Kind: KindText},
+				{Name: portColOwner, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: "query_json", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},

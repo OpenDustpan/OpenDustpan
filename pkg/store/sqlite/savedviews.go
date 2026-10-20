@@ -93,7 +93,10 @@ func (v savedViews) Get(ctx context.Context, ns namespace.Name, id savedview.ID,
 	v.s.mu.RLock()
 	defer v.s.mu.RUnlock()
 
-	row, err := v.s.queries.GetSavedView(ctx, db.GetSavedViewParams{Namespace: ns.String(), ID: string(id), Owner: owner})
+	row, err := v.s.queries.GetSavedView(
+		ctx,
+		db.GetSavedViewParams{Namespace: ns.String(), ID: string(id), Owner: owner},
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return savedview.View{}, savedview.ErrNotFound
 	}
@@ -102,7 +105,10 @@ func (v savedViews) Get(ctx context.Context, ns namespace.Name, id savedview.ID,
 		return savedview.View{}, fmt.Errorf("select saved view: %w", err)
 	}
 
-	out, err := viewstore.View(row.ID, row.Namespace, row.Owner, row.Name, row.QueryJson, row.CreatedAtMs)
+	out, err := viewstore.View(viewstore.Row{
+		ID: row.ID, Namespace: row.Namespace, Owner: row.Owner, Name: row.Name, QueryJSON: row.QueryJson,
+		CreatedAtMs: row.CreatedAtMs,
+	})
 	if err != nil {
 		// A row that fails its checks is not served, and it reads as no view.
 		return savedview.View{}, savedview.ErrNotFound
@@ -122,7 +128,10 @@ func (v savedViews) List(ctx context.Context, ns namespace.Name, owner string) (
 	v.s.mu.RLock()
 	defer v.s.mu.RUnlock()
 
-	rows, err := v.s.queries.ListSavedViewsOfOwner(ctx, db.ListSavedViewsOfOwnerParams{Namespace: ns.String(), Owner: owner})
+	rows, err := v.s.queries.ListSavedViewsOfOwner(
+		ctx,
+		db.ListSavedViewsOfOwnerParams{Namespace: ns.String(), Owner: owner},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("select saved views: %w", err)
 	}
@@ -130,7 +139,10 @@ func (v savedViews) List(ctx context.Context, ns namespace.Name, owner string) (
 	out := make([]savedview.View, 0, len(rows))
 
 	for _, row := range rows {
-		view, viewErr := viewstore.View(row.ID, row.Namespace, row.Owner, row.Name, row.QueryJson, row.CreatedAtMs)
+		view, viewErr := viewstore.View(viewstore.Row{
+			ID: row.ID, Namespace: row.Namespace, Owner: row.Owner, Name: row.Name, QueryJSON: row.QueryJson,
+			CreatedAtMs: row.CreatedAtMs,
+		})
 		if viewErr != nil || view.Owner != owner {
 			continue
 		}
@@ -143,6 +155,8 @@ func (v savedViews) List(ctx context.Context, ns namespace.Name, owner string) (
 
 // Delete implements savedview.Store. When ctx carries an idempotency
 // completion, the transaction also stores its answer.
+//
+//nolint:revive // argument-limit: the signature is the one of savedview.Store.
 func (v savedViews) Delete(
 	ctx context.Context, ns namespace.Name, id savedview.ID, owner string, fence namespace.Fence, e audit.Entry,
 ) error {
@@ -194,35 +208,47 @@ func (v savedViews) DeleteOwned(
 	var removed int
 
 	err := v.s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		ids, err := q.ListSavedViewIDsOfOwner(ctx, db.ListSavedViewIDsOfOwnerParams{Namespace: ns.String(), Owner: owner})
-		if err != nil {
-			return fmt.Errorf("select saved view IDs: %w", err)
-		}
+		var err error
 
-		for _, id := range ids {
-			n, delErr := q.DeleteSavedView(ctx, db.DeleteSavedViewParams{Namespace: ns.String(), ID: id, Owner: owner})
-			if delErr != nil {
-				return fmt.Errorf("delete saved view: %w", delErr)
-			}
+		removed, err = deleteOwnedViews(ctx, q, ns, owner, e)
 
-			if n == 0 {
-				continue
-			}
-
-			entry := e
-			entry.ObjectID = id
-
-			if _, appendErr := appendAuditEntry(ctx, q, entry); appendErr != nil {
-				return fmt.Errorf("append audit entry: %w", appendErr)
-			}
-
-			removed++
-		}
-
-		return nil
+		return err
 	})
 	if err != nil {
 		return 0, err
+	}
+
+	return removed, nil
+}
+
+// deleteOwnedViews deletes the views of owner in ns and appends one audit
+// entry for each, in the transaction of q.
+func deleteOwnedViews(ctx context.Context, q *db.Queries, ns namespace.Name, owner string, e audit.Entry) (int, error) {
+	ids, err := q.ListSavedViewIDsOfOwner(ctx, db.ListSavedViewIDsOfOwnerParams{Namespace: ns.String(), Owner: owner})
+	if err != nil {
+		return 0, fmt.Errorf("select saved view IDs: %w", err)
+	}
+
+	removed := 0
+
+	for _, id := range ids {
+		n, delErr := q.DeleteSavedView(ctx, db.DeleteSavedViewParams{Namespace: ns.String(), ID: id, Owner: owner})
+		if delErr != nil {
+			return 0, fmt.Errorf("delete saved view: %w", delErr)
+		}
+
+		if n == 0 {
+			continue
+		}
+
+		entry := e
+		entry.ObjectID = id
+
+		if _, appendErr := appendAuditEntry(ctx, q, entry); appendErr != nil {
+			return 0, fmt.Errorf("append audit entry: %w", appendErr)
+		}
+
+		removed++
 	}
 
 	return removed, nil

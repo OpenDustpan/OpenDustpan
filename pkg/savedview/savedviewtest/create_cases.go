@@ -37,7 +37,7 @@ func testCreateThenGet(t *testing.T, h Harness) {
 
 	v := newView("acme", ownerA, "Payments")
 	v.Query = savedview.Query{
-		Labels:     []savedview.Label{{Key: "team", Value: "payments"}, {Key: "tier", Value: ""}},
+		Labels:     []savedview.Label{{Key: labelKeyTeam, Value: labelValuePayments}, {Key: "tier", Value: ""}},
 		References: []string{testRef},
 	}
 	mustCreate(t, h, v)
@@ -57,19 +57,19 @@ func testCreateRefusesInvalid(t *testing.T, h Harness) {
 
 	bad := map[string]savedview.View{
 		"empty name":      newView("acme", ownerA, ""),
-		"hidden in name":  newView("acme", ownerA, "pay​ments"),
-		"owner subject":   newView("acme", "alice", "Payments"),
+		"hidden in name":  newView("acme", ownerA, "pay\u200bments"),
+		"owner subject":   newView("acme", subjectAlice, "Payments"),
 		"empty owner":     newView("acme", "", "Payments"),
 		"foreign ref":     withRefs(newView("acme", ownerA, "Payments"), "pulumi:other/web/prod"),
-		"label with ctrl": withLabel(newView("acme", ownerA, "Payments"), "team", "a\nb"),
+		"label with ctrl": withLabel(newView("acme", ownerA, "Payments"), labelKeyTeam, "a\nb"),
 	}
 
 	noID := newView("acme", ownerA, "Payments")
 	noID.ID = ""
 	bad["empty ID"] = noID
 
-	for name, v := range bad {
-		err := h.Store.Create(t.Context(), v, fence, auditEntry("acme", "create"))
+	for name := range bad {
+		err := h.Store.Create(t.Context(), bad[name], fence, auditEntry("acme", "create"))
 		if !errors.Is(err, savedview.ErrInvalid) {
 			t.Errorf("%s: create = %v, want ErrInvalid", name, err)
 		}
@@ -192,7 +192,9 @@ func testRepeatedFilters(t *testing.T, h Harness) {
 
 	v := newView("acme", ownerA, "Payments")
 	v.Query = savedview.Query{
-		Labels:     []savedview.Label{{Key: "team", Value: "payments"}, {Key: "team", Value: "payments"}},
+		Labels: []savedview.Label{
+			{Key: labelKeyTeam, Value: labelValuePayments}, {Key: labelKeyTeam, Value: labelValuePayments},
+		},
 		References: []string{testRef, testRef},
 	}
 	mustCreate(t, h, v)
@@ -220,8 +222,8 @@ func testListOrder(t *testing.T, h Harness) {
 	}
 
 	got := make([]string, 0, len(views))
-	for _, v := range views {
-		got = append(got, v.Name)
+	for i := range views {
+		got = append(got, views[i].Name)
 	}
 
 	want := []string{"10", "9", "Beta", "Zeta", "alpha", "beta", "Émile"}

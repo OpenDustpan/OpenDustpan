@@ -69,9 +69,9 @@ func (m *memStore) List(_ context.Context, ns namespace.Name, owner string) ([]s
 
 	var out []savedview.View
 
-	for _, v := range m.views {
-		if v.Owner == owner && v.Namespace == ns {
-			out = append(out, v)
+	for id := range m.views {
+		if m.views[id].Owner == owner && m.views[id].Namespace == ns {
+			out = append(out, m.views[id])
 		}
 	}
 
@@ -80,6 +80,7 @@ func (m *memStore) List(_ context.Context, ns namespace.Name, owner string) ([]s
 	return out, nil
 }
 
+//nolint:revive // argument-limit: the signature is the one of savedview.Store.
 func (m *memStore) Delete(
 	_ context.Context, ns namespace.Name, id savedview.ID, owner string, f namespace.Fence, e audit.Entry,
 ) error {
@@ -113,15 +114,17 @@ func (m *memStore) DeleteOwned(
 
 	removed := 0
 
-	for id, v := range m.views {
-		if v.Owner == owner && v.Namespace == ns {
-			delete(m.views, id)
-
-			entry := e
-			entry.ObjectID = string(id)
-			m.audits = append(m.audits, entry)
-			removed++
+	for id := range m.views {
+		if m.views[id].Owner != owner || m.views[id].Namespace != ns {
+			continue
 		}
+
+		delete(m.views, id)
+
+		entry := e
+		entry.ObjectID = string(id)
+		m.audits = append(m.audits, entry)
+		removed++
 	}
 
 	return removed, nil
@@ -178,18 +181,34 @@ func person(subject string) identity.Principal {
 	}
 }
 
-func callerOf(owner string, p identity.Principal) savedview.Caller {
-	return savedview.Caller{Owner: owner, Principal: p, By: audit.Entry{SourceIP: "192.0.2.1", Channel: audit.ChannelAPI}}
+// template is the audit entry that the request fills.
+func template() audit.Entry {
+	return audit.Entry{
+		At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "", Action: "", Object: "",
+		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "",
+		Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
+		Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+	}
+}
+
+func callerOf(owner string, p identity.Principal) *savedview.Caller {
+	return &savedview.Caller{Owner: owner, Principal: p, By: template()}
+}
+
+func noQuery() savedview.Query {
+	return savedview.Query{Labels: nil, References: nil}
 }
 
 func TestNewServiceNeedsItsPorts(t *testing.T) {
 	t.Parallel()
 
-	if _, err := savedview.NewService(savedview.Config{Store: nil, Namespaces: testNamespaces(), Now: nil}); !errors.Is(err, savedview.ErrMissingDependency) {
+	_, err := savedview.NewService(savedview.Config{Store: nil, Namespaces: testNamespaces(), Now: nil})
+	if !errors.Is(err, savedview.ErrMissingDependency) {
 		t.Fatalf("no store = %v, want ErrMissingDependency", err)
 	}
 
-	if _, err := savedview.NewService(savedview.Config{Store: newMemStore(), Namespaces: nil, Now: nil}); !errors.Is(err, savedview.ErrMissingDependency) {
+	_, err = savedview.NewService(savedview.Config{Store: newMemStore(), Namespaces: nil, Now: nil})
+	if !errors.Is(err, savedview.ErrMissingDependency) {
 		t.Fatalf("no namespaces = %v, want ErrMissingDependency", err)
 	}
 }
@@ -233,7 +252,14 @@ func TestServiceCreate(t *testing.T) {
 		t.Fatalf("fences = %+v, want the fence of acme", store.fences)
 	}
 
-	e := store.audits[0]
+	checkCreateEntry(t, store.audits[0], &v)
+}
+
+// checkCreateEntry checks the audit entry of a create: the view ID, the person,
+// and no name.
+func checkCreateEntry(t *testing.T, e audit.Entry, v *savedview.View) {
+	t.Helper()
+
 	if e.Action != "view:create" || e.ObjectID != string(v.ID) || e.Object != "acme" || e.Subject != "ana" ||
 		e.TokenID != "tok-1" || e.Namespace != "acme" || e.PrincipalKind != audit.PrincipalKindPerson ||
 		e.SourceIP != "192.0.2.1" || e.Outcome != audit.OutcomeSuccess || e.Validate() != nil {
@@ -243,47 +269,6 @@ func TestServiceCreate(t *testing.T) {
 	// The name can be private text: it is not in the entry.
 	if strings.Contains(fmt.Sprintf("%+v", e), "Reorg") {
 		t.Fatalf("the audit entry holds the name: %+v", e)
-	}
-}
-
-func TestServiceCreateRefusals(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		caller savedview.Caller
-		ns     namespace.Name
-		view   string
-		want   error
-	}{
-		{"service", callerOf(ownerAna, withKind(person("ci"), identity.KindService)), "acme", "x", savedview.ErrNotPerson},
-		{"workload", callerOf(ownerAna, withKind(person("pod"), identity.KindWorkload)), "acme", "x", savedview.ErrNotPerson},
-		{"no kind", callerOf(ownerAna, withKind(person("root"), "")), "acme", "x", savedview.ErrNotPerson},
-		{"unknown kind", callerOf(ownerAna, withKind(person("ana"), "robot")), "acme", "x", savedview.ErrNotPerson},
-		{"a job", callerOf(ownerAna, withJob(person("ana"))), "acme", "x", savedview.ErrNotPerson},
-		{"owner is a subject", callerOf("ana", person("ana")), "acme", "x", savedview.ErrNotPerson},
-		{"no owner", callerOf("", person("ana")), "acme", "x", savedview.ErrNotPerson},
-		{"owner with a pattern", callerOf("prn-%", person("ana")), "acme", "x", savedview.ErrNotPerson},
-		{"invalid name", callerOf(ownerAna, person("ana")), "acme", "", savedview.ErrInvalid},
-		{"unknown namespace", callerOf(ownerAna, person("ana")), "nowhere", "x", namespace.ErrNotFound},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			store := newMemStore()
-			svc := newService(t, store)
-
-			_, err := svc.Create(t.Context(), tc.caller, tc.ns, tc.view, savedview.Query{Labels: nil, References: nil})
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("create = %v, want %v", err, tc.want)
-			}
-
-			if len(store.views) != 0 || len(store.audits) != 0 {
-				t.Fatalf("a refused create stored %d views and %d entries", len(store.views), len(store.audits))
-			}
-		})
 	}
 }
 
@@ -299,13 +284,69 @@ func withJob(p identity.Principal) identity.Principal {
 	return p
 }
 
+func TestServiceCreateRefusals(t *testing.T) {
+	t.Parallel()
+
+	ana := person("ana")
+
+	tests := []struct {
+		name   string
+		caller *savedview.Caller
+		ns     namespace.Name
+		view   string
+		want   error
+	}{
+		{
+			"service",
+			callerOf(ownerAna, withKind(person("ci"), identity.KindService)),
+			"acme",
+			"x",
+			savedview.ErrNotPerson,
+		},
+		{
+			"workload",
+			callerOf(ownerAna, withKind(person("pod"), identity.KindWorkload)),
+			"acme",
+			"x",
+			savedview.ErrNotPerson,
+		},
+		{"no kind", callerOf(ownerAna, withKind(person("root"), "")), "acme", "x", savedview.ErrNotPerson},
+		{"unknown kind", callerOf(ownerAna, withKind(ana, "robot")), "acme", "x", savedview.ErrNotPerson},
+		{"a job", callerOf(ownerAna, withJob(ana)), "acme", "x", savedview.ErrNotPerson},
+		{"owner is a subject", callerOf("ana", ana), "acme", "x", savedview.ErrNotPerson},
+		{"no owner", callerOf("", ana), "acme", "x", savedview.ErrNotPerson},
+		{"owner with a pattern", callerOf("prn-%", ana), "acme", "x", savedview.ErrNotPerson},
+		{"no caller", nil, "acme", "x", savedview.ErrNotPerson},
+		{"invalid name", callerOf(ownerAna, ana), "acme", "", savedview.ErrInvalid},
+		{"unknown namespace", callerOf(ownerAna, ana), "nowhere", "x", namespace.ErrNotFound},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newMemStore()
+			svc := newService(t, store)
+
+			_, err := svc.Create(t.Context(), tc.caller, tc.ns, tc.view, noQuery())
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("create = %v, want %v", err, tc.want)
+			}
+
+			if len(store.views) != 0 || len(store.audits) != 0 {
+				t.Fatalf("a refused create stored %d views and %d entries", len(store.views), len(store.audits))
+			}
+		})
+	}
+}
+
 func TestServiceReadsAndDeletesRefuseWhoIsNotAPerson(t *testing.T) {
 	t.Parallel()
 
 	store := newMemStore()
 	svc := newService(t, store)
 
-	v, err := svc.Create(t.Context(), callerOf(ownerAna, person("ana")), "acme", "x", savedview.Query{Labels: nil, References: nil})
+	v, err := svc.Create(t.Context(), callerOf(ownerAna, person("ana")), "acme", "x", noQuery())
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -329,15 +370,13 @@ func TestServiceReadsAndDeletesRefuseWhoIsNotAPerson(t *testing.T) {
 	}
 }
 
-func TestServiceGetListDelete(t *testing.T) {
+func TestServiceGetAndList(t *testing.T) {
 	t.Parallel()
 
-	store := newMemStore()
-	svc := newService(t, store)
+	svc := newService(t, newMemStore())
 	ana, bob := callerOf(ownerAna, person("ana")), callerOf(ownerBob, person("bob"))
-	empty := savedview.Query{Labels: nil, References: nil}
 
-	v, err := svc.Create(t.Context(), ana, "acme", "x", empty)
+	v, err := svc.Create(t.Context(), ana, "acme", "x", noQuery())
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -350,23 +389,51 @@ func TestServiceGetListDelete(t *testing.T) {
 		t.Fatalf("get as another owner = %v, want ErrNotFound", getErr)
 	}
 
-	for _, id := range []savedview.ID{"", "view-x", "../etc", savedview.ID(strings.Repeat("a", 5000))} {
-		if _, getErr := svc.Get(t.Context(), ana, "acme", id); !errors.Is(getErr, savedview.ErrNotFound) {
-			t.Fatalf("get %q = %v, want ErrNotFound", id, getErr)
-		}
-
-		if delErr := svc.Delete(t.Context(), ana, "acme", id); !errors.Is(delErr, savedview.ErrNotFound) {
-			t.Fatalf("delete %q = %v, want ErrNotFound", id, delErr)
-		}
-	}
-
 	list, err := svc.List(t.Context(), ana, "acme")
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list = %v, %v", list, err)
 	}
 
+	if other, listErr := svc.List(t.Context(), bob, "acme"); listErr != nil || len(other) != 0 {
+		t.Fatalf("list as another owner = %v, %v", other, listErr)
+	}
+}
+
+func TestServiceRefusesIDsThatAreNotViewIDs(t *testing.T) {
+	t.Parallel()
+
+	svc := newService(t, newMemStore())
+	ana := callerOf(ownerAna, person("ana"))
+
+	for _, id := range []savedview.ID{"", "view-x", "../etc", savedview.ID(strings.Repeat("a", 5000))} {
+		if _, err := svc.Get(t.Context(), ana, "acme", id); !errors.Is(err, savedview.ErrNotFound) {
+			t.Fatalf("get %q = %v, want ErrNotFound", id, err)
+		}
+
+		if err := svc.Delete(t.Context(), ana, "acme", id); !errors.Is(err, savedview.ErrNotFound) {
+			t.Fatalf("delete %q = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
+func TestServiceDelete(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	svc := newService(t, store)
+	ana, bob := callerOf(ownerAna, person("ana")), callerOf(ownerBob, person("bob"))
+
+	v, err := svc.Create(t.Context(), ana, "acme", "x", noQuery())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
 	if delErr := svc.Delete(t.Context(), bob, "acme", v.ID); !errors.Is(delErr, savedview.ErrNotFound) {
 		t.Fatalf("delete as another owner = %v, want ErrNotFound", delErr)
+	}
+
+	if delErr := svc.Delete(t.Context(), ana, "nowhere", v.ID); !errors.Is(delErr, namespace.ErrNotFound) {
+		t.Fatalf("delete in an unknown namespace = %v, want ErrNotFound of the namespace", delErr)
 	}
 
 	if delErr := svc.Delete(t.Context(), ana, "acme", v.ID); delErr != nil {
@@ -377,10 +444,6 @@ func TestServiceGetListDelete(t *testing.T) {
 	if last.Action != "view:delete" || last.ObjectID != string(v.ID) {
 		t.Fatalf("audit entry of the delete = %+v", last)
 	}
-
-	if delErr := svc.Delete(t.Context(), ana, "nowhere", v.ID); !errors.Is(delErr, namespace.ErrNotFound) {
-		t.Fatalf("delete in an unknown namespace = %v, want ErrNotFound of the namespace", delErr)
-	}
 }
 
 func TestServiceRemoveOwner(t *testing.T) {
@@ -389,12 +452,10 @@ func TestServiceRemoveOwner(t *testing.T) {
 	store := newMemStore()
 	svc := newService(t, store)
 	ana, bob := callerOf(ownerAna, person("ana")), callerOf(ownerBob, person("bob"))
-	empty := savedview.Query{Labels: nil, References: nil}
+	want := make([]savedview.ID, 0, 3)
 
-	var want []savedview.ID
-
-	for _, ns := range []namespace.Name{"acme", "acme", "gamma"} {
-		v, err := svc.Create(t.Context(), ana, ns, fmt.Sprintf("view %d", len(want)), empty)
+	for i, ns := range []namespace.Name{"acme", "acme", "gamma"} {
+		v, err := svc.Create(t.Context(), ana, ns, fmt.Sprintf("view %d", i), noQuery())
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -402,7 +463,7 @@ func TestServiceRemoveOwner(t *testing.T) {
 		want = append(want, v.ID)
 	}
 
-	keep, err := svc.Create(t.Context(), bob, "acme", "keep", empty)
+	keep, err := svc.Create(t.Context(), bob, "acme", "keep", noQuery())
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -414,25 +475,7 @@ func TestServiceRemoveOwner(t *testing.T) {
 		t.Fatalf("RemoveOwner = %d, %v; want 3", removed, err)
 	}
 
-	// Each namespace ran with its own fence, in the order of the list.
-	wantFences := []namespace.Fence{
-		{Namespace: "acme", FailoverVersion: 3}, {Namespace: "beta", FailoverVersion: 7}, {Namespace: "gamma", FailoverVersion: 11},
-	}
-	if !slices.Equal(store.fences, wantFences) {
-		t.Fatalf("fences = %+v, want %+v", store.fences, wantFences)
-	}
-
-	// One entry for each view, with the ID only, from the server.
-	if len(store.audits) != 3 {
-		t.Fatalf("%d audit entries, want 3", len(store.audits))
-	}
-
-	for _, e := range store.audits {
-		if e.Action != "view:delete" || e.Subject != "@server" || !slices.Contains(want, savedview.ID(e.ObjectID)) ||
-			len(e.Changes) != 0 || e.Validate() != nil {
-			t.Fatalf("audit entry = %+v", e)
-		}
-	}
+	checkCleanupRecords(t, store, want)
 
 	if _, err = svc.Get(t.Context(), bob, "acme", keep.ID); err != nil {
 		t.Fatalf("view of another owner after the cleanup: %v", err)
@@ -444,16 +487,43 @@ func TestServiceRemoveOwner(t *testing.T) {
 	}
 }
 
+// checkCleanupRecords checks that each namespace ran with its own fence, in the
+// order of the list, and that the cleanup wrote one entry for each view, from
+// the server, with the ID only.
+func checkCleanupRecords(t *testing.T, store *memStore, want []savedview.ID) {
+	t.Helper()
+
+	wantFences := []namespace.Fence{
+		{Namespace: "acme", FailoverVersion: 3},
+		{Namespace: "beta", FailoverVersion: 7},
+		{Namespace: "gamma", FailoverVersion: 11},
+	}
+	if !slices.Equal(store.fences, wantFences) {
+		t.Fatalf("fences = %+v, want %+v", store.fences, wantFences)
+	}
+
+	if len(store.audits) != len(want) {
+		t.Fatalf("%d audit entries, want %d", len(store.audits), len(want))
+	}
+
+	for i := range store.audits {
+		e := &store.audits[i]
+		if e.Action != "view:delete" || e.Subject != "@server" || !slices.Contains(want, savedview.ID(e.ObjectID)) ||
+			len(e.Changes) != 0 || e.Validate() != nil {
+			t.Fatalf("audit entry = %+v", *e)
+		}
+	}
+}
+
 func TestServiceRemoveOwnerContinuesAfterAFailure(t *testing.T) {
 	t.Parallel()
 
 	store := newMemStore()
 	svc := newService(t, store)
 	ana := callerOf(ownerAna, person("ana"))
-	empty := savedview.Query{Labels: nil, References: nil}
 
 	for _, ns := range []namespace.Name{"acme", "beta", "gamma"} {
-		if _, err := svc.Create(t.Context(), ana, ns, "x", empty); err != nil {
+		if _, err := svc.Create(t.Context(), ana, ns, "x", noQuery()); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 	}
@@ -479,7 +549,7 @@ func TestServiceRemoveOwnerRefusesAnOwnerThatIsNotAPrincipalID(t *testing.T) {
 	store := newMemStore()
 	svc := newService(t, store)
 
-	if _, err := svc.Create(t.Context(), callerOf(ownerAna, person("ana")), "acme", "x", savedview.Query{Labels: nil, References: nil}); err != nil {
+	if _, err := svc.Create(t.Context(), callerOf(ownerAna, person("ana")), "acme", "x", noQuery()); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 

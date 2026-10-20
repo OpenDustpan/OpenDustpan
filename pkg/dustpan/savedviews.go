@@ -26,7 +26,10 @@ func newViewsConfig(cfg *settings) (*inventoryapi.ViewsConfig, error) {
 
 	principals, ok := cfg.namespaceStore.(principal.Store)
 	if !ok {
-		return nil, fmt.Errorf("namespace store keeps no principals, so it cannot own saved views: %w", ErrMissingOption)
+		return nil, fmt.Errorf(
+			"namespace store keeps no principals, so it cannot own saved views: %w",
+			ErrMissingOption,
+		)
 	}
 
 	service, err := savedview.NewService(savedview.Config{

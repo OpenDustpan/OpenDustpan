@@ -174,7 +174,10 @@ type createViewBody struct {
 }
 
 func toViewDocument(v savedview.View) viewDocument {
-	q := viewQuery{Labels: make([]viewLabel, 0, len(v.Query.Labels)), References: make([]string, 0, len(v.Query.References))}
+	q := viewQuery{
+		Labels:     make([]viewLabel, 0, len(v.Query.Labels)),
+		References: make([]string, 0, len(v.Query.References)),
+	}
 
 	for _, l := range v.Query.Labels {
 		q.Labels = append(q.Labels, viewLabel(l))
@@ -198,10 +201,10 @@ func viewLocation(ns namespace.Name, id savedview.ID) string {
 // not a person gets savedview.ErrNotPerson, and the refusal is audited.
 func (h *Handler) viewCaller(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action,
-) (savedview.Caller, error) {
+) (*savedview.Caller, error) {
 	ctx := r.Context()
 
-	refuse := func(reason string) (savedview.Caller, error) {
+	refuse := func(reason string) (*savedview.Caller, error) {
 		// The audit log refuses a kind that it does not know, so an unknown kind
 		// is recorded as no kind. The denial is still written.
 		audited := p
@@ -214,7 +217,7 @@ func (h *Handler) viewCaller(
 
 		h.guard.Record(ctx, r, audited, refusal.Denial{Action: action, Object: obj, Reason: reason, Window: 0})
 
-		return savedview.Caller{}, savedview.ErrNotPerson
+		return nil, savedview.ErrNotPerson
 	}
 
 	// An allowlist: only the kind "person" passes. The bootstrap token, a
@@ -230,7 +233,7 @@ func (h *Handler) viewCaller(
 	}
 
 	if err != nil {
-		return savedview.Caller{}, fmt.Errorf("find principal: %w", err)
+		return nil, fmt.Errorf("find principal: %w", err)
 	}
 
 	// Defense in depth: the authenticator filled the kind of the request, and
@@ -240,7 +243,7 @@ func (h *Handler) viewCaller(
 		return refuse("the principal record is not an active person")
 	}
 
-	return savedview.Caller{Owner: rec.ID, Principal: p, By: viewAuditTemplate(r)}, nil
+	return &savedview.Caller{Owner: rec.ID, Principal: p, By: viewAuditTemplate(r)}, nil
 }
 
 // viewAuditTemplate returns the fields of the audit entry that the request
@@ -258,7 +261,7 @@ func viewAuditTemplate(r *http.Request) audit.Entry {
 // ownedView reads the view of the path for the caller. The store filters by
 // owner, and the handler checks the owner again.
 func (h *Handler) ownedView(
-	r *http.Request, c savedview.Caller, ns namespace.Name,
+	r *http.Request, c *savedview.Caller, ns namespace.Name,
 ) (savedview.View, error) {
 	id := savedview.ID(r.PathValue("view_id"))
 	if err := id.Validate(); err != nil {
@@ -280,7 +283,7 @@ func (h *Handler) ownedView(
 // given. This check stays so that a store that ignores the owner, a wrong
 // query or a later change cannot serve the view of another person. It does
 // not rely on the store, and the store does not rely on it.
-func checkViewOwner(v savedview.View, c savedview.Caller, ns namespace.Name, id savedview.ID) (savedview.View, error) {
+func checkViewOwner(v savedview.View, c *savedview.Caller, ns namespace.Name, id savedview.ID) (savedview.View, error) {
 	if v.Owner != c.Owner || v.ID != id || v.Namespace != ns {
 		return savedview.View{}, savedview.ErrNotFound
 	}
@@ -315,13 +318,13 @@ func (h *Handler) listViews(w http.ResponseWriter, r *http.Request, p identity.P
 
 	out := make([]viewDocument, 0, len(found))
 
-	for _, v := range found {
+	for i := range found {
 		// Defense in depth: the same owner check as the get route, for each view.
-		if v.Owner != c.Owner || v.Namespace != ns {
+		if found[i].Owner != c.Owner || found[i].Namespace != ns {
 			continue
 		}
 
-		out = append(out, toViewDocument(v))
+		out = append(out, toViewDocument(found[i]))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listViewsResponse{Views: out})
@@ -443,13 +446,14 @@ func (h *Handler) createView(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	h.keyed(w, r, c, createdViewAnswer, true, func(w http.ResponseWriter, r *http.Request) {
-		h.makeView(w, r, c, ns)
+	h.keyed(w, r, c, keyedCall{
+		build: createdViewAnswer, keepsID: true,
+		serve: func(w http.ResponseWriter, r *http.Request) { h.makeView(w, r, c, ns) },
 	})
 }
 
 // makeView reads the body and makes the view.
-func (h *Handler) makeView(w http.ResponseWriter, r *http.Request, c savedview.Caller, ns namespace.Name) {
+func (h *Handler) makeView(w http.ResponseWriter, r *http.Request, c *savedview.Caller, ns namespace.Name) {
 	ctx := r.Context()
 
 	name, query, err := readViewBody(w, r)
@@ -494,12 +498,13 @@ func (h *Handler) deleteView(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	h.keyed(w, r, c, deletedViewAnswer, false, func(w http.ResponseWriter, r *http.Request) {
-		h.removeView(w, r, c, ns)
+	h.keyed(w, r, c, keyedCall{
+		build: deletedViewAnswer, keepsID: false,
+		serve: func(w http.ResponseWriter, r *http.Request) { h.removeView(w, r, c, ns) },
 	})
 }
 
-func (h *Handler) removeView(w http.ResponseWriter, r *http.Request, c savedview.Caller, ns namespace.Name) {
+func (h *Handler) removeView(w http.ResponseWriter, r *http.Request, c *savedview.Caller, ns namespace.Name) {
 	ctx := r.Context()
 
 	if _, nsErr := h.namespaces.Get(ctx, ns); nsErr != nil {
@@ -552,20 +557,28 @@ func deletedViewAnswer(any) (idempotency.Answer, error) {
 
 var errViewResult = errors.New("the store passed a result that is not a saved view")
 
-// keyed runs serve. A request with the Idempotency-Key header runs inside the
-// middleware, which keeps the answer in the transaction of the write. The
+// keyedCall is a call that may carry the Idempotency-Key header.
+type keyedCall struct {
+	// build makes the answer of the call from the result of its write.
+	build func(result any) (idempotency.Answer, error)
+	// serve runs the call and writes its answer.
+	serve http.HandlerFunc
+	// keepsID says that the record keeps the ID of the view that the call made
+	// and not the answer.
+	keepsID bool
+}
+
+// keyed runs the call. A request with the Idempotency-Key header runs inside
+// the middleware, which keeps the answer in the transaction of the write. The
 // record of a create keeps the ID of the view and not the view: a view can
 // hold a label value that names something private. A replay of a create then
 // answers 409 with the ID. The key belongs to the ID of the principal, and not
 // to the subject, so a new principal with the same subject cannot replay it.
-func (h *Handler) keyed(
-	w http.ResponseWriter, r *http.Request, c savedview.Caller,
-	build func(result any) (idempotency.Answer, error), secret bool, serve http.HandlerFunc,
-) {
+func (h *Handler) keyed(w http.ResponseWriter, r *http.Request, c *savedview.Caller, call keyedCall) {
 	ctx := r.Context()
 
 	if !idempotent.Present(r) {
-		serve(w, r)
+		call.serve(w, r)
 
 		return
 	}
@@ -576,15 +589,15 @@ func (h *Handler) keyed(
 		return
 	}
 
-	call := idempotent.Call{
-		Principal: c.Owner, Build: build, SecretAnswer: nil, Required: false, Serve: serve,
+	in := idempotent.Call{
+		Principal: c.Owner, Build: call.build, SecretAnswer: nil, Required: false, Serve: call.serve,
 	}
 
-	if secret {
-		call.SecretAnswer = viewIDOf
+	if call.keepsID {
+		in.SecretAnswer = viewIDOf
 	}
 
-	if err := h.views.idem.Handle(w, r, call); err != nil {
+	if err := h.views.idem.Handle(w, r, in); err != nil {
 		h.writeError(ctx, w, err)
 	}
 }

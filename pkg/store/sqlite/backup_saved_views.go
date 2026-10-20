@@ -9,13 +9,23 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/viewstore"
 )
 
+// backupColOwner is the column that holds the owner of a saved view.
+const backupColOwner = "owner"
+
 // sqliteSavedViewBackupTables holds the backup columns of the saved view
 // table, in the order of backup.Tables.
 func sqliteSavedViewBackupTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
 		{
-			table:   "saved_views",
-			columns: []string{"id", backupColNamespaceID, "owner", backupColName, "query_json", backupColCreatedAtMs},
+			table: "saved_views",
+			columns: []string{
+				"id",
+				backupColNamespaceID,
+				backupColOwner,
+				backupColName,
+				"query_json",
+				backupColCreatedAtMs,
+			},
 		},
 	}
 }
@@ -41,17 +51,15 @@ FROM saved_views AS v JOIN namespaces AS n ON n.id = v.namespace_id`
 	}()
 
 	for rows.Next() {
-		var (
-			id, ns, owner, name, queryJSON string
-			createdAtMs                    int64
-		)
+		var row viewstore.Row
 
-		if scanErr := rows.Scan(&id, &ns, &owner, &name, &queryJSON, &createdAtMs); scanErr != nil {
+		scanErr := rows.Scan(&row.ID, &row.Namespace, &row.Owner, &row.Name, &row.QueryJSON, &row.CreatedAtMs)
+		if scanErr != nil {
 			return fmt.Errorf("read staged saved views: %w", backup.ErrExportRead)
 		}
 
-		if _, viewErr := viewstore.View(id, ns, owner, name, queryJSON, createdAtMs); viewErr != nil {
-			return fmt.Errorf("staged saved view %q is not valid: %w: %w", id, viewErr, backup.ErrCorrupt)
+		if _, viewErr := viewstore.View(row); viewErr != nil {
+			return fmt.Errorf("staged saved view %q is not valid: %w: %w", row.ID, viewErr, backup.ErrCorrupt)
 		}
 	}
 
