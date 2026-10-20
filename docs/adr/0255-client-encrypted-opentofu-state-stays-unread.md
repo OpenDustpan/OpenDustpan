@@ -1,10 +1,10 @@
 # 255. Client-encrypted OpenTofu state stays unread, and the server holds no key for it
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Keeps ADR 41 decision 8 and ADR 163 decision 6 for every feature that reads state. Applies ADR 226 decision 3 to client-encrypted state
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Keeps ADR 41 decision 8 and ADR 163 decision 6 for every feature that reads state. Applies ADR 226 decision 3 to client-encrypted state
 
 ## Context
 
-Decided by the project manager under the owner's delegation of 20 October
+Decided by the product manager under the owner's delegation of 20 October
 2026, with the owner's decision rule.
 
 OpenTofu 1.7.0 added the encryption of state and plan files on the client,

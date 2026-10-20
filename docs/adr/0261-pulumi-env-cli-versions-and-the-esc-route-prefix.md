@@ -1,10 +1,10 @@
 # 261. The `pulumi env` commands: supported CLI versions, and the `/api/esc` route prefix only
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Applies to the profile routes of ADR 209
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Applies to the profile routes of ADR 209
 
 ## Context
 
-Decided by the project manager under the owner's delegation of 20 October
+Decided by the product manager under the owner's delegation of 20 October
 2026, with the owner's decision rule.
 
 The `pulumi env` commands read and write environments on a Pulumi

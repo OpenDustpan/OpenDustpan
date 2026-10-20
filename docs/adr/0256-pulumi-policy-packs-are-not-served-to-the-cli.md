@@ -1,10 +1,10 @@
 # 256. The server enforces resource policy, and the Pulumi adapter serves no required policy packs
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Applies ADR 250 and ADR 222 to the policy packs of the Pulumi CLI
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Applies ADR 250 and ADR 222 to the policy packs of the Pulumi CLI
 
 ## Context
 
-Decided by the project manager under the owner's delegation of 20 October
+Decided by the product manager under the owner's delegation of 20 October
 2026, with the owner's decision rule.
 
 The Pulumi CLI can run the policy packs that its backend requires. We read

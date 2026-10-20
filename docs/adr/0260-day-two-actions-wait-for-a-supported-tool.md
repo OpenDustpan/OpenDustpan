@@ -1,10 +1,10 @@
 # 260. Provider actions wait for a supported tool that has them
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Accepts part of RFC 95 (question 3 and slice 1)
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Accepts part of RFC 95 (question 3 and slice 1)
 
 ## Context
 
-Decided by the project manager under the owner's delegation of 20 October
+Decided by the product manager under the owner's delegation of 20 October
 2026, with the owner's decision rule.
 
 [RFC 95](../rfc/0095-day-two-actions-outside-state.md) asks how OpenDustpan

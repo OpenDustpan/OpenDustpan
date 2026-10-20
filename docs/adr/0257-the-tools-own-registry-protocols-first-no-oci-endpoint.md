@@ -1,10 +1,10 @@
 # 257. Providers and modules: the tools' own registry protocols first, and no OCI endpoint now
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Answers the protocol part of the open question of ADR 170 and the second open question of ADR 177. Accepts part of RFC 10
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Answers the protocol part of the open question of ADR 170 and the second open question of ADR 177. Accepts part of RFC 10
 
 ## Context
 
-Decided by the project manager under the owner's delegation of 20 October
+Decided by the product manager under the owner's delegation of 20 October
 2026, with the owner's decision rule.
 
 ADR 170 and ADR 177 leave open whether OpenDustpan serves the provider

@@ -1,10 +1,10 @@
 # 259. Cost estimates start with the push route, and the first pull adapter comes later
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Accepts part of RFC 45. Orders the two ways in of ADR 144 decision 5
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Accepts part of RFC 45. Orders the two ways in of ADR 144 decision 5
 
 ## Context
 
-Decided by the project manager under the owner's delegation of 20 October
+Decided by the product manager under the owner's delegation of 20 October
 2026, with the owner's decision rule.
 
 ADR 144 decision 5 gives two ways in for a cost estimate of a plan:

@@ -1,10 +1,10 @@
 # 254. Remote execution for OpenTofu starts with speculative plans on runners
 
-Status: accepted · 2026-10-20. Decided by the project manager under the owner's delegation of 20 October 2026. Accepts part of RFC 30. Supersedes in part ADR 25 decisions 1 and 3 (no remote plans, `operations: false` and `execution-mode: local` for each workspace). Uses ADRs 100, 102, 135 and 199
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Accepts part of RFC 30. Supersedes in part ADR 25 decisions 1 and 3 (no remote plans, `operations: false` and `execution-mode: local` for each workspace). Uses ADRs 100, 102, 135 and 199
 
 ## Context
 
-Decided by the project manager under the owner's delegation of 20 October
+Decided by the product manager under the owner's delegation of 20 October
 2026, with the owner's decision rule.
 
 [RFC 30](../rfc/0030-opentofu-remote-execution.md) asks for `tofu plan` on a
