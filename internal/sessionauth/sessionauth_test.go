@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -302,6 +303,45 @@ func TestRefuseDevSubjects(t *testing.T) {
 
 		if tc.want != nil && p.Subject != "" {
 			t.Errorf("subject %q: a refused session returned the principal %q", tc.subject, p.Subject)
+		}
+	}
+}
+
+// TestOnDevRefused proves that the Checker tells the hook the subject of each
+// dev person that it refuses, and only of those.
+func TestOnDevRefused(t *testing.T) {
+	t.Parallel()
+
+	secret := newSecret(t)
+
+	for _, tc := range []struct {
+		subject string
+		want    []string
+	}{
+		{subject: "dev:admin", want: []string{"dev:admin"}},
+		{subject: "DEV:Admin", want: []string{"DEV:Admin"}},
+		{subject: "corp:alice", want: nil},
+		{subject: "developer", want: nil},
+	} {
+		match := aliceMatch()
+		match.Owner.Subject = tc.subject
+
+		var got []string
+
+		c, err := sessionauth.New(&fakeSessions{err: nil, match: match, calls: 0}, []string{consoleOrigin},
+			sessionauth.RefuseDevSubjects(),
+			sessionauth.OnDevRefused(func(_ context.Context, subject string) { got = append(got, subject) }))
+		if err != nil {
+			t.Fatalf("new checker: %v", err)
+		}
+
+		_, _, err = c.Authenticate(request(t, http.MethodGet, secret.Reveal(), nil))
+		if refused := errors.Is(err, identity.ErrUnauthenticated); refused != (len(tc.want) > 0) {
+			t.Errorf("subject %q: refused = %t, want %t", tc.subject, refused, len(tc.want) > 0)
+		}
+
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("subject %q: hook got %v, want %v", tc.subject, got, tc.want)
 		}
 	}
 }

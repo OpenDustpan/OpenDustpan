@@ -676,6 +676,18 @@ func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOp
 	return err
 }
 
+const clearMaintenanceRevocationsOnEnter = `-- name: ClearMaintenanceRevocationsOnEnter :exec
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance'
+`
+
+// Starts a new stay in maintenance mode: it clears the journal when the stored
+// state is not maintenance yet. Run it before the state changes.
+func (q *Queries) ClearMaintenanceRevocationsOnEnter(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, clearMaintenanceRevocationsOnEnter)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2
@@ -3094,6 +3106,27 @@ func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInac
 	return items, nil
 }
 
+const disablePrincipal = `-- name: DisablePrincipal :execrows
+UPDATE principals SET disabled_at_ms = $1::bigint,
+  updated_at_ms = $1::bigint
+WHERE id = $2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+`
+
+type DisablePrincipalParams struct {
+	DisabledAtMs int64
+	ID           string
+}
+
+// Disables the principal. A principal that is disabled or ended stays as it
+// is. The write only narrows access.
+func (q *Queries) DisablePrincipal(ctx context.Context, arg DisablePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, disablePrincipal, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const disablePrincipalForExpiry = `-- name: DisablePrincipalForExpiry :execrows
 UPDATE principals SET disabled_at_ms = $1::bigint
 WHERE id = $2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
@@ -3108,6 +3141,29 @@ type DisablePrincipalForExpiryParams struct {
 // record. A principal that is already disabled stays as it is.
 func (q *Queries) DisablePrincipalForExpiry(ctx context.Context, arg DisablePrincipalForExpiryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, disablePrincipalForExpiry, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const disableSignInProvider = `-- name: DisableSignInProvider :execrows
+UPDATE sign_in_providers
+SET enabled = FALSE, updated_at_ms = $1, version = $2 + 1
+WHERE provider_id = $3 AND version = $2
+`
+
+type DisableSignInProviderParams struct {
+	UpdatedAtMs int64
+	Version     interface{}
+	ProviderID  string
+}
+
+// Disables the provider. The update applies only to the version that the
+// change read, and changes nothing but the flag, the update time and the
+// version. The write only narrows access.
+func (q *Queries) DisableSignInProvider(ctx context.Context, arg DisableSignInProviderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, disableSignInProvider, arg.UpdatedAtMs, arg.Version, arg.ProviderID)
 	if err != nil {
 		return 0, err
 	}
@@ -11593,6 +11649,41 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec
+INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+SELECT $1::text, $2::text, $3::text, $4::text,
+       $5::text, $6::bigint
+WHERE (SELECT state FROM installation WHERE id = 1 FOR SHARE) = 'maintenance'
+`
+
+type RecordMaintenanceRevocationParams struct {
+	Kind      string
+	Target    string
+	EndReason string
+	Actor     string
+	Object    string
+	AtMs      int64
+}
+
+// Journals one write that only reduces access, when the installation is in
+// maintenance mode, and nothing otherwise. A restore applies the journal
+// again after the swap. The read of the state holds the installation row FOR
+// SHARE until the transaction ends. An enter updates that row, so it waits
+// for a revocation in flight, and a revocation that starts after the enter
+// reads maintenance: no revocation commits in maintenance mode without its
+// journal row.
+func (q *Queries) RecordMaintenanceRevocation(ctx context.Context, arg RecordMaintenanceRevocationParams) error {
+	_, err := q.db.Exec(ctx, recordMaintenanceRevocation,
+		arg.Kind,
+		arg.Target,
+		arg.EndReason,
+		arg.Actor,
+		arg.Object,
+		arg.AtMs,
+	)
+	return err
 }
 
 const rejoinRunner = `-- name: RejoinRunner :exec

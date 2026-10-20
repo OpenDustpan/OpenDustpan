@@ -430,6 +430,18 @@ func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOp
 	return err
 }
 
+const clearMaintenanceRevocationsOnEnter = `-- name: ClearMaintenanceRevocationsOnEnter :exec
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance'
+`
+
+// Starts a new stay in maintenance mode: it clears the journal when the stored
+// state is not maintenance yet. Run it before the state changes.
+func (q *Queries) ClearMaintenanceRevocationsOnEnter(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearMaintenanceRevocationsOnEnter)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?
@@ -2872,6 +2884,27 @@ func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInac
 	return items, nil
 }
 
+const disablePrincipal = `-- name: DisablePrincipal :execrows
+UPDATE principals SET disabled_at_ms = CAST(?1 AS INTEGER),
+  updated_at_ms = CAST(?1 AS INTEGER)
+WHERE id = ?2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+`
+
+type DisablePrincipalParams struct {
+	DisabledAtMs int64
+	ID           string
+}
+
+// Disables the principal. A principal that is disabled or ended stays as it
+// is. The write only narrows access.
+func (q *Queries) DisablePrincipal(ctx context.Context, arg DisablePrincipalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, disablePrincipal, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const disablePrincipalForExpiry = `-- name: DisablePrincipalForExpiry :execrows
 UPDATE principals SET disabled_at_ms = CAST(?1 AS INTEGER)
 WHERE id = ?2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
@@ -2886,6 +2919,30 @@ type DisablePrincipalForExpiryParams struct {
 // record. A principal that is already disabled stays as it is.
 func (q *Queries) DisablePrincipalForExpiry(ctx context.Context, arg DisablePrincipalForExpiryParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, disablePrincipalForExpiry, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const disableSignInProvider = `-- name: DisableSignInProvider :execrows
+UPDATE sign_in_providers
+SET enabled = 0, updated_at_ms = CAST(?1 AS INTEGER),
+    version = CAST(?2 AS INTEGER) + 1
+WHERE provider_id = ?3 AND version = CAST(?2 AS INTEGER)
+`
+
+type DisableSignInProviderParams struct {
+	UpdatedAtMs int64
+	Version     int64
+	ProviderID  string
+}
+
+// Disables the provider. The update applies only to the version that the
+// change read, and changes nothing but the flag, the update time and the
+// version. The write only narrows access.
+func (q *Queries) DisableSignInProvider(ctx context.Context, arg DisableSignInProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, disableSignInProvider, arg.UpdatedAtMs, arg.Version, arg.ProviderID)
 	if err != nil {
 		return 0, err
 	}
@@ -11155,6 +11212,37 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec
+INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+SELECT ?1, ?2, ?3, ?4, ?5,
+       CAST(?6 AS INTEGER)
+WHERE (SELECT state FROM installation WHERE id = 1) = 'maintenance'
+`
+
+type RecordMaintenanceRevocationParams struct {
+	Kind      string
+	Target    string
+	EndReason string
+	Actor     string
+	Object    string
+	AtMs      int64
+}
+
+// Journals one write that only reduces access, when the installation is in
+// maintenance mode, and nothing otherwise. A restore applies the journal
+// again after the swap.
+func (q *Queries) RecordMaintenanceRevocation(ctx context.Context, arg RecordMaintenanceRevocationParams) error {
+	_, err := q.db.ExecContext(ctx, recordMaintenanceRevocation,
+		arg.Kind,
+		arg.Target,
+		arg.EndReason,
+		arg.Actor,
+		arg.Object,
+		arg.AtMs,
+	)
+	return err
 }
 
 const rejoinRunner = `-- name: RejoinRunner :exec

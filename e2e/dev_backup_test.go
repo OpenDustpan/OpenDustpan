@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -14,7 +13,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -239,7 +237,7 @@ func startProduction(t *testing.T, bin, dir, targetDir string, extra ...string) 
 	cmd := exec.CommandContext(context.WithoutCancel(t.Context()), bin, args...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "DUSTPAN_ADMIN_TOKEN=" + serveToken}
 
-	out := &ptyBuffer{buf: bytes.Buffer{}, mu: sync.Mutex{}}
+	out := newPtyBuffer()
 	cmd.Stdout = out
 	cmd.Stderr = out
 	cmd.WaitDelay = devStopLimit

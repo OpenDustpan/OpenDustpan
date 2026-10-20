@@ -103,4 +103,6 @@ worked into the proposal above.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 257](../adr/0257-the-tools-own-registry-protocols-first-no-oci-endpoint.md)
+on 2026-10-20: the tools' own HTTP protocols, and no OCI endpoint now. The
+order of the protocols and the curation stay open.

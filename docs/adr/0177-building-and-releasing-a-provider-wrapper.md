@@ -1,6 +1,6 @@
 # 177. Building and releasing a provider wrapper
 
-Status: accepted · 2026-10-18 · part of ADR 170
+Status: accepted · 2026-10-18 · part of ADR 170. Open question answered in part by ADR 257
 
 ## Context
 

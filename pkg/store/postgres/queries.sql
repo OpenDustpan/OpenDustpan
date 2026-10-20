@@ -869,6 +869,25 @@ UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
 
+-- name: RecordMaintenanceRevocation :exec
+-- Journals one write that only reduces access, when the installation is in
+-- maintenance mode, and nothing otherwise. A restore applies the journal
+-- again after the swap. The read of the state holds the installation row FOR
+-- SHARE until the transaction ends. An enter updates that row, so it waits
+-- for a revocation in flight, and a revocation that starts after the enter
+-- reads maintenance: no revocation commits in maintenance mode without its
+-- journal row.
+INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+SELECT sqlc.arg('kind')::text, sqlc.arg('target')::text, sqlc.arg('end_reason')::text, sqlc.arg('actor')::text,
+       sqlc.arg('object')::text, sqlc.arg('at_ms')::bigint
+WHERE (SELECT state FROM installation WHERE id = 1 FOR SHARE) = 'maintenance';
+
+-- name: ClearMaintenanceRevocationsOnEnter :exec
+-- Starts a new stay in maintenance mode: it clears the journal when the stored
+-- state is not maintenance yet. Run it before the state changes.
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance';
+
 -- name: SetLockTimeout :exec
 -- Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
 -- The timeout is a PostgreSQL duration text, for example 10000ms.
@@ -2125,6 +2144,13 @@ WHERE principal_id = $2 AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
 UPDATE temp_admins SET ended_at_ms = $1
 WHERE principal_id = $2 AND ended_at_ms IS NULL;
 
+-- name: DisablePrincipal :execrows
+-- Disables the principal. A principal that is disabled or ended stays as it
+-- is. The write only narrows access.
+UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint,
+  updated_at_ms = sqlc.arg('disabled_at_ms')::bigint
+WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
+
 -- name: DisablePrincipalForExpiry :execrows
 -- Disables the principal at the expiry of its temporary administrator
 -- record. A principal that is already disabled stays as it is.
@@ -2192,6 +2218,14 @@ SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client
     email_claim = sqlc.arg('email_claim'),
     updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
 WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
+
+-- name: DisableSignInProvider :execrows
+-- Disables the provider. The update applies only to the version that the
+-- change read, and changes nothing but the flag, the update time and the
+-- version. The write only narrows access.
+UPDATE sign_in_providers
+SET enabled = FALSE, updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version') + 1
+WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version');
 
 -- name: CountSignInProvider :one
 SELECT COUNT(*) FROM sign_in_providers WHERE provider_id = $1;

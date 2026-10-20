@@ -58,6 +58,10 @@ func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 			return err
 		}
 
+		if err := clearJournalOnEnter(ctx, q, state); err != nil {
+			return err
+		}
+
 		n, err := q.SetInstallationState(ctx, string(state))
 		if err != nil {
 			return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
@@ -136,6 +140,10 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 			return err
 		}
 
+		if err := clearJournalOnEnter(ctx, q, next); err != nil {
+			return err
+		}
+
 		n, err := q.SetInstallationStateIf(ctx, db.SetInstallationStateIfParams{
 			State:   string(next),
 			State_2: string(expected),
@@ -154,6 +162,22 @@ func (s *Store) SetStateIf(ctx context.Context, expected, next maintenance.State
 
 	if changed == 0 {
 		return fmt.Errorf("installation state is not %q: %w", expected, maintenance.ErrStateChanged)
+	}
+
+	return nil
+}
+
+// clearJournalOnEnter starts a new stay in maintenance mode when next is
+// maintenance: it clears the journal of revocations, in the transaction of q
+// and before the state changes. It clears nothing when the state is
+// maintenance already, so a second enter keeps the journal of the stay.
+func clearJournalOnEnter(ctx context.Context, q *db.Queries, next maintenance.State) error {
+	if next != maintenance.StateMaintenance {
+		return nil
+	}
+
+	if err := q.ClearMaintenanceRevocationsOnEnter(ctx); err != nil {
+		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
 	}
 
 	return nil

@@ -213,6 +213,32 @@ The server starts no background task for the limit, so the count of a quiet key 
 When the server stops with a signal, it writes the counts that it still holds, within 5 seconds.
 A server that ends in another way loses these counts, and a restart starts with no counts.
 
+### Refused dev sign-ins
+
+A production installation refuses a session or a token of a dev person. A dev person has a subject that starts with `dev:`, in any case.
+Only `opendustpan dev` makes such a person. One on a production installation comes from a restored dev backup.
+Each refusal can write an entry with the outcome `denied`, in the scope `@server`:
+
+- `subject`: the subject of the dev person.
+- `action`: `session:sign-in`.
+- `object`: `@server`.
+- `reason`: `sign-in by a dev person refused on a production installation`. When the server counted refusals before this entry, the `reason` ends with `; N further refusals since the last entry`.
+
+The entry holds no token, no session cookie and no request data.
+
+These entries use the limit of the previous section, with a window of 1 hour.
+The server writes at most 1 entry for each dev person for each hour.
+It counts each other refusal of that person in the hour.
+The count goes out in the first entry of the next hour.
+When the table of the limiter is full, a dev refusal uses the overflow slot.
+The overflow slot has a window of 1 minute.
+Then the limit of 1 entry for each person for each hour does not hold.
+When the refusals of the person stop, the first denial of any principal after the hour writes an entry.
+The `object` of this entry is the key `signin/server`.
+The entry holds the count (`N further refusals in the last window were not recorded one by one`).
+When the server stops with a signal, it writes the counts that it still holds.
+A dev installation, and a person whose subject does not start with `dev:`, write no such entry.
+
 ## Settings entries
 
 Each server process writes entries about its own settings in the scope
