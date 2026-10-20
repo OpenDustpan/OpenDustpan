@@ -27,47 +27,77 @@ use (see the facts below).
 
 The goal of the theme: a security team allows a provider, a module or a
 Pulumi resource plugin once, through an approval in OpenDustpan. From then
-on every job uses exactly that artifact, on every platform, and nothing
-else. Four layers do this, and each layer must stop the attack alone
-(ADR 250): a curated mirror, an allowlist with approvals, verification, and
-enforcement at run time.
+on every job on an OpenDustpan runner uses exactly that artifact, on every
+platform, and nothing else.
 
-**Relation to RFC 10.** RFC 10 (draft) asks for an artifact registry with
+**What this RFC does not promise.** Five layers work toward the goal (section
+E). Each layer is built to stop the attack alone (ADR 250). All five hold
+together only for a job on an OpenDustpan runner whose pool has egress
+turned on (egress is an option of a pool, ADR 137 decision 6). On a laptop
+or in a team's own CI, the server enforces nothing at run time. The
+artifacts that this RFC does not cover are:
+
+- the language SDK packages of a Pulumi program (npm, PyPI, Go modules,
+  NuGet, Maven),
+- the `tofu` and `pulumi` binaries, and the runner image,
+- provisioners (`local-exec`, `remote-exec`) and the `external` data source,
+  which run any program,
+- Pulumi policy packs.
+
+**Relation to RFC 10.** RFC 10 (draft) asks for an "artifact registry" with
 curated upstreams, private publishing and scanning. This RFC takes the
 curation part of RFC 10 and makes it concrete: the mirror, the approval, the
 hashes and the enforcement. Private publishing (a team uploads its own
 provider) and the version lifecycle stay in RFC 10 (question 12).
 
-**Names (proposal, question 1).** _Provider_ alone is on the _Avoid_ list of
-the glossary (it is a provider block of a profile). This RFC says:
+**Names (proposal, question 1).** The glossary has _Provider_ on the _Avoid_
+list (it is a provider block or a profile provider), and its entry for
+_Profile provider_ says that a provider alone can mean a plugin of OpenTofu
+or the Pulumi CLI. So this RFC writes "OpenTofu provider" in full, and
+"Pulumi resource plugin". "Artifact" also names a plan or a log of a job
+(ADR 152, "job artifacts"), and RFC 10 uses "artifact registry". To avoid a
+clash, the proposal uses a different word:
 
-- **Vetted artifact**: one version of an OpenTofu provider, an OpenTofu
+- **Vetted package**: one version of an OpenTofu provider, an OpenTofu
   module or a Pulumi resource plugin that a namespace admitted, with its
   archives and hashes for each platform.
-- **Artifact admission**: the change that adds a vetted artifact to the
+- **Package admission**: the change that adds a vetted package to the
   allowlist of a namespace. It meets the gates and approval rules.
-- **Artifact mirror**: the routes that serve vetted artifacts to the tools,
+- **Package mirror**: the routes that serve vetted packages to the tools,
   through the protocols that the tools already speak.
+
+The rest of this RFC uses these names. The identifiers of the sketch use
+`package` (for example the decision point `package.admit`). Question 1 asks
+if the owner wants other names. RFC 10 would then need the same word.
 
 ## Facts from primary sources
 
 Checked on 2026-10-20 against the docs, and against the source at OpenTofu
-`main` 42f15c9b and Pulumi `master` 6c60436a where the docs say less.
+`main` 42f15c9b and Pulumi `master` 6c60436a where the docs say less. The
+file names are from that check. Add the line numbers when the ADR is written,
+because the lines move.
 
 **OpenTofu provider network mirror protocol**
-(<https://opentofu.org/docs/internals/provider-network-mirror-protocol/>)
+(<https://opentofu.org/docs/internals/provider-network-mirror-protocol/>,
+`internal/getproviders/http_mirror_source.go`)
 
 - `GET :hostname/:namespace/:type/index.json` gives `{"versions":
   {"1.0.0": {}}}`. A 404 means that the mirror does not have the provider.
 - `GET :hostname/:namespace/:type/:version.json` gives `{"archives":
   {"<os>_<arch>": {"url": ..., "hashes": [...]}}}`. `url` can be relative
   to the document. `hashes` is optional, and with no hashes the CLI
-  installs the package with no check.
+  installs the package with no check. The hashes can use the `zh:` and the
+  `h1:` scheme.
 - No service discovery: the URL comes from `network_mirror { url }`, and it
-  must be `https:` (`internal/getproviders/http_mirror_source.go`).
-- The CLI sends the credentials of the mirror host to the two JSON
-  requests only, not to the archive downloads. The docs say to give
-  signed URLs that expire for the archives.
+  must be `https:`.
+- The CLI sends the credentials of the mirror host on the two JSON requests
+  (`index.json` and the version document), and it forwards them on a
+  redirect. It sends no credentials for an archive download. The docs
+  advise a user-specific URL that expires for the archives.
+- New and not yet released in 1.14: an archive entry can carry
+  `"use_mirror_credentials": true`, and then the CLI sends the credentials of
+  the mirror host for that archive too. Until a release has it, an archive
+  URL must carry its own proof.
 
 **OpenTofu provider registry protocol**
 (<https://opentofu.org/docs/internals/provider-registry-protocol/>)
@@ -79,11 +109,14 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
 - The CLI checks the SHA-256 of the zip against `shasum` and the checksums
   file, then the detached GPG signature of that file
   (`internal/getproviders/package_authentication.go`).
+- For the upstream fetch of the server, `download_url` and `shasums_url`
+  often point to `github.com` and then to a release-asset CDN host, so the
+  fetch crosses several hosts (section G).
 
 **Signing state of OpenTofu** (<https://opentofu.org/docs/cli/plugins/signing/>)
 
 - For `registry.opentofu.org` only, when the registry gives no key, the CLI
-  skips the GPG check and logs a warning. Every other registry host needs a
+  skips the GPG check and logs a WARN. Every other registry host needs a
   valid key. `OPENTOFU_ENFORCE_GPG_VALIDATION=true` turns the skip off. The
   docs call the skip temporary.
 - "OpenTofu only authenticates provider plugins fetched from a registry."
@@ -98,7 +131,8 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
   `GET .../:version/download`, which gives a JSON `location` or an
   `X-Terraform-Get` header.
 - The location can be any module source, for example `git::https://...`,
-  except another registry address.
+  except another registry address. Most public modules use
+  `git::https://github.com/...?ref=...` as their source.
 
 **CLI configuration** (<https://opentofu.org/docs/cli/config/config-file/>)
 
@@ -107,6 +141,9 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
   `oci_mirror`. With no `direct` method, a provider that no method
   matches fails with "was not found in any of the search locations".
 - `TF_CLI_CONFIG_FILE` names the file. We found no `TOFU_CLI_CONFIG_FILE`.
+- `plugin_cache_dir` shares provider packages between runs.
+  `plugin_cache_may_break_dependency_lock_file` lets the cache skip the lock
+  file check.
 
 **Dependency lock file**
 (<https://opentofu.org/docs/language/files/dependency-lock/>,
@@ -116,13 +153,18 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
   of the package, so it also matches an unpacked copy.
 - From a registry, the CLI records each checksum that the registry gives,
   which usually covers every platform. **From a mirror, it records only the
-  current platform.** This is the multi-platform trap. With
-  `trust_all_hashes = true` on the `network_mirror`, it records the mirror's
-  hashes for all platforms.
+  current platform.** This is the multi-platform trap.
+- `trust_all_hashes = true` (from 1.12) records the hashes of all platforms
+  of the mirror, but only after one hash matches the package that the CLI
+  installed, and only when the source does not need a signature. The source
+  needs one for `registry.opentofu.org` when
+  `OPENTOFU_ENFORCE_GPG_VALIDATION` is set, and for every other registry.
+  So the flag helps in a plain mirror setup and is not a guarantee.
 - `tofu providers lock -platform=linux_amd64 -platform=darwin_arm64` records
   the hashes of each named platform. `-net-mirror=<url>` takes them from a
   mirror instead.
-- Modules are not in the lock file.
+- Modules are not in the lock file. The state holds no provider version and
+  no provider hash.
 
 **Pulumi CLI plugins** (`sdk/go/common/workspace/plugins.go`,
 <https://www.pulumi.com/docs/iac/cli/environment-variables/>,
@@ -132,38 +174,54 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
   `gitlab://` and `git://`. With none, the CLI tries GitHub and then
   `get.pulumi.com`.
 - An HTTP source downloads
-  `<url>/pulumi-<kind>-<name>-v<version>-<os>-<arch>.tar.gz`.
-- `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES` takes `regexp=URL` pairs and
-  replaces the URL of each plugin that matches.
-- `PluginSpec.Checksums` maps `<os>-<arch>` to a SHA-256. **When no entry
+  `<url>/pulumi-<kind>-<name>-v<version>-<os>-<arch>.tar.gz`. An HTTPS
+  download sends a `User-Agent` and no other header. It has no credentials.
+- `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES` is a list of `regexp=URL` pairs.
+  The CLI splits the list on `,` and each pair on `=`, so a URL with an `=`
+  or a `,` breaks the pair. An override also applies to a
+  `pluginDownloadURL` and to the `get.pulumi.com` fallback.
+- `PluginSpec.Checksums` maps `<goos>-<goarch>` to a SHA-256. **When no entry
   exists for the current platform, the CLI skips the check with no
   warning.** `pulumi plugin install --checksum` sets one platform only.
   The `packages` entries of `Pulumi.yaml` accept `checksums`.
 - The CLI checks no signature of a plugin.
 - `PULUMI_IGNORE_AMBIENT_PLUGINS` stops the search of `$PATH`, and
   `PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION` stops downloads.
-- We did not find the doc page of the `pluginDownloadURL` resource option.
-  The behavior above is from the source.
+- A provider resource in a Pulumi checkpoint stores the `version`, the
+  `pluginDownloadURL` and the `pluginChecksums` in its inputs. We did not
+  find the doc page of the `pluginDownloadURL` resource option. The behavior
+  above is from the source.
 
 ## What is decided already
 
 - ADR 12: each tool's wire protocol lives in its own adapter under
-  `internal/api/<tool>/`. Shared packages stay tool-neutral.
+  `internal/api/<tool>/`. Shared packages stay tool-neutral. A format that
+  only one tool reads (a lock file, a checksums map) is built in the adapter
+  of that tool.
 - ADR 13: cross-tool features do not merge tool models. Shared code names a
   unit by tool, namespace and the tool's own name.
 - ADR 17: every feature has a REST API, and every route declares its
-  actions and objects.
+  actions and objects. A route with no action is on the public list of the
+  route test.
+- ADR 220: a namespace never reads a blob of another namespace.
 - ADR 224 decision 2: six fixed decision points. A new decision point is a
-  new ADR. Decision 16: `state.write` runs before each state write that no
-  job of OpenDustpan makes.
+  new ADR. Decision 16: `state.write` runs at the lock or at the create of
+  an update, before the state is written, for a write that no job of
+  OpenDustpan makes.
 - ADR 225: approval rules are data, with approvers, a count and
-  `authorMayApprove`.
+  `authorMayApprove`. Decision 7 lists the approve actions.
+- ADR 226 decision 3: a fact that a producer can fail to give is a typed
+  value with an `available` flag.
 - ADR 134 decision 7: the launcher writes the OpenTofu CLI configuration of
   each tool step (`TF_CLI_CONFIG_FILE`) and the Pulumi home (`PULUMI_HOME`).
-  The credentials helper answers the job token for the host of the server
-  only.
+  The CLI configuration names the credentials helper and nothing else. The
+  credentials helper answers the job token for the host of the server only.
+- ADR 129 decision 25 and `pkg/egress`: an egress allowlist and an HTTP
+  client that checks the resolved IP address of each connection.
 - ADR 137 decision 6: a pool can limit the egress of a sandbox to the server
   and to the hosts that the tools need, through the egress proxy of RFC 16.
+  Egress is an option of the pool.
+- ADR 152: "job artifacts" are plans and logs. They are a different thing.
 - ADR 250: every layer stops the attack alone, and has its own test.
 
 ## Options and recommendations
@@ -171,15 +229,18 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
 ### A. Where the code lives (ADR 12)
 
 1. **One shared core, one adapter per tool (recommended).** A new domain
-   package `pkg/artifact` holds the tool-neutral parts: the vetted artifact
-   record (kind, address, version, platforms, a SHA-256 for each archive,
-   the admission record), the allowlist queries, and the store and blob
-   ports. The kind is one of `opentofu-provider`, `opentofu-module` and
-   `pulumi-plugin`. Each tool's address grammar, its upstream protocol and
-   its hash scheme (`h1:` is an OpenTofu scheme) live in a port
-   `artifact.Upstream` with one adapter for each kind. The wire routes live
-   in `internal/api/tfe/` (provider network mirror, module registry) and in
-   `internal/api/pulumi/` (plugin downloads).
+   package `pkg/pkgmirror` holds the tool-neutral parts: the record of a
+   vetted package (kind, upstream host, address, version, platforms, a
+   SHA-256 for each archive, the admission record), the allowlist queries,
+   and the store and blob ports. The kind is one of `opentofu-provider`,
+   `opentofu-module` and `pulumi-plugin`. Each tool's address grammar, its
+   upstream protocol and its hash scheme (`h1:` is an OpenTofu scheme) live
+   in a port `pkgmirror.Upstream` with one adapter for each kind. The wire
+   routes and the tool formats live in the adapter of the tool:
+   `internal/api/tfe/` for the provider network mirror, the module registry
+   and the lock file output, and `internal/api/pulumi/` for the plugin
+   downloads and the `checksums` output. The shared core never builds a
+   lock file or a `checksums` map.
 2. **One model in each tool package.** `workspace` holds OpenTofu providers
    and modules, `stack` holds Pulumi resource plugins. No shared allowlist,
    so the console needs two views, and the approval and storage code is
@@ -190,6 +251,9 @@ Checked on 2026-10-20 against the docs, and against the source at OpenTofu
 
 The address and the version stay as the tool writes them. The core compares
 them as opaque strings after the adapter checks their grammar (section F).
+The key of a record is the kind, the upstream host, the address and the
+version. A request for a key that has a record with different hashes is
+refused (section D).
 
 ### B. The mirror, through the tools' own protocols
 
@@ -203,116 +267,274 @@ them as opaque strings after the adapter checks their grammar (section F).
   namespace. The CLI sends the credentials of the mirror host to the two
   JSON routes, so the credentials helper of the launcher already gives the
   job token there. The CLI sends no credentials for an archive, so each
-  archive URL in the version document is a signed URL of the server that
-  names one blob and expires after 10 minutes (proposal). The server checks
-  the read action when it signs the URL, and the signature and the expiry
-  when the CLI downloads.
+  archive URL in the version document is a signed URL (see below). A later
+  release of the CLI can send the credentials for an archive with
+  `use_mirror_credentials`. The server can then drop the signed URL for a
+  CLI that has it. Until then the signed URL is the proof. The CLI forwards
+  credentials on a redirect, so the mirror routes never redirect.
 - **OpenTofu providers: the provider registry protocol.** A registry
   serves the providers whose source address names its own host. So each
   `required_providers` block must change from `registry.opentofu.org/...` to
   the server host, and that changes the provider address in each state and
   lock file. Not recommended for mirrored providers. It fits the private
   providers of RFC 10.
-- **OpenTofu modules: the module registry protocol (recommended).** Add
-  `modules.v1` to the discovery document that the TFE-compatible API already
-  serves. The module address is `<server host>/<namespace>/<name>/<system>`,
-  so the registry namespace is the OpenDustpan namespace. The download
-  answer names a signed archive URL on the server, never the upstream
-  location, which can be a git URL (see the facts).
-  A team changes its `source` lines once, to the server host.
+- **OpenTofu modules: the module registry protocol (recommended for
+  registry modules).** Add `modules.v1` to the discovery document that the
+  TFE-compatible API already serves. See "Module address" below. The
+  download answer names a signed archive URL on the server, never the
+  upstream location. Modules wait on the decision of question 7 (section F).
 - **Pulumi resource plugins: the plugin download URL (recommended).** Routes
-  under `/pulumi/plugins/v1/{namespace}/` that serve the archive names that
-  the Pulumi CLI asks for. The launcher points the CLI at them (section E).
-- **Storage.** Each archive is one blob of a new kind `artifact`, addressed
-  by its SHA-256 in the namespace, through the `blob` port (fs or S3). Two
-  admissions of the same bytes share one blob. A namespace never reads a
-  blob of another namespace (ADR 220).
+  under `/pulumi/plugins/v1/` that serve the archive names that the Pulumi
+  CLI asks for. The launcher points the CLI at them (section E). See "Pulumi
+  mirror proof" below.
+- **Storage.** Each archive is one blob of a new kind `package`, addressed
+  by its SHA-256, through the `blob` port (fs or S3). Two admissions of the
+  same bytes in one namespace share one blob. See "Who owns a blob".
 - **Size limits (proposal).** 512 MiB for one archive, 2 GiB unpacked, 20,000
   entries in one archive, 16 platforms for one version. An installation
   setting can raise them. Large cloud providers are above 100 MiB for one
-  platform, so the limit is on one archive, not on the sum.
-- **Retention (proposal).** A vetted artifact stays while it is admitted. A
-  revoked artifact keeps its record for ever, and its blobs while a job
-  record or a state version in retention names it. Then the retention
-  expiry deletes the blobs, and the record says so.
+  platform, so the limit is on one archive, not on the sum. The server never
+  holds an archive in memory. See section F, step 3.
+- **Retention (proposal).** A vetted package stays while it is admitted. A
+  revoked package keeps its record for ever. Its blobs stay while a job
+  record or a state version in retention names it, and then the retention
+  expiry deletes the blobs, and the record says so. A kept blob of a revoked
+  package is never served by any route. Only the audit and forensic read
+  (`namespace:read-packages`) opens it, and that read gives the bytes with no
+  signed URL.
+
+**Signed archive URLs.** A signed URL binds the namespace, the ID of the
+record, the platform, the SHA-256 of the archive and the expiry. It expires
+after 10 minutes (proposal). The signature is a MAC with a key of the
+installation. The archive route:
+
+1. refuses a URL that the server did not build. It recomputes the MAC over
+   the fields, and it reads the record by ID. The namespace, the platform and
+   the SHA-256 of the URL must equal the record. A URL with other fields,
+   an extra query key or a bad MAC gives 404 and an audit entry.
+2. checks, on each download, that the record is still admitted and not
+   revoked. So a revocation acts at once, also for a URL that has not yet
+   expired.
+3. serves the blob that the record names, and no other.
+
+The server deletes the query of a signed URL from its access log and from
+its traces (the route pattern is logged, not the URL). The URL is not a
+secret that outlives its expiry, but it is a bearer token until then.
+
+**Who owns a blob (ADR 220).** A blob has the owner that holds the record
+that stored it: a namespace, or the installation for an installation
+admission. A namespace never reads the blob of another namespace. For an
+installation admission, a namespace reads the blob only through its own
+effective allowlist: the route finds the record in the allowlist of the
+namespace of the signed URL (its own record or an inherited one that the
+namespace did not revoke), then reads the blob from the owner of that
+record. The route never takes a blob address from the request.
+
+**Module address.** The module registry protocol has an address with three
+parts, `<namespace>/<name>/<system>`. The upstream address of a module is
+also `<namespace>/<name>/<system>`, for example
+`terraform-aws-modules/vpc/aws`. If the first part were the OpenDustpan
+namespace, an upstream module and a module of another upstream namespace
+could end up with the same name. So the proposal keeps the upstream address
+whole: the module address is `<server host>/<upstream namespace>/<name>/
+<system>`, and the OpenDustpan namespace comes from the token of the job or
+the person (the same as for the provider routes of a job). Then
+`terraform-aws-modules/vpc/aws` and `other/vpc/aws` stay two modules. A
+module with the same three parts on two upstream hosts is refused at the
+second admission (a conflict), because the address has no room for the host.
+The alternative is a module address that holds the OpenDustpan namespace and
+a joined name, and the grammar of a module name makes a safe join hard.
+
+**Pulumi mirror proof.** The Pulumi CLI sends no credentials to a plugin
+URL, and the override list splits on `=` and on `,`, so a token in the query
+(`?token=...`) breaks the pair. Two options:
+
+1. **A capability in a path segment (recommended).** The launcher sets
+   `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES=.*=https://<server>/pulumi/plugins/v1/cap/<cap>`.
+   The `<cap>` is a MAC-signed value in base64url, with no `=` and no `,`.
+   It binds one job, one namespace and an expiry that is not later than the
+   end of the job and not more than two hours from now. The server checks
+   the MAC, the expiry, that the job is still running, and then the record
+   of each package as for a signed URL. The server redacts the segment from
+   its access log and traces and adds the value to the secrets that the log
+   of the job redacts. A copy of the value gives the same read as the
+   namespace has for the rest of the job, and no more.
+2. **Public routes keyed by hash.** The routes have no proof, and the path
+   holds the SHA-256 of the archive. The CLI asks for a file name, not a
+   hash, so the file name route needs the version and the platform, and the
+   route cannot tell which namespace asks. It would also serve one
+   namespace's admitted package to anyone who knows the name. Not
+   recommended.
+
+With option 1 the `cap` routes, and the signed archive routes of the OpenTofu
+mirror, carry their own proof and no bearer header. They go on the explicit
+public list of the route test (ADR 17), each with a comment that names its
+proof. A new test asserts that the list holds these routes only, and that
+each one rejects a request with no valid proof.
+
+**Slice 1 does not include a Pulumi plugin mirror.** This section is the
+design for the later slice.
 
 ### C. The allowlist and the approval
 
-An artifact admission is a change of the namespace, not of a unit. The
-fixed decision points of ADR 224 do not cover it.
+A package admission is a change of the namespace (or of the installation),
+not of a unit. The six fixed decision points of ADR 224 do not cover it.
 
-1. **A new decision point `artifact.admit` (recommended).** It runs before
-   the server stores an admission. Its fact schema `artifact.admit/1.0`
-   holds the kind, the upstream host, the address, the version, the age of
-   the version upstream, the signature result (`verified`, `unsigned`,
-   `unknown-key`, `not-checked` or `failed`), the number of platforms, and a `scan` group
-   with an `available` flag for later (section H). Gates and approval rules
-   work as for every other decision point: a gate with the outcome
+1. **A new decision point `package.admit` (recommended).** It runs before
+   the server stores an admission. Gates and approval rules work as for
+   every other decision point: a gate with the outcome
    `approval:supply-chain` makes the admission wait for the approvers of
-   that rule. A built-in starter gate asks for one approval on each
-   admission, with `final: true` when the installation sets it. This needs
-   a new ADR (ADR 224 decision 2).
+   that rule. The fact schema `package.admit/1.0` holds the kind, the
+   upstream host, the address, the version, the number of platforms, the
+   signature result (`verified`, `unsigned`, `unknown-key`, `not-checked` or
+   `failed`), a `keyChanged` fact (the signing key of this address differs
+   from the key of an earlier admission), the SHA-256 of each archive, and
+   two groups with an `available` flag as ADR 226 decision 3 asks: `age`
+   (the age of the upstream version, see section D) and `scan` (for later,
+   section H). A built-in gate and its approval rule are the answer to
+   self-approval, see below.
+
+   **Amendments that option C.1 makes.** The ADR that accepts C.1 changes:
+   - ADR 224 decision 2: a seventh decision point, `package.admit`.
+   - ADR 224 decision 4: the Cedar request has the namespace, or the
+     installation, as its resource. It has no unit. One admission gives one
+     request and one decision record.
+   - ADR 224 decision 5: the gates that apply are the gates of the
+     installation and of the namespace. No collection, unit, blueprint or
+     profile gate applies.
+   - ADR 225 decision 7: a new approve action,
+     `namespace:approve-package`, with the same rules for who may approve.
+   - ADR 226: the new schema `package.admit/1.0`, with its own version line.
+   - ADR 230 decision 2: the ADR checks whether the table of actions for
+     gate configuration needs an entry for the new decision point.
+
+   **The built-in gate cannot be bypassed.** The installation holds a
+   built-in starter gate for `package.admit` with `final: true`, and a
+   built-in approval rule (one approval, `authorMayApprove: false`,
+   approvers: the holders of `namespace:approve-package`). The gate and the
+   rule live at installation scope, as a final gate does (ADR 224 decision
+   12), so no narrower scope deletes or relaxes them. Three rules, each
+   with its own test (proposal names):
+   - **No gate means approval.** An admission that finds no gate in its
+     chain does not admit. It waits for approval under the built-in rule.
+     The code never reads "no gate" as "allowed". This fails closed
+     (ADR 250). Test: `TestPackageAdmitNoGateNeedsApproval`.
+   - **Managing gates is not approving.** A requester who holds
+     `namespace:manage-gates` can save a gate for the namespace, and that
+     gate cannot lower the final gate of the installation. The requester
+     cannot approve the own admission, because the approve action is
+     separate, the author is not eligible, and a job token, a service
+     principal or an agent never approves (ADR 225 decision 7). Test:
+     `TestPackageAdmitRequesterWithManageGatesCannotApprove`, which also
+     tries to save a namespace gate that returns `allow`, and to approve with
+     the same session.
+   - **No self-admit.** The route for an admission has no way to set the
+     state to admitted. Only the engine, after the decision record, writes
+     it. Test: `TestPackageAdmitRouteCannotSetAdmitted`.
 2. **A fixed approval on the allowlist.** Each admission needs one approval
    by a holder of an action, with no gates. Simple, but no facts, no
    `evaluate` mode, no exemptions, and a second approval system, which
    ADR 222 replaced with one model.
 3. **No approval, an action only.** A holder of the admit action adds an
-   entry. This is the minimum for a small team, and it is a mode of option
-   1: no gate at `artifact.admit` gives no requirement.
+   entry. This is the minimum for a small team. It is not a mode of option
+   1, because option 1 never reads "no gate" as "allowed". A small team
+   instead edits the built-in approval rule at the installation (one
+   approver, who may be the author), and that edit needs
+   `installation:manage-packages`.
 
 **Scope (proposal).** The allowlist belongs to a namespace. The installation
 can hold admissions that each namespace inherits, as gates do. A namespace
-can revoke for itself an artifact that the installation admits, and cannot
+can revoke for itself a package that the installation admits, and cannot
 admit one that the installation revoked (question 3).
 
 **Actions (proposal, ADR 17):**
 
 | Action | Object | Allows |
 | --- | --- | --- |
-| `namespace:read-artifacts` | namespace | read the allowlist, the records and the hashes |
-| `namespace:request-artifact` | namespace | ask for an admission (the gates of `artifact.admit` decide) |
-| `namespace:revoke-artifact` | namespace | revoke a vetted artifact, with a fresh authentication and a reason |
-| `namespace:download-artifacts` | namespace | the mirror routes (a job token of the namespace holds it) |
-| `installation:manage-artifacts` | installation | the admissions and revocations of the installation |
+| `namespace:read-packages` | namespace | read the allowlist, the records and the hashes |
+| `namespace:request-package` | namespace | ask for an admission (the gates of `package.admit` decide) |
+| `namespace:approve-package` | namespace | approve an admission as an eligible approver (ADR 225 decision 7) |
+| `namespace:revoke-package` | namespace | revoke a vetted package, with a fresh authentication and a reason |
+| `namespace:download-packages` | namespace | the mirror routes (a job token of the namespace holds it) |
+| `installation:manage-packages` | installation | the admissions, revocations and the built-in rule of the installation |
 
 A revocation needs no approval: it only takes away. It is in the audit log
 with the reason.
 
 ### D. Verification, and the lock file gap
 
-At admission, the server fetches **every platform** that the upstream
-lists, or the set that the request names, not only the platform of the
-caller. For each archive it:
+**The server fetches once, before the approval.** The request for an
+admission starts the fetch. The server fetches **every platform** that the
+upstream lists, or the set that the request names, not only the platform of
+the caller, and it stores the bytes at once. Then the approval wait starts.
+For each archive the server:
 
 1. checks the SHA-256 of the archive against the upstream checksums file,
-   and the signature of that file against the upstream key where one
-   exists (OpenTofu providers).
-2. computes the `h1:` hash of the content (OpenTofu providers), in memory,
-   from the archive, never from files on disk.
-3. stores the archive, the checksums file, the signature, the key ID and
-   the upstream URLs with the record.
+   and, when the signature check is available, the signature of that file
+   against the upstream key (OpenTofu providers).
+2. computes the `h1:` hash of the content (OpenTofu providers) from the
+   stored archive, entry by entry, never from files on disk.
+3. stores the archive, the checksums file, the signature, the ID and the
+   fingerprint of the key, and the upstream URLs with the record.
 
-The record also holds who asked, the decision record of the gates, each
-signer of each approval, and the time.
+The record holds the SHA-256 of each stored archive, for each platform. The
+decision record and each signature of an approval cover that list of
+SHA-256 values. This closes the time-of-check to time-of-use gap:
+
+- The server never fetches again after the approval. The mirror serves the
+  stored bytes, and a byte of the archive that changes upstream does not
+  change what the namespace receives.
+- A byte change is a new request. A new request for a key (kind, upstream
+  host, address, version) that has a record with other hashes is refused,
+  with an audit entry that holds both hash lists. A person who wants the new
+  bytes revokes the record first, then asks again. The approvers see the
+  new hashes in the new request.
+- A request that only the approval wait separates from the fetch cannot
+  admit different bytes, because the approval names the hashes.
 
 **How the mirror fills the lock file gap.** The version document of the
 mirror carries the `h1:` and `zh:` hashes of each admitted platform. A
 mirror alone is not enough: the CLI records only the current platform from a
-mirror (see the facts). So the launcher sets `trust_all_hashes = true` on the
-`network_mirror` that it writes, and the documentation tells teams to do the
-same for the mirror of their namespace and of no other host. Then one
-`tofu init` on one platform writes a lock file that is valid on all admitted
-platforms. A second route gives the lock file entries of a set of providers
-directly (`GET .../namespaces/{namespace}/artifacts/lock-file`), so a team
-can commit them with no `tofu init`. The documentation also names
-`tofu providers lock -net-mirror=<url> -platform=...` for each platform.
+mirror (see the facts). `trust_all_hashes = true` is not the main path,
+because it works only after one hash matches, and it does nothing when the
+source needs a signature (see the facts). The primary path has two parts,
+and both are checked in the e2e suite:
 
-**Signatures.** The standard library has no OpenPGP. A check of the
-signature needs a dependency, which needs the owner's approval (question 4).
-Without it, the record says `not-checked` and a gate can read it. An
-upstream that gives no key (the CLI allows this for `registry.opentofu.org`
-only, see the facts) gives `unsigned`.
-The SHA-256 check and the approval still stand alone.
+1. **A lock file that the server builds.**
+   `GET /tofu/mirror/v1/{namespace}/lock-file?providers=...` (in the
+   adapter of OpenTofu, `internal/api/tfe/`) answers the text of a
+   `.terraform.lock.hcl` for the named providers and versions, with the
+   `h1:` and `zh:` hashes of every admitted platform. A team commits it and
+   needs no `tofu init` on each platform.
+2. **`tofu providers lock -net-mirror=<url> -platform=...`.** The
+   documentation names this command for each platform that the team uses.
+   The mirror answers the hashes of all admitted platforms to it.
+
+`trust_all_hashes = true` is a secondary option. The launcher does not rely
+on it, and the documentation names its limit.
+
+**Signatures.** The standard library has no OpenPGP. In slice 1 there is no
+OpenPGP dependency (question 4). The slice checks the SHA-256 of the archive
+against the upstream checksums file, keeps the hashes, and needs an
+approval. The record keeps the signature, the key ID and the fingerprint, and
+the fact `keyChanged` tells a gate that the key of this address changed. The
+signature result is `not-checked`, so a gate can ask for a stricter
+approval. A later slice can add
+`github.com/ProtonMail/go-crypto` after a review as ADR 7 asks. An upstream
+that gives no key (the CLI allows this for `registry.opentofu.org` only,
+and a WARN shows it) gives `unsigned`. The CLI of a team that sets
+`OPENTOFU_ENFORCE_GPG_VALIDATION=true` still reads the mirror hashes
+correctly, because the mirror gives hashes and not a signature (see the e2e
+step).
+
+**Age of the upstream version.** The protocols give no date of a release. The
+network mirror protocol, the registry protocol and the module protocol have
+no such field. A GitHub release has a date, but it is a source of the
+upstream host, not of the protocol. So the first slice has no age. The fact
+`age.available` is `false`, and `age.days` is 0, as ADR 226 decision 3 asks.
+A later slice can add a source, for example the date of the release asset
+on the upstream host, or the date of the first admission request of the
+version in this installation. A gate that needs the age names `available`.
 
 **Upstream provenance.** Where an upstream gives more (for example a build
 attestation of a release), the record keeps it as an opaque blob, and a
@@ -323,202 +545,318 @@ checks a SHA-256 only when the plugin spec has an entry for the current
 platform (see the facts). So, as for OpenTofu, the server fetches the
 archive of each platform at admission, keeps its SHA-256, and gives the
 `checksums` map for each `packages` entry of `Pulumi.yaml` for every
-admitted platform (`GET .../artifacts/pulumi-checksums`). A team commits it,
-and the CLI then checks the bytes on each platform. The launcher does not
-rely on it (layer 4).
+admitted platform. The map is keyed by `<goos>-<goarch>`, as the CLI reads
+it. The route lives in `internal/api/pulumi/`. A team commits it, and the
+CLI then checks the bytes on each platform. A platform with no entry is not
+checked by the CLI, so the output lists every admitted platform and the
+documentation says that a missing entry gives no check. The launcher does
+not rely on the map (layer 4).
 
-### E. Enforcement at run time: five independent layers
+**Team CI writes record no version.** A write from a team's own CI cannot
+tell the server a provider version or a hash, because an OpenTofu state holds
+neither and the CLI does not send them. So the server does not record
+versions for those writes. The job record (layer 4) exists only for a job
+on an OpenDustpan runner. A Pulumi checkpoint holds the version in its
+provider inputs, and a read of it is an audit finding (section E, layer 5).
 
-Each layer stops a job that uses an artifact that is not vetted, without
-help from the others (ADR 250).
+### E. Enforcement at run time: five layers
+
+Each layer is built to stop a job that uses a package that is not vetted,
+without help from the others (ADR 250). All five hold together only for a
+job on an OpenDustpan runner with egress turned on in the pool. Each layer
+has its own limit, and the limits are real.
 
 1. **The CLI configuration.** For OpenTofu, the launcher writes a
    `provider_installation` block with one `network_mirror` to the mirror of
-   the namespace and no `direct` method. For Pulumi, it sets
-   `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES` with `.*` to the mirror routes,
-   and `PULUMI_IGNORE_AMBIENT_PLUGINS=true`. It stops a fetch by the CLI
-   from any other source. It cannot stop a binary that the image or a
-   plugin cache already holds.
+   the namespace and no `direct` method. This **amends ADR 134 decision 7**,
+   which now says that the CLI configuration names the credentials helper
+   and nothing else. The amendment adds the block and changes nothing about
+   the helper. The launcher never sets
+   `plugin_cache_may_break_dependency_lock_file`, and no plugin cache is
+   shared between jobs or between namespaces (a cache can hold a package
+   that nobody admitted, or that was revoked). For Pulumi, it sets
+   `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES` with `.*` to the capability URL
+   of the mirror (section B), and `PULUMI_IGNORE_AMBIENT_PLUGINS=true`. It
+   stops a fetch by the CLI from any other source. It cannot stop a binary
+   that the image or a plugin cache already holds.
 2. **The mirror.** It serves only admitted versions and platforms, with
    their hashes. It stops a version or a platform that nobody admitted. It
-   cannot stop an artifact that the image brings.
+   cannot stop a package that the image brings.
 3. **Egress.** The sandbox can reach only the server (ADR 137 decision 6,
-   RFC 16). This stops a module `source` with a git URL, a download in a
-   `local-exec`, and a provider that fetches its own plugin. It cannot stop
-   a fetch from the server host itself.
+   RFC 16). This stops a download in a `local-exec`, a module `source` with
+   a git URL, and a provider that fetches its own plugin. It cannot stop a
+   fetch from the server host itself. A pool with egress off has no layer 3.
 4. **The job record.** After `tofu init`, or before `pulumi up`, the
    launcher reads the lock file, `.terraform/modules/modules.json` and the
-   plugin directory. It reports each address, version and hash. The server
-   compares them with the allowlist, and on a mismatch it fails the job
+   plugin directory. It **hashes the installed package directories itself**
+   (the `h1:` hash of each provider directory, the SHA-256 of each Pulumi
+   plugin archive or binary) and does not copy a hash from the lock file. It
+   reports each address, version and hash. The report is untrusted input,
+   because a step in the sandbox could change the launcher's view. The
+   server checks that each reported address and version is on the allowlist,
+   that each hash equals a hash of the record for the platform of the
+   runner, that the report is complete (one entry for each provider in the
+   lock file), and that its shape is valid. On a mismatch it fails the job
    before the plan. This stops a binary from the image or a cache, and a
    hash that is not the admitted one. It cannot stop a binary that the tool
-   loads after the check.
-5. **`state.write` (option).** The server refuses a state write whose
-   providers are not on the allowlist. This stops a write from a team's own
-   CI that used other providers, with the limits below.
+   loads after the check, and it cannot trust a launcher that the sandbox has
+   already taken over.
+5. **An audit finding, or a check at the lock (option).** See below.
 
 The job record ties the exact addresses, versions and hashes to the plan,
 to the apply, and to the state version or the Pulumi update that the job
 writes (ADR 102). The console shows them on the state version.
 
-**What the server can see in state (layer 5).** An OpenTofu state names
-the provider address of each resource, for example
-`provider["registry.opentofu.org/hashicorp/aws"]`, and, as far as we know,
-no version and no hash. A Pulumi checkpoint holds a provider resource for
-each provider, whose inputs are likely to hold the `version` and the
-`pluginDownloadURL`. The e2e suite must check both with real state before
-the ADR. So layer 5 can refuse an OpenTofu provider address that is not on
-the allowlist, and probably a Pulumi plugin version that is not on it. It
-cannot check a hash, or a module, because no state holds them.
+**Layer 5 and ADR 224 decision 16.** `state.write` runs at the lock of the
+workspace, or at the create of the update, **before** the write. At that
+time the server does not have the state that the write will bring. So a
+refusal at the write cannot read the new providers. Two honest forms:
 
-**What a team's own CI can and cannot do.** The team can point its CLI at
-the mirror (layer 1 and 2 in its own configuration) and receive the same hashes.
-The server cannot see the binary that ran, the CLI configuration, or the
-network of that CI. So for a write from a team's own CI, layers 1 to 4 are
-voluntary, and only layer 5 is enforced, with the limits above. A security
-team that needs all five layers runs its writes on runners of OpenDustpan,
-and a gate at `state.write` can refuse writes that do not come from a job
-(ADR 224 decision 16 already gives the facts for that).
+1. **A non-blocking audit finding (recommended).** After a write from a
+   person's own CLI, the server reads the state that it stored: the provider
+   addresses of an OpenTofu state, and the `version` and `pluginDownloadURL`
+   of the provider resources of a Pulumi checkpoint. It compares them with
+   the allowlist and records a finding on the unit for each package that is
+   not on it. It never blocks, so it cannot break a write. Limit: it shows
+   the violation after it happened.
+2. **A fact at `state.write`, against the current state only.** The fact
+   schema of `state.write` has a new group `packages` with an `available` flag.
+   It lists the providers of the **latest stored state** of the unit. A gate
+   can refuse the lock when the latest state already holds a package that is
+   not on the allowlist. Limit: it sees the last state and not the next
+   one, so the first write with a new provider passes, and the next lock is
+   refused. This amends the `state.write` schema in ADR 226.
+
+What the server sees: an OpenTofu state names the provider address of each
+resource, for example `provider["registry.opentofu.org/hashicorp/aws"]`, and
+holds no version and no hash. A Pulumi checkpoint holds the version and the
+download URL of each provider. So the check can compare an OpenTofu provider
+address, and a Pulumi plugin version, and no hash and no module. The e2e
+suite checks both with real state before the ADR (question 8).
+
+**What a team's own CI and a laptop receive.** The team can point its CLI at
+the mirror (layers 1 and 2 in its own configuration) and receive the same
+hashes. The server cannot see the binary that ran, the CLI configuration, or
+the network of that CI or laptop. So a laptop gets no enforcement. A write
+from a team's CI gets the audit finding or the fact of layer 5, and no more.
+A security team that needs all five layers runs its writes on runners of
+OpenDustpan with egress on, and a gate at `state.write` can refuse writes
+that do not come from a job (ADR 224 decision 16 already gives the facts for
+that).
 
 ### F. Untrusted input (ADR 250)
 
 Archives, checksums files, signatures, keys and every upstream document are
-untrusted input. So are the lock file, `modules.json` and the plugin list
+untrusted input. So are the lock file, `modules.json` and the package list
 that a job reports. The ADR that accepts this RFC adds them to the list of
 ADR 250.
 
 1. **Check at the boundary.**
    - An allowlist of upstream hosts. `https` only. No user info in a URL.
-     No redirect to a host that is not on the list.
+     The check runs on the first request and on every redirect and every
+     document hop (section G).
    - A version grammar (SemVer for providers and plugins). `os` and `arch`
      from a fixed list.
-   - The server refuses a module `source` with a `git::` prefix, an `ssh`
-     scheme, a user info part, or a query other than a 40-character commit.
+   - **Modules.** The server accepts an upstream module only as an `https`
+     archive URL on an allowlisted host, pinned to a commit (a 40-character
+     commit in the path or the query). It refuses every go-getter form: a
+     `git::` prefix, `ssh`, `github.com/...` and `bitbucket.org/...` short
+     forms, `s3::`, `gcs::`, `hg::`, a `file` or `http` scheme, a user info
+     part, and a query other than the commit. Most public modules use
+     `git::https://github.com/...?ref=...` sources, so this rule refuses
+     most of them. They wait on question 7 (a fetch by a runner).
    - The server refuses a JSON document over 1 MiB.
    - Test: one hostile value for each rule, with the fetch skipped.
 2. **Encode or contain at use.**
-   - The server reads an archive in memory, entry by entry, and never
-     unpacks it to disk.
-   - An entry name that is absolute, holds `..`, a backslash or a NUL, or
-     that is a link, refuses the archive. A duplicate name refuses it too.
+   - The server reads an archive entry by entry and never unpacks it to
+     disk. It stores the original bytes and serves them as they are. The
+     checks below protect the CLI that unpacks, not the server.
+   - **Zip rules.** The server refuses an archive with any of these:
+     - an entry name that is absolute, or holds `..`, a backslash, a drive
+       letter or a NUL,
+     - two names that are equal after case folding and NFC normalization,
+     - a symlink entry,
+     - a setuid or setgid mode bit,
+     - a local header that differs from the central directory in name, size
+       or method,
+     - data before the first local header or after the end record (prefix
+       and suffix data),
+     - an insecure path in the sense of `archive/zip` (`zip.ErrInsecurePath`).
+   - **Tar and `tar.gz` rules (Pulumi plugins).** The server accepts regular
+     files and directories only. It refuses any of these:
+     - a hard link, a symlink, a device, a FIFO or a sparse file,
+     - a name that is absolute or holds `..`, also in a PAX path record,
+     - a setuid or setgid bit,
+     - names that are equal after case folding and NFC normalization,
+     - a gzip stream with trailing data,
+     - a gzip ratio above the limit (step 3).
    - The server builds the archive URLs of the mirror from the stored
      record, never from the upstream text.
    - SQL placeholders only. The server deletes CR and LF from log values.
-   - Test: a zip with `../x`, `/etc/x`, a link entry and a duplicate name,
-     with the boundary check skipped.
+   - Test: a zip with `../x`, `/etc/x`, a symlink entry, a case-fold
+     duplicate and a setuid bit, and a tar with a hard link, a PAX path
+     `../x` and a device, with the boundary check skipped.
 3. **Limit the effect.**
    - `http.MaxBytesReader` and a timeout on each fetch.
+   - The server streams an archive to a temporary file inside an `os.Root`
+     with a size limit, hashes it while it streams, and then moves it to the
+     blob store. It reads the stored blob with `ReaderAt`. It never reads
+     512 MiB into memory. The number of admissions that run at the same time
+     is limited (proposal: 4 for each installation, 1 for each namespace).
    - Limits on archive size, unpacked size, entry count, and the ratio of
      unpacked to packed size (archive bombs).
-   - The server checks the resolved IP of each connection against the
-     always-denied ranges. A fetch uses no credential of the installation.
+   - The fetch goes through `pkg/egress` and `egresshttp`, which check the
+     resolved IP of each connection against the always-denied ranges. A
+     fetch uses no credential of the installation.
    - Test: a zip bomb, a 600 MiB archive and a slow upstream, each at its
-     limit plus one.
+     limit plus one. Also a flood of admissions over the concurrent limit.
 4. **Authorize at use.**
    - The store checks the namespace of the admission and the action on it,
      in the same transaction as the write.
-   - The mirror route checks `namespace:download-artifacts` for the
+   - The mirror route checks `namespace:download-packages` for the
      namespace in the path and the namespace of the token. The archive
-     route checks the signature and the expiry of the URL, and that the
-     blob belongs to that namespace.
-   - Test: a job token of another namespace on the mirror, and a signed URL
-     of another namespace, with the route check skipped.
+     route checks the proof of the signed URL, that the record is admitted,
+     and the blob owner (section B).
+   - Test: a job token of another namespace on the mirror, a signed URL of
+     another namespace, and a URL for a revoked record, with the route check
+     skipped.
 5. **Fail closed and record.**
    - A checksum mismatch, a bad signature, an unknown key, a parse error, a
-     size limit or an upstream error refuses the admission.
+     size limit, an upstream error or an unknown value refuses the
+     admission.
    - A missing entry in the job record fails the job.
    - Each refusal writes an audit entry with the upstream host, the address
      and the reason, never the body.
    - Test: each failure gives an audit entry and no stored row.
 
 A module needs one more rule: the server fetches a module archive only from
-an upstream module registry, and never runs `git` for it in the first slice.
-A module whose upstream answer points to a git URL needs a later fetcher in
-a runner sandbox (question 7).
+an upstream module registry or from an allowlisted `https` archive URL, and
+never runs `git` for it in the first slice. A module whose upstream answer
+points to a git URL needs a later fetcher in a runner sandbox (question 7).
 
 ### G. Who fetches from upstream
 
 1. **The server, with an upstream allowlist (recommended for the first
-   slice).** Small, and the checks of section F hold. The server needs an
-   outbound path, like the egress allowlist of model calls (ADR 129
-   decision 25).
-2. **A runner job of a new kind `artifact-fetch`.** The fetch and the
+   slice).** The fetch reuses `pkg/egress` and `egresshttp` (ADR 129
+   decision 25), with its **own** allowlist setting for package upstreams.
+   With no entry, no package fetch goes out. The server checks the host at
+   every hop: the discovery document, the `download_url`, the `shasums_url`
+   and the signature URL, each redirect, and the release-asset CDN host that
+   `github.com` redirects to. A default list for a provider from GitHub
+   names `registry.opentofu.org`, `github.com` and the release-asset host.
+   The default is not turned on until the installation sets it. An e2e test
+   needs a loopback upstream over TLS, so a test-only entry type for a
+   loopback CIDR with one port, as ADR 129 decision 25 allows for private
+   addresses, serves the suite. That entry is not in a production default.
+2. **A runner job of a new kind `package-fetch`.** The fetch and the
    parse run in a sandbox, and the server checks the SHA-256 of the uploaded
    bytes against a checksums file that the server fetches itself. Safer for
-   a server with no outbound access, and more work. A later step.
+   a server with no outbound access, and more work. A later step. It is also
+   the only way to fetch a git module source.
 3. **An upload by a person.** For an air gap: the person uploads the
    archives and the checksums file, and the server checks them as in
-   option 1. It can come with either option.
+   option 1. It can come with either option, and it comes soon after slice 1.
 
 ### H. Later: scanning hooks
 
 A scanner (for example `govulncheck -mode=binary` for Go providers, as
-RFC 10 says, or a license scanner) reads a vetted artifact and gives a
+RFC 10 says, or a license scanner) reads a vetted package and gives a
 report. The report uses the model of RFC 90: a scanner report blob with
-scanner findings, bound to the vetted artifact instead of a plan. The
-`scan` group of `artifact.admit` then reads its counts, so a gate can deny
+scanner findings, bound to the vetted package instead of a plan. The
+`scan` group of `package.admit` then reads its counts, so a gate can deny
 an admission with a finding at or above a severity. A new scan of an
-admitted artifact can flag it, and a person revokes it. No scan revokes by
+admitted package can flag it, and a person revokes it. No scan revokes by
 itself in this RFC (question 9).
 
 ### I. The first slice
 
 **Persona.** The security team of a bank runs OpenDustpan. Its platform
 team asks for one community provider for OpenTofu in the namespace
-`payments`. The security team approves that one version once. After that
-every job in `payments` uses exactly those bytes on `linux_amd64` runners
-and `darwin_arm64` laptops, and nothing else.
+`payments`. The security team approves that one version once.
+
+**What slice 1 gives that persona.** Layers 1 and 2 only. After the
+approval, a job whose launcher writes the block gets that provider from the
+mirror only, with the admitted hashes, for every admitted platform, and the
+lock file from the server pins them. The slice **does not** stop a provider
+that the runner image brings, a provider in a plugin cache, a provider that
+a `local-exec` downloads, or a team that runs `tofu` on a laptop or in its
+own CI. Those need layer 3 (a pool with egress on) and layer 4 (the job
+record), which come in the slice after. A security team that needs the
+guarantee waits for them. Until then the slice gives them one exact, approved
+version in the normal path of the tool, and a record of who approved it.
 
 **Scope.**
 
-- OpenTofu providers only. No modules, no Pulumi resource plugins.
-- `pkg/artifact` with the record, the store port and its conformance suite
-  in `pkg/artifact/artifacttest`, for SQLite and PostgreSQL.
-- The decision point `artifact.admit` (after its ADR) and one approval rule.
-- The server fetch from an allowlist of upstream hosts, with the checks of
-  section F, the SHA-256 against the checksums file, and the `h1:` hash for
-  each platform.
-- The network mirror routes in `internal/api/tfe/`.
-- Layer 1 in the launcher: the `provider_installation` block, with
-  `trust_all_hashes = true`.
+- OpenTofu providers only, version 1.12 or later. No modules, no Pulumi
+  resource plugins.
+- `pkg/pkgmirror` with the record, the store port and its conformance suite
+  in `pkg/pkgmirror/pkgmirrortest`, for SQLite and PostgreSQL.
+- The decision point `package.admit` (after its ADR), the built-in gate and
+  rule, and the action `namespace:approve-package`.
+- The server fetch from its own allowlist of upstream hosts, with the checks
+  of section F, the SHA-256 against the checksums file, and the `h1:` hash
+  for each platform. No OpenPGP check.
+- The network mirror routes and the lock file route in `internal/api/tfe/`.
+- Layer 1 in the launcher: the `provider_installation` block (with the
+  amendment of ADR 134 decision 7).
 - The admission, list and revoke routes, and a user documentation page.
 
-**The e2e step (real OpenTofu CLI).** A test upstream in the e2e suite
-serves one provider that the suite builds, with a checksums file, for
-`linux_amd64` and `darwin_arm64`. The step:
+**The e2e step (real OpenTofu CLI, pinned to 1.12 or later).** A test
+upstream in the e2e suite serves one provider that the suite builds, with a
+checksums file, for `linux_amd64` and `darwin_arm64`, over loopback TLS. The
+step:
 
 1. asks for the admission of version 1.0.0 and sees it wait for approval.
-2. approves it as a second user, and sees the record with two platforms.
-3. runs `tofu init` with a CLI configuration that names only the mirror,
-   and checks that the lock file holds the `h1:` hash of both platforms.
+2. tries to approve it as the requester, who holds
+   `namespace:manage-gates`, and sees the refusal. Then approves it as a
+   second user, and sees the record with two platforms.
+3. fetches the lock file route, and runs
+   `tofu providers lock -net-mirror=<url>` for both platforms. Both give
+   the `h1:` hash of both platforms. Then runs `tofu init` with a CLI
+   configuration that names only the mirror. It runs once with
+   `OPENTOFU_ENFORCE_GPG_VALIDATION` set and once without it, and both
+   succeed, and the lock file holds the hashes of both platforms.
 4. changes the constraint to 1.1.0 (not admitted) and checks that
    `tofu init` fails.
-5. serves a changed archive for 1.0.0 upstream, asks again, and checks that
-   the admission fails on the checksum.
-6. revokes 1.0.0 and checks that `tofu init` with an empty cache fails.
+5. serves a changed archive for 1.0.0 upstream **with the old checksums
+   file**, asks again, and checks that the admission fails on the checksum.
+   Then serves a changed archive **with a changed checksums file**, asks
+   again, and checks that the request is refused because the record has
+   other hashes.
+6. revokes 1.0.0 and checks that `tofu init` with an empty cache fails, and
+   that `tofu init` with a cached `.terraform` directory and an old lock
+   file can no longer download from a signed URL that was issued before the
+   revocation.
 
 ## Open questions
 
-1. Are the names right: vetted artifact, artifact admission, artifact
-   mirror? Or "approved provider" and a word for each tool?
-2. Does `artifact.admit` become a seventh decision point (option C.1), or
-   do admissions use a fixed approval (option C.2)?
+1. Are the names right: vetted package, package admission, package mirror?
+   Or "approved provider" and a word for each tool?
+2. Does `package.admit` become a seventh decision point with the amendments
+   listed in option C.1, and a final installation gate that fails closed? Or
+   a fixed approval (option C.2)? The recommendation is C.1.
 3. Does the installation hold admissions that each namespace inherits, and
    can a namespace narrow them, as gates do?
-4. Does the owner accept an OpenPGP dependency to check provider
-   signatures? Which one, after its review (ADR 7)?
-5. Does the server fetch from upstream (option G.1), or only a runner job
-   (G.2), or both with an upload for an air gap (G.3)?
+4. Does slice 1 go without an OpenPGP dependency (the recommendation: the
+   SHA-256 against the checksums file, the stored hashes, the approval, and
+   the key ID, fingerprint and `keyChanged` fact), and a later review of
+   `github.com/ProtonMail/go-crypto` after ADR 7?
+5. Does the server fetch from upstream through `pkg/egress` with its own
+   allowlist, off until set (option G.1), with an upload for an air gap soon
+   after (G.3), and a fetch by a runner only for git module sources
+   (G.2)? That is the recommendation.
 6. Is the job record (layer 4) a failure before the plan, or a warning in
-   the first slice?
+   the first slice? The recommendation: a failure, in the slice after slice 1.
 7. Modules: only from an upstream module registry, or also from git at a
-   commit, fetched in a runner sandbox?
-8. Is layer 5 at `state.write` worth its cost, given what state shows (see
-   section E)?
-9. Can a scanner report revoke an artifact by itself, or does a person
-   always revoke?
-10. A minimum age for a new upstream version before admission, as ADR 7
-    does for our own dependencies: a fact for a gate, or a fixed rule?
+   commit, fetched in a runner sandbox? Most public modules use git sources,
+   so the answer decides how many modules the feature can serve.
+8. Layer 5: an audit finding (recommended), or a fact at `state.write`
+   against the current state only? Or neither, given what state shows?
+9. Can a scanner report revoke a package by itself, or does a person always
+   revoke?
+10. A minimum age for a new upstream version before admission: what is the
+    source of the date (the protocols give none), and is it a fact for a gate
+    or a fixed rule?
 11. Does the mirror sign what it serves again with a key of the namespace
     (RFC 10 asks the same)?
 12. Does RFC 10 keep private publishing and the version lifecycle, and drop
@@ -526,19 +864,19 @@ serves one provider that the suite builds, with a checksums file, for
 
 ## Proposed glossary lines
 
-**Vetted artifact**:
+**Vetted package**:
 One version of an OpenTofu provider, an OpenTofu module or a Pulumi resource
 plugin that a namespace admitted, with an archive and its hashes for each
 platform, and the record of its admission.
-_Avoid_: Approved provider, package, dependency
+_Avoid_: Approved provider, artifact (that is a plan or a log of a job), dependency
 
-**Artifact admission**:
-The change that adds a vetted artifact to the allowlist of a namespace. It
-meets the gates of `artifact.admit`.
+**Package admission**:
+The change that adds a vetted package to the allowlist of a namespace. It
+meets the gates of `package.admit`.
 _Avoid_: Import, approval (alone)
 
-**Artifact mirror**:
-The routes that serve the vetted artifacts of a namespace through the
+**Package mirror**:
+The routes that serve the vetted packages of a namespace through the
 protocols of each tool: the provider network mirror and the module registry
 for OpenTofu, and the plugin download for the Pulumi CLI.
 _Avoid_: Registry (alone), proxy, cache
