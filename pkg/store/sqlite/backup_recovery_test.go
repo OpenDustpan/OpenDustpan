@@ -55,7 +55,7 @@ func (h *holdTarget) Put(ctx context.Context, key blob.Key, r io.Reader) error {
 
 // backupService builds a backup service over store and the two directories.
 func backupService(
-	t *testing.T, store *sqlite.Store, ops durable.Store, blobs, target blob.Store, owner string,
+	t *testing.T, store *sqlite.Store, ops durable.Store, blobs, target blob.Store,
 ) *backup.Service {
 	t.Helper()
 
@@ -67,7 +67,7 @@ func backupService(
 		Target:      target,
 		TargetName:  "test",
 		Operations:  ops,
-		Owner:       owner,
+		Owner:       "worker",
 		Lease:       recoveryLease,
 		StateOpener: nil,
 		Now:         nil,
@@ -101,7 +101,7 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 
 	held := &holdTarget{Store: dirs.target, mu: sync.Mutex{}, held: false, entered: make(chan struct{})}
 	dead := &crashOps{Store: first.DurableOperationsPort(), crashed: atomic.Bool{}}
-	svc := backupService(t, first, dead, dirs.blobs, held, "before")
+	svc := backupService(t, first, dead, dirs.blobs, held)
 
 	if startErr := svc.Start(ctx, id); startErr != nil {
 		t.Fatalf("start backup: %v", startErr)
@@ -146,7 +146,7 @@ func (c *crashOps) Release(ctx context.Context, claim durable.Claim) error {
 		return errCrashed
 	}
 
-	return c.Store.Release(ctx, claim) //nolint:wrapcheck // A test double passes the answer through.
+	return c.Store.Release(ctx, claim)
 }
 
 // Fail fails after the crash.
@@ -155,7 +155,7 @@ func (c *crashOps) Fail(ctx context.Context, claim durable.Claim, f durable.Fail
 		return errCrashed
 	}
 
-	return c.Store.Fail(ctx, claim, f) //nolint:wrapcheck // A test double passes the answer through.
+	return c.Store.Fail(ctx, claim, f)
 }
 
 // Complete fails after the crash.
@@ -164,7 +164,7 @@ func (c *crashOps) Complete(ctx context.Context, claim durable.Claim) error {
 		return errCrashed
 	}
 
-	return c.Store.Complete(ctx, claim) //nolint:wrapcheck // A test double passes the answer through.
+	return c.Store.Complete(ctx, claim)
 }
 
 // recoveryDirs holds the live blob store and the backup target of the test.
@@ -212,7 +212,7 @@ func TestBackupRecoversAfterCrash(t *testing.T) {
 		t.Fatalf("backup after the crash = %+v, %v; want running", row, getErr)
 	}
 
-	again := backupService(t, second, second.DurableOperationsPort(), blobs, target, "after")
+	again := backupService(t, second, second.DurableOperationsPort(), blobs, target)
 	recoverCtx, stop := context.WithCancel(ctx)
 
 	var worker sync.WaitGroup
@@ -223,6 +223,16 @@ func TestBackupRecoversAfterCrash(t *testing.T) {
 		stop()
 		worker.Wait()
 	})
+
+	checkRecovered(t, second, target, id)
+}
+
+// checkRecovered checks that the backup ended succeeded after the second
+// attempt, and that the target holds one complete backup.
+func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id backup.ID) {
+	t.Helper()
+
+	ctx := t.Context()
 
 	if row := waitBackupEnd(t, second, id); row.State != backup.StateSucceeded {
 		t.Fatalf("backup after the recovery = %+v, want succeeded", row)
