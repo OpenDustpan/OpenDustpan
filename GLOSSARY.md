@@ -617,6 +617,15 @@ An output adapter of the port `pkg/logsink` that delivers structured records to 
 _Avoid_: Log target, log destination, exporter
 _Copy says_: "log output", with the target: a file, syslog or a webhook. Never write "sink" in copy.
 
+**Chat platform**:
+A chat service that OpenDustpan posts messages to: Slack, Microsoft Teams, Mattermost or Matrix (ADR 262). The code type is `chat.Platform`, and the wire value is the lower-case name in the field `platform`. `chatops.Request.Platform` takes this type later.
+_Avoid_: Tool (for a chat service, because a tool is an infrastructure-as-code CLI), provider, integration
+
+**Chat sink**:
+A notification sink of the kind `chat`. It posts a message to one chat platform. The field `platform` names it, and the person who creates the sink gives it. The first form posts to an incoming webhook URL, which is a secret item of the scope. A read of the sink shows its platform, its name and the host of the URL, and whether a URL exists. One sender serves every chat sink, and a renderer for each platform builds the request (RFC 98).
+_Avoid_: Chat connection (for a webhook sink)
+_Copy says_: "Slack channel" or "Slack webhook" for a sink that posts to a webhook URL, and the same pattern for the other platforms. "Slack connection" stays the word for the later connection to a Slack app. Never write "sink" in copy.
+
 **Kind of access**:
 The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The principal kind decides the kind of a state download, never the declared channel (ADR 240). A download with a session or an access token of a principal of the kind `person` writes `reveal`. This includes `tofu state pull` with a personal token or the bootstrap admin token. A download with a service token, a token from a trust rule or a job token writes `tool-operation`. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log). ADR 52 adds `read-access`: a read of the access-review export of an object.
 _Avoid_: Audit type, `log-decryption` as a kind
@@ -1345,15 +1354,6 @@ _Avoid_: Disclaimer, warning (for the note)
 **Product name**:
 The name of the application that an operator sets for the installation, `branding.productName` (ADR 235). The default is "OpenDustpan". It reaches the console, emails and chat messages only. Server errors, logs, CLI output and audit entries say "OpenDustpan".
 _Avoid_: Brand, white label (for the name)
-
-**Chat platform**:
-A chat service that OpenDustpan posts messages to: Slack, Microsoft Teams, Mattermost or Matrix (ADR 262). The code type is `chat.Platform`, and the wire value is the lower-case name in the field `platform`. `chatops.Request.Platform` takes this type later.
-_Avoid_: Tool (for a chat service, because a tool is an infrastructure-as-code CLI), provider, integration
-
-**Chat sink**:
-A notification sink of the kind `chat`. It posts a message to one chat platform. The field `platform` names it, and the person who creates the sink gives it. The first form posts to an incoming webhook URL, which is a secret item of the scope. A read of the sink shows its platform, its name and the host of the URL, and whether a URL exists. One sender serves every chat sink, and a renderer for each platform builds the request (RFC 98).
-
-_Copy says_: "Slack channel" or "Slack webhook" for a sink that posts to a webhook URL, and the same pattern for the other platforms. "Slack connection" stays the word for the later connection to a Slack app. Never write "sink" in copy.
 
 **Agent name**:
 The name of the built-in agent that an operator sets, `branding.agentName` (ADR 235). The default is "Dusty". Text that the agent writes to a person uses it. Logs, the audit log and the API keep the fixed agent ID `dusty`.
