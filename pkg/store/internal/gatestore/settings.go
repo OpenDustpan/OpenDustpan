@@ -12,7 +12,8 @@ import (
 // Settings is gate.Settings over a Runner. A scope holds each setting once,
 // as a row of the kind with an empty ID.
 type Settings struct {
-	run Runner
+	run       Runner
+	approvers approverChecker
 }
 
 var _ gate.Settings = (*Settings)(nil)
@@ -68,6 +69,10 @@ func (s *Settings) PutApprovalDefault(
 	}
 
 	if err := checkFence(d.Scope, fence); err != nil {
+		return 0, err
+	}
+
+	if err := s.approvers.check(ctx, d.Approvers); err != nil {
 		return 0, err
 	}
 

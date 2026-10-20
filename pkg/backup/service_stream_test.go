@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // errSealedOpen is the injected failure of opening a tampered sealed blob.
@@ -101,6 +102,7 @@ func newStreamFixture(
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,
 		Blobs:       source,
 		StateOpener: opener,
@@ -147,20 +149,10 @@ func restoreStreamedBackup(
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
-	live := &restoreServiceLive{
-		checks:     liveChecks,
-		registry:   regs,
-		mu:         sync.Mutex{},
-		stageBlock: nil,
-		applyGate:  nil,
-		stageCalls: 0,
-		applied:    0,
-		kept:       0,
-		bumped:     0,
-		keepingErr: nil,
-	}
+	live := newRestoreServiceLive(liveChecks, regs)
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    newFakeRegistry(),
 		Blobs:       newMemStore(),
 		StateOpener: nil,
@@ -175,18 +167,20 @@ func restoreStreamedBackup(
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        live,
-		Registry:    regs,
-		Backups:     backups,
-		Maintenance: maint,
-		Blobs:       blobs,
-		Target:      target,
-		Key:         testWrapper(),
-		Region:      "eu-west",
-		AfterApply:  nil,
-		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+		Live:            live,
+		Registry:        regs,
+		Backups:         backups,
+		Maintenance:     maint,
+		Blobs:           blobs,
+		Target:          target,
+		Key:             testWrapper(),
+		Region:          "eu-west",
+		AfterApply:      nil,
+		Admit:           nil,
+		Now:             nil,
+		Logger:          nil,
+		AllowDevBackups: false,
+		AllowDevHint:    "",
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)

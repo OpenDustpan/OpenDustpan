@@ -484,6 +484,7 @@ type Restore struct {
 	StartedAtMs int64
 	EndedAtMs   int64
 	Error       string
+	DevReport   string
 }
 
 type Role struct {

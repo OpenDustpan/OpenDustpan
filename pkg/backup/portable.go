@@ -17,7 +17,7 @@ import (
 const PortableFormat = "portable"
 
 // PortableManifestFormat is the manifest format number of the portable format.
-const PortableManifestFormat = 2
+const PortableManifestFormat = 3
 
 // Kind is the portable form of one column value (ADR 42, decision 3). Each
 // dialect reads its own storage form and the table writer writes one form.

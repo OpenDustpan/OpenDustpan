@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"opendustpan.org/opendustpan/internal/devsignin"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -145,8 +146,12 @@ func (s *Server) warnDevPrincipals(ctx context.Context) {
 	}
 
 	subjects := make([]string, 0, len(page.Items))
+
 	for i := range page.Items {
-		subjects = append(subjects, page.Items[i].Subject)
+		// A subject comes from the database, which a restore may fill from a
+		// backup. Clean it before it reaches the log.
+		clean, _ := backup.CleanSubject(page.Items[i].Subject)
+		subjects = append(subjects, clean)
 	}
 
 	s.logger.WarnContext(ctx,

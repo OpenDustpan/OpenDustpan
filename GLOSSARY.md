@@ -131,6 +131,14 @@ _Avoid_: Mode, purpose, origin
 An installation with the installation kind `dev`, which `opendustpan dev` made for a trial or for CI (ADR 237). Its key-encryption key, and the admin token that `dev` makes, live in its data directory. It has no backup, and no command turns it into a production installation. To keep a unit, a user moves it with the export and import commands of its tool.
 _Avoid_: Test installation, sandbox, demo installation
 
+**Dev data**:
+The people and the rows that `opendustpan dev` makes: the person `dev:admin` and the data that depends on it, such as its grants, sessions and tokens. Its subject starts with `dev:`, in any ASCII letter case. A production installation holds no dev data (ADR 253).
+_Avoid_: Test data, demo data
+
+**Strip**:
+The step of a restore that deletes the dev data from the staged data before the swap. It runs on every restore into a production installation. The staged data decides, not the installation kind in the manifest (ADR 253).
+_Avoid_: Scrub, sanitize, clean
+
 **IP allowlist**:
 A list of CIDRs on a namespace. A request that acts on the namespace from outside the list gets 403. The feature is off unless the operator turns it on.
 _Avoid_: Whitelist
