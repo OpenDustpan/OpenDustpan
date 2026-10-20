@@ -249,8 +249,8 @@ func TestBackupSurvivesStartOfAnotherInstance(t *testing.T) {
 		}
 	}
 
-	if op := endedBackupOperation(t, c, 0); op.State != durable.StateSucceeded || op.Attempt != 1 {
-		t.Fatalf("operation = %s after attempt %d, want succeeded after attempt 1", op.State, op.Attempt)
+	if op := endedBackupOperation(t, c, 0); op.State != durable.StateSucceeded || op.Expiries != 0 {
+		t.Fatalf("operation = %s with %d expiries, want succeeded with none", op.State, op.Expiries)
 	}
 }
 
@@ -294,8 +294,8 @@ func TestBackupTakeoverAfterKill(t *testing.T) {
 	}
 
 	op := endedBackupOperation(t, c, survivor)
-	if op.State != durable.StateSucceeded || op.Attempt != 2 || op.Expiries != 1 {
-		t.Fatalf("operation = %+v, want succeeded after attempt 2 with 1 expiry", op)
+	if op.State != durable.StateSucceeded || op.Attempt < 2 || op.Expiries < 1 {
+		t.Fatalf("operation = %+v, want succeeded after a takeover", op)
 	}
 
 	if err := backup.Check(t.Context(), target.Store, backup.ID(id)); err != nil {

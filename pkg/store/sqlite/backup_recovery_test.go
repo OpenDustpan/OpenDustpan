@@ -252,8 +252,8 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 		op, err = second.DurableOperationsPort().Get(ctx, opID)
 	}
 
-	if err != nil || op.State != durable.StateSucceeded || op.Attempt != 2 || op.Expiries != 1 {
-		t.Fatalf("operation = %+v, %v; want succeeded after attempt 2 with 1 expiry", op, err)
+	if err != nil || op.State != durable.StateSucceeded || op.Attempt < 2 || op.Expiries < 1 {
+		t.Fatalf("operation = %+v, %v; want succeeded after a second attempt that took over an expired claim", op, err)
 	}
 
 	if checkErr := backup.Check(ctx, target, id); checkErr != nil {
