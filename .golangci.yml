@@ -140,6 +140,7 @@ linters:
             - "**/pkg/tempadmin/**"
             - "**/pkg/oncall/**"
             - "**/pkg/cost/**"
+            - "**/pkg/locale/**"
             - "**/pkg/notify/*.go"
             - "**/pkg/egress/*.go"
             - "**/pkg/chatops/**"
