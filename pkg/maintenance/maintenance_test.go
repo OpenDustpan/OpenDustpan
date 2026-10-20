@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1242,11 +1243,12 @@ func TestEnterCatchesRacedStart(t *testing.T) {
 	}
 }
 
-// TestForceEnterRefusesRacedStart proves the re-check after the write with
+// TestForceEnterRetriesRacedStart proves the re-check after the write with
 // force: maintenance mode refuses the cancel of an update that starts between
-// the enter check and the write, so the enter moves back to normal and names
-// it. The next force enter cancels it before the write and succeeds.
-func TestForceEnterRefusesRacedStart(t *testing.T) {
+// the enter check and the write, so the attempt moves back to normal. The
+// forced enter tries again, cancels the new update before the write, and
+// answers both the update of the first attempt and the new one.
+func TestForceEnterRetriesRacedStart(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
@@ -1268,23 +1270,93 @@ func TestForceEnterRefusesRacedStart(t *testing.T) {
 		}
 	}
 
-	_, err = f.service.Enter(ctx, true)
-	if !errors.Is(err, maintenance.ErrActiveWork) || !strings.Contains(err.Error(), "pulumi:acme/web/staging") {
-		t.Fatalf("force enter with a raced start: err = %v, want ErrActiveWork naming pulumi:acme/web/staging", err)
-	}
-
-	assertState(t, f, maintenance.StateNormal)
-
 	res, err := f.service.Enter(ctx, true)
 	if err != nil {
-		t.Fatalf("second force enter: %v", err)
+		t.Fatalf("force enter with a raced start: %v", err)
 	}
 
-	if len(res.Canceled) != 1 || res.Canceled[0] != "pulumi:acme/web/staging" {
-		t.Fatalf("second force enter canceled = %v, want [pulumi:acme/web/staging]", res.Canceled)
+	want := []string{"pulumi:acme/web/prod", "pulumi:acme/web/staging"}
+	if !slices.Equal(res.Canceled, want) {
+		t.Fatalf("force enter canceled = %v, want %v", res.Canceled, want)
 	}
 
 	assertState(t, f, maintenance.StateMaintenance)
+}
+
+// TestForceEnterGivesUpAfterBoundedRetries proves that a writer which keeps
+// starting work cannot hold a forced enter in a loop: after the bounded
+// attempts the enter answers ErrActiveWork, leaves the state normal, and the
+// error names the work that blocked it and every unit that the attempts
+// canceled.
+func TestForceEnterGivesUpAfterBoundedRetries(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	seedRunningUpdate(t, f, mustRef(t))
+
+	starts := 0
+
+	f.state.onSetIf = func() {
+		if f.state.state != maintenance.StateNormal {
+			return
+		}
+
+		starts++
+
+		name := fmt.Sprintf("racer%d", starts)
+
+		ref, err := stack.ParseRef("acme", "web", name)
+		if err != nil {
+			t.Errorf("parse stack reference: %v", err)
+
+			return
+		}
+
+		addRunningUpdate(
+			f,
+			ref,
+			stack.UpdateID(fmt.Sprintf("u%d", starts+1)),
+			stack.ID(fmt.Sprintf("stk-test%014d", starts+1)),
+		)
+	}
+
+	_, err := f.service.Enter(ctx, true)
+	if !errors.Is(err, maintenance.ErrActiveWork) {
+		t.Fatalf("force enter against a steady writer: err = %v, want ErrActiveWork", err)
+	}
+
+	var blocked *maintenance.ActiveWorkError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("force enter error %v is not an *ActiveWorkError", err)
+	}
+
+	if len(blocked.Work) != 1 || blocked.Work[0] != "pulumi:acme/web/racer3" {
+		t.Fatalf("blocking work = %v, want [pulumi:acme/web/racer3]", blocked.Work)
+	}
+
+	wantCanceled := []string{"pulumi:acme/web/prod", "pulumi:acme/web/racer1", "pulumi:acme/web/racer2"}
+	if !slices.Equal(blocked.Canceled, wantCanceled) {
+		t.Fatalf("canceled work = %v, want %v", blocked.Canceled, wantCanceled)
+	}
+
+	assertState(t, f, maintenance.StateNormal)
+}
+
+// TestNonForceEnterReportsNoCanceledWork proves that a plain enter that is
+// refused names the blocking work and no canceled work.
+func TestNonForceEnterReportsNoCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	seedRunningUpdate(t, f, mustRef(t))
+
+	_, err := f.service.Enter(t.Context(), false)
+
+	var blocked *maintenance.ActiveWorkError
+	if !errors.As(err, &blocked) || len(blocked.Canceled) != 0 {
+		t.Fatalf("enter without force: err = %v, want an *ActiveWorkError with no canceled work", err)
+	}
 }
 
 // assertState fails the test when the stored state is not want.

@@ -41,6 +41,7 @@ const (
 	backupColObjectKind  = "object_kind"
 	backupColObjectID    = "object_id"
 	backupColAtMs        = "at_ms"
+	backupColTarget      = "target"
 	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
@@ -438,7 +439,7 @@ func sqliteControlTables() []sqliteBackupTable {
 				backupColState,
 				backupColStartedAtMs,
 				backupColEndedAtMs,
-				"target",
+				backupColTarget,
 				"error",
 			},
 		},
@@ -462,6 +463,10 @@ func sqliteControlTables() []sqliteBackupTable {
 				backupColState,
 				"kind",
 			},
+		},
+		{
+			table:   backup.TableMaintenanceRevocations,
+			columns: []string{"id", backupColKind, backupColTarget, "end_reason", backupColAtMs},
 		},
 	}
 

@@ -64,6 +64,15 @@ type enterMaintenanceResponse struct {
 	Canceled []string `json:"canceled"`
 }
 
+// enterRefusedResponse answers an enter that gave up with work that kept
+// starting: the error shape, and the unit references that the forced attempts
+// canceled before it gave up.
+type enterRefusedResponse struct {
+	Code     int      `json:"code"`
+	Message  string   `json:"message"`
+	Canceled []string `json:"canceled"`
+}
+
 // getMaintenance answers the installation state.
 func (h *Handler) getMaintenance(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
@@ -83,6 +92,8 @@ func (h *Handler) getMaintenance(
 // enterMaintenance moves the installation to maintenance mode. An empty body
 // means no force. While an update or a run is active it answers 409 naming
 // each one; with force it cancels them first and names them in the answer.
+// When work keeps starting and a forced enter gives up, the 409 also lists
+// the work it canceled.
 func (h *Handler) enterMaintenance(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
@@ -97,7 +108,7 @@ func (h *Handler) enterMaintenance(
 
 	res, err := h.maintenance.Enter(ctx, req.Force)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeEnterError(ctx, w, err)
 
 		return
 	}
@@ -111,6 +122,22 @@ func (h *Handler) enterMaintenance(
 		State:    maintenance.StateMaintenance.String(),
 		Canceled: canceled,
 	})
+}
+
+// writeEnterError answers a failed enter. A forced enter that gave up names
+// the work it canceled in the answer, so the caller knows what stopped; any
+// other error uses the common answer.
+func (h *Handler) writeEnterError(ctx context.Context, w http.ResponseWriter, err error) {
+	blocked, ok := errors.AsType[*maintenance.ActiveWorkError](err)
+	if !ok || len(blocked.Canceled) == 0 {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	status, message := classify(err)
+
+	h.writeJSON(ctx, w, status, enterRefusedResponse{Code: status, Message: message, Canceled: blocked.Canceled})
 }
 
 // parseEnterRequest decodes the enter body: the whole body must be one JSON

@@ -59,6 +59,7 @@ const (
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
 	pgColKind        = "kind"
+	pgColTarget      = "target"
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
@@ -372,7 +373,7 @@ func pgControlTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableBackups,
-			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
+			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, pgColTarget, "error"},
 			orderBy: []string{"id"},
 		},
 		{
@@ -386,6 +387,11 @@ func pgControlTables() []pgCopyTable {
 		{
 			table:   backup.TableInstallation,
 			columns: []string{"id", pgColState, "kind"},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableMaintenanceRevocations,
+			columns: []string{"id", pgColKind, pgColTarget, "end_reason", "at_ms"},
 			orderBy: []string{"id"},
 		},
 	}

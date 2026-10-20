@@ -430,6 +430,18 @@ func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOp
 	return err
 }
 
+const clearMaintenanceRevocationsOnEnter = `-- name: ClearMaintenanceRevocationsOnEnter :exec
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance'
+`
+
+// Starts a new stay in maintenance mode: it clears the journal when the stored
+// state is not maintenance yet. Run it before the state changes.
+func (q *Queries) ClearMaintenanceRevocationsOnEnter(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearMaintenanceRevocationsOnEnter)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?
@@ -11047,6 +11059,32 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec
+INSERT INTO maintenance_revocations (kind, target, end_reason, at_ms)
+SELECT ?1, ?2, ?3, CAST(?4 AS INTEGER)
+WHERE (SELECT state FROM installation WHERE id = 1) = 'maintenance'
+`
+
+type RecordMaintenanceRevocationParams struct {
+	Kind      string
+	Target    string
+	EndReason string
+	AtMs      int64
+}
+
+// Journals one write that only reduces access, when the installation is in
+// maintenance mode, and nothing otherwise. A restore applies the journal
+// again after the swap.
+func (q *Queries) RecordMaintenanceRevocation(ctx context.Context, arg RecordMaintenanceRevocationParams) error {
+	_, err := q.db.ExecContext(ctx, recordMaintenanceRevocation,
+		arg.Kind,
+		arg.Target,
+		arg.EndReason,
+		arg.AtMs,
+	)
+	return err
 }
 
 const rejoinRunner = `-- name: RejoinRunner :exec

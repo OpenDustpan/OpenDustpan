@@ -852,6 +852,20 @@ UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
 
+-- name: RecordMaintenanceRevocation :exec
+-- Journals one write that only reduces access, when the installation is in
+-- maintenance mode, and nothing otherwise. A restore applies the journal
+-- again after the swap.
+INSERT INTO maintenance_revocations (kind, target, end_reason, at_ms)
+SELECT sqlc.arg('kind')::text, sqlc.arg('target')::text, sqlc.arg('end_reason')::text, sqlc.arg('at_ms')::bigint
+WHERE (SELECT state FROM installation WHERE id = 1) = 'maintenance';
+
+-- name: ClearMaintenanceRevocationsOnEnter :exec
+-- Starts a new stay in maintenance mode: it clears the journal when the stored
+-- state is not maintenance yet. Run it before the state changes.
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance';
+
 -- name: SetLockTimeout :exec
 -- Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
 -- The timeout is a PostgreSQL duration text, for example 10000ms.

@@ -131,9 +131,12 @@ would be lost. Reads of the installation API, the maintenance routes and the
 backup and restore routes stay available. The server leaves maintenance mode
 when the restore ends, also after a failure. The server does not enter
 maintenance mode while an update or a run is active, unless the request sets
-`--force`, which cancels them first and names them. A forced enter can still
-answer 409 when work starts during the enter. The server then stays in
-normal mode. Run the command again to cancel that work.
+`--force`, which cancels them first and names them. If work starts during a
+forced enter, the server tries again and cancels that work too, up to three
+attempts. If work keeps starting, the server answers 409 and stays in normal
+mode. The answer names the work that blocked the enter and, in `canceled`, the
+work that the attempts canceled. Run the command again to cancel the work
+that started last.
 
 Each write checks the stored installation state in its own database
 transaction. After one server enters maintenance mode, every other server
@@ -181,6 +184,41 @@ database may be the other kind.
 A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
 A restore needs the key-encryption key that encrypted every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
+
+### Revocations in maintenance mode
+
+A write that only reduces access runs in maintenance mode. You can end a
+compromised session or revoke a compromised token at any time, also while a
+restore applies. These writes run, each with its audit entry:
+
+- a sign-out, which ends the session of the person.
+- the end of a session by an administrator.
+- the revocation of an access token.
+- the revocation of a service token.
+- the disable of a principal, which happens when the access of a temporary
+  administrator expires.
+
+A write that grants or widens access stays refused with 503. This includes a
+new sign-in, a new session, a new token, a new grant and the enable of a
+disabled principal.
+
+A restore replaces the sessions, tokens and principals with the data of the
+backup, so it would bring back a session or a token that you revoked in
+maintenance mode. The server prevents this. It records each revocation that
+it accepts in maintenance mode, and the restore applies the record again
+after it swaps in the backup. The restore ends the restored session, revokes
+the restored token, and disables the restored principal, with the time of the
+original revocation. A target that the backup does not hold needs no change.
+
+The server records only the revocations of the current stay in maintenance mode. A
+new enter starts a new stay. A revocation that you made in normal
+operation, or in an earlier stay, belongs to the data that the restore
+replaces. After a restore, check the sessions and tokens that you revoked
+before the stay, and revoke them again if the backup brings them back. The
+audit log of the restored backup replaces the log of the live data, so the
+audit entries of the revocations during the stay are not in the log after the
+restore. A restore by a caller without `server:restore-access` keeps the live
+sessions, tokens and principals, so it keeps every revocation.
 
 ## Upgrade the server
 

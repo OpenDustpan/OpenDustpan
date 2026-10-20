@@ -1440,3 +1440,15 @@ func BenchmarkAuthorizer(b *testing.B) {
 
 	accesstest.Bench(b, s)
 }
+
+// TestRevocationConformance runs the suite of the writes that only reduce
+// access: they run in maintenance mode, and a restore keeps them.
+func TestRevocationConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunRevocations(t, func(t *testing.T) storetest.RevocationStore {
+		t.Helper()
+
+		return open(t)
+	})
+}

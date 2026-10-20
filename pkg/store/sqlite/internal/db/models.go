@@ -374,6 +374,14 @@ type InventoryLabel struct {
 	LabelValue string
 }
 
+type MaintenanceRevocation struct {
+	ID        int64
+	Kind      string
+	Target    string
+	EndReason string
+	AtMs      int64
+}
+
 type ManualLock struct {
 	Kind      string
 	ObjectID  string

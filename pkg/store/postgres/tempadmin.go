@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -90,7 +91,9 @@ func (s *Store) ListTempAdmins(ctx context.Context) ([]tempadmin.TempAdmin, erro
 // still denied. A record that already ended answers tempadmin.ErrExpired
 // and writes no second entry.
 func (s *Store) ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	rev := revocation{kind: maintenance.RevokedPrincipal, target: principalID, endReason: ""}
+
+	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
 		return expireTempAdminTx(ctx, q, principalID, e)
 	})
 }

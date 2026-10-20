@@ -247,6 +247,10 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 
 		previous := live + "_previous"
 
+		if err := lockRevocationJournal(ctx, tx, live); err != nil {
+			return err
+		}
+
 		if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
 			return fmt.Errorf("move live schema aside: %w", err)
 		}
@@ -261,16 +265,24 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 
 // finishSwap ends the swap in tx: it keeps the audit chain state of this
 // installation, keeps the durable control tables of the live installation,
-// drops the schema previous and the control schema of the staging area, and
-// fences the restored schema live (see fenceRestored). The installation,
-// backups and restores tables live in the control schema, which the swap
-// never renames, so they stay across the swap with no copy.
+// applies the journaled revocations again, drops the schema previous and the
+// control schema of the staging area, and fences the restored schema live
+// (see fenceRestored). The installation, backups, restores and revocation
+// journal tables live in the control schema, which the swap never renames,
+// so they stay across the swap with no copy.
 func finishSwap(ctx context.Context, tx pgx.Tx, live, previous, staging string) error {
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
 		return err
 	}
 
 	if err := keepControlTables(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
+	// The restored access tables come from the backup. Apply again the
+	// revocations that ran in this stay in maintenance mode, so the swap does not
+	// bring back a session or a token that an operator ended.
+	if err := replayRevocations(ctx, tx, live); err != nil {
 		return err
 	}
 

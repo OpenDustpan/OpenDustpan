@@ -284,6 +284,36 @@ func TestEnterMaintenanceRefusesActiveWork(t *testing.T) {
 	}
 }
 
+func TestEnterMaintenanceListsCanceledWorkWhenForceGivesUp(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeMaintenance(maintenance.StateNormal)
+	fake.enterErr = fmt.Errorf("enter: %w", &maintenance.ActiveWorkError{
+		Work: []string{"pulumi:acme/web/racer3"}, Canceled: []string{"pulumi:acme/web/prod"},
+	})
+	handler := newMaintenanceHandler(t, fake)
+
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/maintenance/enter", `{"force":true}`)
+	if status != http.StatusConflict {
+		t.Fatalf("POST forced enter that gave up answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	var doc struct {
+		Code     int      `json:"code"`
+		Message  string   `json:"message"`
+		Canceled []string `json:"canceled"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode 409 of POST enter: %v (%s)", err, body)
+	}
+
+	if doc.Code != http.StatusConflict || !strings.Contains(doc.Message, "pulumi:acme/web/racer3") ||
+		len(doc.Canceled) != 1 || doc.Canceled[0] != "pulumi:acme/web/prod" {
+		t.Fatalf("POST enter error = %+v, want code 409 naming the blocking and the canceled work", doc)
+	}
+}
+
 func TestEnterMaintenanceRejectsBadBody(t *testing.T) {
 	t.Parallel()
 

@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -153,9 +154,12 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 	return out, total, nil
 }
 
-// RevokeToken implements accesstoken.Store.
+// RevokeToken implements accesstoken.Store. It only reduces access, so it runs
+// in maintenance mode and the maintenance journal records it.
 func (s *Store) RevokeToken(ctx context.Context, id string, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	rev := revocation{kind: maintenance.RevokedToken, target: id, endReason: ""}
+
+	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
 		n, err := q.RevokeAccessToken(ctx, db.RevokeAccessTokenParams{RevokedAtMs: codec.Millis(e.At), ID: id})
 		if err != nil {
 			return fmt.Errorf("revoke access token: %w", err)
