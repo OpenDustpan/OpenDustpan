@@ -70,7 +70,7 @@ func (h *Handler) recordOverrideRefusal(
 		action = identity.ActionUnitWriteUnlocked
 	}
 
-	h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: obj, Reason: "override refused"})
+	h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: obj, Reason: "override refused", Window: 0})
 }
 
 // appendDownloadAudit writes the audit entry of a state read: the action

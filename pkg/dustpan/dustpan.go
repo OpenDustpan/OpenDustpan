@@ -147,7 +147,9 @@ const restoreStoppedText = "server stopped during restore"
 type settings struct {
 	// denialLimiter is the one limiter of the audit entries of refused requests.
 	// Every adapter gets it, so its bound on keys holds for the whole server.
-	denialLimiter   *denylimit.Limiter
+	denialLimiter *denylimit.Limiter
+	// devRefusal holds the one recorder of the refused dev sign-ins.
+	devRefusal      *devRefusalState
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -668,6 +670,7 @@ func defaultSettings() *settings {
 		denialLimiter: denylimit.New(denylimit.Config{
 			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
 		}),
+		devRefusal:              new(devRefusalState),
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -853,7 +856,7 @@ func wireDevGuard(cfg *settings) {
 		return
 	}
 
-	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator)
+	cfg.authenticator = principal.RefuseDevSubjects(cfg.authenticator).OnRefused(devRefusalAudit(cfg))
 }
 
 // requestOf answers the client address and the request ID that the server
@@ -921,13 +924,22 @@ func allowlistAddressGate(allow *ipAllowlistSettings) interface {
 	}
 }
 
+// newServerMetrics returns the metrics of the server, and gives the recorder of
+// the refused dev sign-ins the namespace reader and the failure counter.
+func newServerMetrics(cfg *settings, svc services) *metrics.ServerMetrics {
+	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
+	cfg.devRefusal.bind(svc.namespaces, func() { observed.IncAuditAppendFailure() })
+
+	return observed
+}
+
 // assemble mounts the adapters and routes around the services. backups is
 // the installation backup service, or nil when no backup target is
 // configured.
 func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
 	// One registry holds every family: the request, runtime and build
 	// families, and the readiness failure counter of the probe.
-	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
+	observed := newServerMetrics(cfg, svc)
 
 	cfg.watch = newWorkerWatch(cfg)
 
@@ -2303,6 +2315,7 @@ func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 		Logger:        cfg.logger,
 		Now:           cfg.now,
 
+		Namespaces:     svc.namespaces,
 		Audit:          entries,
 		OnAuditFailure: onFailure,
 		DenialLimiter:  cfg.denialLimiter,

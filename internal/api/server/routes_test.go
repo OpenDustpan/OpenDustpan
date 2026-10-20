@@ -323,7 +323,8 @@ func newServiceBackedHandlerOf(
 		IPAllowlists:     allow,
 		SessionPolicy:    sessionPolicies,
 		SignIn: &apiserver.SignIn{
-			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
+			OnDevRefused: nil,
+			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
 				{
 					Client:      stubOIDC{},

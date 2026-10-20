@@ -220,7 +220,7 @@ func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, o
 
 	res, err := op(w, r, h.access, c)
 	if err != nil {
-		refused := denials.Denial{Action: identity.Action(c.e.Action), Object: c.obj, Reason: ""}
+		refused := denials.Denial{Action: identity.Action(c.e.Action), Object: c.obj, Reason: "", Window: 0}
 		h.recordEscalation(ctx, r, c.p, refused, err)
 		h.writeError(ctx, w, err)
 
@@ -764,7 +764,7 @@ func (h *Handler) serveRevokeGrantByID(
 
 	revoked, err := h.access.RevokeByID(ctx, callerEntry(r, p, actions.manage), p, id)
 	if err != nil {
-		h.recordEscalation(ctx, r, p, denials.Denial{Action: actions.manage, Object: obj, Reason: ""}, err)
+		h.recordEscalation(ctx, r, p, denials.Denial{Action: actions.manage, Object: obj, Reason: "", Window: 0}, err)
 		h.writeError(ctx, w, err)
 		h.appendObjectChange(r, p, obj, serverChange{
 			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),
