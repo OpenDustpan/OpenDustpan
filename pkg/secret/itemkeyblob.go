@@ -274,7 +274,10 @@ func (b *ItemKeyBlobs) Versions(ctx context.Context, ns namespace.ID, id ItemKey
 	for i := range objects {
 		part, parseErr := ParseItemKeyBlobKey(objects[i].Key)
 		if parseErr != nil || part.Namespace != ns || part.ID != id {
-			return nil, fmt.Errorf("%w: the listing holds a key that is not a version of the item key", ErrInvalidItemRef)
+			return nil, fmt.Errorf(
+				"%w: the listing holds a key that is not a version of the item key",
+				ErrInvalidItemRef,
+			)
 		}
 
 		parsed = append(parsed, part)
