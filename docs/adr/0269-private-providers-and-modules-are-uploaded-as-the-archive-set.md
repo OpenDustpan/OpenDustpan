@@ -37,9 +37,6 @@ library stays open for the owner.
 3. **Order of the slices.** The first slice serves providers by upload.
    Decided by the owner (RFC 101 question 1).
 
-Decisions 4 to 11 are decided by the product manager under the owner's
-delegation of 20 October 2026.
-
 4. **Address host.** A private address has the host of the server and the
    namespace of OpenDustpan. The adapter refuses every host except the
    configured host, compared exactly with the configuration. Only a name in

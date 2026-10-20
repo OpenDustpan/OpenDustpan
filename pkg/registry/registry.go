@@ -49,7 +49,8 @@ var (
 // Bounds of a release. The limits of the upload are a setting of the
 // installation (RFC 101). These bounds protect the store.
 const (
-	// MaxNameLength is the longest name, system or file name.
+	// MaxNameLength is the longest name or system. A file name has its own
+	// limit, MaxFileNameLength.
 	MaxNameLength = 64
 	// MaxFileNameLength is the longest file name of an archive.
 	MaxFileNameLength = 255
@@ -421,9 +422,18 @@ func splitVersion(v string) ([3]uint64, string, bool) {
 	core, pre, _ := strings.Cut(v, "-")
 
 	// A numeric pre-release identifier has no leading zero (SemVer 2.0.0,
-	// section 9). The pattern cannot say it, so the check is here.
+	// section 9), and it fits 64 bits, as the version numbers do. The pattern
+	// cannot say it, so the check is here.
 	for id := range strings.SplitSeq(pre, ".") {
-		if len(id) > 1 && id[0] == '0' && strings.Trim(id, "0123456789") == "" {
+		if id == "" || strings.Trim(id, "0123456789") != "" {
+			continue
+		}
+
+		if len(id) > 1 && id[0] == '0' {
+			return nums, "", false
+		}
+
+		if _, err := strconv.ParseUint(id, 10, 64); err != nil {
 			return nums, "", false
 		}
 	}

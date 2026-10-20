@@ -203,6 +203,26 @@ func TestValidateVersion(t *testing.T) {
 	}
 }
 
+// TestValidateVersionPreReleaseBits proves that a numeric pre-release
+// identifier fits 64 bits, as a version number does, and that an identifier
+// with a letter has no such limit.
+func TestValidateVersionPreReleaseBits(t *testing.T) {
+	t.Parallel()
+
+	for v, ok := range map[string]bool{
+		"1.0.0-18446744073709551615":     true,
+		"1.0.0-18446744073709551616":     false,
+		"1.0.0-99999999999999999999":     false,
+		"1.0.0-rc.99999999999999999999":  false,
+		"1.0.0-rc.99999999999999999999x": true,
+	} {
+		err := registry.ValidateVersion(v)
+		if ok != (err == nil) {
+			t.Errorf("ValidateVersion(%q) = %v, want ok=%v", v, err, ok)
+		}
+	}
+}
+
 // signed adds a verified signature to a provider release.
 func signed(r *registry.Release) {
 	r.SignatureFile = r.SumsFile + ".sig"
