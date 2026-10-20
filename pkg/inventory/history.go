@@ -58,6 +58,7 @@ type Change struct {
 // collection in a row may be out of date, and the entry has none.
 func (c Change) Entry() Entry {
 	return Entry{
+		ManualLock:    nil,
 		LastChanged:   c.At,
 		Namespace:     c.Namespace,
 		Tool:          c.Tool,

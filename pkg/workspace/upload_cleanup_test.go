@@ -61,6 +61,7 @@ func TestUploadCleanupSurvivesTheRequest(t *testing.T) {
 	body := `{"serial":1,"lineage":"l"} junk`
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
 		Blobs:              ctxBlobs{Store: f.blobs},

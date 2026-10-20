@@ -22,7 +22,13 @@ func replayBoundFixture(t *testing.T) updateFixture {
 		t,
 		allowAll(),
 		tokenAuthenticator{},
-		fixtureOptions{checker: nil, limit: 0, cutoff: 0, replayer: pulumijournal.NewReplayer(time.Now, "")},
+		fixtureOptions{
+			manual:   nil,
+			checker:  nil,
+			limit:    0,
+			cutoff:   0,
+			replayer: pulumijournal.NewReplayer(time.Now, ""),
+		},
 	)
 }
 

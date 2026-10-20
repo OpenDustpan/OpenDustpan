@@ -127,6 +127,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		kind:             kindState{store: nil, principals: nil, kind: ""},
 		tempAdmins:       nil,
 		handler:          nil,
+		ungated:          nil,
 		logger:           slog.New(slog.DiscardHandler),
 		listenAddr:       "",
 		listener:         nil,
@@ -157,6 +158,8 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		deletedEvery:     scheduleTestEvery,
 		idempotency:      nil,
 		idempotencyEvery: 0,
+		components:       AllComponents(),
+		watch:            nil,
 	}
 }
 

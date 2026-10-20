@@ -117,6 +117,10 @@ type Config struct {
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
+	// Workers reports the components of the process and the state of the
+	// worker, and refuses the start of a durable operation when no worker
+	// claimed or renewed a claim. Nil means no refusal and an empty report.
+	Workers WorkerSource
 	// SignIn is the console sign-in through OpenID Connect providers. Nil
 	// means no sign-in: the sign-in routes are not mounted, and the
 	// session cookie authenticates nothing. With SignIn set, Principals is
@@ -171,6 +175,7 @@ type Handler struct {
 	now            func() time.Time
 	auditChain     AuditChain
 	auditSinks     AuditSinkSource
+	workers        WorkerSource
 	signIn         *signInState
 	kind           installation.Kind
 	mux            *patternMux
@@ -215,6 +220,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		onAuditFailure: cfg.OnAuditFailure,
 		now:            cfg.Now,
 		auditSinks:     cfg.AuditSinks,
+		workers:        cfg.Workers,
 		signIn:         signIn,
 		kind:           cfg.InstallationKind,
 		mux:            newPatternMux(),
@@ -373,6 +379,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
 		h.writeJSON(ctx, w, status, reauthenticateResponse{Code: status, Message: message, Reauthenticate: fresh.url})
 
@@ -397,7 +407,7 @@ func classifyIdentity(err error) (int, string, bool) {
 // classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
 	for _, try := range []func(error) (int, string, bool){
-		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity,
+		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
 	} {
 		if status, message, ok := try(err); ok {
 			return status, message
@@ -497,7 +507,7 @@ func classifyBackup(err error) (int, string, bool) {
 
 // classifyNamespace maps the namespace errors to their status and message: a
 // bad namespace name, body, page or cursor answers 400, a duplicate
-// namespace 409, an unknown namespace 404, and a store without the paging
+// namespace or a fenced write 409, an unknown namespace 404, and a store without the paging
 // port 501.
 func classifyNamespace(err error) (int, string, bool) {
 	switch {
@@ -506,6 +516,10 @@ func classifyNamespace(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, namespace.ErrFenced):
+		// The sentence of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return http.StatusConflict, namespace.ErrFenced.Error(), true
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, namespace.ErrNoPaging):

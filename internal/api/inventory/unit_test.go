@@ -57,6 +57,7 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 
 	return map[namespace.Name][]coreinventory.Entry{
 		"acme": {{
+			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "acme",
 			Tool:          "pulumi",
@@ -72,6 +73,7 @@ func unitEntries() map[namespace.Name][]coreinventory.Entry {
 			Labels:     map[string]string{"team": "payments"},
 		}},
 		"globex": {{
+			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "globex",
 			Tool:          "opentofu",
@@ -102,6 +104,7 @@ func newUnitHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handl
 	}}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Locks:         nil,
 		Moves:         nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,

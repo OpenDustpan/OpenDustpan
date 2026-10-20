@@ -48,6 +48,7 @@ func newSweepHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
