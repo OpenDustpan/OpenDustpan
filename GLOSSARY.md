@@ -65,6 +65,15 @@ _Avoid_: Routing rule, assignment rule
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
 
+**Unit state**:
+One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The server derives `locked` at read time from the unit lock, which stays the only source (ADR 265 decision 5). The drift statuses are three of the states.
+_Avoid_: Unit status (for the set), winning status, health
+_Copy says_: the tool's own words on its own pages. "Approval wait" is the human word for `awaiting-approval`.
+
+**Saved view**:
+A name for a query of the unit list, stored on the server and read through the REST API (ADR 266). A saved view holds the query and never its results. A reader runs the query again with the access of the reader, so the view shows only units that the reader can read. A saved view grants no access (ADR 51 decision 7). One person in one namespace owns a view, and a view is private first (ADR 266).
+_Avoid_: Filter preset, bookmark, smart collection (a collection holds units by explicit membership, ADR 51)
+
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
 _Avoid_: Lease (for the inventory field), unit status
@@ -166,6 +175,10 @@ _Avoid_: Feature flag, plugin, add-on, module (alone)
 **Capabilities document**:
 The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 211). `apiVersion` is public, so the console reads it before the sign-in. The module list needs `caller:read`, so the console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
 _Avoid_: Feature list, handshake, capability (alone)
+
+**API description**:
+The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The SDKs, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
+_Avoid_: Swagger file, API spec, OpenAPI spec, schema file
 
 **Forge connection**:
 The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).

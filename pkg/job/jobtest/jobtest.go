@@ -6,11 +6,10 @@
 //		jobtest.Run(t, func(t *testing.T) jobtest.Harness { return newHarness(t) })
 //	}
 //
-// The suite comes before the first SQL adapter. Its cases state the rules
-// of the ports, and a reference adapter in memory, in the tests of this
-// package, runs them. The cases of job.Claimer, job.Recorder and
-// job.ArtifactStore come with their first implementation, because they need
-// the blob store and the item keys.
+// The cases state the rules of the ports. A reference adapter in memory, in
+// the tests of this package, runs them, and so does each SQL adapter. The
+// cases of job.Claimer, job.Recorder and job.ArtifactStore come with their
+// first implementation, because they need the blob store and the item keys.
 package jobtest
 
 import (
@@ -38,12 +37,27 @@ type Harness struct {
 
 // Domain makes the rows that a job needs and that other ports own, and
 // reads the audit entries that the job store appends.
+//
+//nolint:interfacebloat // One fixture contract: the rows that the cases of the suite need from the other ports.
 type Domain interface {
 	// CreateNamespace creates the namespace name and returns its fence.
 	CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error)
 	// CreateUnit creates a unit of tool in the namespace of fence and
 	// returns its reference, with its stable unit ID set.
 	CreateUnit(ctx context.Context, fence namespace.Fence, tool, name string) (identity.Object, error)
+	// RenameUnit renames the unit of fence to newName, as the rename of its
+	// tool does: the stable unit ID and the locks of the unit stay. It
+	// returns the unit under its new name. The suite renames a Pulumi unit
+	// only.
+	RenameUnit(
+		ctx context.Context,
+		fence namespace.Fence,
+		unit identity.Object,
+		newName string,
+	) (identity.Object, error)
+	// RemoveUnit removes the unit from the inventory, as the delete of its
+	// tool does. The suite removes a Pulumi unit only.
+	RemoveUnit(ctx context.Context, fence namespace.Fence, unit identity.Object) error
 	// BumpFence increments the failover version of the namespace of fence,
 	// as a failover does, and returns the new fence.
 	BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error)
@@ -119,6 +133,15 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a running job whose operation fails ends failed at the reconcile", testRunningOperationFails},
 		{"the confirmation gate and a confirmation are stored", testConfirmationStored},
 		{"list filters by unit and state, newest first", testList},
+		{"a fence of another namespace reaches no job", testForeignNamespace},
+		{"parallel creates with one key give one job", testParallelCreatesOneKey},
+		{"two claimers of one phase: one wins", testTwoClaimers},
+		{"parallel dispatches on one unit: one holds it", testParallelUnitBusy},
+		{"a dispatch and a manual lock in parallel give one serial order", testDispatchAndLockInParallel},
+		{"a dispatch of a renamed unit still obeys the lock of its namespace", testRenamedUnitLocked},
+		{"a dispatch of a renamed unit still obeys the lock of the unit", testRenamedUnitOwnLock},
+		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
+		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"freezes list, end once, and validate", testFreezes},
 	}
 

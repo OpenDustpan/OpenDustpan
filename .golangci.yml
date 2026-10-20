@@ -133,6 +133,7 @@ linters:
             - "**/pkg/unmanaged/**"
             - "**/pkg/drift/**"
             - "**/pkg/trigger/**"
+            - "**/pkg/savedview/**"
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"
             - "**/pkg/source/**"

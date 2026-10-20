@@ -12430,7 +12430,7 @@ func startBackupForCheck(ctx context.Context, t *testing.T, env *e2e.Env) string
 		t.Fatalf("POST backups answers %q, want an id: %v", body, decodeErr)
 	}
 
-	doc := pollBackupState(ctx, t, env, started.ID, "succeeded")
+	doc := pollBackupState(ctx, t, env, started.ID)
 	t.Logf("backup %s succeeded with SQL size %d", doc.ID, doc.Manifest.SQLSize)
 
 	return started.ID
@@ -12495,8 +12495,8 @@ const backupPollInterval = 100 * time.Millisecond
 // 409, calls without a token answer 401, and the list holds the backups
 // newest first. It runs on every store under test with the first Pulumi
 // version of the matrix. The restart part needs the real server binary: it
-// stops the server during a running backup and sees the row failed after the
-// start. Without E2E_SERVER=binary the test proves the routes and skips only
+// stops the server during a running backup and sees the backup succeed after
+// the start. Without E2E_SERVER=binary the test proves the routes and skips only
 // the restart.
 func TestBackups(t *testing.T) {
 	t.Parallel()
@@ -12546,7 +12546,7 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	writeBackupData(ctx, t, env)
 
 	id := startBackupAndConflict(ctx, t, env)
-	doc := pollBackupState(ctx, t, env, id, "succeeded")
+	doc := pollBackupState(ctx, t, env, id)
 	checkBackupManifest(t, store, doc)
 	checkPortableObjects(t, env, id, doc.Manifest.SQLFiles)
 	checkBackupList(ctx, t, env, id)
@@ -12558,7 +12558,7 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	checkBackupCommand(ctx, t, env)
-	checkBackupRestartFailed(ctx, t, env, id)
+	checkBackupRestartResumes(ctx, t, env, id)
 }
 
 // writeBackupData writes Pulumi state with the CLI and grows the database
@@ -12717,7 +12717,7 @@ func startBackupAndConflict(ctx context.Context, t *testing.T, env *e2e.Env) str
 
 // pollBackupState polls one backup until it reaches want, failing the test
 // when it reaches another terminal state or the deadline passes first.
-func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id, want string) backupDoc {
+func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id string) backupDoc {
 	t.Helper()
 
 	deadline, cancel := context.WithTimeout(ctx, backupPollTimeout)
@@ -12743,16 +12743,16 @@ func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id, want s
 		}
 
 		switch doc.State {
-		case want:
+		case "succeeded":
 			return doc
 		case "running":
 		default:
-			t.Fatalf("backup %s reads %q with error %q, want %q", id, doc.State, doc.Error, want)
+			t.Fatalf("backup %s reads %q with error %q, want succeeded", id, doc.State, doc.Error)
 		}
 
 		select {
 		case <-deadline.Done():
-			t.Fatalf("backup %s stays running, want %q", id, want)
+			t.Fatalf("backup %s stays running, want succeeded", id)
 		case <-timer.C:
 			timer.Reset(backupPollInterval)
 		}
@@ -12985,11 +12985,12 @@ func checkBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Logf("opendustpan backup: %s", strings.TrimSpace(res.Stdout))
 }
 
-// checkBackupRestartFailed stops the server during a running backup, starts
-// it, and proves the row reads failed. The padded checkpoint holds the backup
-// running, so the stop lands mid-backup with no test hook. It also proves the
-// earlier backup survives the restart still succeeded.
-func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, firstID string) {
+// checkBackupRestartResumes stops the server during a running backup, starts
+// it, and proves the backup ends succeeded: the stopped server released its
+// claim, and the new process continues the backup. The padded checkpoint
+// holds the backup running, so the stop lands mid-backup with no test hook.
+// It also proves the earlier backup survives the restart still succeeded.
+func checkBackupRestartResumes(ctx context.Context, t *testing.T, env *e2e.Env, firstID string) {
 	t.Helper()
 
 	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
@@ -13012,15 +13013,12 @@ func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, f
 	env.StopServer(ctx, t)
 	env.StartServer(ctx, t)
 
-	doc := pollBackupState(ctx, t, env, started.ID, "failed")
-
-	if doc.Error == "" {
-		t.Fatalf("backup %s reads failed with no error text", started.ID)
+	doc := pollBackupState(ctx, t, env, started.ID)
+	if doc.Error != "" {
+		t.Fatalf("backup %s reads succeeded with the error text %q", started.ID, doc.Error)
 	}
 
-	t.Logf("backup %s failed after the restart: %q", started.ID, doc.Error)
-
-	again := pollBackupState(ctx, t, env, firstID, "succeeded")
+	again := pollBackupState(ctx, t, env, firstID)
 	if backupCheckpointBlobSize(again.Manifest) < backupPadMinBlob {
 		t.Fatalf("backup %s after the restart holds no checkpoint blob of %d pad bytes gzipped",
 			firstID, backupPadMinBlob)

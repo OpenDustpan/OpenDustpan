@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -109,7 +110,9 @@ func alice() oauthtest.User {
 func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 	t.Helper()
 
-	return newSignInEnvWith(t, signInEnvOptions{autoCreate: autoCreate, noPolicyRoutes: false, stored: nil})
+	return newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: autoCreate, noPolicyRoutes: false, stored: nil, authz: nil, namespaces: nil,
+	})
 }
 
 // signInEnvOptions are the options of a sign-in environment. autoCreate
@@ -119,8 +122,21 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 // providers, for the store and the clock of the environment.
 type signInEnvOptions struct {
 	stored         func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders)
+	authz          identity.Authorizer
+	namespaces     []namespace.Name
 	autoCreate     bool
 	noPolicyRoutes bool
+}
+
+// seedNamespaces makes the namespaces names in svc.
+func seedNamespaces(t *testing.T, svc *namespace.Service, names []namespace.Name) {
+	t.Helper()
+
+	for _, name := range names {
+		if _, err := svc.Create(t.Context(), name); err != nil {
+			t.Fatalf("seed namespace %s: %v", name, err)
+		}
+	}
 }
 
 func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
@@ -154,6 +170,13 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
+	seedNamespaces(t, namespaces, opts.namespaces)
+
+	authz := opts.authz
+	if authz == nil {
+		authz = selectiveAuthorizer{deny: map[identity.Action]bool{}}
+	}
+
 	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: clock.Now})
 	if err != nil {
 		t.Fatalf("session policies: %v", err)
@@ -183,12 +206,17 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		admin, stored = opts.stored(st, clock)
 	}
 
+	gates, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: st, Namespaces: namespaces, Now: clock.Now})
+	if err != nil {
+		t.Fatalf("gate config service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
 		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Authorizer:       authz,
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       namespaces,
 		Backups:          nil,
@@ -207,6 +235,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		AuditSinks:       nil,
 		AuditChain:       nil,
 		IPAllowlists:     nil,
+		Gates:            gates,
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
@@ -1079,6 +1108,7 @@ func TestSignInProviderDown(t *testing.T) {
 		AuditSinks:       nil,
 		AuditChain:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    policies,
 		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
@@ -1220,7 +1250,9 @@ func TestSignInSessionPolicyChangeNeedsAFreshSignIn(t *testing.T) {
 func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 	t.Parallel()
 
-	e := newSignInEnvWith(t, signInEnvOptions{autoCreate: true, noPolicyRoutes: true, stored: nil})
+	e := newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: true, noPolicyRoutes: true, stored: nil, authz: nil, namespaces: nil,
+	})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
 	if created.Code != http.StatusCreated {

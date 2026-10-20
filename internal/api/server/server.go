@@ -92,6 +92,10 @@ type Config struct {
 	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
 	// allowlist store is configured: the IP allowlist routes are not mounted.
 	IPAllowlists *ipallow.Service
+	// Gates keeps the approval defaults and the approval rules of each
+	// namespace. Nil means the store keeps none: the approval default and
+	// approval rule routes are not mounted.
+	Gates GateConfig
 	// SessionPolicy keeps the session policy of the installation. Nil
 	// means the store keeps none: the session policy routes are not
 	// mounted. Both SQL adapters keep it.
@@ -174,6 +178,7 @@ type Handler struct {
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
+	gates          GateConfig
 	sessions       *session.Policies
 	epochs         CheckpointEpochs
 	onAuditFailure func()
@@ -233,6 +238,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		auditChain:     cfg.AuditChain,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
+		gates:          cfg.Gates,
 		sessions:       cfg.SessionPolicy,
 		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
@@ -444,6 +450,10 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifyGateConfig(err); ok {
+		return status, message
+	}
+
 	if status, message, ok := classifySessionPolicy(err); ok {
 		return status, message
 	}
@@ -470,6 +480,8 @@ func classifyRequest(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", true
+	case errors.Is(err, errFreshSession):
+		return http.StatusForbidden, errFreshSession.Error(), true
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden", true
 	case errors.Is(err, identity.ErrInvalidObject):

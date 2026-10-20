@@ -478,42 +478,49 @@ func (o *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	defer s.mu.RUnlock()
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		row, err := q.GetDurableOperation(ctx, string(id))
-		if errors.Is(err, sql.ErrNoRows) {
-			return durable.ErrNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("read durable operation: %w", err)
-		}
-
-		now, err := storeNow(ctx, q)
-		if err != nil {
-			return err
-		}
-
-		switch durable.State(row.State) {
-		case durable.StatePending:
-			row.State = string(durable.StateCanceled)
-		case durable.StateRunning:
-			row.CancelRequested = true
-		case durable.StateSucceeded, durable.StateFailed:
-			return durable.ErrFinished
-		case durable.StateCanceled:
-			return nil
-		default:
-			return fmt.Errorf(
-				"durable operation %s has the unknown state %q: %w",
-				id,
-				row.State,
-				errUnknownDurableState,
-			)
-		}
-
-		row.UpdatedAtMs = now
-
-		return writeDurable(ctx, q, row)
+		return cancelDurable(ctx, q, id)
 	})
+}
+
+// cancelDurable applies the rules of durable.Store.Cancel to the operation id
+// in the transaction of q. A domain write that cancels an operation in its
+// own transaction calls it.
+func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
+	row, err := q.GetDurableOperation(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return durable.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read durable operation: %w", err)
+	}
+
+	now, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	switch durable.State(row.State) {
+	case durable.StatePending:
+		row.State = string(durable.StateCanceled)
+	case durable.StateRunning:
+		row.CancelRequested = true
+	case durable.StateSucceeded, durable.StateFailed:
+		return durable.ErrFinished
+	case durable.StateCanceled:
+		return nil
+	default:
+		return fmt.Errorf(
+			"durable operation %s has the unknown state %q: %w",
+			id,
+			row.State,
+			errUnknownDurableState,
+		)
+	}
+
+	row.UpdatedAtMs = now
+
+	return writeDurable(ctx, q, row)
 }
 
 // endAttempt runs the checks that Complete, Fail and Release share, then

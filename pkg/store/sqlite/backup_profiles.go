@@ -21,7 +21,7 @@ func sqliteProfileBackupTables() []sqliteBackupTable {
 			table: "profile_revisions",
 			columns: []string{
 				backupColNamespaceID, "profile_id", "number", "document", backupColDocumentSha256, "author",
-				backupColCreatedAtMs, "reason",
+				backupColCreatedAtMs, backupColReason,
 			},
 		},
 	}

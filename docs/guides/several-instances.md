@@ -92,11 +92,13 @@ With `api` processes only, nobody runs the background work. Four signs show that
 - The metric `dustpan_oldest_unclaimed_operation_age_seconds` shows how long the oldest unclaimed operation or due schedule waits. It is 0 when none waits. It does not decide the refusal below. A long job, or a schedule that an older worker does not know, leaves work unclaimed while the workers run.
 - `GET /api/server/worker` of the installation API shows `silentSeconds` and lists each due schedule and each operation that no worker claimed for more than 2 lease periods. It needs the action `server:observe`.
 
-Each worker records a heartbeat in the store when it claims work or renews a claim. The time of the store counts, not the clock of the process that reads it. When no worker claimed or renewed a claim for 2 lease periods, an `api` process refuses each request that inserts a durable operation with 503. Today that is the approval of an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process counts the 2 lease periods from the time it began to watch. So it never refuses a start right after it began. A process that runs only `worker` does not fail the backups and the restores of the `api` processes when it starts.
+Each worker records a heartbeat in the store when it claims work or renews a claim. The time of the store counts, not the clock of the process that reads it. When no worker claimed or renewed a claim for 2 lease periods, an `api` process refuses each request that inserts a durable operation with 503. Today that is the approval of an audit chain change. The error says: `start a worker with opendustpan serve --components worker`. Other requests stay as they are. A process that runs `all` or `worker` never refuses a start for this reason. An `api` process counts the 2 lease periods from the time it began to watch. So it never refuses a start right after it began. A process that runs only `worker` does not fail the restores of the `api` processes when it starts.
 
 `GET /api/server/components` lists the components of the process that answers.
 
-A backup or a restore runs in the process that took the request, so it needs no worker. Send the request to an `api` process that has enough time and memory for it.
+A restore runs in the process that took the request, so it needs no worker. Send the request to an `api` process that has enough time and memory for it.
+
+A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
 
 ## Settings that stay on one host
 
@@ -117,4 +119,4 @@ Send health checks to the readiness probe. The [observe guide](observe.md) gives
 ## Limits
 
 - SQLite holds one instance only. Do not start two processes on one SQLite file.
-- At start, an instance can mark a backup or a restore as failed while another instance runs it. Start or restart an instance only when no backup or restore runs.
+- At start, an instance can mark a restore as failed while another instance runs it. Start or restart an instance only when no restore runs.

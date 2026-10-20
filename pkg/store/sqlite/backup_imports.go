@@ -20,7 +20,7 @@ func sqliteImportBackupTables() []sqliteBackupTable {
 				"profile_path",
 				"options",
 				backupColState,
-				"reason",
+				backupColReason,
 				backupColCreatedBy,
 				backupColCreatedAtMs,
 				"plan",

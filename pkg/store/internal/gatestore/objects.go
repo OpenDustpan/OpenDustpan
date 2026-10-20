@@ -355,9 +355,10 @@ func validateObject(obj any) error {
 
 		return err
 	case gate.ApprovalRule:
-		_, err := gate.ParseRuleID(string(v.ID))
-
-		return err
+		// Defense in depth: the service validates the rule too; this check
+		// stays so that a new caller of the port cannot store a rule that
+		// nobody can meet or that needs no approval.
+		return v.Validate()
 	case gate.OwnershipRule:
 		if _, err := gate.ParseID(string(v.ID)); err != nil {
 			return err

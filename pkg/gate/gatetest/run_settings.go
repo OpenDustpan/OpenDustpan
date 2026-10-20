@@ -16,6 +16,7 @@ func settingsRunners() map[string]runner {
 	return map[string]runner{
 		"approval-default-none":                   once(caseDefaultNone),
 		"approval-default-round-trip":             once(caseDefaultRoundTrip),
+		"approval-default-fields-must-be-valid":   once(caseDefaultFieldsValid),
 		"approval-default-not-at-installation":    once(caseDefaultInstallation),
 		"approval-default-path-sets-must-resolve": once(caseDefaultResolves),
 		"approval-default-delete":                 once(caseDefaultDelete),
@@ -56,6 +57,35 @@ func caseDefaultNone(t *testing.T, e *env) {
 
 	_, err := e.h.Store.Settings().ApprovalDefault(t.Context(), e.fx.acme)
 	wantErr(t, "ApprovalDefault(none)", err, gate.ErrNotFound)
+}
+
+func caseDefaultFieldsValid(t *testing.T, e *env) {
+	t.Helper()
+
+	tests := []struct {
+		name   string
+		mutate func(d *gate.ApprovalDefault)
+	}{
+		{"count zero", func(d *gate.ApprovalDefault) { d.Count = 0 }},
+		{"count above ten", func(d *gate.ApprovalDefault) { d.Count = gate.MaxApprovalCount + 1 }},
+		{"window below 60", func(d *gate.ApprovalDefault) { d.FreshAuth = gate.FreshAuth{Set: true, Seconds: 59} }},
+		{"window above 900", func(d *gate.ApprovalDefault) { d.FreshAuth = gate.FreshAuth{Set: true, Seconds: 901} }},
+		{"empty approver name", func(d *gate.ApprovalDefault) {
+			d.Approvers = gate.Approvers{Groups: nil, Users: []string{""}, UnitOwners: false}
+		}},
+	}
+
+	for _, tt := range tests {
+		d := approvalDefault(e.fx.acme, 1)
+		tt.mutate(&d)
+
+		_, err := e.h.Store.Settings().PutApprovalDefault(t.Context(), d, 0, e.acme, entry("acme"))
+		wantErr(t, "PutApprovalDefault("+tt.name+")", err, gate.ErrInvalid)
+	}
+
+	_, err := e.h.Store.Settings().ApprovalDefault(t.Context(), e.fx.acme)
+	wantErr(t, "ApprovalDefault(after the refused puts)", err, gate.ErrNotFound)
+	e.wantEntries("acme", 0)
 }
 
 func caseDefaultInstallation(t *testing.T, e *env) {
