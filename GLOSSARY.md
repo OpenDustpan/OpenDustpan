@@ -38,6 +38,11 @@ The tool, the namespace and the tool's own name for a unit, written as `<tool>:<
 _Avoid_: Unit ID, path, address
 _Copy says_: the name of the stack or the workspace, with its tool and namespace. `<tool>:<namespace>/<name>` stays in the API.
 
+**Manual lock**:
+A lock that a person puts on one unit or on one collection, with a reason of at most 500 characters. While it covers a unit, a lock request of a tool for that unit fails and names the holder and the reason. It covers each unit that is in the collection now. The holder unlocks it, or a person with `unit:manage` on the object force-unlocks it with an audit entry. A tool force-unlock never ends it. The inventory shows it as a flag that is apart from the unit lock (ADR 213 decision 10).
+_Avoid_: Freeze (that is a schedule of a namespace), hold, pause
+_Copy says_: "manual lock", on a stack, a workspace or a collection. Both stacks and workspaces: "stacks and workspaces". The `unit:lock` and `unit:manage` action names stay in the API.
+
 **State**:
 The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state and may read it. A read masks secret values (ADR 41).
 _Avoid_: State file (except for OpenTofu), snapshot
@@ -561,6 +566,7 @@ _Avoid_: Key status, KMS state
 Encrypted at rest with the data key of a scope, or with the item key of a history item. The server seals each checkpoint blob, event payload and journal batch of a Pulumi update with the item key of the update (ADR 151). It seals the state blob and the outputs document of an OpenTofu state version with the item key of the state version. The part of the server that seals and opens content is the sealer.
 _Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
 _Copy says_: "encrypted by the server". Do not use "sealed" in copy. It means locked in Vault.
+The _Avoid_ rule ("Encrypted") is for names in code. The _Copy says_ rule ("encrypted by the server") is for text that users read.
 
 **Secret value**:
 A value in state that the tool marks as secret: a Pulumi secret, or an OpenTofu sensitive output or attribute.
@@ -680,10 +686,6 @@ _Avoid_: Autonomy level, agent permission
 **Freeze**:
 A change freeze on a namespace (ADR 103 decision 4). While it is active, no phase that changes resources, state or the code in git dispatches. Freezes are opt-in. A namespace has no freeze until a principal with `namespace:manage-freezes` creates one. A freeze has a reason, a start and an optional end. Plans still run, and a phase that runs when the freeze starts runs to its end. A queued job waits with the reason `frozen`, and dispatches after the freeze ends. A freeze never refuses a state write, because it stops only the work that OpenDustpan starts (ADR 103 decision 5).
 _Avoid_: Maintenance mode (that stops the tool APIs of a whole installation), lock
-
-**Manual lock**:
-A lock that a person puts on one unit, one collection or a whole namespace, with a reason (ADR 213 decision 10). It needs `unit:lock`. While it covers a unit, no new job of the unit starts and no queued phase dispatches. A lock request of a tool fails with the holder and the reason. The inventory shows it as the lock flag of the unit, not as a status. A freeze is a schedule for a whole namespace. A manual lock is not a freeze.
-_Avoid_: Freeze, hold, pause
 
 **Write-back**:
 The executor in which OpenDustpan writes a change to git, and the team's existing CI applies it (ADR 100). The change is a direct push or a review request. It runs in the server: each instance claims a deliver phase with a `durable.Runner` (ADR 101 decision 3). It commits through the API of the forge, never with a git client. Each commit has the trailer `Dustpan-Job: <job ID>`. A write-back job does `apply` only, and edits only the config or variable files of the unit. The next final state version of the unit closes the job, after the merge for a review request. A job that sees no such version expires after 14 days by default. OpenDustpan approvals add to the approvals of the forge.

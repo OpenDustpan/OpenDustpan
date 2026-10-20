@@ -108,6 +108,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -564,6 +565,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -770,6 +772,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -890,6 +893,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		TempAdmins:       nil,
 		Now:              nil,
@@ -1001,6 +1005,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		TempAdmins:       nil,
 		Now:              nil,

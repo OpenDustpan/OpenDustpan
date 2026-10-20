@@ -64,6 +64,7 @@ func newUpdateFixtureWithAddressGate(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Tokens:             nil,
 		Updates:            mem,
 		Checkpoints:        mem,
@@ -244,6 +245,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Tokens:             nil,
 		Updates:            mem,
 		Checkpoints:        mem,

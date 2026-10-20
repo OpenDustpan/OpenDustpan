@@ -9,7 +9,7 @@ const ServeSynopsis = "Run the server with the built-in adapters."
 func ServeFlags() []*Setting {
 	return SettingsFor(
 		"config",
-		"database", "region",
+		"database", "region", "components",
 		"listen", "console-dir", "allowed-origins", "tls-cert", "tls-key", "public-url", "trusted-proxies",
 		"trusted-proxy-header", "ip-allowlists", "ip-allowlists-include-bootstrap",
 		"log-level", "log-format", "log-sink",

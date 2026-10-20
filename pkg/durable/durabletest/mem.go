@@ -86,6 +86,7 @@ type memDB struct {
 	ops       map[durable.ID]*durable.Operation
 	byKey     map[string]durable.ID
 	schedules map[string]*memSchedule
+	beats     map[string]time.Time
 	fences    map[namespace.Name]int64
 	values    []string
 	broken    string
@@ -99,6 +100,7 @@ func newMemDB(broken string) *memDB {
 		ops:       map[durable.ID]*durable.Operation{},
 		byKey:     map[string]durable.ID{},
 		schedules: map[string]*memSchedule{},
+		beats:     map[string]time.Time{},
 		fences:    map[namespace.Name]int64{},
 		values:    nil,
 		broken:    broken,
@@ -714,6 +716,53 @@ func (s memStore) ClaimTick(_ context.Context, spec durable.ScheduleSpec) (durab
 	}
 
 	return durable.Tick{Operation: op, Schedule: s.db.schedule(spec.Name, sc, now)}, nil
+}
+
+// HeartbeatHarness returns a heartbeat suite harness on m.
+func (m *Mem) HeartbeatHarness() HeartbeatHarness {
+	return m.db.heartbeatHarness()
+}
+
+func (m *memDB) heartbeatHarness() HeartbeatHarness {
+	return HeartbeatHarness{
+		Open: func(_ *testing.T, skew time.Duration) durable.HeartbeatStore { return memStore{db: m, skew: skew} },
+	}
+}
+
+func (s memStore) Beat(_ context.Context, owner string) error {
+	if owner == "" {
+		return fmt.Errorf("heartbeat owner is empty: %w", durable.ErrInvalid)
+	}
+
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	now := s.db.clock(s.skew)
+
+	for name, at := range s.db.beats {
+		if now.Sub(at) > durable.HeartbeatRetention {
+			delete(s.db.beats, name)
+		}
+	}
+
+	s.db.beats[owner] = now
+
+	return nil
+}
+
+func (s memStore) LastBeat(_ context.Context) (durable.Beat, error) {
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	beat := durable.Beat{Owner: "", At: time.Time{}, Now: s.db.clock(s.skew)}
+
+	for owner, at := range s.db.beats {
+		if at.After(beat.At) || (at.Equal(beat.At) && owner > beat.Owner) {
+			beat.Owner, beat.At = owner, at
+		}
+	}
+
+	return beat, nil
 }
 
 // end ends the attempt of c with fn, after the checks that Complete, Fail and

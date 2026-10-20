@@ -105,6 +105,46 @@ func TestDurableScheduleConformance(t *testing.T) {
 	})
 }
 
+// TestDurableHeartbeatConformance runs the heartbeat suite. Each case gets a
+// fresh schema, and each handle of a case is a store of its own on that
+// schema, as two instances on one database are.
+func TestDurableHeartbeatConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL durable heartbeat suite", envURL)
+	}
+
+	durabletest.RunHeartbeats(t, func(t *testing.T) durabletest.HeartbeatHarness {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		first, err := postgres.Open(t.Context(), schemaURL)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(first.Close)
+
+		return durabletest.HeartbeatHarness{
+			Open: func(t *testing.T, _ time.Duration) durable.HeartbeatStore {
+				t.Helper()
+
+				s, openErr := postgres.Open(t.Context(), schemaURL)
+				if openErr != nil {
+					t.Fatalf("open store: %v", openErr)
+				}
+
+				t.Cleanup(s.Close)
+
+				return s.DurableOperations()
+			},
+		}
+	})
+}
+
 // TestDurableClaimSkipsALockedRow proves that a claim skips the row of an
 // operation that another transaction holds, and answers ErrNoWork at once,
 // instead of a wait for that transaction.

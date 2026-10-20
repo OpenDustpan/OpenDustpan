@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/servertest"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
 // request is one request of a test to one server of a cluster, and the
@@ -83,6 +84,48 @@ func TestTwoServersShareOneDatabase(t *testing.T) {
 			want:   http.StatusOK,
 		},
 		request{server: 1, method: http.MethodGet, path: "/api/stacks/acme/web/test", body: "", want: http.StatusOK},
+	)
+}
+
+// TestSplitTopology proves a split topology on one database: server 0 runs
+// the api component, server 1 runs the worker component, and server 2 runs
+// both. The api server serves the routes, the worker server answers 404 on
+// each route except the probes and the metrics route, and a write on the api
+// server reads on the server with both components.
+func TestSplitTopology(t *testing.T) {
+	t.Parallel()
+
+	api, err := dustpan.ParseComponents("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	worker, err := dustpan.ParseComponents("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := servertest.StartSplit(t, []dustpan.Components{api, worker, dustpan.AllComponents()})
+
+	send(
+		t,
+		c,
+		request{
+			server: 0,
+			method: http.MethodPost,
+			path:   "/api/server/namespaces",
+			body:   `{"name":"acme"}`,
+			want:   http.StatusCreated,
+		},
+		request{server: 2, method: http.MethodGet, path: "/api/server/namespaces", body: "", want: http.StatusOK},
+		request{server: 1, method: http.MethodGet, path: "/api/server/namespaces", body: "", want: http.StatusNotFound},
+		request{server: 1, method: http.MethodGet, path: "/api/stacks/acme/web", body: "", want: http.StatusNotFound},
+		request{server: 1, method: http.MethodGet, path: "/health/live", body: "", want: http.StatusNoContent},
+		request{server: 1, method: http.MethodGet, path: "/health/ready/worker", body: "", want: http.StatusOK},
+		request{server: 1, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusNotFound},
+		request{server: 1, method: http.MethodGet, path: "/api/server/metrics", body: "", want: http.StatusOK},
+		request{server: 0, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusOK},
+		request{server: 0, method: http.MethodGet, path: "/api/server/worker", body: "", want: http.StatusOK},
 	)
 }
 

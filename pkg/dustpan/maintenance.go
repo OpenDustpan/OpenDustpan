@@ -139,7 +139,7 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 
 	switch {
 	case strings.HasPrefix(path, "/health/"),
-		path == "/api/server/metrics" && r.Method == http.MethodGet,
+		path == metricsPath && r.Method == http.MethodGet,
 		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		path == "/api/server/maintenance" || strings.HasPrefix(path, "/api/server/maintenance/"):
 		return shapePulumi, false

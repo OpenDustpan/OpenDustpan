@@ -1566,6 +1566,7 @@ func newDeleteHandlerWithAudit(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Tokens:             nil,
 		Checkpoints:        exportPanicsStore{UpdateStore: nil, EventStore: nil},
@@ -1931,6 +1932,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 	stores := unusedUpdateStores{UpdateStore: nil, CheckpointStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,
 		Checkpoints:        stores,
@@ -2003,6 +2005,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 	stores := emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            stores,
 		Tokens:             nil,
 		Checkpoints:        stores,

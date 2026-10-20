@@ -281,6 +281,7 @@ func newServiceBackedHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -1393,6 +1394,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -1535,6 +1537,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
@@ -1571,6 +1574,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
 		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,

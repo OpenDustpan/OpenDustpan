@@ -155,6 +155,7 @@ var families = map[identity.Action]Family{
 	identity.ActionUnitMove:                       FamilyData,
 	identity.ActionUnitManageAccess:               FamilyData,
 	identity.ActionUnitRestore:                    FamilyData,
+	identity.ActionUnitLock:                       FamilyData,
 	identity.ActionUnitPurge:                      FamilyData,
 	identity.ActionUnitReadAccess:                 FamilyData,
 	identity.ActionUnitSetContext:                 FamilyData,

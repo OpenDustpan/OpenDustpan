@@ -40,6 +40,10 @@ type Entry struct {
 	Status        string
 	ResourceCount *int64
 	Lock          *Lock
+	// ManualLock is the manual lock that covers the unit, or nil when none
+	// does. Like Lock, it is a flag and not a status. A lock on the unit or on
+	// its collection sets it.
+	ManualLock *ManualLock
 	// Collection is the name of the collection that holds the unit, as it was
 	// written. It is empty when the unit has none (ADR 51). A collection never
 	// changes the tool's own name of the unit.
@@ -59,6 +63,19 @@ type Lock struct {
 	Since     time.Time
 	Holder    string
 	Operation string
+}
+
+// ManualLock is a manual lock that covers a unit: who holds it, why, since
+// when and on which object. Kind is "unit" or "collection". Object names the
+// object that holds the lock: the unit reference for a unit, or the
+// collection reference <namespace>/<collection> for a collection. A lock on a
+// collection covers each unit that is in the collection now.
+type ManualLock struct {
+	Since  time.Time
+	Kind   string
+	Object string
+	Holder string
+	Reason string
 }
 
 // Reference returns the unit reference in the form <tool>:<namespace>/<name>.
