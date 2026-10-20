@@ -44,6 +44,8 @@ const (
 	portColResourceKey   = "resource_key"
 	portColAtMs          = "at_ms"
 	portColScopeKey      = "scope_key"
+	portColSeq           = "seq"
+	portColBody          = "body"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -247,7 +249,7 @@ func portableSpec() []PortableTable {
 		},
 		{
 			Table:   "inventory_changes",
-			OrderBy: []string{portColNamespaceID, "seq"},
+			OrderBy: []string{portColNamespaceID, portColSeq},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "seq", Kind: KindInteger},
@@ -340,7 +342,7 @@ func portableSpec() []PortableTable {
 				{Name: portColTool, Kind: KindText},
 				{Name: "unit_name", Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
-				{Name: "body", Kind: KindText},
+				{Name: portColBody, Kind: KindText},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},
 		},
@@ -699,6 +701,7 @@ func portableSpec() []PortableTable {
 		portableImportTables(),
 		portableBlameTables(),
 		portableRunnerTables(),
+		portableJobTables(),
 		portableProfileTables(),
 		portableManualLockTables(),
 	)

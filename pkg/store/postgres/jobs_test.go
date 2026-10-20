@@ -1,0 +1,184 @@
+package postgres_test
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job/jobtest"
+	"opendustpan.org/opendustpan/pkg/manuallock"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/workspace"
+)
+
+// jobDomain makes the rows that the job stores need, on the real
+// namespaces, workspaces, manual locks and audit chain of one PostgreSQL store.
+type jobDomain struct {
+	s *postgres.Store
+}
+
+var _ jobtest.Domain = (*jobDomain)(nil)
+
+func (d *jobDomain) CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error) {
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), Name: name, HomeRegion: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := d.s.CreateNamespace(ctx, ns); err != nil {
+		return namespace.Fence{}, fmt.Errorf("create namespace: %w", err)
+	}
+
+	return ns.Fence(), nil
+}
+
+func (d *jobDomain) CreateUnit(
+	ctx context.Context, fence namespace.Fence, tool, name string,
+) (identity.Object, error) {
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+
+	switch tool {
+	case "opentofu":
+		ref, err := workspace.ParseName(name)
+		if err != nil {
+			return identity.Object{}, fmt.Errorf("workspace name: %w", err)
+		}
+
+		w := workspace.Workspace{
+			CreatedAt: now, UpdatedAt: now,
+			Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
+			Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		}
+
+		if err := d.s.CreateWorkspace(ctx, w, fence); err != nil {
+			return identity.Object{}, fmt.Errorf("create workspace: %w", err)
+		}
+	case "pulumi":
+		project, stackName, _ := strings.Cut(name, "/")
+		st := stack.Stack{
+			CreatedAt: now, UpdatedAt: now, Tags: map[string]string{},
+			Ref: stack.Ref{
+				Namespace: fence.Namespace, Project: stack.ProjectName(project), Stack: stack.Name(stackName),
+			},
+			ID: stack.ID(ident.NewID("stk-")), Version: 0,
+		}
+
+		if err := d.s.CreateStack(ctx, st, fence); err != nil {
+			return identity.Object{}, fmt.Errorf("create stack: %w", err)
+		}
+	default:
+		return identity.Object{}, fmt.Errorf("%w: tool %q", identity.ErrInvalidObject, tool)
+	}
+
+	entries, err := d.s.ListUnits(ctx, fence.Namespace)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("list units: %w", err)
+	}
+
+	for i := range entries {
+		e := &entries[i]
+
+		if e.Tool == tool && e.Name == name {
+			o, err := identity.UnitObject(tool, fence.Namespace, name)
+			if err != nil {
+				return identity.Object{}, fmt.Errorf("unit object: %w", err)
+			}
+
+			return o.WithUnitID(e.UnitID), nil
+		}
+	}
+
+	return identity.Object{}, fmt.Errorf("%w: unit %s not in the inventory", identity.ErrInvalidObject, name)
+}
+
+func (d *jobDomain) BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error) {
+	if _, err := d.s.BumpFailoverVersions(ctx); err != nil {
+		return namespace.Fence{}, fmt.Errorf("bump failover versions: %w", err)
+	}
+
+	ns, err := d.s.GetNamespace(ctx, fence.Namespace)
+	if err != nil {
+		return namespace.Fence{}, fmt.Errorf("get namespace: %w", err)
+	}
+
+	return ns.Fence(), nil
+}
+
+func (d *jobDomain) SetStateVersion(
+	ctx context.Context, fence namespace.Fence, unit identity.Object, version string,
+) error {
+	return d.s.PutUnitStateVersion(ctx, fence, unit.UnitID(), version)
+}
+
+func (d *jobDomain) PutManualLock(
+	ctx context.Context, fence namespace.Fence, target manuallock.Target, holder, reason string,
+) error {
+	l := manuallock.Lock{Since: time.Now().UTC(), Target: target, Holder: holder, Reason: reason}
+
+	return d.s.PutLock(ctx, l, fence, lockEntry(fence.Namespace, target))
+}
+
+func (d *jobDomain) RemoveManualLock(ctx context.Context, fence namespace.Fence, target manuallock.Target) error {
+	_, err := d.s.ForceRemoveLock(ctx, target, fence, lockEntry(fence.Namespace, target))
+
+	return err
+}
+
+func lockEntry(ns namespace.Name, target manuallock.Target) audit.Entry {
+	return audit.Entry{
+		At: time.Now().UTC(), Namespace: ns, Subject: "tester", IDPSubject: "", TokenID: "",
+		Action: "unit:lock", Object: target.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
+		PrincipalKind: "", JobID: "",
+	}
+}
+
+func (d *jobDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error) {
+	var out []audit.Entry
+
+	for page := 1; ; page++ {
+		listing, err := d.s.List(ctx, ns, audit.Page{Number: page, Size: audit.MaxPageSize})
+		if err != nil {
+			return nil, fmt.Errorf("list audit: %w", err)
+		}
+
+		out = append(out, listing.Entries...)
+
+		if len(listing.Entries) < audit.MaxPageSize {
+			break
+		}
+	}
+
+	slices.SortFunc(out, func(a, b audit.Entry) int { return int(a.Sequence - b.Sequence) })
+
+	return out, nil
+}
+
+func TestJobConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	jobtest.Run(t, func(t *testing.T) jobtest.Harness {
+		t.Helper()
+
+		s := open(t, base)
+		j := s.Jobs()
+
+		return jobtest.Harness{Jobs: j, Durable: s.DurableOperationsPort(), Freezes: j, Domain: &jobDomain{s: s}}
+	})
+}

@@ -413,7 +413,7 @@ func testLocked(t *testing.T, h Harness) {
 		j := create(t, h, f, newJob(f.unit, op, ""), nil)
 
 		_, err := h.Jobs.Apply(t.Context(), dispatch(&j), f.fence, nil)
-		if !errors.Is(err, job.ErrLocked) {
+		if err == nil || !errors.Is(err, job.ErrLocked) {
 			t.Fatalf("dispatch of %s on a locked unit = %v, want ErrLocked", op, err)
 		}
 

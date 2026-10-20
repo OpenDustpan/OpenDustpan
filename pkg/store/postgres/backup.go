@@ -64,6 +64,7 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
+	pgColJobID       = "job_id"
 	pgColObjectKind  = "object_kind"
 	pgColObjectID    = "object_id"
 	pgColResourceKey = "resource_key"
@@ -105,6 +106,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyImportTables()...)
 	tables = append(tables, pgCopyBlameTables()...)
 	tables = append(tables, pgCopyRunnerTables()...)
+	tables = append(tables, pgCopyJobTables()...)
 	tables = append(tables, pgCopyProfileTables()...)
 	tables = append(tables, pgCopyManualLockTables()...)
 
@@ -324,7 +326,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				pgColObject, pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id", "fence_version", "principal_kind", "job_id", pgColReason,
+				"changes", "object_id", "fence_version", "principal_kind", pgColJobID, pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
@@ -351,7 +353,7 @@ func pgControlTables() []pgCopyTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", "kind", "input", "version", "state", "attempt", "expiries", "failures",
+				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries", "failures",
 				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
 				"not_before_ms", "created_at_ms", "updated_at_ms",
 			},
@@ -402,7 +404,7 @@ func pgControlTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableMaintenanceRevocations,
-			columns: []string{"id", pgColKind, pgColTarget, "end_reason", "actor", pgColObject, "at_ms"},
+			columns: []string{"id", pgColKind, pgColTarget, "end_reason", "actor", pgColObject, pgColAtMs},
 			orderBy: []string{"id"},
 		},
 	}

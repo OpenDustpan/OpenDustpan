@@ -1,0 +1,276 @@
+package jobs
+
+import (
+	"net/http"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
+)
+
+// jobResponse is the answered document of a job read. A step answers its
+// name, role and phase, and never its arguments or its variables.
+//
+// Contract: never remove or rename these fields.
+type jobResponse struct {
+	ID           string            `json:"id"`
+	Namespace    string            `json:"namespace"`
+	Unit         unitResponse      `json:"unit"`
+	Operation    string            `json:"operation"`
+	Executor     string            `json:"executor"`
+	State        string            `json:"state"`
+	Wait         string            `json:"wait,omitempty"`
+	Reason       string            `json:"reason,omitempty"`
+	Location     locationResponse  `json:"location"`
+	Pool         string            `json:"pool,omitempty"`
+	Steps        []stepResponse    `json:"steps"`
+	Phases       []phaseResponse   `json:"phases"`
+	Current      int               `json:"current"`
+	StartedBy    string            `json:"startedBy,omitempty"`
+	Agent        string            `json:"agent,omitempty"`
+	AgentMode    string            `json:"agentMode,omitempty"`
+	BreakGlass   *breakGlassBody   `json:"breakGlass,omitempty"`
+	Delivery     *deliveryResponse `json:"delivery,omitempty"`
+	Closed       *closedResponse   `json:"closed,omitempty"`
+	Verification string            `json:"verification,omitempty"`
+	Version      int64             `json:"version"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
+}
+
+type unitResponse struct {
+	ID   string `json:"id"`
+	Tool string `json:"tool"`
+	Name string `json:"name"`
+}
+
+type locationResponse struct {
+	Connection string `json:"connection,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+	Directory  string `json:"directory,omitempty"`
+	Revision   string `json:"revision,omitempty"`
+}
+
+type stepResponse struct {
+	Name             string `json:"name"`
+	Role             string `json:"role"`
+	Phase            string `json:"phase"`
+	ChangesResources bool   `json:"changesResources"`
+}
+
+type phaseResponse struct {
+	Kind         string               `json:"kind"`
+	Claims       int                  `json:"claims"`
+	Executor     string               `json:"executor,omitempty"`
+	StateVersion string               `json:"stateVersion,omitempty"`
+	Steps        []stepRecordResponse `json:"steps"`
+	Plan         *planResponse        `json:"plan,omitempty"`
+	Gates        []gateResponse       `json:"gates"`
+	Approvals    []approvalResponse   `json:"approvals"`
+	StartedAt    *time.Time           `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time           `json:"finishedAt,omitempty"`
+}
+
+type stepRecordResponse struct {
+	Name       string     `json:"name"`
+	ExitCode   int        `json:"exitCode"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	Log        *logRef    `json:"log,omitempty"`
+}
+
+type logRef struct {
+	ID       string `json:"id"`
+	Version  int    `json:"version"`
+	Size     int64  `json:"size"`
+	Closed   bool   `json:"closed"`
+	Redacted bool   `json:"redacted"`
+}
+
+type planResponse struct {
+	ID           string             `json:"id"`
+	StateVersion string             `json:"stateVersion"`
+	Parts        []planPartResponse `json:"parts"`
+	CreatedAt    time.Time          `json:"createdAt"`
+	ExpiresAt    *time.Time         `json:"expiresAt,omitempty"`
+	RedactedAt   *time.Time         `json:"redactedAt,omitempty"`
+}
+
+type planPartResponse struct {
+	Kind   string `json:"kind"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	Secret bool   `json:"secret"`
+}
+
+type gateResponse struct {
+	Type      string   `json:"type"`
+	Approvals int      `json:"approvals"`
+	Groups    []string `json:"groups,omitempty"`
+	AllowSelf bool     `json:"allowSelf"`
+	BindPlan  bool     `json:"bindPlan"`
+}
+
+type approvalResponse struct {
+	Gate    string    `json:"gate"`
+	Subject string    `json:"subject"`
+	Agent   string    `json:"agent,omitempty"`
+	Verdict string    `json:"verdict"`
+	Comment string    `json:"comment,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+type breakGlassBody struct {
+	Reason string `json:"reason"`
+	Freeze string `json:"freeze"`
+}
+
+type deliveryResponse struct {
+	Delivery      string     `json:"delivery"`
+	Commit        string     `json:"commit,omitempty"`
+	Branch        string     `json:"branch,omitempty"`
+	ReviewRequest string     `json:"reviewRequest,omitempty"`
+	MergedAt      *time.Time `json:"mergedAt,omitempty"`
+	DeliveredAt   *time.Time `json:"deliveredAt,omitempty"`
+}
+
+type closedResponse struct {
+	VersionID string    `json:"versionID"`
+	Commit    string    `json:"commit,omitempty"`
+	At        time.Time `json:"at"`
+}
+
+// getJob answers GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}
+// with the job. The route wrapper already allowed namespace:read on the
+// namespace and job:read on the unit of the job.
+func (h *Handler) getJob(w http.ResponseWriter, r *http.Request, _ identity.Principal, t *target) {
+	h.writeJSON(r.Context(), w, http.StatusOK, toJobResponse(&t.job))
+}
+
+// toJobResponse maps a job to its wire shape.
+func toJobResponse(j *job.Job) jobResponse {
+	out := jobResponse{
+		ID: string(j.ID), Namespace: j.Spec.Unit.Namespace().String(),
+		Unit: unitResponse{
+			ID: j.Spec.Unit.UnitID(), Tool: toolLabel(j.Spec.Unit.Tool()), Name: j.Spec.Unit.UnitName(),
+		},
+		Operation: string(j.Spec.Operation), Executor: string(j.Spec.Executor), State: string(j.State),
+		Wait: string(j.Wait), Reason: j.Reason, Location: locationResponse(j.Spec.Location), Pool: j.Spec.Pool,
+		Steps: make([]stepResponse, 0, len(j.Spec.Steps)), Phases: make([]phaseResponse, 0, len(j.Phases)),
+		Current: j.Current, StartedBy: j.StartedBy, Agent: j.Agent, AgentMode: string(j.AgentMode),
+		BreakGlass: nil, Delivery: nil, Closed: nil, Verification: string(j.Verification), Version: j.Version,
+		CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt,
+	}
+
+	for i := range j.Spec.Steps {
+		s := &j.Spec.Steps[i]
+		out.Steps = append(out.Steps, stepResponse{
+			Name: s.Name, Role: string(s.Role), Phase: string(s.Phase), ChangesResources: s.ChangesResources,
+		})
+	}
+
+	for i := range j.Phases {
+		out.Phases = append(out.Phases, toPhaseResponse(&j.Phases[i]))
+	}
+
+	if j.BreakGlass != nil {
+		bg := breakGlassBody(*j.BreakGlass)
+		out.BreakGlass = &bg
+	}
+
+	if d := j.Delivery; d != nil {
+		out.Delivery = &deliveryResponse{
+			Delivery: string(d.Delivery), Commit: d.Commit, Branch: d.Branch, ReviewRequest: d.ReviewRequest,
+			MergedAt: timeOrNil(d.MergedAt), DeliveredAt: timeOrNil(d.DeliveredAt),
+		}
+	}
+
+	if c := j.Closed; c != nil {
+		out.Closed = &closedResponse{VersionID: c.VersionID, Commit: c.Commit, At: c.At}
+	}
+
+	return out
+}
+
+func toPhaseResponse(p *job.Phase) phaseResponse {
+	out := phaseResponse{
+		Kind: string(p.Kind), Claims: p.Claims, Executor: p.Executor, StateVersion: p.StateVersion,
+		Steps: make([]stepRecordResponse, 0, len(p.Steps)), Plan: nil, Gates: make([]gateResponse, 0, len(p.Gates)),
+		Approvals: make([]approvalResponse, 0, len(p.Approvals)), StartedAt: timeOrNil(p.StartedAt),
+		FinishedAt: timeOrNil(p.FinishedAt),
+	}
+
+	for i := range p.Steps {
+		s := &p.Steps[i]
+		rec := stepRecordResponse{
+			Name: s.Name, ExitCode: s.ExitCode, StartedAt: timeOrNil(s.StartedAt), FinishedAt: timeOrNil(s.FinishedAt),
+			Log: nil,
+		}
+
+		if l := s.Log; l != nil {
+			rec.Log = &logRef{
+				ID: l.ID, Version: l.Version, Size: l.Size, Closed: !l.ClosedAt.IsZero(),
+				Redacted: !l.RedactedAt.IsZero(),
+			}
+		}
+
+		out.Steps = append(out.Steps, rec)
+	}
+
+	if pl := p.Plan; pl != nil {
+		plan := &planResponse{
+			ID: pl.ID, StateVersion: pl.StateVersion, Parts: make([]planPartResponse, 0, len(pl.Parts)),
+			CreatedAt: pl.CreatedAt, ExpiresAt: timeOrNil(pl.ExpiresAt), RedactedAt: timeOrNil(pl.RedactedAt),
+		}
+
+		for _, part := range pl.Parts {
+			plan.Parts = append(plan.Parts, planPartResponse{
+				Kind: string(part.Kind), Size: part.Size, SHA256: part.SHA256, Secret: part.Secret,
+			})
+		}
+
+		out.Plan = plan
+	}
+
+	for _, g := range p.Gates {
+		out.Gates = append(out.Gates, gateResponse{
+			Type: string(g.Type), Approvals: g.Approvals, Groups: g.Groups, AllowSelf: g.AllowSelf,
+			BindPlan: g.BindPlan,
+		})
+	}
+
+	for i := range p.Approvals {
+		a := &p.Approvals[i]
+		out.Approvals = append(out.Approvals, approvalResponse{
+			Gate: string(a.Gate), Subject: a.Subject, Agent: a.Agent, Verdict: string(a.Verdict),
+			Comment: a.Comment, At: a.At,
+		})
+	}
+
+	return out
+}
+
+// timeOrNil returns nil for the zero time, so that a field that was never
+// set is not in the answer.
+func timeOrNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+
+	return &t
+}
+
+// toolLabel maps a stored lowercase tool code to the tool label of the
+// glossary ("Pulumi" or "OpenTofu"). A code without a label answers
+// unchanged, so that a new tool still reads.
+func toolLabel(code string) string {
+	switch code {
+	case "pulumi":
+		return "Pulumi"
+	case "opentofu":
+		return "OpenTofu"
+	default:
+		return code
+	}
+}

@@ -6,11 +6,10 @@
 //		jobtest.Run(t, func(t *testing.T) jobtest.Harness { return newHarness(t) })
 //	}
 //
-// The suite comes before the first SQL adapter. Its cases state the rules
-// of the ports, and a reference adapter in memory, in the tests of this
-// package, runs them. The cases of job.Claimer, job.Recorder and
-// job.ArtifactStore come with their first implementation, because they need
-// the blob store and the item keys.
+// The cases state the rules of the ports. A reference adapter in memory, in
+// the tests of this package, runs them, and so does each SQL adapter. The
+// cases of job.Claimer, job.Recorder and job.ArtifactStore come with their
+// first implementation, because they need the blob store and the item keys.
 package jobtest
 
 import (
@@ -119,6 +118,11 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a running job whose operation fails ends failed at the reconcile", testRunningOperationFails},
 		{"the confirmation gate and a confirmation are stored", testConfirmationStored},
 		{"list filters by unit and state, newest first", testList},
+		{"a fence of another namespace reaches no job", testForeignNamespace},
+		{"parallel creates with one key give one job", testParallelCreatesOneKey},
+		{"two claimers of one phase: one wins", testTwoClaimers},
+		{"parallel dispatches on one unit: one holds it", testParallelUnitBusy},
+		{"a dispatch and a manual lock in parallel give one serial order", testDispatchAndLockInParallel},
 		{"freezes list, end once, and validate", testFreezes},
 	}
 

@@ -172,6 +172,10 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 		return job.Job{}, false, err
 	}
 
+	if err := checkNamespace(j.Spec.Unit.Namespace(), fence, e); err != nil {
+		return job.Job{}, false, err
+	}
+
 	ns := j.Spec.Unit.Namespace()
 	key := string(ns) + "/" + j.IdempotencyKey
 
@@ -268,8 +272,12 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	}
 
 	cur, ok := m.lookup(c.Job)
-	if !ok {
+	if !ok || cur.Spec.Unit.Namespace() != fence.Namespace {
 		return job.Job{}, job.ErrNotFound
+	}
+
+	if err := checkNamespace(fence.Namespace, fence, e); err != nil {
+		return job.Job{}, err
 	}
 
 	if cur.Version != c.Version {
@@ -324,6 +332,10 @@ func (m *memDB) ObserveStateVersion(ctx context.Context, v job.StateVersion, fen
 		return nil, err
 	}
 
+	if v.Unit.Namespace() != fence.Namespace {
+		return nil, fmt.Errorf("%w: a state version names a unit of the namespace of the fence", job.ErrInvalid)
+	}
+
 	if !v.Final {
 		return nil, nil
 	}
@@ -364,7 +376,7 @@ func (m *memDB) SetVerification(_ context.Context, id job.ID, v job.Verification
 	}
 
 	j, ok := m.lookup(id)
-	if !ok {
+	if !ok || j.Spec.Unit.Namespace() != fence.Namespace {
 		return job.ErrNotFound
 	}
 
@@ -849,4 +861,21 @@ func (m *memDB) closeLate(ctx context.Context, next *job.Job, ev job.Event) erro
 	}
 
 	return m.close(ctx, next, v)
+}
+
+// checkNamespace returns job.ErrInvalid when ns is not the namespace of fence,
+// and audit.ErrInvalidEntry for an entry of another namespace.
+func checkNamespace(ns namespace.Name, fence namespace.Fence, e []audit.Entry) error {
+	if ns != fence.Namespace {
+		return fmt.Errorf("%w: namespace %q, fence %q", job.ErrInvalid, ns, fence.Namespace)
+	}
+
+	for i := range e {
+		if e[i].Namespace != fence.Namespace {
+			return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e[i].Namespace,
+				fence.Namespace)
+		}
+	}
+
+	return nil
 }

@@ -167,6 +167,7 @@ type settings struct {
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
+	jobStore             job.Store
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -686,6 +687,7 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
+		jobStore:                nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -1141,6 +1143,8 @@ type neutralHandlers struct {
 	runners http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
+	// jobs is nil when no job store is set.
+	jobs http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1172,8 +1176,13 @@ func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMet
 		return neutralHandlers{}, err
 	}
 
+	jobs, err := newJobsHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	return neutralHandlers{
-		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles,
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, jobs: jobs,
 	}, nil
 }
 
@@ -3486,6 +3495,9 @@ func mountAPI(mux *http.ServeMux, a adapters, cfg *settings) error {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	// The capabilities document and the dev sign-in belong to the
