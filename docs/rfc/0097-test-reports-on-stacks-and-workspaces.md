@@ -150,7 +150,7 @@ The upload names `commit=<sha>`, and the tool and its version. It takes an
 
 | Layer | What it does | Its test |
 | --- | --- | --- |
-| Check at the boundary | The rules above. A bad document refuses the whole report. | fuzz the parser; a `DOCTYPE`, an unknown element and each limit plus one |
+| Check at the boundary | The rules above. A bad document refuses the whole report. | fuzz the parser. Send a `DOCTYPE`, an unknown element and each limit plus one |
 | Encode at use | SQL placeholders only. The console escapes each string. CR and LF are removed from log values. Text given to Dusty or the MCP endpoint is marked as untrusted data. | a hostile name through the store, the log and the agent output, with the parser skipped |
 | Limit the effect | Size, count and rate limits. The parser has a time limit. The raw blob is never parsed again at read. | an upload at each limit plus one byte or one item |
 | Authorize at use | The store checks the unit of the upload and the action in the same transaction as the write. | a token of another unit, with the route check skipped |
@@ -168,7 +168,7 @@ The upload names `commit=<sha>`, and the tool and its version. It takes an
 
 ### The first slice
 
-Display data only. No gate reads it, and no fact exists.
+This slice only shows data. No gate reads it, and no fact exists.
 
 1. `POST` and `GET` of test reports, and `GET` of test cases, for a unit
    and a commit, with the limits, the audit entries and the actions above.
