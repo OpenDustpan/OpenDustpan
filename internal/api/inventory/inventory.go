@@ -450,6 +450,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
@@ -490,8 +494,7 @@ func classify(err error) (int, string) {
 	case errors.Is(err, collection.ErrNotFound), errors.Is(err, collection.ErrUnitNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, collection.ErrAlreadyExists), errors.Is(err, collection.ErrNotEmpty),
-		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection),
-		errors.Is(err, namespace.ErrFenced):
+		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody), errors.Is(err, errMissingUnit):
 		return http.StatusBadRequest, err.Error()

@@ -198,7 +198,11 @@ func classifyNamespace(err error) (problem, bool) {
 	case errors.Is(err, namespace.ErrNotFound):
 		return problem{status: http.StatusNotFound, code: "namespace.not-found", message: "namespace not found"}, true
 	case errors.Is(err, namespace.ErrFenced):
-		return problem{status: http.StatusConflict, code: "namespace.fenced", message: "write fenced: try again"}, true
+		return problem{
+			status:  http.StatusConflict,
+			code:    "namespace.fenced",
+			message: namespace.ErrFenced.Error(),
+		}, true
 	case errors.Is(err, namespace.ErrNotHome):
 		return problem{
 			status: http.StatusMisdirectedRequest, code: "namespace.not-home",
