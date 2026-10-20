@@ -219,6 +219,7 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 		return
 	}
 
+	h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	bodygate.SetRetryAfterJitter(w)
 	http.Error(w, namespace.ErrFenced.Error(), http.StatusServiceUnavailable)
 }
