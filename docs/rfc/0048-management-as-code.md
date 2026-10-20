@@ -159,12 +159,20 @@ repository, with `sdk/go` as its own module.
 | B. One new repository for the CLI and both providers | The CLI and the providers share the client and the release. They have a version line of their own. The module does not hold server code. | An API change needs a pull request in two repositories. |
 | C. A repository for each product | Each has its own release page and tag. A registry that expects a repository name by convention can find it. | Three repositories for one client. |
 
+Both A and B keep the client out of the `go.mod` of the server, because a
+separate Go module has its own `go.mod`. RFC 99 proposes this for `sdk/go`.
+`pkg/` is the server SDK (ADR 35), so client code does not go in `pkg/` in
+either option.
+
 **Recommendation: B.** One repository, with the CLI and the provider core in
 different modules, and one release that builds the CLI, the OpenTofu archive and
-the Pulumi archive (ADR 177). A client must not pull the `go.mod` of the server
-(ADR 170 decisions 3 and 4), and `pkg/` is the server SDK (ADR 35), so no client
-code goes in this repository. Before 1.0, a client release ships on the day of
-each server minor release, and it pins that minor version (question 8).
+the Pulumi archive (ADR 177). B gives the client a tag line and a release page
+of its own, and it makes the rule that the client does not import server code
+a rule of the repository, not only of the module. A holds the same client in a
+separate module in this repository. A costs the shared tags and the shared
+release page, and it gains one pull request for an API change and its client.
+Before 1.0, a client release ships on the day of each server minor release,
+and it pins that minor version (question 8).
 
 **Open. This question needs the owner**, because the owner decides to create a
 repository. One check comes first: the naming rules of the OpenTofu registry
@@ -350,6 +358,16 @@ version:
 - A release outside the range is refused with a message that names the server
   version and the range.
 
+The client follows these rules but differs from `pkg/store/schema` in two
+places. First, the empty string is not a dev build in the client: the server
+sent no version, and the client refuses it. `pkg/store/schema` treats the empty
+string as a dev build. Second, build metadata is allowlisted in the client and
+not dropped: `pkg/store/schema` drops the text after `+` without a check, and
+the client refuses a form that is not on the allowlist. The client copies the
+rules into its own code, because it cannot import `pkg/store/schema`: that
+package is in the module of the server, and a client must not pull the
+`go.mod` of the server.
+
 **Pre-release.** With a lower bound that is a pre-release, the range accepts a
 pre-release of any patch version in the range. This differs from node-semver,
 which accepts a pre-release only on the same `MAJOR.MINOR.PATCH` as a bound.
@@ -395,22 +413,70 @@ A namespace is 1 to 100 characters of ASCII letters, digits, `-`, `_` and `.`,
 and does not start with `.` or `-`. The client encodes each path segment, so an
 inner space in a collection name goes to the path as `%20`.
 
+### The import reference
+
+`tofu import`, `pulumi import` and the CLI take one string for an object. The
+string joins the namespace, the collection (when the kind has one) and the ID
+with `/`. No allowed character of a namespace, a collection name or an ID is
+`/`, so the separator needs no escape. The client does not decode `%`, `\` or
+any other escape: a value with a character outside its allowlist is refused
+(`ErrInvalidRef`), not cut and not changed. The number of segments decides the
+form, and a form with a wrong number of segments for its kind is refused.
+
+| Kind | Form | Allowlist of each segment |
+| --- | --- | --- |
+| `collection` | `NAMESPACE/NAME` | The namespace grammar above, then the collection grammar above. |
+| `approval-rule` | `NAMESPACE/ID` | The namespace grammar above, then `[a-z0-9][a-z0-9-]{0,62}`, not `default` and not `owners`. |
+| `ownership-rule` in a namespace | `NAMESPACE/ID` | The namespace grammar above, then `[a-z0-9][a-z0-9-]{0,62}`. |
+| `ownership-rule` in a collection | `NAMESPACE/COLLECTION/ID` | The namespace grammar, the collection grammar, then `[a-z0-9][a-z0-9-]{0,62}`. |
+
+A collection name may hold inner spaces, so a shell needs quotes around the
+reference of a collection and of an ownership rule in a collection. The
+reference is a single argument, and the client does not split it at a space.
+The namespace may hold `.`, which has no meaning in the reference.
+
+| Kind | Valid example | Refused example |
+| --- | --- | --- |
+| `collection` | `acme.eu/payments core` | `acme.eu/payments%20core` (`%` is not allowed), and `acme.eu/payments/core` (3 segments). |
+| `approval-rule` | `acme.eu/two-person` | `acme.eu/default` (reserved ID), and `acme.eu/Two-Person` (upper case). |
+| `ownership-rule` in a namespace | `acme.eu/net-cidr` | `acme.eu/net_cidr` (`_` is not allowed in an ID). |
+| `ownership-rule` in a collection | `acme.eu/payments core/net-cidr` | `acme.eu//net-cidr` (empty segment), and `acme.eu/payments core/net-cidr/x` (4 segments). |
+
+An ownership rule in a namespace and an approval rule have the same form, so
+the kind of the resource in the code decides how the client reads the
+reference. The reference never selects the kind.
+
 ### Methods and errors
 
 | Method | Does | Errors |
 | --- | --- | --- |
 | `ServerVersion` | Returns the server version and the description version. | |
 | `Get(ref)` | Returns the object with its `ETag`. | `ErrNotFound` |
-| `List(kind, scope, page)` | Returns one page in a stable order, and the cursor of the next page. | `ErrInvalidRef` |
+| `List(kind, scope, page)` | Returns one page in a stable order, and the cursor of the next page. | `ErrInvalidRef`, `ErrNotFound` (a namespace that does not exist) |
 | `Create(ref, spec)` | Makes the object. Sends `If-None-Match: *`. Never adopts. | `ErrAlreadyExists` (from `412`), `ErrInvalidSpec` |
 | `Update(object)` | Replaces or patches the object. Sends `If-Match` with the `ETag` of the read. | `ErrConflict` (from `412`), `ErrNotFound`, `ErrInvalidSpec` |
-| `Delete(ref, etag)` | Removes the object. Sends `If-Match`. | `ErrConflict` (from `412`), `ErrNotFound` |
+| `Delete(ref, etag)` | Removes the object. Sends `If-Match`. An object that is already gone is success: the server answers `204`, and the provider treats the object as deleted. | `ErrConflict` (from `412`) |
 
 Every method also returns the error of the context, `ErrUnauthenticated`
 (`401`), `ErrForbidden` (`403`), and `ErrFreshAuthRequired` (`403` with the code
 `mfa.fresh-step-required`). The adapter wraps each error with the detail of the
 server and returns no transport error. The `ETag` is opaque. The client stores
 it and sends it back as it came.
+
+**Status mapping.** The adapter maps a `409` by its error code, never by its
+status alone:
+
+| Answer | The adapter returns |
+| --- | --- |
+| `412` | `ErrConflict`. |
+| `409` with `request.idempotency-key-in-progress` | A retry with the same key (see "Write rules"). |
+| `409` with `request.idempotency-key-replayed-secret` | `ErrReplayedSecret`: the replay names the object that the first request made and holds no secret. The client does not retry. It reads the object by its reference. |
+| `409` with `gate.final` | `ErrFinal`: the gate has a final decision and the change is refused. |
+| `409` with `gate.rule-failed` | `ErrRuleFailed`: a rule refuses the change. |
+| `409` with any other code, or with no code | A fail-closed error (`ErrUnexpected`) that holds the status and the code. It is never `ErrConflict`. |
+
+A `409` is not a stale `If-Match`. A client that reads a `409` as `ErrConflict`
+sends a stale-version message for a refusal that a new read does not change.
 
 ### Write rules
 
@@ -421,12 +487,14 @@ it and sends it back as it came.
   characters, for example a random UUID. A retry after a lost answer sends the
   same key. A `409` with the code `request.idempotency-key-in-progress` means
   the first request has not ended: the client retries later with the same key.
+  Every other `409` follows the status mapping in "Methods and errors".
   A `422` with the code `request.idempotency-key-reused` means the same key with
   a different body: the client reports a defect and does not retry. A replay
   answers with the header `Idempotent-Replayed: true` (ADR 210 decision 6).
 - **`PUT` or merge patch, by kind.** The client sends the whole spec with `PUT`
-  for an approval rule, an ownership rule and the approval default, because
-  those routes replace the object. For a collection, the update route is a JSON
+  for an approval rule and an ownership rule, because those routes replace the
+  object. The approval default is not a first kind (ADR 270 decision 5), so the
+  port has no kind for it yet. For a collection, the update route is a JSON
   Merge Patch (RFC 7396) of the fields in the spec, once the route exists. A
   field that the spec leaves out is not changed by a patch, and it is reset by
   a `PUT`. The client states which one a kind uses and tests both cases.
@@ -487,7 +555,10 @@ server work and block the first provider release in issue 967.
   description to any signed-in caller, with no `server:observe` (question 8);
 - #1237: a collection update route with `ETag` and `If-Match`;
 - #1238: REST routes for ownership rules;
-- #1239: create-only writes (`If-None-Match: *`) on `PUT` routes that upsert;
+- #1239: create-only writes (`If-None-Match: *`) on `PUT` routes that upsert,
+  and a `412` for a stale `If-Match` on the approval default and approval
+  rule routes of gate configuration, which answer `409` today (ADR 210
+  decision 6 says `412`);
 - #1240: writes to gate configuration accept an access token for a change that
   does not weaken security, and answer `mfa.fresh-step-required` for one that
   does;

@@ -83,9 +83,12 @@ delegation of 20 October 2026.
    versions to any signed-in caller. The client refuses a description version
    outside its pin, with a message that names both versions. For the server
    range, a dev build counts as newer than every release, and a describe build
-   counts as its tag, as in `pkg/store/schema`. A client that talks to a dev
-   build prints a warning that names both versions and continues. RFC 48
-   question 8 holds the rules in full.
+   counts as its tag, as in `pkg/store/schema`. The dev rule is an exception
+   to the range: a dev build is outside every range that has an upper bound,
+   and the client still accepts it. The client prints a warning that names
+   both versions and continues. The exception does not apply to the pin on
+   the description, which a dev build must meet. RFC 48 question 8 holds the
+   rules in full.
 
 ## Consequences
 
