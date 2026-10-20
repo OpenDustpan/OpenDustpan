@@ -1346,6 +1346,11 @@ _Avoid_: Disclaimer, warning (for the note)
 The name of the application that an operator sets for the installation, `branding.productName` (ADR 235). The default is "OpenDustpan". It reaches the console, emails and chat messages only. Server errors, logs, CLI output and audit entries say "OpenDustpan".
 _Avoid_: Brand, white label (for the name)
 
+**Chat sink**:
+A notification sink of the kind `chat`. It posts a message to the incoming webhook URL of one chat tool: Slack, Microsoft Teams, Mattermost or Matrix (ADR 262). The URL is a secret item of the scope. A read of the sink shows its tool, its name and the host of the URL, and that a URL is set. One sender serves every chat sink, and a renderer for each tool builds the request.
+
+_Copy says_: "Slack connection", "Microsoft Teams connection", "Mattermost connection", "Matrix connection". Never write "sink" in copy.
+
 **Agent name**:
 The name of the built-in agent that an operator sets, `branding.agentName` (ADR 235). The default is "Dusty". Text that the agent writes to a person uses it. Logs, the audit log and the API keep the fixed agent ID `dusty`.
 _Avoid_: Bot name, persona
