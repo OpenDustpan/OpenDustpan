@@ -79,7 +79,7 @@ func parseUnitPage(r *http.Request, ns namespace.Name, f unitFilter) (unitPage, 
 // queryFingerprint returns a short digest of the namespace and the filters of
 // a unit list, so a page token works only for the query that made it.
 func queryFingerprint(ns namespace.Name, f unitFilter) string {
-	parts := make([]string, 0, 1+len(f.labels)+len(f.references))
+	parts := make([]string, 0, 1+len(f.labels)+len(f.references)+len(f.states))
 	parts = append(parts, "ns="+ns.String())
 
 	for _, l := range f.labels {
@@ -88,6 +88,10 @@ func queryFingerprint(ns namespace.Name, f unitFilter) string {
 
 	for ref := range f.references {
 		parts = append(parts, "reference="+ref)
+	}
+
+	for s := range f.states {
+		parts = append(parts, "state="+string(s))
 	}
 
 	// The order of the query values does not change the query.

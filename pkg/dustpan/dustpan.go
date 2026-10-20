@@ -83,6 +83,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
+	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -168,6 +169,7 @@ type settings struct {
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
 	jobStore             job.Store
+	savedViewStore       savedview.Store
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -687,6 +689,7 @@ func defaultSettings() *settings {
 		inventoryReader:         nil,
 		profileStore:            nil,
 		jobStore:                nil,
+		savedViewStore:          nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -2440,7 +2443,13 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		moves = grants
 	}
 
+	views, err := newViewsConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Views:      views,
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,

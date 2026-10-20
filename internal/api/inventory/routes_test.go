@@ -81,6 +81,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Views: testViewsConfig(t),
 		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
@@ -117,6 +118,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Views: nil,
 		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
