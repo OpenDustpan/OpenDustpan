@@ -39,4 +39,6 @@ decides nothing. An ADR records a decision (ADR 15).
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 259](../adr/0259-cost-estimates-start-with-the-push-route.md)
+on 2026-10-20: the first slice ships the push route only. The first pull
+adapter stays open.
