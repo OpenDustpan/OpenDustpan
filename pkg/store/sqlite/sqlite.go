@@ -27,6 +27,7 @@ import (
 	// Registers the "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
 
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -238,6 +239,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// kind is the installation kind of the command that opens the store.
+	// Empty means no check before the migrations.
+	kind installation.Kind
 	// noMigrate makes Open apply no migration and refuse a database with
 	// a pending one.
 	noMigrate bool
@@ -288,6 +292,15 @@ func WithBinaryVersion(version string) Option {
 // the server stays the one process that changes the schema.
 func WithoutMigrate() Option {
 	return func(s *Store) { s.noMigrate = true }
+}
+
+// WithInstallationKind sets the installation kind of the command that opens
+// the database. When the database already holds a kind, Open compares it with
+// kind before it applies a migration, and returns an error that wraps
+// installation.ErrKindMismatch without a change when the two differ. A
+// database that holds no kind yet passes the check: the claim decides.
+func WithInstallationKind(kind installation.Kind) Option {
+	return func(s *Store) { s.kind = kind }
 }
 
 // Open opens (creating if needed) the database file at path and migrates it.
@@ -372,6 +385,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		keepAccessHook:      nil,
 		beforeLockDelete:    nil,
 		binaryVersion:       "",
+		kind:                "",
 		noMigrate:           false,
 		processGuard:        guard,
 		stepTxBound:         DefaultStepTransactionBound,
@@ -1222,6 +1236,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 	if checkErr != nil {
 		return fmt.Errorf("check schema: %w", checkErr)
+	}
+
+	if kindErr := s.checkKind(ctx); kindErr != nil {
+		return kindErr
 	}
 
 	if s.noMigrate && len(plan.Pending) > 0 {

@@ -48,6 +48,10 @@ func TestNewServerSignInSetup(t *testing.T) {
 			providers: []dustpan.OIDCProvider{oidcProvider("corp:a")}, want: "provider ID",
 		},
 		{
+			name: "reserved ID of the dev sign-in", publicURL: "https://dustpan.example",
+			providers: []dustpan.OIDCProvider{oidcProvider(session.DevProviderID)}, want: "reserved",
+		},
+		{
 			name: "same ID two times", publicURL: "https://dustpan.example",
 			providers: []dustpan.OIDCProvider{oidcProvider("corp"), oidcProvider("corp")}, want: "two times",
 		},

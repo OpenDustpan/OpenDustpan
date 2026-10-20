@@ -55,7 +55,8 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	}
 
 	stmts := make([]string, 0, len(all)+2)
-	stmts = append(stmts, "CREATE SCHEMA "+ident, "SET search_path TO "+ident)
+	stmts = append(stmts, "CREATE SCHEMA "+ident,
+		"SET search_path TO "+ident+", "+pgx.Identifier{name + "_control"}.Sanitize())
 	for _, m := range all {
 		stmts = append(stmts, m.SQL)
 	}

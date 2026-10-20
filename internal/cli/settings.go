@@ -261,7 +261,7 @@ var Settings = []*Setting{
 		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
 		"`0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. "+
 			"The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs "+
-			"document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes "+
+			"document asks for more budget as the document grows. One encrypted state with 16 MiB of outputs takes "+
 			"about 72 MiB of the budget. Installations with large outputs should raise this value. An upload "+
 			"that can never fit answers 413.",
 	).WithFile("max-body-bytes-in-flight"),
@@ -451,6 +451,17 @@ var Settings = []*Setting{
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
 		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
+	).WithSensitive(),
+	envSetting(
+		DevDataDirEnv,
+		"The parent of the data directory of `dev`. The data directory is `dev` in it. `--ephemeral` "+
+			"ignores it, and `--data-dir` wins over it.",
+	),
+	envSetting(
+		DevAdminTokenEnv,
+		"The administrator token of `dev`, in place of a token that `dev` makes. At least 32 bytes. "+
+			"`dev` clears the variable from its environment after the read, and `dev.env` takes "+
+			"the token from the variable in the shell that loads it.",
 	).WithSensitive(),
 
 	stringSetting(

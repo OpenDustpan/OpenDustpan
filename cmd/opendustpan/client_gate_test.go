@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // errGateStoreOpened reports a store open outside serve.
@@ -52,7 +54,7 @@ func TestNonServeCommandsOpenNoStore(t *testing.T) {
 	t.Setenv(adminTokenEnvVar, "test-token")
 
 	previous := openStore
-	openStore = func(_ context.Context, _ string, _ *slog.Logger, _ openMode) (store, error) {
+	openStore = func(_ context.Context, _ string, _ *slog.Logger, _ openMode, _ installation.Kind) (store, error) {
 		t.Error(errGateStoreOpened.Error())
 
 		return nil, errGateStoreOpened

@@ -220,7 +220,7 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 	}
 
 	bodygate.SetRetryAfterJitter(w)
-	http.Error(w, namespace.ErrFenced.Error()+": try again after the Retry-After time", http.StatusServiceUnavailable)
+	http.Error(w, namespace.ErrFenced.Error(), http.StatusServiceUnavailable)
 }
 
 // writeHeld answers a refused LOCK with the lock that holds the workspace now.
