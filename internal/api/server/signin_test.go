@@ -217,13 +217,14 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
-			DevCode:  nil,
-			DevAdmin: noBootstrapAdmin,
-			Sessions: sessions,
-			Limiter:  limiter,
-			Stored:   stored,
-			Admin:    admin,
-			Origins:  []string{signInBase, consoleOrigin},
+			OnDevRefused: nil,
+			DevCode:      nil,
+			DevAdmin:     noBootstrapAdmin,
+			Sessions:     sessions,
+			Limiter:      limiter,
+			Stored:       stored,
+			Admin:        admin,
+			Origins:      []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
 				{
 					Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false,
@@ -1089,9 +1090,10 @@ func TestSignInProviderDown(t *testing.T) {
 		SessionPolicy:    policies,
 		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
-			DevCode:  nil,
-			DevAdmin: noBootstrapAdmin,
-			Sessions: sessions, Stored: nil, Admin: nil,
+			OnDevRefused: nil,
+			DevCode:      nil,
+			DevAdmin:     noBootstrapAdmin,
+			Sessions:     sessions, Stored: nil, Admin: nil,
 			Limiter: limiter,
 			Origins: nil,
 			Providers: []apiserver.SignInProvider{

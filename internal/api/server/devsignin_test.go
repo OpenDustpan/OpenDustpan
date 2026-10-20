@@ -180,7 +180,8 @@ func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
 		Now:              nil,
 		AuditSinks:       nil,
 		SignIn: &apiserver.SignIn{
-			Sessions: d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
+			OnDevRefused: nil,
+			Sessions:     d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
 			Providers: nil, DevCode: handlerCode, DevAdmin: devAdmin,
 		},
 		InstallationKind: parts.kind,

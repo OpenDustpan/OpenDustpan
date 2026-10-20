@@ -768,7 +768,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Idempotency:   nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
-		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		Audit:         nil, Namespaces: nil, OnAuditFailure: nil, DenialLimiter: nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile handler: %v", err)

@@ -88,6 +88,10 @@ type Denial struct {
 	Object identity.Object
 	// Reason says why, in a short sentence.
 	Reason string
+	// Window is the window of the limiter for this refusal. Zero means the
+	// window of the limiter of the Recorder. A caller uses one window for each
+	// action and object kind.
+	Window time.Duration
 }
 
 // maxReasonPartBytes bounds the reason text that a caller gives.
@@ -158,7 +162,7 @@ func (r *Recorder) Authorize(
 		reason = ReasonPolicy
 	}
 
-	r.Record(ctx, req, p, Denial{Action: action, Object: obj, Reason: reason})
+	r.Record(ctx, req, p, Denial{Action: action, Object: obj, Reason: reason, Window: 0})
 
 	return err
 }
@@ -193,12 +197,12 @@ func (r *Recorder) Record(ctx context.Context, req *http.Request, p identity.Pri
 	target := r.resolve(ctx, scope)
 	subject := Clean(p.Subject, maxSubjectBytes)
 
-	decision := r.limiter.Allow(denylimit.Key{
+	decision := r.limiter.AllowWindow(denylimit.Key{
 		Principal: subject,
 		Action:    string(action),
 		Kind:      r.keyKind(obj),
 		Scope:     target.key,
-	})
+	}, d.Window)
 
 	r.writeAll(ctx, flushEntries(decision.Flush))
 
