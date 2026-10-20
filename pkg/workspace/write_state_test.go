@@ -572,6 +572,7 @@ func ctxAwareService(t *testing.T, f fixture) *workspace.Service {
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             ctxStates{StateStore: f.store},
 		Blobs:              f.blobs,

@@ -132,6 +132,11 @@ type CollectionMember struct {
 	AssignedAtMs  int64
 }
 
+type DurableHeartbeat struct {
+	Owner string
+	AtMs  int64
+}
+
 type DurableOperation struct {
 	ID               string
 	StartKey         string
@@ -367,6 +372,15 @@ type InventoryLabel struct {
 	UnitID     string
 	LabelKey   string
 	LabelValue string
+}
+
+type ManualLock struct {
+	Kind      string
+	ObjectID  string
+	Namespace string
+	Holder    string
+	Reason    string
+	SinceMs   int64
 }
 
 type Namespace struct {

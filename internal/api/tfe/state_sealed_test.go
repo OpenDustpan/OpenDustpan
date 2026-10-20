@@ -192,7 +192,8 @@ func sealedTestWorkspaces(
 	t.Helper()
 
 	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces: store, States: store, Blobs: blobs, Namespaces: namespaces,
+		ManualLocks: nil,
+		Workspaces:  store, States: store, Blobs: blobs, Namespaces: namespaces,
 		Sealer: secrets, Logger: slog.New(slog.DiscardHandler),
 		Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0,
 		Retention: 0,

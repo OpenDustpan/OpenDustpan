@@ -263,8 +263,7 @@ func newBehaviorHandlerWith(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Audit: nil, OnAuditFailure: nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks:         nil, Moves:         nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
@@ -371,6 +370,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 
 	reader.entries[ns] = []coreinventory.Entry{
 		{
+			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
@@ -384,6 +384,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
@@ -397,6 +398,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Labels:        nil,
 		},
 		{
+			ManualLock:    nil,
 			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
@@ -630,6 +632,7 @@ func TestListUnitsLockField(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
@@ -687,6 +690,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
@@ -741,6 +745,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					ManualLock:    nil,
 					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
@@ -938,8 +943,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiinventory.Config{
-		Audit: nil, OnAuditFailure: nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks:         nil, Moves:         nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,

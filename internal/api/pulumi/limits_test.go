@@ -52,6 +52,7 @@ func newUpdateFixtureWithGate(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            mem,
 		Tokens:             nil,
 		Checkpoints:        mem,

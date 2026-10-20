@@ -162,6 +162,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	w.Header().Set("Cache-Control", "no-store")
 	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
 }
@@ -208,7 +212,11 @@ func classifyNamespace(err error) (problem, bool) {
 	case errors.Is(err, namespace.ErrNotFound):
 		return problem{status: http.StatusNotFound, code: "namespace.not-found", message: "namespace not found"}, true
 	case errors.Is(err, namespace.ErrFenced):
-		return problem{status: http.StatusConflict, code: "namespace.fenced", message: "write fenced: try again"}, true
+		return problem{
+			status:  http.StatusConflict,
+			code:    "namespace.fenced",
+			message: namespace.ErrFenced.Error(),
+		}, true
 	case errors.Is(err, namespace.ErrNotHome):
 		return problem{
 			status: http.StatusMisdirectedRequest, code: "namespace.not-home",

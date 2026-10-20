@@ -113,8 +113,7 @@ func newHistoryHandlerWithURL(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Audit: nil, OnAuditFailure: nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks:         nil, Moves:         nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: nil, err: nil},

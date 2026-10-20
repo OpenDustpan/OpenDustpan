@@ -88,6 +88,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	blobs := newMemBlob(clk)
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
 		Checkpoints:        store,

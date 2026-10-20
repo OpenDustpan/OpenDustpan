@@ -8,11 +8,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -88,6 +92,75 @@ func lockInfoOf(l workspace.Lock) lockInfo {
 	}
 }
 
+// The routes of the lock API that remove a manual lock. The backend names them
+// in the lock info, because `tofu force-unlock` cannot remove a manual lock.
+const (
+	unitLockRoute       = "/api/inventory/unit-lock"
+	collectionLockRoute = "/api/dustpan/v1/namespaces/%s/collections/%s/lock"
+)
+
+// lockRemovalRoutes holds the routes that remove a manual lock. Remove is the
+// route of the holder. Force is the route of a person with unit:manage.
+type lockRemovalRoutes struct {
+	Remove string
+	Force  string
+}
+
+// manualLockRoutes returns the routes that remove the manual lock of t.
+func manualLockRoutes(t manuallock.Target) lockRemovalRoutes {
+	if t.Kind == manuallock.KindCollection {
+		remove := fmt.Sprintf(collectionLockRoute, url.PathEscape(t.Collection.Namespace.String()),
+			url.PathEscape(t.Collection.Name.String()))
+
+		return lockRemovalRoutes{Remove: remove, Force: remove + "/force-unlock"}
+	}
+
+	unit := unitQueryValue(t.Unit)
+
+	return lockRemovalRoutes{
+		Remove: unitLockRoute + "?unit=" + unit,
+		Force:  unitLockRoute + "/force-unlock?unit=" + unit,
+	}
+}
+
+// unitQueryValue escapes the unit reference for a query. A colon and a slash
+// are legal in a query, so they stay readable for the person who copies the
+// route. Every other reserved character stays escaped.
+func unitQueryValue(u collection.UnitRef) string {
+	return strings.NewReplacer("%3A", ":", "%2F", "/").Replace(url.QueryEscape(u.String()))
+}
+
+// manualLockInfo returns the lock info of a manual lock. The backend shows ID
+// and Info to the user, so both say that a manual lock blocks the run and name
+// the route that removes it, after plain words. The ID is not a tool lock ID:
+// `tofu force-unlock` cannot use it.
+func manualLockInfo(e *manuallock.LockedError) lockInfo {
+	routes := manualLockRoutes(e.Lock.Target)
+
+	return lockInfo{
+		ID:        "A manual lock blocks this run. To remove it, send `DELETE " + routes.Remove + "`.",
+		Operation: "manual lock",
+		Info: e.Error() + ". `tofu force-unlock` does not remove a manual lock. " +
+			"The holder sends `DELETE " + routes.Remove + "`. A person with unit:manage sends `POST " + routes.Force + "`.",
+		Who:     manuallock.SafeText(e.Lock.Holder),
+		Version: "",
+		Created: e.Lock.Since.Format(time.RFC3339),
+		Path:    "",
+	}
+}
+
+// writeManualLocked answers 423 for a manual lock. The lock info names the
+// holder in Who, and the unit, the holder and the reason in Info, which the
+// backend shows to the user.
+func (h *Handler) writeManualLocked(w http.ResponseWriter, e *manuallock.LockedError) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusLocked)
+
+	if err := json.NewEncoder(w).Encode(manualLockInfo(e)); err != nil {
+		h.logger.Warn("write lock info", slog.String("error", err.Error()))
+	}
+}
+
 // writeLocked answers 423 with the lock info of the current lock, which the
 // backend shows to the user (ADR 49, decision 6).
 func (h *Handler) writeLocked(w http.ResponseWriter, held workspace.Lock) {
@@ -147,6 +220,7 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 		return
 	}
 
+	h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	bodygate.SetRetryAfterJitter(w)
 	http.Error(w, namespace.ErrFenced.Error(), http.StatusServiceUnavailable)
 }
@@ -154,6 +228,12 @@ func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err
 // writeHeld answers a refused LOCK with the lock that holds the workspace now.
 // A lock that cannot be read answers with the refusal.
 func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, refused error) {
+	if manual, ok := errors.AsType[*manuallock.LockedError](refusal); ok {
+		h.writeManualLocked(w, manual)
+
+		return
+	}
+
 	current, err := h.ws.Get(ctx, c.ref)
 	if err != nil || !current.Lock.Locked() {
 		h.writeError(ctx, w, refused)

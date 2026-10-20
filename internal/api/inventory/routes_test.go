@@ -81,8 +81,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Audit: nil, OnAuditFailure: nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks:         nil, Moves:         nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
@@ -117,8 +116,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Audit: nil, OnAuditFailure: nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks:         nil, Moves:         nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: enforcingUnitEntries(), err: nil},
@@ -145,6 +143,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 func enforcingUnitEntries() map[namespace.Name][]coreinventory.Entry {
 	return map[namespace.Name][]coreinventory.Entry{
 		"acme": {{
+			ManualLock:    nil,
 			LastChanged:   changeTime(),
 			Namespace:     "acme",
 			Tool:          "pulumi",

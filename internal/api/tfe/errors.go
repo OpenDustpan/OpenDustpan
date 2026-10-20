@@ -63,6 +63,10 @@ type errorClass struct {
 // an internal error text: it logs the status and answers "internal error".
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	class := classify(err)
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	if class.status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
@@ -176,7 +180,11 @@ func classifyTooLarge(err error) (errorClass, bool) {
 func classifyNamespace(err error) (errorClass, bool) {
 	switch {
 	case errors.Is(err, namespace.ErrFenced):
-		return errorClass{status: http.StatusConflict, title: titleConflict, detail: err.Error()}, true
+		// The copy of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return errorClass{
+			status: http.StatusConflict, title: titleConflict, detail: namespace.ErrFenced.Error(),
+		}, true
 	case errors.Is(err, namespace.ErrNotHome):
 		return errorClass{
 			status: http.StatusMisdirectedRequest,

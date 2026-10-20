@@ -220,8 +220,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 	logger := slog.New(slog.DiscardHandler)
 
 	units, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Audit: nil, OnAuditFailure: nil,
-		PublicURL: "", Moves: nil, Namespaces: namespaces, Units: st, Collections: collections, Deleted: st,
+		Audit: nil, OnAuditFailure: nil, Locks:     nil, PublicURL: "", Moves: nil, Namespaces: namespaces, Units: st, Collections: collections, Deleted: st,
 		History: nil, Lifecycles: map[string]coreinventory.Lifecycle{"pulumi": nil}, ReadScope: allReadable{},
 		Authenticator: authn, Authorizer: identity.AdminOnly{}, Sessions: nil, Logger: logger, Now: nil,
 	})

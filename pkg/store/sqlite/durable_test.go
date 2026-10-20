@@ -54,6 +54,34 @@ func TestDurableScheduleConformance(t *testing.T) {
 	})
 }
 
+// TestDurableHeartbeatConformance runs the heartbeat suite. One SQLite file
+// allows one store, so the suite gets that store on every Open call.
+func TestDurableHeartbeatConformance(t *testing.T) {
+	t.Parallel()
+
+	durabletest.RunHeartbeats(t, func(t *testing.T) durabletest.HeartbeatHarness {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+		copyTemplate(t, path)
+
+		s := openWith(t, path)
+
+		return durabletest.HeartbeatHarness{
+			Open: func(t *testing.T, _ time.Duration) durable.HeartbeatStore {
+				t.Helper()
+
+				ops := s.DurableOperations()
+				if ops == nil {
+					t.Fatal("durable operations are nil, want *sqlite.DurableOperations")
+				}
+
+				return ops
+			},
+		}
+	})
+}
+
 // durableHarness returns a harness on a fresh database file. One SQLite file
 // allows one store, so every Open call returns the operations of that one
 // store.
