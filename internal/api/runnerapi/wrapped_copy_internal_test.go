@@ -1,15 +1,18 @@
 package runnerapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -141,7 +144,7 @@ func TestWriteErrorUnknownAnswer(t *testing.T) {
 		t.Run(fmt.Sprint(scope), func(t *testing.T) {
 			t.Parallel()
 
-			rec, _ := writeErrorOf(t, scope, errUnknownDriver)
+			rec, logged := writeErrorOf(t, scope, errUnknownDriver)
 
 			if rec.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
@@ -149,6 +152,69 @@ func TestWriteErrorUnknownAnswer(t *testing.T) {
 
 			if got := answerMessage(t, rec.Body.String()); got != internalMessage {
 				t.Fatalf("message = %q, want %q", got, internalMessage)
+			}
+
+			if strings.Contains(logged, "hunter2") {
+				t.Fatalf("log = %q, must not hold the text of the unknown error", logged)
+			}
+		})
+	}
+}
+
+// TestWriteErrorBareSentinelNoRefusedLine proves that a bare sentinel, which
+// the answer holds whole, writes no "runner request refused" line.
+func TestWriteErrorBareSentinelNoRefusedLine(t *testing.T) {
+	t.Parallel()
+
+	for _, scope := range []Scope{ScopeRunnerKey, ScopeAuthorized} {
+		t.Run(fmt.Sprint(scope), func(t *testing.T) {
+			t.Parallel()
+
+			_, logged := writeErrorOf(t, scope, errBadBody)
+
+			if strings.Contains(logged, "runner request refused") {
+				t.Fatalf("log = %q, must hold no refused line", logged)
+			}
+		})
+	}
+}
+
+// TestRefusedLevel proves the level of a refusal: Debug for an error that an
+// anonymous caller can cause, Warn for the others.
+func TestRefusedLevel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want slog.Level
+	}{
+		{"unauthenticated", fmt.Errorf("sign-in: %w", identity.ErrUnauthenticated), slog.LevelDebug},
+		{"forged proof", fmt.Errorf("verify: %w", runner.ErrBadProof), slog.LevelDebug},
+		{"unknown runner", fmt.Errorf("lookup: %w", runner.ErrNotFound), slog.LevelDebug},
+		{"replay", fmt.Errorf("verify: %w", runner.ErrReplay), slog.LevelWarn},
+		{"claim lost", fmt.Errorf("claim: %w", runner.ErrClaimLost), slog.LevelWarn},
+		{"invalid", fmt.Errorf("body: %w", runner.ErrInvalid), slog.LevelWarn},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := refusedLevel(tc.err); got != tc.want {
+				t.Fatalf("level = %v, want %v", got, tc.want)
+			}
+
+			var (
+				h   Handler
+				buf bytes.Buffer
+			)
+
+			h.logger = slog.New(slog.NewTextHandler(&buf, nil))
+			h.logRefused(t.Context(), tc.err, "sent text")
+
+			if got := strings.Contains(buf.String(), "runner request refused"); got != (tc.want == slog.LevelWarn) {
+				t.Fatalf("log = %q, refused line at default level = %t", buf.String(), got)
 			}
 		})
 	}

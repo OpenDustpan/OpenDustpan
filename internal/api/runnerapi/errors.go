@@ -70,17 +70,33 @@ func (h *Handler) logFenced(ctx context.Context, err error) {
 
 // logRefused logs the wrap text of a protocol error that the answer does not
 // hold. A fence has its own line, and an unknown error holds no text for the
-// log: its answer is "internal error" and logFailure records the status.
+// log: its answer is "internal error" and logFailure records the status. A
+// refusal that any anonymous caller can cause logs at Debug, so that a flood
+// of forged requests does not fill the log.
 func (h *Handler) logRefused(ctx context.Context, err error, sent string) {
 	if sent == err.Error() || sent == internalMessage || errors.Is(err, namespace.ErrFenced) {
 		return
 	}
 
-	h.logger.WarnContext(ctx, "runner request refused", slog.String("error", err.Error()))
+	h.logger.Log(ctx, refusedLevel(err), "runner request refused", slog.String("error", err.Error()))
 }
 
-// logFailure logs the status of a failed request. The log never holds the
-// error text, which may hold driver detail, a token or a key.
+// refusedLevel returns the log level of a refusal. Debug is for the errors
+// that a caller without credentials can cause: no sign-in, a proof that does
+// not verify, an unknown runner. All other refusals are Warn.
+func refusedLevel(err error) slog.Level {
+	if errors.Is(err, identity.ErrUnauthenticated) || errors.Is(err, runner.ErrBadProof) ||
+		errors.Is(err, runner.ErrNotFound) {
+		return slog.LevelDebug
+	}
+
+	return slog.LevelWarn
+}
+
+// logFailure logs the status of a failed request. It never holds the error
+// text, which may hold driver detail, a token or a key. Only logFenced and
+// logRefused log the text of an error, and only for an error that a case of a
+// switch knows.
 func (h *Handler) logFailure(ctx context.Context, status int) {
 	if status >= http.StatusInternalServerError {
 		h.logger.ErrorContext(ctx, "runner request failed", slog.Int("status", status))
