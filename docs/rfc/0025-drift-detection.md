@@ -37,4 +37,7 @@ Operator all have it. OpenDustpan has only a motivation line in RFC 6.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 258](../adr/0258-drift-remediation-is-a-plan-that-a-person-approves.md)
+on 2026-10-20: no automatic apply. A remediation is a job whose plan a
+person approves. The schedule, the status and the pull request action stay
+open.

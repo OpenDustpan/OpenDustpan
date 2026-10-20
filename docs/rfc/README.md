@@ -58,7 +58,7 @@ both together.
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | accepted (ADRs 211, 249) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted; the backup of one namespace (ADR 218) |
 | [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft; the branding preset setting accepted (ADR 212), operator branding accepted (ADR 235) |
-| [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
+| [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft; the tools' own registry protocols, no OCI endpoint now (ADR 257) |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
 | [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); the points of RFC 77 decided |
@@ -73,12 +73,12 @@ both together.
 | [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entries (ADR 212) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
-| [25](0025-drift-detection.md) | Drift detection and remediation | draft |
+| [25](0025-drift-detection.md) | Drift detection and remediation | draft; no automatic remediation (ADR 258) |
 | [26](0026-unit-status.md) | Unit status in the inventory | draft; a lock is a flag, with manual locks (ADR 213) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
 | [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | accepted |
 | [29](0029-existing-ci.md) | Using an existing CI as the executor | accepted |
-| [30](0030-opentofu-remote-execution.md) | CLI-driven remote execution for OpenTofu | draft |
+| [30](0030-opentofu-remote-execution.md) | CLI-driven remote execution for OpenTofu | draft; speculative plans first (ADR 254) |
 | [31](0031-kubernetes.md) | Kubernetes: runner, operator, and blueprints as resources | draft |
 | [32](0032-object-storage.md) | Object storage adapters | accepted; no bucket of the customer (ADR 221) |
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | accepted |
@@ -93,7 +93,7 @@ both together.
 | [42](0042-migration-import.md) | Migration from other backends and operators | accepted (ADR 29); the import resource and the source adapters decided by ADRs 241 to 244 |
 | [43](0043-ephemeral-units.md) | Ephemeral units and time to live | draft |
 | [44](0044-bulk-operations.md) | Bulk operations | draft; bulk calls accepted (ADR 213) |
-| [45](0045-cost-estimation.md) | Cost estimation | draft |
+| [45](0045-cost-estimation.md) | Cost estimation | draft; the push route first (ADR 259) |
 | [46](0046-insights.md) | Insights: dashboards and reports | draft |
 | [47](0047-discovery-and-codification.md) | Discovery and codification of unmanaged resources | draft |
 | [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
@@ -141,5 +141,6 @@ both together.
 | [92](0092-opentelemetry-for-jobs.md) | OpenTelemetry for jobs, with job traces, fleet metrics and OTLP export to the operator's collector | draft |
 | [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | draft |
 | [94](0094-ci-shim-secrets-at-run-time-out-of-state.md) | The CI shim, which gives secrets to a tool in a team's own CI at run time and keeps them out of state | draft |
-| [95](0095-day-two-actions-outside-state.md) | Day-two actions outside state, which change the world but not the state, and how OpenDustpan records, shows and gates them | draft |
+| [95](0095-day-two-actions-outside-state.md) | Day-two actions outside state, which change the world but not the state, and how OpenDustpan records, shows and gates them | draft; wait for a supported tool, slice 1 no code (ADR 260) |
 | [96](0096-follow-ups-after-an-apply.md) | Follow-ups after an apply, which start an AWX job template or send a signed webhook with selected outputs | draft |
+| [97](0097-test-reports-on-stacks-and-workspaces.md) | Test reports on stacks and workspaces, an extension of RFC 90 to test results | draft |
