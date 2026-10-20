@@ -169,7 +169,7 @@ _Avoid_: Feature list, handshake, capability (alone)
 
 **API description**:
 The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The SDKs, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
-_Avoid_: Swagger file, API spec, schema file
+_Avoid_: Swagger file, API spec, OpenAPI spec, schema file
 
 **Forge connection**:
 The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).

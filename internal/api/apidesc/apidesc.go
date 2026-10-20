@@ -1,13 +1,14 @@
 // Package apidesc holds the types for the description of the tool-neutral
 // REST API and the check that compares a description with a route table.
 //
-// The package describes the shape of the check only. It reads no route table
-// and writes no document yet.
+// The package holds the types and the check only. It reads no route table and
+// writes no document.
 package apidesc
 
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -16,8 +17,8 @@ import (
 // covers a path under this prefix and no other path.
 const Prefix = "/api/dustpan/v1/"
 
-// ErrInvalidOperation means that an operation has no method or no path, or
-// that its path lies outside Prefix.
+// ErrInvalidOperation means that an operation breaks the allowlists of
+// Validate, or that a list holds the same key twice.
 var ErrInvalidOperation = errors.New("apidesc: operation is not valid")
 
 // Operation is one endpoint of the description: a method and a path pattern,
@@ -36,28 +37,119 @@ type Operation struct {
 	Public bool
 }
 
-// Source gives the operations of one place: a route table of the server, or a
-// description that a person or a tool wrote.
-type Source interface {
-	// Operations returns every operation of the source. It returns
-	// ErrInvalidOperation, wrapped, for an operation that Validate refuses.
-	Operations() ([]Operation, error)
-}
-
-// Validate returns ErrInvalidOperation, wrapped, when the operation has no
-// method, when the path lies outside Prefix, or when the path holds a dot
-// segment that could leave the prefix after a client cleans it.
+// Validate returns ErrInvalidOperation, wrapped, when the operation breaks an
+// allowlist: the method, the path or the actions. It refuses a value and does
+// not change it to make it valid.
+//
+// Defense in depth: a handler and a route test check the same fields. This
+// check stays so that a new caller of Diff or of the generator cannot skip it
+// and read a hostile path as a match.
 func (o Operation) Validate() error {
-	if o.Method == "" || o.Method != strings.ToUpper(o.Method) {
+	if !allowedMethod(o.Method) {
 		return fmt.Errorf("%w: method %q", ErrInvalidOperation, o.Method)
 	}
 
-	if !strings.HasPrefix(o.Path, Prefix) {
-		return fmt.Errorf("%w: path %q is outside %s", ErrInvalidOperation, o.Path, Prefix)
+	if err := validatePath(o.Path); err != nil {
+		return err
 	}
 
-	if slices.Contains(strings.Split(o.Path, "/"), "..") {
-		return fmt.Errorf("%w: path %q holds a dot segment", ErrInvalidOperation, o.Path)
+	return validateActions(o)
+}
+
+// allowedMethod reports whether the method is on the allowlist.
+func allowedMethod(method string) bool {
+	switch method {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE":
+		return true
+	default:
+		return false
+	}
+}
+
+var (
+	literalSegment = regexp.MustCompile(`^[a-z0-9-]+$`)
+	wildcardName   = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+	actionGrammar  = regexp.MustCompile(`^[a-z]+:[a-z]+(-[a-z]+)*$`)
+)
+
+// validatePath allows a path under Prefix whose segments are literals
+// ([a-z0-9-]+) or wildcards. A wildcard is {name} with name [a-z_][a-z0-9_]*.
+// {name...} and {$} are allowed in the last segment only.
+func validatePath(path string) error {
+	rest, ok := strings.CutPrefix(path, Prefix)
+	if !ok || rest == "" {
+		return fmt.Errorf("%w: path %q is outside %s", ErrInvalidOperation, path, Prefix)
+	}
+
+	segments := strings.Split(rest, "/")
+	for i, seg := range segments {
+		last := i == len(segments)-1
+		if !validSegment(seg, last) {
+			return fmt.Errorf("%w: path %q holds the segment %q that is not allowed", ErrInvalidOperation, path, seg)
+		}
+	}
+
+	return nil
+}
+
+// validSegment reports whether one path segment is a literal or a wildcard
+// that is allowed at its place. An empty segment, a dot segment, an encoded
+// dot, a query, a fragment, a space and CR or LF all fail the literal rule.
+func validSegment(seg string, last bool) bool {
+	if literalSegment.MatchString(seg) {
+		return true
+	}
+
+	name, ok := strings.CutPrefix(seg, "{")
+	if !ok {
+		return false
+	}
+
+	name, ok = strings.CutSuffix(name, "}")
+	if !ok {
+		return false
+	}
+
+	if name == "$" {
+		return last
+	}
+
+	if base, rest := strings.CutSuffix(name, "..."); rest {
+		return last && wildcardName.MatchString(base)
+	}
+
+	return wildcardName.MatchString(name)
+}
+
+// validateActions refuses an empty action, a repeated action and an action
+// that breaks the grammar <area>:<verb>. A public route has no actions. A
+// route that is not public has at least one.
+func validateActions(o Operation) error {
+	if o.Public && len(o.Actions) > 0 {
+		return fmt.Errorf("%w: actions of %s %s are set on a public route", ErrInvalidOperation, o.Method, o.Path)
+	}
+
+	if !o.Public && len(o.Actions) == 0 {
+		return fmt.Errorf(
+			"%w: actions of %s %s are missing on a route that is not public",
+			ErrInvalidOperation,
+			o.Method,
+			o.Path,
+		)
+	}
+
+	seen := make(map[string]bool, len(o.Actions))
+
+	for _, action := range o.Actions {
+		if !actionGrammar.MatchString(action) {
+			return fmt.Errorf("%w: action %q is not <area>:<verb>", ErrInvalidOperation, action)
+		}
+
+		if seen[action] {
+			return fmt.Errorf("%w: action %q appears twice", ErrInvalidOperation, action)
+		}
+
+		seen[action] = true
 	}
 
 	return nil
@@ -98,14 +190,14 @@ type Drift struct {
 	Undescribed []string
 	// Unrouted holds the keys of the operations that no route serves.
 	Unrouted []string
-	// ActionMismatch holds the keys of the operations whose actions differ
-	// between the route table and the description.
-	ActionMismatch []string
+	// Mismatch holds the keys of the operations that exist in both lists but
+	// differ in their path, their actions or their public flag.
+	Mismatch []string
 }
 
 // Empty reports whether the route table and the description agree.
 func (d Drift) Empty() bool {
-	return len(d.Undescribed) == 0 && len(d.Unrouted) == 0 && len(d.ActionMismatch) == 0
+	return len(d.Undescribed) == 0 && len(d.Unrouted) == 0 && len(d.Mismatch) == 0
 }
 
 // Diff compares the routes with the described operations. It fails closed:
@@ -133,8 +225,10 @@ func Diff(routes, described []Operation) (Drift, error) {
 			continue
 		}
 
-		if route.Public != doc.Public || !sameActions(route.Actions, doc.Actions) {
-			d.ActionMismatch = append(d.ActionMismatch, key)
+		// The key ignores the names of wildcards, but a generator turns them
+		// into the names of SDK parameters, so the paths must match exactly.
+		if route.Path != doc.Path || route.Public != doc.Public || !sameActions(route.Actions, doc.Actions) {
+			d.Mismatch = append(d.Mismatch, key)
 		}
 	}
 
@@ -146,7 +240,7 @@ func Diff(routes, described []Operation) (Drift, error) {
 
 	slices.Sort(d.Undescribed)
 	slices.Sort(d.Unrouted)
-	slices.Sort(d.ActionMismatch)
+	slices.Sort(d.Mismatch)
 
 	return d, nil
 }
