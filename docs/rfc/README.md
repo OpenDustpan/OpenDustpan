@@ -140,3 +140,4 @@ both together.
 | [91](0091-plan-review-at-scale.md) | Plan review at scale, with one view of repeated changes across stacks and workspaces, and noise rules that expire | draft |
 | [92](0092-opentelemetry-for-jobs.md) | OpenTelemetry for jobs, with job traces, fleet metrics and OTLP export to the operator's collector | draft |
 | [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | draft |
+| [95](0095-day-two-actions-outside-state.md) | Day-two actions outside state, which change the world but not the state, and how OpenDustpan records, shows and gates them | draft |
