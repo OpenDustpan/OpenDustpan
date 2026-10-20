@@ -21,6 +21,9 @@ const (
 	// maxReferenceFilters is the largest number of reference query values in
 	// one request.
 	maxReferenceFilters = 20
+	// maxStateFilters is the largest number of state query values in one
+	// request. The count is of the raw values, before the removal of duplicates.
+	maxStateFilters = 9
 	// maxLabelKeyLen and maxLabelValueLen are the largest lengths of a label
 	// key and of a label value, in characters.
 	maxLabelKeyLen   = 128
@@ -42,16 +45,17 @@ type labelFilter struct {
 }
 
 // unitFilter holds the filters of a unit list. A unit matches when it has
-// each label and, if the filter names references, when its reference is one
-// of them.
+// each label, when its reference is one of the references if the filter names
+// any, and when it has any of the states if the filter names any.
 type unitFilter struct {
 	references map[string]struct{}
+	states     map[coreinventory.State]struct{}
 	labels     []labelFilter
 }
 
 // active reports whether the filter selects anything.
 func (f unitFilter) active() bool {
-	return len(f.labels) > 0 || f.references != nil
+	return len(f.labels) > 0 || f.references != nil || f.states != nil
 }
 
 // matches reports whether the unit e, with the authorization object uobj,
@@ -63,6 +67,10 @@ func (f unitFilter) matches(e coreinventory.Entry, uobj identity.Object) bool {
 		}
 	}
 
+	if f.states != nil && !hasAnyState(e, f.states) {
+		return false
+	}
+
 	for _, want := range f.labels {
 		if got, ok := e.Labels[want.key]; !ok || got != want.value {
 			return false
@@ -70,6 +78,18 @@ func (f unitFilter) matches(e coreinventory.Entry, uobj identity.Object) bool {
 	}
 
 	return true
+}
+
+// hasAnyState reports whether the unit e has one of the states in want. It
+// uses the derivation of the entry, the one that the response uses.
+func hasAnyState(e coreinventory.Entry, want map[coreinventory.State]struct{}) bool {
+	for s := range want {
+		if e.HasState(s) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // parseUnitFilter reads the label and reference query values of a unit list
@@ -119,7 +139,44 @@ func parseUnitFilter(r *http.Request, ns namespace.Name) (unitFilter, error) {
 		f.references[obj.String()] = struct{}{}
 	}
 
+	states, stateErr := parseStateFilter(query["state"])
+	if stateErr != nil {
+		return unitFilter{}, stateErr
+	}
+
+	f.states = states
+
 	return f, nil
+}
+
+// parseStateFilter reads the state query values of a unit list. The match is
+// exact. More than maxStateFilters raw values, or a value that is not a unit
+// state, gives an error that names the valid values. It returns nil when raw
+// is empty, and else the set of states without duplicates.
+func parseStateFilter(raw []string) (map[coreinventory.State]struct{}, error) {
+	if len(raw) > maxStateFilters {
+		return nil, fmt.Errorf(
+			"%w: send at most %d state query values; the valid values are %s",
+			errInvalidQuery, maxStateFilters, coreinventory.ValidStateList(),
+		)
+	}
+
+	if len(raw) == 0 {
+		return nil, nil //nolint:nilnil // No state value means no state filter; the nil map says so.
+	}
+
+	set := make(map[coreinventory.State]struct{}, len(raw))
+
+	for i, value := range raw {
+		s, err := coreinventory.ParseState(value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: state query value %d: %w", errInvalidQuery, i+1, err)
+		}
+
+		set[s] = struct{}{}
+	}
+
+	return set, nil
 }
 
 // parseLabelFilter splits raw at the first equals sign and checks both parts.

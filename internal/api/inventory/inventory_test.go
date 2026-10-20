@@ -304,15 +304,22 @@ func authorizedGet(
 
 // unitBody is one decoded unit entry.
 type unitBody struct {
-	Tool          string    `json:"tool"`
-	Reference     string    `json:"reference"`
-	UnitID        string    `json:"unitID"`
-	Namespace     string    `json:"namespace"`
-	Name          string    `json:"name"`
-	LastChange    string    `json:"lastChange"`
-	Status        string    `json:"status"`
-	ResourceCount *int64    `json:"resourceCount"`
-	Lock          *lockBody `json:"lock"`
+	Tool          string      `json:"tool"`
+	Reference     string      `json:"reference"`
+	UnitID        string      `json:"unitID"`
+	Namespace     string      `json:"namespace"`
+	Name          string      `json:"name"`
+	LastChange    string      `json:"lastChange"`
+	Status        string      `json:"status"`
+	ResourceCount *int64      `json:"resourceCount"`
+	Lock          *lockBody   `json:"lock"`
+	States        []stateBody `json:"states"`
+}
+
+// stateBody is one decoded state of a unit.
+type stateBody struct {
+	State string `json:"state"`
+	Since string `json:"since"`
 }
 
 // lockBody is one decoded lock object.
@@ -479,6 +486,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			States:        []stateBody{},
 		},
 		{
 			Tool:          "Pulumi",
@@ -490,6 +498,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			Status:        "deployed",
 			ResourceCount: &count,
 			Lock:          nil,
+			States:        []stateBody{},
 		},
 		{
 			Tool:          "OpenTofu",
@@ -501,6 +510,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			Status:        "",
 			ResourceCount: nil,
 			Lock:          nil,
+			States:        []stateBody{},
 		},
 	}
 
