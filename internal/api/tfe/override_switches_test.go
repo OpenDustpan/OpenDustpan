@@ -118,6 +118,7 @@ func newSwitchedHandler(
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

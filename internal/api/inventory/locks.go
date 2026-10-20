@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -155,7 +156,7 @@ func (h *Handler) putLock(w http.ResponseWriter, r *http.Request, p identity.Pri
 
 	l, err := h.locks.Lock(ctx, p, lockTarget(obj), reason, entry)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: ""}, err)
 
 		return
 	}
@@ -185,7 +186,7 @@ func (h *Handler) deleteLock(w http.ResponseWriter, r *http.Request, p identity.
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "unlock")
 
 	if err := h.locks.Unlock(ctx, p, lockTarget(obj), entry); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: ""}, err)
 
 		return
 	}
@@ -203,12 +204,41 @@ func (h *Handler) forceUnlock(w http.ResponseWriter, r *http.Request, p identity
 	entry := lockAuditEntry(r, p, obj, identity.ActionUnitManage, "force-unlock")
 
 	if err := h.locks.ForceUnlock(ctx, p, lockTarget(obj), entry); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockFailure(w, r, p, refusal.Denial{Action: identity.ActionUnitManage, Object: obj, Reason: ""}, err)
 
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Reasons of the audit entries of the lock refusals that the service decides.
+const (
+	reasonNotHolder   = "lock held by another principal"
+	reasonLockChanged = "lock changed during the removal"
+)
+
+// writeLockFailure answers the error of a lock route. A removal that the
+// service refuses because the principal does not hold the lock, or because the
+// lock changed, writes an audit entry of the outcome denied: the route check
+// has allowed the request, so the middleware has not recorded it. A lock that
+// is already held, and an object with no lock, are state and not refusals, and
+// write no entry. d holds the action and the object of the route.
+func (h *Handler) writeLockFailure(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, d refusal.Denial, err error,
+) {
+	switch {
+	case errors.Is(err, manuallock.ErrNotHolder):
+		d.Reason = reasonNotHolder
+		h.guard.Record(r.Context(), r, p, d)
+	case errors.Is(err, manuallock.ErrLockChanged):
+		d.Reason = reasonLockChanged
+		h.guard.Record(r.Context(), r, p, d)
+	default:
+		// State and other errors write no entry.
+	}
+
+	h.writeError(r.Context(), w, err)
 }
 
 // lockAuditEntry returns the audit entry of a lock change. version names the

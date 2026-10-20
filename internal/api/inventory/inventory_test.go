@@ -263,8 +263,7 @@ func newBehaviorHandlerWith(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Locks:         nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
@@ -278,6 +277,7 @@ func newBehaviorHandlerWith(
 		PublicURL:     wiring.publicURL,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -944,8 +944,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiinventory.Config{
-		Locks:         nil,
-		Moves:         nil,
+		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
@@ -959,6 +958,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		PublicURL:     "",
+		DenialLimiter: nil,
 	}
 
 	cases := []struct {

@@ -184,6 +184,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
 		},
 		InstallationKind: parts.kind,
 		Workers:          nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

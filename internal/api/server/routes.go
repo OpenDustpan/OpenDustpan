@@ -404,7 +404,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		}
 
 		for _, action := range actions {
-			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
+			if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
 				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
 
 				return

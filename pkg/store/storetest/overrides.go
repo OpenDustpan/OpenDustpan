@@ -181,6 +181,10 @@ func testUnlockedDeclareNeedsSwitches(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("declare an unlocked write with the switches off: err = %v, want ErrOverrideRefused", err)
 	}
 
+	if override, ok := workspace.RefusedOverride(err); !ok || override != workspace.OverrideUnlocked {
+		t.Fatalf("unlocked refusal: RefusedOverride = %v, %v, want OverrideUnlocked", override, ok)
+	}
+
 	setErr := s.SetOverrides(t.Context(), ns.Name, namespace.Overrides{Forced: false, Unlocked: true}, ns.Fence())
 	if setErr != nil {
 		t.Fatalf("turn on the namespace switch: %v", setErr)
@@ -311,6 +315,10 @@ func testForcedDeclareNeedsSwitches(t *testing.T, s WorkspaceStore) {
 	err := s.CreateStateVersion(t.Context(), in, ns.Fence(), generousPendingCap)
 	if !errors.Is(err, workspace.ErrOverrideRefused) {
 		t.Fatalf("declare a forced write into a unit with state, switches off: err = %v, want ErrOverrideRefused", err)
+	}
+
+	if override, ok := workspace.RefusedOverride(err); !ok || override != workspace.OverrideForced {
+		t.Fatalf("forced refusal: RefusedOverride = %v, %v, want OverrideForced", override, ok)
 	}
 
 	cur, curErr := s.CurrentStateVersion(t.Context(), w.ID)
