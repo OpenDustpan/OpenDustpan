@@ -379,6 +379,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
 		h.writeJSON(ctx, w, status, reauthenticateResponse{Code: status, Message: message, Reauthenticate: fresh.url})
 
@@ -503,7 +507,7 @@ func classifyBackup(err error) (int, string, bool) {
 
 // classifyNamespace maps the namespace errors to their status and message: a
 // bad namespace name, body, page or cursor answers 400, a duplicate
-// namespace 409, an unknown namespace 404, and a store without the paging
+// namespace or a fenced write 409, an unknown namespace 404, and a store without the paging
 // port 501.
 func classifyNamespace(err error) (int, string, bool) {
 	switch {
@@ -512,6 +516,10 @@ func classifyNamespace(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, namespace.ErrFenced):
+		// The sentence of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return http.StatusConflict, namespace.ErrFenced.Error(), true
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, namespace.ErrNoPaging):

@@ -901,12 +901,16 @@ type errorResponse struct {
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 
-	if status == http.StatusInternalServerError {
+	switch {
+	case status == http.StatusInternalServerError:
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
-	} else if errors.Is(err, secret.ErrDecrypt) {
+	case errors.Is(err, secret.ErrDecrypt):
 		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
+	case errors.Is(err, namespace.ErrFenced):
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	default:
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
@@ -958,8 +962,11 @@ func classify(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrHasResources):
 		return http.StatusBadRequest, hasResourcesMessage
-	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, namespace.ErrFenced),
-		errors.Is(err, stack.ErrOtherSecretsProvider):
+	case errors.Is(err, namespace.ErrFenced):
+		// The copy of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return http.StatusConflict, namespace.ErrFenced.Error()
+	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, stack.ErrOtherSecretsProvider):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, err.Error()
