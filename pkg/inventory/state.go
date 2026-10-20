@@ -71,15 +71,16 @@ func (s State) Valid() bool {
 func ParseState(raw string) (State, error) {
 	s := State(raw)
 	if !s.Valid() {
-		return "", fmt.Errorf("%w %q: use one of %s", ErrUnknownState, raw, validStateList())
+		return "", fmt.Errorf("%w %q: use one of %s", ErrUnknownState, raw, ValidStateList())
 	}
 
 	return s, nil
 }
 
-// validStateList returns the wire values in the order of the badges, joined
-// with a comma and a space.
-func validStateList() string {
+// ValidStateList returns the wire values in the order of the badges, joined
+// with a comma and a space. An error text that names the valid values uses it,
+// so the list has one place.
+func ValidStateList() string {
 	states := States()
 	names := make([]string, len(states))
 

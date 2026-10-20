@@ -157,7 +157,7 @@ func parseStateFilter(raw []string) (map[coreinventory.State]struct{}, error) {
 	if len(raw) > maxStateFilters {
 		return nil, fmt.Errorf(
 			"%w: send at most %d state query values; the valid values are %s",
-			errInvalidQuery, maxStateFilters, validStates(),
+			errInvalidQuery, maxStateFilters, coreinventory.ValidStateList(),
 		)
 	}
 
@@ -177,18 +177,6 @@ func parseStateFilter(raw []string) (map[coreinventory.State]struct{}, error) {
 	}
 
 	return set, nil
-}
-
-// validStates returns the valid state values for an error text.
-func validStates() string {
-	states := coreinventory.States()
-	names := make([]string, len(states))
-
-	for i, s := range states {
-		names[i] = string(s)
-	}
-
-	return strings.Join(names, ", ")
 }
 
 // parseLabelFilter splits raw at the first equals sign and checks both parts.

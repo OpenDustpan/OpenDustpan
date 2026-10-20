@@ -73,6 +73,22 @@ func TestStatesBadgeOrder(t *testing.T) {
 	}
 }
 
+// TestValidStateListFollowsStates proves that the text of the valid values
+// names every state once, in the order of the badges, with a comma and a space.
+func TestValidStateListFollowsStates(t *testing.T) {
+	t.Parallel()
+
+	var names []string
+
+	for _, s := range inventory.States() {
+		names = append(names, string(s))
+	}
+
+	if got, want := inventory.ValidStateList(), strings.Join(names, ", "); got != want {
+		t.Fatalf("ValidStateList() = %q, want %q", got, want)
+	}
+}
+
 func TestParseState(t *testing.T) {
 	t.Parallel()
 

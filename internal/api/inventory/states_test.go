@@ -207,7 +207,7 @@ func TestUnitListStateFilterRefuses(t *testing.T) {
 	handler := newStateHandler(t, lockCombinationEntries())
 
 	nine := strings.Repeat("&state=locked", 9)[1:]
-	tenDistinct := "state=" + strings.Join(strings.Fields(strings.Repeat("locked ", 10)), "&state=")
+	tenDuplicates := "state=" + strings.Join(strings.Fields(strings.Repeat("locked ", 10)), "&state=")
 
 	cases := []struct {
 		name  string
@@ -215,8 +215,8 @@ func TestUnitListStateFilterRefuses(t *testing.T) {
 		code  int
 	}{
 		{"nine raw values", nine, http.StatusOK},
-		{"ten raw values", tenDistinct, http.StatusBadRequest},
-		{"ten raw values with duplicates", nine + "&state=in-sync", http.StatusBadRequest},
+		{"ten raw values, all duplicates", tenDuplicates, http.StatusBadRequest},
+		{"nine duplicates and one other raw value", nine + "&state=in-sync", http.StatusBadRequest},
 		{"unknown value", "state=winning", http.StatusBadRequest},
 		{"other case", "state=Locked", http.StatusBadRequest},
 		{"trailing space", "state=" + url.QueryEscape("locked "), http.StatusBadRequest},
