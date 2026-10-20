@@ -252,7 +252,7 @@ func checkApprovalRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 		{step: "default with an unknown field", method: http.MethodPut, path: def, body: `{"count":1,"approvers":{},"unless":"true"}`, want: http.StatusBadRequest},
 		{step: "rule with no approver", method: http.MethodPut, path: rule, body: `{"count":1,"approvers":{}}`, want: http.StatusUnprocessableEntity},
 		{step: "rule with the reserved ID", method: http.MethodPut, path: approvalNamespaceBase + "/approval-rules/default", body: `{"count":1,"approvers":{"groups":["a"]}}`, want: http.StatusUnprocessableEntity},
-		{step: "delete when unset", method: http.MethodDelete, path: def, body: "", want: http.StatusNotFound},
+		{step: "delete when unset", method: http.MethodDelete, path: def, body: "", want: http.StatusNoContent},
 	} {
 		approvalCall(ctx, t, env, s)
 	}

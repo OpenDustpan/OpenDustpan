@@ -208,7 +208,7 @@ func TestApprovalDefaultLifecycle(t *testing.T) {
 
 	wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, target, "", ""}), http.StatusNoContent)
 	wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, target, "", ""}), http.StatusNotFound)
-	wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, target, "", ""}), http.StatusNotFound)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, target, "", ""}), http.StatusNoContent)
 }
 
 // TestApprovalDefaultVersionPrecondition proves that If-Match protects a

@@ -77,8 +77,9 @@ A `PUT` with no `If-Match` header replaces the stored default, or creates it. A
 `PUT` with `If-Match: "<version>"` replaces that version only. If another
 request changed the default, the server answers 409 and changes nothing.
 
-`DELETE` on the same path removes the default and answers 204. After that, the
-namespace needs no approval again. `DELETE` also takes `If-Match`.
+`DELETE` on the same path removes the default and answers 204. It answers 204
+also when the namespace sets no default. After that, the namespace needs no
+approval again. `DELETE` also takes `If-Match`.
 
 ## Store an approval rule
 

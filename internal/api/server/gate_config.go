@@ -320,7 +320,8 @@ func (h *Handler) writeApprovalDefault(
 }
 
 // removeApprovalDefault serves DELETE /api/dustpan/v1/namespaces/{namespace}/approval-default.
-// It answers 204. With If-Match, it removes that version only.
+// It answers 204, also when the namespace sets no default. With If-Match, it
+// removes that version only.
 func (h *Handler) removeApprovalDefault(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
@@ -332,13 +333,28 @@ func (h *Handler) removeApprovalDefault(
 
 		return d.Version, getErr
 	})
+	if errors.Is(err, gate.ErrNotFound) {
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	if err := h.gates.DeleteApprovalDefault(ctx, scope, prev, gateEntry(r, p)); err != nil {
+	err = h.gates.DeleteApprovalDefault(ctx, scope, prev, gateEntry(r, p))
+	if errors.Is(err, gate.ErrNotFound) {
+		// The default went away between the read and the delete. The goal of
+		// the request holds, so the answer is the same as for no default.
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
