@@ -35,13 +35,14 @@ const (
 	StateUnknown State = "unknown"
 )
 
-// States returns the unit states, in the vocabulary order of the owner's
-// decision. It returns a new slice on each call.
+// States returns the unit states in the order of the badges: failed,
+// awaiting-approval, apply-needed, drifted, running, queued, locked, unknown,
+// in-sync. The order picks no winner. This function is the one place that
+// holds the order. It returns a new slice on each call.
 func States() []State {
 	return []State{
-		StateInSync, StateRunning, StateQueued, StateLocked,
-		StateAwaitingApproval, StateApplyNeeded, StateDrifted, StateFailed,
-		StateUnknown,
+		StateFailed, StateAwaitingApproval, StateApplyNeeded, StateDrifted,
+		StateRunning, StateQueued, StateLocked, StateUnknown, StateInSync,
 	}
 }
 

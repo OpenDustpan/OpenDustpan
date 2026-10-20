@@ -1,13 +1,13 @@
 ---
 rfc: 26
 title: Unit status in the inventory
-status: accepted in part (ADR 265)
+status: accepted (ADRs 213, 265)
 created: 2026-10-10
 ---
 
 # RFC 26. Unit status in the inventory
 
-Status: accepted in part. [ADR 265](../adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md)
+Status: accepted (ADRs 213 and 265). [ADR 265](../adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md)
 records the decisions: the words and the badge rule (owner, 2026-10-18), and
 the answers to all ten questions below (product manager, under the owner's
 delegation of 20 October 2026). No question is open. No code writes a state
@@ -53,7 +53,8 @@ vocabulary holds no `locked` value.
   draws the lock badge from them. A filter by `locked` reads the flags.
 - C. Store `locked` as a state. This contradicts ADR 213 decision 9.
 
-Answer: A (ADR 265 decision 5). The badge set is one list for the console and
+Answer: A (ADR 265 decision 5). Option A supersedes in part the vocabulary
+sentence of ADR 213 decision 9 and keeps the flag as the only source. The badge set is one list for the console and
 the filter (decision 26.2). The flag stays the only source, so no stored state
 holds `locked`.
 
@@ -72,20 +73,19 @@ own words (ADR 12, ADR 251).
 | `locked` | the inventory | the lock and the manual lock |
 | `drifted`, `in-sync`, `unknown` | the drift package | the drift result (ADR 263) |
 | `running`, `queued`, `awaiting-approval` | the job model | the jobs of the unit, when the job store writes them |
-| `failed` | the job model, and the `stack` package for a Pulumi CLI update | the latest change job or update of the unit |
+| `failed` | the job model, and the `stack` package for a Pulumi CLI update | the latest change to end: an apply or destroy job, or an update of kind update, destroy or import |
 | `apply-needed` | the job model | a stored plan with changes that nobody applied (question 5) |
 
-Options: A: the inventory stores the set of states of a unit, and each owner
+Options: A: the inventory stores the set of states of a unit, and each writer
 writes its own states in the transaction of its own write (ADR 13). B: the
-inventory builds the set at read time from the tables of each owner.
+inventory builds the set at read time from the tables of each writer.
 
 Answer: A for the states that change on a write, and B only for `locked`
 (ADR 265 decision 7). A stored set makes the filter one indexed read. B makes
 every list read join the job and drift tables. Each write of a state carries
 the `namespace.Fence`, and the store checks it in the same transaction. Each
-state has one owner, and no owner writes the state of another. A Pulumi CLI
-update that ends failed sets `failed`, because the `stack` package owns the
-update cycle. The next successful update clears it.
+state has named writers. A writer writes a state only in the transaction of
+its own write, with the namespace fence.
 
 ### 4. When do `in-sync` and `unknown` show?
 
@@ -113,10 +113,18 @@ with RFC 12.
 ADR 263 decision 11 says that a failed drift check shows as a failed job and
 does not change the drift result.
 
-Answer: `failed` means that the latest change job of the unit ended failed
-(ADR 265 decision 10). A change job is an apply or a destroy. A plan-only job
-and a drift check are not change jobs. `failed` clears only on the next
-successful change job. There is no acknowledge action.
+Answer: `failed` means that the latest change to end failed (ADR 265 decision
+10). A change is an apply or destroy job, or a Pulumi CLI update of kind
+update, destroy or import. A preview, a refresh, a plan-only job and a drift
+check are not changes. `failed` is one stored fact for each unit with two
+writers: the job model and the `stack` package. Each writes it in the
+transaction of its own write, with the fence. The latest change to end wins: a
+failed change sets `failed`, and a successful change from either source clears
+it. A Pulumi job that runs `pulumi up` against our API gives a job end and an
+update end for the same change. Both write the same fact, so the result is the
+same whichever comes last. An OpenTofu CLI apply outside a job gives no
+`failed`, because the server sees only the state upload. There is no
+acknowledge action.
 
 ### 7. In what order are the badges?
 
@@ -145,16 +153,17 @@ matches when it has any of the named states. This is the style of the
 reference filter. The label filter is different: a unit must have all the
 named labels. The `state` filter adds to the other filters with AND. The
 match is exact, with no normalization. The server removes duplicate values. A
-request has at most 9 values. An unknown value answers 400 and names the valid
+request has at most 9 values, and the limit counts the raw values before the
+server removes duplicates. An unknown value answers 400 and names the valid
 values. `inventory.ParseState` returns the sentinel `ErrUnknownState`.
 
 ### 10. Which slice comes first?
 
 Answer: `locked` (ADR 265 decision 14). The server knows it today, so the slice
 needs no new writer. `drifted` waits for the drift store. The job states wait
-for the job store. The first slice also removes `Entry.Status` and the API
-field `status`, because no code sets them and no released console version
-reads them.
+for the job store. A separate change removes `Entry.Status` and the API field
+`status`, because no code sets them and no released console version reads
+them.
 
 ## Open questions
 
@@ -163,7 +172,8 @@ None.
 ## Outcome
 
 Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
-decision 9 on 2026-10-18: a lock is a flag, not a status. Accepted in part as
+decision 9 on 2026-10-18: a lock is a flag, not a status. Accepted as
 [ADR 265](../adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md)
 on 2026-10-20: the words, the badge rule, the wire values and the answers to
-questions 1 to 10. The slices that build the code stay open as issues.
+questions 1 to 10. ADR 265 supersedes in part the vocabulary sentence of ADR 213
+decision 9. The slices that build the code stay open as issues.

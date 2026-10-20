@@ -74,7 +74,7 @@ both together.
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
 | [25](0025-drift-detection.md) | Drift detection and remediation | discussing; a person approves a remediation by a built-in gate (ADR 258); detection is a plan-only refresh job (ADR 263) |
-| [26](0026-unit-status.md) | Unit status in the inventory | accepted in part (ADRs 213, 265); the slices that build the code are open |
+| [26](0026-unit-status.md) | Unit status in the inventory | accepted (ADRs 213, 265) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
 | [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | accepted |
 | [29](0029-existing-ci.md) | Using an existing CI as the executor | accepted |

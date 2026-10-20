@@ -1,6 +1,6 @@
 # 265. A unit shows all its states with one fixed set of words
 
-Status: accepted · 2026-10-20. Decisions 1 to 4 are owner decisions. Decisions 5 to 14 are decided by the product manager under the owner's delegation of 20 October 2026. Extends ADR 13. Reads ADR 213 decision 9 (decision 5). Accepts part of RFC 26
+Status: accepted · 2026-10-20. Decisions 1 to 4 are owner decisions. Decisions 5 to 14 are decided by the product manager under the owner's delegation of 20 October 2026. Extends ADR 13. Supersedes in part ADR 213 decision 9: the vocabulary now holds `locked`, derived from the lock flag (decision 5). Accepts RFC 26
 
 ## Context
 
@@ -18,7 +18,7 @@ decision 8 holds the wire value of the approval wait.
 1. **The state words are one fixed set.** Issue #933 says (26.1, owner,
    2026-10-18): "the status words are: in sync, running, queued, locked,
    waiting for approval, apply needed, drifted, failed, unknown." No tool adds
-   a word. Each owner maps its own facts to these words.
+   a word. Each writer maps its own facts to these words.
 2. **A list shows all states of a unit.** Issue #933 says (26.2): "lists show
    all state badges with a tooltip, not one winning status." So the inventory
    gives the set of states of a unit, not one value.
@@ -36,14 +36,12 @@ decision 8 holds the wire value of the approval wait.
 6. **The wire values are kebab case.** They are `in-sync`, `running`,
    `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`,
    `failed` and `unknown`. This is the spelling of ADR 263 and of decision 3.
-7. **Each owner writes its own states.** The drift package writes `drifted`,
-   `in-sync` and `unknown`. The job model writes `running`, `queued`,
-   `awaiting-approval` and `failed`. Each owner writes in the transaction of
-   its own write. Each write of a state carries the `namespace.Fence`, and the
-   store checks it in the same transaction. No owner writes the state of
-   another. Only `locked` is derived. A Pulumi CLI update that ends failed sets
-   `failed`, because the `stack` package owns the update cycle. The next
-   successful update clears it.
+7. **Each state has named writers.** The drift package writes `drifted`,
+   `in-sync` and `unknown`. The job model writes `running`, `queued` and
+   `awaiting-approval`. The job model and the `stack` package write `failed`
+   (decision 10). A writer writes a state only in the transaction of its own
+   write, with the `namespace.Fence`, and the store checks the fence in the
+   same transaction. Only `locked` is derived.
 8. **`unknown` shows only for a unit with a drift check setting.** The unit
    shows `unknown` until its first drift result. A unit with no drift check
    setting shows no drift state. `in-sync` shows when the latest drift result
@@ -52,10 +50,18 @@ decision 8 holds the wire value of the approval wait.
 9. **`apply-needed` has one first source.** The source is a stored plan with
    changes that nobody applied. The case "code ahead of applied" stays with
    RFC 12.
-10. **`failed` means that the latest change job ended failed.** A change job
-    is an apply or a destroy. A plan-only job and a drift check are not change
-    jobs, so they do not set `failed`. `failed` clears only on the next
-    successful change job. There is no acknowledge action.
+10. **`failed` means that the latest change to end failed.** A change is an
+    apply or destroy job, or a Pulumi CLI update of kind update, destroy or
+    import. A preview, a refresh, a plan-only job and a drift check are not
+    changes, so they do not set `failed`. `failed` is one stored fact for each
+    unit with two writers: the job model and the `stack` package. Each writes
+    it in the transaction of its own write, with the fence. The latest change
+    to end wins: a failed change sets `failed`, and a successful change from
+    either source clears it. A Pulumi job that runs `pulumi up` against our API
+    gives a job end and an update end for the same change. Both write the same
+    fact, so the result is the same whichever comes last. An OpenTofu CLI apply
+    outside a job gives no `failed`, because the server sees only the state
+    upload. There is no acknowledge action.
 11. **The badges have a fixed order.** The order is `failed`,
     `awaiting-approval`, `apply-needed`, `drifted`, `running`, `queued`,
     `locked`, `unknown`, `in-sync`. The order is the order of the badges only.
@@ -69,12 +75,14 @@ decision 8 holds the wire value of the approval wait.
     when it has any of the named states, like the reference filter. The filter
     adds to the other filters with AND. The match is exact: the server does
     not normalize a value. The server removes duplicate values. A request has
-    at most 9 values. An unknown value, or more than 9 values, gets status 400,
+    at most 9 values, and the limit counts the raw values before the server
+    removes duplicates. An unknown value, or more than 9 values, gets status 400,
     and the error names the valid values. `inventory.ParseState` returns the
     sentinel `ErrUnknownState` for an unknown value.
-14. **The first slice is `locked`.** The `Entry.Status` field and the `status`
-    field of the API are a free string that no code sets. No released console
-    version reads it. The first slice removes it.
+14. **The first slice is `locked`.** It adds the `states` field with
+    `locked`, the `state` filter and the badge order. A separate change removes
+    the `Entry.Status` field and the `status` field of the API. They are a
+    free string that no code sets, and no released console version reads them.
 
 ## Consequences
 

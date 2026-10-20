@@ -1,6 +1,7 @@
 package inventory_test
 
 import (
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -51,7 +52,20 @@ func TestStatesReturnsACopy(t *testing.T) {
 	t.Parallel()
 	a := inventory.States()
 	a[0] = "changed"
-	if inventory.States()[0] != inventory.StateInSync {
+	if inventory.States()[0] != inventory.StateFailed {
 		t.Error("States() shares its backing array")
+	}
+}
+
+func TestStatesBadgeOrder(t *testing.T) {
+	t.Parallel()
+	want := []inventory.State{
+		inventory.StateFailed, inventory.StateAwaitingApproval,
+		inventory.StateApplyNeeded, inventory.StateDrifted,
+		inventory.StateRunning, inventory.StateQueued, inventory.StateLocked,
+		inventory.StateUnknown, inventory.StateInSync,
+	}
+	if got := inventory.States(); !slices.Equal(got, want) {
+		t.Errorf("States() = %v, want %v", got, want)
 	}
 }
