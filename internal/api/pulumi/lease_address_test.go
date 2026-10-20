@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // leaseAddressGate is a pulumi AddressGate stub that counts calls, records
@@ -72,6 +73,7 @@ func newUpdateFixtureWithAddressGate(
 		Namespaces:         namespaces,
 		Stacks:             stacks,
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
@@ -254,6 +256,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 		Namespaces:         namespaces,
 		Stacks:             stacks,
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,

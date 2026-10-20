@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storefault"
 )
@@ -27,6 +28,7 @@ type crashFixture struct {
 	stackID stack.ID
 	id      stack.UpdateID
 	tok     token.Token
+	nsID    namespace.ID
 }
 
 // TestCrashBlobWithoutRow fails the SQL commit after the blob write (ADR 37
@@ -54,7 +56,7 @@ func TestCrashBlobWithoutRow(t *testing.T) {
 		t.Fatalf("referenced keys = %v, want none", keys)
 	}
 
-	if n := len(listUpdateBlobs(t, f.blobs, f.stackID, f.id)); n != 1 {
+	if n := len(listUpdateBlobs(t, f.blobs, f.nsID, f.stackID, f.id)); n != 1 {
 		t.Fatalf("stored blobs = %d, want the one orphan", n)
 	}
 
@@ -102,7 +104,7 @@ func TestCrashRowWithoutDelete(t *testing.T) {
 		t.Fatalf("export = %q, want the second save %q", got, second.Deployment)
 	}
 
-	if n := len(listUpdateBlobs(t, f.blobs, f.stackID, f.id)); n != 2 {
+	if n := len(listUpdateBlobs(t, f.blobs, f.nsID, f.stackID, f.id)); n != 2 {
 		t.Fatalf("stored blobs = %d, want the current one with its superseded one", n)
 	}
 
@@ -151,6 +153,11 @@ func newCrashFixture(
 		t.Fatalf("create stack: %v", err)
 	}
 
+	ns, err := namespaces.Get(ctx, ref.Namespace)
+	if err != nil {
+		t.Fatalf("namespace of the stack: %v", err)
+	}
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		ManualLocks:        nil,
 		Updates:            wrappedSQL,
@@ -160,6 +167,7 @@ func newCrashFixture(
 		Namespaces:         namespaces,
 		Stacks:             service,
 		Blobs:              wrappedBlobs,
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
@@ -191,6 +199,7 @@ func newCrashFixture(
 		stackID: created.ID,
 		id:      u.ID,
 		tok:     started.Token,
+		nsID:    ns.ID,
 	}
 }
 
@@ -283,10 +292,14 @@ func referencedKeys(t *testing.T, s *storefault.Store, ref stack.Ref) []blob.Key
 }
 
 // listUpdateBlobs returns the stored blobs of one update.
-func listUpdateBlobs(t *testing.T, blobs *blobfault.Store, stackID stack.ID, id stack.UpdateID) []blob.Object {
+func listUpdateBlobs(
+	t *testing.T, blobs *blobfault.Store, ns namespace.ID, stackID stack.ID, id stack.UpdateID,
+) []blob.Object {
 	t.Helper()
 
-	listed, err := blobs.List(t.Context(), "pulumi/"+stackID.String()+"/"+id.String()+"/")
+	prefix := "namespaces/" + ns.String() + "/pulumi/" + stackID.String() + "/" + id.String() + "/"
+
+	listed, err := blobs.List(t.Context(), prefix)
 	if err != nil {
 		t.Fatalf("list blobs of update %s: %v", id, err)
 	}

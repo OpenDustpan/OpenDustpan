@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,10 +39,12 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 	ops := make([]int64, len(seqs))
 
 	return stack.JournalRow{
-		Ref:          u.Ref,
-		Update:       u.ID,
-		Lease:        u.Lease.Digest,
-		BlobKey:      blob.Key(fmt.Sprintf("pulumi/%s/%s/journal/%d", st.ID, u.ID, low)),
+		Ref:    u.Ref,
+		Update: u.ID,
+		Lease:  u.Lease.Digest,
+		BlobKey: blob.Key(
+			fmt.Sprintf("%s%s/%s/journal/%d", stackBlobPrefix(t, s, u.Ref.Namespace), st.ID, u.ID, low),
+		),
 		SHA256:       sum,
 		MD5:          [16]byte{sha},
 		Size:         1,
@@ -138,9 +141,33 @@ func testJournalRefusals(t *testing.T, f fixture) {
 	}
 
 	wrongKey := journalRow(t, f.s, u, 1, 1)
-	wrongKey.BlobKey = blob.Key("pulumi/other/" + u.ID.String() + "/journal/1")
-	if _, err := f.s.PutJournalRow(t.Context(), wrongKey, f.fence); err == nil {
-		t.Fatal("batch with a blob key of another stack: err = nil, want an error")
+	wrongKey.BlobKey = blob.Key(stackBlobPrefix(t, f.s, f.ref.Namespace) + "other/" + u.ID.String() + "/journal/1")
+	if _, err := f.s.PutJournalRow(t.Context(), wrongKey, f.fence); !errors.Is(err, stack.ErrJournalKey) {
+		t.Fatalf("batch with a blob key of another stack: err = %v, want ErrJournalKey", err)
+	}
+
+	// The key of a batch of this stack in the blob scope of another namespace,
+	// a key without a namespace directory, a key of another directory of the
+	// namespace, and a key that is deeper than a batch key are refused too.
+	st, err := f.s.GetStack(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	nsID := strings.TrimSuffix(strings.TrimPrefix(stackBlobPrefix(t, f.s, f.ref.Namespace), "namespaces/"), "/pulumi/")
+
+	for name, key := range map[string]string{
+		"another namespace":            "namespaces/ns-other/pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
+		"no namespace directory":       "pulumi/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
+		"a directory of the namespace": "namespaces/" + nsID + "/tofu/" + st.ID.String() + "/" + u.ID.String() + "/journal/1",
+		"a nested key":                 stackBlobPrefix(t, f.s, f.ref.Namespace) + st.ID.String() + "/" + u.ID.String() + "/journal/1/2",
+	} {
+		row := journalRow(t, f.s, u, 1, 1)
+		row.BlobKey = blob.Key(key)
+
+		if _, err := f.s.PutJournalRow(t.Context(), row, f.fence); !errors.Is(err, stack.ErrJournalKey) {
+			t.Fatalf("batch with %s in the key: err = %v, want ErrJournalKey", name, err)
+		}
 	}
 }
 

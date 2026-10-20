@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // updatePatterns lists every update route as "METHOD path". The enforcement
@@ -569,6 +570,7 @@ func newUpdateFixtureWithAuthenticator(
 		Namespaces:         namespaces,
 		Stacks:             stacks,
 		Blobs:              blobs,
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
@@ -2792,6 +2794,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Namespaces:         namespaces,
 		Stacks:             stacks,
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,

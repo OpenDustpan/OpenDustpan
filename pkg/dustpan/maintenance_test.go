@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -354,7 +355,15 @@ type namespaceOnlyStore struct {
 		GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 		ListNamespaces(ctx context.Context) ([]namespace.Namespace, error)
 		Ping(ctx context.Context) error
+		AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
 	}
+}
+
+// AppendServer lets the server write the security entries of the stack blobs,
+// which the update service needs at its start. It is no part of the
+// maintenance port.
+func (s namespaceOnlyStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	return s.store.AppendServer(ctx, e)
 }
 
 func (s namespaceOnlyStore) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {

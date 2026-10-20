@@ -1434,6 +1434,11 @@ func newUpdateService(
 		locks = manual
 	}
 
+	refusals, err := stackRefusals(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
@@ -1441,6 +1446,7 @@ func newUpdateService(
 		Namespaces:         namespaces,
 		Stacks:             cfg.stackStore,
 		Blobs:              cfg.blobStore,
+		Refusals:           refusals,
 		Tokens:             checker,
 		Now:                cfg.now,
 		Logger:             cfg.logger,

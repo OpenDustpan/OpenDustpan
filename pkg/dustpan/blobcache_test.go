@@ -97,13 +97,24 @@ type keyCounter struct {
 }
 
 func (c *keyCounter) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
-	family, _, _ := strings.Cut(key.String(), "/")
+	family := blobFamily(key)
 
 	c.mu.Lock()
 	c.gets[family]++
 	c.mu.Unlock()
 
 	return c.Store.Get(ctx, key)
+}
+
+// blobFamily returns the family of key: the first segment, or the segment
+// after the namespace ID for a key under namespaces/.
+func blobFamily(key blob.Key) string {
+	parts := strings.SplitN(key.String(), "/", 4)
+	if parts[0] == "namespaces" && len(parts) >= 3 {
+		return parts[2]
+	}
+
+	return parts[0]
 }
 
 // count returns the Get calls on the keys of family.

@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -76,7 +77,7 @@ func newRealStack(t *testing.T) *realStack {
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		ManualLocks: nil, Updates: st, Tokens: nil, Checkpoints: st, Events: st, Namespaces: namespaces,
 		Stacks: stacks, Blobs: newTestBlobs(t), Now: nil, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
-		Replayer: nil,
+		Replayer: nil, Refusals: stacktest.NewRefusals(),
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)

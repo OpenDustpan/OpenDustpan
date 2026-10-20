@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // journalMemStore implements the journal and built-checkpoint ports in
@@ -287,6 +288,7 @@ type buildFixture struct {
 	stackID stack.ID
 	journal *stack.JournalEntries
 	base    []byte
+	nsID    namespace.ID
 }
 
 // baseResource is the one resource of the base checkpoint.
@@ -375,7 +377,9 @@ func newBuildFixtureWith(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	journal, err := stack.NewJournalEntries(blobs, store, pulumijournal.Verifier{}, 1<<20)
+	refusals := stacktest.NewRefusals()
+
+	journal, err := stack.NewJournalEntries(blobs, store, pulumijournal.Verifier{}, 1<<20, refusals)
 	if err != nil {
 		t.Fatalf("journal writer: %v", err)
 	}
@@ -394,6 +398,7 @@ func newBuildFixtureWith(
 		MaxCheckpointBytes: 1 << 20,
 		Journal:            journal,
 		Replayer:           replayer,
+		Refusals:           refusals,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
@@ -444,7 +449,7 @@ func newBuildFixtureWith(
 
 	return &buildFixture{
 		svc: svc, store: store, blobs: blobs, clock: clk,
-		ref: ref, stackID: got.ID, journal: journal, base: base,
+		ref: ref, stackID: got.ID, journal: journal, base: base, nsID: ns.ID,
 	}
 }
 
@@ -833,7 +838,7 @@ func TestJournalBuildBatches(t *testing.T) {
 
 	s := f.startJournaled(t)
 
-	bodies, err := f.journal.Batches(t.Context(), f.stackID, s.Update.ID)
+	bodies, err := f.journal.Batches(t.Context(), f.nsID, f.stackID, s.Update.ID)
 	if err != nil {
 		t.Fatalf("batches: %v", err)
 	}

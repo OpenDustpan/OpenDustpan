@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // gzipBestSpeedXFL is the gzip header XFL byte that compress/gzip writes for
@@ -96,6 +97,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 		Namespaces:         namespaces,
 		Stacks:             store,
 		Blobs:              blobs,
+		Refusals:           stacktest.NewRefusals(),
 		Now:                clk.Now,
 		Logger:             nil,
 		MaxCheckpointBytes: 32 << 20,

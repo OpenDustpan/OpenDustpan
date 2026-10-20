@@ -120,7 +120,7 @@ func (l pulumiLifecycle) purgeUnit(
 	}
 
 	l.blobs.deleteBlobs(ctx, pulumiTool, unitID, func(c context.Context) error {
-		return l.updates.DeleteStackBlobs(c, id)
+		return l.updates.DeleteStackBlobs(c, ns, id)
 	})
 
 	return nil

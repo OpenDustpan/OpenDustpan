@@ -45,6 +45,7 @@ type builtSave struct {
 	stackID ID
 	fence   namespace.Fence
 	built   Checkpoint
+	blobs   *scopedBlobs
 }
 
 // builtBlob groups a built save with its blob write: the key it wrote with
@@ -67,7 +68,7 @@ type builtBlob struct {
 // past a replay bound is refused with ErrTooLarge, which names the bound and
 // its limit. A canceled parent context is a cancel, not a timeout.
 func (s *Updates) buildJournalCheckpoint(
-	ctx context.Context, ref Ref, u Update, batches [][]byte,
+	ctx context.Context, bl *scopedBlobs, ref Ref, u Update, batches [][]byte,
 ) (Checkpoint, error) {
 	var zero Checkpoint
 
@@ -78,7 +79,7 @@ func (s *Updates) buildJournalCheckpoint(
 	buildCtx, cancel := context.WithTimeout(ctx, MaxJournalBuildDuration)
 	defer cancel()
 
-	base, err := s.journalBase(buildCtx, ref, u)
+	base, err := s.journalBase(buildCtx, bl, ref, u)
 	if err != nil {
 		if errors.Is(buildCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
@@ -158,17 +159,17 @@ func TooLargeMessage(err error) (string, bool) {
 // the server served at the start of the update, unwrapped like an export.
 // A version without a checkpoint falls back to the latest one, and a stack
 // without state falls back to an empty base.
-func (s *Updates) journalBase(ctx context.Context, ref Ref, u Update) ([]byte, error) {
+func (s *Updates) journalBase(ctx context.Context, bl *scopedBlobs, ref Ref, u Update) ([]byte, error) {
 	if u.Version > 1 {
 		if cp, err := s.checkpoints.CheckpointByVersion(ctx, ref, u.Version-1); err == nil {
-			return s.baseDeployment(ctx, cp)
+			return s.baseDeployment(ctx, bl, cp)
 		} else if !errors.Is(err, ErrNoState) {
 			return nil, fmt.Errorf("read base of update %s: %w", u.ID, err)
 		}
 	}
 
 	if cp, err := s.checkpoints.LatestCheckpoint(ctx, ref); err == nil {
-		return s.baseDeployment(ctx, cp)
+		return s.baseDeployment(ctx, bl, cp)
 	} else if !errors.Is(err, ErrNoState) {
 		return nil, fmt.Errorf("read base of update %s: %w", u.ID, err)
 	}
@@ -178,8 +179,8 @@ func (s *Updates) journalBase(ctx context.Context, ref Ref, u Update) ([]byte, e
 
 // baseDeployment resolves the deployment of cp and returns its inner bytes,
 // the same bytes an export serves.
-func (s *Updates) baseDeployment(ctx context.Context, cp Checkpoint) ([]byte, error) {
-	resolved, err := s.resolveCheckpoint(ctx, cp)
+func (s *Updates) baseDeployment(ctx context.Context, bl *scopedBlobs, cp Checkpoint) ([]byte, error) {
+	resolved, err := s.resolveCheckpoint(ctx, bl, cp)
 	if err != nil {
 		return nil, fmt.Errorf("read base of update %s: %w", cp.Update, err)
 	}
@@ -262,12 +263,12 @@ func (s *Updates) storeBuiltCheckpoint(ctx context.Context, save builtSave) erro
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	key, err := checkpointBlobKey(save.stackID, save.id, 0, prev)
+	key, err := checkpointBlobKey(save.blobs, save.stackID, save.id, 0, prev)
 	if err != nil {
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	size, sum, err := s.putCheckpointBlob(ctx, key, save.built.Deployment)
+	size, sum, err := s.putCheckpointBlob(ctx, save.blobs, key, save.built.Deployment)
 	if err != nil {
 		if errors.Is(err, blob.ErrExists) {
 			return s.adoptBuiltBlob(ctx, builtBlob{save: save, key: key, size: size, sum: sum, prev: prev})
@@ -295,7 +296,7 @@ func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
 			Sequence:      0,
 			Invalid:       false,
 		},
-		digest: save.built.Digest, prev: prev, key: key,
+		digest: save.built.Digest, prev: prev, key: key, blobs: save.blobs,
 	}
 }
 
@@ -304,7 +305,7 @@ func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
 // committed its row. Anything else is a concurrent save of the same update,
 // which fails without touching the journal.
 func (s *Updates) adoptBuiltBlob(ctx context.Context, stored builtBlob) error {
-	raw, err := s.blobs.Get(ctx, stored.key)
+	raw, err := stored.save.blobs.Get(ctx, stored.key)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, cerr)
@@ -424,7 +425,7 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 	}
 
 	if len(keys) > 0 && s.journal != nil {
-		if err := s.journal.RemoveBlobs(ctx, keys); err != nil {
+		if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, keys); err != nil {
 			s.logger.WarnContext(
 				ctx,
 				"delete journal blobs",
@@ -484,9 +485,14 @@ func (s *Updates) buildBeforeEnd(ctx context.Context, ref Ref, id UpdateID, u Up
 		return fmt.Errorf("build checkpoint of update %s: %w", id, ErrMissingDependency)
 	}
 
-	fence, err := s.fence(ctx, ref)
+	ns, err := s.writable(ctx, ref)
 	if err != nil {
 		return err
+	}
+
+	bl, err := s.blobs.scope(ns.ID)
+	if err != nil {
+		return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 	}
 
 	st, err := s.stacks.GetStack(ctx, ref)
@@ -494,7 +500,7 @@ func (s *Updates) buildBeforeEnd(ctx context.Context, ref Ref, id UpdateID, u Up
 		return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 	}
 
-	batches, err := s.journal.Batches(ctx, st.ID, id)
+	batches, err := s.journal.Batches(ctx, ns.ID, st.ID, id)
 	if err != nil {
 		return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 	}
@@ -503,12 +509,14 @@ func (s *Updates) buildBeforeEnd(ctx context.Context, ref Ref, id UpdateID, u Up
 		return nil
 	}
 
-	built, err := s.buildJournalCheckpoint(ctx, ref, u, batches)
+	built, err := s.buildJournalCheckpoint(ctx, bl, ref, u, batches)
 	if err != nil {
 		return err
 	}
 
-	return s.storeBuiltCheckpoint(ctx, builtSave{ref: ref, id: id, stackID: st.ID, fence: fence, built: built})
+	return s.storeBuiltCheckpoint(
+		ctx, builtSave{ref: ref, id: id, stackID: st.ID, fence: ns.Fence(), built: built, blobs: bl},
+	)
 }
 
 // journaledState builds the state of the running journaled update of the
@@ -566,12 +574,17 @@ func (s *Updates) journaledUpdate(ctx context.Context, ref Ref, u Update) (Check
 		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, ErrMissingDependency)
 	}
 
+	bl, err := s.scopeOf(ctx, ref.Namespace)
+	if err != nil {
+		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, err)
+	}
+
 	st, err := s.stacks.GetStack(ctx, ref)
 	if err != nil {
 		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, err)
 	}
 
-	batches, err := s.journal.Batches(ctx, st.ID, u.ID)
+	batches, err := s.journal.Batches(ctx, bl.ns, st.ID, u.ID)
 	if err != nil {
 		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, err)
 	}
@@ -580,7 +593,7 @@ func (s *Updates) journaledUpdate(ctx context.Context, ref Ref, u Update) (Check
 		return zero, false, nil
 	}
 
-	built, err := s.buildJournalCheckpoint(ctx, ref, u, batches)
+	built, err := s.buildJournalCheckpoint(ctx, bl, ref, u, batches)
 	if err != nil {
 		return zero, false, err
 	}

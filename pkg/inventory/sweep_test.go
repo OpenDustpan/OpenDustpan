@@ -74,7 +74,7 @@ func (l *sweepTool) PurgeExpired(
 	return nil
 }
 
-func (l *sweepTool) DeletePurgedBlobs(_ context.Context, unitID string) error {
+func (l *sweepTool) DeletePurgedBlobs(_ context.Context, _ namespace.Name, unitID string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

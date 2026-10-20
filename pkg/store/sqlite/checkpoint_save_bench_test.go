@@ -230,7 +230,7 @@ func benchCheckpoint(u stack.Update, seq int64, deployment []byte, digest [sha25
 		Sequence:      seq,
 		Digest:        digest,
 		Invalid:       false,
-		BlobKey:       blob.Key("pulumi/bench/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10)),
+		BlobKey:       blob.Key("namespaces/ns-bench/pulumi/bench/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10)),
 		BlobSize:      0,
 		BlobMD5:       [md5.Size]byte{},
 	}

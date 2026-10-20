@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // deleteEmptyDeployment holds no managed resources: only the automatic
@@ -725,6 +726,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 		Namespaces:         namespaces,
 		Stacks:             mem,
 		Blobs:              blobs,
+		Refusals:           stacktest.NewRefusals(),
 		Now:                func() time.Time { return now },
 		Logger:             nil,
 		MaxCheckpointBytes: limit,

@@ -68,6 +68,7 @@ func (s *Updates) SaveCheckpointDelta(
 		digest: save.digest,
 		prev:   save.prev,
 		key:    save.key,
+		blobs:  save.blobs,
 	})
 	if err != nil {
 		return deltaCommitErr(id, err)
@@ -99,6 +100,7 @@ type deltaCommit struct {
 	digest  [sha256.Size]byte
 	prev    *Checkpoint
 	key     blob.Key
+	blobs   *scopedBlobs
 }
 
 // deltaSave checks the lease and the validity rules of a delta and returns
@@ -107,9 +109,14 @@ type deltaCommit struct {
 func (s *Updates) deltaSave(
 	ctx context.Context, ref Ref, id UpdateID, tok token.Token, in DeltaInput,
 ) ([]byte, *deltaCommit, error) {
-	u, fence, err := s.authorized(ctx, ref, id, tok)
+	u, ns, err := s.authorizedIn(ctx, ref, id, tok)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	bl, err := s.blobs.scope(ns.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("save checkpoint delta of update %s: %w", id, err)
 	}
 
 	if inputErr := checkDeltaInput(u, in); inputErr != nil {
@@ -134,11 +141,12 @@ func (s *Updates) deltaSave(
 		ref:     ref,
 		id:      id,
 		stackID: st,
-		fence:   fence,
+		fence:   ns.Fence(),
 		lease:   u.Lease.Digest,
 		prev:    prev,
 		in:      in,
 		want:    want,
+		blobs:   bl,
 	}
 
 	return s.applyDelta(ctx, pending)
@@ -227,12 +235,13 @@ type deltaPending struct {
 	prev    *Checkpoint
 	in      DeltaInput
 	want    []byte
+	blobs   *scopedBlobs
 }
 
 // applyDelta applies the delta to the previous checkpoint, checks the hash
 // and returns the result with its commit.
 func (s *Updates) applyDelta(ctx context.Context, pending deltaPending) ([]byte, *deltaCommit, error) {
-	resolved, err := s.resolveCheckpoint(ctx, *pending.prev)
+	resolved, err := s.resolveCheckpoint(ctx, pending.blobs, *pending.prev)
 	if err != nil {
 		return nil, nil, fmt.Errorf("save checkpoint delta of update %s: %w", pending.id, err)
 	}
@@ -248,7 +257,7 @@ func (s *Updates) applyDelta(ctx context.Context, pending deltaPending) ([]byte,
 		return nil, nil, fmt.Errorf("%w: checkpoint hash %q", ErrInvalidDelta, pending.in.Hash)
 	}
 
-	key, err := checkpointBlobKey(pending.stackID, pending.id, pending.in.Sequence, pending.prev)
+	key, err := checkpointBlobKey(pending.blobs, pending.stackID, pending.id, pending.in.Sequence, pending.prev)
 	if err != nil {
 		return nil, nil, fmt.Errorf("save checkpoint delta of update %s: %w", pending.id, err)
 	}
@@ -260,6 +269,7 @@ func (s *Updates) applyDelta(ctx context.Context, pending deltaPending) ([]byte,
 		digest:  digest,
 		prev:    pending.prev,
 		key:     key,
+		blobs:   pending.blobs,
 	}, nil
 }
 

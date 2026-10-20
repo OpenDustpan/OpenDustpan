@@ -1248,6 +1248,20 @@ func gzipAttrs(deployment string) (int64, [md5.Size]byte) {
 	return int64(buf.Len()), sum
 }
 
+// stackBlobPrefix returns the prefix of the stack blobs of the namespace ns:
+// namespaces/<namespace ID>/pulumi/. The key of a checkpoint or of a journal
+// batch of a stack starts with it.
+func stackBlobPrefix(t *testing.T, s UpdatesStore, ns namespace.Name) string {
+	t.Helper()
+
+	row, err := s.GetNamespace(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("get namespace %s: %v", ns, err)
+	}
+
+	return "namespaces/" + row.ID.String() + "/pulumi/"
+}
+
 // blobKey returns the blob key of a save of u with seq, for the stack of the
 // fixture.
 func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
@@ -1259,7 +1273,14 @@ func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
 	}
 
 	key, err := blob.ParseKey(
-		"pulumi/" + st.ID.String() + "/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10),
+		stackBlobPrefix(
+			t,
+			f.s,
+			f.ref.Namespace,
+		) + st.ID.String() + "/" + u.ID.String() + "/" + strconv.FormatInt(
+			seq,
+			10,
+		),
 	)
 	if err != nil {
 		t.Fatalf("parse blob key: %v", err)
@@ -1295,7 +1316,12 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 // holds.
 func placeholderKey(u stack.Update, seq int64) blob.Key {
 	key, err := blob.ParseKey(
-		"pulumi/placeholder/" + hex.EncodeToString([]byte(u.ID)) + "/" + strconv.FormatInt(seq, 10),
+		"namespaces/ns-placeholder/pulumi/placeholder/" + hex.EncodeToString(
+			[]byte(u.ID),
+		) + "/" + strconv.FormatInt(
+			seq,
+			10,
+		),
 	)
 	if err != nil {
 		panic(err)

@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -191,11 +192,11 @@ func (d *deletedSweeper) logDue(ctx context.Context) {
 
 // DeletePurgedBlobs implements inventory.SweepTool for Pulumi stacks,
 // within purgeBlobTimeout.
-func (l pulumiLifecycle) DeletePurgedBlobs(ctx context.Context, unitID string) error {
+func (l pulumiLifecycle) DeletePurgedBlobs(ctx context.Context, ns namespace.Name, unitID string) error {
 	bounded, cancel := context.WithTimeout(ctx, purgeBlobTimeout)
 	defer cancel()
 
-	if err := l.updates.DeleteStackBlobs(bounded, stack.ID(unitID)); err != nil {
+	if err := l.updates.DeleteStackBlobs(bounded, ns, stack.ID(unitID)); err != nil {
 		return fmt.Errorf("delete blobs of stack %s: %w", unitID, err)
 	}
 
@@ -204,7 +205,7 @@ func (l pulumiLifecycle) DeletePurgedBlobs(ctx context.Context, unitID string) e
 
 // DeletePurgedBlobs implements inventory.SweepTool for OpenTofu
 // workspaces, within purgeBlobTimeout.
-func (l opentofuLifecycle) DeletePurgedBlobs(ctx context.Context, unitID string) error {
+func (l opentofuLifecycle) DeletePurgedBlobs(ctx context.Context, _ namespace.Name, unitID string) error {
 	bounded, cancel := context.WithTimeout(ctx, purgeBlobTimeout)
 	defer cancel()
 

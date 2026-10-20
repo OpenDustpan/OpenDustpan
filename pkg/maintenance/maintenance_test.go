@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -533,6 +534,7 @@ func newFixtureWith(
 		Namespaces:         namespaces,
 		Stacks:             f.stacks,
 		Blobs:              newTestBlobs(t),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
@@ -683,6 +685,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Namespaces:         namespaces,
 		Stacks:             f.stacks,
 		Blobs:              newTestBlobs(t),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
