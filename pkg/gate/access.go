@@ -253,7 +253,10 @@ func withFactMemo(ctx context.Context) context.Context {
 
 // memoOf returns the factMemo of ctx, or nil.
 func memoOf(ctx context.Context) *factMemo {
-	m, _ := ctx.Value(factMemoKey{}).(*factMemo)
+	m, ok := ctx.Value(factMemoKey{}).(*factMemo)
+	if !ok {
+		return nil
+	}
 
 	return m
 }

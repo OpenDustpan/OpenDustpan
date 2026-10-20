@@ -284,6 +284,18 @@ func (e swEnv) records(t *testing.T) []gate.Record {
 	return rs
 }
 
+// newestRecord returns the newest record and fails the test when there is none.
+func (e swEnv) newestRecord(t *testing.T) gate.Record {
+	t.Helper()
+
+	recs := e.records(t)
+	if len(recs) == 0 {
+		t.Fatal("no decision record")
+	}
+
+	return recs[0]
+}
+
 func swWrite(t *testing.T, subject, unit string, op gate.OperationKind) gate.StateWrite {
 	t.Helper()
 
@@ -519,7 +531,7 @@ func TestEvaluateModeGateIsInTheRecord(t *testing.T) {
 		t.Fatalf("GuardStateWrite() = %v, want nil: the gate is in evaluate mode", err)
 	}
 
-	gates := e.records(t)[0].Units[0].Gates
+	gates := e.newestRecord(t).Units[0].Gates
 	if len(gates) != 1 || !gates[0].Matched || gates[0].Mode != gate.ModeEvaluate || gates[0].Message != "would stop" {
 		t.Fatalf("record gates = %+v, want the matched gate in evaluate mode", gates)
 	}
@@ -829,5 +841,24 @@ func TestGuardReadsTheUnitFactsOnce(t *testing.T) {
 	if units.collections != 1 || units.labels != 1 {
 		t.Fatalf("reads = %d collections and %d labels, want 1 and 1 for one check of the limits and the gates",
 			units.collections, units.labels)
+	}
+}
+
+func TestHugeLabelSetIsTruncatedInTheFactDocument(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("x", gate.MaxFactDocumentBytes)
+	units := swUnits{collections: nil, labels: map[string][]string{"opentofu:acme/web": {"big=" + huge}}}
+	e := newSWEnv(t, units, nil)
+	e.putGate(t, newSWGate(atUnit, "watch", "", gate.OutcomeWarn, "careful"))
+
+	d, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock))
+	if err != nil || d.Result != gate.ResultWarn {
+		t.Fatalf("GuardStateWrite() = %+v, %v, want warn: the gate still runs on the smaller document", d, err)
+	}
+
+	facts := e.newestRecord(t).Units[0].Facts
+	if len(facts.Unit.Labels) != 0 || !slices.Equal(facts.Document.Truncated, []string{"unit.labels"}) {
+		t.Fatalf("facts = %+v, want the labels emptied and named in document.truncated", facts)
 	}
 }

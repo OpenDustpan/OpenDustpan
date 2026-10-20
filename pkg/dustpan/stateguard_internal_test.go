@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -42,12 +43,47 @@ func (f fakeInventory) GetUnit(_ context.Context, unitID string) (inventory.Entr
 
 func gateTestEntry() inventory.Entry {
 	return inventory.Entry{
-		UnitID: "ws-1", Tool: "opentofu", Namespace: "acme", Name: "web", Collection: "prod",
+		LastChanged: time.Time{}, Namespace: "acme", Tool: "opentofu", Name: "web", UnitID: "ws-1", DisplayName: "",
+		Status: "", ResourceCount: nil, Lock: nil, ManualLock: nil, Collection: "prod",
 		Labels: map[string]string{"team": "core", "env": "prod"},
 	}
 }
 
-func gateTestUnit(t *testing.T, withID bool) identity.Object {
+// fakeUnitIDs finds the ID of the unit web, and counts the lookups.
+type fakeUnitIDs struct {
+	calls int
+}
+
+func (f *fakeUnitIDs) UnitID(_ context.Context, obj identity.Object) (string, bool, error) {
+	f.calls++
+
+	if obj.UnitName() == "web" {
+		return "ws-1", true, nil
+	}
+
+	return "", false, nil
+}
+
+// The ways that a test names the unit web.
+const (
+	byReference = iota
+	byStableID
+	byIndexedLookup
+)
+
+// gateFacts returns the facts source for the way mode names the unit.
+func gateFacts(entries []inventory.Entry, mode int) (inventoryFacts, *fakeUnitIDs) {
+	lookup := &fakeUnitIDs{calls: 0}
+	f := inventoryFacts{reader: fakeInventory{entries: entries, err: nil}, ids: nil}
+
+	if mode == byIndexedLookup {
+		f.ids = lookup
+	}
+
+	return f, lookup
+}
+
+func gateTestUnit(t *testing.T, mode int) identity.Object {
 	t.Helper()
 
 	u, err := identity.UnitObject("opentofu", "acme", "web")
@@ -55,27 +91,44 @@ func gateTestUnit(t *testing.T, withID bool) identity.Object {
 		t.Fatal(err)
 	}
 
-	if withID {
+	if mode == byStableID {
 		return u.WithUnitID("ws-1")
 	}
 
 	return u
 }
 
+// namingModes returns the three ways that a test names the unit web.
+func namingModes() []int {
+	return []int{byReference, byStableID, byIndexedLookup}
+}
+
+func gatePrincipal(subject string, kind identity.Kind, credential identity.Credential) identity.Principal {
+	return identity.Principal{
+		Subject: subject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: kind, Credential: credential,
+		JobID: "",
+	}
+}
+
 func TestInventoryFactsGiveCollectionAndSortedLabels(t *testing.T) {
 	t.Parallel()
 
-	for _, withID := range []bool{true, false} {
-		f := inventoryFacts{reader: fakeInventory{entries: []inventory.Entry{gateTestEntry()}, err: nil}}
+	for _, mode := range namingModes() {
+		f, lookup := gateFacts([]inventory.Entry{gateTestEntry()}, mode)
 
-		coll, err := f.Collection(t.Context(), gateTestUnit(t, withID))
+		coll, err := f.Collection(t.Context(), gateTestUnit(t, mode))
 		if err != nil || coll != collection.Name("prod") {
-			t.Fatalf("Collection(withID %v) = %q, %v, want prod", withID, coll, err)
+			t.Fatalf("Collection(mode %d) = %q, %v, want prod", mode, coll, err)
 		}
 
-		labels, err := f.Labels(t.Context(), gateTestUnit(t, withID))
+		labels, err := f.Labels(t.Context(), gateTestUnit(t, mode))
 		if err != nil || !slices.Equal(labels, []string{"env=prod", "team=core"}) {
-			t.Fatalf("Labels(withID %v) = %v, %v, want the sorted labels", withID, labels, err)
+			t.Fatalf("Labels(mode %d) = %v, %v, want the sorted labels", mode, labels, err)
+		}
+
+		if want := map[bool]int{true: 2, false: 0}[mode == byIndexedLookup]; lookup.calls != want {
+			t.Fatalf("mode %d made %d indexed lookups, want %d", mode, lookup.calls, want)
 		}
 	}
 }
@@ -83,15 +136,15 @@ func TestInventoryFactsGiveCollectionAndSortedLabels(t *testing.T) {
 func TestInventoryFactsOfAnUnknownUnit(t *testing.T) {
 	t.Parallel()
 
-	for _, withID := range []bool{true, false} {
-		f := inventoryFacts{reader: fakeInventory{entries: nil, err: nil}}
+	for _, mode := range namingModes() {
+		f, _ := gateFacts(nil, mode)
 
-		if _, err := f.Collection(t.Context(), gateTestUnit(t, withID)); !errors.Is(err, gate.ErrNotFound) {
-			t.Fatalf("Collection(withID %v) = %v, want gate.ErrNotFound", withID, err)
+		if _, err := f.Collection(t.Context(), gateTestUnit(t, mode)); !errors.Is(err, gate.ErrNotFound) {
+			t.Fatalf("Collection(mode %d) = %v, want gate.ErrNotFound", mode, err)
 		}
 
-		if _, err := f.Labels(t.Context(), gateTestUnit(t, withID)); !errors.Is(err, gate.ErrNotFound) {
-			t.Fatalf("Labels(withID %v) = %v, want gate.ErrNotFound", withID, err)
+		if _, err := f.Labels(t.Context(), gateTestUnit(t, mode)); !errors.Is(err, gate.ErrNotFound) {
+			t.Fatalf("Labels(mode %d) = %v, want gate.ErrNotFound", mode, err)
 		}
 	}
 }
@@ -101,9 +154,9 @@ func TestInventoryFactsOfAUnitInNoCollection(t *testing.T) {
 
 	e := gateTestEntry()
 	e.Collection = ""
-	f := inventoryFacts{reader: fakeInventory{entries: []inventory.Entry{e}, err: nil}}
+	f, _ := gateFacts([]inventory.Entry{e}, byStableID)
 
-	if _, err := f.Collection(t.Context(), gateTestUnit(t, true)); !errors.Is(err, gate.ErrNotFound) {
+	if _, err := f.Collection(t.Context(), gateTestUnit(t, byStableID)); !errors.Is(err, gate.ErrNotFound) {
 		t.Fatalf("Collection() = %v, want gate.ErrNotFound", err)
 	}
 }
@@ -111,12 +164,17 @@ func TestInventoryFactsOfAUnitInNoCollection(t *testing.T) {
 func TestInventoryFactsFailClosedOnAReaderError(t *testing.T) {
 	t.Parallel()
 
-	f := inventoryFacts{reader: fakeInventory{entries: nil, err: errReaderDown}}
+	for _, mode := range namingModes() {
+		f, _ := gateFacts(nil, mode)
+		f.reader = fakeInventory{entries: nil, err: errReaderDown}
 
-	for _, withID := range []bool{true, false} {
-		_, err := f.Labels(t.Context(), gateTestUnit(t, withID))
+		if mode == byIndexedLookup {
+			f.ids = &fakeUnitIDs{calls: 0}
+		}
+
+		_, err := f.Labels(t.Context(), gateTestUnit(t, mode))
 		if !errors.Is(err, errReaderDown) || errors.Is(err, gate.ErrNotFound) {
-			t.Fatalf("Labels(withID %v) = %v, want the reader error and no ErrNotFound", withID, err)
+			t.Fatalf("Labels(mode %d) = %v, want the reader error and no ErrNotFound", mode, err)
 		}
 	}
 }
@@ -132,17 +190,41 @@ func TestPrincipalSubjects(t *testing.T) {
 		wantCred   gate.CredentialKind
 	}{
 		{"unknown kind counts as a person", "", "", gate.PrincipalPerson, gate.CredentialAccessToken},
-		{"person with a session", identity.KindPerson, identity.CredentialSession, gate.PrincipalPerson, gate.CredentialSession},
-		{"service with an access token", identity.KindService, identity.CredentialAccessToken, gate.PrincipalService, gate.CredentialAccessToken},
-		{"workload with a trust token", identity.KindWorkload, identity.CredentialTrustToken, gate.PrincipalService, gate.CredentialTrustToken},
-		{"service with a job token", identity.KindService, identity.CredentialJobToken, gate.PrincipalService, gate.CredentialJobToken},
+		{
+			"person with a session",
+			identity.KindPerson,
+			identity.CredentialSession,
+			gate.PrincipalPerson,
+			gate.CredentialSession,
+		},
+		{
+			"service with an access token",
+			identity.KindService,
+			identity.CredentialAccessToken,
+			gate.PrincipalService,
+			gate.CredentialAccessToken,
+		},
+		{
+			"workload with a trust token",
+			identity.KindWorkload,
+			identity.CredentialTrustToken,
+			gate.PrincipalService,
+			gate.CredentialTrustToken,
+		},
+		{
+			"service with a job token",
+			identity.KindService,
+			identity.CredentialJobToken,
+			gate.PrincipalService,
+			gate.CredentialJobToken,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			p := identity.Principal{Subject: "alice", Kind: tc.kind, Credential: tc.credential}
+			p := gatePrincipal("alice", tc.kind, tc.credential)
 
 			s, err := principalSubjects{}.Subject(t.Context(), p)
 			if err != nil || s.ID != "alice" || s.Kind != tc.wantKind || s.Credential != tc.wantCred ||
@@ -157,7 +239,8 @@ func TestPrincipalSubjectsRefuseAnEmptySubject(t *testing.T) {
 	t.Parallel()
 
 	for _, subject := range []string{"", "  "} {
-		if _, err := (principalSubjects{}).Subject(t.Context(), identity.Principal{Subject: subject}); !errors.Is(err, identity.ErrDenied) {
+		_, err := principalSubjects{}.Subject(t.Context(), gatePrincipal(subject, "", ""))
+		if !errors.Is(err, identity.ErrDenied) {
 			t.Fatalf("Subject(%q) = %v, want identity.ErrDenied", subject, err)
 		}
 	}
@@ -166,8 +249,29 @@ func TestPrincipalSubjectsRefuseAnEmptySubject(t *testing.T) {
 func TestNoGateServiceWithoutGateStoreOrInventory(t *testing.T) {
 	t.Parallel()
 
-	svc, err := newGateService(&settings{}, nil)
+	svc, err := newGateService(new(settings), nil)
 	if svc != nil || err != nil {
 		t.Fatalf("newGateService(no store) = %v, %v, want nil, nil: no write is checked", svc, err)
+	}
+}
+
+func TestInventoryFactsOfAnUnknownUnitByIndexedLookup(t *testing.T) {
+	t.Parallel()
+
+	e := gateTestEntry()
+	e.Name = "other"
+	f, lookup := gateFacts([]inventory.Entry{e}, byIndexedLookup)
+
+	u, err := identity.UnitObject("opentofu", "acme", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = f.Labels(t.Context(), u); !errors.Is(err, gate.ErrNotFound) || lookup.calls != 1 {
+		t.Fatalf(
+			"Labels(unit the store does not know) = %v after %d lookups, want gate.ErrNotFound after 1",
+			err,
+			lookup.calls,
+		)
 	}
 }

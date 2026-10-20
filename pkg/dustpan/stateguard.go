@@ -52,8 +52,10 @@ func newGateService(cfg *settings, namespaces *namespace.Service) (*gate.Service
 		return nil, nil //nolint:nilnil // A store without gates is a valid setup: no write is checked.
 	}
 
-	ids, _ := cfg.namespaceStore.(unitIDs)
-	facts := inventoryFacts{reader: cfg.inventoryReader, ids: ids}
+	facts := inventoryFacts{reader: cfg.inventoryReader, ids: nil}
+	if ids, hasIDs := cfg.namespaceStore.(unitIDs); hasIDs {
+		facts.ids = ids
+	}
 
 	var actions []string
 	for _, family := range []access.Family{
@@ -131,34 +133,51 @@ func (f inventoryFacts) Labels(ctx context.Context, unit identity.Object) ([]str
 // entry returns the inventory entry of unit. A unit that is not in the
 // inventory, for example a deleted unit, gives gate.ErrNotFound.
 func (f inventoryFacts) entry(ctx context.Context, unit identity.Object) (inventory.Entry, error) {
-	id := unit.UnitID()
-
-	if id == "" && f.ids != nil {
-		found, ok, err := f.ids.UnitID(ctx, unit)
-		if err != nil {
-			return inventory.Entry{}, fmt.Errorf("unit ID of %s: %w", unit, err)
-		}
-
-		if !ok {
-			return inventory.Entry{}, gate.ErrNotFound
-		}
-
-		id = found
+	id, err := f.unitID(ctx, unit)
+	if err != nil {
+		return inventory.Entry{}, err
 	}
 
-	if id != "" {
-		e, err := f.reader.GetUnit(ctx, id)
-		if errors.Is(err, inventory.ErrUnitNotFound) {
-			return inventory.Entry{}, gate.ErrNotFound
-		}
-
-		if err != nil {
-			return inventory.Entry{}, fmt.Errorf("inventory unit %s: %w", id, err)
-		}
-
-		return e, nil
+	if id == "" {
+		return f.listed(ctx, unit)
 	}
 
+	e, err := f.reader.GetUnit(ctx, id)
+	if errors.Is(err, inventory.ErrUnitNotFound) {
+		return inventory.Entry{}, gate.ErrNotFound
+	}
+
+	if err != nil {
+		return inventory.Entry{}, fmt.Errorf("inventory unit %s: %w", id, err)
+	}
+
+	return e, nil
+}
+
+// unitID returns the stable ID of unit: the one the reference carries, or the
+// one that the store finds with one indexed read. It returns the empty ID when
+// the store has no such lookup, and gate.ErrNotFound for a unit it does not
+// know.
+func (f inventoryFacts) unitID(ctx context.Context, unit identity.Object) (string, error) {
+	if id := unit.UnitID(); id != "" || f.ids == nil {
+		return id, nil
+	}
+
+	id, ok, err := f.ids.UnitID(ctx, unit)
+	if err != nil {
+		return "", fmt.Errorf("unit ID of %s: %w", unit, err)
+	}
+
+	if !ok {
+		return "", gate.ErrNotFound
+	}
+
+	return id, nil
+}
+
+// listed finds unit in the list of its namespace. It is the way for a store
+// with no indexed lookup.
+func (f inventoryFacts) listed(ctx context.Context, unit identity.Object) (inventory.Entry, error) {
 	entries, err := f.reader.ListUnits(ctx, unit.Namespace())
 	if err != nil {
 		return inventory.Entry{}, fmt.Errorf("inventory units of %s: %w", unit.Namespace(), err)
