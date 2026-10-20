@@ -199,7 +199,7 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 
 // Enter moves the installation to maintenance mode. While an update or a run
 // is active it reports ErrActiveWork naming each one, unless force cancels
-// them first and the result names them. Entering twice keeps maintenance
+// them first and the result names what it canceled. Entering twice keeps maintenance
 // mode: the result holds only what this call canceled, empty otherwise.
 //
 // Enter holds the service mutex, so two concurrent enters cannot cancel the
@@ -210,9 +210,9 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 // leave or a rollback landed in between), the enter tries again from the
 // fresh state. After the write, Enter lists the active work again: an update
 // or a run that started between the first check and the write is still
-// active during maintenance. Without force Enter moves back to normal and
-// reports ErrActiveWork naming it, with force it cancels it too and names
-// it. A start after the second check meets the tool adapters, which answer
+// active during maintenance. In that case, with or without force, Enter
+// moves back to normal and reports ErrActiveWork naming it. With force a
+// retry then cancels it before the write. A start after the second check meets the tool adapters, which answer
 // 503.
 func (s *Service) Enter(ctx context.Context, force bool) (EnterResult, error) {
 	s.mu.Lock()

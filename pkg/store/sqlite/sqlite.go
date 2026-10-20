@@ -1171,13 +1171,14 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 // inControlTx runs fn in a transaction with no installation state check. The
 // writes of a restore and of the control tables (the installation state,
 // backups, restores, durable operations, schedules, heartbeats and the audit
-// chain) must run while the installation is in maintenance mode. Each caller
-// is a write that maintenance mode must not refuse, and none runs for a tool
-// or installation API request.
+// chain) must run while the installation is in maintenance mode. The control
+// path is for the writes that keep the installation able to enter, leave and
+// restore from maintenance mode, and that record what happens. Each caller is
+// a write that maintenance mode must not refuse.
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
-// transaction holds the shared write lock; the inner one asks for it again,
+// transaction holds the write connection; the inner one asks for it again,
 // and it queues behind an enter that waits for the outer one: a deadlock.
 // Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {

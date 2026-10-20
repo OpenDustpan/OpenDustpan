@@ -131,7 +131,9 @@ would be lost. Reads of the installation API, the maintenance routes and the
 backup and restore routes stay available. The server leaves maintenance mode
 when the restore ends, also after a failure. The server does not enter
 maintenance mode while an update or a run is active, unless the request sets
-`--force`, which cancels them first and names them.
+`--force`, which cancels them first and names them. A forced enter can still
+answer 409 when work starts during the enter. The server then stays in
+normal mode. Run the command again to cancel that work.
 
 Each write checks the stored installation state in its own database
 transaction. After one server enters maintenance mode, every other server

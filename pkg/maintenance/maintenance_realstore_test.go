@@ -33,12 +33,17 @@ func (r *racingState) SetStateIf(ctx context.Context, expected, next maintenance
 	return r.Store.SetStateIf(ctx, expected, next)
 }
 
-// TestForceEnterWithRacedStartOnTheRealStore proves, with the checked writes
-// of a real store, that a forced enter whose write raced an update start
-// does not fail on a refused cancel: it moves back to normal, names the
-// update, and the next forced enter cancels it before the write.
-func TestForceEnterWithRacedStartOnTheRealStore(t *testing.T) {
-	t.Parallel()
+// realStack is the real store with the services that a forced enter works on.
+type realStack struct {
+	st         *sqlite.Store
+	namespaces *namespace.Service
+	stacks     *stack.Service
+	updates    *stack.Updates
+	workspaces *workspace.Service
+}
+
+func newRealStack(t *testing.T) *realStack {
+	t.Helper()
 
 	ctx := t.Context()
 
@@ -84,49 +89,78 @@ func TestForceEnterWithRacedStartOnTheRealStore(t *testing.T) {
 		t.Fatalf("workspace service: %v", err)
 	}
 
-	startUpdate := func(name string) {
-		t.Helper()
+	return &realStack{st: st, namespaces: namespaces, stacks: stacks, updates: updates, workspaces: workspaces}
+}
 
-		ref, refErr := stack.ParseRef(testNamespace.String(), "web", name)
-		if refErr != nil {
-			t.Fatalf("parse stack reference: %v", refErr)
-		}
+// startUpdate creates a stack and starts an update on it.
+func (r *realStack) startUpdate(t *testing.T, name string) {
+	t.Helper()
 
-		if _, createErr := stacks.Create(ctx, ref, nil); createErr != nil {
-			t.Fatalf("create stack %s: %v", name, createErr)
-		}
+	ctx := t.Context()
 
-		plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
-
-		u, createErr := updates.Create(ctx, ref, plan)
-		if createErr != nil {
-			t.Fatalf("create update of %s: %v", name, createErr)
-		}
-
-		if _, startErr := updates.Start(ctx, ref, u.ID); startErr != nil {
-			t.Fatalf("start update of %s: %v", name, startErr)
-		}
+	ref, err := stack.ParseRef(testNamespace.String(), "web", name)
+	if err != nil {
+		t.Fatalf("parse stack reference: %v", err)
 	}
 
-	state := &racingState{Store: st, beforeSetIf: func() { startUpdate("staging") }}
+	if _, createErr := r.stacks.Create(ctx, ref, nil); createErr != nil {
+		t.Fatalf("create stack %s: %v", name, createErr)
+	}
+
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+
+	u, err := r.updates.Create(ctx, ref, plan)
+	if err != nil {
+		t.Fatalf("create update of %s: %v", name, err)
+	}
+
+	if _, startErr := r.updates.Start(ctx, ref, u.ID); startErr != nil {
+		t.Fatalf("start update of %s: %v", name, startErr)
+	}
+}
+
+func (r *realStack) service(t *testing.T, state maintenance.Store) *maintenance.Service {
+	t.Helper()
 
 	service, err := maintenance.NewService(maintenance.Config{
-		Store: state, Namespaces: namespaces, Stacks: stacks, Updates: updates, Workspaces: workspaces, Hold: nil,
+		Store: state, Namespaces: r.namespaces, Stacks: r.stacks, Updates: r.updates, Workspaces: r.workspaces,
+		Hold: nil,
 	})
 	if err != nil {
 		t.Fatalf("maintenance service: %v", err)
 	}
 
-	startUpdate("prod")
+	return service
+}
 
-	_, err = service.Enter(ctx, true)
+func (r *realStack) wantState(t *testing.T, label string, want maintenance.State) {
+	t.Helper()
+
+	if got, err := r.st.GetState(t.Context()); err != nil || got != want {
+		t.Fatalf("state %s = %q, %v, want %q without error", label, got, err, want)
+	}
+}
+
+// TestForceEnterWithRacedStartOnTheRealStore proves, with the checked writes
+// of a real store, that a forced enter whose write raced an update start
+// does not fail on a refused cancel: it moves back to normal, names the
+// update, and the next forced enter cancels it before the write.
+func TestForceEnterWithRacedStartOnTheRealStore(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	rs := newRealStack(t)
+	state := &racingState{Store: rs.st, beforeSetIf: func() { rs.startUpdate(t, "staging") }}
+	service := rs.service(t, state)
+
+	rs.startUpdate(t, "prod")
+
+	_, err := service.Enter(ctx, true)
 	if !errors.Is(err, maintenance.ErrActiveWork) || !strings.Contains(err.Error(), "pulumi:acme/web/staging") {
 		t.Fatalf("force enter with a raced start: err = %v, want ErrActiveWork naming pulumi:acme/web/staging", err)
 	}
 
-	if got, getErr := st.GetState(ctx); getErr != nil || got != maintenance.StateNormal {
-		t.Fatalf("state after the refused enter = %q, %v, want normal without error", got, getErr)
-	}
+	rs.wantState(t, "after the refused enter", maintenance.StateNormal)
 
 	res, err := service.Enter(ctx, true)
 	if err != nil {
@@ -137,7 +171,5 @@ func TestForceEnterWithRacedStartOnTheRealStore(t *testing.T) {
 		t.Fatalf("second force enter canceled = %v, want [pulumi:acme/web/staging]", res.Canceled)
 	}
 
-	if got, getErr := st.GetState(ctx); getErr != nil || got != maintenance.StateMaintenance {
-		t.Fatalf("state after the second enter = %q, %v, want maintenance without error", got, getErr)
-	}
+	rs.wantState(t, "after the second enter", maintenance.StateMaintenance)
 }
