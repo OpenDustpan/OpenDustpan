@@ -79,6 +79,7 @@ func TestDeleteWorkspace(t *testing.T) {
 				OnAuditFailure: nil,
 				Gate:           nil,
 				MaxStateBytes:  0,
+				DenialLimiter:  nil,
 			})
 			if err != nil {
 				t.Fatalf("handler: %v", err)

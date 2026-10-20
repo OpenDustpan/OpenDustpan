@@ -26,7 +26,7 @@ func (o *DurableOperations) EnsureSchedule(ctx context.Context, spec durable.Sch
 
 	var sc durable.Schedule
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		now, err := storeNow(ctx, q)
 		if err != nil {
 			return err
@@ -110,7 +110,7 @@ func (o *DurableOperations) ClaimTick(ctx context.Context, spec durable.Schedule
 		claimed bool
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		var claimErr error
 
 		tick, claimed, claimErr = claimTick(ctx, q, spec)

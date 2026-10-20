@@ -88,7 +88,7 @@ func (o *DurableOperations) Start(ctx context.Context, req durable.StartRequest)
 		created bool
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		var startErr error
 
 		op, created, startErr = startDurable(ctx, q, req)
@@ -375,7 +375,7 @@ func (o *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 	var extended durable.Claim
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := liveDurable(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err
@@ -477,7 +477,7 @@ func (o *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		row, err := q.GetDurableOperation(ctx, string(id))
 		if errors.Is(err, sql.ErrNoRows) {
 			return durable.ErrNotFound
@@ -526,7 +526,7 @@ func (s *Store) endAttempt(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		row, now, err := liveDurable(ctx, q, c.Operation, c.Token)
 		if err != nil {
 			return err

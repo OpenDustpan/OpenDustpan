@@ -104,6 +104,7 @@ func newCheckGateHandler(t *testing.T, ws tfe.WorkspaceService, gate *bodygate.G
 		Gate:           gate,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
