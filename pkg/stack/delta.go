@@ -114,11 +114,6 @@ func (s *Updates) deltaSave(
 		return nil, nil, err
 	}
 
-	bl, err := s.blobs.scope(ns.ID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("save checkpoint delta of update %s: %w", id, err)
-	}
-
 	if inputErr := checkDeltaInput(u, in); inputErr != nil {
 		return nil, nil, inputErr
 	}
@@ -126,6 +121,11 @@ func (s *Updates) deltaSave(
 	st, prev, err := s.deltaBase(ctx, ref, id)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	bl, err := s.blobs.scope(ns.ID, st)
+	if err != nil {
+		return nil, nil, fmt.Errorf("save checkpoint delta of update %s: %w", id, err)
 	}
 
 	want, err := decodeDeltaHash(in.Hash)

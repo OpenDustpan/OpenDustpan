@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -107,6 +106,16 @@ func foreignKeys() []foreignKey {
 			build: func(ns, tail string) string { return "namespaces/" + ns + "/item-keys/stk-test/" + tail },
 			where: stack.OutsideStackBlobs,
 		},
+		{
+			name:  "same namespace, another stack",
+			build: func(ns, tail string) string { return "namespaces/" + ns + "/pulumi/stk-other/" + tail },
+			where: stack.OutsideStackBlobs,
+		},
+		{
+			name:  "same namespace, stack ID as a prefix",
+			build: func(ns, tail string) string { return "namespaces/" + ns + "/pulumi/stk-testx/" + tail },
+			where: stack.OutsideStackBlobs,
+		},
 	}
 }
 
@@ -116,6 +125,7 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 	t.Helper()
 
 	row := stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       f.clock.Now(),
 		Features:      nil,
 		Deployment:    nil,
@@ -309,6 +319,18 @@ func journalForeignKeys() map[string]journalForeignKey {
 		"own tofu directory": {
 			"namespaces/ns-journal-test/tofu/stack-1/upd-1/journal/1", stack.OutsideStackBlobs,
 		},
+		"same namespace, another stack": {
+			"namespaces/ns-journal-test/pulumi/stack-2/upd-1/journal/1", stack.OutsideStackBlobs,
+		},
+		"same namespace, stack ID as a prefix": {
+			"namespaces/ns-journal-test/pulumi/stack-10/upd-1/journal/1", stack.OutsideStackBlobs,
+		},
+		"same stack, another update": {
+			"namespaces/ns-journal-test/pulumi/stack-1/upd-2/journal/1", stack.OutsideStackBlobs,
+		},
+		"same stack, checkpoint of the update": {
+			"namespaces/ns-journal-test/pulumi/stack-1/upd-1/1", stack.OutsideStackBlobs,
+		},
 	}
 }
 
@@ -329,7 +351,7 @@ func journalBlobOps() map[string]journalBlobOp {
 			return err
 		}},
 		"remove": {op: "delete", run: func(ctx context.Context, e *stack.JournalEntries, key blob.Key) error {
-			return e.RemoveBlobs(ctx, journalNS, []blob.Key{key})
+			return e.RemoveBlobs(ctx, journalNS, "stack-1", "upd-1", []blob.Key{key})
 		}},
 	}
 }
@@ -381,14 +403,12 @@ func checkRefusedJournalOp(t *testing.T, op journalBlobOp, tc journalForeignKey)
 }
 
 // TestJournalWriterRefusesAnInvalidNamespace checks the boundary of the
-// writer: a batch, a read, a sweep and a remove with a namespace ID that
-// cannot be part of a key fail before they reach the blob store.
+// writer: a batch, a read and a remove with a namespace ID that cannot be part
+// of a key fail before they reach the blob store.
 func TestJournalWriterRefusesAnInvalidNamespace(t *testing.T) {
 	t.Parallel()
 
 	body := journalBatch(beginEntry(1, 1))
-	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
-
 	for _, id := range []namespace.ID{"", "acme", "ns-", "ns-A", "ns-a/b"} {
 		blobs := newFakeBlobs()
 		entries := newEntries(t, blobs, newFakeRows(), allowAll{})
@@ -403,12 +423,8 @@ func TestJournalWriterRefusesAnInvalidNamespace(t *testing.T) {
 			t.Errorf("batches with the namespace %q: err = %v, want blob.ErrInvalidKey", id, err)
 		}
 
-		if err := entries.RemoveBlobs(t.Context(), id, nil); !errors.Is(err, blob.ErrInvalidKey) {
+		if err := entries.RemoveBlobs(t.Context(), id, "stack-1", "upd-1", nil); !errors.Is(err, blob.ErrInvalidKey) {
 			t.Errorf("remove with the namespace %q: err = %v, want blob.ErrInvalidKey", id, err)
-		}
-
-		if err := entries.SweepUpdate(t.Context(), id, "stack-1", "upd-1", now); !errors.Is(err, blob.ErrInvalidKey) {
-			t.Errorf("sweep with the namespace %q: err = %v, want blob.ErrInvalidKey", id, err)
 		}
 
 		if len(blobs.calls) != 0 {
@@ -543,7 +559,7 @@ func TestDeleteStackBlobsStaysInTheNamespace(t *testing.T) {
 
 	putAll(t, f.blobs, append([]string{f.prefix + "stk-test/" + s.Update.ID.String() + "/journal/1"}, keep...))
 
-	if err := f.svc.DeleteStackBlobs(ctx, f.ref.Namespace, "stk-test"); err != nil {
+	if err := f.svc.DeleteStackBlobs(ctx, f.nsID, "stk-test"); err != nil {
 		t.Fatalf("delete stack blobs: %v", err)
 	}
 
@@ -556,16 +572,22 @@ func TestDeleteStackBlobsStaysInTheNamespace(t *testing.T) {
 	}
 }
 
-// TestDeleteStackBlobsInAMissingNamespace checks that the purge of a stack in
-// a namespace that does not exist fails and deletes nothing.
-func TestDeleteStackBlobsInAMissingNamespace(t *testing.T) {
+// TestDeleteStackBlobsRefusesAnInvalidScope checks that the purge with an
+// empty namespace ID, as the join of a blob purge record with a missing
+// namespace row gives, or with a stack ID that is not one segment, fails and
+// deletes nothing.
+func TestDeleteStackBlobsRefusesAnInvalidScope(t *testing.T) {
 	t.Parallel()
 
 	f := newUpdates(t)
 	putAll(t, f.blobs, []string{f.prefix + "stk-test/upd-1/1"})
 
-	if err := f.svc.DeleteStackBlobs(t.Context(), "missing", "stk-test"); !errors.Is(err, namespace.ErrNotFound) {
-		t.Fatalf("delete in a missing namespace: err = %v, want namespace.ErrNotFound", err)
+	if err := f.svc.DeleteStackBlobs(t.Context(), "", "stk-test"); !errors.Is(err, blob.ErrInvalidKey) {
+		t.Fatalf("delete with an empty namespace ID: err = %v, want blob.ErrInvalidKey", err)
+	}
+
+	if err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, ""); !errors.Is(err, stack.ErrInvalidScope) {
+		t.Fatalf("delete with an empty stack ID: err = %v, want ErrInvalidScope", err)
 	}
 
 	if got := blobKeysOf(t, f.blobs); len(got) != 1 {
@@ -643,7 +665,7 @@ func TestAuditOutOfScopeWritesASecurityEntry(t *testing.T) {
 
 			store := &serverAudit{err: nil, entries: nil}
 
-			rec, err := stack.NewAuditOutOfScope(store, audit.ChannelAPI, nil)
+			rec, err := stack.NewAuditOutOfScope(store, nil)
 			if err != nil {
 				t.Fatalf("recorder: %v", err)
 			}
@@ -662,18 +684,52 @@ func TestAuditOutOfScopeWritesASecurityEntry(t *testing.T) {
 }
 
 // TestNewAuditOutOfScopeRefusesBadInput checks the boundary of the
-// constructor: no audit store, and a channel that is not api or console.
+// constructor: no audit store.
 func TestNewAuditOutOfScopeRefusesBadInput(t *testing.T) {
 	t.Parallel()
 
-	store := &serverAudit{err: nil, entries: nil}
-
-	if _, err := stack.NewAuditOutOfScope(nil, audit.ChannelAPI, nil); !errors.Is(err, stack.ErrMissingDependency) {
+	if _, err := stack.NewAuditOutOfScope(nil, nil); !errors.Is(err, stack.ErrMissingDependency) {
 		t.Errorf("no audit store: err = %v, want ErrMissingDependency", err)
 	}
+}
 
-	if _, err := stack.NewAuditOutOfScope(store, audit.Channel("cli"), nil); !errors.Is(err, stack.ErrInvalidChannel) {
-		t.Errorf("channel cli: err = %v, want ErrInvalidChannel", err)
+// TestAuditOutOfScopeTakesTheChannelOfTheRequest checks that the entry of a
+// refusal names the channel that the context of the call carries: console for
+// a console request, api for an API request and for a call with none, and api
+// for a channel that is not one of the two.
+func TestAuditOutOfScopeTakesTheChannelOfTheRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ctx  context.Context //nolint:containedctx // The test table holds the context of each case.
+		want audit.Channel
+	}{
+		{"console request", audit.WithChannel(t.Context(), audit.ChannelConsole), audit.ChannelConsole},
+		{"api request", audit.WithChannel(t.Context(), audit.ChannelAPI), audit.ChannelAPI},
+		{"no channel", t.Context(), audit.ChannelAPI},
+		{"startup is not a request channel", audit.WithChannel(t.Context(), audit.ChannelStartup), audit.ChannelAPI},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &serverAudit{err: nil, entries: nil}
+
+			rec, err := stack.NewAuditOutOfScope(store, nil)
+			if err != nil {
+				t.Fatalf("recorder: %v", err)
+			}
+
+			if recErr := rec.RecordOutOfScope(tc.ctx, "ns-one", "get", stack.OutsideNamespace); recErr != nil {
+				t.Fatalf("record: %v", recErr)
+			}
+
+			if len(store.entries) != 1 || store.entries[0].Channel != tc.want {
+				t.Fatalf("entries = %+v, want one with the channel %q", store.entries, tc.want)
+			}
+		})
 	}
 }
 
@@ -685,7 +741,7 @@ func TestAuditOutOfScopeRefusesBadRecords(t *testing.T) {
 
 	store := &serverAudit{err: nil, entries: nil}
 
-	rec, err := stack.NewAuditOutOfScope(store, audit.ChannelConsole, nil)
+	rec, err := stack.NewAuditOutOfScope(store, nil)
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
@@ -715,7 +771,7 @@ func TestAuditOutOfScopeRefusesBadRecords(t *testing.T) {
 
 	failing := &serverAudit{err: errDiskFull, entries: nil}
 
-	failRec, err := stack.NewAuditOutOfScope(failing, audit.ChannelAPI, nil)
+	failRec, err := stack.NewAuditOutOfScope(failing, nil)
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}

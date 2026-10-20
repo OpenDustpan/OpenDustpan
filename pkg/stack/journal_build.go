@@ -237,6 +237,7 @@ func (s *Updates) builtCheckpoint(ref Ref, u Update, document []byte) (Checkpoin
 	}
 
 	return Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       s.clock(),
 		Features:      in.Features,
 		Deployment:    in.Deployment,
@@ -404,6 +405,7 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 	}
 
 	cp := Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       s.clock(),
 		Features:      save.in.Features,
 		Deployment:    save.in.Deployment,
@@ -425,7 +427,7 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 	}
 
 	if len(keys) > 0 && s.journal != nil {
-		if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, keys); err != nil {
+		if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, keys); err != nil {
 			s.logger.WarnContext(
 				ctx,
 				"delete journal blobs",
@@ -490,12 +492,12 @@ func (s *Updates) buildBeforeEnd(ctx context.Context, ref Ref, id UpdateID, u Up
 		return err
 	}
 
-	bl, err := s.blobs.scope(ns.ID)
+	st, err := s.stacks.GetStack(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 	}
 
-	st, err := s.stacks.GetStack(ctx, ref)
+	bl, err := s.blobs.scope(ns.ID, st.ID)
 	if err != nil {
 		return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 	}
@@ -574,17 +576,17 @@ func (s *Updates) journaledUpdate(ctx context.Context, ref Ref, u Update) (Check
 		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, ErrMissingDependency)
 	}
 
-	bl, err := s.scopeOf(ctx, ref.Namespace)
-	if err != nil {
-		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, err)
-	}
-
 	st, err := s.stacks.GetStack(ctx, ref)
 	if err != nil {
 		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, err)
 	}
 
-	batches, err := s.journal.Batches(ctx, bl.ns, st.ID, u.ID)
+	bl, err := s.blobs.scope(st.NamespaceID, st.ID)
+	if err != nil {
+		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, err)
+	}
+
+	batches, err := s.journal.Batches(ctx, st.NamespaceID, st.ID, u.ID)
 	if err != nil {
 		return zero, false, fmt.Errorf("read journaled state of %s: %w", ref, err)
 	}

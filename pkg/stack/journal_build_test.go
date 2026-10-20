@@ -10,6 +10,7 @@ import (
 	"io"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
@@ -289,6 +290,10 @@ type buildFixture struct {
 	journal *stack.JournalEntries
 	base    []byte
 	nsID    namespace.ID
+	// nsStore counts the namespace reads of the service.
+	nsStore *memNamespaces
+	// refusals holds the refusals of the blob scope that the service wrote.
+	refusals *stacktest.Refusals
 }
 
 // baseResource is the one resource of the base checkpoint.
@@ -370,8 +375,10 @@ func newBuildFixtureWith(
 		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
+	nsStore := &memNamespaces{ns: ns, reads: atomic.Int64{}}
+
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: clk.Now, Region: "local"},
+		namespace.Config{Store: nsStore, Now: clk.Now, Region: "local"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -409,6 +416,7 @@ func newBuildFixtureWith(
 		t.Fatalf("parse ref: %v", err)
 	}
 
+	store.nsID = ns.ID
 	store.addStack(ref, "stk-build")
 
 	ctx := t.Context()
@@ -450,6 +458,7 @@ func newBuildFixtureWith(
 	return &buildFixture{
 		svc: svc, store: store, blobs: blobs, clock: clk,
 		ref: ref, stackID: got.ID, journal: journal, base: base, nsID: ns.ID,
+		nsStore: nsStore, refusals: refusals,
 	}
 }
 

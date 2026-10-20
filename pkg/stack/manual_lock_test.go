@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -304,7 +305,11 @@ func newLockedStackService(t *testing.T, locks stack.ManualLocks) (*stack.Servic
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: func() time.Time { return now }, Region: "local"},
+		namespace.Config{
+			Store:  &memNamespaces{ns: ns, reads: atomic.Int64{}},
+			Now:    func() time.Time { return now },
+			Region: "local",
+		},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

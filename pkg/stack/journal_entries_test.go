@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -598,47 +597,6 @@ func TestNewJournalEntriesRefusesNilVerifier(t *testing.T) {
 	}
 }
 
-// TestJournalSweepKeepsNamedAndYoungBlobs checks that the sweep deletes only the old
-// journal blobs that no row names.
-func TestJournalSweepKeepsNamedAndYoungBlobs(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
-	old := now.Add(-2 * time.Hour)
-	named := blob.Key(journalPrefix + "stack-1/upd-1/journal/1")
-	orphan := blob.Key(journalPrefix + "stack-1/upd-1/journal/2")
-	young := blob.Key(journalPrefix + "stack-1/upd-1/journal/3")
-
-	blobs := newFakeBlobs()
-	blobs.listed = []blob.Object{
-		{Key: named, ModifiedAt: old},
-		{Key: orphan, ModifiedAt: old},
-		{Key: young, ModifiedAt: now.Add(-time.Minute)},
-	}
-	entries := newEntries(
-		t,
-		blobs,
-		&fakeRows{
-			err: nil, rows: nil, keys: []blob.Key{named}, refusals: nil,
-			running: false, retried: false, calls: nil,
-		},
-		allowAll{},
-	)
-
-	err := entries.SweepUpdate(t.Context(), journalNS, "stack-1", "upd-1", now)
-	if err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
-
-	if strings.Join(blobs.calls, ",") != "delete" {
-		t.Fatalf("blob calls = %v, want one delete", blobs.calls)
-	}
-
-	if _, ok := blobs.objects[orphan]; ok {
-		t.Fatal("the old orphan blob survived the sweep")
-	}
-}
-
 // TestJournalRemoveBlobsJoinsFailures checks that a failed delete is returned, joined,
 // and that the other deletes still run.
 func TestJournalRemoveBlobsJoinsFailures(t *testing.T) {
@@ -656,6 +614,8 @@ func TestJournalRemoveBlobsJoinsFailures(t *testing.T) {
 	err := entries.RemoveBlobs(
 		t.Context(),
 		journalNS,
+		"stack-1",
+		"upd-1",
 		[]blob.Key{
 			blob.Key(journalPrefix + "stack-1/upd-1/journal/1"),
 			blob.Key(journalPrefix + "stack-1/upd-1/journal/2"),

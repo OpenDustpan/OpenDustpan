@@ -16,6 +16,8 @@ import (
 const (
 	scopeNS    = namespace.ID("ns-scope-a")
 	scopeOther = "ns-scope-b"
+	// scopeStack is the stack that the scoped access of the tests serves.
+	scopeStack = ID("stk-1")
 )
 
 // countingStore counts every call that reaches it, so a test proves that a
@@ -146,6 +148,21 @@ func hostileKeys() map[string]struct {
 		"own namespace, tofu":         {"namespaces/ns-scope-a/tofu/ws-1/sv-1/1", OutsideStackBlobs},
 		"own namespace, item keys":    {"namespaces/ns-scope-a/item-keys/ik-1/v1", OutsideStackBlobs},
 		"own namespace, string match": {"namespaces/ns-scope-a/pulumix/stk-1/upd-1/1", OutsideStackBlobs},
+		"same namespace, another stack": {
+			"namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", OutsideStackBlobs,
+		},
+		"same namespace, another stack, journal": {
+			"namespaces/ns-scope-a/pulumi/stk-2/upd-1/journal/1", OutsideStackBlobs,
+		},
+		"same namespace, stack ID as a string prefix": {
+			"namespaces/ns-scope-a/pulumi/stk-10/upd-1/1", OutsideStackBlobs,
+		},
+		"same namespace, family directory only": {
+			"namespaces/ns-scope-a/pulumi/", OutsideNamespace,
+		},
+		"same namespace, stack ID only": {
+			"namespaces/ns-scope-a/pulumi/stk-1", OutsideStackBlobs,
+		},
 	}
 }
 
@@ -185,7 +202,7 @@ func newScopeFixture(t *testing.T, recordErr error) (*scopedBlobs, *countingStor
 		t.Fatalf("access: %v", err)
 	}
 
-	b, err := access.scope(scopeNS)
+	b, err := access.scope(scopeNS, scopeStack)
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
@@ -247,6 +264,9 @@ func TestScopedBlobsRefuseHostilePrefixes(t *testing.T) {
 		{"string prefix of the id", "namespaces/ns-scope-ax/pulumi/", OutsideNamespace},
 		{"old layout", "pulumi/stk-1/", OutsideNamespace},
 		{"scope root", "namespaces/ns-scope-a/", OutsideStackBlobs},
+		{"same namespace, family directory", "namespaces/ns-scope-a/pulumi/", OutsideStackBlobs},
+		{"same namespace, another stack", "namespaces/ns-scope-a/pulumi/stk-2/", OutsideStackBlobs},
+		{"same namespace, stack ID as a string prefix", "namespaces/ns-scope-a/pulumi/stk-10/", OutsideStackBlobs},
 		{"scope root without slash", "namespaces/ns-scope-a", OutsideStackBlobs},
 		{"own tofu directory", "namespaces/ns-scope-a/tofu/", OutsideStackBlobs},
 		{"string prefix of the directory", "namespaces/ns-scope-a/pulumix/", OutsideStackBlobs},
@@ -379,8 +399,14 @@ func TestBlobAccessRefusesBadInput(t *testing.T) {
 	}
 
 	for _, id := range []namespace.ID{"", "ns-", "acme", "ns-A", "ns-a/b", "ns-a/../ns-b", "ns-a b"} {
-		if _, err := access.scope(id); err == nil {
+		if _, err := access.scope(id, scopeStack); err == nil {
 			t.Errorf("scope(%q): err = nil, want an error", id)
+		}
+	}
+
+	for _, id := range []ID{"", "stk-1/", "stk-1/upd-1", "..", "stk/../stk-2", "stk\\1", " "} {
+		if _, err := access.scope(scopeNS, id); !errors.Is(err, ErrInvalidScope) {
+			t.Errorf("scope with stack %q: err = %v, want ErrInvalidScope", id, err)
 		}
 	}
 }
@@ -434,3 +460,164 @@ func TestCheckJournalBlobKey(t *testing.T) {
 
 // scopeOther2 is the namespace ID that matches scopeOther.
 const scopeOther2 = namespace.ID(scopeOther)
+
+// TestCheckCheckpointBlobKey checks the row store layer: only the key of a save
+// of this update and this stack, in this namespace, passes.
+func TestCheckCheckpointBlobKey(t *testing.T) {
+	t.Parallel()
+
+	const good = "namespaces/ns-scope-a/pulumi/stk-1/upd-1/3"
+
+	tests := []struct {
+		name string
+		ns   namespace.ID
+		key  string
+		ok   bool
+	}{
+		{"a save of the update", scopeNS, good, true},
+		{"the first save", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/0", true},
+		{"another namespace", scopeOther2, good, false},
+		{"same namespace, another stack", scopeNS, "namespaces/ns-scope-a/pulumi/stk-2/upd-1/3", false},
+		{"same namespace, stack ID as a string prefix", scopeNS, "namespaces/ns-scope-a/pulumi/stk-10/upd-1/3", false},
+		{"same namespace, another update", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-2/3", false},
+		{"old layout", scopeNS, "pulumi/stk-1/upd-1/3", false},
+		{"a journal key", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/journal/3", false},
+		{"no number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/", false},
+		{"not a number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/x", false},
+		{"negative number", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/-1", false},
+		{"nested", scopeNS, good + "/4", false},
+		{"tofu directory", scopeNS, "namespaces/ns-scope-a/tofu/stk-1/upd-1/3", false},
+		{"parent segment", scopeNS, "namespaces/ns-scope-a/pulumi/stk-1/upd-1/../3", false},
+		{"empty key", scopeNS, "", false},
+		{"invalid namespace ID", "acme", good, false},
+		{"empty namespace ID", "", good, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := CheckCheckpointBlobKey(tc.ns, "stk-1", "upd-1", blob.Key(tc.key))
+
+			switch {
+			case tc.ok && err != nil:
+				t.Fatalf("err = %v, want nil", err)
+			case !tc.ok && !errors.Is(err, ErrCheckpointKey):
+				t.Fatalf("err = %v, want ErrCheckpointKey", err)
+			case !tc.ok && tc.key != "" && strings.Contains(err.Error(), tc.key):
+				t.Fatalf("error holds the key: %v", err)
+			default:
+			}
+		})
+	}
+}
+
+// TestNarrowedBlobsRefuseTheRestOfTheStack checks the use-time scope of a key
+// that comes from a row: the access narrowed to one update refuses the
+// directory of another update of the same stack, the journal directory of the
+// update, and the directory of another stack. Each operation refuses before
+// the store and writes one refusal.
+func TestNarrowedBlobsRefuseTheRestOfTheStack(t *testing.T) {
+	t.Parallel()
+
+	keys := map[string]blob.Key{
+		"another update, same stack":    "namespaces/ns-scope-a/pulumi/stk-1/upd-2/1",
+		"another stack, same update ID": "namespaces/ns-scope-a/pulumi/stk-2/upd-1/1",
+		"update ID as a string prefix":  "namespaces/ns-scope-a/pulumi/stk-1/upd-10/1",
+	}
+
+	for opName, run := range scopeOps() {
+		for name, key := range keys {
+			t.Run(opName+"/"+name, func(t *testing.T) {
+				t.Parallel()
+
+				checkNarrowedRefusal(t, opName, run, key)
+			})
+		}
+	}
+}
+
+// checkNarrowedRefusal sends key to run on the access narrowed to the update
+// upd-1, and checks the refusal before the store.
+func checkNarrowedRefusal(t *testing.T, opName string, run scopeOp, key blob.Key) {
+	t.Helper()
+
+	b, store, rec := newScopeFixture(t, nil)
+	narrowed := b.narrow(b.updatePrefix(scopeStack, "upd-1"))
+
+	if err := run(t.Context(), narrowed, key); !errors.Is(err, blob.ErrOutOfScope) {
+		t.Fatalf("%s: err = %v, want blob.ErrOutOfScope", opName, err)
+	}
+
+	if n := store.count(); n != 0 {
+		t.Fatalf("%s reached the store %d times, want 0", opName, n)
+	}
+
+	if len(rec.got) != 1 || rec.got[0].op != opName || rec.got[0].where != OutsideStackBlobs {
+		t.Fatalf("refusals = %+v, want one %s refusal in the stack directory", rec.got, opName)
+	}
+}
+
+// TestNarrowOutsideTheStackRefusesEveryKey checks that a narrow to a directory
+// outside the stack gives an access that refuses all keys, also its own.
+func TestNarrowOutsideTheStackRefusesEveryKey(t *testing.T) {
+	t.Parallel()
+
+	b, store, rec := newScopeFixture(t, nil)
+	other := b.narrow("namespaces/ns-scope-a/pulumi/stk-2/upd-1/")
+
+	for _, key := range []blob.Key{
+		"namespaces/ns-scope-a/pulumi/stk-2/upd-1/1",
+		"namespaces/ns-scope-a/pulumi/stk-1/upd-1/1",
+	} {
+		if err := other.Delete(t.Context(), key); !errors.Is(err, blob.ErrOutOfScope) {
+			t.Fatalf("delete %s: err = %v, want blob.ErrOutOfScope", key, err)
+		}
+	}
+
+	if n := store.count(); n != 0 || len(rec.got) != 2 {
+		t.Fatalf("store calls = %d, refusals = %d; want 0 and 2", n, len(rec.got))
+	}
+}
+
+// foreignLister lists the keys of two stacks whatever the prefix says, as an
+// adapter with a listing fault would.
+type foreignLister struct {
+	*countingStore
+}
+
+func (foreignLister) List(context.Context, string) ([]blob.Object, error) {
+	return []blob.Object{
+		{Key: "namespaces/ns-scope-a/pulumi/stk-1/upd-1/1", ModifiedAt: time.Time{}},
+		{Key: "namespaces/ns-scope-a/pulumi/stk-2/upd-1/1", ModifiedAt: time.Time{}},
+	}, nil
+}
+
+// TestListRefusesAKeyOutsideTheStack checks the layer under the delete of a
+// purge and of a sweep: when the store lists a key of another stack of the
+// same namespace, the listing is refused and returns no key, so the caller
+// deletes nothing.
+func TestListRefusesAKeyOutsideTheStack(t *testing.T) {
+	t.Parallel()
+
+	rec := &scopeRecorder{err: nil, got: nil}
+
+	access, err := newBlobAccess(foreignLister{newCountingStore()}, rec)
+	if err != nil {
+		t.Fatalf("access: %v", err)
+	}
+
+	b, err := access.scope(scopeNS, scopeStack)
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+
+	listed, err := b.List(t.Context(), b.stackPrefix(scopeStack))
+	if !errors.Is(err, blob.ErrOutOfScope) || len(listed) != 0 {
+		t.Fatalf("list = %v, %v; want no key and blob.ErrOutOfScope", listed, err)
+	}
+
+	if len(rec.got) != 1 || rec.got[0].op != "list" || rec.got[0].where != OutsideStackBlobs {
+		t.Fatalf("refusals = %+v, want one list refusal in the stack directory", rec.got)
+	}
+}

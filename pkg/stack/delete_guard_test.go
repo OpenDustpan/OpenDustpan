@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -222,7 +223,11 @@ func newDeleteFixture(
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: func() time.Time { return now }, Region: "local"},
+		namespace.Config{
+			Store:  &memNamespaces{ns: ns, reads: atomic.Int64{}},
+			Now:    func() time.Time { return now },
+			Region: "local",
+		},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -255,6 +260,7 @@ func newDeleteFixture(
 // resolved bytes the guard counts, with the digest naming them.
 func deleteInlineCheckpoint(ref stack.Ref, id, deployment string) stack.Checkpoint {
 	return stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
 		Features:      nil,
 		Deployment:    []byte(deployment),
@@ -382,7 +388,11 @@ func TestDeleteServiceWithoutStatePassesEmptyGuard(t *testing.T) {
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: func() time.Time { return now }, Region: "local"},
+		namespace.Config{
+			Store:  &memNamespaces{ns: ns, reads: atomic.Int64{}},
+			Now:    func() time.Time { return now },
+			Region: "local",
+		},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -708,7 +718,11 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: func() time.Time { return now }, Region: "local"},
+		namespace.Config{
+			Store:  &memNamespaces{ns: ns, reads: atomic.Int64{}},
+			Now:    func() time.Time { return now },
+			Region: "local",
+		},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -742,6 +756,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 		t.Fatalf("parse ref: %v", err)
 	}
 
+	mem.nsID = ns.ID
 	mem.addStack(ref, "stk-test")
 
 	st := &deleteStacks{mu: sync.Mutex{}, guards: nil, queue: nil, restoreCalls: 0}

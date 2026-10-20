@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,6 +94,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "history is started mutating updates, newest first", test: testListUpdates},
 		{name: "checkpoint round trip keeps bytes", test: testCheckpointRoundTrip},
 		{name: "checkpoint blob metadata round trip", test: testCheckpointBlobMetadata},
+		{name: "checkpoint reads carry the namespace and stack IDs", test: testCheckpointReadsCarryIDs},
+		{name: "checkpoint key must belong to the update", test: testCheckpointKeyBelongsToUpdate},
 		{name: "checkpoint by update returns only that update", test: testCheckpointByUpdate},
 		{name: "history reports the stored size for blob rows", test: testHistoryBlobSize},
 		{name: "referenced checkpoint keys list every key of the stack", test: testReferencedCheckpointKeys},
@@ -426,7 +429,10 @@ func (f historyFixture) end(t *testing.T, u stack.Update, status stack.UpdateSta
 func (f historyFixture) putCheckpoint(t *testing.T, u stack.Update, body string) {
 	t.Helper()
 
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, body), f.fence); err != nil {
+	cp := newCheckpoint(u, 0, body)
+	cp.BlobKey = checkpointKey(t, f.s, u, 0)
+
+	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
 		t.Fatalf("put checkpoint of %s: %v", u.ID, err)
 	}
 }
@@ -760,7 +766,7 @@ func testUpdateWritesFenced(t *testing.T, f fixture) {
 			return f.s.SaveUpdate(t.Context(), ended(running, stack.StatusSucceeded), stale)
 		},
 		"PutCheckpoint": func() error {
-			return f.s.PutCheckpoint(t.Context(), newCheckpoint(running, 0, `{}`), stale)
+			return f.s.PutCheckpoint(t.Context(), f.checkpoint(t, running, 0, `{}`), stale)
 		},
 		"AppendEvents": func() error {
 			return f.s.AppendEvents(t.Context(), newEvents(running, 0), stale)
@@ -1251,7 +1257,7 @@ func gzipAttrs(deployment string) (int64, [md5.Size]byte) {
 // stackBlobPrefix returns the prefix of the stack blobs of the namespace ns:
 // namespaces/<namespace ID>/pulumi/. The key of a checkpoint or of a journal
 // batch of a stack starts with it.
-func stackBlobPrefix(t *testing.T, s UpdatesStore, ns namespace.Name) string {
+func stackBlobPrefix(t *testing.T, s namespace.Store, ns namespace.Name) string {
 	t.Helper()
 
 	row, err := s.GetNamespace(t.Context(), ns)
@@ -1262,26 +1268,26 @@ func stackBlobPrefix(t *testing.T, s UpdatesStore, ns namespace.Name) string {
 	return "namespaces/" + row.ID.String() + "/pulumi/"
 }
 
-// blobKey returns the blob key of a save of u with seq, for the stack of the
-// fixture.
-func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
+// keyStore is the part of a store that the key of a checkpoint blob needs: the
+// namespace row and the stack row.
+type keyStore interface {
+	namespace.Store
+	GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error)
+}
+
+// checkpointKey returns the blob key of a save of u with seq, for the stack of
+// u: namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>.
+func checkpointKey(t *testing.T, s keyStore, u stack.Update, seq int64) blob.Key {
 	t.Helper()
 
-	st, err := f.s.GetStack(t.Context(), f.ref)
+	st, err := s.GetStack(t.Context(), u.Ref)
 	if err != nil {
-		t.Fatalf("get stack %s: %v", f.ref, err)
+		t.Fatalf("get stack %s: %v", u.Ref, err)
 	}
 
-	key, err := blob.ParseKey(
-		stackBlobPrefix(
-			t,
-			f.s,
-			f.ref.Namespace,
-		) + st.ID.String() + "/" + u.ID.String() + "/" + strconv.FormatInt(
-			seq,
-			10,
-		),
-	)
+	prefix := stackBlobPrefix(t, s, u.Ref.Namespace)
+
+	key, err := blob.ParseKey(prefix + st.ID.String() + "/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10))
 	if err != nil {
 		t.Fatalf("parse blob key: %v", err)
 	}
@@ -1289,13 +1295,33 @@ func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
 	return key
 }
 
+// blobKey returns the blob key of a save of u with seq, for the stack of u.
+func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
+	t.Helper()
+
+	return checkpointKey(t, f.s, u, seq)
+}
+
+// checkpoint returns a checkpoint of u as newCheckpoint does, under the blob
+// key that the service builds for the save: the store refuses any other key.
+func (f fixture) checkpoint(t *testing.T, u stack.Update, seq int64, deployment string) stack.Checkpoint {
+	t.Helper()
+
+	cp := newCheckpoint(u, seq, deployment)
+	cp.BlobKey = f.blobKey(t, u, seq)
+
+	return cp
+}
+
 // newCheckpoint returns a checkpoint of u written under its current lease,
-// under a placeholder blob key. The store never reads the blob store, so the
-// key needs no object.
+// under a placeholder blob key that the store refuses. The store never reads the
+// blob store, so a key needs no object. Use fixture.checkpoint for a checkpoint
+// that the store accepts.
 func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoint {
 	size, sum := gzipAttrs(deployment)
 
 	return stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       now().Add(2 * time.Second),
 		Features:      []string{"deltaCheckpointUploadsV2", "verbatim"},
 		Deployment:    []byte(deployment),
@@ -1313,16 +1339,12 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 }
 
 // placeholderKey returns a blob key of a save of u with seq that no object
-// holds.
+// holds, and that no store accepts in a row: it is in no real namespace.
 func placeholderKey(u stack.Update, seq int64) blob.Key {
-	key, err := blob.ParseKey(
-		"namespaces/ns-placeholder/pulumi/placeholder/" + hex.EncodeToString(
-			[]byte(u.ID),
-		) + "/" + strconv.FormatInt(
-			seq,
-			10,
-		),
-	)
+	name := hex.EncodeToString([]byte(u.ID))
+	tail := strconv.FormatInt(seq, 10)
+
+	key, err := blob.ParseKey("namespaces/ns-placeholder/pulumi/placeholder/" + name + "/" + tail)
 	if err != nil {
 		panic(err)
 	}
@@ -1340,7 +1362,7 @@ func testCheckpointRoundTrip(t *testing.T, f fixture) {
 	u := f.run(t, f.ref, "u1", mutating())
 
 	// Not normalized JSON: key order, spacing and duplicates must survive.
-	want := newCheckpoint(u, 0, "{\"b\": 1,  \"a\":[ ], \"b\":2}\n")
+	want := f.checkpoint(t, u, 0, "{\"b\": 1,  \"a\":[ ], \"b\":2}\n")
 	want.Invalid = true
 
 	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
@@ -1349,7 +1371,7 @@ func testCheckpointRoundTrip(t *testing.T, f fixture) {
 
 	assertCheckpoint(t, f, f.ref, want)
 
-	empty := newCheckpoint(u, 0, "")
+	empty := f.checkpoint(t, u, 0, "")
 	empty.Features = nil
 
 	if err := f.s.PutCheckpoint(t.Context(), empty, f.fence); err != nil {
@@ -1367,7 +1389,7 @@ func testCheckpointLease(t *testing.T, f fixture) {
 	t.Helper()
 
 	waiting := f.create(t, f.ref, "waiting", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(waiting, 0, `{}`), f.fence); !errors.Is(
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, waiting, 0, `{}`), f.fence); !errors.Is(
 		err, stack.ErrWrongUpdateState,
 	) {
 		t.Fatalf("checkpoint of a not-started update: err = %v, want ErrWrongUpdateState", err)
@@ -1375,7 +1397,7 @@ func testCheckpointLease(t *testing.T, f fixture) {
 
 	u := f.run(t, f.ref, "u1", mutating())
 
-	forged := newCheckpoint(u, 0, `{}`)
+	forged := f.checkpoint(t, u, 0, `{}`)
 	forged.Lease = sha256.Sum256([]byte("another lease"))
 
 	if err := f.s.PutCheckpoint(t.Context(), forged, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
@@ -1383,7 +1405,7 @@ func testCheckpointLease(t *testing.T, f fixture) {
 	}
 
 	// Authorized while running, written after a cancel: rejected.
-	late := newCheckpoint(u, 0, `{}`)
+	late := f.checkpoint(t, u, 0, `{}`)
 	f.end(t, u, stack.StatusCanceled)
 
 	if err := f.s.PutCheckpoint(t.Context(), late, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
@@ -1400,7 +1422,7 @@ func testCheckpointSequence(t *testing.T, f fixture) {
 
 	u := f.run(t, f.ref, "u1", mutating())
 	put := func(seq int64, body string) error {
-		return f.s.PutCheckpoint(t.Context(), newCheckpoint(u, seq, body), f.fence)
+		return f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, seq, body), f.fence)
 	}
 
 	if err := put(2, `{"n":2}`); err != nil {
@@ -1419,7 +1441,7 @@ func testCheckpointSequence(t *testing.T, f fixture) {
 		t.Fatalf("sequence 1 after 2: err = %v, want ErrStaleCheckpoint", err)
 	}
 
-	assertCheckpoint(t, f, f.ref, newCheckpoint(u, 2, `{"n":2}`))
+	assertCheckpoint(t, f, f.ref, f.checkpoint(t, u, 2, `{"n":2}`))
 
 	if err := put(3, `{"n":3}`); err != nil {
 		t.Fatalf("put sequence 3: %v", err)
@@ -1434,14 +1456,14 @@ func testCheckpointSequence(t *testing.T, f fixture) {
 		t.Fatalf("put without sequence again: %v", err)
 	}
 
-	assertCheckpoint(t, f, f.ref, newCheckpoint(u, 0, `{"n":"b"}`))
+	assertCheckpoint(t, f, f.ref, f.checkpoint(t, u, 0, `{"n":"b"}`))
 }
 
 func testCheckpointAcrossUpdates(t *testing.T, f fixture) {
 	t.Helper()
 
 	first := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(first, 5, `{"from":1}`), f.fence); err != nil {
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, first, 5, `{"from":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1449,7 +1471,7 @@ func testCheckpointAcrossUpdates(t *testing.T, f fixture) {
 
 	// Sequence numbers belong to an update: a new update starts again at 1.
 	second := f.run(t, f.ref, "u2", mutating())
-	want := newCheckpoint(second, 1, `{"from":2}`)
+	want := f.checkpoint(t, second, 1, `{"from":2}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
@@ -1458,7 +1480,7 @@ func testCheckpointAcrossUpdates(t *testing.T, f fixture) {
 	assertCheckpoint(t, f, f.ref, want)
 
 	other := f.run(t, f.other(t), "d1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(other, 9, `{"from":"dev"}`), f.fence); err != nil {
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, other, 9, `{"from":"dev"}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of another stack: %v", err)
 	}
 
@@ -1472,7 +1494,7 @@ func testCheckpointLatestIsHighest(t *testing.T, f fixture) {
 	t.Helper()
 
 	first := f.run(t, f.ref, "u1", mutating())
-	firstCP := newCheckpoint(first, 0, `{"v":1}`)
+	firstCP := f.checkpoint(t, first, 0, `{"v":1}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
@@ -1481,7 +1503,7 @@ func testCheckpointLatestIsHighest(t *testing.T, f fixture) {
 	f.end(t, first, stack.StatusSucceeded)
 
 	second := f.run(t, f.ref, "u2", mutating())
-	secondCP := newCheckpoint(second, 0, `{"v":2}`)
+	secondCP := f.checkpoint(t, second, 0, `{"v":2}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
@@ -1504,7 +1526,7 @@ func testCheckpointByVersion(t *testing.T, f fixture) {
 	t.Helper()
 
 	first := f.run(t, f.ref, "u1", mutating())
-	firstCP := newCheckpoint(first, 0, `{"v":1}`)
+	firstCP := f.checkpoint(t, first, 0, `{"v":1}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
@@ -1513,7 +1535,7 @@ func testCheckpointByVersion(t *testing.T, f fixture) {
 	f.end(t, first, stack.StatusSucceeded)
 
 	second := f.run(t, f.ref, "u2", mutating())
-	secondCP := newCheckpoint(second, 0, `{"v":2}`)
+	secondCP := f.checkpoint(t, second, 0, `{"v":2}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
@@ -1590,7 +1612,7 @@ func testCheckpointByUpdate(t *testing.T, f fixture) {
 	t.Helper()
 
 	first := f.run(t, f.ref, "u1", mutating())
-	want := newCheckpoint(first, 0, `{"v":1}`)
+	want := f.checkpoint(t, first, 0, `{"v":1}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
@@ -1710,7 +1732,7 @@ func testCheckpointWithoutKeyRefused(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	cp := newCheckpoint(u, 0, `{"v":1}`)
+	cp := f.checkpoint(t, u, 0, `{"v":1}`)
 	cp.BlobKey = ""
 
 	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointNoKey) {
@@ -1738,7 +1760,7 @@ func testKeylessRowRefused(t *testing.T, f fixture) {
 	}
 
 	u := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -1760,10 +1782,10 @@ func testCheckpointPreviewRejected(t *testing.T, f fixture) {
 
 	for name, plan := range map[string]stack.Plan{
 		"preview": preview(),
-		"dry run": dryRun(),
+		"dry-run": dryRun(),
 	} {
 		u := f.run(t, f.ref, name, plan)
-		if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{}`), f.fence); !errors.Is(
+		if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{}`), f.fence); !errors.Is(
 			err, stack.ErrWrongUpdateState,
 		) {
 			t.Errorf("%s checkpoint: err = %v, want ErrWrongUpdateState", name, err)
@@ -1783,7 +1805,7 @@ func testCheckpointKeepsAfterEnd(t *testing.T, f fixture) {
 	t.Helper()
 
 	failed := f.run(t, f.ref, "u1", mutating())
-	failedCP := newCheckpoint(failed, 0, `{"v":1}`)
+	failedCP := f.checkpoint(t, failed, 0, `{"v":1}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), failedCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
@@ -1794,7 +1816,7 @@ func testCheckpointKeepsAfterEnd(t *testing.T, f fixture) {
 	assertCheckpointVersion(t, f, f.ref, failed.Version, failedCP)
 
 	canceled := f.run(t, f.ref, "u2", mutating())
-	canceledCP := newCheckpoint(canceled, 0, `{"v":2}`)
+	canceledCP := f.checkpoint(t, canceled, 0, `{"v":2}`)
 
 	if err := f.s.PutCheckpoint(t.Context(), canceledCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint of u2: %v", err)
@@ -1813,7 +1835,7 @@ func testDeletedStackChildrenUnreachable(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -1917,7 +1939,7 @@ func finishWithDeployment(t *testing.T, f fixture, id, deployment string) stack.
 	t.Helper()
 
 	u := f.run(t, f.ref, id, mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, deployment), f.fence); err != nil {
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, deployment), f.fence); err != nil {
 		t.Fatalf("put checkpoint of %s: %v", id, err)
 	}
 
@@ -2211,7 +2233,7 @@ func testDeleteRaceWithFinishingUpdate(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "racer", mutating())
-	want := newCheckpoint(u, 0, resourcedDeployment)
+	want := f.checkpoint(t, u, 0, resourcedDeployment)
 
 	var (
 		completeErr error
@@ -2308,7 +2330,7 @@ func runResourcedUpdate(t *testing.T, f fixture) error {
 		return err
 	}
 
-	cp := newCheckpoint(startedUpdate, 0, resourcedDeployment)
+	cp := f.checkpoint(t, startedUpdate, 0, resourcedDeployment)
 	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
 		return err
 	}
@@ -2501,7 +2523,7 @@ func seedRenameHistory(
 
 	u := f.run(t, f.ref, "u1", mutating())
 
-	wantCP := newCheckpoint(u, 0, `{"v":1}`)
+	wantCP := f.checkpoint(t, u, 0, `{"v":1}`)
 	if err := f.s.PutCheckpoint(t.Context(), wantCP, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
@@ -2944,4 +2966,103 @@ func eventsString(events []stack.Event) string {
 	}
 
 	return b.String()
+}
+
+// testCheckpointReadsCarryIDs checks that each read of a checkpoint returns the
+// ID of the namespace row and the ID of the stack row, from the query of the
+// read, and that the read of one stack returns the namespace ID too. The
+// service builds the scope of the blob of a row from them, without a second
+// read.
+func testCheckpointReadsCarryIDs(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	ns, err := f.s.GetNamespace(t.Context(), f.ref.Namespace)
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	st, err := f.s.GetStack(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	if st.NamespaceID != ns.ID || ns.ID == "" {
+		t.Fatalf("stack namespace ID = %q, want %q", st.NamespaceID, ns.ID)
+	}
+
+	latest, latestErr := f.s.LatestCheckpoint(t.Context(), f.ref)
+	byVersion, versionErr := f.s.CheckpointByVersion(t.Context(), f.ref, u.Version)
+	byUpdate, updateErr := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID)
+
+	if err := errors.Join(latestErr, versionErr, updateErr); err != nil {
+		t.Fatalf("read checkpoints: %v", err)
+	}
+
+	for name, cp := range map[string]*stack.Checkpoint{"latest": &latest, "by version": &byVersion, "by update": &byUpdate} {
+		if cp.NamespaceID != ns.ID || cp.StackID != st.ID {
+			t.Errorf("%s: namespace ID %q, stack ID %q; want %q, %q", name, cp.NamespaceID, cp.StackID, ns.ID, st.ID)
+		}
+	}
+}
+
+// testCheckpointKeyBelongsToUpdate checks that a checkpoint write names a key
+// of its own update, stack and namespace, through both the save and the built
+// checkpoint write. The key of another namespace, of the old layout, of
+// another directory of the namespace, of another stack or another update of
+// the same namespace, of a journal batch and a key that is deeper or has no
+// number is refused with ErrCheckpointKey, and the store keeps no row. The
+// service builds the key, so this layer holds when another caller of the store
+// builds it by other means.
+func testCheckpointKeyBelongsToUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	other := f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+
+	st, err := f.s.GetStack(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	prefix := stackBlobPrefix(t, f.s, f.ref.Namespace)
+	nsDir := strings.TrimSuffix(prefix, "pulumi/")
+	update := u.ID.String()
+
+	keys := map[string]string{
+		"another namespace":             "namespaces/ns-other/pulumi/" + st.ID.String() + "/" + update + "/1",
+		"no namespace directory":        "pulumi/" + st.ID.String() + "/" + update + "/1",
+		"a directory of the namespace":  nsDir + "tofu/" + st.ID.String() + "/" + update + "/1",
+		"same namespace, another stack": prefix + "other-stack/" + update + "/1",
+		"same stack, another update":    prefix + st.ID.String() + "/" + other.ID.String() + "/1",
+		"a journal batch":               prefix + st.ID.String() + "/" + update + "/journal/1",
+		"a nested key":                  prefix + st.ID.String() + "/" + update + "/1/2",
+		"no number":                     prefix + st.ID.String() + "/" + update + "/x",
+		"the placeholder":               string(placeholderKey(u, 1)),
+	}
+
+	for name, key := range keys {
+		cp := f.checkpoint(t, u, 1, `{"v":1}`)
+		cp.BlobKey = blob.Key(key)
+
+		if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointKey) {
+			t.Errorf("put checkpoint with %s in the key: err = %v, want ErrCheckpointKey", name, err)
+		}
+
+		if _, err := f.s.PutBuiltCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointKey) {
+			t.Errorf("put built checkpoint with %s in the key: err = %v, want ErrCheckpointKey", name, err)
+		}
+	}
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint after refused writes: err = %v, want ErrNoState", err)
+	}
+
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 1, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint with the key of the update: %v", err)
+	}
 }

@@ -221,7 +221,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		CreatedBy:    "alice@example.com",
 		RestoredFrom: 0,
 	})
-	checkpoint := newCheckpoint(running, 0, resourcedDeployment)
+	checkpoint := f.checkpoint(t, running, 0, resourcedDeployment)
 
 	if err := s.PutCheckpoint(ctx, checkpoint, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)

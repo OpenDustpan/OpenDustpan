@@ -298,7 +298,17 @@ func (m *memUpdateStore) LatestCheckpoint(_ context.Context, ref stack.Ref) (sta
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
 
-	return best, nil
+	return withTestScope(best), nil
+}
+
+// withTestScope fills the namespace ID and the stack ID of a checkpoint that a
+// read returns, as the SQL stores do from the query. The IDs are the ones of
+// homedNamespaceStore and recordingStackStore.
+func withTestScope(cp stack.Checkpoint) stack.Checkpoint {
+	cp.NamespaceID = namespace.ID("ns-" + cp.Ref.Namespace.String())
+	cp.StackID = "stk-test"
+
+	return cp
 }
 
 func (m *memUpdateStore) CheckpointByVersion(
@@ -309,7 +319,7 @@ func (m *memUpdateStore) CheckpointByVersion(
 
 	for id := range m.checkpoints {
 		if m.checkpoints[id].Ref == ref && m.updates[id].Version == version {
-			return m.checkpoints[id], nil
+			return withTestScope(m.checkpoints[id]), nil
 		}
 	}
 
@@ -328,7 +338,7 @@ func (m *memUpdateStore) CheckpointByUpdate(
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
 
-	return cp, nil
+	return withTestScope(cp), nil
 }
 
 // ReferencedCheckpointKeys implements stack.CheckpointStore.

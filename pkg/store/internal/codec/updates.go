@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -50,7 +51,10 @@ type UpdateRow struct {
 // a key is corrupt. Size is the uncompressed size for history. BlobSize with
 // BlobMD5 describe the stored bytes for backups.
 type CheckpointRow struct {
-	StackID       string
+	StackID string
+	// NamespaceID is the ID of the namespace row of the stack. A read fills it
+	// from the join of its query; a write leaves it empty.
+	NamespaceID   string
 	UpdateID      string
 	LeaseDigest   []byte
 	Digest        []byte
@@ -186,6 +190,7 @@ func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, erro
 	}
 
 	return CheckpointRow{
+		NamespaceID:   "",
 		StackID:       stackID.String(),
 		UpdateID:      cp.Update.String(),
 		LeaseDigest:   EncodeDigest(cp.Lease),
@@ -240,6 +245,8 @@ func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, erro
 		Deployment:    nil,
 		Update:        stack.UpdateID(row.UpdateID),
 		Ref:           ref,
+		NamespaceID:   namespace.ID(row.NamespaceID),
+		StackID:       stack.ID(row.StackID),
 		Lease:         lease,
 		SchemaVersion: int(row.SchemaVersion),
 		Sequence:      row.Sequence,

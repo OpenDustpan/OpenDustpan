@@ -605,12 +605,13 @@ func seedRunningUpdate(t *testing.T, f *fixture, ref stack.Ref) {
 // the service's stack list.
 func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stack.ID) {
 	f.stacks.stacks = append(f.stacks.stacks, stack.Stack{
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Tags:      map[string]string{},
-		Ref:       ref,
-		ID:        stackID,
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		Tags:        map[string]string{},
+		Ref:         ref,
+		ID:          stackID,
+		Version:     0,
 	})
 
 	f.updates.updates[id] = stack.Update{

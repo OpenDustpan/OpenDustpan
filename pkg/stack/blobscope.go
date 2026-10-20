@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,29 +67,50 @@ func newBlobAccess(store blob.Store, refusals OutOfScopeRecorder) (blobAccess, e
 	return blobAccess{store: store, refusals: refusals}, nil
 }
 
-// scope returns the blob access of the namespace ns for one call. The caller
-// takes ns from the namespace row that it resolved and authorized, never from
-// a request field.
-func (a blobAccess) scope(ns namespace.ID) (*scopedBlobs, error) {
+// scope returns the blob access of the stack stackID of the namespace ns for
+// one call. The caller takes ns from the namespace row that it resolved and
+// authorized, and stackID from the stack row, never from a request field or
+// from a row that names a blob.
+func (a blobAccess) scope(ns namespace.ID, stackID ID) (*scopedBlobs, error) {
 	view, err := blob.NewScoped(a.store, ns)
 	if err != nil {
 		return nil, fmt.Errorf("scope of stack blobs: %w", err)
 	}
 
-	return &scopedBlobs{view: view, ns: ns, refusals: a.refusals}, nil
+	// The ID of the stack is one segment of the key, so it must hold no
+	// separator and no empty value: else the directory of the stack could
+	// widen to the directory of the family or to another stack.
+	if _, keyErr := blob.ParseKey(view.Prefix() + pulumiDir + stackID.String()); keyErr != nil ||
+		strings.Contains(stackID.String(), "/") {
+		return nil, fmt.Errorf("scope of stack blobs: %w: stack ID", ErrInvalidScope)
+	}
+
+	b := &scopedBlobs{view: view, refusals: a.refusals, ns: ns, stack: stackID, allowed: ""}
+	b.allowed = b.stackPrefix(stackID)
+
+	return b, nil
 }
 
-// scopedBlobs is the blob store of the stack blobs of one namespace. It
-// refuses each key outside namespaces/<namespace ID>/pulumi/ with
-// blob.ErrOutOfScope, before any call to the store, and writes one security
-// entry to the audit log for each refusal. It implements blob.Store.
+// ErrInvalidScope reports an ID that cannot make the scope of the blobs of a
+// stack.
+var ErrInvalidScope = errors.New("invalid scope of stack blobs")
+
+// scopedBlobs is the blob store of the blobs of one stack of one namespace. It
+// refuses each key outside namespaces/<namespace ID>/pulumi/<stack ID>/, the
+// directory of the stack, with blob.ErrOutOfScope, before any call to the
+// store, and writes one security entry to the audit log for each refusal. A
+// key in the directory of another stack of the same namespace is a refusal
+// too. It implements blob.Store.
 type scopedBlobs struct {
 	view     *blob.Scoped
 	refusals OutOfScopeRecorder
 	ns       namespace.ID
+	stack    ID
+	// allowed is the directory that the calls may use, with the trailing
+	// slash: the directory of the stack, or a directory inside it after
+	// narrow.
+	allowed string
 }
-
-var _ blob.Store = (*scopedBlobs)(nil)
 
 // Key returns the key of rel, which is relative to the stack blob directory.
 func (b *scopedBlobs) Key(rel string) (blob.Key, error) {
@@ -101,7 +123,7 @@ func (b *scopedBlobs) Key(rel string) (blob.Key, error) {
 }
 
 // Put implements blob.Store. It returns blob.ErrOutOfScope when key is not a
-// key of the stack blob directory of the namespace.
+// key of the directory of the stack.
 func (b *scopedBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) error {
 	if err := b.check(ctx, "put", key); err != nil {
 		return err
@@ -113,7 +135,7 @@ func (b *scopedBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) error 
 }
 
 // Get implements blob.Store. It returns blob.ErrOutOfScope when key is not a
-// key of the stack blob directory of the namespace.
+// key of the directory of the stack.
 func (b *scopedBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	if err := b.check(ctx, "get", key); err != nil {
 		return nil, err
@@ -128,7 +150,7 @@ func (b *scopedBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, err
 }
 
 // Delete implements blob.Store. It returns blob.ErrOutOfScope when key is not
-// a key of the stack blob directory of the namespace.
+// a key of the directory of the stack.
 func (b *scopedBlobs) Delete(ctx context.Context, key blob.Key) error {
 	if err := b.check(ctx, "delete", key); err != nil {
 		return err
@@ -140,17 +162,29 @@ func (b *scopedBlobs) Delete(ctx context.Context, key blob.Key) error {
 }
 
 // List implements blob.Store. It returns blob.ErrOutOfScope when prefix is not
-// a directory inside the stack blob directory of the namespace.
+// a directory inside the directory of the stack, and when the store returns a
+// key outside that directory. In the second case it returns no key, so a
+// caller that deletes what it lists deletes nothing.
+//
+// Defense in depth: the store lists by prefix. This check stays so that a
+// fault of an adapter that lists more than the prefix never reaches the delete
+// of a sweep, and it does not rely on the adapter.
 func (b *scopedBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
 	dir := strings.TrimSuffix(prefix, "/") + "/"
 
-	if !strings.HasPrefix(dir, b.dir()) {
+	if !strings.HasPrefix(dir, b.allowed) {
 		return nil, b.refusePrefix(ctx, prefix)
 	}
 
 	objects, err := b.view.List(ctx, prefix)
 	if err != nil {
 		return nil, b.refuse(ctx, "list", err)
+	}
+
+	for i := range objects {
+		if !strings.HasPrefix(objects[i].Key.String(), b.allowed) {
+			return nil, b.record(ctx, "list", b.whereOf(objects[i].Key))
+		}
 	}
 
 	return objects, nil
@@ -165,8 +199,27 @@ func (b *scopedBlobs) Ping(ctx context.Context) error {
 	return nil
 }
 
-// dir returns the prefix of the stack blobs of the scope, with the trailing
-// slash.
+// narrow returns the access that is limited to the directory prefix inside the
+// directory of the stack, for example the journal directory of one update.
+// A prefix outside the directory of the stack gives an access that refuses
+// every key.
+func (b *scopedBlobs) narrow(prefix string) *scopedBlobs {
+	narrowed := *b
+
+	if strings.HasPrefix(prefix, b.allowed) {
+		narrowed.allowed = prefix
+	} else {
+		// Fail closed: a directory that cannot hold a key.
+		narrowed.allowed = b.allowed + "\x00/"
+	}
+
+	return &narrowed
+}
+
+var _ blob.Store = (*scopedBlobs)(nil)
+
+// dir returns the prefix of the stack blobs of the namespace, with the trailing
+// slash: the directory of all stacks.
 func (b *scopedBlobs) dir() string {
 	return b.view.Prefix() + pulumiDir
 }
@@ -186,23 +239,24 @@ func (b *scopedBlobs) journalPrefix(stackID ID, id UpdateID) string {
 	return b.updatePrefix(stackID, id) + "journal/"
 }
 
-// check refuses key when it is not a key of the stack blob directory of the
-// namespace.
+// check refuses key when it is not a key of the directory of the stack.
 //
 // Defense in depth: the view refuses a key outside the namespace too. This
 // check stays so that a key of another kind of blob in the same namespace,
-// for example the key of an OpenTofu state version in a row, never reaches
-// the stack code, and it does not rely on the view.
+// for example the key of an OpenTofu state version in a row, and a key of
+// another stack in the same namespace never reach the stack code, and it does
+// not rely on the view, on the check of the row store or on the check at the
+// write of a row.
 func (b *scopedBlobs) check(ctx context.Context, op string, key blob.Key) error {
-	if strings.HasPrefix(key.String(), b.dir()) {
+	if strings.HasPrefix(key.String(), b.allowed) {
 		return nil
 	}
 
 	return b.record(ctx, op, b.whereOf(key))
 }
 
-// refusePrefix refuses the listing of a prefix outside the stack blob
-// directory.
+// refusePrefix refuses the listing of a prefix outside the directory of the
+// stack.
 func (b *scopedBlobs) refusePrefix(ctx context.Context, prefix string) error {
 	where := OutsideNamespace
 	if strings.HasPrefix(strings.TrimSuffix(prefix, "/")+"/", b.view.Prefix()) {
@@ -213,9 +267,11 @@ func (b *scopedBlobs) refusePrefix(ctx context.Context, prefix string) error {
 }
 
 // whereOf says where the refused key is. A key that a valid key of the view
-// would be, in the namespace of the view, is outside the stack blob
-// directory. Every other key is outside the namespace: another namespace, a
-// parent segment, an empty key or a key that is not a valid key at all.
+// would be, in the namespace of the view, is outside the directory of the
+// stack: the directory of another stack, another kind of blob, or a directory
+// of the stack that the call does not use. Every other key is outside the
+// namespace: another namespace, a parent segment, an empty key or a key that
+// is not a valid key at all.
 func (b *scopedBlobs) whereOf(key blob.Key) OutOfScopeWhere {
 	if _, err := blob.ParseKey(key.String()); err == nil && strings.HasPrefix(key.String(), b.view.Prefix()) {
 		return OutsideStackBlobs
@@ -254,9 +310,6 @@ const (
 	outOfScopeSubject = "server"
 )
 
-// ErrInvalidChannel reports a channel that an out-of-scope record cannot have.
-var ErrInvalidChannel = errors.New("audit channel of a refusal is not api or console")
-
 // ErrInvalidRefusal reports an out-of-scope record with an operation, a place
 // or a namespace ID that the entry cannot hold.
 var ErrInvalidRefusal = errors.New("invalid out-of-scope refusal")
@@ -265,31 +318,25 @@ var ErrInvalidRefusal = errors.New("invalid out-of-scope refusal")
 // kind security in the scope @server.
 type AuditOutOfScope struct {
 	entries audit.ServerStore
-	channel audit.Channel
 	now     func() time.Time
 }
 
 var _ OutOfScopeRecorder = (*AuditOutOfScope)(nil)
 
 // NewAuditOutOfScope returns an OutOfScopeRecorder that appends to entries.
-// The caller gives the channel of its requests: audit.ChannelAPI or
-// audit.ChannelConsole. now may be nil; it then is time.Now.
-func NewAuditOutOfScope(
-	entries audit.ServerStore, channel audit.Channel, now func() time.Time,
-) (*AuditOutOfScope, error) {
+// The channel of each entry is the channel of the request, which the context
+// of the call carries (audit.WithChannel). A call without one is an API call.
+// now may be nil; it then is time.Now.
+func NewAuditOutOfScope(entries audit.ServerStore, now func() time.Time) (*AuditOutOfScope, error) {
 	if entries == nil {
 		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
-	}
-
-	if channel != audit.ChannelAPI && channel != audit.ChannelConsole {
-		return nil, fmt.Errorf("%w: %q", ErrInvalidChannel, channel)
 	}
 
 	if now == nil {
 		now = time.Now
 	}
 
-	return &AuditOutOfScope{entries: entries, channel: channel, now: now}, nil
+	return &AuditOutOfScope{entries: entries, now: now}, nil
 }
 
 // RecordOutOfScope appends the entry. The object is the ID of the namespace of
@@ -332,7 +379,7 @@ func (a *AuditOutOfScope) RecordOutOfScope(
 		Changes:       nil,
 		SourceIP:      "",
 		UserAgent:     "",
-		Channel:       a.channel,
+		Channel:       audit.ChannelFrom(ctx),
 		Kind:          audit.KindSecurity,
 		Outcome:       audit.OutcomeDenied,
 		RequestID:     "",
@@ -348,6 +395,41 @@ func (a *AuditOutOfScope) RecordOutOfScope(
 
 	if _, err := a.entries.AppendServer(ctx, entry); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// CheckCheckpointBlobKey returns nil when key is the blob key of a checkpoint
+// save of the update in the stack stackID of the namespace ns:
+// namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<number>. Otherwise
+// it returns ErrCheckpointKey. The row stores call it before they write a
+// checkpoint row, so a row never names a blob of another stack, of another
+// update, of the journal, or outside the scope of a namespace. The error never
+// holds the key.
+//
+// Defense in depth: the service builds the key in the scoped view of the stack
+// of the call. This check stays so that a caller of the row store that builds
+// a key by other means cannot store a row that names a foreign blob, and it
+// does not rely on the service.
+func CheckCheckpointBlobKey(ns namespace.ID, stackID ID, update UpdateID, key blob.Key) error {
+	if _, err := namespace.ParseID(ns.String()); err != nil {
+		return fmt.Errorf("%w: namespace ID", ErrCheckpointKey)
+	}
+
+	want := "namespaces/" + ns.String() + "/" + pulumiDir + stackID.String() + "/" + update.String() + "/"
+
+	num, ok := strings.CutPrefix(key.String(), want)
+	if !ok || num == "" || strings.Contains(num, "/") {
+		return fmt.Errorf("%w: key is not a save of the update in the namespace", ErrCheckpointKey)
+	}
+
+	if _, err := strconv.ParseUint(num, 10, 63); err != nil {
+		return fmt.Errorf("%w: key does not end in a number", ErrCheckpointKey)
+	}
+
+	if _, err := blob.ParseKey(key.String()); err != nil {
+		return fmt.Errorf("%w: key is not valid", ErrCheckpointKey)
 	}
 
 	return nil

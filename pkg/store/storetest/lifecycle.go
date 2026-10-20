@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -169,7 +170,7 @@ func testPurgeStack(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
+	if err := f.s.PutCheckpoint(t.Context(), f.checkpoint(t, u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
@@ -640,6 +641,11 @@ func testPurgeWorkspaceRevokesItsGrants(t *testing.T, s WorkspaceStore) {
 	checkUnitGrant(t, as, access.ErrNotFound)
 }
 
+// namespaceReader is the part of the namespace store that the checks read.
+type namespaceReader interface {
+	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+}
+
 // blobPurgesOf returns the blob purge records of the unit unitID of tool.
 func blobPurgesOf(t *testing.T, purges inventory.BlobPurges, tool, unitID string) []inventory.BlobPurge {
 	t.Helper()
@@ -674,6 +680,23 @@ func checkBlobPurge(t *testing.T, s any, tool, unitID string, ns namespace.Name)
 	found := blobPurgesOf(t, purges, tool, unitID)
 	if len(found) != 1 || found[0].Namespace != ns || !found[0].PurgedAt.Equal(deletedAt()) {
 		t.Fatalf("blob purges of %s %s = %+v, want one in %s at %v", tool, unitID, found, ns, deletedAt())
+	}
+
+	// The record carries the ID of the namespace row from the join of the list,
+	// so the sweep deletes the blobs under the prefix of the namespace without
+	// a second read.
+	namespaces, ok := storeAs[namespaceReader](s)
+	if !ok {
+		t.Fatalf("store %T cannot read a namespace", s)
+	}
+
+	row, err := namespaces.GetNamespace(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("get namespace %s: %v", ns, err)
+	}
+
+	if found[0].NamespaceID != row.ID || row.ID == "" {
+		t.Fatalf("blob purge namespace ID = %q, want %q", found[0].NamespaceID, row.ID)
 	}
 
 	for range 2 {

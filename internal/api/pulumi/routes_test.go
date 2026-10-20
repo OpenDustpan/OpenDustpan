@@ -217,6 +217,7 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 
 	out.Ref = ref
 	out.ID = "stk-test"
+	out.NamespaceID = namespace.ID("ns-" + ref.Namespace.String())
 	out.Tags = map[string]string{}
 
 	return out, nil

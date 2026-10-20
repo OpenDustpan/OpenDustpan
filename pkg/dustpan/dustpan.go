@@ -150,7 +150,10 @@ type settings struct {
 	// Every adapter gets it, so its bound on keys holds for the whole server.
 	denialLimiter *denylimit.Limiter
 	// devRefusal holds the one recorder of the refused dev sign-ins.
-	devRefusal      *devRefusalState
+	devRefusal *devRefusalState
+	// stackRefusals records the refusals of the stack blob scope. newServices
+	// builds it once.
+	stackRefusals   stack.OutOfScopeRecorder
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -269,6 +272,12 @@ type ipAllowlistSettings struct {
 type Option func(*settings)
 
 // WithNamespaceStore sets the namespace persistence port. Required.
+//
+// The server also uses the store for the audit entries of the scope @server,
+// for example the security entry of a stack blob key that a row names outside
+// the scope of its stack. So the store must implement audit.ServerStore, as
+// the SQLite and PostgreSQL stores do. NewServer answers ErrMissingOption for
+// a store that does not.
 func WithNamespaceStore(s namespace.Store) Option {
 	return func(o *settings) { o.namespaceStore = s }
 }
@@ -673,6 +682,7 @@ func defaultSettings() *settings {
 			Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil,
 		}),
 		devRefusal:              new(devRefusalState),
+		stackRefusals:           nil,
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -1434,11 +1444,6 @@ func newUpdateService(
 		locks = manual
 	}
 
-	refusals, err := stackRefusals(cfg)
-	if err != nil {
-		return nil, err
-	}
-
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
@@ -1446,7 +1451,7 @@ func newUpdateService(
 		Namespaces:         namespaces,
 		Stacks:             cfg.stackStore,
 		Blobs:              cfg.blobStore,
-		Refusals:           refusals,
+		Refusals:           cfg.stackRefusals,
 		Tokens:             checker,
 		Now:                cfg.now,
 		Logger:             cfg.logger,
@@ -1495,6 +1500,10 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	)
 	if err != nil {
 		return services{}, fmt.Errorf("namespace service: %w", err)
+	}
+
+	if refusalsErr := attachStackRefusals(cfg); refusalsErr != nil {
+		return services{}, refusalsErr
 	}
 
 	journal, err := journalWriter(cfg)

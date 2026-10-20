@@ -331,11 +331,31 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 	})
 }
 
-// writeCheckpoint checks the lease, rejects previews, checks the sequence,
+// checkCheckpointKey refuses a checkpoint whose blob key does not belong to the
+// namespace, the stack and the update of the row. The service builds the key,
+// so a mismatch is a bug or an attack, and no row names the blob.
+func checkCheckpointKey(ctx context.Context, q *db.Queries, stackID string, cp stack.Checkpoint) error {
+	nsID, err := q.GetNamespaceID(ctx, cp.Ref.Namespace.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: the namespace of the row does not exist", stack.ErrCheckpointKey)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read namespace ID: %w", err)
+	}
+
+	return stack.CheckCheckpointBlobKey(namespace.ID(nsID), stack.ID(stackID), cp.Update, cp.BlobKey)
+}
+
+// writeCheckpoint checks the key, the lease, rejects previews, checks the sequence,
 // then upserts the checkpoint of its update.
 func writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) error {
+	if keyErr := checkCheckpointKey(ctx, q, stackID, cp); keyErr != nil {
+		return keyErr
+	}
+
 	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
 		return leaseErr
 	}
@@ -396,6 +416,7 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 
 	return codec.FromCheckpointRow(codec.CheckpointRow{
 		StackID:       row.StackID,
+		NamespaceID:   row.NamespaceID,
 		UpdateID:      row.UpdateID,
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,
@@ -438,6 +459,7 @@ func (s *Store) CheckpointByVersion(
 
 	return codec.FromCheckpointRow(codec.CheckpointRow{
 		StackID:       row.StackID,
+		NamespaceID:   row.NamespaceID,
 		UpdateID:      row.UpdateID,
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,
@@ -480,6 +502,7 @@ func (s *Store) CheckpointByUpdate(
 
 	return codec.FromCheckpointRow(codec.CheckpointRow{
 		StackID:       row.StackID,
+		NamespaceID:   row.NamespaceID,
 		UpdateID:      row.UpdateID,
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"io"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/token"
@@ -79,7 +80,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	}
 
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: clk.Now, Region: "local"},
+		namespace.Config{Store: &memNamespaces{ns: ns, reads: atomic.Int64{}}, Now: clk.Now, Region: "local"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -113,6 +114,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 		t.Fatalf("parse ref: %v", err)
 	}
 
+	store.nsID = ns.ID
 	store.addStack(ref, "stk-test")
 
 	u, err := svc.Create(t.Context(), ref, stack.Plan{

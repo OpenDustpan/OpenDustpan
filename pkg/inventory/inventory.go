@@ -189,8 +189,11 @@ type Lifecycle interface {
 type BlobPurge struct {
 	PurgedAt  time.Time
 	Namespace namespace.Name
-	Tool      string
-	UnitID    string
+	// NamespaceID is the ID of the namespace row, which the store joins in the
+	// same read. It is empty when the row is gone.
+	NamespaceID namespace.ID
+	Tool        string
+	UnitID      string
 }
 
 // BlobPurgeCursor is the position after which a page of blob purge records

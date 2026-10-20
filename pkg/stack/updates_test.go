@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,13 +24,20 @@ import (
 )
 
 // memNamespaces is a namespace.Store holding one namespace.
-type memNamespaces struct{ ns namespace.Namespace }
+type memNamespaces struct {
+	ns namespace.Namespace
+	// reads counts the namespace reads, so a test proves that a blob call makes
+	// no read beyond the ones it needs for the fence.
+	reads atomic.Int64
+}
 
 func (m *memNamespaces) CreateNamespace(context.Context, namespace.Namespace) error {
 	return namespace.ErrAlreadyExists
 }
 
 func (m *memNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	m.reads.Add(1)
+
 	if name != m.ns.Name {
 		return namespace.Namespace{}, namespace.ErrNotFound
 	}
@@ -64,10 +72,14 @@ type memUpdates struct {
 	cancelOnPut func()
 	// renewFirst makes the next SaveUpdate lose to a simulated lease renewal.
 	renewFirst bool
+	// nsID is the ID of the namespace row that the reads of stacks and
+	// checkpoints fill, as the SQL stores do from the join of the query.
+	nsID namespace.ID
 }
 
 func newMemUpdates() *memUpdates {
 	return &memUpdates{
+		nsID:         "",
 		updates:      map[stack.UpdateID]stack.Update{},
 		namespaces:   map[namespace.Name]namespace.Namespace{},
 		stacks:       map[stack.Ref]stack.Stack{},
@@ -158,6 +170,8 @@ func (m *memUpdates) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, er
 	if !ok {
 		return stack.Stack{}, stack.ErrNotFound
 	}
+
+	st.NamespaceID = m.nsID
 
 	return st, nil
 }
@@ -363,7 +377,7 @@ func (m *memUpdates) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.C
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
 
-	return best, nil
+	return m.withScope(best), nil
 }
 
 func (m *memUpdates) CheckpointByVersion(
@@ -379,7 +393,7 @@ func (m *memUpdates) CheckpointByVersion(
 		}
 
 		if m.updates[cp.Update].Version == version {
-			return cp, nil
+			return m.withScope(cp), nil
 		}
 	}
 
@@ -398,7 +412,7 @@ func (m *memUpdates) CheckpointByUpdate(
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
 
-	return cp, nil
+	return m.withScope(cp), nil
 }
 
 // ReferencedCheckpointKeys implements stack.CheckpointStore.
@@ -566,6 +580,7 @@ func (m *memBlob) ageAll(d time.Duration) {
 }
 
 type updatesFixture struct {
+	nsStore    *memNamespaces
 	refusals   *stacktest.Refusals
 	prefix     string
 	nsID       namespace.ID
@@ -603,8 +618,10 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
+	nsStore := &memNamespaces{ns: ns, reads: atomic.Int64{}}
+
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: clk.Now, Region: "local"},
+		namespace.Config{Store: nsStore, Now: clk.Now, Region: "local"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -642,11 +659,12 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 		t.Fatalf("parse ref: %v", err)
 	}
 
+	store.nsID = ns.ID
 	store.addStack(ref, "stk-test")
 
 	return updatesFixture{
 		svc: svc, store: store, blobs: blobs, clock: clk, namespaces: namespaces, ref: ref,
-		refusals: refusals, nsID: ns.ID, prefix: "namespaces/" + ns.ID.String() + "/pulumi/",
+		refusals: refusals, nsID: ns.ID, nsStore: nsStore, prefix: "namespaces/" + ns.ID.String() + "/pulumi/",
 	}
 }
 
@@ -1758,6 +1776,7 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 	}
 
 	stored := stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       clk.Now(),
 		Features:      nil,
 		Deployment:    nil,
@@ -1856,12 +1875,29 @@ func (*memUpdates) SetOverrides(context.Context, namespace.Name, namespace.Overr
 	return nil
 }
 
+// withScope fills the namespace ID and the stack ID of a checkpoint that a
+// read returns, as the SQL stores do from the query. Callers hold mu.
+func (m *memUpdates) withScope(cp stack.Checkpoint) stack.Checkpoint {
+	cp.NamespaceID = m.nsID
+	cp.StackID = m.stacks[cp.Ref].ID
+
+	return cp
+}
+
 // addStack registers a stack with a stable ID under ref. Callers hold no lock.
 func (m *memUpdates) addStack(ref stack.Ref, id stack.ID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.stacks[ref] = stack.Stack{CreatedAt: time.Time{}, UpdatedAt: time.Time{}, Tags: nil, Ref: ref, ID: id, Version: 0}
+	m.stacks[ref] = stack.Stack{
+		NamespaceID: "",
+		CreatedAt:   time.Time{},
+		UpdatedAt:   time.Time{},
+		Tags:        nil,
+		Ref:         ref,
+		ID:          id,
+		Version:     0,
+	}
 }
 
 // runningUnder reports whether update id is running under lease; callers hold mu.

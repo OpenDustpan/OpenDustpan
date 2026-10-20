@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -34,11 +33,6 @@ var ErrJournalKey = errors.New("journal blob key does not belong to the update")
 // ErrNilVerifier is returned by NewJournalEntries for a nil verifier. Without a
 // verifier a batch would be stored unchecked, so the writer is never built with one.
 var ErrNilVerifier = errors.New("journal writer needs a batch verifier")
-
-// journalSweepGrace is how long after its write a journal blob stays before the
-// sweep may delete it, so a blob written just before its row is not removed.
-// It matches the grace period of checkpoint blobs.
-const journalSweepGrace = time.Hour
 
 // ErrJournalBatch is returned for a batch body that has no entries, an entry with a
 // sequence ID of 0 or less, or a sequence ID that the batch holds twice.
@@ -255,17 +249,23 @@ func NewJournalEntries(
 	return &JournalEntries{blobs: access, rows: rows, verifier: verifier, maxCheckpointBytes: maxCheckpointBytes}, nil
 }
 
-// RemoveBlobs deletes the blobs of journal batches of the namespace ns after the
-// build has removed their rows. A failed delete leaves the blob for the sweep. A
-// key outside the scope of ns is a refusal with blob.ErrOutOfScope. The returned
-// error joins the failures, and the caller logs it without failing the build.
-func (j *JournalEntries) RemoveBlobs(ctx context.Context, ns namespace.ID, keys []blob.Key) error {
-	bl, err := j.blobs.scope(ns)
+// RemoveBlobs deletes the blobs of journal batches of the update in the stack
+// stackID of the namespace ns after the build has removed their rows. A failed
+// delete leaves the blob for the sweep. The keys come from rows, so each key
+// must name a batch in the journal directory of this update: a key outside it,
+// also a key of another stack or another update of the same namespace, is a
+// refusal with blob.ErrOutOfScope, and the call deletes nothing for it. The
+// returned error joins the failures, and the caller logs it without failing the
+// build.
+func (j *JournalEntries) RemoveBlobs(
+	ctx context.Context, ns namespace.ID, stackID ID, update UpdateID, keys []blob.Key,
+) error {
+	bl, err := j.blobs.scope(ns, stackID)
 	if err != nil {
 		return fmt.Errorf("remove journal blobs: %w", err)
 	}
 
-	return removeJournalBlobs(ctx, bl, keys)
+	return removeJournalBlobs(ctx, bl.narrow(bl.journalPrefix(stackID, update)), keys)
 }
 
 // removeJournalBlobs deletes the blobs under keys through the scoped access bl.
@@ -287,10 +287,14 @@ func removeJournalBlobs(ctx context.Context, bl *scopedBlobs, keys []blob.Key) e
 func (j *JournalEntries) Batches(
 	ctx context.Context, ns namespace.ID, stackID ID, update UpdateID,
 ) ([][]byte, error) {
-	bl, err := j.blobs.scope(ns)
+	bl, err := j.blobs.scope(ns, stackID)
 	if err != nil {
 		return nil, fmt.Errorf("read journal batches: %w", err)
 	}
+
+	// The keys come from rows. Each must name a batch in the journal
+	// directory of this update, so the reads are narrowed to it.
+	bl = bl.narrow(bl.journalPrefix(stackID, update))
 
 	keys, err := j.rows.JournalKeys(ctx, stackID, update)
 	if err != nil {
@@ -378,60 +382,6 @@ func hasJournalGap(seqs []int64) bool {
 	return int64(len(seqs)) != highest
 }
 
-// SweepUpdate deletes the journal blobs of one update that no row names and that are
-// older than the grace period at now: batches whose row never committed, and blobs
-// that a finished build left behind. It runs only when the store reports the journal
-// sweepable, so no batch can be added during the sweep. The listing covers one update
-// prefix. It returns the first error that it meets, joined with the others.
-func (j *JournalEntries) SweepUpdate(
-	ctx context.Context, ns namespace.ID, stackID ID, update UpdateID, now time.Time,
-) error {
-	bl, err := j.blobs.scope(ns)
-	if err != nil {
-		return fmt.Errorf("sweep journal blobs: %w", err)
-	}
-
-	sweepable, err := j.rows.JournalSweepable(ctx, stackID, update)
-	if err != nil {
-		return fmt.Errorf("check journal sweepable: %w", err)
-	}
-
-	if !sweepable {
-		return nil
-	}
-
-	listed, err := bl.List(ctx, bl.journalPrefix(stackID, update))
-	if err != nil {
-		return fmt.Errorf("list journal blobs: %w", err)
-	}
-
-	if len(listed) == 0 {
-		return nil
-	}
-
-	named, err := j.rows.JournalKeys(ctx, stackID, update)
-	if err != nil {
-		return fmt.Errorf("read journal keys: %w", err)
-	}
-
-	keep := make(map[blob.Key]bool, len(named))
-	for _, key := range named {
-		keep[key] = true
-	}
-
-	var orphans []blob.Key
-
-	for _, obj := range listed {
-		if keep[obj.Key] || now.Sub(obj.ModifiedAt) < journalSweepGrace {
-			continue
-		}
-
-		orphans = append(orphans, obj.Key)
-	}
-
-	return removeJournalBlobs(ctx, bl, orphans)
-}
-
 // batchLimitError reports a journal batch over MaxJournalBatchBytes. Its
 // Error text keeps the update wrapper for the log, and Message is the one
 // sentence the server answers. It wraps ErrTooLarge.
@@ -492,7 +442,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		return nil
 	}
 
-	bl, err := j.blobs.scope(batch.Namespace)
+	bl, err := j.blobs.scope(batch.Namespace, batch.StackID)
 	if err != nil {
 		return fmt.Errorf("append journal batch: %w", err)
 	}

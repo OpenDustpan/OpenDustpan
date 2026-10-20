@@ -418,7 +418,8 @@ func (d gateDomain) CreateUnit(
 		}
 
 		st := stack.Stack{
-			CreatedAt: gateTime(), UpdatedAt: gateTime(), Tags: map[string]string{}, Ref: ref,
+			NamespaceID: "",
+			CreatedAt:   gateTime(), UpdatedAt: gateTime(), Tags: map[string]string{}, Ref: ref,
 			ID: stack.ID(ident.NewID("stk-")), Version: 0,
 		}
 		if err = d.s.CreateStack(ctx, st, n.Fence()); err != nil {

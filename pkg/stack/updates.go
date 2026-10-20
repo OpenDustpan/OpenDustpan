@@ -362,10 +362,12 @@ type StartedBy struct {
 func (s *Updates) StartBy(
 	ctx context.Context, ref Ref, id UpdateID, by StartedBy, journalVersion int64,
 ) (Started, error) {
-	fence, err := s.fence(ctx, ref)
+	ns, err := s.writable(ctx, ref)
 	if err != nil {
 		return Started{}, err
 	}
+
+	fence := ns.Fence()
 
 	u, err := s.Get(ctx, ref, id)
 	if err != nil {
@@ -402,7 +404,7 @@ func (s *Updates) StartBy(
 		return Started{}, fmt.Errorf("start update %s of %s: %w", id, ref, err)
 	}
 
-	s.sweepStackOnStart(ctx, ref)
+	s.sweepStackOnStart(ctx, ns.ID, ref)
 
 	return Started{Token: tok, Update: u}, nil
 }
@@ -481,12 +483,12 @@ func (s *Updates) SaveCheckpoint(
 		return fmt.Errorf("%w: a preview does not save state", ErrWrongUpdateState)
 	}
 
-	bl, err := s.blobs.scope(ns.ID)
+	st, err := s.stacks.GetStack(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", id, err)
 	}
 
-	st, err := s.stacks.GetStack(ctx, ref)
+	bl, err := s.blobs.scope(ns.ID, st.ID)
 	if err != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", id, err)
 	}
@@ -523,13 +525,15 @@ func (s *Updates) SaveCheckpoint(
 }
 
 // DeleteStackBlobs removes every checkpoint blob of the purged stack stackID
-// of the namespace ns, with a retry for each blob (ADR 47). Journal batches
-// of the stack are under the same stack directory, so they go too. The purge runs it after the rows are gone,
-// so no save can still commit a row naming these blobs. It returns an error
-// when a blob may remain, so the caller keeps the blob purge record for the
-// sweep. No log line and no error names a blob key.
-func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.Name, stackID ID) error {
-	bl, err := s.scopeOf(ctx, ns)
+// of the namespace with the ID ns, with a retry for each blob (ADR 47).
+// Journal batches of the stack are under the same stack directory, so they go
+// too. The caller takes ns from the namespace row of the purge, never from a
+// request field. The purge runs it after the rows are gone, so no save can
+// still commit a row naming these blobs. It returns an error when a blob may
+// remain, so the caller keeps the blob purge record for the sweep. No log
+// line and no error names a blob key.
+func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID ID) error {
+	bl, err := s.blobs.scope(ns, stackID)
 	if err != nil {
 		return fmt.Errorf("delete checkpoint blobs of stack %s: %w", stackID, err)
 	}
@@ -758,7 +762,7 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 		return Checkpoint{}, fmt.Errorf("export %s: %w", ref, err)
 	}
 
-	bl, err := s.scopeOf(ctx, ref.Namespace)
+	bl, err := s.blobs.scope(cp.NamespaceID, cp.StackID)
 	if err != nil {
 		return cp, fmt.Errorf("export %s: %w", ref, err)
 	}
@@ -791,7 +795,7 @@ func (s *Updates) ExportVersion(ctx context.Context, ref Ref, version int64) (Ch
 		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
 	}
 
-	bl, err := s.scopeOf(ctx, ref.Namespace)
+	bl, err := s.blobs.scope(cp.NamespaceID, cp.StackID)
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
 	}
@@ -1095,6 +1099,7 @@ func (s *Updates) commitCheckpointRow(
 	ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte,
 ) error {
 	cp := Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       s.clock(),
 		Features:      slices.Clone(save.in.Features),
 		Deployment:    save.in.Deployment,
@@ -1119,7 +1124,11 @@ func (s *Updates) commitCheckpointRow(
 // line names a blob key.
 func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) {
 	if save.prev != nil && save.prev.BlobKey != save.key {
-		if err := s.deleteBlobRetried(ctx, save.blobs, save.prev.BlobKey); err != nil {
+		// The key comes from a row. It must name a save of this update in this
+		// stack, so the access is narrowed to the directory of the update.
+		own := save.blobs.narrow(save.blobs.updatePrefix(save.stackID, save.id))
+
+		if err := s.deleteBlobRetried(ctx, own, save.prev.BlobKey); err != nil {
 			s.logger.WarnContext(
 				ctx,
 				"delete superseded checkpoint blob",
@@ -1286,7 +1295,7 @@ func (s *Updates) sweepCandidates(
 // sweepStackOnStart resolves the stack ID and sweeps its orphan blobs. It is
 // best effort: a cleanup failure never fails the start, and the blobs stay
 // for the next sweep. No log line names a blob key.
-func (s *Updates) sweepStackOnStart(ctx context.Context, ref Ref) {
+func (s *Updates) sweepStackOnStart(ctx context.Context, ns namespace.ID, ref Ref) {
 	st, err := s.stacks.GetStack(ctx, ref)
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
@@ -1294,7 +1303,7 @@ func (s *Updates) sweepStackOnStart(ctx context.Context, ref Ref) {
 		return
 	}
 
-	bl, err := s.scopeOf(ctx, ref.Namespace)
+	bl, err := s.blobs.scope(ns, st.ID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "sweep checkpoint blobs", slog.String("stack", ref.String()))
 
@@ -1381,7 +1390,9 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, bl *scopedBlobs, ref Ref,
 // blob with other content fails instead of serving foreign state. The read
 // holds one decompressed copy.
 func (s *Updates) resolveCheckpoint(ctx context.Context, bl *scopedBlobs, cp Checkpoint) (Checkpoint, error) {
-	raw, err := bl.Get(ctx, cp.BlobKey)
+	// The key comes from a row. It must name a save of the update of the row
+	// in the stack of bl, so the read is narrowed to that directory.
+	raw, err := bl.narrow(bl.updatePrefix(bl.stack, cp.Update)).Get(ctx, cp.BlobKey)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			return Checkpoint{}, fmt.Errorf("resolve checkpoint: %w", cerr)
@@ -1447,7 +1458,7 @@ func (s *Updates) restoreInput(ctx context.Context, ref Ref, version int64) (Che
 		return CheckpointInput{}, fmt.Errorf("restore %s version %d: %w", ref, version, err)
 	}
 
-	bl, err := s.scopeOf(ctx, ref.Namespace)
+	bl, err := s.blobs.scope(src.NamespaceID, src.StackID)
 	if err != nil {
 		return CheckpointInput{}, fmt.Errorf("restore %s version %d: %w", ref, version, err)
 	}
@@ -1590,19 +1601,6 @@ func (s *Updates) fence(ctx context.Context, ref Ref) (namespace.Fence, error) {
 	}
 
 	return ns.Fence(), nil
-}
-
-// scopeOf returns the blob access of the namespace called name for one call.
-// The caller passes the namespace of a reference that the request path
-// authorized already. The scope takes the ID from the namespace row, never
-// from a request field.
-func (s *Updates) scopeOf(ctx context.Context, name namespace.Name) (*scopedBlobs, error) {
-	ns, err := s.namespaces.Get(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("scope of stack blobs: %w", err)
-	}
-
-	return s.blobs.scope(ns.ID)
 }
 
 func (s *Updates) clock() time.Time {

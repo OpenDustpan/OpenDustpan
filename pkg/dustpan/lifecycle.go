@@ -115,12 +115,13 @@ func (l pulumiLifecycle) purgeUnit(
 ) error {
 	id := stack.ID(unitID)
 
-	if err := l.stacks.PurgeExpired(ctx, ns, id, dueBy, e); err != nil {
+	nsID, err := l.stacks.PurgeExpired(ctx, ns, id, dueBy, e)
+	if err != nil {
 		return lifecycleError(err, stack.ErrNotFound, stack.ErrAlreadyExists)
 	}
 
 	l.blobs.deleteBlobs(ctx, pulumiTool, unitID, func(c context.Context) error {
-		return l.updates.DeleteStackBlobs(c, ns, id)
+		return l.updates.DeleteStackBlobs(c, nsID, id)
 	})
 
 	return nil

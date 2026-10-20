@@ -49,12 +49,14 @@ type sweepTool struct {
 	entries  []audit.Entry
 	dueBys   []time.Time
 	deleted  []string
+	// deletedIn holds the namespace ID of each blob delete.
+	deletedIn []namespace.ID
 }
 
 func newSweepTool() *sweepTool {
 	return &sweepTool{
 		mu: sync.Mutex{}, errs: map[string]error{}, blobErrs: map[string]error{},
-		entries: nil, dueBys: nil, deleted: nil,
+		entries: nil, dueBys: nil, deleted: nil, deletedIn: nil,
 	}
 }
 
@@ -74,11 +76,12 @@ func (l *sweepTool) PurgeExpired(
 	return nil
 }
 
-func (l *sweepTool) DeletePurgedBlobs(_ context.Context, _ namespace.Name, unitID string) error {
+func (l *sweepTool) DeletePurgedBlobs(_ context.Context, ns namespace.ID, unitID string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.deleted = append(l.deleted, unitID)
+	l.deletedIn = append(l.deletedIn, ns)
 
 	return l.blobErrs[unitID]
 }
@@ -277,9 +280,12 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 
 	old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Minute)
 	records := []inventory.BlobPurge{
-		{PurgedAt: old, Namespace: "acme", Tool: "pulumi", UnitID: "stk-gone"},
-		{PurgedAt: old, Namespace: "acme", Tool: "pulumi", UnitID: "stk-stuck"},
-		{PurgedAt: sweepNow().Add(-time.Hour), Namespace: "acme", Tool: "pulumi", UnitID: "stk-young"},
+		{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-gone"},
+		{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-stuck"},
+		{
+			PurgedAt: sweepNow().Add(-time.Hour), Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi",
+			UnitID: "stk-young",
+		},
 	}
 	f := newSweepFixture(t, nil, records)
 	f.tool.blobErrs["stk-stuck"] = fmt.Errorf("delete: %w", errDriver)
@@ -304,6 +310,14 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 		}
 	}
 
+	// The sweep gives the tool the ID of the namespace row that the record
+	// carries, not the name.
+	for _, ns := range f.tool.deletedIn {
+		if ns != "ns-acme" {
+			t.Fatalf("sweep deleted blobs in the namespace %q, want ns-acme", ns)
+		}
+	}
+
 	if strings.Contains(f.log.String(), "10.0.0.7") {
 		t.Fatalf("log = %q, want no driver text", f.log.String())
 	}
@@ -318,7 +332,9 @@ func TestSweepCountsAFailedFinish(t *testing.T) {
 	f := newSweepFixture(
 		t,
 		nil,
-		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "acme", Tool: "pulumi", UnitID: "stk-1"}},
+		[]inventory.BlobPurge{
+			{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "pulumi", UnitID: "stk-1"},
+		},
 	)
 	f.records.finishErr = fmt.Errorf("finish: %w", namespace.ErrUnavailable)
 
@@ -348,7 +364,7 @@ func TestSweepUnknownTool(t *testing.T) {
 	f := newSweepFixture(
 		t,
 		units,
-		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "acme", Tool: "other", UnitID: "x"}},
+		[]inventory.BlobPurge{{PurgedAt: old, Namespace: "acme", NamespaceID: "ns-acme", Tool: "other", UnitID: "x"}},
 	)
 
 	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
@@ -606,8 +622,13 @@ func TestSweepPagesTheRecords(t *testing.T) {
 
 	for i := range 250 {
 		records = append(records, inventory.BlobPurge{
-			PurgedAt: old.Add(time.Duration(i) * time.Second), Namespace: "acme", Tool: "pulumi",
-			UnitID: fmt.Sprintf("stk-%03d", i),
+			PurgedAt: old.Add(
+				time.Duration(i) * time.Second,
+			),
+			Namespace:   "acme",
+			NamespaceID: "ns-acme",
+			Tool:        "pulumi",
+			UnitID:      fmt.Sprintf("stk-%03d", i),
 		})
 	}
 

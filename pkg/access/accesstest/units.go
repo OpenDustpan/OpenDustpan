@@ -64,7 +64,8 @@ func unitStore(t *testing.T, s access.Store) UnitStore {
 	}
 
 	st := stack.Stack{
-		CreatedAt: at(0), UpdatedAt: at(0), Tags: map[string]string{}, Ref: ref, ID: "stk-web", Version: 0,
+		NamespaceID: "",
+		CreatedAt:   at(0), UpdatedAt: at(0), Tags: map[string]string{}, Ref: ref, ID: "stk-web", Version: 0,
 	}
 	if createErr := us.CreateStack(ctx, st, ns.Fence()); createErr != nil {
 		t.Fatalf("create stack: %v", createErr)

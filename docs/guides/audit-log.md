@@ -171,11 +171,19 @@ names the blob kind and the operation. It also says whether the key was
 outside the namespace or outside the directory of the blob kind in the
 namespace. The entry never holds the blob key that the call used.
 
+For a Pulumi blob, the directory is the directory of one stack:
+`namespaces/<namespace ID>/pulumi/<stack ID>/`. A key in the directory of
+another stack of the same namespace is a refusal too. The server checks this
+each time that it uses a key from a row, to read, to delete or to list.
+
+The channel of the entry is the channel of the request: `console` for a
+request from the console, and `api` for all other requests.
+
 A request for a Pulumi blob that meets such a refusal fails with a server
 error, and the entry is the record for the operator. The server stores the
 checkpoint and the journal batches of a stack under
-`namespaces/<namespace ID>/pulumi/`, so a refusal shows a damaged row or a
-fault in the server, not a mistake of the client.
+`namespaces/<namespace ID>/pulumi/<stack ID>/`, so a refusal shows a damaged
+row or a fault in the server, not a mistake of the client.
 
 ## Denial entries
 

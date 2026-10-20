@@ -29,6 +29,7 @@ func TestToCheckpointRowBoundsMemory(t *testing.T) {
 	deployment := bigDeployment(resources)
 
 	cp := stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       time.Now(),
 		Features:      []string{"verbatim"},
 		Deployment:    deployment,
@@ -86,6 +87,7 @@ func TestToCheckpointRowRefusesNoKey(t *testing.T) {
 	t.Parallel()
 
 	cp := stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       time.Now(),
 		Features:      nil,
 		Deployment:    []byte(`{}`),
@@ -113,6 +115,7 @@ func TestFromCheckpointRowRefusesNoKey(t *testing.T) {
 
 	digest := sha256.Sum256([]byte(`{}`))
 	row := codec.CheckpointRow{
+		NamespaceID:   "",
 		StackID:       "stk-test",
 		UpdateID:      "upd-test",
 		LeaseDigest:   []byte{},

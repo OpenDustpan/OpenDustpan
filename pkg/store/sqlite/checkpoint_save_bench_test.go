@@ -136,12 +136,13 @@ func openBenchSaveStore(b *testing.B) *benchSaveFixture {
 	}
 
 	st := stack.Stack{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Tags:      map[string]string{},
-		Ref:       ref,
-		ID:        stack.ID(ident.NewID("stk-")),
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Tags:        map[string]string{},
+		Ref:         ref,
+		ID:          stack.ID(ident.NewID("stk-")),
+		Version:     0,
 	}
 
 	if err = s.CreateStack(ctx, st, ns.Fence()); err != nil {
@@ -220,6 +221,7 @@ func (f *benchSaveFixture) endBenchUpdate(b *testing.B, u stack.Update) {
 // scanned the full deployment bytes.
 func benchCheckpoint(u stack.Update, seq int64, deployment []byte, digest [sha256.Size]byte) stack.Checkpoint {
 	return stack.Checkpoint{
+		NamespaceID: "", StackID: "",
 		SavedAt:       time.Now().UTC(),
 		Features:      []string{"deltaCheckpointUploadsV2", "verbatim"},
 		Deployment:    deployment,
