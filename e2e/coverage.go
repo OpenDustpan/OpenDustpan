@@ -204,7 +204,14 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	tb.Helper()
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       coverageStackStore{},
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
@@ -462,8 +469,8 @@ func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (wo
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
-func (coverageTofuHTTPWorkspaces) LockWithID(
-	_ context.Context, _ workspace.ID, _, _, _ string,
+func (coverageTofuHTTPWorkspaces) LockWithIDForJob(
+	_ context.Context, _ workspace.ID, _ workspace.LockRequest,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
@@ -529,8 +536,8 @@ func (coverageWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace
 	return nil, nil
 }
 
-func (coverageWorkspaces) Lock(
-	_ context.Context, _ workspace.ID, _, _ string,
+func (coverageWorkspaces) LockForJob(
+	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	var none workspace.Workspace
 
@@ -666,6 +673,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Namespaces: coverageNamespaceStore{},
 		Authorizer: identity.AdminOnly{},
 		Now:        nil,
+		Phases:     nil,
 	})
 	if err != nil {
 		tb.Fatalf("manual lock service: %v", err)
@@ -871,6 +879,10 @@ func (coverageLockStore) GetLock(_ context.Context, _ manuallock.Target) (manual
 
 func (coverageLockStore) CoveringLock(_ context.Context, _ collection.UnitRef) (manuallock.Lock, error) {
 	return manuallock.Lock{}, manuallock.ErrNotLocked
+}
+
+func (coverageLockStore) CoveringLocks(_ context.Context, _ collection.UnitRef) ([]manuallock.Lock, error) {
+	return nil, manuallock.ErrNotLocked
 }
 
 // coverageReader answers no unit. It exists only to build a Handler for its
@@ -1207,6 +1219,7 @@ func CoverageAllowlist() []AllowEntry {
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
+		manualLockAllowEntries(),
 	)
 }
 
@@ -2171,4 +2184,28 @@ func reviewAllowEntries() []AllowEntry {
 	}
 
 	return out
+}
+
+// manualLockAllowEntries returns the lock routes of a namespace. The real CLIs
+// never call them: the steps of TestManualLockOnNamespaceStopsTheChangeRoutes
+// take, read, remove and force-remove the lock through the API, and drive both
+// CLIs against it. That test writes no matrix report, so the coverage check must
+// not depend on the order in which the tests finish. The routes of a unit and
+// of a collection need no entry: the matrix scenario of the OpenTofu suite
+// reaches them.
+func manualLockAllowEntries() []AllowEntry {
+	const (
+		path = "/api/dustpan/v1/namespaces/{namespace}/lock"
+		test = "TestManualLockOnNamespaceStopsTheChangeRoutes"
+	)
+
+	reason := "Console and client route: no CLI takes a manual lock. The harness steps of " +
+		test + " take, read and end the lock through the API and run both CLIs against it."
+
+	return []AllowEntry{
+		{Method: http.MethodPut, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodDelete, Path: path, CoveringTest: test, Reason: reason},
+		{Method: http.MethodPost, Path: path + "/force-unlock", CoveringTest: test, Reason: reason},
+	}
 }

@@ -3,12 +3,16 @@ package jobtest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 )
 
 func testApplyConflict(t *testing.T, h Harness) {
@@ -64,6 +68,28 @@ func testUnitBusy(t *testing.T, h Harness) {
 	assertState(t, h, second.ID, job.StateQueued)
 }
 
+// checkRefusedDispatchKeepsAudit dispatches j with an audit entry, expects the
+// refusal want, and checks that the refused change left no audit entry.
+func checkRefusedDispatchKeepsAudit(t *testing.T, h Harness, f fixture, j *job.Job, want error) {
+	t.Helper()
+
+	before, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil {
+		t.Fatalf("AuditEntries = %v", err)
+	}
+
+	_, err = h.Jobs.Apply(t.Context(), dispatch(j), f.fence,
+		[]audit.Entry{entry(f.unit, job.ActionUnitRunApply)})
+	if !errors.Is(err, want) {
+		t.Fatalf("Apply = %v, want %v", err, want)
+	}
+
+	after, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("audit entries after a refused change = %d, %v; want %d", len(after), err, len(before))
+	}
+}
+
 func testAuditRollback(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -71,21 +97,7 @@ func testAuditRollback(t *testing.T, h Harness) {
 	runApplyPhase(t, h, f)
 	second := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
 
-	before, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
-	if err != nil {
-		t.Fatalf("AuditEntries = %v", err)
-	}
-
-	_, err = h.Jobs.Apply(t.Context(), dispatch(&second), f.fence,
-		[]audit.Entry{entry(f.unit, job.ActionUnitRunApply)})
-	if !errors.Is(err, job.ErrUnitBusy) {
-		t.Fatalf("Apply = %v, want ErrUnitBusy", err)
-	}
-
-	after, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
-	if err != nil || len(after) != len(before) {
-		t.Fatalf("audit entries after a failed change = %d, %v; want %d", len(after), err, len(before))
-	}
+	checkRefusedDispatchKeepsAudit(t, h, f, &second, job.ErrUnitBusy)
 }
 
 func testUnitFrees(t *testing.T, h Harness) {
@@ -350,4 +362,185 @@ func orphanIDs(orphans []job.Orphan) []job.ID {
 	}
 
 	return out
+}
+
+// The holder and the reason of the manual lock that the cases put on a unit.
+const (
+	lockHolder = "alice"
+	lockReason = "change window closed"
+)
+
+// lockUnit puts a manual lock of lockHolder on the unit of f.
+func lockUnit(t *testing.T, h Harness, f fixture) {
+	t.Helper()
+
+	target := manuallock.UnitTarget(collection.UnitRef{
+		Namespace: f.unit.Namespace(), Tool: f.unit.Tool(), Name: f.unit.UnitName(),
+	})
+
+	if err := h.Domain.PutManualLock(t.Context(), f.fence, target, lockHolder, lockReason); err != nil {
+		t.Fatalf("PutManualLock = %v", err)
+	}
+}
+
+// unlockUnit removes the manual lock of the unit of f.
+func unlockUnit(t *testing.T, h Harness, f fixture) {
+	t.Helper()
+
+	target := manuallock.UnitTarget(collection.UnitRef{
+		Namespace: f.unit.Namespace(), Tool: f.unit.Tool(), Name: f.unit.UnitName(),
+	})
+
+	if err := h.Domain.RemoveManualLock(t.Context(), f.fence, target); err != nil {
+		t.Fatalf("RemoveManualLock = %v", err)
+	}
+}
+
+func testLocked(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	other, err := h.Domain.CreateUnit(t.Context(), f.fence, "opentofu", "dns")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	lockUnit(t, h, f)
+
+	// Every phase kind is refused, a plan phase too: a manual lock stops the
+	// jobs of the unit, not only its changes.
+	for _, op := range []job.Operation{job.OperationPlan, job.OperationRefresh} {
+		j := create(t, h, f, newJob(f.unit, op, ""), nil)
+
+		_, err := h.Jobs.Apply(t.Context(), dispatch(&j), f.fence, nil)
+		if !errors.Is(err, job.ErrLocked) {
+			t.Fatalf("dispatch of %s on a locked unit = %v, want ErrLocked", op, err)
+		}
+
+		if !strings.Contains(err.Error(), lockHolder) || !strings.Contains(err.Error(), lockReason) {
+			t.Errorf("error = %q, want the holder and the reason", err)
+		}
+
+		assertState(t, h, j.ID, job.StateQueued)
+	}
+
+	// A lock on one unit stops no other unit.
+	j := create(t, h, f, newJob(other, job.OperationRefresh, ""), nil)
+	if got := apply(t, h, f, dispatch(&j)); got.State != job.StateDispatched {
+		t.Fatalf("dispatch on another unit = %s, want dispatched", got.State)
+	}
+}
+
+func testNamespaceLocked(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	other, err := h.Domain.CreateUnit(t.Context(), f.fence, "pulumi", "web/prod")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	elsewhere, err := h.Domain.CreateNamespace(t.Context(), "globex")
+	if err != nil {
+		t.Fatalf("CreateNamespace = %v", err)
+	}
+
+	foreign, err := h.Domain.CreateUnit(t.Context(), elsewhere, "opentofu", "network")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	target := manuallock.NamespaceTarget(f.fence.Namespace)
+	if err := h.Domain.PutManualLock(t.Context(), f.fence, target, lockHolder, lockReason); err != nil {
+		t.Fatalf("PutManualLock = %v", err)
+	}
+
+	units := []identity.Object{f.unit, other}
+	for i := range units {
+		j := create(t, h, f, newJob(units[i], job.OperationRefresh, ""), nil)
+		if _, err := h.Jobs.Apply(t.Context(), dispatch(&j), f.fence, nil); !errors.Is(err, job.ErrLocked) {
+			t.Fatalf("dispatch on %s in a locked namespace = %v, want ErrLocked", units[i], err)
+		}
+	}
+
+	away := fixture{fence: elsewhere, unit: foreign}
+
+	j := create(t, h, away, newJob(foreign, job.OperationRefresh, ""), nil)
+	if got := apply(t, h, away, dispatch(&j)); got.State != job.StateDispatched {
+		t.Fatalf("dispatch in another namespace = %s, want dispatched", got.State)
+	}
+}
+
+func testBreakGlassNotPastLock(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	fr := freeze(t, h, f)
+	lockUnit(t, h, f)
+
+	withGlass := newJob(f.unit, job.OperationRefresh, "")
+	withGlass.BreakGlass = &job.BreakGlass{Reason: "outage", Freeze: fr.ID}
+	glass := create(t, h, f, withGlass, nil)
+
+	// The break-glass passes the freeze (testBreakGlass) and not the lock.
+	if _, err := h.Jobs.Apply(t.Context(), dispatch(&glass), f.fence, nil); !errors.Is(err, job.ErrLocked) {
+		t.Fatalf("break-glass dispatch on a locked unit = %v, want ErrLocked", err)
+	}
+
+	assertState(t, h, glass.ID, job.StateQueued)
+}
+
+func testLockedQueue(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	lockUnit(t, h, f)
+
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Wait = job.WaitLocked
+	queued := create(t, h, f, j, nil)
+
+	// The queue timeout still ends a locked job.
+	expired := apply(t, h, f, change(&queued, job.EventExpire))
+	if expired.State != job.StateExpired {
+		t.Fatalf("expire of a locked job = %s, want expired", expired.State)
+	}
+
+	waiting := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
+	if _, err := h.Jobs.Apply(t.Context(), dispatch(&waiting), f.fence, nil); !errors.Is(err, job.ErrLocked) {
+		t.Fatalf("dispatch on a locked unit = %v, want ErrLocked", err)
+	}
+
+	unlockUnit(t, h, f)
+
+	if got := apply(t, h, f, dispatch(&waiting)); got.State != job.StateDispatched {
+		t.Fatalf("dispatch after the unlock = %s, want dispatched", got.State)
+	}
+}
+
+func testLockRunsOn(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	running := runApplyPhase(t, h, f)
+	claimOp(t, h, "runner-1", job.RunnerKind(running.Spec.Pool), time.Minute)
+	running = claimed(t, h, f, &running, "runner-1")
+
+	lockUnit(t, h, f)
+
+	// The phase runs to its end: no event after the dispatch meets the lock.
+	if got := apply(t, h, f, change(&running, job.EventLastPhaseDone)); got.State != job.StateSucceeded {
+		t.Fatalf("last phase done under a manual lock = %s, want succeeded", got.State)
+	}
+}
+
+func testLockedAuditRollback(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	lockUnit(t, h, f)
+
+	j := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
+
+	checkRefusedDispatchKeepsAudit(t, h, f, &j, job.ErrLocked)
 }

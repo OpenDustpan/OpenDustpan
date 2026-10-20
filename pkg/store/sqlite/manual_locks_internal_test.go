@@ -131,3 +131,41 @@ func replaceLock(
 		return err
 	}
 }
+
+// TestDeleteManualLocksOfObjectFiltersByKind stores two locks of different kinds
+// under one object ID, which the real IDs never give, and deletes by the kind
+// of one. The lock of the other kind must stay. This is a defense in depth
+// layer: the IDs of units, collections and namespaces are distinct today.
+func TestDeleteManualLocksOfObjectFiltersByKind(t *testing.T) {
+	t.Parallel()
+
+	s, ns, _ := membershipSetup(t)
+	ctx := t.Context()
+	const shared = "id-shared"
+
+	for _, kind := range []manuallock.Kind{manuallock.KindUnit, manuallock.KindCollection, manuallock.KindNamespace} {
+		_, err := s.queries.InsertManualLock(ctx, db.InsertManualLockParams{
+			Kind: string(kind), ObjectID: shared, Namespace: ns.Name.String(), Holder: "alice", Reason: "freeze",
+			SinceMs: 1_700_000_300_000,
+		})
+		if err != nil {
+			t.Fatalf("InsertManualLock %s: %v", kind, err)
+		}
+	}
+
+	err := s.queries.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+		Kind: string(manuallock.KindCollection), ObjectID: shared,
+	})
+	if err != nil {
+		t.Fatalf("DeleteManualLocksOfObject: %v", err)
+	}
+
+	for kind, want := range map[manuallock.Kind]bool{
+		manuallock.KindUnit: true, manuallock.KindCollection: false, manuallock.KindNamespace: true,
+	} {
+		_, err := s.queries.GetManualLock(ctx, db.GetManualLockParams{Kind: string(kind), ObjectID: shared})
+		if got := err == nil; got != want {
+			t.Errorf("lock of kind %s present = %v (err %v), want %v", kind, got, err, want)
+		}
+	}
+}
