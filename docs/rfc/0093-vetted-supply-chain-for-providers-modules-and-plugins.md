@@ -399,8 +399,8 @@ namespace, and a namespace must not read a blob of another. Two options:
    every key but `installation/packages/<SHA-256>`. This needs one copy only,
    and it amends ADR 220 decisions 7 to 9: a second, read-only view and a
    blob that no namespace key seals. ADR 217 would name the key. The
-   `blobtest` suite gets a case for the read-only view (refuses a write, a
-   list and a key outside the prefix), and decision 20 gets a test that a
+   `blobtest` suite adds a case for the read-only view (it refuses a write, a
+   list and a key outside the prefix), and decision 20 adds a test that a
    namespace reads only a key of the effective allowlist. The route finds the
    record in the effective allowlist of the namespace of the proof, then
    reads the blob from the installation.
