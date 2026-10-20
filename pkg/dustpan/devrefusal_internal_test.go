@@ -138,6 +138,29 @@ func TestDevRefusalFirstWritesEntry(t *testing.T) {
 	}
 }
 
+// TestDevRefusalCanceledContextWritesEntry proves that the hook writes the entry also when the context of the request
+// is already canceled, as it is when the client closes the connection.
+func TestDevRefusalCanceledContextWritesEntry(t *testing.T) {
+	t.Parallel()
+
+	w := newDevRefusalWorld(t, installation.KindProduction)
+	w.cfg.authenticator = subjectAuthenticator{subject: "dev:admin"}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	devRefusalAudit(w.cfg)(ctx, "dev:admin")
+
+	got := w.entries(t, "dev:admin")
+	if len(got) != 1 {
+		t.Fatalf("entries after a canceled context = %+v, want 1", got)
+	}
+
+	if got[0].Outcome != audit.OutcomeDenied || got[0].Reason != devRefusalReason {
+		t.Fatalf("entry = outcome %q, reason %q", got[0].Outcome, got[0].Reason)
+	}
+}
+
 // TestDevRefusalSecondIsCounted proves that the second refusal in the hour writes nothing, and the count goes out after
 // the hour.
 func TestDevRefusalSecondIsCounted(t *testing.T) {

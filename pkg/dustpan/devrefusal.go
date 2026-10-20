@@ -91,6 +91,12 @@ func devRefusalAudit(cfg *settings) func(ctx context.Context, subject string) {
 			JobID:                  "",
 		}
 
+		// Defense in depth: the recorder detaches its write from the context
+		// and bounds it with a timeout too. This detach stays so that a change
+		// of the recorder cannot let a client that cancels its request drop the
+		// record of the refusal.
+		ctx = context.WithoutCancel(ctx)
+
 		state.recorder(cfg).Record(ctx, nil, person, refusal.Denial{
 			Action: session.ActionSignIn,
 			Object: identity.ServerObject(),
