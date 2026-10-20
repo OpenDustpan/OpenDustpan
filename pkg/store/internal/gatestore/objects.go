@@ -12,8 +12,9 @@ import (
 
 // Objects is gate.Objects[T] over a Runner.
 type Objects[T gate.Object] struct {
-	run   Runner
-	codec codec[T]
+	run       Runner
+	codec     codec[T]
+	approvers approverChecker
 }
 
 var (
@@ -24,8 +25,8 @@ var (
 	_ gate.Objects[gate.PathSet]       = (*Objects[gate.PathSet])(nil)
 )
 
-func newObjects[T gate.Object](run Runner) *Objects[T] {
-	return &Objects[T]{run: run, codec: codecOf[T]()}
+func newObjects[T gate.Object](run Runner, approvers approverChecker) *Objects[T] {
+	return &Objects[T]{run: run, codec: codecOf[T](), approvers: approvers}
 }
 
 // checkFence returns gate.ErrInvalid when fence is not the fence of scope: the
@@ -135,6 +136,10 @@ func (o *Objects[T]) Put(
 	}
 
 	if err := validateObject(obj); err != nil {
+		return 0, err
+	}
+
+	if err := o.approvers.checkObject(ctx, obj); err != nil {
 		return 0, err
 	}
 

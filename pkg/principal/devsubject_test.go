@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 )
 
 // devSubjects returns the hostile subjects that every layer below refuses.
@@ -199,6 +200,20 @@ func TestRefuseDevSubjects(t *testing.T) {
 
 			if tt.want != nil && p.Subject != "" {
 				t.Fatalf("a refused token returned the principal %q", p.Subject)
+			}
+		})
+	}
+}
+
+func TestIsDevSubjectMatchesSharedTable(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range principaltest.DevSubjectCases() {
+		t.Run(tc.Name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := principal.IsDevSubject(tc.Subject); got != tc.Dev {
+				t.Errorf("IsDevSubject(%q) = %v, want %v", tc.Subject, got, tc.Dev)
 			}
 		})
 	}

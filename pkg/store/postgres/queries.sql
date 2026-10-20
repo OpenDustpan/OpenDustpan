@@ -892,12 +892,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING;
 
 -- name: GetRestore :one
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 WHERE id = $1;
 
 -- name: ListRestores :many
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 ORDER BY started_at_ms DESC, id ASC;
 
@@ -912,6 +912,13 @@ WHERE id = $4 AND state IN ('checking', 'applying');
 UPDATE restores
 SET state = 'applying', pre_backup_id = $1
 WHERE id = $2 AND state = 'checking';
+
+-- name: SetRestoreDevReport :execrows
+-- Stores the report of the dev data of one restore, with the codes of its
+-- warnings. A restore that does not exist matches no row.
+UPDATE restores
+SET dev_report = $1
+WHERE id = $2;
 
 -- name: FailRunningRestores :exec
 UPDATE restores

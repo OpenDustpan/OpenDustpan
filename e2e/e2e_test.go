@@ -12771,8 +12771,8 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 		t.Fatalf("manifest id = %q, want backup %q", manifest.ID, doc.ID)
 	}
 
-	if manifest.Format != 2 {
-		t.Fatalf("manifest format = %d, want 2", manifest.Format)
+	if manifest.Format != 3 {
+		t.Fatalf("manifest format = %d, want 3", manifest.Format)
 	}
 
 	if manifest.SQLFormat != "portable" {

@@ -253,8 +253,8 @@ func decodeApprovalRule(scope gate.Scope, row Row) (gate.ApprovalRule, error) {
 	}
 
 	return gate.ApprovalRule{
-		Scope: scope, ID: gate.ID(row.ID), Version: row.Version, Approvers: b.Approvers, Count: b.Count,
-		AuthorMayApprove: b.AuthorMayApprove, FreshAuth: b.FreshAuth, Timeout: b.TimeoutNanos,
+		Scope: scope, ID: gate.ID(row.ID), Version: row.Version, Approvers: gate.RuleApprovers(b.Approvers),
+		Count: b.Count, AuthorMayApprove: b.AuthorMayApprove, FreshAuth: b.FreshAuth, Timeout: b.TimeoutNanos,
 	}, nil
 }
 
@@ -278,7 +278,8 @@ func decodeOwnershipRule(scope gate.Scope, row Row) (gate.OwnershipRule, error) 
 
 	return gate.OwnershipRule{
 		Scope: scope, ID: gate.ID(row.ID), Version: row.Version, Mode: gate.Mode(b.Mode), Paths: b.Paths,
-		When: b.When, Approvers: b.Approvers, Count: b.Count, FreshAuth: b.FreshAuth, Reads: idsOf(b.Reads),
+		When: b.When, Approvers: gate.RuleApprovers(b.Approvers), Count: b.Count, FreshAuth: b.FreshAuth,
+		Reads: idsOf(b.Reads),
 	}, nil
 }
 

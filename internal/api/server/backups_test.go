@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -78,6 +79,12 @@ func openBackupDeps(t *testing.T) backupStores {
 
 	registry := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
+	// A server claims its installation kind at start. The backup and the
+	// restore read it, so the stores of these tests hold one.
+	if _, err := registry.ClaimKind(t.Context(), installation.KindProduction); err != nil {
+		t.Fatalf("claim the installation kind: %v", err)
+	}
+
 	live, err := blobfs.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open live store: %v", err)
@@ -113,6 +120,7 @@ func newBackupFixture(
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Kinds:       stores.registry,
 		Registry:    stores.registry,
 		Blobs:       stores.live,
 		StateOpener: nil,

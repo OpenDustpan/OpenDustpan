@@ -2257,8 +2257,10 @@ func (s *fakeBackupStore) ApplyStaging(_ context.Context) error {
 
 // ApplyStagingKeepingAccess implements backup.AccessKeepingApplier: the fake
 // keeps no access tables, so it swaps like ApplyStaging.
-func (s *fakeBackupStore) ApplyStagingKeepingAccess(ctx context.Context) error {
-	return s.ApplyStaging(ctx)
+//
+//nolint:unparam // The port returns the result, and the fake keeps no access tables.
+func (s *fakeBackupStore) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAccessResult, error) {
+	return backup.KeepAccessResult{}, s.ApplyStaging(ctx)
 }
 
 // BumpFailoverVersions implements backup.Fencer: it increments the failover

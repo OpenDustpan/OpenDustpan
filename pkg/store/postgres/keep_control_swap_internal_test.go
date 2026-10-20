@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // insertDurableRow stores one running operation with key and token in the
@@ -97,7 +99,7 @@ func stageWithDurableRows(t *testing.T) (*Store, string) {
 		t.Fatalf("export portable: %v", err)
 	}
 
-	staged, err := s.StagePortable(ctx, sink.read, sum, files)
+	staged, err := s.StagePortable(ctx, sink.read, sum, files, storetest.StageAs(t, s))
 	if err != nil {
 		t.Fatalf("stage portable: %v", err)
 	}
@@ -155,7 +157,7 @@ func TestApplyStagingKeepingAccessKeepsDurableRows(t *testing.T) {
 	ctx := t.Context()
 	s, live := stageWithDurableRows(t)
 
-	if err := s.ApplyStagingKeepingAccess(ctx); err != nil {
+	if _, err := s.ApplyStagingKeepingAccess(ctx); err != nil {
 		t.Fatalf("apply staging keeping the access tables: %v", err)
 	}
 
