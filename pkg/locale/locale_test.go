@@ -92,32 +92,38 @@ func TestValidateFormattingLocale(t *testing.T) {
 
 func TestParseDigits(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		in   string
+		want locale.Digits
+	}{
+		{"latn", locale.DigitsLatin},
+		{"arab", locale.DigitsArabic},
+	} {
+		got, err := locale.ParseDigits(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("ParseDigits(%q) = %q, %v, want %q, nil", tc.in, got, err, tc.want)
+		}
+	}
+}
+
+func TestParseDigitsRefusals(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   string
-		want locale.Digits
-		ok   bool
 	}{
-		{"Western", "latn", locale.DigitsLatin, true},
-		{"Arabic-Indic", "arab", locale.DigitsArabic, true},
-		{"empty", "", "", false},
-		{"upper case", "ARAB", "", false},
-		{"leading space", " arab", "", false},
-		{"newline", "arab\n", "", false},
-		{"other numbering system", "deva", "", false},
-		{"the word null", "null", "", false},
-		{"long hostile value", strings.Repeat("x", 4096), "", false},
+		{"empty", ""},
+		{"upper case", "ARAB"},
+		{"leading space", " arab"},
+		{"newline", "arab\n"},
+		{"other numbering system", "deva"},
+		{"the word null", "null"},
+		{"long hostile value", strings.Repeat("x", 4096)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := locale.ParseDigits(tc.in)
-			if tc.ok {
-				if err != nil || got != tc.want {
-					t.Fatalf("ParseDigits(%q) = %q, %v, want %q, nil", tc.in, got, err, tc.want)
-				}
-				return
-			}
 			if !errors.Is(err, locale.ErrInvalidDigits) || got != "" {
 				t.Fatalf("ParseDigits(%q) = %q, %v, want ErrInvalidDigits", tc.in, got, err)
 			}

@@ -10,10 +10,15 @@ import (
 	"golang.org/x/text/number"
 )
 
-// latinArabicRegions are the regions where Arabic text uses Western digits
-// by default. Every other Arabic region uses Arabic-Indic digits.
-var latinArabicRegions = map[string]bool{
-	"AE": true, "DZ": true, "EH": true, "LY": true, "MA": true, "TN": true,
+// latinArabicRegion reports whether Arabic text uses Western digits by
+// default in a region. Every other Arabic region uses Arabic-Indic digits.
+func latinArabicRegion(region string) bool {
+	switch region {
+	case "AE", "DZ", "EH", "LY", "MA", "TN":
+		return true
+	default:
+		return false
+	}
 }
 
 // DefaultDigits returns the digits that a formatting locale uses when the
@@ -25,15 +30,15 @@ func DefaultDigits(formattingLocale string) (Digits, error) {
 	if !ok {
 		return "", ErrInvalidFormattingLocale
 	}
-	return defaultDigits(tag), nil
+	return digitsOf(tag), nil
 }
 
-func defaultDigits(tag language.Tag) Digits {
+func digitsOf(tag language.Tag) Digits {
 	base, _ := tag.Base()
 	if base.String() != "ar" {
 		return DigitsLatin
 	}
-	if region, conf := tag.Region(); conf == language.Exact && latinArabicRegions[region.String()] {
+	if region, conf := tag.Region(); conf == language.Exact && latinArabicRegion(region.String()) {
 		return DigitsLatin
 	}
 	return DigitsArabic
@@ -64,7 +69,7 @@ func NewFormatter(formattingLocale string, digits Digits) (*Formatter, error) {
 	tag, _ := checkTag(formattingLocale)
 	effective := digits
 	if effective == "" {
-		effective = defaultDigits(tag)
+		effective = digitsOf(tag)
 	}
 	// The tag has no -u- extension (checked above), so the digits extension
 	// is the only one and the parse cannot fail for a valid Digits.
@@ -122,17 +127,19 @@ func PluralCategory(languageTag string, n int64) (Category, error) {
 		return "", ErrInvalidLanguage
 	}
 	// The rules read the last two digits of a count, and the checks "more
-	// than 10". A count above the range of int keeps its last nine digits,
-	// so its category does not change.
-	u := uint64(n)
-	if n < 0 {
-		u = -u
+	// than 10". A count of one billion or more keeps its last nine digits
+	// and stays above one billion, so its category does not change, and
+	// the value fits in a 32-bit int.
+	const billion = 1_000_000_000
+	big := n >= billion || n <= -billion
+	rest := n % billion
+	if rest < 0 {
+		rest = -rest
 	}
-	const maxInt = uint64(^uint(0) >> 1)
-	if u > maxInt {
-		u %= 1_000_000_000
+	if big {
+		rest += billion
 	}
-	n = int64(u)
+	n = rest
 	switch plural.Cardinal.MatchPlural(tag, int(n), 0, 0, 0, 0) {
 	case plural.Zero:
 		return Zero, nil
@@ -144,7 +151,10 @@ func PluralCategory(languageTag string, n int64) (Category, error) {
 		return Few, nil
 	case plural.Many:
 		return Many, nil
-	default:
+	case plural.Other:
 		return Other, nil
+	default:
+		// Fail closed: a future version of x/text may add a form.
+		return "", ErrUnknownPlural
 	}
 }

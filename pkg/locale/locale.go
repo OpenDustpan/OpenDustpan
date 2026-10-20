@@ -23,11 +23,16 @@ var (
 	ErrInvalidLanguage = errors.New("language must be a BCP 47 tag of 2 to 35 characters, for example en or ar")
 	// ErrInvalidFormattingLocale means a formatting locale tag has a wrong
 	// shape, or has a -u- or -x- extension.
-	ErrInvalidFormattingLocale = errors.New("formatting locale must be a BCP 47 tag of 2 to 35 characters with no -u- or -x- extension, for example ar-EG")
+	ErrInvalidFormattingLocale = errors.New(
+		"formatting locale must be a BCP 47 tag of 2 to 35 characters with no -u- or -x- extension, for example ar-EG",
+	)
 	// ErrInvalidDigits means a digits value is not one of the valid values.
 	ErrInvalidDigits = errors.New("digits must be latn, arab or null")
 	// ErrNotFinite means a number to format is not finite.
 	ErrNotFinite = errors.New("number must be finite")
+	// ErrUnknownPlural means the plural rules gave a form that this package
+	// does not know.
+	ErrUnknownPlural = errors.New("plural form is not known")
 	// ErrFractionDigits means a count of fraction digits is out of range.
 	ErrFractionDigits = errors.New("fraction digits must be 0 to 9")
 )
@@ -46,25 +51,32 @@ func checkTag(s string) (language.Tag, bool) {
 	if len(s) < minTagLen || len(s) > maxTagLen {
 		return language.Und, false
 	}
-	// Allowlist of bytes. This stops control characters, spaces, `_`,
-	// non-ASCII text and CR or LF before the parser sees the value.
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-'
-		if !ok {
-			return language.Und, false
-		}
+	if !asciiTag(s) {
+		return language.Und, false
 	}
 	tag, err := language.Parse(s)
 	if err != nil {
 		// An unknown subtag is a well-formed tag: the shape is right, and
 		// the console owns the list of languages.
-		var ve language.ValueError
-		if !errors.As(err, &ve) {
+		if !errors.As(err, new(language.ValueError)) {
 			return language.Und, false
 		}
 	}
 	return tag, true
+}
+
+// asciiTag reports whether s has only ASCII letters, digits and hyphens. It
+// is an allowlist of bytes. It stops control characters, spaces, `_`,
+// non-ASCII text and CR or LF before the parser sees the value.
+func asciiTag(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateLanguage returns nil when s has the shape of a language tag: a
