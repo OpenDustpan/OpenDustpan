@@ -381,8 +381,8 @@ part of the sealed item, in the way ADR 145 decision 13 binds the secrets of
 a sink to the sink. Any change of one of these values deletes the
 credential, and the follow-up stays suspended until a person enters the
 token again. Option: record who sealed the token, and let only a person who
-enters the token again resume; the stored token then stays valid for
-changed data, so it protects less. **Recommendation: the binding.** "Sent only to the origin of
+enters the token again resume. The stored token then stays valid for
+changed data, so this option protects less. **Recommendation: the binding.** "Sent only to the origin of
 the target" means the origin at seal time. Before each request, the server
 compares the bound origin with the origin that it will dial. A mismatch
 fails the call, and the token never leaves the server. A change of the
