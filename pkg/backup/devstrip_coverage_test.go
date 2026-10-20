@@ -21,7 +21,7 @@ type devDecision struct {
 // principalColumn matches the name of a column that can name a principal, by
 // ID, by subject or as text. The coverage test fails for a column that
 // matches and has no decision, so a new column forces its author to decide.
-var principalColumn = regexp.MustCompile( //nolint:gochecknoglobals // A frozen pattern shared by the coverage tests.
+var principalColumn = regexp.MustCompile(
 	`(?i)(principal|subject|owner|author|actor|user|holder|approver|_by$|^by_|granted|requested|member|identity|email|display_name)`,
 )
 
@@ -57,32 +57,50 @@ var devColumnDecisions = map[string]devDecision{
 	"gate_references.owner_kind":   {strip: false, reason: "kind of a gate object, not of a person"},
 	"imports.created_by":           {strip: false, reason: "history text of who started the import"},
 	"inventory.display_name":       {strip: false, reason: "label of a unit"},
-	"inventory.lock_holder":        {strip: false, reason: "history text of a lock; an unlock needs its own authorization"},
+	"inventory.lock_holder": {
+		strip:  false,
+		reason: "history text of a lock; an unlock needs its own authorization",
+	},
 	"inventory_changes.display_name": {
 		strip: false, reason: "label of a unit",
 	},
-	"manual_locks.holder":                    {strip: false, reason: "history text of a lock; an unlock needs its own authorization"},
-	"object_context.updated_by":              {strip: false, reason: "history text of who changed the context"},
-	"object_context_owners.owner":            {strip: false, reason: "context text; the approval code counts no dev signature"},
-	"principals.display_name":                {strip: false, reason: "label of a principal that the strip removes with its row"},
-	"profile_revisions.author":               {strip: false, reason: "history text of who wrote the revision"},
-	"profiles.created_by":                    {strip: false, reason: "history text of who made the profile"},
-	"runner_join_tokens.created_by":          {strip: false, reason: "history text of who made the join token"},
-	"runner_join_tokens.used_by":             {strip: false, reason: "ID of a runner, not of a person"},
-	"sessions.user_agent":                    {strip: false, reason: "text of a client"},
-	"sign_in_providers.authorization_url":    {strip: false, reason: "address of a provider"},
-	"sign_in_providers.display_name":         {strip: false, reason: "label of a provider"},
-	"sign_in_providers.email_claim":          {strip: false, reason: "name of a claim of a provider"},
-	"sign_in_providers.subject_claim":        {strip: false, reason: "name of a claim of a provider"},
-	"sign_in_providers.userinfo_url":         {strip: false, reason: "address of a provider"},
-	"sign_in_providers.username_claim":       {strip: false, reason: "name of a claim of a provider"},
-	"state_versions.fenced_by":               {strip: false, reason: "history text of who fenced the version"},
-	"state_versions.holder":                  {strip: false, reason: "history text of a lock; an unlock needs its own authorization"},
+	"manual_locks.holder": {
+		strip:  false,
+		reason: "history text of a lock; an unlock needs its own authorization",
+	},
+	"object_context.updated_by": {strip: false, reason: "history text of who changed the context"},
+	"object_context_owners.owner": {
+		strip:  false,
+		reason: "context text; the approval code counts no dev signature",
+	},
+	"principals.display_name": {
+		strip:  false,
+		reason: "label of a principal that the strip removes with its row",
+	},
+	"profile_revisions.author":            {strip: false, reason: "history text of who wrote the revision"},
+	"profiles.created_by":                 {strip: false, reason: "history text of who made the profile"},
+	"runner_join_tokens.created_by":       {strip: false, reason: "history text of who made the join token"},
+	"runner_join_tokens.used_by":          {strip: false, reason: "ID of a runner, not of a person"},
+	"sessions.user_agent":                 {strip: false, reason: "text of a client"},
+	"sign_in_providers.authorization_url": {strip: false, reason: "address of a provider"},
+	"sign_in_providers.display_name":      {strip: false, reason: "label of a provider"},
+	"sign_in_providers.email_claim":       {strip: false, reason: "name of a claim of a provider"},
+	"sign_in_providers.subject_claim":     {strip: false, reason: "name of a claim of a provider"},
+	"sign_in_providers.userinfo_url":      {strip: false, reason: "address of a provider"},
+	"sign_in_providers.username_claim":    {strip: false, reason: "name of a claim of a provider"},
+	"state_versions.fenced_by":            {strip: false, reason: "history text of who fenced the version"},
+	"state_versions.holder": {
+		strip:  false,
+		reason: "history text of a lock; an unlock needs its own authorization",
+	},
 	"updates.created_by":                     {strip: false, reason: "history text of who started the update"},
 	"workspace_resource_changes.by_job_id":   {strip: false, reason: "ID of a job, not of a person"},
 	"workspace_resource_changes.by_subject":  {strip: false, reason: "history text of who made the change"},
 	"workspace_resource_changes.by_token_id": {strip: false, reason: "ID of a token, not of a person"},
-	"workspaces.lock_holder":                 {strip: false, reason: "history text of a lock; an unlock needs its own authorization"},
+	"workspaces.lock_holder": {
+		strip:  false,
+		reason: "history text of a lock; an unlock needs its own authorization",
+	},
 }
 
 // TestDevStripCoversEveryPrincipalColumn lists the columns of the backup that
@@ -133,22 +151,56 @@ func TestDevStripCoversEveryPrincipalColumn(t *testing.T) {
 //
 //nolint:gochecknoglobals // A frozen decision table shared by the coverage tests.
 var devFieldDecisions = map[string]devDecision{
-	"ApprovalRule.Approvers":    {strip: true, reason: "Users loses the dev subjects; Groups and UnitOwners are not subjects"},
-	"ApprovalDefault.Approvers": {strip: true, reason: "Users loses the dev subjects; Groups and UnitOwners are not subjects"},
-	"OwnershipRule.Approvers":   {strip: true, reason: "Users loses the dev subjects; Groups are not subjects"},
-	"ApprovalDefault.Unless":    {strip: false, reason: "Cedar text; no principal matches a dev subject after the strip"},
-	"OwnershipRule.When":        {strip: false, reason: "Cedar text; no principal matches a dev subject after the strip"},
-	"Gate.Condition":            {strip: false, reason: "Cedar text; no principal matches a dev subject after the strip"},
-	"Gate.Unless":               {strip: false, reason: "Cedar text; no principal matches a dev subject after the strip"},
-	"AccessLimit.Policy":        {strip: false, reason: "Cedar text; no principal matches a dev subject after the strip"},
-	"Requirement.Approvers":     {strip: false, reason: "decision record: history, and it grants no authority"},
-	"Requirement.Signatures":    {strip: false, reason: "decision record: history; the approval code counts no dev signature"},
+	"ApprovalRule.Approvers": {
+		strip:  true,
+		reason: "Users loses the dev subjects; Groups and UnitOwners are not subjects",
+	},
+	"ApprovalDefault.Approvers": {
+		strip:  true,
+		reason: "Users loses the dev subjects; Groups and UnitOwners are not subjects",
+	},
+	"OwnershipRule.Approvers": {strip: true, reason: "Users loses the dev subjects; Groups are not subjects"},
+	"ApprovalDefault.Unless": {
+		strip:  false,
+		reason: "Cedar text; no principal matches a dev subject after the strip",
+	},
+	"OwnershipRule.When": {
+		strip:  false,
+		reason: "Cedar text; no principal matches a dev subject after the strip",
+	},
+	"Gate.Condition": {
+		strip:  false,
+		reason: "Cedar text; no principal matches a dev subject after the strip",
+	},
+	"Gate.Unless": {
+		strip:  false,
+		reason: "Cedar text; no principal matches a dev subject after the strip",
+	},
+	"AccessLimit.Policy": {
+		strip:  false,
+		reason: "Cedar text; no principal matches a dev subject after the strip",
+	},
+	"Requirement.Approvers": {strip: false, reason: "decision record: history, and it grants no authority"},
+	"Requirement.Signatures": {
+		strip:  false,
+		reason: "decision record: history; the approval code counts no dev signature",
+	},
 }
 
 // TestDevStripCoversEveryApproverField fails for a field of the objects of the
 // policy model that names approvers or holds Cedar text and has no decision.
 func TestDevStripCoversEveryApproverField(t *testing.T) {
 	t.Parallel()
+
+	checkFieldDecisions(t)
+	checkApproverSubjectFields(t)
+	checkApproverFieldNames(t)
+}
+
+// checkFieldDecisions fails for a field with no decision and for a decision
+// with no field.
+func checkFieldDecisions(t *testing.T) {
+	t.Helper()
 
 	types := []reflect.Type{
 		reflect.TypeFor[gate.ApprovalRule](), reflect.TypeFor[gate.ApprovalDefault](),
@@ -161,8 +213,7 @@ func TestDevStripCoversEveryApproverField(t *testing.T) {
 	found := map[string]bool{}
 
 	for _, typ := range types {
-		for i := range typ.NumField() {
-			field := typ.Field(i)
+		for field := range typ.Fields() {
 			if field.Type != approvers && !slices.Contains(cedar, field.Name) {
 				continue
 			}
@@ -181,12 +232,16 @@ func TestDevStripCoversEveryApproverField(t *testing.T) {
 			t.Errorf("devFieldDecisions lists %s, which is no such field", key)
 		}
 	}
+}
 
-	// Approvers.Users is the only field of Approvers that holds subjects.
+// checkApproverSubjectFields proves that Approvers.Users is the only field of
+// Approvers that holds subjects.
+func checkApproverSubjectFields(t *testing.T) {
+	t.Helper()
+
 	subjects := []string{}
 
-	for i := range approvers.NumField() {
-		field := approvers.Field(i)
+	for field := range reflect.TypeFor[gate.Approvers]().Fields() {
 		if field.Type == reflect.TypeFor[[]string]() && field.Name == "Users" {
 			subjects = append(subjects, field.Name)
 		}
@@ -195,9 +250,15 @@ func TestDevStripCoversEveryApproverField(t *testing.T) {
 	if !slices.Equal(subjects, []string{"Users"}) {
 		t.Errorf("Approvers fields of subjects = %v, want [Users]; decide the new field in the strip", subjects)
 	}
+}
 
-	for i := range approvers.NumField() {
-		switch name := approvers.Field(i).Name; name {
+// checkApproverFieldNames fails for a field of Approvers that the strip does
+// not know.
+func checkApproverFieldNames(t *testing.T) {
+	t.Helper()
+
+	for field := range reflect.TypeFor[gate.Approvers]().Fields() {
+		switch name := field.Name; name {
 		case "Groups", "Users", "UnitOwners":
 		default:
 			t.Errorf("Approvers has the new field %s: decide it in the strip and in this test", name)

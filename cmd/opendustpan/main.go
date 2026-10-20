@@ -1023,15 +1023,8 @@ func (f *serveFlags) serveWithStores(
 	if optErr != nil {
 		return optErr
 	}
-	opts = append(opts, f.backupOptions(backupTarget)...)
-	opts = append(opts, f.devBackupOptions()...)
+	opts = append(opts, f.restoreOptions(ctx, logger, backupTarget)...)
 	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
-
-	if f.allowDevBackups {
-		logger.WarnContext(ctx, "This server lets a production installation restore a backup of a dev installation. "+
-			"A restore removes the dev users and their data. We do not recommend this.",
-			slog.String("flag", "--"+cli.UnsafeAllowDevBackupsFlag))
-	}
 
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks
@@ -1552,6 +1545,26 @@ func (f *serveFlags) backupOptions(target blob.Store) []dustpan.Option {
 	}
 
 	return []dustpan.Option{dustpan.WithBackupTarget(target, strings.TrimSpace(f.backupTarget))}
+}
+
+// restoreOptions returns the backup option and the dev backup options, and
+// writes the warning of a start with the dev backup flag.
+func (f *serveFlags) restoreOptions(ctx context.Context, logger *slog.Logger, target blob.Store) []dustpan.Option {
+	f.warnDevBackups(ctx, logger)
+
+	return append(f.backupOptions(target), f.devBackupOptions()...)
+}
+
+// warnDevBackups writes the one warning of each start with the flag that lets
+// a production installation restore a backup of a dev installation.
+func (f *serveFlags) warnDevBackups(ctx context.Context, logger *slog.Logger) {
+	if !f.allowDevBackups {
+		return
+	}
+
+	logger.WarnContext(ctx, "This server lets a production installation restore a backup of a dev installation. "+
+		"A restore deletes the dev users and their data. We do not recommend this.",
+		slog.String("flag", "--"+cli.UnsafeAllowDevBackupsFlag))
 }
 
 // devBackupOptions returns the NewServer options for a dev backup in a

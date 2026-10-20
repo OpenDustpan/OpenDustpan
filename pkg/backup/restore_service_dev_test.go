@@ -364,7 +364,8 @@ func TestRestoreStripsDevData(t *testing.T) {
 			t.Fatalf("check-only restore = %q %+v, want the counts it would remove", row.State, row.DevReport)
 		}
 
-		if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 || len(setup.live.devSnapshot().appends) != 0 {
+		if setup.live.counts().applied != 0 || setup.maint.counts().enters != 0 ||
+			len(setup.live.devSnapshot().appends) != 0 {
 			t.Fatal("a check-only restore changed something")
 		}
 	})

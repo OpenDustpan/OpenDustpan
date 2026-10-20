@@ -87,8 +87,8 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 
 	out := make([]backup.RestoreRecord, 0, len(rows))
 
-	for _, row := range rows {
-		r, err := restoreFromRow(row)
+	for i := range rows {
+		r, err := restoreFromRow(rows[i])
 		if err != nil {
 			return nil, err
 		}

@@ -85,6 +85,7 @@ func (m *Manifest) UnmarshalJSON(data []byte) error {
 
 	wire := struct {
 		*plain
+
 		Kind json.RawMessage `json:"installationKind"`
 	}{plain: (*plain)(m), Kind: nil}
 
@@ -1112,6 +1113,12 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 		return Manifest{}, fmt.Errorf("close manifest of backup %s: %w", id, closeErr)
 	}
 
+	return parseManifest(id, data)
+}
+
+// parseManifest decodes the bytes of the manifest of backup id and checks the
+// format, the ID, the kind and the file descriptors.
+func parseManifest(id ID, data []byte) (Manifest, error) {
 	var manifest Manifest
 
 	if err := json.Unmarshal(data, &manifest); err != nil {

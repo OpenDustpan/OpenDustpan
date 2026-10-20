@@ -503,7 +503,11 @@ func (r *restoreServiceRegistry) FailRunningRestores(_ context.Context, endedAt 
 // live data with staged data predating the rows.
 // setDevReport stores the report in the row, like RecordDevReport of an
 // adapter. An unknown ID reports backup.ErrRestoreNotFound.
-func (r *restoreServiceRegistry) setDevReport(_ context.Context, id backup.RestoreID, report backup.DevStripReport) error {
+func (r *restoreServiceRegistry) setDevReport(
+	_ context.Context,
+	id backup.RestoreID,
+	report backup.DevStripReport,
+) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

@@ -20,6 +20,8 @@ import (
 // of the summary match the new file, so only the checks of the stage can
 // refuse the rows. No port writes a dev principal, so the dev data cases edit
 // the export by hand.
+//
+//nolint:revive // The test, the three parts of an export, the table and the rows travel together.
 func AddPortableRows(
 	t *testing.T,
 	files map[string][]byte,

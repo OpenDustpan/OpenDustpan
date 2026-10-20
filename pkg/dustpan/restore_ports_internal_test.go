@@ -106,7 +106,11 @@ func TestNewRestoreServiceNeedsDevPorts(t *testing.T) {
 		t.Parallel()
 
 		// The service only holds the maintenance service; the test never enters it.
-		service, err := newRestoreService(restoreSettings(t, real, true), restoreDeps(t, real), new(maintenance.Service))
+		service, err := newRestoreService(
+			restoreSettings(t, real, true),
+			restoreDeps(t, real),
+			new(maintenance.Service),
+		)
 		if err != nil || service == nil {
 			t.Fatalf("restore service = %v, %v, want a service", service, err)
 		}

@@ -354,7 +354,11 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 		}
 	}()
 
-	fix := newRestoreFixtureOver(t, stores, &gatedRestoreTarget{inner: stores.target, gate: gate, reads: atomic.Int32{}})
+	fix := newRestoreFixtureOver(
+		t,
+		stores,
+		&gatedRestoreTarget{inner: stores.target, gate: gate, reads: atomic.Int32{}},
+	)
 
 	status, startBody := serveRestore(
 		t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"bkp-missing000000000001"}`,

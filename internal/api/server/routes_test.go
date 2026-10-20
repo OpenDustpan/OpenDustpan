@@ -795,6 +795,7 @@ func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
 		RequestedBy: "tester",
 		Error:       "",
 		State:       backup.RestoreFailed,
+		DevReport:   nil,
 	}
 
 	seedErr := st.CreateRestore(t.Context(), seed)

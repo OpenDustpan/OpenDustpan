@@ -14,6 +14,7 @@ package devstrip
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -47,16 +48,22 @@ type Dialect struct {
 	Left4 func(expr string) string
 }
 
+// ErrDevRowsRemain reports dev rows that remain in the staging area after the strip.
+var ErrDevRowsRemain = errors.New("dev rows remain in the staging area")
+
 // ReservedProvider is the provider ID that the dev sign-in uses. The match
 // folds ASCII letters, as the match of a subject does.
 const ReservedProvider = "dev"
 
+// colPrincipalID is the column that links a row to a principal.
+const colPrincipalID = "principal_id"
+
 // devPrefix is the prefix of a dev subject, in lower case.
 const devPrefix = "dev:"
 
-// match returns the SQL condition that col holds a dev subject.
-func (d Dialect) match(col string) string {
-	return d.Lower(d.Left4(col)) + " = '" + devPrefix + "'"
+// matchSubject returns the SQL condition that the column subject holds a dev subject.
+func (d Dialect) matchSubject() string {
+	return d.Lower(d.Left4("subject")) + " = '" + devPrefix + "'"
 }
 
 // provider returns the SQL condition that col holds the reserved provider ID.
@@ -66,7 +73,7 @@ func (d Dialect) provider(col string) string {
 
 // devPrincipals is the sub-select of the IDs of the dev principals.
 func (d Dialect) devPrincipals() string {
-	return "(SELECT id FROM principals WHERE " + d.match("subject") + ")"
+	return "(SELECT id FROM principals WHERE " + d.matchSubject() + ")"
 }
 
 // Rebind turns the "?" placeholders of query into the numbered placeholders
@@ -109,15 +116,15 @@ type class struct {
 //nolint:gochecknoglobals // A frozen table of the classes, like the table lists of pkg/backup.
 var classes = []class{
 	{name: backup.RemovedGrants, table: "grants", link: "subject_id", only: "subject_kind = 'principal'", extra: nil},
-	{name: backup.RemovedGroupMembers, table: "group_members", link: "principal_id", only: "", extra: nil},
+	{name: backup.RemovedGroupMembers, table: "group_members", link: colPrincipalID, only: "", extra: nil},
 	{
-		name: backup.RemovedSessions, table: "sessions", link: "principal_id", only: "",
+		name: backup.RemovedSessions, table: "sessions", link: colPrincipalID, only: "",
 		extra: func(d Dialect) string { return d.provider("provider") },
 	},
-	{name: backup.RemovedAccessTokens, table: "access_tokens", link: "principal_id", only: "", extra: nil},
+	{name: backup.RemovedAccessTokens, table: "access_tokens", link: colPrincipalID, only: "", extra: nil},
 	{
-		name: backup.RemovedTempAdmins, table: "temp_admins", link: "principal_id", only: "",
-		extra: func(d Dialect) string { return d.match("subject") },
+		name: backup.RemovedTempAdmins, table: "temp_admins", link: colPrincipalID, only: "",
+		extra: func(d Dialect) string { return d.matchSubject() },
 	},
 }
 
@@ -191,6 +198,9 @@ func Run(ctx context.Context, q Querier, d Dialect) (backup.DevStripReport, erro
 	return r.report, nil
 }
 
+// fixedCountQueries is the number of count queries that do not depend on a class.
+const fixedCountQueries = 4
+
 // Count returns the number of rows in the staging area that hold a dev
 // principal or name one, and the number of dev approvers. It reads only. The
 // swap check and the proof after the removal use it, so they share one
@@ -198,19 +208,20 @@ func Run(ctx context.Context, q Querier, d Dialect) (backup.DevStripReport, erro
 func Count(ctx context.Context, q Querier, d Dialect) (int64, error) {
 	var total int64
 
-	queries := []string{
-		"SELECT COUNT(*) FROM principals WHERE " + d.match("subject"),
-		"SELECT COUNT(*) FROM sign_in_providers WHERE " + d.provider("provider_id"),
-		"SELECT COUNT(*) FROM oidc_providers WHERE " + d.provider("provider_id"),
-		"SELECT COUNT(*) FROM sign_in_requests WHERE " + d.provider("provider"),
-	}
+	queries := make([]string, 0, fixedCountQueries+len(classes))
+	queries = append(queries,
+		"SELECT COUNT(*) FROM principals WHERE "+d.matchSubject(),
+		"SELECT COUNT(*) FROM sign_in_providers WHERE "+d.provider("provider_id"),
+		"SELECT COUNT(*) FROM oidc_providers WHERE "+d.provider("provider_id"),
+		"SELECT COUNT(*) FROM sign_in_requests WHERE "+d.provider("provider"),
+	)
 
 	for _, c := range classes {
 		queries = append(queries, "SELECT COUNT(*) FROM "+c.table+" WHERE "+c.where(d))
 	}
 
 	for _, query := range queries {
-		n, err := count(ctx, q, query)
+		n, err := countRows(ctx, q, query)
 		if err != nil {
 			return 0, err
 		}
@@ -226,8 +237,8 @@ func Count(ctx context.Context, q Querier, d Dialect) (int64, error) {
 	return total + approvers, nil
 }
 
-// count runs a query that returns one count.
-func count(ctx context.Context, q Querier, query string, args ...any) (int64, error) {
+// countRows runs a query that returns one count.
+func countRows(ctx context.Context, q Querier, query string, args ...any) (int64, error) {
 	rows, err := q.Query(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("count staged rows: %w", backup.ErrExportRead)

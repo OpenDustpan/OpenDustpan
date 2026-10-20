@@ -117,6 +117,7 @@ func newRestoreRecord(id backup.RestoreID, backupID backup.ID, startedAt time.Ti
 		RequestedBy: "admin",
 		Error:       "",
 		State:       backup.RestoreChecking,
+		DevReport:   nil,
 	}
 }
 

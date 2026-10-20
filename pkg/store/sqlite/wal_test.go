@@ -488,7 +488,10 @@ func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup
 		}
 	})
 
-	_, err = dst.StagePortable(ctx, storetest.PortableOpener(bk.files), bk.sum, bk.descs, storetest.StageAs(t, dst))
+	//nolint:contextcheck // StageAs takes the context of t.
+	opts := storetest.StageAs(t, dst)
+
+	_, err = dst.StagePortable(ctx, storetest.PortableOpener(bk.files), bk.sum, bk.descs, opts)
 	if err != nil {
 		t.Fatalf("stage backup: %v", err)
 	}

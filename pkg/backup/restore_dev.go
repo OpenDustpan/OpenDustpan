@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,25 +14,25 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
-// devRefusal is the error of a refused dev backup. It wraps
+// devRefusalError is the error of a refused dev backup. It wraps
 // ErrDevBackupRefused and carries the text that the restore row and the API
 // answer show, with the words of AllowDevHint.
-type devRefusal struct {
+type devRefusalError struct {
 	text string
 }
 
 // Error implements error.
-func (e *devRefusal) Error() string {
+func (e *devRefusalError) Error() string {
 	return ErrDevBackupRefused.Error()
 }
 
 // Is makes errors.Is(err, ErrDevBackupRefused) true.
-func (e *devRefusal) Is(target error) bool {
+func (e *devRefusalError) Is(target error) bool {
 	return target == ErrDevBackupRefused
 }
 
 // Text returns the refusal text for an operator.
-func (e *devRefusal) Text() string {
+func (e *devRefusalError) Text() string {
 	return e.text
 }
 
@@ -40,7 +40,7 @@ func (e *devRefusal) Text() string {
 // refused: the backup claims to come from a dev installation, or the staged
 // data holds dev people. hint names how to allow the restore, and is left out
 // when empty.
-func refusalText(reason, hint string) string {
+func refusalSentence(reason, hint string) string {
 	text := "This installation is a production installation. " + reason + " We do not recommend this restore."
 	if hint != "" {
 		text += " To restore it, start the server with " + hint + "."
@@ -71,7 +71,7 @@ var warningTexts = map[RestoreWarningCode]string{
 func WarningFor(code RestoreWarningCode) (RestoreWarning, bool) {
 	text, ok := warningTexts[code]
 	if !ok {
-		return RestoreWarning{}, false
+		return RestoreWarning{Code: code, Text: ""}, false
 	}
 
 	return RestoreWarning{Code: code, Text: text}, true
@@ -119,6 +119,7 @@ func (d *devRun) warnings() []RestoreWarningCode {
 		codes = append(codes, WarnDevBackupIntoProduction)
 	case d.live == installation.KindDev && d.backup == installation.KindProduction:
 		codes = append(codes, WarnProductionBackupIntoDev)
+	default:
 	}
 
 	return codes
@@ -141,7 +142,7 @@ func (s *RestoreService) devKinds(ctx context.Context, pinned pinnedManifest) (*
 	run := &devRun{live: live, backup: pinned.kind, report: emptyDevReport()}
 
 	if live == installation.KindProduction && pinned.kind == installation.KindDev && !s.allowDev {
-		return nil, &devRefusal{text: refusalText(reasonDevBackup, s.devHint)}
+		return nil, &devRefusalError{text: refusalSentence(reasonDevBackup, s.devHint)}
 	}
 
 	return run, nil
@@ -172,7 +173,7 @@ func (s *RestoreService) detectStaged(ctx context.Context, run *devRun) error {
 	run.report = report
 
 	if !report.Empty() && !s.allowDev {
-		return &devRefusal{text: refusalText(reasonDevData, s.devHint)}
+		return &devRefusalError{text: refusalSentence(reasonDevData, s.devHint)}
 	}
 
 	return nil
@@ -215,7 +216,7 @@ func (s *RestoreService) logRemoval(ctx context.Context, report DevStripReport) 
 		}
 	}
 
-	sort.Strings(classes)
+	slices.Sort(classes)
 
 	for _, class := range classes {
 		s.logger.WarnContext(ctx, "the restore removed dev data from the staged data",
@@ -374,7 +375,7 @@ func countsText(counts map[DevRemovalClass]int64) string {
 		}
 	}
 
-	sort.Strings(classes)
+	slices.Sort(classes)
 
 	if len(classes) == 0 {
 		return ""
@@ -386,8 +387,7 @@ func countsText(counts map[DevRemovalClass]int64) string {
 // RefusalText returns the text of a refused dev backup for an operator, with
 // the words of AllowDevHint, and false when err is no such refusal.
 func RefusalText(err error) (string, bool) {
-	var refusal *devRefusal
-	if errors.As(err, &refusal) {
+	if refusal, ok := errors.AsType[*devRefusalError](err); ok {
 		return refusal.Text(), true
 	}
 
@@ -407,7 +407,10 @@ func (s *RestoreService) startDevCheck(ctx context.Context, id ID) ([]RestoreWar
 		return nil, nil //nolint:nilerr // The restore reads the manifest again and reports its error.
 	}
 
-	run, err := s.devKinds(ctx, pinnedManifest{kind: manifest.InstallationKind})
+	run, err := s.devKinds(
+		ctx,
+		pinnedManifest{sqlSize: 0, sqlSHA: "", schema: 0, dialect: "", kind: manifest.InstallationKind, wrappers: nil},
+	)
 	if err != nil {
 		return nil, err
 	}

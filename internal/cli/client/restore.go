@@ -168,7 +168,8 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	// Read the manifest first, so the warning comes before the restore
 	// starts. A backup that cannot be read here gets its own error from the
 	// restore, so this read never stops the command.
-	warnDevBackup(ctx, restoreReadParams{client: client, server: server, token: token, backupID: id}, stderr)
+	kindRead := restoreReadParams{client: client, server: server, token: token, restoreID: "", backupID: id}
+	warnDevBackup(ctx, kindRead, stderr)
 
 	started, err := startRestore(ctx, startRestoreParams{
 		client:    client,
@@ -583,9 +584,12 @@ func writeRestoreReport(stdout io.Writer, doc RestoreStatusResponse, checkOnly b
 // backupKindResponse holds the one field that the notice reads from the
 // answer of GET /api/server/backups/{id}.
 type backupKindResponse struct {
-	Manifest *struct {
-		InstallationKind string `json:"installationKind"`
-	} `json:"manifest"`
+	Manifest *backupKindManifest `json:"manifest"`
+}
+
+// backupKindManifest holds the kind of the manifest of a backup.
+type backupKindManifest struct {
+	InstallationKind string `json:"installationKind"`
 }
 
 // warnDevBackup prints the notice about a dev backup when the manifest of the
@@ -651,7 +655,8 @@ func writeRestoreWarnings(stdout io.Writer, started []RestoreWarning, doc Restor
 
 	slices.Sort(classes)
 
-	if _, err := fmt.Fprintf(stdout, "dev data: %d principals; %s\n", doc.DevData.Principals, strings.Join(classes, ", ")); err != nil {
+	_, err := fmt.Fprintf(stdout, "dev data: %d principals; %s\n", doc.DevData.Principals, strings.Join(classes, ", "))
+	if err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 

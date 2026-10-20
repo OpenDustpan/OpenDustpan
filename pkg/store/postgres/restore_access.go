@@ -59,49 +59,56 @@ func (s *Store) swapStagingSchemaKeepingAccess(
 	}
 
 	err := inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
-		var live string
-
-		if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
-			return fmt.Errorf("read live schema: %w", err)
-		}
-
-		if live == "" || live == staging {
-			return fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
-		}
-
-		// The check covers the whole staging area, also the access tables
-		// that the swap does not take, and runs before any write.
-		if err := checkSwapDev(ctx, tx, staging); err != nil {
-			return err
-		}
-
-		if err := lockLiveAccessTables(ctx, tx, live); err != nil {
-			return err
-		}
-
-		if s.keepAccessHook != nil {
-			s.keepAccessHook(ctx, tx, live)
-		}
-
-		if err := keepAccessTables(ctx, tx, live, staging); err != nil {
-			return err
-		}
-
-		// The swap takes temp_admins from the backup and keeps the live
-		// principals, which keepAccessTables put into the staged schema. So
-		// a staged row can name a principal that the live principals table
-		// does not hold.
-		dropped, err := dropDanglingTempAdmins(ctx, tx, staging)
-		if err != nil {
-			return err
-		}
-
+		dropped, txErr := s.keepAccessTx(ctx, tx, staging)
 		result.DroppedTempAdmins = dropped
 
-		return swapSchemas(ctx, tx, live, staging)
+		return txErr
 	})
 
-	return result, err //nolint:wrapcheck // inBackupTx and the steps above wrap every error.
+	return result, err
+}
+
+// keepAccessTx runs the keep-access swap in tx and returns the count of
+// dropped temp_admins rows.
+func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, staging string) (int64, error) {
+	var live string
+
+	if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
+		return 0, fmt.Errorf("read live schema: %w", err)
+	}
+
+	if live == "" || live == staging {
+		return 0, fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
+	}
+
+	// The check covers the whole staging area, also the access tables that
+	// the swap does not take, and runs before any write.
+	if err := checkSwapDev(ctx, tx, staging); err != nil {
+		return 0, err
+	}
+
+	if err := lockLiveAccessTables(ctx, tx, live); err != nil {
+		return 0, err
+	}
+
+	if s.keepAccessHook != nil {
+		s.keepAccessHook(ctx, tx, live)
+	}
+
+	if err := keepAccessTables(ctx, tx, live, staging); err != nil {
+		return 0, err
+	}
+
+	// The swap takes temp_admins from the backup and keeps the live
+	// principals, which keepAccessTables put into the staged schema. So a
+	// staged row can name a principal that the live principals table does
+	// not hold.
+	dropped, err := dropDanglingTempAdmins(ctx, tx, staging)
+	if err != nil {
+		return 0, err
+	}
+
+	return dropped, swapSchemas(ctx, tx, live, staging)
 }
 
 // swapSchemas moves the live schema aside, moves the staged schema live,

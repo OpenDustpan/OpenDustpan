@@ -23,15 +23,15 @@ func TestCleanSubject(t *testing.T) {
 		want    string
 		wantCut bool
 	}{
-		{name: "plain", subject: "dev:admin", want: "dev:admin"},
-		{name: "empty", subject: "", want: ""},
-		{name: "CR and LF", subject: "dev:a\r\nb", want: "dev:ab"},
-		{name: "NUL", subject: "dev:\x00a", want: "dev:a"},
-		{name: "other control characters", subject: "dev:\x07\x08\x7f\u0085a", want: "dev:a"},
-		{name: "escape sequence", subject: "dev:\x1b[31mred", want: "dev:[31mred"},
-		{name: "bidirectional override", subject: "dev:‮admin", want: "dev:admin"},
-		{name: "line and paragraph separators", subject: "dev: a b", want: "dev:ab"},
-		{name: "invalid UTF-8", subject: "dev:\xffa\xc3", want: "dev:a"},
+		{name: "plain", subject: "dev:admin", want: "dev:admin", wantCut: false},
+		{name: "empty", subject: "", want: "", wantCut: false},
+		{name: "CR and LF", subject: "dev:a\r\nb", want: "dev:ab", wantCut: false},
+		{name: "NUL", subject: "dev:\x00a", want: "dev:a", wantCut: false},
+		{name: "other control characters", subject: "dev:\x07\x08\x7f\u0085a", want: "dev:a", wantCut: false},
+		{name: "escape sequence", subject: "dev:\x1b[31mred", want: "dev:[31mred", wantCut: false},
+		{name: "bidirectional override", subject: "dev:\u202eadmin", want: "dev:admin", wantCut: false},
+		{name: "line and paragraph separators", subject: "dev:\u2028a\u2029b", want: "dev:ab", wantCut: false},
+		{name: "invalid UTF-8", subject: "dev:\xffa\xc3", want: "dev:a", wantCut: false},
 		{name: "10 000 bytes", subject: long, want: long[:backup.MaxReportedSubjectBytes], wantCut: true},
 		{
 			name:    "cut at a character boundary",
@@ -50,15 +50,23 @@ func TestCleanSubject(t *testing.T) {
 				t.Fatalf("CleanSubject(%q) = %q, %v, want %q, %v", tc.subject, got, cut, tc.want, tc.wantCut)
 			}
 
-			if len(got) > backup.MaxReportedSubjectBytes || !utf8.ValidString(got) {
-				t.Fatalf("CleanSubject(%q) = %q: too long or not UTF-8", tc.subject, got)
-			}
-
-			for _, r := range got {
-				if unicode.IsControl(r) {
-					t.Fatalf("CleanSubject(%q) = %q holds control character %U", tc.subject, got, r)
-				}
-			}
+			checkCleanText(t, tc.subject, got)
 		})
+	}
+}
+
+// checkCleanText proves that got is valid UTF-8, within the bound and free of
+// control characters.
+func checkCleanText(t *testing.T, subject, got string) {
+	t.Helper()
+
+	if len(got) > backup.MaxReportedSubjectBytes || !utf8.ValidString(got) {
+		t.Fatalf("CleanSubject(%q) = %q: too long or not UTF-8", subject, got)
+	}
+
+	for _, r := range got {
+		if unicode.IsControl(r) {
+			t.Fatalf("CleanSubject(%q) = %q holds control character %U", subject, got, r)
+		}
 	}
 }

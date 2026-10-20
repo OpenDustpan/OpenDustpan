@@ -293,7 +293,14 @@ func serverCall(t *testing.T, base, method, path, body string, session *http.Coo
 func restoreDevBackup(t *testing.T, server *productionServer, backupID string) {
 	t.Helper()
 
-	status, resp := serverCall(t, server.url, http.MethodPost, "/api/server/restores", `{"backupID":"`+backupID+`"}`, nil)
+	status, resp := serverCall(
+		t,
+		server.url,
+		http.MethodPost,
+		"/api/server/restores",
+		`{"backupID":"`+backupID+`"}`,
+		nil,
+	)
 	if status != http.StatusAccepted {
 		t.Fatalf("POST restores = %d, want 202 (%s)", status, resp)
 	}
@@ -360,7 +367,14 @@ func checkDevPersonGone(t *testing.T, server *productionServer, session *http.Co
 		t.Fatalf("audit entries of @server hold no entry of the removal: %s", entries)
 	}
 
-	if status, body := serverCall(t, server.url, http.MethodGet, "/api/dustpan/v1/capabilities", "", session); status == http.StatusOK &&
+	if status, body := serverCall(
+		t,
+		server.url,
+		http.MethodGet,
+		"/api/dustpan/v1/capabilities",
+		"",
+		session,
+	); status == http.StatusOK &&
 		strings.Contains(body, "dev:admin") {
 		t.Fatalf("the session of dev:admin is valid on the production installation: %s", body)
 	}

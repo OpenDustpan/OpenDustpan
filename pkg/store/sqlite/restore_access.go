@@ -45,12 +45,12 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 
 	// The check covers the whole staging area, also the access tables that
 	// the swap does not take, and runs before any write to the staged file.
-	if err := s.checkSwapDevLocked(ctx, staged); err != nil {
-		return backup.KeepAccessResult{}, err
+	if checkErr := s.checkSwapDevLocked(ctx, staged); checkErr != nil {
+		return backup.KeepAccessResult{}, checkErr
 	}
 
-	if err := s.keepLiveAccessTables(ctx, staged); err != nil {
-		return backup.KeepAccessResult{}, err
+	if keepErr := s.keepLiveAccessTables(ctx, staged); keepErr != nil {
+		return backup.KeepAccessResult{}, keepErr
 	}
 
 	// The swap takes temp_admins from the backup and keeps the live

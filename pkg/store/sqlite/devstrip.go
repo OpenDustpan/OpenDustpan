@@ -48,17 +48,24 @@ type sqlTxQuerier struct {
 func (q sqlTxQuerier) Exec(ctx context.Context, query string, args ...any) (int64, error) {
 	res, err := q.tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, err //nolint:wrapcheck // devstrip wraps every error with a stable sentence.
+		return 0, fmt.Errorf("run a statement on the staged file: %w", err)
 	}
 
-	return res.RowsAffected() //nolint:wrapcheck // devstrip wraps every error with a stable sentence.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count the changed rows: %w", err)
+	}
+
+	return n, nil
 }
 
 // Query implements devstrip.Querier.
+//
+//nolint:ireturn,rowserrcheck // The Querier port returns the Rows interface, and the caller checks Rows.Err.
 func (q sqlTxQuerier) Query(ctx context.Context, query string, args ...any) (devstrip.Rows, error) {
 	rows, err := q.tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // devstrip wraps every error with a stable sentence.
+		return nil, fmt.Errorf("query the staged file: %w", err)
 	}
 
 	return rows, nil
@@ -108,7 +115,11 @@ func stripStagedFile(ctx context.Context, path string, mode backup.DevStripMode)
 	}
 
 	if mode == backup.DevStripDetect {
-		return report, tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return backup.DevStripReport{}, fmt.Errorf("roll back the detect run: %w", rbErr)
+		}
+
+		return report, nil
 	}
 
 	left, err := devstrip.Count(ctx, q, sqliteDevDialect)
@@ -118,7 +129,7 @@ func stripStagedFile(ctx context.Context, path string, mode backup.DevStripMode)
 
 	if left > 0 {
 		return backup.DevStripReport{}, errors.Join(
-			fmt.Errorf("%d dev rows remain in the staged file", left), tx.Rollback(),
+			fmt.Errorf("%w: %d rows in the staged file", devstrip.ErrDevRowsRemain, left), tx.Rollback(),
 		)
 	}
 
@@ -170,7 +181,9 @@ func (s *Store) checkSwapDevLocked(ctx context.Context, staged string) error {
 	}
 
 	if countErr != nil {
-		return fmt.Errorf("apply staged data: check for dev data: %w", errors.Join(backup.ErrDevBackupRefused, countErr))
+		joined := errors.Join(backup.ErrDevBackupRefused, countErr)
+
+		return fmt.Errorf("apply staged data: check for dev data: %w", joined)
 	}
 
 	if n > 0 {
@@ -213,7 +226,7 @@ func dropDanglingTempAdmins(ctx context.Context, path string) (int64, error) {
 func (s *Store) RecordDevReport(ctx context.Context, id backup.RestoreID, report backup.DevStripReport) error {
 	text, err := codec.EncodeDevReport(report)
 	if err != nil {
-		return err //nolint:wrapcheck // The codec wraps with a stable sentence.
+		return err
 	}
 
 	s.mu.RLock()

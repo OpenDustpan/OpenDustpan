@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -47,10 +48,12 @@ type stripped struct {
 // and changes only approvers.users, so it keeps every other member as it is.
 // A body that it cannot read returns errApproverBody.
 func stripBody(body string) (stripped, error) {
-	doc, approvers, users, err := readApprovers(body)
+	parsed, err := readApprovers(body)
 	if err != nil {
 		return stripped{}, err
 	}
+
+	doc, approvers, users := parsed.doc, parsed.approvers, parsed.users
 
 	if approvers == nil {
 		return stripped{body: body, removed: 0, replaced: false}, nil
@@ -99,32 +102,38 @@ func stripBody(body string) (stripped, error) {
 	return stripped{body: string(out), removed: removed, replaced: replaced}, nil
 }
 
+// parsedBody is a decoded body: the whole document, its approvers member and
+// the users of it. approvers is nil when the body has none.
+type parsedBody struct {
+	doc       map[string]json.RawMessage
+	approvers map[string]json.RawMessage
+	users     []string
+}
+
 // readApprovers decodes the body, its approvers member and the users of it.
-// The approvers member is nil when the body has none.
-func readApprovers(body string) (map[string]json.RawMessage, map[string]json.RawMessage, []string, error) {
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		return nil, nil, nil, fmt.Errorf("%w", errApproverBody)
+func readApprovers(body string) (parsedBody, error) {
+	var out parsedBody
+
+	if err := json.Unmarshal([]byte(body), &out.doc); err != nil {
+		return parsedBody{}, fmt.Errorf("%w", errApproverBody)
 	}
 
-	raw, ok := doc["approvers"]
+	raw, ok := out.doc["approvers"]
 	if !ok || string(raw) == "null" {
-		return doc, nil, nil, nil
+		return out, nil
 	}
 
-	var approvers map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &approvers); err != nil {
-		return nil, nil, nil, fmt.Errorf("%w", errApproverBody)
+	if err := json.Unmarshal(raw, &out.approvers); err != nil {
+		return parsedBody{}, fmt.Errorf("%w", errApproverBody)
 	}
 
-	var users []string
-	if usersRaw, has := approvers["users"]; has {
-		if err := json.Unmarshal(usersRaw, &users); err != nil {
-			return nil, nil, nil, fmt.Errorf("%w", errApproverBody)
+	if usersRaw, has := out.approvers["users"]; has {
+		if err := json.Unmarshal(usersRaw, &out.users); err != nil {
+			return parsedBody{}, fmt.Errorf("%w", errApproverBody)
 		}
 	}
 
-	return doc, approvers, users, nil
+	return out, nil
 }
 
 // namesNobody reports whether the approvers would name nobody if their users
@@ -183,7 +192,7 @@ func readPage(ctx context.Context, q Querier, after object) ([]object, error) {
 		"SELECT namespace_id, scope_key, kind, id, body FROM gate_objects WHERE kind IN ('"+
 			kindApprovalRule+"', '"+kindApprovalDefault+"', '"+kindOwnershipRule+"')"+
 			" AND (namespace_id, scope_key, kind, id) > (?, ?, ?, ?)"+
-			" ORDER BY namespace_id, scope_key, kind, id LIMIT "+fmt.Sprint(approverPage),
+			" ORDER BY namespace_id, scope_key, kind, id LIMIT "+strconv.Itoa(approverPage),
 		after.namespace, after.scope, after.kind, after.id,
 	)
 	if err != nil {
@@ -194,7 +203,7 @@ func readPage(ctx context.Context, q Querier, after object) ([]object, error) {
 
 	for rows.Next() {
 		var obj object
-		if err := rows.Scan(&obj.namespace, &obj.scope, &obj.kind, &obj.id, &obj.body); err != nil {
+		if scanErr := rows.Scan(&obj.namespace, &obj.scope, &obj.kind, &obj.id, &obj.body); scanErr != nil {
 			_ = rows.Close() //nolint:errcheck // The scan error is the cause.
 
 			return nil, fmt.Errorf("read the approvers of the staged gate objects: %w", backup.ErrExportRead)
@@ -221,12 +230,12 @@ func countApprovers(ctx context.Context, q Querier) (int64, error) {
 	var total int64
 
 	err := eachObject(ctx, q, func(obj object) error {
-		_, _, users, err := readApprovers(obj.body)
+		parsed, err := readApprovers(obj.body)
 		if err != nil {
 			return err
 		}
 
-		for _, user := range users {
+		for _, user := range parsed.users {
 			if principal.IsDevSubject(user) {
 				total++
 			}

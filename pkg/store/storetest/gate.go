@@ -311,7 +311,7 @@ func kindHarness(newStore GateFactory, want installation.Kind) gatetest.Factory 
 			ReadKind(ctx context.Context) (installation.Kind, error)
 		})
 
-		if want == installation.KindProduction && !(ok && readable) {
+		if want == installation.KindProduction && !ok || !readable {
 			// A store that reads no kind counts as production: the check
 			// fails closed.
 			return gatetest.Harness{Store: s, Domain: gateDomain{s: s}}

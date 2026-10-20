@@ -44,17 +44,19 @@ type pgTxQuerier struct {
 func (q pgTxQuerier) Exec(ctx context.Context, query string, args ...any) (int64, error) {
 	tag, err := q.tx.Exec(ctx, devstrip.Rebind(query), args...)
 	if err != nil {
-		return 0, err //nolint:wrapcheck // devstrip wraps every error with a stable sentence.
+		return 0, fmt.Errorf("run a statement on the staging schema: %w", err)
 	}
 
 	return tag.RowsAffected(), nil
 }
 
 // Query implements devstrip.Querier.
+//
+//nolint:ireturn // The Querier port returns the Rows interface.
 func (q pgTxQuerier) Query(ctx context.Context, query string, args ...any) (devstrip.Rows, error) {
 	rows, err := q.tx.Query(ctx, devstrip.Rebind(query), args...)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // devstrip wraps every error with a stable sentence.
+		return nil, fmt.Errorf("run a query on the staging schema: %w", err)
 	}
 
 	return pgRows{Rows: rows}, nil
@@ -132,7 +134,7 @@ func (s *Store) StripDevStaged(ctx context.Context, mode backup.DevStripMode) (b
 
 		report, runErr = devstrip.Run(ctx, q, pgDevDialect)
 		if runErr != nil {
-			return runErr //nolint:wrapcheck // devstrip wraps every error with a stable sentence.
+			return runErr
 		}
 
 		if mode == backup.DevStripDetect {
@@ -141,11 +143,11 @@ func (s *Store) StripDevStaged(ctx context.Context, mode backup.DevStripMode) (b
 
 		left, countErr := devstrip.Count(ctx, q, pgDevDialect)
 		if countErr != nil {
-			return countErr //nolint:wrapcheck // devstrip wraps every error with a stable sentence.
+			return countErr
 		}
 
 		if left > 0 {
-			return fmt.Errorf("%d dev rows remain in the staging schema", left)
+			return fmt.Errorf("%w: %d rows in the staging schema", devstrip.ErrDevRowsRemain, left)
 		}
 
 		return nil
@@ -198,7 +200,9 @@ func checkSwapDev(ctx context.Context, tx pgx.Tx, staging string) error {
 	}
 
 	if countErr != nil {
-		return fmt.Errorf("apply staged data: check for dev data: %w", errors.Join(backup.ErrDevBackupRefused, countErr))
+		joined := errors.Join(backup.ErrDevBackupRefused, countErr)
+
+		return fmt.Errorf("apply staged data: check for dev data: %w", joined)
 	}
 
 	if n > 0 {
@@ -229,7 +233,7 @@ func dropDanglingTempAdmins(ctx context.Context, tx pgx.Tx, staging string) (int
 func (s *Store) RecordDevReport(ctx context.Context, id backup.RestoreID, report backup.DevStripReport) error {
 	text, err := codec.EncodeDevReport(report)
 	if err != nil {
-		return err //nolint:wrapcheck // The codec wraps with a stable sentence.
+		return err
 	}
 
 	n, err := s.queries.SetRestoreDevReport(ctx, db.SetRestoreDevReportParams{DevReport: text, ID: id.String()})

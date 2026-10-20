@@ -253,16 +253,7 @@ func (s *RestoreService) Start(
 		return fmt.Errorf("create restore %s: %w", id, createErr)
 	}
 
-	if len(warnings) > 0 {
-		// The warnings are on the row from the start, so the answer of the
-		// start carries them. The restore replaces them with what it finds.
-		report := emptyDevReport()
-		report.Warnings = warnings
-
-		if recordErr := s.live.RecordDevReport(ctx, id, report); recordErr != nil {
-			s.logger.ErrorContext(ctx, "record the restore warnings failed", slog.String("restore_id", id.String()))
-		}
-	}
+	s.recordStartWarnings(ctx, id, warnings)
 
 	s.trackRestore(create)
 
@@ -343,6 +334,22 @@ func (s *RestoreService) Running(ctx context.Context) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// recordStartWarnings puts the warnings that the kinds decide on the row from
+// the start, so the answer of the start carries them. The restore replaces
+// them with what it finds.
+func (s *RestoreService) recordStartWarnings(ctx context.Context, id RestoreID, warnings []RestoreWarningCode) {
+	if len(warnings) == 0 {
+		return
+	}
+
+	report := emptyDevReport()
+	report.Warnings = warnings
+
+	if err := s.live.RecordDevReport(ctx, id, report); err != nil {
+		s.logger.ErrorContext(ctx, "record the restore warnings failed", slog.String("restore_id", id.String()))
+	}
 }
 
 // claim takes the single restore slot, or reports ErrRestoreRunning.
@@ -515,6 +522,7 @@ func (s *RestoreService) createFinishedRow(ctx context.Context, out restoreOutco
 		RequestedBy: out.req.RequestedBy,
 		Error:       out.errText,
 		State:       out.state,
+		DevReport:   nil,
 	}
 
 	if held, ok := s.inflightRecord(out.id); ok {
@@ -545,37 +553,34 @@ func sanitizeRestoreError(err error) string {
 		return text
 	}
 
-	var refusal *devRefusal
-	if errors.As(err, &refusal) {
+	if refusal, ok := errors.AsType[*devRefusalError](err); ok {
 		return refusal.Text()
 	}
 
-	switch {
-	case errors.Is(err, ErrDevBackupRefused):
-		return refusalText(reasonDevBackup, "")
-	case errors.Is(err, ErrManifestKindInvalid):
-		return ErrManifestKindInvalid.Error()
-	case errors.Is(err, ErrDevStripIncomplete):
-		return ErrDevStripIncomplete.Error()
-	case errors.Is(err, ErrRestoreRunning):
-		return ErrRestoreRunning.Error()
-	case errors.Is(err, ErrRestoreAccessMismatch):
-		return ErrRestoreAccessMismatch.Error()
-	case errors.Is(err, ErrCorrupt):
-		return ErrCorrupt.Error()
-	case errors.Is(err, ErrSchemaBeforeBaseline):
-		return ErrSchemaBeforeBaseline.Error()
-	case errors.Is(err, ErrSchemaMismatch):
-		return ErrSchemaMismatch.Error()
-	case errors.Is(err, maintenance.ErrActiveWork):
+	if errors.Is(err, maintenance.ErrActiveWork) {
 		return activeWorkMessage(err)
-	case errors.Is(err, ErrNotFound):
-		return ErrNotFound.Error()
-	case errors.Is(err, ErrRestoreNotFound):
-		return ErrRestoreNotFound.Error()
-	default:
-		return "restore failed"
 	}
+
+	if errors.Is(err, ErrDevBackupRefused) {
+		return refusalSentence(reasonDevBackup, "")
+	}
+
+	for _, sentinel := range storedRestoreSentinels {
+		if errors.Is(err, sentinel) {
+			return sentinel.Error()
+		}
+	}
+
+	return "restore failed"
+}
+
+// storedRestoreSentinels lists the sentinels whose own text a restore row
+// stores, in the order that sanitizeRestoreError tests them.
+//
+//nolint:gochecknoglobals // A frozen list of sentinels, like the table lists of this package.
+var storedRestoreSentinels = []error{
+	ErrManifestKindInvalid, ErrDevStripIncomplete, ErrRestoreRunning, ErrRestoreAccessMismatch, ErrCorrupt,
+	ErrSchemaBeforeBaseline, ErrSchemaMismatch, ErrNotFound, ErrRestoreNotFound,
 }
 
 // activeWorkMessage answers the stored text for a refused maintenance
@@ -924,7 +929,11 @@ func (s *RestoreService) applyPinned(
 		return repinErr
 	}
 
-	if stageErr := s.stage(ctx, backupID, StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev}); stageErr != nil {
+	if stageErr := s.stage(
+		ctx,
+		backupID,
+		StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
+	); stageErr != nil {
 		return fmt.Errorf("stage backup %s for restore %s: %w", backupID, id, stageErr)
 	}
 
@@ -1085,7 +1094,7 @@ func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, r
 		IDPSubject:    "",
 		TokenID:       "",
 		Action:        string(identity.ActionServerRestore),
-		Object:        "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + devFlagText(s.allowDev) + ")",
+		Object:        "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + s.devFlagText() + ")",
 		Version:       "",
 		ValuePath:     "",
 		ValueCount:    nil,
@@ -1114,8 +1123,8 @@ func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, r
 // devFlagText names in the audit entry of a restore that the server runs with
 // the setting that lets a production installation restore a dev backup. It is
 // empty when the setting is off, which is the normal case.
-func devFlagText(allow bool) string {
-	if allow {
+func (s *RestoreService) devFlagText() string {
+	if s.allowDev {
 		return ", dev backups into production allowed"
 	}
 
@@ -1130,20 +1139,20 @@ func (s *RestoreService) applyStaged(
 ) (KeepAccessResult, error) {
 	if !req.KeepAccessTables {
 		if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
-			return KeepAccessResult{}, fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+			return noKeepResult(), fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
 		}
 
-		return KeepAccessResult{}, nil
+		return noKeepResult(), nil
 	}
 
 	keeper, ok := s.live.(AccessKeepingApplier)
 	if !ok {
-		return KeepAccessResult{}, fmt.Errorf("apply staged data for restore %s: %w", id, ErrMissingDependency)
+		return noKeepResult(), fmt.Errorf("apply staged data for restore %s: %w", id, ErrMissingDependency)
 	}
 
 	kept, applyErr := keeper.ApplyStagingKeepingAccess(ctx)
 	if applyErr != nil {
-		return KeepAccessResult{}, fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+		return noKeepResult(), fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
 	}
 
 	return kept, nil
@@ -1225,6 +1234,7 @@ func (s *RestoreService) recreateAfterSwap(ctx context.Context, before RestoreRe
 		RequestedBy: before.RequestedBy,
 		Error:       "",
 		State:       RestoreApplying,
+		DevReport:   nil,
 	}
 
 	if err := s.registry.CreateRestore(ctx, recreated); err != nil {
@@ -1356,4 +1366,9 @@ func MintRestoreID() RestoreID {
 // never taken.
 func MintRestoreIDs() (RestoreID, ID) {
 	return MintRestoreID(), ID(ident.NewID("bkp-"))
+}
+
+// noKeepResult is the result of a swap that dropped nothing.
+func noKeepResult() KeepAccessResult {
+	return KeepAccessResult{DroppedTempAdmins: 0}
 }

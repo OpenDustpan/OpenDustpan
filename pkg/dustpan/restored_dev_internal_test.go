@@ -217,7 +217,7 @@ func TestRestoredDevPeopleAreRefusedOnProduction(t *testing.T) {
 // checkTokenRefused proves that the token of person authenticates through the
 // service alone, and not through the dev guard.
 func checkTokenRefused(
-	t *testing.T, person restoredDev, open identity.Authenticator, guarded identity.Authenticator,
+	t *testing.T, person restoredDev, open, guarded identity.Authenticator,
 ) {
 	t.Helper()
 

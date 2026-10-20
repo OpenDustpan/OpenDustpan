@@ -58,16 +58,56 @@ func TestManifestKindIsRequired(t *testing.T) {
 		wantErr error
 	}{
 		{name: "production", change: func(m string) string { return m }, wantErr: nil},
-		{name: "dev", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"dev"`, 1) }},
-		{name: "missing", change: func(m string) string { return strings.Replace(m, `,`+kindKey, ``, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "empty", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":""`, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "null", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":null`, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "upper case", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"DEV"`, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "unknown", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"staging"`, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "number", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":1`, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "array", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":["dev"]`, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "object", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":{}`, 1) }, wantErr: backup.ErrManifestKindInvalid},
-		{name: "boolean", change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":true`, 1) }, wantErr: backup.ErrManifestKindInvalid},
+		{
+			name:   "dev",
+			change: func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"dev"`, 1) },
+			wantErr: nil,
+		},
+		{
+			name:    "missing",
+			change:  func(m string) string { return strings.Replace(m, `,`+kindKey, ``, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "empty",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":""`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "null",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":null`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "upper case",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"DEV"`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "unknown",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":"staging"`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "number",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":1`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "array",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":["dev"]`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "object",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":{}`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
+		{
+			name:    "boolean",
+			change:  func(m string) string { return strings.Replace(m, kindKey, `"installationKind":true`, 1) },
+			wantErr: backup.ErrManifestKindInvalid,
+		},
 		{
 			name:    "format 2 with a valid kind",
 			change:  func(m string) string { return strings.Replace(m, `"format":3`, `"format":2`, 1) },
@@ -91,23 +131,8 @@ func TestManifestKindIsRequired(t *testing.T) {
 			_, readErr := fix.service.ReadManifest(t.Context(), id)
 			checkErr := backup.Check(t.Context(), fix.target, id)
 
-			for name, err := range map[string]error{"read": readErr, "check": checkErr} {
-				if tc.wantErr == nil {
-					if err != nil {
-						t.Fatalf("%s a manifest with the kind %s: %v", name, tc.name, err)
-					}
-
-					continue
-				}
-
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("%s: err = %v, want %v", name, err, tc.wantErr)
-				}
-
-				if tc.wantErr == backup.ErrCorrupt && errors.Is(err, backup.ErrManifestKindInvalid) {
-					t.Fatalf("%s: a format 2 manifest got the kind error: %v", name, err)
-				}
-			}
+			checkManifestError(t, tc.name, "read", readErr, tc.wantErr)
+			checkManifestError(t, tc.name, "check", checkErr, tc.wantErr)
 		})
 	}
 }
@@ -164,5 +189,27 @@ func TestExportRecordsTheKindOfItsOwnDatabase(t *testing.T) {
 				t.Fatalf("target holds %d objects after a refused export, want none", n)
 			}
 		})
+	}
+}
+
+// checkManifestError proves that err is nil when want is nil, and else wraps
+// want. A format error never reads as a kind error.
+func checkManifestError(t *testing.T, name, step string, err, want error) {
+	t.Helper()
+
+	if want == nil {
+		if err != nil {
+			t.Fatalf("%s a manifest with the kind %s: %v", step, name, err)
+		}
+
+		return
+	}
+
+	if !errors.Is(err, want) {
+		t.Fatalf("%s: err = %v, want %v", step, err, want)
+	}
+
+	if errors.Is(want, backup.ErrCorrupt) && errors.Is(err, backup.ErrManifestKindInvalid) {
+		t.Fatalf("%s: a format 2 manifest got the kind error: %v", step, err)
 	}
 }

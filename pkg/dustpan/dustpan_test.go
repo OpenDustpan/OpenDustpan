@@ -1490,7 +1490,11 @@ func TestServerWithoutDevPortsDoesNotStart(t *testing.T) {
 				dustpan.WithBackupTarget(target, "dir:/var/backups"),
 			)...)
 			if err == nil {
-				t.Fatalf("NewServer with a store that lacks %s started, want a start error (server %v)", tc.missing, srv)
+				t.Fatalf(
+					"NewServer with a store that lacks %s started, want a start error (server %v)",
+					tc.missing,
+					srv,
+				)
 			}
 
 			if !strings.Contains(err.Error(), "lacks "+tc.missing) {

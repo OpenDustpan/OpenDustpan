@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,7 +62,10 @@ func RunDevData(t *testing.T, newStore DevDataFactory) {
 		{name: "the swap refuses dev data by itself", test: testDevSwapRefuses},
 		{name: "the swap of a dev installation takes dev data", test: testDevSwapDevInstallation},
 		{name: "the swap refuses when it cannot read the live kind", test: testDevSwapUnreadableKind},
-		{name: "a swap that keeps access drops temp admins that dangle against the live principals", test: testDevKeepDropsTempAdmins},
+		{
+			name: "a swap that keeps access drops temp admins that dangle against the live principals",
+			test: testDevKeepDropsTempAdmins,
+		},
 		{name: "the strip and the swap cover the whole staging area on the keep path", test: testDevKeepWholeArea},
 		{name: "the report is stored in the restore record", test: testDevRecordReport},
 	}
@@ -201,6 +205,8 @@ func testDevReadKind(t *testing.T, newStore DevDataFactory) {
 // testDevStageKind calls the stage call directly, with the service check
 // skipped: the stage compares the claimed kind of the backup with the live
 // kind that it reads from its own database (layer 1c).
+//
+//nolint:exhaustruct_v5 // Each case names only the fields that it tests.
 func testDevStageKind(t *testing.T, newStore DevDataFactory) {
 	t.Helper()
 
@@ -215,7 +221,8 @@ func testDevStageKind(t *testing.T, newStore DevDataFactory) {
 	}{
 		{
 			name: "dev backup into production, flag off", live: installation.KindProduction,
-			opts: backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false}, want: backup.ErrDevBackupRefused,
+			opts: backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false},
+			want: backup.ErrDevBackupRefused,
 		},
 		{
 			name: "dev backup into production, flag on", live: installation.KindProduction,
@@ -262,6 +269,7 @@ func testDevStageKind(t *testing.T, newStore DevDataFactory) {
 			t.Fatalf("%s: stage = %v, want success", tc.name, err)
 		case !tc.stage && !errors.Is(err, tc.want):
 			t.Fatalf("%s: stage err = %v, want %v", tc.name, err, tc.want)
+		default:
 		}
 
 		if tc.stage {
@@ -315,6 +323,7 @@ func ruleBody(groups, users string, owners bool) string {
 	return fmt.Sprintf(bodyRule, groups, users, owners)
 }
 
+//nolint:exhaustruct_v5 // Each case names only the fields that it tests.
 func devStripCases() []devStripCase {
 	return []devStripCase{
 		{
@@ -555,6 +564,18 @@ func assertDevReport(t *testing.T, tc devStripCase, got backup.DevStripReport) {
 		t.Fatalf("%s: HasDev = %v, want %v (report %+v)", tc.name, got.HasDev(), !tc.noDev, got)
 	}
 
+	assertClasses(t, tc, got)
+	assertPrincipalCounts(t, tc, got)
+
+	if !slices.Equal(got.Approvers, tc.approvers) && (len(got.Approvers) > 0 || len(tc.approvers) > 0) {
+		t.Fatalf("%s: approvers = %+v, want %+v", tc.name, got.Approvers, tc.approvers)
+	}
+}
+
+// assertClasses compares the counts of the classes of a report with the case.
+func assertClasses(t *testing.T, tc devStripCase, got backup.DevStripReport) {
+	t.Helper()
+
 	for class, want := range tc.classes {
 		if got.Classes[class] != want {
 			t.Fatalf("%s: class %s = %d, want %d (report %+v)", tc.name, class, got.Classes[class], want, got.Classes)
@@ -566,6 +587,12 @@ func assertDevReport(t *testing.T, tc devStripCase, got backup.DevStripReport) {
 			t.Fatalf("%s: class %s = %d, want 0", tc.name, class, n)
 		}
 	}
+}
+
+// assertPrincipalCounts compares the counts of the listed principals of a
+// report with the case.
+func assertPrincipalCounts(t *testing.T, tc devStripCase, got backup.DevStripReport) {
+	t.Helper()
 
 	for _, p := range got.Principals {
 		want, listed := tc.principals[p.Subject]
@@ -579,10 +606,6 @@ func assertDevReport(t *testing.T, tc devStripCase, got backup.DevStripReport) {
 			}
 		}
 	}
-
-	if !slices.Equal(got.Approvers, tc.approvers) && (len(got.Approvers) > 0 || len(tc.approvers) > 0) {
-		t.Fatalf("%s: approvers = %+v, want %+v", tc.name, got.Approvers, tc.approvers)
-	}
 }
 
 // assertAfterStrip checks the live data after the swap of a stripped backup.
@@ -590,7 +613,7 @@ func assertAfterStrip(t *testing.T, tc devStripCase, dst DevDataStore) {
 	t.Helper()
 
 	for _, row := range tableRows(t, dst, "principals") {
-		subject, _ := row["subject"].(string)
+		subject := textOf(row, "subject")
 		if len(subject) >= 4 && strings.EqualFold(subject[:4], "dev:") {
 			t.Fatalf("%s: principal %q is live after the strip", tc.name, subject)
 		}
@@ -615,6 +638,29 @@ func assertAfterStrip(t *testing.T, tc devStripCase, dst DevDataStore) {
 	checkAfterBodies(t, tc, dst)
 }
 
+// approversOf is the approvers member of a stored body.
+type approversOf struct {
+	Groups     []string `json:"groups"`
+	Users      []string `json:"users"`
+	UnitOwners bool     `json:"unitOwners"`
+}
+
+// approverDoc is the part of a stored body that the cases read.
+type approverDoc struct {
+	Approvers approversOf `json:"approvers"`
+	Count     int         `json:"count"`
+}
+
+// textOf returns the string value of key in row, or empty when it is no string.
+func textOf(row map[string]any, key string) string {
+	text, ok := row[key].(string)
+	if !ok {
+		return ""
+	}
+
+	return text
+}
+
 // checkAfterBodies checks the approvers of the gate objects after the strip.
 func checkAfterBodies(t *testing.T, tc devStripCase, dst DevDataStore) {
 	t.Helper()
@@ -625,19 +671,12 @@ func checkAfterBodies(t *testing.T, tc devStripCase, dst DevDataStore) {
 		var body string
 
 		for _, row := range rows {
-			if rowID, _ := row["id"].(string); rowID == id {
-				body, _ = row["body"].(string)
+			if textOf(row, "id") == id {
+				body = textOf(row, "body")
 			}
 		}
 
-		var doc struct {
-			Approvers struct {
-				Groups     []string `json:"groups"`
-				Users      []string `json:"users"`
-				UnitOwners bool     `json:"unitOwners"`
-			} `json:"approvers"`
-			Count int `json:"count"`
-		}
+		var doc approverDoc
 
 		if err := json.Unmarshal([]byte(body), &doc); err != nil {
 			t.Fatalf("%s: body of %q = %q: %v", tc.name, id, body, err)
@@ -663,7 +702,8 @@ func testDevStripMatchesSharedTable(t *testing.T, newStore DevDataFactory) {
 
 	var wantDev int64
 
-	var wantKept, tableSubjects []string
+	wantKept := make([]string, 0, len(cases))
+	tableSubjects := make([]string, 0, len(cases))
 
 	for i, tc := range cases {
 		tableSubjects = append(tableSubjects, tc.Subject)
@@ -895,38 +935,57 @@ func testDevSwapRefuses(t *testing.T, newStore DevDataFactory) {
 
 	base := newDevExport(t, newStore)
 
+	swaps := map[string]func(DevDataStore) error{
+		"plain": func(dst DevDataStore) error { return applyPlain(t, dst) },
+		"keep":  func(dst DevDataStore) error { return applyKeeping(t, dst) },
+	}
+
 	for _, tc := range devSwapCases() {
-		for _, keep := range []bool{false, true} {
-			name := fmt.Sprintf("%s (keep access %v)", tc.name, keep)
+		for kind, swap := range swaps {
 			dst := newStore(t, installation.KindProduction)
-
-			before := portableSummaryOf(t, dst)
-
-			tc.add(t, base).mustStage(t, dst)
-
-			var err error
-
-			if keep {
-				_, err = dst.ApplyStagingKeepingAccess(t.Context())
-			} else {
-				err = dst.ApplyStaging(t.Context())
-			}
-
-			if !errors.Is(err, backup.ErrDevBackupRefused) {
-				t.Fatalf("%s: swap err = %v, want ErrDevBackupRefused", name, err)
-			}
-
-			assertSameSummary(t, portableSummaryOf(t, dst), before)
-
-			// The staging area is still there for the caller to discard.
-			if again := dst.ApplyStaging(t.Context()); !errors.Is(again, backup.ErrDevBackupRefused) {
-				t.Fatalf("%s: second swap err = %v, want ErrDevBackupRefused", name, again)
-			}
-
-			if err := dst.DiscardStaging(t.Context()); err != nil {
-				t.Fatalf("%s: discard: %v", name, err)
-			}
+			checkSwapRefused(t, tc.name+" ("+kind+")", dst, tc.add(t, base), swap)
 		}
+	}
+}
+
+// applyPlain runs the plain swap and returns its error as it is.
+func applyPlain(t *testing.T, dst DevDataStore) error {
+	t.Helper()
+
+	return dst.ApplyStaging(t.Context()) //nolint:wrapcheck // The test compares the sentinel the adapter returns.
+}
+
+// applyKeeping runs the swap that keeps access and returns its error as it is.
+func applyKeeping(t *testing.T, dst DevDataStore) error {
+	t.Helper()
+
+	_, err := dst.ApplyStagingKeepingAccess(t.Context())
+
+	return err //nolint:wrapcheck // The test compares the sentinel the adapter returns.
+}
+
+// checkSwapRefused stages e into dst with no strip, and expects the swap to
+// refuse with ErrDevBackupRefused and to leave the live data as it was.
+func checkSwapRefused(t *testing.T, name string, dst DevDataStore, e *devExport, swap func(DevDataStore) error) {
+	t.Helper()
+
+	before := portableSummaryOf(t, dst)
+
+	e.mustStage(t, dst)
+
+	if err := swap(dst); !errors.Is(err, backup.ErrDevBackupRefused) {
+		t.Fatalf("%s: swap err = %v, want ErrDevBackupRefused", name, err)
+	}
+
+	assertSameSummary(t, portableSummaryOf(t, dst), before)
+
+	// The staging area is still there for the caller to discard.
+	if again := dst.ApplyStaging(t.Context()); !errors.Is(again, backup.ErrDevBackupRefused) {
+		t.Fatalf("%s: second swap err = %v, want ErrDevBackupRefused", name, again)
+	}
+
+	if discardErr := dst.DiscardStaging(t.Context()); discardErr != nil {
+		t.Fatalf("%s: discard: %v", name, discardErr)
 	}
 }
 
@@ -1125,5 +1184,5 @@ func reportsEqual(a, b backup.DevStripReport) bool {
 	left, errLeft := json.Marshal(a)
 	right, errRight := json.Marshal(b)
 
-	return errLeft == nil && errRight == nil && string(left) == string(right)
+	return errLeft == nil && errRight == nil && bytes.Equal(left, right)
 }

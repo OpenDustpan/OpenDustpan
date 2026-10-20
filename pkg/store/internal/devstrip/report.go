@@ -34,7 +34,7 @@ func (r *reporter) add(class backup.DevRemovalClass, n int64) {
 // MaxAuditedPrincipals of them with their cleaned subjects. It returns their
 // IDs. It removes nothing.
 func (r *reporter) principals(ctx context.Context, q Querier, d Dialect) ([]string, error) {
-	total, err := count(ctx, q, "SELECT COUNT(*) FROM principals WHERE "+d.match("subject"))
+	total, err := countRows(ctx, q, "SELECT COUNT(*) FROM principals WHERE "+d.matchSubject())
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (r *reporter) principals(ctx context.Context, q Querier, d Dialect) ([]stri
 
 	rows, err := q.Query(ctx, fmt.Sprintf(
 		"SELECT id, subject FROM principals WHERE %s ORDER BY subject, id LIMIT %d",
-		d.match("subject"), backup.MaxAuditedPrincipals,
+		d.matchSubject(), backup.MaxAuditedPrincipals,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("read the dev principals of the staging area: %w", backup.ErrExportRead)
@@ -85,7 +85,7 @@ func (r *reporter) principals(ctx context.Context, q Querier, d Dialect) ([]stri
 // class counts the rows of c that go with the dev principals, assigns the
 // counts to the first principals and to the others, and removes the rows.
 func (r *reporter) class(ctx context.Context, q Querier, d Dialect, c class, ids []string) error {
-	total, err := count(ctx, q, "SELECT COUNT(*) FROM "+c.table+" WHERE "+c.where(d))
+	total, err := countRows(ctx, q, "SELECT COUNT(*) FROM "+c.table+" WHERE "+c.where(d))
 	if err != nil {
 		return err
 	}
@@ -117,36 +117,9 @@ func (r *reporter) perPrincipal(ctx context.Context, q Querier, d Dialect, c cla
 		args[i] = id
 	}
 
-	rows, err := q.Query(ctx,
-		"SELECT "+c.link+", COUNT(*) FROM "+c.table+" WHERE "+c.ofPrincipals(len(ids))+" GROUP BY "+c.link,
-		args...,
-	)
+	counts, err := groupCounts(ctx, q, c, args)
 	if err != nil {
-		return fmt.Errorf("count dev rows of table %q: %w", c.table, backup.ErrExportRead)
-	}
-
-	counts := map[string]int64{}
-
-	for rows.Next() {
-		var id string
-
-		var n int64
-		if err := rows.Scan(&id, &n); err != nil {
-			_ = rows.Close() //nolint:errcheck // The scan error is the cause.
-
-			return fmt.Errorf("count dev rows of table %q: %w", c.table, backup.ErrExportRead)
-		}
-
-		counts[id] = n
-	}
-
-	err = rows.Err()
-	if closeErr := rows.Close(); closeErr != nil && err == nil {
-		err = closeErr
-	}
-
-	if err != nil {
-		return fmt.Errorf("count dev rows of table %q: %w", c.table, backup.ErrExportRead)
+		return err
 	}
 
 	for i, id := range ids {
@@ -160,7 +133,7 @@ func (r *reporter) perPrincipal(ctx context.Context, q Querier, d Dialect, c cla
 		only = c.only + " AND "
 	}
 
-	other, err := count(ctx, q,
+	other, err := countRows(ctx, q,
 		"SELECT COUNT(*) FROM "+c.table+" WHERE "+only+c.link+" IN "+d.devPrincipals()+
 			" AND "+c.link+" NOT IN ("+placeholders(len(ids))+")",
 		args...,
@@ -176,6 +149,47 @@ func (r *reporter) perPrincipal(ctx context.Context, q Querier, d Dialect, c cla
 	return nil
 }
 
+// groupCounts counts the rows of c for each principal ID in args.
+func groupCounts(ctx context.Context, q Querier, c class, args []any) (map[string]int64, error) {
+	fail := fmt.Errorf("count dev rows of table %q: %w", c.table, backup.ErrExportRead)
+
+	rows, err := q.Query(ctx,
+		"SELECT "+c.link+", COUNT(*) FROM "+c.table+" WHERE "+c.ofPrincipals(len(args))+" GROUP BY "+c.link,
+		args...,
+	)
+	if err != nil {
+		return nil, fail
+	}
+
+	counts := map[string]int64{}
+
+	for rows.Next() {
+		var (
+			id string
+			n  int64
+		)
+
+		if scanErr := rows.Scan(&id, &n); scanErr != nil {
+			_ = rows.Close() //nolint:errcheck // The scan error is the cause.
+
+			return nil, fail
+		}
+
+		counts[id] = n
+	}
+
+	err = rows.Err()
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+
+	if err != nil {
+		return nil, fail
+	}
+
+	return counts, nil
+}
+
 // remove removes the dev principals, the providers with the reserved ID and
 // the sign-in requests that name it.
 func (r *reporter) remove(ctx context.Context, q Querier, d Dialect) error {
@@ -185,7 +199,7 @@ func (r *reporter) remove(ctx context.Context, q Querier, d Dialect) error {
 		where string
 		skip  bool
 	}{
-		{class: backup.RemovedPrincipals, table: "principals", where: d.match("subject"), skip: true},
+		{class: backup.RemovedPrincipals, table: "principals", where: d.matchSubject(), skip: true},
 		{class: backup.RemovedProviders, table: "sign_in_providers", where: d.provider("provider_id"), skip: false},
 		{class: backup.RemovedProviders, table: "oidc_providers", where: d.provider("provider_id"), skip: false},
 		{class: backup.RemovedSignInRequests, table: "sign_in_requests", where: d.provider("provider"), skip: false},
