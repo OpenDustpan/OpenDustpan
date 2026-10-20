@@ -170,6 +170,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) *apiserver.Handler {
 		Tokens:           d.tokens,
 		Audit:            d.st,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    d.policies,
 		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,

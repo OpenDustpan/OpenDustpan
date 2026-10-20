@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -183,6 +184,11 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		admin, stored = opts.stored(st, clock)
 	}
 
+	gates, err := gate.NewConfigService(gate.ConfigServiceConfig{Store: st, Namespaces: namespaces, Now: clock.Now})
+	if err != nil {
+		t.Fatalf("gate config service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Workers:          nil,
 		TempAdmins:       nil,
@@ -207,6 +213,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		AuditSinks:       nil,
 		AuditChain:       nil,
 		IPAllowlists:     nil,
+		Gates:            gates,
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
@@ -1078,6 +1085,7 @@ func TestSignInProviderDown(t *testing.T) {
 		AuditSinks:       nil,
 		AuditChain:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    policies,
 		InstallationKind: "",
 		SignIn: &apiserver.SignIn{
