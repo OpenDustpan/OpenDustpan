@@ -10,6 +10,11 @@ created: 2026-10-20
 Status: draft. Nothing in this RFC is decided. No code exists for it. The
 owner answers the questions at the end.
 
+Read section H first. The shim runs in the same CI job as the code that it
+starts. It is a convenience layer, not a security boundary. Slice 1 moves a
+long-lived cloud key from the settings of the CI into an OpenDustpan
+profile. It does not delete that key.
+
 ## Problem
 
 Many teams run OpenTofu or the Pulumi CLI in their own CI, not on an
@@ -22,7 +27,8 @@ value in the output only.
 
 OpenTofu 1.11 has a real answer: ephemeral values and write-only
 attributes. Few modules use them yet. The Pulumi CLI encrypts a value in
-state only when the program marks it secret.
+state only when the program marks it secret. Pulumi has write-only fields
+too, but it still writes their values to the state, as secrets (facts).
 
 The owner asked for a **CI shim**: a small, optional program in the team's
 own CI. It exchanges the identity token of the CI job for a short-lived
@@ -104,13 +110,27 @@ is not a job: the server schedules no work and holds no claim.
 
 - **ADR 209 decision 1**, only if the owner picks option A2 or A3 (a third
   client program). A1 (a mode of the run command) needs no amendment.
+- **ADR 209 decision 5**, to apply its rule for a job token (empty
+  `environmentVariables` and `files` on the Pulumi paths) to a trust token of
+  a CI run too. The amendment covers trust tokens of CI runs only. It
+  changes nothing for a personal token or an access token of a person.
 - **ADR 54 decision 5**, only if the owner accepts the scope of a trust
   rule (B4). Today the grants of the principal decide everything.
-- **ADR 203 decision 1**, to add the consumer `ci` (C1), and decision 9,
-  if the owner accepts the audit kind of G3.
+- **ADR 203 decision 1**, to add the consumer `ci` (C1). The consumer `ci`
+  takes trust tokens only.
 - **ADR 205 decision 3**, only if the owner accepts the `ci_*` claims (B6).
   The claim set is a one-way door, so this is an open question, not a
   recommendation for slice 1.
+
+## New dependency
+
+The server must check JWTs of other issuers and read their JWKS. The
+standard library has no JWS or JWK code. Options: a maintained JWT and JWK
+library, or about 300 lines of our own code on `crypto/rsa` and
+`crypto/ecdsa`. Both are a new dependency or new security code. CLAUDE.md
+says to ask before a new dependency. **The owner must approve the choice
+before any code.** The shim itself verifies no token, so the shim needs no
+such library.
 
 ## Facts from primary sources
 
@@ -138,17 +158,28 @@ From <https://docs.github.com/en/actions/reference/security/oidc> and
   `run_id`, `run_number`, `run_attempt`, `runner_environment`
   (`github-hosted` or `self-hosted`), `workflow`, `workflow_ref`,
   `workflow_sha`.
-- **Not in the list:** `ref_protected`, and a `sha` of the commit (only
-  `workflow_sha` and `job_workflow_sha`).
+- **The docs table does not list `ref_protected`, and it does not list a
+  `sha` of the commit** (only `workflow_sha` and `job_workflow_sha`). But the
+  live discovery document
+  (<https://token.actions.githubusercontent.com/.well-known/openid-configuration>,
+  read on 2026-10-20) lists both `ref_protected` and `sha` in
+  `claims_supported`. It also lists `enterprise`, `enterprise_id`,
+  `environment_node_id`, `issuer_scope` and `check_run_id`. The example
+  token of the concepts page has `sha`. A token probably holds both claims,
+  but a list of supported claims is not proof. An e2e item: a real token from
+  a test workflow shows which claims it holds, for a push, a pull request and
+  an `environment` job.
 - **Subject.** `repo:ORG/REPO:` and then the context, for example
   `ref:refs/heads/main`, `environment:prod` or `pull_request`. Repositories
   made after 15 July 2026, or that opt in, get the immutable form
   `repo:OWNER@OWNER-ID/REPO@REPO-ID:...`.
 - **Lifetime.** The reference does not give one. In the example token,
   `exp - iat` is 300 seconds. The docs say nothing about replay.
-- **Fork pull requests.** The OIDC pages do not say whether a workflow
-  that a pull request from a fork starts can get a token. We could not
-  find it in a primary source. An e2e item.
+- **Fork pull requests and `pull_request_target`.** The OIDC pages do not
+  say whether a workflow that a pull request from a fork starts can get a
+  token. We could not find it in a primary source. An e2e item. A
+  `pull_request_target` workflow runs in the context of the base
+  repository, so its token has the claims of the base repository (B5).
 - **Masks.** <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands>:
   a step writes `::add-mask::<value>` to its standard output. The docs warn:
   "Make sure you register the secret with 'add-mask' before outputting it
@@ -172,8 +203,15 @@ From <https://docs.gitlab.com/ci/secrets/id_token_authentication/>:
   `project_visibility`, and others.
 - **Subject.** `project_path:{group}/{project}:ref_type:{type}:ref:{branch_name}`
   by default. The projects API can change it.
-- **Lifetime.** "Expiry equals the job's timeout if one is set, otherwise
-  5 minutes." A job timeout can be hours. GitLab signs the token with RS256.
+- **Lifetime.** "The expiry time for the token is set to the job's timeout
+  if specified, or 5 minutes if no timeout is specified." A job timeout can
+  be hours. The token has no renewal. "The ID token is encoded by using RS256
+  and signed with a dedicated private key."
+- **Merge requests from a fork.** From
+  <https://docs.gitlab.com/ci/cloud_services/>: "When the source project and
+  the target project are different, merge request pipelines have
+  `ref_protected:false`." The docs advise a trust policy to require
+  `ref_protected:true`.
 - **Personal data.** The claims can hold `user_login` and `user_email`.
 
 ### OpenTofu ephemeral values and write-only attributes
@@ -212,7 +250,9 @@ From <https://www.pulumi.com/docs/iac/concepts/secrets/> and
 <https://www.pulumi.com/docs/iac/concepts/resources/providers/>:
 
 - **State holds everything, encrypted where marked.** "Values marked as
-  secret are encrypted before they're persisted". A value is secret when
+  secret are encrypted before they're persisted". The secrets page says:
+  secrets "are marked internally as needing encryption before persisting in
+  the state file". A value is secret when
   `pulumi config set --secret`, `Output.secret`, `additionalSecretOutputs`
   or a secret input makes it so. Each value derived from a secret is
   secret.
@@ -233,8 +273,18 @@ From <https://www.pulumi.com/docs/iac/concepts/secrets/> and
   own process, and writes each of `files` to a temporary file that it does
   not delete. It encrypts each secret of `pulumiConfig` and sends the
   ciphertext in the update.
-- We found no ephemeral value or write-only input in the Pulumi docs that
-  we read.
+- **Write-only fields exist, but they reach the state.** From
+  <https://www.pulumi.com/docs/iac/concepts/secrets/write-only-fields/>:
+  "Write-only fields are resource properties that can be set during
+  resource creation but are never returned by the cloud provider's API."
+  "Pulumi supports these properties mainly for schema parity with the
+  underlying Terraform provider." When Pulumi meets one: "Its initial value
+  gets written to Pulumi state inputs as a Secret. It will never appear in
+  state outputs." So the value is in the state, as ciphertext of the secrets
+  provider. Pulumi has no ephemeral value in the sense of OpenTofu. Issue 3201
+  of `pulumi/pulumi-terraform-bridge` reports that encrypted write-only
+  values still reach the state. We could not read that issue in this
+  session. Read it before the owner accepts section D.
 
 ### How a tool reads a credential from its environment
 
@@ -257,7 +307,8 @@ From <https://www.pulumi.com/docs/iac/concepts/secrets/> and
 **What it does, in order:**
 
 1. Gets the identity token of the CI job (B).
-2. Exchanges it for an OpenDustpan trust token, for one namespace.
+2. Exchanges it for an OpenDustpan trust token, for one namespace. One start
+   of the shim makes one exchange (B3).
 3. Opens the profiles of the unit with that token (C).
 4. Checks for a manual lock of the unit, and stops with a clear message
    when one exists (I).
@@ -274,8 +325,11 @@ From <https://www.pulumi.com/docs/iac/concepts/secrets/> and
   server also makes (owner comment: "the shim is one layer, not the only
   one").
 - **Not required.** A team that does not use it keeps a plain backend.
-- **It never changes what the tool does.** It does not edit the code, add
-  arguments that change the plan, or read the state.
+- **It does not change what the tool does.** It does not edit the code or
+  read the state. It adds only the variables file of `exports.opentofu`
+  (C3). To do that, it reads the arguments of the tool for the subcommand,
+  or it sets `TF_CLI_ARGS_<subcommand>` (C3). It accepts an argument list
+  only, never a shell string.
 
 **Where the code lives.**
 
@@ -285,11 +339,13 @@ From <https://www.pulumi.com/docs/iac/concepts/secrets/> and
 2. **A2. A new command of the same binary:** `opendustpan ci run`. Same
    download. A new client program, so it amends ADR 209 decision 1.
 3. **A3. A small static binary of its own**, for example `dustpan-ci`,
-   pure Go with the standard library only, as the launcher is (ADR 134
-   decision 1). It shares the code of the launcher for masks, the
-   environment and the credentials helper (`launcher.Masker`,
-   `launcher.BuildEnv`, `launcher.OpenTofuAnswer`). It amends ADR 209
-   decision 1.
+   pure Go with no cgo, as the launcher is (ADR 134 decision 1). It
+   imports the code of the launcher for masks, the environment and the
+   credentials helper (`launcher.Masker`, `launcher.BuildEnv`,
+   `launcher.OpenTofuAnswer`). Its dependencies are then those of
+   `pkg/launcher`, not the standard library alone. The e2e suite or the
+   release build measures the size of the binary. `launcher.PulumiConfigFile`
+   does not exist yet and is planned work (C3). A3 amends ADR 209 decision 1.
 4. **A4. A thin action or component for each CI platform** that downloads
    A3, checks its SHA-256 and starts it. It holds no logic.
 
@@ -307,6 +363,7 @@ the owner wants no third client program.
 - GitLab CI: from the variable that `--id-token-env <name>` names. The
   job declares it under `id_tokens` with the audience of B2.
 - Never from the command line, and never from a file in the work tree.
+- The shim does not pass the CI token to the tool (H).
 
 **B2. Audience binding.** Options:
 
@@ -321,19 +378,64 @@ The server refuses a token whose `aud` is not the audience of the matched
 rule. A token for one namespace then never works at another, also when
 two namespaces trust the same issuer.
 
-**B3. Replay limits and lifetime.** A CI token is a bearer token. A GitLab
-token can live as long as the job timeout. Recommendation:
+**B3. Replay limits, lifetime and many starts in one job.** A CI token is
+a bearer token. A GitLab token lives for the job timeout and the job cannot
+renew it (facts). A GitHub job can ask for a new token at any time. Rules
+that are the same for each platform:
 
-- Each `jti` exchanges once. The server keeps the `jti` with the issuer
-  until the `exp` of the CI token, and refuses a second exchange. A token
-  with no `jti` fails.
-- The server refuses a CI token whose `iat` is more than 10 minutes in the
-  past, or whose `exp - iat` is more than 6 hours, and each token that is
-  expired or not yet valid, with a clock skew of 60 seconds.
+- Each `jti` exchanges once. The server keeps the `jti` with the issuer, in
+  the database, in a table with a unique key on issuer and `jti`. The
+  exchange does an insert that fails on a duplicate, in the same
+  transaction as the issue of the trust token. Server instances hold no
+  state in memory for this (ADR 72). The row stays until the `exp` of the CI
+  token plus the clock skew. A token with no `jti` fails.
+- The server refuses an expired token and a token not yet valid, with a
+  clock skew of 60 seconds, and a token whose `exp - iat` is more than 6
+  hours.
 - The trust token lives for the setting of ADR 69 decision 6 (1 hour by
   default), and never longer than the `exp` of the CI token plus 1 hour.
-  A GitHub job can ask for a new CI token and exchange again. A GitLab job
-  cannot, so a GitLab CI run longer than the trust token fails. Question 3.
+
+The problem: one `iat` window of 10 minutes and one exchange for each `jti`
+break a GitLab job that starts the shim three times (`init`, `plan -out`,
+`apply`). The second start has the same token, with the same `jti`, and an
+`iat` that is older than 10 minutes. Options:
+
+1. **One start runs a command list.** `dustpan-ci run --unit U -- tofu init
+   -- tofu plan -out=p -- tofu apply p` (the exact form is for the design).
+   One exchange, one open, one CI run record. The commands run in order, and
+   the shim stops at the first failure. The trust token never leaves the
+   memory of the shim, and no later start reads it. Against: the team must
+   write the steps of the job as one call.
+2. **An `iat` window for each platform.** 10 minutes for GitHub Actions. For
+   GitLab CI, the window is the `exp` of the token (at most 6 hours). The
+   `jti` still exchanges once, so many starts still fail. This alone does not
+   solve the problem.
+3. **One exchange for each job, and the trust token kept in a file** under a
+   directory of mode 0700 that a later start reads. Many starts, one
+   exchange. The exposure: the trust token (up to 1 hour) sits on disk
+   between the starts, and the code of every tool start and every later step
+   of the job can read it. That equals a CI token that leaks to the code,
+   for up to 1 hour, with one namespace and the scope of the rule (B4.2).
+
+**Recommendation.** B3.1 for slice 1, with the GitHub window of 10 minutes
+and the GitLab window of B3.2. The docs show GitLab jobs with one call.
+B3.3 is not in slice 1, because it keeps a bearer token on disk. If the owner
+wants B3.3 later, the file is bound to the CI job (`job_id` or `run_id` and
+`run_attempt`) and deleted by the job at its end.
+
+**A retry after the server accepted the `jti`.** The shim sends the
+exchange request again when the network fails after the server wrote the
+`jti` row but before the shim read the answer. A second exchange of the same
+`jti` is refused, so the job would fail. Design: the shim makes a random
+nonce of 128 bits for each start, and sends it with the CI token. The server
+stores the SHA-256 of the nonce with the `jti` row. A second exchange with
+the same `jti` and the same nonce, in 5 minutes from the first, gets a new
+trust token for the same CI run and principal, and the server revokes the
+trust token of the first answer. A second exchange with another nonce is a
+replay: refused, with an audit entry. A holder of the CI token only does not
+know the nonce. A holder that also reads the memory of the shim can retry
+as the shim does, but that holder has the trust token already. The e2e suite
+tests a lost answer with a proxy that drops it.
 
 **B4. The scope of a trust rule.** ADR 54 gives the matched principal all
 its grants. A CI token for one repository then reaches every unit that the
@@ -345,14 +447,42 @@ principal can reach. Options:
    grants and the scope.
 
 **Recommendation.** B4.2. It is a smaller blast radius for one token, and
-it amends ADR 54 decision 5.
+it amends ADR 54 decision 5. The scope is narrow-only. It is enforced in
+the Authorizer, for every action of the trust token (not in the handlers of
+single routes), and it fails closed: a token with a scope and an action or
+object that the scope does not name is denied. A read of the state of
+another workspace, for example by `terraform_remote_state`, fails unless
+that workspace is in the scope. Each denial writes an audit entry (ADR 54
+decision 8).
 
 **B5. Claim conditions.** A rule matches on claims. The console offers
 `repository`, `ref` and `environment` for GitHub Actions, and
-`project_path`, `ref` and `ref_protected` for GitLab CI. The docs warn that
-a rule on `sub` alone with a wildcard matches pull requests, and that
-GitHub Actions has no `ref_protected` claim (facts). A condition on a claim
-that the token does not hold fails closed.
+`project_path`, `ref` and `ref_protected` for GitLab CI. A rule on `sub`
+alone with a wildcard matches pull requests. A condition on a claim that the
+token does not hold fails closed. Whether a GitHub token holds
+`ref_protected` is an e2e item (facts).
+
+A `pull_request_target` workflow runs the code of the base repository with
+its secrets and its OIDC token, and the pull request can influence what it
+runs. A fork pull request is code from outside the team. Options for a rule
+that gives write access (apply):
+
+1. `repository` and `ref` only.
+2. Also a condition on `event_name` (for example `push` only) and on
+   `job_workflow_ref` or `workflow_ref`, so that only one workflow file at
+   one ref can use the rule.
+3. Also `environment`, with deployment protection rules on the GitHub
+   environment (required reviewers, a branch limit). GitHub then withholds
+   the token until the protection passes.
+
+**Recommendation.** B5.3 for apply, and B5.2 for plan. The console shows
+`environment` for every rule that can write state. The console denies
+`event_name: pull_request_target` by default, and the user must delete the
+deny rule on purpose. Whether GitHub withholds an OIDC token from a
+workflow that a fork pull request starts is an e2e item. For GitLab CI, a
+merge request pipeline from a fork has `ref_protected: false` (facts), so
+the console requires `ref_protected: true` in each GitLab rule that can
+write.
 
 **B6. Claims for clouds.** A cloud credential from a login block of a
 profile is a token of the issuer of ADR 204, with the claims of ADR 205.
@@ -368,14 +498,36 @@ no unit claims. Options:
 **Recommendation.** B6.1 for slice 1. B6.2 changes the claim set, which is
 a one-way door, so it is question 4.
 
+**B7. Downloading the discovery document and the JWKS.** The server downloads
+a URL that comes from outside, so this is security code (H).
+
+- The server downloads only for an `iss` that a trust rule of the namespace
+  of the request names. It decides this from the database, before any
+  network call. An unknown issuer is denied with no download (G4).
+- `https` only. The server follows no redirect to another scheme or host.
+  The `jwks_uri` of the document passes the same checks.
+- The server checks the resolved IP address when the connection opens, not
+  before, so a changed DNS answer cannot help. It denies loopback, private,
+  link-local, unspecified and multicast addresses. A test-only option allows
+  the loopback issuer of the e2e suite. The option is set in code by the
+  harness. No flag and no environment variable sets it.
+- Limits: the discovery document at most 64 KiB, the JWKS at most 256 KiB,
+  5 seconds to connect and 10 seconds in all, at most 100 keys. The cache
+  holds at most 1,000 issuers, at most 20 for each namespace, for 1 hour. An
+  unknown `kid` causes at most one new download for each issuer in 5 minutes.
+- The `issuer` of the discovery document must equal the `iss` of the token,
+  byte for byte.
+
 ### C. Delivery to the tool
 
 **C1. The consumer.** The shim opens each profile with a new consumer `ci`.
 It behaves as `run` (ADR 209 decision 8) with three changes: no open
 session, the trust token only, and the answer of `exports.opentofu` and
-`exports.pulumi` too. This amends ADR 203 decision 1. Option: reuse `run`,
-with no amendment. Recommendation: `ci`, so the audit and the access
-review can tell a CI run from a workstation.
+`exports.pulumi` too. **The consumer `ci` takes trust tokens only.** A
+person who needs the values on a laptop or in a shell uses `profile run`.
+The server refuses `ci` for any other credential kind. This amends ADR 203
+decision 1. Option: reuse `run`, with no amendment. Recommendation: `ci`, so
+the audit and the access review can tell a CI run from a workstation.
 
 **C2. Which profiles.** The shim names the unit (`--unit`), not the
 profiles. The server answers the profiles that the unit attaches (ADR 203
@@ -393,20 +545,35 @@ profiles.
 | `exports.files`, and each credential file of a block | files of mode 0600 under a directory of mode 0700, on a memory-backed directory when one exists. The shim deletes them when the tool ends, also on a signal. | yes |
 | `exports.variables`, plain | variables of the tool process | yes |
 | `exports.variables`, secret | refused in slice 1 (question 5) | yes |
-| `exports.opentofu` | a variables file in the same directory, and `-var-file=<path>` for `plan` and `apply` | yes |
-| `exports.pulumi` | a stack settings file with `environment` entries, as `launcher.PulumiConfigFile` | yes |
+| `exports.opentofu` | a variables file in the same directory, passed as `-var-file=<path>` (see below) | yes |
+| `exports.pulumi` | a stack settings file with `environment` entries, with the planned `launcher.PulumiConfigFile` (it does not exist yet) | yes |
 
+- **How the variables file reaches the tool.** The shim must add
+  `-var-file=<path>`, or set `TF_CLI_ARGS_plan` and `TF_CLI_ARGS_apply`. The
+  first way means that the shim parses the arguments of the tool to find
+  the subcommand. The second way needs no parsing. Recommendation: the
+  second way, if the e2e suite shows that the tool reads it, and the first
+  way as the fallback. Either way the shim reads no other argument. E2e
+  item: the OpenTofu docs say that an ephemeral variable "must also be set
+  when running tofu apply" with a saved plan file. They do not say whether
+  `tofu apply <saved plan>` refuses `-var-file` for a variable that is not
+  ephemeral. If it refuses, the shim passes the file to `apply` only for a
+  saved plan that needs an ephemeral variable.
 - The shim never writes to `GITHUB_ENV`, never sets a variable of the CI
   job, and never writes a file in the work tree.
 - The shim never passes its own environment to the tool. It passes the
   variables of the CI job that the tool needs (`PATH`, `HOME`, the
   variables of the platform) and drops each name that
   `job.IsCredentialEnv` matches, except the names that the profile sets.
-  This is the same rule as on a runner, not a second rule.
-- **With a trust token, the Pulumi paths answer empty
+  This is the same rule as on a runner, not a second rule. It also drops,
+  by name and not by that rule, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`,
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and the variable that `--id-token-env`
+  names (H).
+- **With a trust token of a CI run, the Pulumi paths answer empty
   `environmentVariables` and `files`**, as they do for a job token (ADR
-  209 decision 5). The shim already wrote them, and the CLI would write
-  the files to a temporary directory that it does not delete.
+  209 decision 5, which this RFC amends for CI-run trust tokens only). The
+  shim already wrote them, and the CLI would write the files to a
+  temporary directory that it does not delete.
 
 ### D. Secrets out of state: what can stay out, what cannot
 
@@ -417,7 +584,7 @@ profiles.
 | A provider credential (a cloud key, a token) | yes | a credential file or a variable that the provider reads, or `ephemeral "opendustpan_profile"` into the provider block |
 | A value that a resource needs once (an initial password) | yes, where the provider has a write-only attribute | the ephemeral resource into the write-only attribute and its version attribute |
 | A value for a provisioner or a `connection` block | yes | an ephemeral value. Provisioner output is not masked by OpenTofu, so the shim mask is the only mask there. |
-| A value in `exports.opentofu` (a variables file) | **no**, unless the variable is `ephemeral = true` | OpenTofu keeps the values of non-ephemeral variables in a saved plan. The server seals the stored plan (ADR 102). |
+| A value in `exports.opentofu` (a variables file) | **no**, unless the variable is `ephemeral = true` | OpenTofu keeps the values of non-ephemeral variables in a saved plan. A plan that a CI job saves with `-out` stays in the team's CI (an artifact, a cache). The server seals a plan that it stores itself (ADR 102), not a plan file of the team's CI. The docs say: "OpenTofu supports encrypting state and plan files at rest". Recommendation: the team turns on state and plan encryption (OpenTofu 1.7 and later) with `enforced = true`. |
 | The result of a data source (`data "opendustpan_profile"`, `data "external"`) | **no** | stored in plain text in the plan and the state |
 | A value that a resource makes or returns (a generated password, a new access key, a private key) | **no** | stored in the state. Only state encryption protects it. |
 | An attribute of a resource with no write-only form | **no** | stored |
@@ -429,7 +596,12 @@ Only a provider credential from a file or a variable stays out.
 the state. A provider credential that the provider reads from a file or a
 variable by itself is not a resource input (e2e item). A secret config
 value is in the state as ciphertext of the secrets provider of the stack.
-An unmarked value and each resource ID are plain text.
+An unmarked value and each resource ID are plain text. Pulumi has
+write-only fields on bridged providers, but "its initial value gets written
+to Pulumi state inputs as a Secret": the value is in the state as
+ciphertext, not out of it (facts). So for Pulumi the promise is
+"encrypted in state when marked, or when it is a write-only field", never
+"out of state".
 
 **What OpenDustpan can promise.**
 
@@ -483,7 +655,10 @@ the record of real resources, which is worse than the leak. A refusal
 belongs before the apply, at a plan upload (I, later). State sealing stays
 on as the last layer.
 
-**E4. Limits.** Only exact copies. Only values of 8 bytes or more, so a
+**E4. Limits.** A team that turns on OpenTofu state encryption (D)
+uploads a state that the server cannot read, so the walk of E2 finds
+nothing. The leak check then reports "not checked" for that state version,
+never "clean". Only exact copies. Only values of 8 bytes or more, so a
 short or common value (`true`, a region) does not match by chance. Only
 writes with the trust token of the CI run. At most 1,000 fingerprints for
 each CI run and a state of at most the size limit of a state write.
@@ -497,14 +672,17 @@ One record for each CI run, with the ID prefix `cir-`:
 - the principal, the trust rule, the issuer and the CI claims that the
   rule read (`repository`, `ref`, `run_id`, `run_attempt`, or the GitLab
   `project_path`, `ref`, `pipeline_id`, `job_id`), never `user_email`,
-- the commit (`sha` for GitLab CI, and `GITHUB_SHA` for GitHub Actions, marked
-  as declared by the CI, because no claim holds it),
+- the commit: the `sha` claim for GitLab CI. For GitHub Actions, the `sha`
+  claim if the e2e suite shows that the token holds it. Otherwise
+  `GITHUB_SHA`, marked as declared by the CI. Do not mark `GITHUB_SHA` as
+  declared until the e2e suite shows that the token has no `sha`,
 - each profile, revision and path that the open answered, never a value,
 - the state versions that the CI run wrote, and the leak findings,
 - a link to the CI job, built from the claims, and a link to the record in
   the CI log.
 
-The shim sends the record when the tool ends, also on a failure. The
+A CI run is closed only by the token that opened it. The shim sends the
+record when the tool ends, also on a failure. The
 server makes the record at the exchange and closes it with that send, so a
 CI run that dies still has its open record. A record that is not closed
 after the trust token ends gets the outcome `unknown`.
@@ -518,7 +696,7 @@ after the trust token ends gets the outcome `unknown`.
 | --- | --- |
 | `POST /token-exchange` | none (public list of the route test). A trust rule decides. Rate-limited for each namespace and each issuer. |
 | `POST /units/{unit}/ci-runs/open` | `profile:open` on each attached profile, and `unit:record-ci-run` on the unit |
-| `PATCH /ci-runs/{id}` | the trust token that opened the CI run, only |
+| `PATCH /ci-runs/{id}` | `unit:record-ci-run` on the unit of the CI run, and a check that the trust token is the one that opened the CI run |
 | `GET /ci-runs`, `GET /ci-runs/{id}` | `unit:read` on the unit |
 | `GET`, `POST`, `PATCH`, `DELETE /trust-rules` and `/trust-rules/{id}` | as ADR 54 decision 8 |
 
@@ -530,33 +708,55 @@ in the same transaction as the write.
 issuer, never a value.
 
 **G3. The audit kind.** A workload reads for a tool, so the entry is not a
-`reveal`. Options: keep the kind `access` of ADR 203, or follow ADR 240
-and write `reveal` when a person runs the shim with a personal token (on a
-laptop, or with a token in a CI secret). Recommendation: follow ADR 240,
-so a person who sees values is always a `reveal`. It amends ADR 203
-decision 9.
+`reveal`. ADR 240 already says that a workload gives `tool-operation`. The
+consumer `ci` takes trust tokens only (C1), so a person never opens values
+through the shim, and no amendment of ADR 203 decision 9 is needed.
 
 **G4. Denials.** Each refused exchange writes an audit entry: the issuer,
 the reason (bad signature, unknown issuer, wrong audience, replayed `jti`,
 expired, no rule matched, a claim condition failed), the SHA-256 of the
-`jti`, and never the token. An unknown issuer has no namespace scope yet,
-so the entry goes to the scope `@server`, with the flood limit of the
-denial audit (pull request 1108, in review).
+`jti`, and never the token. The exchange request names its namespace in the
+path. When that namespace exists, the denial goes to the audit of that
+namespace, also for an issuer that no rule of it names. Only when the
+namespace does not exist does the entry go to the scope `@server`. The
+answer to the caller is the same in both cases, so it is not a way to find
+out which namespaces exist. Both scopes use the flood limit of the denial
+audit (pull request 1108, merged).
 
 ### H. Defense in depth (ADR 250)
 
-**The shim runs untrusted code.** The tool runs the IaC code, providers,
-provisioners and external data sources of the team, in the same CI job
-and as the same user. Each value that the shim gives to the tool is
-visible to that code: it can read the process environment, the files, and
-ask the credentials helper. It can send a value over the network, or write
-it to the log in a changed form that no mask finds. The shim and the
-server do not prevent this. The boundary is what the trust token can open
-(B4) and what the cloud trust policy accepts (ADR 203 decision 4). The
-security docs say so in their first lines.
+**The shim runs untrusted code, and it is not the boundary.** The tool runs
+the IaC code, providers, provisioners and external data sources of the
+team, in the same CI job and as the same user. Each value that the shim
+gives to the tool is visible to that code: it can read the process
+environment, the files, and ask the credentials helper. It can send a value
+over the network, or write it to the log in a changed form that no mask
+finds.
+
+Any other step of the same job can do more. On GitHub Actions, a step with
+`id-token: write` asks `ACTIONS_ID_TOKEN_REQUEST_URL` for a token with any
+audience, and sends it to the exchange endpoint, with no shim. On GitLab CI,
+the variable of each declared token is in each script line of the job. The
+shim drops `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_URL`
+and the variable named by `--id-token-env` from the environment of the tool,
+by name. That limits one path for the tool process. It is not a boundary. The
+boundary is the trust rule (its claim conditions, B5) and its scope (B4.2),
+what the trust token can open, and what the cloud trust policy accepts (ADR
+203 decision 4). The security docs say so in their first lines.
+
+**Blast radius of slice 1.** Slice 1 moves a long-lived cloud key from the
+CI settings into a profile. Each CI run that matches the rule, and the
+code that it runs, can read the key and send it out. A stolen CI token gives
+one exchange, then a trust token of up to 1 hour, then every profile in the
+scope, and so a key that does not expire. B4.2 limits the scope, but the key
+itself is permanent. The next step that ends this is a login block
+(ADR 207): the cloud gives a short-lived credential to the workload, and the
+profile holds no cloud key. The docs page of slice 1 (J) says this in a
+warning at the top.
 
 | Layer | What it does | Its test |
 | --- | --- | --- |
+| Download of discovery and JWKS (server) | See B7. The server downloads only for an `iss` that a trust rule of the namespace in the request names. It decides this from the database before any network call. `https` only, with no redirect to another scheme or host. The server checks the resolved IP address when the connection opens. It denies loopback, private, link-local (also `169.254.169.254`), unspecified and multicast addresses. Size limits, timeouts and a cache limit apply. The `issuer` of the discovery document equals `iss`. | one test for each of these cases. An `iss` of no rule: no network call happens. An `http` URL. A redirect. A host that resolves to each denied address class, also a DNS answer that changes after the first check, because the check runs at connect. A response over the size limit. A slow response. A full cache. A discovery `issuer` that differs from `iss`. Each test runs with the other checks skipped. |
 | Check at the boundary (server) | JWT: `alg` from an allowlist (`RS256`, `ES256`), never `none`. The `kid` is in the cached JWKS of the issuer. `iss`, `aud`, `exp`, `nbf`, `iat` and `jti` are present and valid. At most 16 KiB. Claim values are strict UTF-8 with no control character. The unit name and the profile paths have the rules of their own routes. | a token for each rule, sent to the verifier with the route and the rule match skipped |
 | Check at the boundary (shim) | The server URL is `https`. The name in `--id-token-env` matches `[A-Z_][A-Z0-9_]*`. The unit name has the rules of the server. Each answered file name is one path segment from an allowlist. Each variable name passes the step variable rules of `pkg/job`. | a hostile answer of the server with the server checks skipped |
 | Encode or contain | The tool starts with `exec.Command` and an argument list, never a shell. No value goes on a command line. Files go under `os.Root` of the directory of the CI run. The shim drops CR and LF from each log value. SQL uses placeholders only. | a value with a shell character, a path with `..`, a value with CR and LF |
@@ -594,8 +794,10 @@ finds exact copies only.
 
 **Persona.** A platform team on GitHub Actions runs OpenTofu 1.11 against
 OpenDustpan. Today a cloud access key is a secret of the repository. The
-team wants the CI to hold no OpenDustpan token and no cloud key, and the
-key to stay out of the state.
+team wants the CI to hold no OpenDustpan token and no cloud key in its
+settings, and the key to stay out of the state. In slice 1 the key moves
+into a profile. It is still a long-lived key (H). Login blocks are the
+recommended next step.
 
 **Needs first:** the trust rule exchange of ADR 54 (OIDC discovery only),
 and the open of ADR 203 for static secrets and `exports.files`. Login
@@ -603,12 +805,21 @@ blocks (ADR 207) and the OpenDustpan provider (ADR 209) are not needed for
 slice 1: the cloud credential is a static secret of a profile, delivered
 as a shared credentials file.
 
-1. The routes of G1, the trust rule scope (B4.2), the `jti` store (B3) and
-   the denial audit (G4).
+1. The routes of G1, the trust rule scope (B4.2), the `jti` store (B3), the
+   download rules of B7 and the denial audit (G4). The trust rules, the
+   exchange and the CI runs live in one new tool-neutral domain package,
+   for example `pkg/trust`, with a store port, its conformance suite and an
+   adapter for each dialect. CI runs are part of the backup tables, so a
+   restore keeps the record of what each run read. The `jti` table and the
+   fingerprints of E are not (they are short-lived).
 2. The shim (A3) with B1 for GitHub Actions and GitLab CI, C1 to C3, the
    masks, the manual lock check and the CI run record (F).
 3. The docs page: the workflow, the trust rule, the profile, and the table
-   of section D with its warnings.
+   of section D with its warnings. A warning at the top says: slice 1 puts a
+   long-lived cloud key into a profile. Each CI run that matches the rule,
+   and the code that it runs, can read and send out that key. A stolen CI
+   token gives access to every profile in the scope. Use login blocks for
+   short-lived credentials as soon as they are available.
 4. **The e2e step.** The test starts a test OIDC issuer (a discovery
    document and a JWKS on loopback with TLS and its own CA) and a stub of
    `ACTIONS_ID_TOKEN_REQUEST_URL` that signs GitHub-shaped tokens. It
@@ -629,6 +840,23 @@ as a shared credentials file.
    - a token with another audience, a replayed `jti`, an expired token,
      and a token for `refs/heads/feature` each fail before the tool
      starts, each with an audit entry,
+   - a token shaped like `pull_request_target` (`event_name`), a token with
+     another `workflow_ref`, and a token of a fork pull request each fail,
+     with an audit entry. A real fork pull request on a test repository
+     shows whether GitHub withholds the token.
+   - a lost answer of the exchange, retried with the same nonce, works once.
+     A retry with another nonce fails,
+   - a GitLab-shaped job with a command list of `init`, `plan -out` and
+     `apply` works with one exchange,
+   - the shim masks the canary when the module prints it. A base64 copy of
+     the canary is not masked, and the test shows this on purpose, to show
+     the limit of a mask,
+   - the environment of the tool holds no `ACTIONS_ID_TOKEN_REQUEST_*`
+     variable and no variable named by `--id-token-env`,
+   - a read of the state of another workspace by `terraform_remote_state`
+     fails when that workspace is not in the scope,
+   - the real claims of a GitHub token: whether `ref_protected` and `sha`
+     are present, and the value of `GITHUB_SHA` against `sha`.
    - with a manual lock on the workspace, the shim stops before `tofu
      init` with a message that names the lock.
 
@@ -644,18 +872,22 @@ The owner keeps these. Each recommendation is the author's.
 
 1. Where the code lives: a mode of the run command (A1), a command of the
    server binary (A2), or a small binary of its own (A3), which amends ADR
-   209 decision 1? Recommendation: A3.
+   209 decision 1? Recommendation: A3, with A1 as the fallback.
 2. Can a trust rule narrow the grants of its principal to units and
-   profiles (B4.2), which amends ADR 54 decision 5? Recommendation: yes.
-3. A GitLab CI token cannot be renewed in the job. Is a GitLab CI run
-   limited to the trust token lifetime (1 hour by default), or does the
-   shim renew its trust token through the server while its CI run is open?
-   Recommendation: the limit in slice 1, and a renewal through the CI run
-   record later, at most until the `exp` of the CI token.
+   profiles (B4.2), which amends ADR 54 decision 5? Recommendation: yes,
+   narrow-only, enforced centrally in the Authorizer, and audited under ADR
+   54 decision 8.
+3. A GitLab CI token cannot be renewed in the job, and lives for the job
+   timeout. Does slice 1 use one start with a command list (B3.1), a kept
+   trust token (B3.3), or the limit of the trust token lifetime (1 hour by
+   default) with a renewal through the CI run record later, at most until
+   the `exp` of the CI token? Recommendation: B3.1 with the limit, and the
+   renewal later.
 4. Do issued cloud tokens get `ci_*` claims and the unit claims for a
    trust rule scoped to one unit (B6.2)? It changes the claim set, a
-   one-way door. Recommendation: not in slice 1. Decide with the first
-   login block in CI.
+   one-way door. Recommendation: no unit claims from a CI run, and `ci_*`
+   claims only as a separate decision with the first CI login block. Slice
+   1 is B6.1.
 5. Can a CI run give a secret as a variable of the tool process, for an
    SDK that reads only a variable, or for `TF_VAR_` of an ephemeral
    variable? The shim cannot see whether the variable is ephemeral, so a
@@ -669,13 +901,19 @@ The owner keeps these. Each recommendation is the author's.
 7. The leak check: a finding only (E3.1), or also a refusal by policy?
    Recommendation: a finding only at the state write, and a refusal only at a
    plan upload, later.
-8. The audit kind of an open by a person through the shim: `access` (ADR
-   203) or `reveal` (ADR 240 style)? Recommendation: `reveal`.
-9. Which CI platforms in slice 1: GitHub Actions only, or also GitLab CI?
-   GitLab CI has `ref_protected` and `sha` claims, which GitHub Actions
-   lacks. Recommendation: both. Forgejo Actions comes after a check of its docs.
-10. The audience form of B2.2: the namespace ID in a path, or a URN?
-    Recommendation: the URL form, so the console can show one string.
+8. Which CI platforms in slice 1: GitHub Actions only, or also GitLab CI?
+   The discovery document of GitHub lists `ref_protected` and `sha`, but
+   the docs table does not, so an e2e item decides what GitHub tokens hold.
+   This is no reason to prefer GitLab. Recommendation: both. Forgejo
+   Actions comes after a check of its docs.
+9. The audience form of B2.2: the namespace ID in a path, or a URN?
+   Recommendation: the URL form, so the console can show one string.
+10. The JWT and JWK code of the server: a library, or our own code on the
+    standard library (New dependency)? Recommendation: a maintained
+    library, after the owner reviews its license and its age.
+11. Does slice 1 go ahead with the blast radius of H, or only after the
+    first login block? Recommendation: slice 1 first, with the warning,
+    and login blocks next.
 
 ## Proposed glossary lines
 
