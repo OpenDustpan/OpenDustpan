@@ -238,7 +238,20 @@ func checkRecovered(t *testing.T, second *sqlite.Store, target blob.Store, id ba
 		t.Fatalf("backup after the recovery = %+v, want succeeded", row)
 	}
 
-	op, err := second.DurableOperationsPort().Get(ctx, durableID(t, second, id))
+	// The runner completes the operation just after the finish write.
+	opID := durableID(t, second, id)
+	deadline := time.Now().Add(10 * time.Second)
+
+	op, err := second.DurableOperationsPort().Get(ctx, opID)
+	for err == nil && !op.State.Terminal() && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(20 * time.Millisecond):
+		}
+
+		op, err = second.DurableOperationsPort().Get(ctx, opID)
+	}
+
 	if err != nil || op.State != durable.StateSucceeded || op.Attempt != 2 || op.Expiries != 1 {
 		t.Fatalf("operation = %+v, %v; want succeeded after attempt 2 with 1 expiry", op, err)
 	}

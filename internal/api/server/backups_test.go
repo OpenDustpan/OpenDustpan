@@ -138,6 +138,19 @@ func newBackupFixture(
 		t.Fatalf("new backup service: %v", err)
 	}
 
+	// A worker claims the backup operations, as the worker component of a
+	// server does. It stops before the stores close.
+	workCtx, stopWork := context.WithCancel(context.WithoutCancel(t.Context()))
+
+	var work sync.WaitGroup
+
+	work.Go(func() { service.Work(workCtx) })
+
+	t.Cleanup(func() {
+		stopWork()
+		work.Wait()
+	})
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)

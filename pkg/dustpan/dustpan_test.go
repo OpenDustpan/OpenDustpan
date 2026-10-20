@@ -1313,10 +1313,10 @@ func sendEvilTarget(t *testing.T, base, evil string) {
 	}
 }
 
-// TestRunMarksRunningBackupsFailed proves the server marks running backups
-// failed at start (ADR 30 decision 9): a running row from before the stop
-// reads failed with error text after Run starts.
-func TestRunMarksRunningBackupsFailed(t *testing.T) {
+// TestRunLeavesRunningBackupAlone proves that a start writes no backup row:
+// a running row, which another instance may run, reads running with no
+// error text after the start-up steps ended.
+func TestRunLeavesRunningBackupAlone(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
@@ -1325,11 +1325,18 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	seedRunningBackup(t, st, now)
 
+	started := make(chan struct{})
+
 	srv, err := dustpan.NewServer(append(
 		fullServerOptions(t, st, blobs, authn),
 		dustpan.WithBackupTarget(target, "dir:/var/backups"),
 		dustpan.WithClock(func() time.Time { return now }),
 		dustpan.WithListenAddr("127.0.0.1:0"),
+		dustpan.WithBeforeServe(func(context.Context) error {
+			close(started)
+
+			return nil
+		}),
 	)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -1344,7 +1351,20 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 		done <- srv.Run(ctx)
 	}()
 
-	waitForFailedBackup(t, st, "bkp-restart00000000001", now)
+	select {
+	case <-started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the server did not finish its start-up steps")
+	}
+
+	row, err := st.GetBackup(t.Context(), "bkp-restart00000000001")
+	if err != nil {
+		t.Fatalf("get backup: %v", err)
+	}
+
+	if row.State != backup.StateRunning || row.Error != "" || !row.EndedAt.IsZero() {
+		t.Fatalf("backup after start = %+v, want the running row unchanged", row)
+	}
 
 	cancel()
 
@@ -1399,51 +1419,6 @@ func seedRunningBackup(t *testing.T, st *sqlite.Store, now time.Time) {
 
 	if err := st.CreateBackup(t.Context(), running); err != nil {
 		t.Fatalf("create running backup: %v", err)
-	}
-}
-
-// waitForFailedBackup waits until id reads failed, then checks the row.
-func waitForFailedBackup(t *testing.T, st *sqlite.Store, id backup.ID, now time.Time) {
-	t.Helper()
-
-	deadline := time.Now().Add(10 * time.Second)
-
-	for {
-		row, err := st.GetBackup(t.Context(), id)
-		if err != nil {
-			t.Fatalf("get backup: %v", err)
-		}
-
-		if row.State == backup.StateFailed {
-			checkFailedRow(t, row, now)
-
-			return
-		}
-
-		if time.Now().After(deadline) {
-			t.Fatalf("backup %s = %+v, want failed after start", id, row)
-		}
-
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-timer.C:
-		case <-t.Context().Done():
-			timer.Stop()
-			t.Fatal("test ended before the server marked the running backup failed")
-		}
-	}
-}
-
-// checkFailedRow proves row failed with the stop text, keeping its start time.
-func checkFailedRow(t *testing.T, row backup.Record, now time.Time) {
-	t.Helper()
-
-	if row.Error != "server stopped during backup" {
-		t.Fatalf("backup error = %q, want the stop text", row.Error)
-	}
-
-	if !row.StartedAt.Equal(now) || !row.EndedAt.Equal(now) {
-		t.Fatalf("backup times = %v to %v, want %v to %v", row.StartedAt, row.EndedAt, now, now)
 	}
 }
 

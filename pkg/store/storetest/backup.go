@@ -1491,7 +1491,10 @@ func checkBackupFinishErrors(t *testing.T, s BackupStore, claim durable.Claim, i
 		t.Fatalf("finish a finished backup: err = %v, want ErrNotRunning", err)
 	}
 
-	_, err := s.FinishBackup(ctx, probe, backup.ID(ident.NewID("bkp-")), backup.StateFailed, "no", endedAt)
+	missing := backup.ID(ident.NewID("bkp-"))
+	missingProbe := bareBackupClaim(t, s, missing).Step("probe")
+
+	_, err := s.FinishBackup(ctx, missingProbe, missing, backup.StateFailed, "no", endedAt)
 	if !errors.Is(err, backup.ErrNotFound) {
 		t.Fatalf("finish a missing backup: err = %v, want ErrNotFound", err)
 	}
@@ -1804,6 +1807,23 @@ func testBackupFinishForeignFence(t *testing.T, newStore BackupFactory) {
 
 		requireStillRunning(t, s, r.ID, claim)
 	}
+
+	// A live claim on the operation of another backup must not finish this
+	// row: the operation of the fence has to be the operation of the row.
+	otherBackup := backup.ID(ident.NewID("bkp-"))
+	live := bareBackupClaim(t, s, otherBackup)
+	liveFence := live.Step(backup.StepFinish)
+
+	_, err = s.FinishBackup(t.Context(), liveFence, r.ID, backup.StateSucceeded, "", now().Add(time.Hour))
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("finish with a live fence of another backup: err = %v, want durable.ErrClaimLost", err)
+	}
+
+	requireStillRunning(t, s, r.ID, claim)
+
+	if _, done := mustOperation(t, s, live.Operation).Step(liveFence.Step); done {
+		t.Fatalf("operation of another backup recorded step %q after a refused finish, want none", liveFence.Step)
+	}
 }
 
 // testBackupFinishRollsBack refuses a finish of a missing row and a finish
@@ -1819,7 +1839,9 @@ func testBackupFinishRollsBack(t *testing.T, newStore BackupFactory) {
 	endedAt := now().Add(time.Hour)
 
 	missing := backup.ID(ident.NewID("bkp-"))
-	if _, err := s.FinishBackup(t.Context(), fence, missing, backup.StateFailed, "no", endedAt); !errors.Is(
+	missingFence := bareBackupClaim(t, s, missing).Step(backup.StepFinish)
+
+	if _, err := s.FinishBackup(t.Context(), missingFence, missing, backup.StateFailed, "no", endedAt); !errors.Is(
 		err, backup.ErrNotFound,
 	) {
 		t.Fatalf("finish a missing backup: err = %v, want ErrNotFound", err)

@@ -177,6 +177,28 @@ func backupOperation(t *testing.T, c *servertest.Cluster, i int) durable.Operati
 	return ops[0]
 }
 
+// endedBackupOperation returns the only backup operation of the cluster once
+// it ended. The runner completes it just after the finish write, so a caller
+// that saw the backup succeed waits for that.
+func endedBackupOperation(t *testing.T, c *servertest.Cluster, i int) durable.Operation {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		op := backupOperation(t, c, i)
+		if op.State.Terminal() || time.Now().After(deadline) {
+			return op
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("wait for the backup operation: %v", t.Context().Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
 // splitSets returns server 0 with every component and server 1 with the api
 // component only.
 func splitSets(t *testing.T) []dustpan.Components {
@@ -227,7 +249,7 @@ func TestBackupSurvivesStartOfAnotherInstance(t *testing.T) {
 		}
 	}
 
-	if op := backupOperation(t, c, 0); op.State != durable.StateSucceeded || op.Attempt != 1 {
+	if op := endedBackupOperation(t, c, 0); op.State != durable.StateSucceeded || op.Attempt != 1 {
 		t.Fatalf("operation = %s after attempt %d, want succeeded after attempt 1", op.State, op.Attempt)
 	}
 }
@@ -271,7 +293,7 @@ func TestBackupTakeoverAfterKill(t *testing.T) {
 		t.Fatalf("takeover took %v, want a few lease periods of %v", took, backupLease)
 	}
 
-	op := backupOperation(t, c, survivor)
+	op := endedBackupOperation(t, c, survivor)
 	if op.State != durable.StateSucceeded || op.Attempt != 2 || op.Expiries != 1 {
 		t.Fatalf("operation = %+v, want succeeded after attempt 2 with 1 expiry", op)
 	}
