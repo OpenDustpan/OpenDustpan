@@ -537,7 +537,7 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
      installation) in place of one entry for each unit.
    - ADR 225 decision 1: a new `approvers` entry, `holders`: the persons who
      hold the approve action of the resource of the request. The reserved
-     list of rule IDs gets `package-admission`.
+     list of rule IDs adds `package-admission`.
    - ADR 225 decision 7: two approve actions, `namespace:approve-package`
      and `installation:approve-package`, with the same rules for who may
      approve.
