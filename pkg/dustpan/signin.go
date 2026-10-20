@@ -108,6 +108,7 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 	in := &serverapi.SignIn{
 		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
 		Origins: append([]string{origin}, cfg.allowedOrigins...), DevCode: nil, DevAdmin: noDevAdmin,
+		OnDevRefused: devRefusalAudit(cfg),
 	}
 
 	if cfg.devSignIn != nil {
@@ -213,7 +214,7 @@ func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Poli
 		return nil, nil, err
 	}
 
-	if cfg.sessionCookies, err = sessionCookies(signIn, cfg.installationKind); err != nil {
+	if cfg.sessionCookies, err = sessionCookies(signIn, cfg); err != nil {
 		return nil, nil, err
 	}
 
@@ -223,14 +224,14 @@ func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Poli
 // sessionCookies returns the session cookie check of the APIs other than
 // the installation API, with the sessions and the origins of in. A nil in
 // gives a nil check: those APIs then take access tokens only.
-func sessionCookies(in *serverapi.SignIn, kind installation.Kind) (*sessionauth.Checker, error) {
+func sessionCookies(in *serverapi.SignIn, cfg *settings) (*sessionauth.Checker, error) {
 	if in == nil {
 		return nil, nil //nolint:nilnil // No sign-in is a valid setup: the APIs take access tokens only.
 	}
 
 	var opts []sessionauth.Option
-	if kind != installation.KindDev {
-		opts = append(opts, sessionauth.RefuseDevSubjects())
+	if cfg.installationKind != installation.KindDev {
+		opts = append(opts, sessionauth.RefuseDevSubjects(), sessionauth.OnDevRefused(devRefusalAudit(cfg)))
 	}
 
 	c, err := sessionauth.New(in.Sessions, in.Origins, opts...)
