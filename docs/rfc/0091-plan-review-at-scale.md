@@ -89,7 +89,7 @@ dropped from the RFC.
 - **ADR 194 decision 4.** "Needs attention" also holds each `forget`, each
   `import` and each move.
 
-The resume of a multi-unit apply (ADR 190 decision 7) is not in this
+The resume of a multi-unit apply (ADR 190 decision 8) is not in this
 list. It is an open question (question 8).
 
 ## Facts from primary sources
@@ -111,8 +111,17 @@ Source: <https://opentofu.org/docs/internals/json-format/>.
   `["update"]`, `["delete"]` and `["forget"]`, or a replace:
   `["delete", "create"]` or `["create", "delete"]`. The docs say that this
   form lets a scan for `delete` catch each deletion.
-- `replace_paths` lists the attribute paths that forced the replace. It is
-  omitted when the action is not a replace.
+- `replace_paths` lists the attribute paths that forced the replace. The
+  page says it is omitted when the action is not a replace, "or if no paths
+  caused the replacement (for example, if the resource was tainted)". The
+  page does not say it for `replace_by_request`, so the reader never relies
+  on the presence or the absence of `replace_paths`.
+- `importing` is an object in `change` (for example `{"id": "foo"}`). The
+  page says: "If importing is present (ie. not null) then the change is an
+  import operation in addition to anything mentioned in the actions
+  field". So an import is not an action. A planned import can have the
+  actions `["no-op"]` or `["update"]`. A `generated_config` string can
+  come with it.
 - `action_reason` values include `replace_because_tainted`,
   `replace_because_cannot_update`, `replace_by_request`,
   `replace_by_triggers`, `delete_because_no_resource_config`,
@@ -235,8 +244,10 @@ different from an unknown `action_reason`, which is only a hint.
 | OpenTofu `["forget"]` | `forget` | Needs attention |
 | OpenTofu `["delete", "create"]` and `["create", "delete"]` | `replace` | Needs attention |
 | OpenTofu `["no-op"]` with `previous_address` | `move` | Needs attention |
-| OpenTofu `["no-op"]` without it | none | not in the summary |
-| Pulumi `same` | none | not in the summary |
+| OpenTofu any actions with `change.importing` present, also `["no-op"]` | `import` | Needs attention |
+| OpenTofu `["no-op"]` without `previous_address` and without `importing` | none | not in the summary |
+| Pulumi `same` with `movedFrom` (an alias rename: the URN of `oldState` differs from the URN of the step) | `move` | Needs attention |
+| Pulumi `same` without `movedFrom` | none | not in the summary |
 | Pulumi `create`, `update`, `read` | `create`, `update`, `read` | the other changes |
 | Pulumi `delete`, `delete-replaced`, `discard-replaced`, `remove-pending-replace` | `delete` | Needs attention |
 | Pulumi `replace`, `create-replacement`, `read-replacement`, `import-replacement` | `replace` | Needs attention |
@@ -254,14 +265,16 @@ different from an unknown `action_reason`, which is only a hint.
   `replace` in the view like any other replace.
 - A resource change that has `movedFrom`, with any action, goes to
   "Needs attention" and never joins a change group.
+- An OpenTofu change with `importing` present has the kind `import`, also
+  when its actions are `["update"]`. The row keeps the paths of the update.
+  It is in "Needs attention" and never joins a change group.
 
 **Needs attention keys on actions, not on paths.** The section holds each
-change of kind `delete`, `replace`, `forget` or `import`, each change with
-`movedFrom`, and each unit with `errored: true` or an unreadable summary.
+change of kind `delete`, `replace`, `forget` or `import` (also an import with the actions
+`["no-op"]`), each change with `movedFrom`, and each unit with `errored: true` or an unreadable summary.
 The reader never decides this from `replace_paths` or `forcesReplace`.
-OpenTofu leaves `replace_paths` out when the cause is
-`replace_because_tainted` or `replace_by_request`, and such a replace must
-still show. The flag `forcesReplace` is for a label on a value path and for
+OpenTofu leaves `replace_paths` out when no path caused the replace, for
+example for a tainted resource, and such a replace must still show. The flag `forcesReplace` is for a label on a value path and for
 the limits of noise rules (section E).
 
 **Sensitive values.** A `true` in `before_sensitive` or `after_sensitive`
@@ -330,12 +343,31 @@ Rules for a similar change, when it is built:
 
 - The row shows the count of resources and the count of units, and opens
   to a list by unit, then by resource. The list pages, and it never cuts.
+  The counts and the list hold only the units whose values the reader may
+  read (see the next rule).
 - The summary of ADR 194 (the count of each change kind for each unit)
   counts every change, also the grouped ones.
 - A view "by unit" lists each unit with all its changes. The grouping is a
   way to read, not a filter.
 - A unit that has a change outside all groups gets the mark "has other
   changes" in the row.
+
+**Units whose values the reader may not read.** A group of units can hold a
+unit that the reader may not read values of (no `job:read-plans`, ADR 194
+decision 9). Then a shared row would show that this unit has the same
+change as the others. So, for each row that shows a value, a value path or
+a diagnostic text (a change group, a similar change, a diagnostic group, an
+explain row):
+
+- The row never lists, counts or marks such a unit. Its counts and its
+  list hold only the units that the reader may read.
+- The changes of such a unit show only in its own per-unit list, as the
+  metadata of ADR 194 decision 9: keys, types, change kinds and counts.
+  That list says "values hidden" for this unit alone, which shows nothing
+  about other units.
+- The key of a change group (`cog-`) of a change of such a unit is not
+  returned to the reader, because an equal key would link the unit to a
+  group.
 
 **Change order or collection.** The approval lives on a change order. So
 the view of this RFC is the view of a change order revision.
@@ -394,7 +426,10 @@ text:
 - An error diagnostic is never in a count only. Each error group is in its
   own section, after "Needs attention" and before the change groups.
 - The text of a diagnostic is a value. It follows the rules for values in
-  section E: a unit without `job:read-plans` adds no text, only counts.
+  section E: a unit without `job:read-plans` is not listed, not counted
+  and not marked in a row that shows a text. The diagnostics of that unit
+  show only in its own per-unit list, as the count of each severity with no
+  text and no group key.
 
 ### E. Noise rules
 
@@ -447,9 +482,15 @@ own, in every output:
 
 - A unit without `job:read-plans` adds no value and no value path to a
   list of values, to a count per value, to the explain view or to the
-  Markdown. The row shows the mark "values hidden (N units)".
-- A rule never lets a reader infer a hidden value. A count per value
-  counts only the units that the reader may read.
+  Markdown. A row that shows a value, a value path or a diagnostic text
+  never lists, counts or marks such a unit (the rule of section B). So
+  the mark "values hidden (N units)" is not on those rows: it would show
+  that the hidden units have the same change. The per-unit list of the
+  hidden unit has the mark, with its metadata only.
+- A rule never lets a reader infer a hidden value or a hidden change. A
+  count per value counts only the units that the reader may read, and the
+  key of a change group of a hidden unit is not returned. A rule that
+  collapses a path of a hidden unit adds nothing to a row of other units.
 - Markdown that the CI shim posts to a forge holds no value and no value
   path. It holds change kinds, counts and the link to the view
   (**recommendation**). A forge comment has an audience that the server
@@ -458,7 +499,8 @@ own, in every output:
 **The explain view.** For each revision, a list of each collapsed path:
 unit, resource, path, the rule ID and version, its owner, its reason and
 its expiry. It needs the same actions as the view, and the rule above for
-values. It also lists each path that a Pulumi `hideDiffs` option names
+values: for a unit that the reader may not read values of, it holds the
+count of collapsed paths and the rule ID, with no path and no value. It also lists each path that a Pulumi `hideDiffs` option names
 (section "Pulumi CLI preview JSON"). The view does not apply `hideDiffs`:
 the author of the change controls it, so it is not a rule of the reviewer.
 The explain view lists it as "hidden by the program" and the path shows.
@@ -466,28 +508,39 @@ The explain view lists it as "hidden by the program" and the path shows.
 **Rules of the author and rules that came late** (**recommendation**).
 A noise rule can make a reviewer read less. So:
 
-- A rule that the author of the change order created or changed collapses
-  nothing in that change order. The server compares the author with
-  `createdBy` and with the last person who changed the rule.
+- A rule that an author of the change order wrote collapses nothing in that
+  change order. Every author counts (ADR 190 decision 4: the principal that
+  created the change order and each principal that attached a revision).
+  The server compares each author with each principal in the **write
+  history** of the rule: the creator, each principal that changed it, and
+  each principal that renewed it. One match is enough. Membership of the
+  `owner` group of the rule does not count as a write by itself
+  (**recommendation**): a person who only belongs to that group did not
+  write the rule.
 - A rule created or changed after a revision was attached collapses
   nothing in that revision. The view marks it "new since attach". The
   author can attach a new revision to use it.
 - A person whose own rule collapses at least one row of a revision cannot
-  sign that revision. The server refuses it with `ErrPolicyDenied` and
-  writes an audit entry.
+  sign that revision. "Own rule" has the same meaning as above: the person
+  is in the write history of the rule (create, change or renewal). The
+  server refuses the signature with a specific error, `ErrSelfApproval`
+  (not `ErrPolicyDenied`), and writes an audit entry.
 
 **Authorization and audit.**
 
-- Actions, separate for create, change and delete, as the gate
-  configuration has them (ADR 230). Proposals, with the namespace as the
-  object: `namespace:create-noise-rule`, `namespace:change-noise-rule`,
-  `namespace:delete-noise-rule` and `namespace:read-noise-rules`. A
-  collection scope or a unit scope is a field of the rule. The action
-  names follow the style of ADR 210 and must be checked against the
-  action lists of ADR 210 and ADR 230 when an ADR records them. A read of
-  the view needs `changeorder:read` on the units.
-- No built-in role gets the create, change or delete action except the
+- One action for the write of noise rules, as ADR 230 has one action,
+  `namespace:manage-gates`, for all writes of gate configuration. Proposal,
+  with the namespace as the object: `namespace:manage-noise-rules`. A
+  collection scope or a unit scope is a field of the rule. A read of the
+  rules needs `namespace:read-noise-rules`. The action names follow the
+  style of ADR 210 and must be checked against the action lists of ADR 210
+  and ADR 230 when an ADR records them. A read of the view needs
+  `changeorder:read` on the units.
+- `namespace:manage-noise-rules` is in no built-in role except the
   namespace administrator, as a proposal (question 4).
+- A create, a change and a renewal of a rule need a fresh authentication
+  (ADR 227), because a rule reduces what a reviewer reads
+  (**recommendation**). A delete does not, because it can only show more.
 - Each rule write carries a `namespace.Fence` and the store checks it in
   the same transaction, as for every write in a namespace.
 - The rules are a new table. It goes in the table list of the backup
@@ -549,9 +602,11 @@ signer read the new view.
 **The view basis (definition).** The view basis is the SHA-256 of a
 canonical list that holds, in this order:
 
-1. the ID and the version of each active noise rule that is in scope for
-   the revision. A rule is in scope when its scope holds a unit of the
-   revision, and the rule is not expired at that time,
+1. the sorted list of the pairs (rule ID, rule version, unit) that apply
+   to the revision. A pair applies when the scope of the rule holds the
+   unit, the unit is in the revision, and the rule is not expired at that
+   time. So a unit that moves into or out of a collection changes the
+   basis, also when no rule changes,
 2. the ID and the version of each built-in rule set that a scope of the
    revision turned on,
 3. the version name of the view encoding (for example `cho-view/1`) and the
@@ -591,7 +646,7 @@ diagnostic. All limits below that this RFC adds are proposals.
 | Encode at use | The console escapes each string. The Markdown output escapes Markdown and HTML. It strips CR and LF from a table cell. It puts each value in a code span. It breaks `@` mentions and links. Logs strip CR and LF. Bidirectional control characters show as escapes. SQL takes placeholders only. | A hostile name, path and value through each renderer, with the reader checks skipped. |
 | Plan strings to an assistant | Text of a plan can go to the built-in assistant or to an MCP tool (a name, a value, a diagnostic). It goes in a delimited field that is marked as untrusted data. It is never an instruction (the same rule as RFC 90 has for finding text). | A hostile string with an instruction in a plan, through the assistant output, with the reader checks skipped. |
 | Limit the effect | The analysis runs in the durable operation of ADR 194 decision 6, with a time limit and a memory limit. The server parses a part once and keeps the summary. A rule has a bounded cost (no user regular expression). The runner never runs `pulumi preview` with `--show-secrets`, and it refuses a plan step whose arguments hold that flag. So the part holds `[secret]`, not the value, even if the reader check fails. | A plan at each limit, and a rule set at its count limit. A plan step with `--show-secrets` is refused by the runner. |
-| Authorize at use | Values need `job:read-plans` on each unit (ADR 194 decision 9), for each output. A unit without it adds no value and no path. This holds for a list of values, a count per value, the explain view and the Markdown. The row says "values hidden (N units)". The store checks the action of a rule on its scope in the transaction of the write. | A rule write with a token of another scope. A view read, an explain read and a Markdown read of a change order with one unit that the reader may not read. No value or path of that unit appears in any output. The route check is skipped. |
+| Authorize at use | Values need `job:read-plans` on each unit (ADR 194 decision 9), for each output. A unit without it adds no value and no path. This holds for a list of values, a count per value, the explain view and the Markdown. A row that shows a value, a path or a diagnostic text never lists, counts or marks such a unit. The server does not return the key of a change group of that unit. Only the per-unit list of that unit says "values hidden", with metadata. The store checks the action of a rule on its scope in the transaction of the write. | A rule write with a token of another scope. A view read, an explain read and a Markdown read of a change order with one unit that the reader may not read. No value or path of that unit appears in any output. A second test: two units have the same change, and the reader may read one. The group row, the counts, the diagnostic group, the explain view and the Markdown name, count and mark only the readable unit. No `cog-` key of the hidden change comes back. The route check is skipped. |
 | Fail closed and record | A plan that the reader cannot read is `unreadable` and blocks approval (ADR 194 decision 6). A rule that cannot be evaluated collapses nothing (fail open for the view, which is the safe side). Each refused rule write writes an audit entry. | An unreadable plan gives no signature. A broken rule shows each path. |
 
 **Masking is kept.** The reader masks before it computes a fingerprint, a
@@ -655,9 +710,9 @@ which needs no provider download.
    It checks that "Needs attention" comes first, holds that one resource
    as `replace` with its `replace_paths`, and that the other two stay in
    the change group.
-3. The step runs `tofu taint` on another resource and plans again. OpenTofu
-   leaves `replace_paths` out for a tainted resource
-   (`replace_because_tainted`). The step checks that this resource is in
+3. The step runs `tofu taint` on another resource and plans again. The
+   OpenTofu docs say that `replace_paths` is omitted when a tainted
+   resource is replaced (`replace_because_tainted`). The step checks that this resource is in
    "Needs attention" as `replace`, with no value path.
 
 ## Open questions
@@ -678,8 +733,10 @@ Each question has a recommendation of the author. The owner decides.
 4. Who can create a noise rule? **Recommendation:** only a namespace
    administrator. A rule that the author of a change order created or
    changed, or that was created or changed after a revision was attached,
-   collapses nothing in that revision. A person whose own rule collapses a
-   row of a revision cannot sign it.
+   collapses nothing in that revision. A person who is in the write history
+   of a rule that collapses a row of a revision cannot sign it. The
+   action is `namespace:manage-noise-rules`, and a write needs a fresh
+   authentication.
 5. What is the longest expiry of a rule: 30, 90 or 180 days?
    **Recommendation:** 90 days, with at most 3 renewals of 90 days each.
 6. Does a noise rule also apply to the facts of a gate, for example to not
@@ -691,7 +748,7 @@ Each question has a recommendation of the author. The owner decides.
    e2e suite shows that the plan file from the same run applies without
    change. Else keep the second command.
 8. The resume of a multi-unit apply is out of this theme. ADR 190 decision
-   7 says that the author attaches a new revision for the units that did
+   8 says that the author attaches a new revision for the units that did
    not apply. Other options exist: resume in the same revision for a unit
    whose apply never started, or a resume revision that pins the commit of
    each code location. **Recommendation:** take this to its own RFC. If an
