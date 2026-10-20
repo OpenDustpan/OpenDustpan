@@ -1374,19 +1374,7 @@ func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
 		t.Fatalf("installation state after the restore = %q, %v, want maintenance without error", got, err)
 	}
 
-	entries := revReplayEntries(t, s)
-	if len(entries) != len(stay) {
-		t.Fatalf("replay audit entries = %d, want %d (one for each revocation)", len(entries), len(stay))
-	}
-
-	for i, r := range stay {
-		e := entries[i]
-		if e.Subject != "alice" || e.Object != r.object || e.Outcome != audit.OutcomeSuccess ||
-			e.Namespace != audit.ServerScope || e.ValuePath != "/maintenance/revocations/"+r.kind {
-			t.Fatalf("replay entry %d = %+v, want the subject alice, the object %q and the kind %q",
-				i, e, r.object, r.kind)
-		}
-	}
+	revCheckReplayEntries(t, s, stay)
 
 	// A second restore in the same stay applies the journal again. The
 	// staged rows are the rows of the export, so the replay must end in the
@@ -1403,6 +1391,26 @@ func testRevocationSurvivesRestore(t *testing.T, s RevocationStore) {
 
 	if again := revReplayEntries(t, s); len(again) != len(stay) {
 		t.Fatalf("replay audit entries after the second restore = %d, want %d", len(again), len(stay))
+	}
+}
+
+// revCheckReplayEntries fails the test unless the log holds one replay entry
+// for each revocation of the stay, in order.
+func revCheckReplayEntries(t *testing.T, s RevocationStore, stay []revJournaled) {
+	t.Helper()
+
+	entries := revReplayEntries(t, s)
+	if len(entries) != len(stay) {
+		t.Fatalf("replay audit entries = %d, want %d (one for each revocation)", len(entries), len(stay))
+	}
+
+	for i, r := range stay {
+		e := entries[i]
+		if e.Subject != "alice" || e.Object != r.object || e.Outcome != audit.OutcomeSuccess ||
+			e.Namespace != audit.ServerScope || e.ValuePath != "/maintenance/revocations/"+r.kind {
+			t.Fatalf("replay entry %d = %+v, want the subject alice, the object %q and the kind %q",
+				i, e, r.object, r.kind)
+		}
 	}
 }
 

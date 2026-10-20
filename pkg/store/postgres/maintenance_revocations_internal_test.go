@@ -313,19 +313,7 @@ func TestFailedReplayRollsBackTheSwap(t *testing.T) {
 		t.Fatalf("end the session in maintenance mode: %v", endErr)
 	}
 
-	staging := pgx.Identifier{s.stagingSchema}.Sanitize()
-	refuse := pgx.Identifier{s.stagingSchema, "refuse_replay"}.Sanitize()
-
-	for _, stmt := range []string{
-		"CREATE FUNCTION " + refuse + "() RETURNS trigger LANGUAGE plpgsql AS " +
-			"$$ BEGIN RAISE EXCEPTION 'replay refused'; END $$",
-		"CREATE TRIGGER refuse_replay BEFORE UPDATE ON " + staging + ".sessions " +
-			"FOR EACH ROW EXECUTE FUNCTION " + refuse + "()",
-	} {
-		if _, execErr := s.pool.Exec(ctx, stmt); execErr != nil {
-			t.Fatalf("add the failing step to the staged schema: %v", execErr)
-		}
-	}
+	refuseStagedSessionUpdates(t, s)
 
 	if applyErr := s.ApplyStaging(ctx); applyErr == nil || !strings.Contains(applyErr.Error(), "replay refused") {
 		t.Fatalf("apply staging = %v, want the error of the failed replay step", applyErr)
@@ -336,7 +324,8 @@ func TestFailedReplayRollsBackTheSwap(t *testing.T) {
 	}
 
 	var endedMs int64
-	if scanErr := s.pool.QueryRow(ctx, `SELECT ended_at_ms FROM sessions WHERE id = $1`, id).Scan(&endedMs); scanErr != nil {
+	row := s.pool.QueryRow(ctx, `SELECT ended_at_ms FROM sessions WHERE id = $1`, id)
+	if scanErr := row.Scan(&endedMs); scanErr != nil {
 		t.Fatalf("read the live session after the failed swap: %v", scanErr)
 	}
 
@@ -346,5 +335,25 @@ func TestFailedReplayRollsBackTheSwap(t *testing.T) {
 
 	if got, stateErr := s.GetState(ctx); stateErr != nil || got != maintenance.StateMaintenance {
 		t.Fatalf("state after the failed swap = %q, %v, want maintenance without error", got, stateErr)
+	}
+}
+
+// refuseStagedSessionUpdates adds a trigger to the staged sessions table that
+// fails each update, so the replay of a session revocation fails.
+func refuseStagedSessionUpdates(t *testing.T, s *Store) {
+	t.Helper()
+
+	staging := pgx.Identifier{s.stagingSchema}.Sanitize()
+	refuse := pgx.Identifier{s.stagingSchema, "refuse_replay"}.Sanitize()
+
+	for _, stmt := range []string{
+		"CREATE FUNCTION " + refuse + "() RETURNS trigger LANGUAGE plpgsql AS " +
+			"$$ BEGIN RAISE EXCEPTION 'replay refused'; END $$",
+		"CREATE TRIGGER refuse_replay BEFORE UPDATE ON " + staging + ".sessions " +
+			"FOR EACH ROW EXECUTE FUNCTION " + refuse + "()",
+	} {
+		if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
+			t.Fatalf("add the failing step to the staged schema: %v", execErr)
+		}
 	}
 }

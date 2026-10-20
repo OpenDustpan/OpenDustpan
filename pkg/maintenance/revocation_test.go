@@ -140,27 +140,34 @@ func TestRevocationReplayEntryHostileActor(t *testing.T) {
 	t.Parallel()
 
 	for _, hostile := range []string{"mallory\nforged", "mallory\x00"} {
-		for _, field := range []string{"actor", "object"} {
-			row := revocationRow(maintenance.RevokedToken, "tok-1")
-			if field == "actor" {
-				row.Actor = hostile
-			} else {
-				row.Object = hostile
-			}
+		actor := revocationRow(maintenance.RevokedToken, "tok-1")
+		actor.Actor = hostile
 
-			err := row.Validate()
-			if !errors.Is(err, maintenance.ErrInvalidRevocation) {
-				t.Fatalf("%s %q: err = %v, want ErrInvalidRevocation", field, hostile, err)
-			}
+		object := revocationRow(maintenance.RevokedToken, "tok-1")
+		object.Object = hostile
 
-			denied := row.ReplayEntry(err)
-			if verr := denied.Validate(); verr != nil {
-				t.Fatalf("%s %q: entry of a refused row: %v", field, hostile, verr)
-			}
+		checkDeniedEntry(t, actor)
+		checkDeniedEntry(t, object)
+	}
+}
 
-			if denied.Outcome != audit.OutcomeDenied || strings.Contains(denied.Subject+denied.Object+denied.ValuePath, "mallory") {
-				t.Fatalf("%s %q: entry = %+v, want the outcome denied and no text of the row", field, hostile, denied)
-			}
-		}
+// checkDeniedEntry fails the test unless row is refused and its replay entry
+// is valid, denied and free of the text of the row.
+func checkDeniedEntry(t *testing.T, row maintenance.Revocation) {
+	t.Helper()
+
+	err := row.Validate()
+	if !errors.Is(err, maintenance.ErrInvalidRevocation) {
+		t.Fatalf("row %+v: err = %v, want ErrInvalidRevocation", row, err)
+	}
+
+	denied := row.ReplayEntry(err)
+	if verr := denied.Validate(); verr != nil {
+		t.Fatalf("row %+v: entry of a refused row: %v", row, verr)
+	}
+
+	text := denied.Subject + denied.Object + denied.ValuePath
+	if denied.Outcome != audit.OutcomeDenied || strings.Contains(text, "mallory") {
+		t.Fatalf("row %+v: entry = %+v, want the outcome denied and no text of the row", row, denied)
 	}
 }
