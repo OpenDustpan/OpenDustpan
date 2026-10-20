@@ -553,13 +553,13 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
    **The built-in gate cannot be bypassed.** The installation holds a
    built-in starter gate for `package.admit` with `final: true`, and the
    built-in approval rule `package-admission` (one approval,
-   `authorMayApprove: false`, approvers: `holders`). The approve action is
-   `namespace:approve-package` for the admission of a namespace, and
-   `installation:approve-package` for the admission of the installation.
+   `authorMayApprove: false`, approvers: `holders`). The approve action of
+   the built-in rule is `installation:approve-package`, for the admission of
+   a namespace and for the admission of the installation.
    Both the gate and the rule live at installation scope, as a final gate does
    (ADR 224 decision 12), so no narrower scope deletes or relaxes them. A
    rule with the ID `package-admission` at a narrower scope gives
-   `gate.ErrFinal`. Three rules, each with its own test (proposal names):
+   `gate.ErrFinal`. Four rules, each with its own test (proposal names):
    - **No gate means approval.** An admission that finds no gate in its
      chain does not admit. It waits for approval under the built-in rule.
      The code never reads "no gate" as "allowed". This fails closed
@@ -576,6 +576,16 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
    - **No self-admit.** The route for an admission has no way to set the
      state to admitted. Only the engine, after the decision record, writes
      it. Test: `TestPackageAdmitRouteCannotSetAdmitted`.
+   - **A namespace grant does not make an approver.** `holders` of the
+     built-in rule resolves the approve action only at the scope of the
+     rule, which is the installation. The approvers of every admission under
+     the built-in rule, also the admission of a namespace, hold
+     `installation:approve-package`. A namespace administrator can grant
+     `namespace:approve-package`, and with a namespace principal home can
+     create a second person, but that grant makes nobody an approver of the
+     built-in rule. `namespace:approve-package` serves only the rules that a
+     namespace saves itself. Test:
+     `TestPackageAdmitNamespaceGrantDoesNotMakeApprover`.
 
    **Approvers: the choice.** `holders` is a new entry kind, and a rule
    with it needs the amendment of ADR 225 decision 1 above (recommended). It
