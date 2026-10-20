@@ -92,8 +92,9 @@ type ItemKeyID string
 // itemKeyPrefix starts every item key ID.
 const itemKeyPrefix = "ik-"
 
-// itemKeyObjectPrefix starts the blob key of every wrapped item key.
-const itemKeyObjectPrefix = "item-keys/"
+// itemKeyDir is the directory, inside the scope of one namespace, of the
+// blob keys of the wrapped item keys.
+const itemKeyDir = "item-keys/"
 
 // NewItemKeyID returns a new random item key ID.
 func NewItemKeyID() ItemKeyID {
@@ -108,23 +109,15 @@ func ParseItemKeyID(s string) (ItemKeyID, error) {
 		return "", fmt.Errorf("%w: item key ID %q", ErrInvalidItemRef, s)
 	}
 
-	if _, err := blob.ParseKey(itemKeyObjectPrefix + s); err != nil {
+	if _, err := blob.ParseKey(itemKeyDir + s); err != nil {
 		return "", fmt.Errorf("%w: item key ID %q", ErrInvalidItemRef, s)
 	}
 
 	return ItemKeyID(s), nil
 }
 
-// Object returns the blob key that holds the wrapped item key:
-// item-keys/<id>. The server writes it one time. A backup copies it like
-// every other blob, and every backup in one target shares the copy, so one
-// delete in the target reaches all of them. id must be valid.
-func (id ItemKeyID) Object() blob.Key {
-	return blob.Key(itemKeyObjectPrefix + string(id))
-}
-
 // ItemKey is the record of one item key, as SQL keeps it. The wrapped
-// key itself is not part of the record: it is the blob that Object names.
+// key itself is not part of the record: it is the blob that ItemKeyBlobs.Key names.
 // ShreddedAt is the zero time while the key exists.
 type ItemKey struct {
 	CreatedAt  time.Time

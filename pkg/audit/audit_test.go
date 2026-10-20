@@ -67,6 +67,17 @@ func TestValidateRejectsAnUnknownKind(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsTheSecurityKind(t *testing.T) {
+	t.Parallel()
+
+	e := testEntry()
+	e.Kind, e.Outcome = audit.KindSecurity, audit.OutcomeDenied
+
+	if err := e.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
 func TestNormalizeChannelMapsUnknownValuesToAPI(t *testing.T) {
 	t.Parallel()
 

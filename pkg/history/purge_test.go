@@ -2,6 +2,7 @@ package history_test
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,6 +24,9 @@ func validTombstone() history.Tombstone {
 		Targets:   nil,
 	}
 }
+
+// nsID is a namespace ID for the prefixes of the tests.
+const nsID = "ns-abcdefghijklmnopqrst"
 
 func TestTombstoneValidate(t *testing.T) {
 	t.Parallel()
@@ -55,6 +59,33 @@ func TestTombstoneValidate(t *testing.T) {
 			name: "a prefix of the key blobs",
 			edit: func(tb *history.Tombstone) { tb.Prefixes = []string{"item-keys/"} },
 			want: history.ErrInvalidTombstone,
+		},
+		{
+			name: "a prefix of the item keys of one namespace",
+			edit: func(tb *history.Tombstone) { tb.Prefixes = []string{"namespaces/" + nsID + "/item-keys/"} },
+			want: history.ErrInvalidTombstone,
+		},
+		{
+			name: "a prefix inside the item keys of one namespace",
+			edit: func(tb *history.Tombstone) {
+				tb.Prefixes = []string{"namespaces/" + nsID + "/item-keys/" + string(tb.ItemKeys[0]) + "/"}
+			},
+			want: history.ErrInvalidTombstone,
+		},
+		{
+			name: "a prefix of one namespace, which holds its item keys",
+			edit: func(tb *history.Tombstone) { tb.Prefixes = []string{"namespaces/" + nsID + "/"} },
+			want: history.ErrInvalidTombstone,
+		},
+		{
+			name: "a prefix of every namespace",
+			edit: func(tb *history.Tombstone) { tb.Prefixes = []string{"namespaces/"} },
+			want: history.ErrInvalidTombstone,
+		},
+		{
+			name: "a content prefix of one namespace",
+			edit: func(tb *history.Tombstone) { tb.Prefixes = []string{"namespaces/" + nsID + "/tofu/ws-one/"} },
+			want: nil,
 		},
 		{
 			name: "a prefix that holds the ledger",
@@ -102,6 +133,22 @@ func TestTombstoneLedger(t *testing.T) {
 // TestGaps checks the rule that backup check and restore share: a blob that
 // a redaction or a purge names is an expected gap, and any other blob is
 // missing.
+// nsID2 is a second namespace ID for the tests.
+const nsID2 = "ns-tsrqponmlkjihgfedcba"
+
+// itemKeyBlob returns the blob key of version of the item key id in the
+// namespace ns.
+func itemKeyBlob(t *testing.T, ns string, id secret.ItemKeyID, version int) blob.Key {
+	t.Helper()
+
+	key, err := blob.ParseKey("namespaces/" + ns + "/item-keys/" + string(id) + "/v" + strconv.Itoa(version))
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+
+	return key
+}
+
 func TestGaps(t *testing.T) {
 	t.Parallel()
 
@@ -117,11 +164,23 @@ func TestGaps(t *testing.T) {
 		want bool
 	}{
 		{name: "a content blob of a redaction", key: "pulumi/stk-two/upd-1/checkpoint-1", want: true},
-		{name: "the key blob of a redaction", key: r.ItemKey.Object(), want: true},
-		{name: "a key blob of a purged unit", key: tb.ItemKeys[0].Object(), want: true},
+		{name: "the key blob of a redaction", key: itemKeyBlob(t, nsID, r.ItemKey, 1), want: true},
+		{name: "a later version of the key blob of a redaction", key: itemKeyBlob(t, nsID, r.ItemKey, 7), want: true},
+		{name: "a key blob of a purged unit", key: itemKeyBlob(t, nsID, tb.ItemKeys[0], 1), want: true},
+		{
+			name: "a key blob of a purged unit in another namespace ID",
+			key:  itemKeyBlob(t, nsID2, tb.ItemKeys[0], 1),
+			want: true,
+		},
 		{name: "a blob under the prefix of a purged unit", key: "pulumi/stk-one/upd-9/checkpoint-3", want: true},
 		{name: "another blob of the redacted unit", key: "pulumi/stk-two/upd-2/checkpoint-1", want: false},
-		{name: "another key blob", key: secret.NewItemKeyID().Object(), want: false},
+		{name: "another key blob", key: itemKeyBlob(t, nsID, secret.NewItemKeyID(), 1), want: false},
+		{name: "the key blob in the old layout", key: blob.Key("item-keys/" + string(r.ItemKey)), want: false},
+		{
+			name: "a blob that only holds the item key ID",
+			key:  blob.Key("pulumi/" + string(r.ItemKey) + "/x"),
+			want: false,
+		},
 		{name: "a unit with a similar ID", key: "pulumi/stk-one-b/upd-1/checkpoint-1", want: false},
 	}
 
@@ -141,5 +200,71 @@ func TestGaps(t *testing.T) {
 
 	if g.Purged(r.Item.Unit) {
 		t.Errorf("Purged(%v) = true, want false: a redaction does not purge its unit", r.Item.Unit)
+	}
+}
+
+// TestTombstonePrefixCannotReachAnItemKey sends hostile prefixes straight to
+// Validate, as if the layers before it had failed. A prefix that can list or
+// shred an item key must be refused, whatever the namespace ID is.
+func TestTombstonePrefixCannotReachAnItemKey(t *testing.T) {
+	t.Parallel()
+
+	refused := []string{
+		"namespaces/",
+		"namespaces/" + nsID + "/",
+		"namespaces/" + nsID2 + "/",
+		"namespaces/" + nsID + "/item-keys/",
+		"namespaces/" + nsID + "/item-keys/ik-abc/",
+		"namespaces/" + nsID + "/ITEM-KEYS/",
+		"namespaces/" + nsID + "/Item-Keys/ik-abc/",
+		"Namespaces/",
+		"NAMESPACES/" + nsID + "/",
+		"namespaces//",
+		"namespaces/" + nsID + "//item-keys/",
+		"namespaces/./",
+		"namespaces/../",
+		"namespaces/" + nsID + "/./item-keys/",
+		"namespaces/" + nsID + "/../item-keys/",
+		"item-keys/",
+		"ITEM-KEYS/",
+		"item-keys/ik-abc/",
+		"./item-keys/",
+		"../namespaces/",
+		"/namespaces/",
+		"tombstones/",
+		"redactions/",
+	}
+
+	for _, p := range refused {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+
+			tb := validTombstone()
+			tb.Prefixes = []string{p}
+
+			if err := tb.Validate(); !errors.Is(err, history.ErrInvalidTombstone) {
+				t.Errorf("Validate with prefix %q err = %v, want ErrInvalidTombstone", p, err)
+			}
+		})
+	}
+
+	allowed := []string{
+		"pulumi/stk-one/",
+		"namespaces/" + nsID + "/tofu/",
+		"namespaces/" + nsID + "/pulumi/stk-one/",
+		"namespaces/" + nsID + "/item-keys-extra/",
+	}
+
+	for _, p := range allowed {
+		t.Run("allowed "+p, func(t *testing.T) {
+			t.Parallel()
+
+			tb := validTombstone()
+			tb.Prefixes = []string{p}
+
+			if err := tb.Validate(); err != nil {
+				t.Errorf("Validate with prefix %q err = %v, want nil", p, err)
+			}
+		})
 	}
 }

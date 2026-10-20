@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -93,19 +94,50 @@ func (t Tombstone) Validate() error {
 }
 
 // validPrefix reports whether p is a blob key prefix of unit content: it
-// ends with "/", and it does not hold the ledger or the key blobs.
+// ends with "/", every segment is a plain name, and it does not hold the
+// ledger or the key blobs. The key blobs of a namespace are in
+// namespaces/<namespace ID>/item-keys/, so a prefix that is "namespaces/",
+// "namespaces/<id>/" or inside "namespaces/<id>/item-keys/" is refused for
+// every ID: each of them can reach an item key, and a purge of one unit must
+// never shred the key of another item. The name check ignores case, because a
+// store on a case-insensitive file system treats "Item-Keys" as "item-keys".
+//
+// Defense in depth: the purge builds the prefixes of a unit itself, the store
+// checks them again, and the shred operation lists with a scoped view. This
+// check stays so that a tombstone from a ledger or a restore, which no other
+// layer built, cannot name a prefix that reaches an item key.
 func validPrefix(p string) bool {
 	if len(p) < 2 || !strings.HasSuffix(p, "/") || strings.HasPrefix(p, "/") {
 		return false
 	}
 
-	for _, reserved := range []string{"item-keys/", "redactions/", "tombstones/"} {
-		if strings.HasPrefix(p, reserved) {
-			return false
+	segments := strings.Split(strings.TrimSuffix(p, "/"), "/")
+
+	return plainSegments(segments) && !reservedPrefix(segments)
+}
+
+// plainSegments reports whether no segment is empty, ".", or "..".
+func plainSegments(segments []string) bool {
+	return !slices.ContainsFunc(segments, func(seg string) bool {
+		return seg == "" || seg == "." || seg == ".."
+	})
+}
+
+// reservedPrefix reports whether the directory that segments name holds the
+// ledger or an item key, or can hold them in a directory below it.
+func reservedPrefix(segments []string) bool {
+	for _, reserved := range []string{"item-keys", "redactions", "tombstones"} {
+		if strings.EqualFold(segments[0], reserved) {
+			return true
 		}
 	}
 
-	return true
+	// "namespaces/" and "namespaces/<id>/" hold the item keys below them.
+	if strings.EqualFold(segments[0], "namespaces") {
+		return len(segments) < 3 || strings.EqualFold(segments[2], "item-keys")
+	}
+
+	return false
 }
 
 // TombstoneFailure is one failed try of the shred operation on one target
@@ -208,6 +240,7 @@ func (t Tombstone) Ledger() TombstoneRecord {
 // "blobs/" prefix of the target.
 type Gaps struct {
 	blobs    map[blob.Key]struct{}
+	itemKeys map[secret.ItemKeyID]struct{}
 	units    map[Unit]struct{}
 	prefixes []string
 }
@@ -215,11 +248,16 @@ type Gaps struct {
 // NewGaps returns the gaps of the ledger records redactions and
 // tombstones.
 func NewGaps(redactions []LedgerRecord, tombstones []TombstoneRecord) Gaps {
-	g := Gaps{blobs: map[blob.Key]struct{}{}, units: map[Unit]struct{}{}, prefixes: nil}
+	g := Gaps{
+		blobs:    map[blob.Key]struct{}{},
+		itemKeys: map[secret.ItemKeyID]struct{}{},
+		units:    map[Unit]struct{}{},
+		prefixes: nil,
+	}
 
 	for i := range redactions {
 		r := &redactions[i]
-		g.blobs[r.ItemKey.Object()] = struct{}{}
+		g.itemKeys[r.ItemKey] = struct{}{}
 
 		for _, k := range r.Blobs {
 			g.blobs[k] = struct{}{}
@@ -231,7 +269,7 @@ func NewGaps(redactions []LedgerRecord, tombstones []TombstoneRecord) Gaps {
 		g.units[Unit{Namespace: t.Namespace, Tool: t.Tool, ID: t.UnitID}] = struct{}{}
 
 		for _, id := range t.ItemKeys {
-			g.blobs[id.Object()] = struct{}{}
+			g.itemKeys[id] = struct{}{}
 		}
 
 		g.prefixes = append(g.prefixes, t.Prefixes...)
@@ -245,6 +283,16 @@ func NewGaps(redactions []LedgerRecord, tombstones []TombstoneRecord) Gaps {
 func (g Gaps) Expected(key blob.Key) bool {
 	if _, ok := g.blobs[key]; ok {
 		return true
+	}
+
+	// An item key blob is namespaces/<namespace ID>/item-keys/<ID>/v<version>.
+	// The ledger names the item key, not the namespace ID or a version, and
+	// each rewrap adds a version, so every version of a named item key is a
+	// gap. The ID is random, so no other namespace holds it.
+	if parsed, err := secret.ParseItemKeyBlobKey(key); err == nil {
+		if _, ok := g.itemKeys[parsed.ID]; ok {
+			return true
+		}
 	}
 
 	for _, p := range g.prefixes {

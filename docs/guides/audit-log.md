@@ -99,8 +99,8 @@ An entry holds these fields:
   `service` or `workload`. It is omitted when the server cannot name the
   kind, for example for the bootstrap admin token.
 - `jobID`: the job whose token acted, else omitted.
-- Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
-  never anything else, so a reader never confuses a tool that needed secrets
+- Kind: `tool-operation`, `reveal`, `override`, `change`, `read-access` or
+  `security`, never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
 - Outcome: `success`, `failure` or `denied`.
 - `requestID`: the request ID the server mints. The server returns it in
@@ -153,6 +153,16 @@ lock that it finds. Each release writes one `change` entry with the action
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.
+
+## Security entries
+
+The server writes one entry of the kind `security` and the outcome `denied`
+when it stops an access that crosses a namespace boundary. Today this is a
+read, a write or a delete of an item key blob with a blob key of another
+namespace. The action is `blob:out-of-scope`. The scope is `@server`, the
+subject is `server`, and the object is the ID of the namespace of the call.
+The reason names the operation. The entry never holds the blob key that
+the call used.
 
 ## Denial entries
 
