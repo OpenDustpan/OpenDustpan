@@ -78,9 +78,10 @@ func TestStatesBadgeOrder(t *testing.T) {
 func TestValidStateListFollowsStates(t *testing.T) {
 	t.Parallel()
 
-	var names []string
+	states := inventory.States()
+	names := make([]string, 0, len(states))
 
-	for _, s := range inventory.States() {
+	for _, s := range states {
 		names = append(names, string(s))
 	}
 
