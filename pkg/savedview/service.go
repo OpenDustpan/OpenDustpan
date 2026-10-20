@@ -112,6 +112,10 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, name
 	}
 
 	v := View{CreatedAt: s.now().UTC(), ID: NewID(), Namespace: ns, Name: name, Owner: c.Owner, Query: q}
+
+	// Defense in depth: the store checks the view again. This check stays so
+	// that a refused view costs no read of the namespace, and so that a store
+	// that skips its check cannot take an invalid view from this service.
 	if err := v.Validate(); err != nil {
 		return View{}, err
 	}

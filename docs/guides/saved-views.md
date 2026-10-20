@@ -72,8 +72,8 @@ collection.
 ## Make a view
 
 `POST /api/dustpan/v1/namespaces/<namespace>/views` makes a view. It needs the
-action `view:create` on the namespace. The roles `viewer`, `auditor`,
-`secret-viewer`, `writer`, `maintainer` and `admin` hold it.
+action `view:create` on the namespace. Each built-in role that holds
+`namespace:read` also holds `view:create`, `view:read` and `view:delete`.
 
 ```sh
 curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \

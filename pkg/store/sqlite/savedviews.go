@@ -143,6 +143,9 @@ func (v savedViews) List(ctx context.Context, ns namespace.Name, owner string) (
 			ID: row.ID, Namespace: row.Namespace, Owner: row.Owner, Name: row.Name, QueryJSON: row.QueryJson,
 			CreatedAtMs: row.CreatedAtMs,
 		})
+		// Defense in depth: the query matched the owner. This check stays so that a
+		// change of the query cannot list a view of another owner. A row that fails
+		// its checks is left out.
 		if viewErr != nil || view.Owner != owner {
 			continue
 		}
@@ -160,6 +163,9 @@ func (v savedViews) List(ctx context.Context, ns namespace.Name, owner string) (
 func (v savedViews) Delete(
 	ctx context.Context, ns namespace.Name, id savedview.ID, owner string, fence namespace.Fence, e audit.Entry,
 ) error {
+	// Defense in depth: the fence check below compares the fence with the
+	// namespace row. This check stays so that a delete in one namespace cannot
+	// run under the fence of another namespace. It does not rely on the service.
 	if ns != fence.Namespace {
 		return fmt.Errorf("%w: view names %q, fence names %q", namespace.ErrFenced, ns, fence.Namespace)
 	}
