@@ -439,7 +439,7 @@ URL, and the override list splits on `=` and on `,`, so a token in the query
    package in the effective allowlist of that namespace, as for a signed URL.
    A copy of the value gives the same read as that namespace has until the
    phase deadline, and no more. If an actor replays it in another job of the
-   same namespace, the reader gets that namespace's allowlist and nothing
+   same namespace, the reader receives that namespace's allowlist and nothing
    else, so a replay across jobs of one namespace gives no extra right.
    A replay needs a running job: the server refuses a capability when its
    job is no longer running.
