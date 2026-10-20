@@ -82,6 +82,7 @@ pkg/                   the public SDK (ADR 35)
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
   gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
+  forge/               domain: the Forge port, forge connections and their errors; forge/forgetest holds the conformance suite
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
@@ -127,7 +128,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`, `drift`, `trigger`, `savedview`, `registry`, `unitimport`, `gate`) never import
+  `unmanaged`, `drift`, `trigger`, `savedview`, `registry`, `unitimport`, `gate`, `forge`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.

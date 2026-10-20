@@ -140,11 +140,11 @@ day. They have the label "(PM decision, 2026-10-20)".
 | Write-back, review request (`write-back-review`, ADR 101, ADR 100 decision 15) | The same, and the review watcher | The same, and a review request that a second open call does not duplicate. The state of the review request, with the merge time and the merge commit. A close with no merge. | The same, and `OpenReview`, `ReadReview`, `CloseReview` | `files`, `compare`, `commit`, `review` |
 | Catalog request files (`catalog`, ADR 116) | A render of a request in git | One file at one commit. | `ReadFile` | `files` |
 | Change order cause diff (`cause-diff`, ADR 196) | Each read of the review | The file diff from base to head, with a byte limit, and an ancestor check. | `Compare` | `compare` |
-| Source fetch (`fetch`, ADR 135) | The `source.fetch` operation, in the server, for the source of each job and each auth kind (app, token, deploy key) | A credential for the git protocol. The token can be the long-lived token of the connection: it stays in the server. A runner gets the source only as the pack that the server builds (owner decision, 2026-10-20). | `RepoToken` | `git-access` |
+| Source fetch (`fetch`, ADR 135) | The `source.fetch` operation, in the server, for the source of each job and each auth kind of the port (app, token) | A credential for the git protocol. The token can be the long-lived token of the connection: it stays in the server. A runner gets the source only as the pack that the server builds (owner decision, 2026-10-20). A deploy key may come later as an auth kind for the source fetch only. The port has no deploy key now. | `RepoToken` | `git-access` |
 | Runner git (`runner-git`, ADR 130 decision 11) | A runner step in the git credential mode `forge`. Only for a live fetch other than the source of the job, for example a private Git module source. | A token that reads one repository only and expires soon. The runner path refuses a token with `Scoped` not set. Never a long-lived token. | `RepoToken` | `repo-token` |
 | Triggers (RFC 24) (proposed, no Go constant yet) | A push, a tag, a review request that opens or changes its head | Signed events. The changed paths from the old head to the new head, to find the affected units. | `ParseEvent`, `Compare`, `Head` | `events`, `files`, `compare` |
 | Review request feedback (RFC 27) (proposed, no Go constant yet) | After a plan, and after an apply | A status on the head commit for each unit. One summary comment that the server edits in place. A merge at an expected head, for "apply before merge" (RFC 12). | `SetStatus`, `PutComment`, `MergeReview` (proposed) | `status`, `comment`, `merge` (proposed) |
-| Comment commands (RFC 27, Q8) (owner decision, 2026-10-20, no Go constant yet) | A new comment on a review request | A signed event. A read of the comment through the API, with the stable ID of its author, before the server acts. A read of the review request with its head and whether the Git host lets it merge. A reply. | `ParseEvent`, `ReadComment`, `PutComment`, `ReadReview` | `events`, `comment`, `review` (proposed) |
+| Comment commands (RFC 27, Q8) (owner decision, 2026-10-20, no Go constant yet) | A new comment on a review request | A signed event. A read of the comment through the API, with the stable ID of its author, before the server acts. A read of the review request with its head and whether the Git host lets it merge (the field `Mergeable` of `Review` is proposed: it enters the Go interface with this consumer). A reply. | `ParseEvent`, `ReadComment`, `PutComment`, `ReadReview` | `events`, `comment`, `review` |
 
 `forge.Needs` holds the same map in code, as capabilities (below), for the
 rows that have a constant. `TestNeeds` in `pkg/forge` lists the same rows,
@@ -253,8 +253,8 @@ answer, a server error or a rate limit). The adapter wraps a sentinel with
 | `ReadReview(repo, id)` | The state (`open`, `merged`, `closed`), the head, and the merge time and merge commit after a merge. | `ErrNotFound` |
 | `CloseReview(repo, id)` | Closes with no merge. A closed one returns nil. | `ErrNotFound` for a missing one, `ErrConflict` for a merged one |
 | `RepoToken(repo)` | A token for the git protocol. An app connection answers a token that reads only `repo` and expires in at most 1 hour, with `Scoped` set. A `token` connection answers its own token with `Scoped` not set. | `ErrUnsupported` when the auth kind has no token for the git protocol. `ErrNotFound` for a missing repository. The runner path refuses a token with `Scoped` not set, so the long-lived token never leaves the server. A runner never gets a token for the source of its job (owner decision, 2026-10-20). |
-| `ParseEvent(r, secrets)` | Checks the signature or token of an event against each active event secret of the registration, and returns a forge-neutral event: `ping` or `review` (`push` and `comment` wait for their consumers), with the delivery ID and, for an app, the installation ID. No call to the forge. | `ErrSignature`, `ErrInvalid`, `ErrUnsupported` for another kind |
-| `RotateSelf(expiresAt)` | Asks the forge for a new token in place of the token of the credential, and returns it with its expiry. The forge revokes the old token. The caller never calls it again with the old token after an error (see "Credential expiry and rotation"). | `ErrUnsupported` when the forge or the auth kind cannot rotate, `ErrAuth` for a refused or revoked token |
+| `ParseEvent(r, secrets)` | Checks the signature or token of an event against each active event secret of the registration, and returns a forge-neutral event: `ping` or `review` (`push` and `comment` wait for their consumers), with the delivery ID and, for an app, the installation ID. It ignores an empty secret. It returns `ErrSignature` when the list has no secret or only empty secrets. No call to the forge. | `ErrSignature`, `ErrInvalid`, `ErrUnsupported` for another kind |
+| `RotateSelf(expiresAt)` | Asks the forge for a new token in place of the token of the credential, and returns it with its expiry. The forge revokes the old token. The adapter makes one call and never retries it. The caller never calls it again with the old token after an error, and never tries an older credential set (see "Credential expiry and rotation"). | `ErrUnsupported` when the forge or the auth kind cannot rotate, `ErrAuth` for a refused or revoked token |
 
 The sentinels are `ErrNotFound`, `ErrConflict`, `ErrRefused`, `ErrAuth`,
 `ErrUnavailable`, `ErrTooLarge`, `ErrUnsupported`, `ErrSignature` and
@@ -350,7 +350,7 @@ a merge by a person, a signed event, a redelivery, a revoked credential).
 Each adapter runs it against a recorded or a fake API of its forge, as
 issue #886 asks for GitHub.
 
-The suite lists 70 table-driven cases (`forgetest.CaseNames`). Each case
+The suite lists 72 table-driven cases (`forgetest.CaseNames`). Each case
 has no body yet and skips with "not implemented". A case gets its body
 before an adapter implements the methods that it covers (CLAUDE.md: a new
 port method gets conformance tests before any adapter implements it). A
@@ -362,7 +362,12 @@ gives (the kind may be one that the port does not name), repeats a
 delivery with `Redeliver` so that a retried delivery keeps its delivery ID,
 and can make the forge fail with a server error or a rate limit. The
 case "an operation outside the capabilities is unsupported" checks that such
-a method returns `ErrUnsupported`. The case "no error and no event holds a
+a method returns `ErrUnsupported`. The `Fixture` also counts the calls that
+the forge got (`Calls`), for the cases "open refuses ... and makes no call" and
+"rotate self makes one call and never retries after an error". The case
+"parse event with no secret or an empty secret fails" gives `ParseEvent` an
+empty list and a list with an empty secret, and expects `ErrSignature` for
+both. The case "no error and no event holds a
 part of the secret" puts a canary in the secret and in the event secret, and
 checks each error text and each field of each event. The case "parse event of an app has the installation ID" skips when `Connection.Auth` is not `app`. The case "a connection with no push access lists no commit and no review" checks the rule of `Push`, and the case "a forge with repo-token also lists git-access" checks the rule above.
 
@@ -524,10 +529,33 @@ rotates it. When a revoked token rotates again, GitLab revokes the whole
 token family. So:
 
 1. A rotation runs as a durable operation.
-2. The step that receives the new token also seals and stores it.
-3. The operation never retries with the old token.
-4. A crash between the call and the store marks the connection "needs a new
-   credential", and an alert fires.
+2. Each connection has at most one rotation operation at a time (PM
+   decision, 2026-10-20). The operation has a unique key, for example
+   `git-host-rotate:<connection ID>`. "Rotate now" while a rotation runs
+   answers 409, and a scheduled rotation that finds one running ends with no
+   call. Two calls with one token would make the second call rotate a
+   revoked token.
+3. Before the call, the operation writes a "rotation started" mark on the
+   connection, with the ID of the old set, in its own transaction (PM
+   decision, 2026-10-20).
+4. The step that receives the new token also seals and stores it, and
+   clears the mark in the same transaction.
+5. The operation never retries with the old token. `RotateSelf` never uses
+   the older-set fallback of the service (PM decision, 2026-10-20).
+6. From the moment the call returns, no operation uses the old set: the
+   forge revoked it. The service uses the new set, and removes the old set
+   after the new set passes `Check`.
+7. On resume, the operation reads the mark. A mark with no new set marks the
+   connection "needs a new credential", and an alert fires. It makes no
+   second call. Without the mark, the operation cannot see a crash between
+   the call and the store.
+
+The service cases enter with the service, as the cases of the suite enter
+with their adapter: "rotate now while a rotation runs is a conflict", "a
+scheduled rotation while a rotation runs makes no call", "the rotation mark
+is written before the call", "a resume with the mark and no new set marks the
+connection and makes no call", "rotate self after an error tries no older
+set", and "after a rotation no operation uses the old set".
 
 **GitHub tokens: expiry display and warnings only.** GitHub has no API that
 rotates a fine-grained personal access token. The console says so and
@@ -557,15 +585,18 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   one webhook URL for all its installations, so the hook ID belongs to an
   app registration, not to a connection. The event secret also belongs to
   the app registration (PM decision). The registration holds the app ID,
-  the hook ID and the sealed event secrets, two during a rotation. A `token`
+  the API address, the hook ID and the sealed event secrets, two during a
+  rotation. A `token`
   connection has a registration of its own, with one connection. The two
   kinds of app registration are in "The GitHub App scope" below.
 - `ParseEvent` puts the installation ID of the event in `Event`. For an
   installation-level app, the server finds the namespace in the
   installation-to-namespace map, and then the connection of that namespace
   whose installation ID parameter matches. For a per-namespace app, it finds
-  the connection of that namespace directly. An event for an installation
-  that no map entry or connection names is dropped with 204 and counted in
+  the namespace of the registration, and then the connection of that
+  namespace whose installation ID parameter matches the installation ID of
+  the event. An event for an installation that no map entry or connection
+  names, for either kind of app, is dropped with 204 and counted in
   `git_host_event_rejected_total` with the reason `unknown-installation`.
 - The route reads at most 2 MiB of body (proposed), finds the registration
   by the hook ID, and calls `ParseEvent` with the active event secrets of
@@ -577,7 +608,10 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   `git_host_event_rejected_total{reason="too-large"}`, and the poll catches the
   change that it announced.
 - The server drops a delivery ID that it saw for the same connection in
-  the last 24 hours.
+  the last 24 hours. The intake makes no check of the time of an event,
+  because GitHub does not sign a time. This is acceptable because an event is
+  a hint: a replay after 24 hours causes one more read through the API, and
+  nothing else.
 - **An event is a hint** (owner decision, 2026-10-20, Q2 A). The server reads the object through
   the API before it changes a record: `ReadReview` before the review
   watcher records a merge, `ReadComment` (proposed) before a comment
@@ -592,7 +626,11 @@ own way. The HTTP route is in the internal API adapter, not in the port.
   trigger. An `api` process never claims an operation.
 - The event secret is part of the app registration, not of the credential
   set. The person or IaC gives it, and the server never answers it (Q9, owner
-  decision, 2026-10-20). Where the events go after a promotion, or at a
+  decision, 2026-10-20). The set call refuses a secret of fewer than 32
+  bytes with 400, and the server never stores an empty secret (PM decision,
+  2026-10-20). The command `openssl rand -hex 32` of the guide makes 64
+  characters from 32 random bytes. The server checks the length only,
+  because it cannot measure entropy. Where the events go after a promotion, or at a
   member that does not hold the primary of the namespace, is in "Webhook
   hostname and federation" below (Q10).
 
@@ -632,6 +670,66 @@ the level of the OpenDustpan installation.
   installation API, with an installation-level action (proposed: the
   implementation pull request names them).
 
+### Binding a credential to its address (PM decision, 2026-10-20)
+
+A person with the action `namespace:manage-git-host-connections` must not be
+able to send a credential to an address that they choose. Without a rule, a
+`PATCH` of the API address followed by a `check` would send the sealed token
+to that address. For the installation-level app, the call would send an app
+JWT that the private key of the operator signed. With that JWT, the receiver
+can make an installation token for every installation of the app, so for
+every namespace. These rules close this gap. Each rule stops the attack
+alone, and none relies on another (ADR 250).
+
+1. **The installation-level app owns its address and its app ID.** A
+   connection of the installation-level app takes its API address and its
+   app ID from the registration of the operator. The routes of a namespace
+   cannot set or change them: a request that holds either field fails with
+   400. The create call sets `installation_id`, which must be an installation
+   that the operator assigned to the namespace. No later call changes
+   `installation_id`: a `PATCH` that holds it fails with 400, and the way to
+   point a connection at another installation is a new connection.
+2. **A change of address or of auth parameters needs a new credential set.**
+   For a `token` connection and for a connection of a per-namespace app, a
+   `PATCH` that changes the API address, or a parameter of the auth kind (the
+   app ID, the installation ID), must carry a new credential set in the same
+   call. For a per-namespace app, a change of the app ID also needs a new
+   event secret, because it is a new registration. The server calls `Check`
+   with the new set at the new address first, and refuses the whole call when
+   `Check` fails. Then, in one transaction, it stores the new set and the new
+   values, and removes the old sets. A `PATCH` with a changed address and no
+   new set fails with 400. GitHub asks for the same when a person changes a
+   webhook URL.
+3. **`check` never sends an existing credential to a changed address.** The
+   server stores with each credential set a digest of the API address and the
+   auth parameters for which the set was checked. `Open` refuses a set whose
+   digest differs from the values of the connection now, and fails closed.
+   This layer holds even when a code path skips rule 2.
+4. **The installation map is checked at each `Open`.** For a connection of
+   the installation-level app, the service reads the installation-to-
+   namespace map at each `Open`, not only at create. When the map does not
+   assign the installation ID to this namespace, or the service cannot read
+   the map, `Open` fails with an error that wraps `ErrAuth`, the older-set
+   fallback does not apply, and the service writes an audit entry and counts
+   `git_host_connection_refused_total{reason="installation-not-assigned"}`. A
+   reassignment by the operator stops the old namespace at once.
+5. **The API address passes the outbound address check.** The server checks
+   the API address at set time (create, `PATCH` and `check`) and again at
+   each call, when the adapter opens the network connection, with the
+   address that the name resolves to (ADR 250 step 2). The check refuses
+   a loopback address, a link-local address, a private address (including
+   the unique-local range of IPv6 and 100.64.0.0/10), an unspecified
+   address, a multicast address and the metadata addresses of the cloud
+   providers, unless the operator allows the range with an installation
+   setting. GitHub Enterprise Server on a private network needs this
+   setting. The scheme is `https`. The adapter follows no redirect to
+   another host, and each redirect that it follows passes the same check.
+
+The route tests cover each rule with hostile input sent straight to it: a
+`PATCH` of the address with no set, a `check` after a change that bypassed
+rule 2 (the digest differs), an `Open` with a map entry that moved, and an
+address in each refused range at set time and at connection time.
+
 ### Webhook hostname and federation (owner decision, 2026-10-20)
 
 - **A stable hostname.** The hook URL uses a stable hostname that each
@@ -664,19 +762,32 @@ entry with no part of a credential (ADR 213 decision 7).
 The webhook secret is a write-only input of the create call and of the call
 that adds a credential set (Q9, owner decision, 2026-10-20). No read answers
 it. A read answers only that a secret is set, with its set ID and its
-creation time. The console form and IaC use these same routes (ADR 17).
+creation time. The console form and IaC use these same routes (ADR 17). The
+server refuses an event secret of fewer than 32 bytes with 400.
+
+**A connection of the installation-level app has no credential and no event
+secret of its own** (PM decision, 2026-10-20). Its private key and its event
+secret are installation credentials. Only the installation API of the
+operator sets them. For such a connection, each route below that takes or
+changes a key or an event secret refuses the request: create and "add a
+credential set" fail with 400 when the request holds a key or an event
+secret, "remove a credential set" and "rotate now" fail with 409 because the
+connection has no set, and `check` uses the key of the operator. The routes
+cannot set or change the API address or the app ID of such a connection
+(see "Binding a credential to its address").
 
 | Method and path | Does | Action | Object |
 | --- | --- | --- | --- |
 | `GET .../git-host-connections` | Lists the connections: ID, kind, auth kind, API address, parameters that are not secret, push flag, default flag, hook ID, and for each credential set its ID and creation time. Never a secret. | `namespace:read-git-host-connections` | the namespace |
 | `GET .../git-host-connections/{id}` | Reads one connection, as in the list. | `namespace:read-git-host-connections` | the namespace |
-| `POST .../git-host-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). Fails with 409 for the app ID of a per-namespace app that a connection of another namespace uses. A connection of the installation-level app names an installation ID that the operator assigned to the namespace. | `namespace:manage-git-host-connections` | the namespace |
-| `PATCH .../git-host-connections/{id}` | Changes the API address, the parameters or the push flag. Never a credential. | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections` | Creates a connection with its first credential set. The first connection of a namespace becomes the default. The answer holds the hook ID and no secret (Q9). Fails with 409 for the app ID of a per-namespace app that a connection of another namespace uses. A connection of the installation-level app takes no key, no event secret, no API address and no app ID (400): it names an installation ID that the operator assigned to the namespace, and the service checks that at each `Open`. The call refuses an event secret of fewer than 32 bytes with 400. | `namespace:manage-git-host-connections` | the namespace |
+| `PATCH .../git-host-connections/{id}` | Changes the push flag. For a `token` connection and a per-namespace app, it changes the API address or an auth parameter only with a new credential set in the same call (and, for a new app ID, a new event secret); the server calls `Check` at the new address first, then replaces the old sets in one transaction. For the installation-level app, it refuses (400) the API address, the app ID and `installation_id`. The API address passes the outbound address check. | `namespace:manage-git-host-connections` | the namespace |
 | `DELETE .../git-host-connections/{id}` | Deletes the connection and all its credential sets. Fails with 409 for the default connection (ADR 213 decision 8), and for a connection that a code location, a Catalog request home or a job that is not terminal names. | `namespace:manage-git-host-connections` | the namespace |
 | `POST .../git-host-connections/{id}/make-default` | Makes this connection the default. A custom method (ADR 210 decision 5). | `namespace:manage-git-host-connections` | the namespace |
-| `POST .../git-host-connections/{id}/credentials` | Adds a credential set. The server calls `Check` with it first, and refuses a set that fails. Answers the set ID, never the secret. | `namespace:manage-git-host-connections` | the namespace |
-| `DELETE .../git-host-connections/{id}/credentials/{set ID}` | Removes a credential set. Fails with 409 for the last set. | `namespace:manage-git-host-connections` | the namespace |
-| `POST .../git-host-connections/{id}/check` | Calls `Check` with each active set. Answers the account, the capabilities, and the missing capabilities for each consumer (`forge.Needs`). | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections/{id}/credentials` | Adds a credential set. The server calls `Check` with it first, and refuses a set that fails. Answers the set ID, never the secret. For a connection of the installation-level app: 400, because only the installation API sets the key and the event secret. | `namespace:manage-git-host-connections` | the namespace |
+| `DELETE .../git-host-connections/{id}/credentials/{set ID}` | Removes a credential set. Fails with 409 for the last set, and with 409 for a connection of the installation-level app, which has no set. | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections/{id}/rotate` (proposed path) | Rotate now, for a connection whose forge can rotate a token (`self-rotate`). Starts the one rotation operation of the connection; fails with 409 while one runs, and with 409 for a connection of the installation-level app. | `namespace:manage-git-host-connections` | the namespace |
+| `POST .../git-host-connections/{id}/check` | Calls `Check` with each active set, at the stored address only, after the outbound address check. For the installation-level app it uses the key of the operator. Answers the account, the capabilities, and the missing capabilities for each consumer (`forge.Needs`). | `namespace:manage-git-host-connections` | the namespace |
 | `POST` or `PATCH` of a code location or a Catalog request home that names a connection (owner decision, 2026-10-20, Q6 B) | Names the connection. The call also needs its own action on the unit. | `namespace:use-git-host-connection` | the connection (`namespace:<ns>/git-host-connection:<id>`) |
 | `POST /webhooks/{hook ID}` | Webhook intake, above. | none (public list) | none |
 
@@ -740,7 +851,7 @@ of anomalies (SOC 2 CC7.2). This is a comparison, not a compliance claim.
 **Owner decision, 2026-10-20: the question is moot as framed.** ADR 135
 already decides that the server clones and streams the fetch-pack to object
 storage, and that a runner puts the pack together again and checks it out.
-This is true for each auth kind (app, token, deploy key). So no Git host
+This is true for each auth kind of the port (app, token). So no Git host
 credential reaches a runner for its source. The source comes only through
 the pack that the server builds. The git credential mode `forge` of ADR 130
 decision 11 is for other live fetches, for example private Git module
@@ -835,6 +946,18 @@ the exact plan of the summary comment when all of these conditions are true:
    or on OpenDustpan, or neither can ask for an approval.
 3. The commenter is a linked account (as for chat, ADR 146), and its
    principal can apply the unit.
+
+The exact plan is the plan of the current head (PM decision, 2026-10-20).
+When the server acts, it calls `ReadReview` and `ReadComment`. It applies the
+plan only when all of these are true: the head that `ReadReview` answers is
+the commit of that plan, the summary comment shows the same plan and the
+same commit, and the summary comment did not change after the person wrote
+the apply comment (`ReadComment` answers the edit time of a comment, which is
+proposed). If the head moved since the plan, or a new plan replaced the plan
+of the summary comment, the server refuses with a reply comment that says why
+and links to the plan page of the console. A push between the comment and
+the action cannot change what runs. The commands of RFC 27 that start a plan
+or show a status stay beside `dustpan apply` and `unlock`.
 
 When the unit has approval rules that are not yet satisfied, the comment
 does not approve. The job waits for an approval on the plan page of the
@@ -1072,6 +1195,13 @@ One line for each question.
   hostname.
 - **Q11: deferred to RFC 12.** The proposed answer is A: the code location
   sets the merge method, with a merge commit as the default.
+- **Credential binding and rotation locks (PM decision, 2026-10-20).** The
+  installation-level app owns its address and app ID. A change of address
+  or auth parameters needs a new credential set. The installation map is
+  checked at each `Open`. The API address passes the outbound address check.
+  The routes of a namespace never set a key or an event secret of the
+  installation-level app. An event secret has 32 bytes at least. A
+  connection has one rotation at a time, with a mark before the call.
 - **Credential expiry and rotation (owner decision, 2026-10-20).** The
   GitHub App is the recommended connection. The server records the expiry
   of a static token and warns. A GitLab token rotates through `self/rotate`

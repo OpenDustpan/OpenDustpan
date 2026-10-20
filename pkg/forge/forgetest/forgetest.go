@@ -71,6 +71,10 @@ type Fixture interface {
 	// Refuse makes the forge refuse the credential of the connection from
 	// now on, as after a revocation.
 	Refuse(ctx context.Context) error
+	// Calls returns the number of calls that the forge got from the
+	// connection since the case began, so that a case can check that Open
+	// makes none and that RotateSelf makes one.
+	Calls(ctx context.Context) (int, error)
 	// Unavailable makes the forge fail with a server error, or with a rate
 	// limit and the wait time retryAfter when it is above zero, until the
 	// returned function restores it.
@@ -157,6 +161,7 @@ func cases() []testCase {
 		{"repo token of an app reads its repository only", forge.CapRepoToken, nil},
 		{"repo token of an app cannot write", forge.CapRepoToken, nil},
 		{"repo token of an app expires within one hour", forge.CapRepoToken, nil},
+		// Skips when Connection.Auth is not AuthToken.
 		{"repo token of a token connection is not scoped", forge.CapGitAccess, nil},
 		{"a forge with repo-token also lists git-access", forge.CapRepoToken, nil},
 
@@ -165,11 +170,13 @@ func cases() []testCase {
 		{"rotate self revokes the old token", forge.CapSelfRotate, nil},
 		{"rotate self keeps the expiry that the call asks for", forge.CapSelfRotate, nil},
 		{"rotate self with a revoked token is ErrAuth", forge.CapSelfRotate, nil},
+		{"rotate self makes one call and never retries after an error", forge.CapSelfRotate, nil},
 		{"rotate self returns no part of the old or the new secret in an error", forge.CapSelfRotate, nil},
 
 		// Events.
 		{"parse ping event", forge.CapEvents, nil},
 		{"parse review event with a valid signature", forge.CapEvents, nil},
+		{"parse event with no secret or an empty secret fails", forge.CapEvents, nil},
 		{"parse event with a wrong signature fails", forge.CapEvents, nil},
 		{"parse event with a changed body is a signature error", forge.CapEvents, nil},
 		{"parse signed event with a body that does not parse is invalid", forge.CapEvents, nil},

@@ -181,11 +181,11 @@ The machine-readable document that lists the operations of the tool-neutral REST
 _Avoid_: Swagger file, API spec, OpenAPI spec, schema file
 
 **Forge**:
-A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection (RFC 89, proposed). Internal term. User-facing text names the service (GitHub, GitLab, Forgejo). Where a generic term is needed, it says Git host.
+A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection. Internal term. User-facing text names the service (GitHub, GitLab, Forgejo). Where a generic term is needed, it says Git host.
 _Avoid_: VCS provider, SCM, VCS (alone). In user-facing text: forge
 
 **Forge connection**:
-The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213). User-facing text names the service ("GitHub connection"). Where a generic term is needed, it says Git host connection.
+The credentials that let the server use one forge for a namespace. With them, the server reads files, takes webhooks, posts results and, if allowed, pushes. The server keeps them sealed, not as a setting. The credentials of a token connection, and the key and event secret of a per-namespace GitHub App, are namespace credentials. The key and event secret of the installation-level GitHub App, the default for GitHub, are installation credentials. The operator sets them, and a connection of a namespace holds no credential set of its own. A namespace can have many forge connections, and one of them is the default (ADR 213). User-facing text names the service ("GitHub connection"). Where a generic term is needed, it says Git host connection.
 _Avoid_: VCS integration, VCS provider, app (alone)
 
 **Review request**:
@@ -193,19 +193,19 @@ A proposed change on a forge that people review before a merge: a pull request o
 _Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
 
 **Forge capability**:
-One group of operations of the `Forge` port that a forge connection can do, for example `commit`, `review` or `repo-token` (RFC 89, proposed). A method outside the capabilities of a connection returns `ErrUnsupported`. The server checks the capabilities that a feature needs when a person names the connection for it.
+One group of operations of the `Forge` port that a forge connection can do, for example `commit`, `review` or `repo-token`. A method outside the capabilities of a connection returns `ErrUnsupported`. The server checks the capabilities that a feature needs when a person names the connection for it.
 _Avoid_: Feature (alone), scope (that is a token permission of the forge), permission
 
 **Forge bridge**:
-A small process that a team runs next to its version control system (RFC 89, proposed). The server cannot reach that system, or the system has no forge API. The bridge does the operations of the `Forge` port on that side, and connects out to the server.
+A small process that a team runs next to its version control system. The server cannot reach that system, or the system has no forge API. The bridge does the operations of the `Forge` port on that side, and connects out to the server.
 _Avoid_: Proxy, relay, gateway, mirror
 
 **Forge event**:
-A signed request that a forge sends to the server: a push, a change of a review request, or a comment (RFC 89, proposed). The server checks its signature, and reads the object through the API of the forge before it changes a record. So an event is a hint, never a fact. The server takes it at `/webhooks/{hook ID}`.
+A signed request that a forge sends to the server: a push, a change of a review request, or a comment. The server checks its signature, and reads the object through the API of the forge before it changes a record. So an event is a hint, never a fact. The server takes it at `/webhooks/{hook ID}`.
 _Avoid_: Webhook (that is the setting on the forge, or a sink of notifications), callback, hook (alone)
 
 **Comment command**:
-A command that a person writes in a comment of a review request, for example `plan` (RFC 27, RFC 89, proposed). It never approves a change.
+A command that a person writes in a comment of a review request, for example `plan`, `dustpan apply` or `unlock` (RFC 27). The commands include a command that starts a plan or shows a status. `dustpan apply` applies the plan of the current head, and refuses when the head moved since the plan. A comment command never approves a change.
 _Avoid_: Chat command, slash command, bot command
 
 **Sensitive setting**:

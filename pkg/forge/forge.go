@@ -24,6 +24,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Sentinel errors returned by the port. An adapter wraps one of them with
@@ -46,7 +48,8 @@ var (
 	ErrRefused = errors.New("change refused by the Git host")
 	// ErrAuth reports a credential that the forge does not accept: expired,
 	// revoked, or for another forge. The server then tries an older
-	// credential set of the connection, if one exists.
+	// credential set of the connection, if one exists. RotateSelf is the
+	// exception: after an error from it, the server tries no other set.
 	ErrAuth = errors.New("credential refused by the Git host")
 	// ErrUnavailable reports a forge that did not answer, answered a server
 	// error, or limited the rate of the connection. A retry with backoff
@@ -60,7 +63,9 @@ var (
 	// of the connection, cannot do. Capabilities does not list it.
 	ErrUnsupported = errors.New("the Git host does not support the operation")
 	// ErrSignature reports an event whose signature or token does not
-	// match the secret of the connection.
+	// match an active event secret of the registration. It also reports an
+	// event that was checked against no secret, or against empty secrets
+	// only.
 	ErrSignature = errors.New("event signature from the Git host does not match")
 	// ErrInvalid reports a request that fails validation before the
 	// adapter calls the forge, or connection parameters that the adapter
@@ -141,7 +146,10 @@ type Connection struct {
 	Kind Kind
 	Auth AuthKind
 	// BaseURL is the API address of the forge, for example
-	// https://api.github.com or the address of a GitLab instance.
+	// https://api.github.com or the address of a GitLab instance. The
+	// server checks it against its outbound address rules before Open. The
+	// adapter checks the resolved address again when it opens the network
+	// connection.
 	BaseURL string
 	// Params holds the values of the auth kind that are not secret, for
 	// example the app ID and the installation ID of a GitHub App.
@@ -280,8 +288,9 @@ type Events interface {
 	// ParseEvent checks the signature or the token of r against each of
 	// secrets, which are the active event secrets of the app registration
 	// or of the hook, and returns the event. The event is valid when it
-	// matches any one of them. It returns ErrSignature for a request that
-	// matches none of them, ErrInvalid for a
+	// matches any one of them. It ignores an empty secret. It returns
+	// ErrSignature for a request that matches none of them, and for a list
+	// with no secret or with empty secrets only. It returns ErrInvalid for a
 	// body that it cannot parse, and ErrUnsupported for a kind of event
 	// that the port does not name. It makes no call to the forge. An
 	// event is a hint: the server reads the object through the API before
@@ -295,7 +304,10 @@ type Rotation interface {
 	// RotateSelf asks the forge for a new token in place of the token of
 	// the credential, and returns the new token. The forge revokes the old
 	// token when it makes the new one. The caller seals and stores the new
-	// token in the same step that receives it. After any error, the caller
+	// token in the same step that receives it. The adapter makes one call and
+	// never retries it. The caller never tries an older credential set after
+	// an error, and never runs two rotations of one connection at once.
+	// After any error, the caller
 	// never calls RotateSelf again with the old token: the forge may have
 	// rotated it already, and a second rotation with a revoked token can
 	// make the forge revoke each token made from it. expiresAt is the expiry
@@ -389,8 +401,8 @@ func ValidateCommit(req CommitRequest) error {
 		return err
 	}
 
-	if req.Base == "" {
-		return fmt.Errorf("%w: the base commit is empty", ErrInvalid)
+	if err := ValidateCommitID(req.Base); err != nil {
+		return fmt.Errorf("the base commit: %w", err)
 	}
 
 	if req.Message == "" {
@@ -436,27 +448,120 @@ func validateChanges(changes []FileChange) error {
 	return nil
 }
 
-// validatePath checks a file path in a repository: relative, clean, with
-// no ".." part and no NUL byte.
+// Limits of the names that the port accepts.
+const (
+	maxPathBytes = 4096
+	maxRefBytes  = 255
+)
+
+// validatePath checks a file path in a repository with an allow list. Each
+// rune is a graphic character: a letter, a mark, a number, a punctuation
+// mark, a symbol or a space. A control character, a format character (for
+// example a bidirectional override) and a backslash are not valid. The path
+// is relative and clean, and no part is "..", or ".git" in any case.
 func validatePath(p string) error {
 	switch {
 	case p == "", p == ".":
 		return fmt.Errorf("%w: the file path is empty", ErrInvalid)
-	case strings.ContainsRune(p, 0):
-		return fmt.Errorf("%w: the file path has a NUL byte", ErrInvalid)
-	case strings.HasPrefix(p, "/"), path.Clean(p) != p:
+	case len(p) > maxPathBytes:
+		return fmt.Errorf("%w: the file path has more than %d bytes", ErrInvalid, maxPathBytes)
+	case !utf8.ValidString(p):
+		return fmt.Errorf("%w: the file path is not valid UTF-8", ErrInvalid)
+	}
+
+	for _, r := range p {
+		if r == '\\' || !unicode.IsGraphic(r) {
+			return fmt.Errorf("%w: the file path %q has a character that is not allowed", ErrInvalid, p)
+		}
+	}
+
+	if strings.HasPrefix(p, "/") || path.Clean(p) != p {
 		return fmt.Errorf("%w: the file path %q is not relative and clean", ErrInvalid, p)
-	case p == "..", strings.HasPrefix(p, "../"):
-		return fmt.Errorf("%w: the file path %q leaves the repository", ErrInvalid, p)
+	}
+
+	for part := range strings.SplitSeq(p, "/") {
+		switch {
+		case part == "..":
+			return fmt.Errorf("%w: the file path %q leaves the repository", ErrInvalid, p)
+		case strings.EqualFold(part, ".git"):
+			return fmt.Errorf("%w: the file path %q has a .git part", ErrInvalid, p)
+		}
 	}
 
 	return nil
 }
 
+// validateRef checks a branch or tag name with an allow list. Each rune is
+// a letter, a digit, or one of "._-+/". Each part between slashes is not
+// empty, does not start with "." or "-", and does not end with "." or
+// ".lock". The name is not a full ref and has no "..". The allow list
+// refuses a control character, "@{" and each character that git refuses.
 func validateRef(ref string) error {
-	if ref == "" || strings.HasPrefix(ref, "refs/") || strings.ContainsAny(ref, " ~^:?*[\\\x00") ||
-		strings.Contains(ref, "..") || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, "/") {
+	if !refRunesAllowed(ref) || strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") ||
+		!refPartsAllowed(ref) {
 		return fmt.Errorf("%w: the branch name %q is not valid", ErrInvalid, ref)
+	}
+
+	return nil
+}
+
+func refRunesAllowed(ref string) bool {
+	if ref == "" || len(ref) > maxRefBytes || !utf8.ValidString(ref) {
+		return false
+	}
+
+	for _, r := range ref {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("._-+/", r) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func refPartsAllowed(ref string) bool {
+	for part := range strings.SplitSeq(ref, "/") {
+		if part == "" || part[0] == '.' || part[0] == '-' || strings.HasSuffix(part, ".") ||
+			strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+
+	return true
+}
+
+// ValidateCommitID checks a full commit ID: 40 hex digits (SHA-1) or 64
+// (SHA-256), in lower case. It returns an error that wraps ErrInvalid. An
+// adapter calls it before it sends a commit ID to the forge.
+func ValidateCommitID(id string) error {
+	if len(id) != 40 && len(id) != 64 {
+		return fmt.Errorf("%w: a commit ID has 40 or 64 hex digits, not %d characters", ErrInvalid, len(id))
+	}
+
+	for i := range len(id) {
+		c := id[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return fmt.Errorf("%w: a commit ID has only the digits 0-9 and a-f", ErrInvalid)
+		}
+	}
+
+	return nil
+}
+
+// MinEventSecretBytes is the least length of an event secret. The guide
+// gives the command "openssl rand -hex 32", which makes 64 characters from
+// 32 random bytes. The server cannot measure the entropy of a secret, so it
+// checks the length only.
+const MinEventSecretBytes = 32
+
+// ValidateEventSecret checks an event secret when a person sets it. It
+// returns an error that wraps ErrInvalid for a secret shorter than
+// MinEventSecretBytes. The error text holds no part of the secret.
+func ValidateEventSecret(secret []byte) error {
+	if len(secret) < MinEventSecretBytes {
+		return fmt.Errorf(
+			"%w: the event secret has %d bytes, the least is %d", ErrInvalid, len(secret), MinEventSecretBytes,
+		)
 	}
 
 	return nil
