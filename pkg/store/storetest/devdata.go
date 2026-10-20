@@ -126,11 +126,11 @@ func (e *devExport) mustStage(t *testing.T, dst DevDataStore) {
 func (e *devExport) withKeeper(t *testing.T) *devExport {
 	t.Helper()
 
-	out := e.with(t, "principals", devPrincipalRow("prn-keeper", "alice"))
-	out = out.with(t, "grants", devGrantRow("grt-keeper", "prn-keeper"))
-	out = out.with(t, "sessions", devSessionRow("ses-keeper", "prn-keeper", "google"))
+	out := e.with(t, "principals", DevPrincipalRow("prn-keeper", "alice"))
+	out = out.with(t, "grants", DevGrantRow("grt-keeper", "prn-keeper"))
+	out = out.with(t, "sessions", DevSessionRow("ses-keeper", "prn-keeper", "google"))
 
-	return out.with(t, "access_tokens", devTokenRow("tok-keeper", "prn-keeper"))
+	return out.with(t, "access_tokens", DevTokenRow("tok-keeper", "prn-keeper"))
 }
 
 // tableRows exports s and returns the rows of table.
@@ -322,13 +322,13 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				out := e.with(t, "principals", devPrincipalRow("prn-dev", "dev:admin"))
-				out = out.with(t, "grants", devGrantRow("grt-dev", "prn-dev"))
-				out = out.with(t, "sessions", devSessionRow("ses-dev", "prn-dev", "dev"))
-				out = out.with(t, "access_tokens", devTokenRow("tok-dev", "prn-dev"))
-				out = out.with(t, "principal_groups", devGroupRow("grp-1"))
+				out := e.with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
+				out = out.with(t, "grants", DevGrantRow("grt-dev", "prn-dev"))
+				out = out.with(t, "sessions", DevSessionRow("ses-dev", "prn-dev", "dev"))
+				out = out.with(t, "access_tokens", DevTokenRow("tok-dev", "prn-dev"))
+				out = out.with(t, "principal_groups", DevGroupRow("grp-1"))
 
-				return out.with(t, "group_members", devMemberRow("grp-1", "prn-dev"))
+				return out.with(t, "group_members", DevMemberRow("grp-1", "prn-dev"))
 			},
 			classes: map[backup.DevRemovalClass]int64{
 				backup.RemovedPrincipals: 1, backup.RemovedGrants: 1, backup.RemovedSessions: 1,
@@ -347,8 +347,8 @@ func devStripCases() []devStripCase {
 				t.Helper()
 
 				return e.with(t, "principals",
-					devPrincipalRow("prn-a", "DEV:"), devPrincipalRow("prn-b", "Dev:Admin"),
-					devPrincipalRow("prn-c", "dEv:x"))
+					DevPrincipalRow("prn-a", "DEV:"), DevPrincipalRow("prn-b", "Dev:Admin"),
+					DevPrincipalRow("prn-c", "dEv:x"))
 			},
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: 3},
 		},
@@ -357,9 +357,9 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				out := e.with(t, "principals", devPrincipalRow("prn-a", "dev:x"), devPrincipalRow("prn-b", "DEV:x"))
+				out := e.with(t, "principals", DevPrincipalRow("prn-a", "dev:x"), DevPrincipalRow("prn-b", "DEV:x"))
 
-				return out.with(t, "grants", devGrantRow("grt-a", "prn-a"), devGrantRow("grt-b", "prn-b"))
+				return out.with(t, "grants", DevGrantRow("grt-a", "prn-a"), DevGrantRow("grt-b", "prn-b"))
 			},
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: 2, backup.RemovedGrants: 2},
 			principals: map[string]map[backup.DevRemovalClass]int64{
@@ -371,12 +371,12 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				out := e.with(t, "sign_in_providers", devProviderRow("dev"), devProviderRow("google"))
-				out = out.with(t, "oidc_providers", devIssuerRow("dev"), devIssuerRow("DEV"), devIssuerRow("google"))
+				out := e.with(t, "sign_in_providers", DevProviderRow("dev"), DevProviderRow("google"))
+				out = out.with(t, "oidc_providers", DevIssuerRow("dev"), DevIssuerRow("DEV"), DevIssuerRow("google"))
 
 				return out.with(t, "sign_in_requests",
-					devSignInRequestRow("req-1", "dev"), devSignInRequestRow("req-2", "Dev"),
-					devSignInRequestRow("req-3", "google"))
+					DevSignInRequestRow("req-1", "dev"), DevSignInRequestRow("req-2", "Dev"),
+					DevSignInRequestRow("req-3", "google"))
 			},
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedProviders: 3, backup.RemovedSignInRequests: 2},
 		},
@@ -385,7 +385,7 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				return e.withKeeper(t).with(t, "sessions", devSessionRow("ses-forged", "prn-keeper", "dev"))
+				return e.withKeeper(t).with(t, "sessions", DevSessionRow("ses-forged", "prn-keeper", "dev"))
 			},
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedSessions: 1},
 		},
@@ -394,11 +394,11 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				out := e.withKeeper(t).with(t, "principals", devPrincipalRow("prn-dev", "dev:admin"))
+				out := e.withKeeper(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
 
 				return out.with(t, "temp_admins",
-					devTempAdminRow("prn-dev", "dev:admin"), devTempAdminRow("prn-keeper", "Dev:x"),
-					devTempAdminRow("prn-other", "recovery"))
+					DevTempAdminRow("prn-dev", "dev:admin"), DevTempAdminRow("prn-keeper", "Dev:x"),
+					DevTempAdminRow("prn-other", "recovery"))
 			},
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: 1, backup.RemovedTempAdmins: 2},
 			principals: map[string]map[backup.DevRemovalClass]int64{
@@ -410,9 +410,9 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				out := e.withKeeper(t).with(t, "principals", devPrincipalRow("prn-dev", "dev:admin"))
+				out := e.withKeeper(t).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
 
-				return out.with(t, "grants", devGrantRow("grt-missing", "prn-missing"))
+				return out.with(t, "grants", DevGrantRow("grt-missing", "prn-missing"))
 			},
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedPrincipals: 1, backup.RemovedDangling: 1},
 		},
@@ -421,7 +421,7 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				return e.withKeeper(t).with(t, "grants", devGrantRow("grt-missing", "prn-missing"))
+				return e.withKeeper(t).with(t, "grants", DevGrantRow("grt-missing", "prn-missing"))
 			},
 			noDev: true,
 		},
@@ -430,7 +430,7 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				return e.with(t, "gate_objects", devGateObjectRow(kindRule, "rule-a",
+				return e.with(t, "gate_objects", DevGateObjectRow(kindRule, "rule-a",
 					ruleBody(`[]`, `["dev:admin","alice"]`, false)))
 			},
 			classes:   map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
@@ -442,7 +442,7 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				return e.with(t, "gate_objects", devGateObjectRow(kindDefault, "",
+				return e.with(t, "gate_objects", DevGateObjectRow(kindDefault, "",
 					ruleBody(`["ops"]`, `["DEV:x"]`, false)))
 			},
 			classes:   map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
@@ -454,7 +454,7 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				return e.with(t, "gate_objects", devGateObjectRow(kindDefault, "",
+				return e.with(t, "gate_objects", DevGateObjectRow(kindDefault, "",
 					ruleBody(`[]`, `["Dev:Y"]`, false)))
 			},
 			classes:   map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
@@ -466,7 +466,7 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				return e.with(t, "gate_objects", devGateObjectRow(kindOwnerRle, "own-a",
+				return e.with(t, "gate_objects", DevGateObjectRow(kindOwnerRle, "own-a",
 					ruleBody(`[]`, `["dev:a","DEV:b"]`, false)))
 			},
 			classes: map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 2},
@@ -480,7 +480,7 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				return e.with(t, "gate_objects", devGateObjectRow(kindRule, "rule-b",
+				return e.with(t, "gate_objects", DevGateObjectRow(kindRule, "rule-b",
 					ruleBody(`["ops"]`, `["dev:z"]`, true)))
 			},
 			classes:   map[backup.DevRemovalClass]int64{backup.RemovedApprovers: 1},
@@ -492,9 +492,9 @@ func devStripCases() []devStripCase {
 			add: func(t *testing.T, e *devExport) *devExport {
 				t.Helper()
 
-				out := e.withKeeper(t).with(t, "sign_in_providers", devProviderRow("google"))
+				out := e.withKeeper(t).with(t, "sign_in_providers", DevProviderRow("google"))
 
-				return out.with(t, "gate_objects", devGateObjectRow(kindRule, "rule-c",
+				return out.with(t, "gate_objects", DevGateObjectRow(kindRule, "rule-c",
 					ruleBody(`["ops"]`, `["alice"]`, false)))
 			},
 			noDev:  true,
@@ -667,7 +667,7 @@ func testDevStripMatchesSharedTable(t *testing.T, newStore DevDataFactory) {
 
 	for i, tc := range cases {
 		tableSubjects = append(tableSubjects, tc.Subject)
-		rows = append(rows, devPrincipalRow(fmt.Sprintf("prn-%03d", i), tc.Subject))
+		rows = append(rows, DevPrincipalRow(fmt.Sprintf("prn-%03d", i), tc.Subject))
 
 		if tc.Dev {
 			wantDev++
@@ -722,13 +722,13 @@ func testDevStripBounds(t *testing.T, newStore DevDataFactory) {
 
 	for i := range total {
 		id := fmt.Sprintf("prn-%04d", i)
-		principals = append(principals, devPrincipalRow(id, fmt.Sprintf("dev:user-%04d", i)))
-		grants = append(grants, devGrantRow(fmt.Sprintf("grt-%04d", i), id))
+		principals = append(principals, DevPrincipalRow(id, fmt.Sprintf("dev:user-%04d", i)))
+		grants = append(grants, DevGrantRow(fmt.Sprintf("grt-%04d", i), id))
 	}
 
 	// PostgreSQL text holds no NUL, so the NUL case lives in the unit test of the cleaner.
 	hostile := "dev:evil\r\nforged\x1b[31m\x07" + strings.Repeat("x", 400)
-	principals = append(principals, devPrincipalRow("prn-hostile", hostile))
+	principals = append(principals, DevPrincipalRow("prn-hostile", hostile))
 
 	dst := newStore(t, installation.KindProduction)
 	staged := export.with(t, "principals", principals...).with(t, "grants", grants...)
@@ -806,7 +806,7 @@ func testDevStripModes(t *testing.T, newStore DevDataFactory) {
 		}
 	}
 
-	export := newDevExport(t, newStore).with(t, "principals", devPrincipalRow("prn-dev", "dev:admin"))
+	export := newDevExport(t, newStore).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
 	export.mustStage(t, dst)
 
 	first, err := dst.StripDevStaged(t.Context(), backup.DevStripDetect)
@@ -841,48 +841,48 @@ func devSwapCases() []struct {
 		{name: "a dev principal with a grant", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "principals", devPrincipalRow("prn-dev", "dev:admin")).
-				with(t, "grants", devGrantRow("grt-dev", "prn-dev"))
+			return e.with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin")).
+				with(t, "grants", DevGrantRow("grt-dev", "prn-dev"))
 		}},
 		{name: "a dev principal in another case", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "principals", devPrincipalRow("prn-dev", "DEV:Admin"))
+			return e.with(t, "principals", DevPrincipalRow("prn-dev", "DEV:Admin"))
 		}},
 		{name: "a temp admin by subject", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "temp_admins", devTempAdminRow("prn-x", "Dev:x"))
+			return e.with(t, "temp_admins", DevTempAdminRow("prn-x", "Dev:x"))
 		}},
 		{name: "a session of the reserved provider", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.withKeeper(t).with(t, "sessions", devSessionRow("ses-dev", "prn-keeper", "dev"))
+			return e.withKeeper(t).with(t, "sessions", DevSessionRow("ses-dev", "prn-keeper", "dev"))
 		}},
 		{name: "a provider with the reserved ID", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "sign_in_providers", devProviderRow("dev"))
+			return e.with(t, "sign_in_providers", DevProviderRow("dev"))
 		}},
 		{name: "a sign-in request of the reserved provider", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "sign_in_requests", devSignInRequestRow("req-1", "dev"))
+			return e.with(t, "sign_in_requests", DevSignInRequestRow("req-1", "dev"))
 		}},
 		{name: "a dev approver in an approval rule", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "gate_objects", devGateObjectRow(kindRule, "rule-a", ruleBody(`[]`, `["dev:admin"]`, false)))
+			return e.with(t, "gate_objects", DevGateObjectRow(kindRule, "rule-a", ruleBody(`[]`, `["dev:admin"]`, false)))
 		}},
 		{name: "a dev approver in an approval default", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "gate_objects", devGateObjectRow(kindDefault, "", ruleBody(`["ops"]`, `["DEV:x"]`, false)))
+			return e.with(t, "gate_objects", DevGateObjectRow(kindDefault, "", ruleBody(`["ops"]`, `["DEV:x"]`, false)))
 		}},
 		{name: "a dev approver in an ownership rule", add: func(t *testing.T, e *devExport) *devExport {
 			t.Helper()
 
-			return e.with(t, "gate_objects", devGateObjectRow(kindOwnerRle, "own-a", ruleBody(`[]`, `["dEv:y"]`, false)))
+			return e.with(t, "gate_objects", DevGateObjectRow(kindOwnerRle, "own-a", ruleBody(`[]`, `["dEv:y"]`, false)))
 		}},
 	}
 }
@@ -934,7 +934,7 @@ func testDevSwapRefuses(t *testing.T, newStore DevDataFactory) {
 func testDevSwapDevInstallation(t *testing.T, newStore DevDataFactory) {
 	t.Helper()
 
-	export := newDevExport(t, newStore).with(t, "principals", devPrincipalRow("prn-dev", "dev:admin"))
+	export := newDevExport(t, newStore).with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin"))
 	dst := newStore(t, installation.KindDev)
 
 	opts := backup.StageOptions{BackupKind: installation.KindDev, AllowDev: false}
@@ -994,7 +994,7 @@ func testDevKeepDropsTempAdmins(t *testing.T, newStore DevDataFactory) {
 	dst := newStore(t, installation.KindProduction)
 
 	// Give the live data a principal: a swap of a first backup brings it.
-	first := newDevExport(t, newStore).with(t, "principals", devPrincipalRow("prn-live", "alice"))
+	first := newDevExport(t, newStore).with(t, "principals", DevPrincipalRow("prn-live", "alice"))
 	first.mustStage(t, dst)
 
 	if err := dst.ApplyStaging(t.Context()); err != nil {
@@ -1002,10 +1002,10 @@ func testDevKeepDropsTempAdmins(t *testing.T, newStore DevDataFactory) {
 	}
 
 	second := newDevExport(t, newStore).
-		with(t, "principals", devPrincipalRow("prn-live", "alice")).
+		with(t, "principals", DevPrincipalRow("prn-live", "alice")).
 		with(t, "temp_admins",
-			devTempAdminRow("prn-live", "alice"), devTempAdminRow("prn-absent", "bob"),
-			devTempAdminRow("prn-live-2", "Dev:x"))
+			DevTempAdminRow("prn-live", "alice"), DevTempAdminRow("prn-absent", "bob"),
+			DevTempAdminRow("prn-live-2", "Dev:x"))
 	second.mustStage(t, dst)
 
 	report, err := dst.StripDevStaged(t.Context(), backup.DevStripRemove)
@@ -1041,7 +1041,7 @@ func testDevKeepWholeArea(t *testing.T, newStore DevDataFactory) {
 
 	dst := newStore(t, installation.KindProduction)
 	newDevExport(t, newStore).
-		with(t, "principals", devPrincipalRow("prn-dev", "dev:admin")).
+		with(t, "principals", DevPrincipalRow("prn-dev", "dev:admin")).
 		mustStage(t, dst)
 
 	detected, err := dst.StripDevStaged(t.Context(), backup.DevStripDetect)

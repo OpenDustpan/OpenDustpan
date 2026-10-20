@@ -103,10 +103,11 @@ func AddPortableRows(
 }
 
 // The row builders below return one row of the table in the portable form,
-// with a value for every column.
+// with a value for every column. A caller may change a value of the returned
+// map before it adds the row.
 
-// devPrincipalRow returns a principals row.
-func devPrincipalRow(id, subject string) map[string]any {
+// DevPrincipalRow returns a principals row.
+func DevPrincipalRow(id, subject string) map[string]any {
 	return map[string]any{
 		"id": id, "subject": subject, "display_name": "", "kind": "person", "source": "local",
 		"created_at_ms": 1, "updated_at_ms": 1, "deleted_at_ms": nil, "disabled_at_ms": nil,
@@ -114,9 +115,9 @@ func devPrincipalRow(id, subject string) map[string]any {
 	}
 }
 
-// devGrantRow returns a grants row of a principal. The role differs for each
+// DevGrantRow returns a grants row of a principal. The role differs for each
 // ID, so the unique index of current grants holds.
-func devGrantRow(id, principalID string) map[string]any {
+func DevGrantRow(id, principalID string) map[string]any {
 	return map[string]any{
 		"id": id, "subject": "principal:" + principalID, "subject_kind": "principal",
 		"subject_id": principalID, "role": "role-" + id, "object": "installation", "target": "",
@@ -125,8 +126,8 @@ func devGrantRow(id, principalID string) map[string]any {
 	}
 }
 
-// devSessionRow returns a sessions row. The digest differs for each ID.
-func devSessionRow(id, principalID, provider string) map[string]any {
+// DevSessionRow returns a sessions row. The digest differs for each ID.
+func DevSessionRow(id, principalID, provider string) map[string]any {
 	return map[string]any{
 		"id": id, "principal_id": principalID, "digest": "digest-" + id, "provider": provider,
 		"created_at_ms": 1, "last_seen_at_ms": 1, "auth_time_ms": 1, "ended_at_ms": nil,
@@ -134,8 +135,8 @@ func devSessionRow(id, principalID, provider string) map[string]any {
 	}
 }
 
-// devTokenRow returns an access_tokens row. The digest differs for each ID.
-func devTokenRow(id, principalID string) map[string]any {
+// DevTokenRow returns an access_tokens row. The digest differs for each ID.
+func DevTokenRow(id, principalID string) map[string]any {
 	return map[string]any{
 		"id": id, "principal_id": principalID, "name": "token", "kind": "service",
 		"digest": "digest-" + id, "created_at_ms": 1, "expires_at_ms": 4_000_000_000_000,
@@ -144,40 +145,40 @@ func devTokenRow(id, principalID string) map[string]any {
 	}
 }
 
-// devGroupRow returns a principal_groups row.
-func devGroupRow(id string) map[string]any {
+// DevGroupRow returns a principal_groups row.
+func DevGroupRow(id string) map[string]any {
 	return map[string]any{
 		"id": id, "name": id, "name_key": id, "description": "", "source": "local",
 		"created_at_ms": 1, "updated_at_ms": 1, "deleted_at_ms": nil,
 	}
 }
 
-// devMemberRow returns a group_members row.
-func devMemberRow(groupID, principalID string) map[string]any {
+// DevMemberRow returns a group_members row.
+func DevMemberRow(groupID, principalID string) map[string]any {
 	return map[string]any{
 		"group_id": groupID, "principal_id": principalID, "added_at_ms": 1, "removed_at_ms": nil,
 		"source": "local", "source_id": "", "state": "active", "suspended_at_ms": 0, "pinned": false,
 	}
 }
 
-// devSignInRequestRow returns a sign_in_requests row.
-func devSignInRequestRow(digest, provider string) map[string]any {
+// DevSignInRequestRow returns a sign_in_requests row.
+func DevSignInRequestRow(digest, provider string) map[string]any {
 	return map[string]any{
 		"digest": digest, "provider": provider, "nonce": "n", "verifier": "v", "return_path": "/",
 		"created_at_ms": 1, "expires_at_ms": 4_000_000_000_000, "max_age_ms": nil,
 	}
 }
 
-// devTempAdminRow returns a temp_admins row.
-func devTempAdminRow(principalID, subject string) map[string]any {
+// DevTempAdminRow returns a temp_admins row.
+func DevTempAdminRow(principalID, subject string) map[string]any {
 	return map[string]any{
 		"principal_id": principalID, "subject": subject, "expires_at_ms": 4_000_000_000_000,
 		"created_at_ms": 1, "created_by": "host", "reason": "recovery", "ended_at_ms": nil,
 	}
 }
 
-// devProviderRow returns a sign_in_providers row.
-func devProviderRow(id string) map[string]any {
+// DevProviderRow returns a sign_in_providers row.
+func DevProviderRow(id string) map[string]any {
 	return map[string]any{
 		"provider_id": id, "issuer": "https://issuer.example/" + id, "display_name": id,
 		"client_id": "client", "client_secret": "", "scopes": "openid", "auto_create": false,
@@ -187,13 +188,13 @@ func devProviderRow(id string) map[string]any {
 	}
 }
 
-// devIssuerRow returns an oidc_providers row.
-func devIssuerRow(id string) map[string]any {
+// DevIssuerRow returns an oidc_providers row.
+func DevIssuerRow(id string) map[string]any {
 	return map[string]any{"provider_id": id, "issuer": "https://issuer.example/" + id, "created_at_ms": 1}
 }
 
-// devGateObjectRow returns a gate_objects row of the installation scope.
-func devGateObjectRow(kind, id, body string) map[string]any {
+// DevGateObjectRow returns a gate_objects row of the installation scope.
+func DevGateObjectRow(kind, id, body string) map[string]any {
 	return map[string]any{
 		"namespace_id": "", "scope_key": "installation", "kind": kind, "id": id, "level": "installation",
 		"tool": "", "unit_name": "", "version": 1, "body": body, "updated_at_ms": 1,

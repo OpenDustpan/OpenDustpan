@@ -415,13 +415,13 @@ var Settings = []*Setting{
 	),
 	boolSetting(
 		unsafeAllowDevBackupsFlag, "",
-		"let a production installation restore a backup of a dev installation; the restore removes the dev "+
+		"let a production installation restore a backup of a dev installation; the restore deletes the dev "+
 			"users and their data. We do not recommend this. Only this flag sets it: no variable, no "+
 			"configuration file key and no API setting",
-		"false. Only the flag sets it. No variable and no configuration file key sets it, and the "+
-			"server writes one warning to the log at each start with the flag. Without it, a production "+
-			"installation refuses to restore a backup of a dev installation, and a restore of any backup "+
-			"removes the dev users and their data from the staged data",
+		"false. Only the flag sets it. No variable and no configuration file key sets it. "+
+			"The server writes one warning to the log at each start with the flag. Without it, a production "+
+			"installation refuses to restore a backup of a dev installation. A restore of any backup "+
+			"deletes the dev users and their data from the staged data",
 	),
 	boolSetting(
 		"check-only", "",
