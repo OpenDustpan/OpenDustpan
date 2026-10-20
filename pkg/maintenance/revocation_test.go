@@ -171,3 +171,91 @@ func checkDeniedEntry(t *testing.T, row maintenance.Revocation) {
 		t.Fatalf("row %+v: entry = %+v, want the outcome denied and no text of the row", row, denied)
 	}
 }
+
+// errRefused is what the injected validators answer.
+var errRefused = errors.New("refused")
+
+// refuseSuccess refuses the entry of an applied row and accepts a denied entry.
+func refuseSuccess(e audit.Entry) error {
+	if e.Outcome == audit.OutcomeSuccess {
+		return errRefused
+	}
+
+	return nil
+}
+
+// refuseAll refuses every entry.
+func refuseAll(audit.Entry) error { return errRefused }
+
+// TestCheckedReplayEntry proves the audit layer: an entry that validate
+// refuses is replaced by the fixed denied entry, the row without a time
+// gets one, and a validate that refuses both entries gives an error.
+func TestCheckedReplayEntry(t *testing.T) {
+	t.Parallel()
+
+	row := revocationRow(maintenance.RevokedGrant, "grt-1")
+	noTime := row
+	noTime.At = time.Time{}
+
+	tests := []struct {
+		name     string
+		row      maintenance.Revocation
+		validate func(audit.Entry) error
+		want     audit.Outcome
+		wantErr  bool
+	}{
+		{"accepted", row, audit.Entry.Validate, audit.OutcomeSuccess, false},
+		{"row without a time", noTime, audit.Entry.Validate, audit.OutcomeDenied, false},
+		{"injected refusal of the first entry", row, refuseSuccess, audit.OutcomeDenied, false},
+		{"refusal of both entries", row, refuseAll, "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, err := tt.row.CheckedReplayEntry(nil, tt.validate)
+			if tt.wantErr {
+				if !errors.Is(err, errRefused) {
+					t.Fatalf("err = %v, want the refusal", err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("err = %v, want none", err)
+			}
+
+			checkReplayEntry(t, e, tt.want)
+		})
+	}
+}
+
+// checkReplayEntry fails unless e is valid, has the outcome want, and names
+// the component and not the row when it is denied.
+func checkReplayEntry(t *testing.T, e audit.Entry, want audit.Outcome) {
+	t.Helper()
+
+	if e.Outcome != want || e.Validate() != nil {
+		t.Fatalf("entry = %+v, want a valid entry with the outcome %q", e, want)
+	}
+
+	if want == audit.OutcomeDenied && e.Subject != "maintenance" {
+		t.Fatalf("denied entry names the row: %+v", e)
+	}
+}
+
+// TestRevocationValidateRefusesARowWithoutATime proves that a row without a
+// time is refused: its target would end at the zero time, which reads as not
+// ended.
+func TestRevocationValidateRefusesARowWithoutATime(t *testing.T) {
+	t.Parallel()
+
+	row := revocationRow(maintenance.RevokedToken, "tok-1")
+	row.At = time.Time{}
+
+	if err := row.Validate(); !errors.Is(err, maintenance.ErrInvalidRevocation) {
+		t.Fatalf("err = %v, want ErrInvalidRevocation", err)
+	}
+}

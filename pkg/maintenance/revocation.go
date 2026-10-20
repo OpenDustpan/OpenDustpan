@@ -98,6 +98,12 @@ func (r Revocation) Validate() error {
 		return fmt.Errorf("%w: row %d has an actor or an object that is not valid text", ErrInvalidRevocation, r.ID)
 	}
 
+	// A row without a time would end its target at the zero time, and the
+	// stores read that as not ended.
+	if r.At.IsZero() {
+		return fmt.Errorf("%w: row %d has no time", ErrInvalidRevocation, r.ID)
+	}
+
 	return nil
 }
 
@@ -177,11 +183,40 @@ func (r Revocation) ReplayEntry(invalid error) audit.Entry {
 	}
 
 	// A hostile row can hold any text. The denial names the row by its
-	// number and the subject is the fixed name of this component.
+	// number and the subject is the fixed name of this component. A row
+	// without a time takes the epoch, so that the denial can be written.
+	if e.At.IsZero() {
+		e.At = time.UnixMilli(0).UTC()
+	}
+
 	e.Outcome = audit.OutcomeDenied
 	e.Subject = maintenanceSubject
 	e.Object = "maintenance-revocation:" + strconv.FormatInt(r.ID, 10)
 	e.ValuePath = "/maintenance/revocations/invalid"
 
 	return e
+}
+
+// CheckedReplayEntry returns ReplayEntry(invalid), after validate accepts it.
+// Defense in depth: Validate and the checks of the replay do not look at the
+// whole audit entry, so a row can pass them and still make an entry that the
+// audit log refuses, for example a row without a time. The entry is then the
+// fixed denied entry. It returns an error when validate refuses the denied
+// entry too, so that the caller writes nothing and the restore fails closed.
+func (r Revocation) CheckedReplayEntry(invalid error, validate func(audit.Entry) error) (audit.Entry, error) {
+	e := r.ReplayEntry(invalid)
+
+	err := validate(e)
+	if err == nil {
+		return e, nil
+	}
+
+	if invalid == nil {
+		e = r.ReplayEntry(err)
+		if err = validate(e); err == nil {
+			return e, nil
+		}
+	}
+
+	return audit.Entry{}, fmt.Errorf("replay audit entry for revocation %d: %w", r.ID, err)
 }
