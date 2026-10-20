@@ -561,6 +561,7 @@ _Avoid_: Key status, KMS state
 Encrypted at rest with the data key of a scope, or with the item key of a history item. The server seals each checkpoint blob, event payload and journal batch of a Pulumi update with the item key of the update (ADR 151). It seals the state blob and the outputs document of an OpenTofu state version with the item key of the state version. The part of the server that seals and opens content is the sealer.
 _Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
 _Copy says_: "encrypted by the server". Do not use "sealed" in copy. It means locked in Vault.
+The _Avoid_ rule ("Encrypted") is for names in code. The _Copy says_ rule ("encrypted by the server") is for text that users read.
 
 **Secret value**:
 A value in state that the tool marks as secret: a Pulumi secret, or an OpenTofu sensitive output or attribute.
