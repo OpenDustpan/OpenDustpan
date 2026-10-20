@@ -74,8 +74,8 @@ if the owner wants other names. RFC 10 would then need the same word.
 
 Checked on 2026-10-20 against the docs, and against the source at OpenTofu
 `main` 42f15c9b and Pulumi `master` 6c60436a where the docs say less. The
-file names are from that check. Add the line numbers when the ADR is written,
-because the lines move.
+file names and the line numbers are from that check. The lines move, so the
+ADR checks them again when it is written.
 
 **OpenTofu provider network mirror protocol**
 (<https://opentofu.org/docs/internals/provider-network-mirror-protocol/>,
@@ -92,12 +92,13 @@ because the lines move.
   must be `https:`.
 - The CLI sends the credentials of the mirror host on the two JSON requests
   (`index.json` and the version document), and it forwards them on a
-  redirect. It sends no credentials for an archive download. The docs
-  advise a user-specific URL that expires for the archives.
+  redirect (`http_mirror_source.go:306-331`). It sends no credentials for an
+  archive download. The docs advise a user-specific URL that expires for the
+  archives.
 - New and not yet released in 1.14: an archive entry can carry
   `"use_mirror_credentials": true`, and then the CLI sends the credentials of
-  the mirror host for that archive too. Until a release has it, an archive
-  URL must carry its own proof.
+  the mirror host for that archive too (`http_mirror_source.go:179` and
+  `:224`). Until a release has it, an archive URL must carry its own proof.
 
 **OpenTofu provider registry protocol**
 (<https://opentofu.org/docs/internals/provider-registry-protocol/>)
@@ -175,14 +176,19 @@ because the lines move.
   `get.pulumi.com`.
 - An HTTP source downloads
   `<url>/pulumi-<kind>-<name>-v<version>-<os>-<arch>.tar.gz`. An HTTPS
-  download sends a `User-Agent` and no other header. It has no credentials.
+  download sends a `User-Agent` and no other header. It has no credentials
+  (`plugins.go:763-781` builds the URL of the HTTP source, `:1669-1686`
+  sends the request). With `-v=1`, the CLI logs the full override URL
+  (`plugins.go:771`), and the text of a download error holds the URL
+  (`plugins.go:1745`).
 - `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES` is a list of `regexp=URL` pairs.
   The CLI splits the list on `,` and each pair on `=`, so a URL with an `=`
-  or a `,` breaks the pair. An override also applies to a
+  or a `,` breaks the pair (`plugins.go:131-150`). A bad pair panics at
+  `:126`. An override also applies to a
   `pluginDownloadURL` and to the `get.pulumi.com` fallback.
 - `PluginSpec.Checksums` maps `<goos>-<goarch>` to a SHA-256. **When no entry
   exists for the current platform, the CLI skips the check with no
-  warning.** `pulumi plugin install --checksum` sets one platform only.
+  warning** (`plugins.go:934-941`). `pulumi plugin install --checksum` sets one platform only.
   The `packages` entries of `Pulumi.yaml` accept `checksums`.
 - The CLI checks no signature of a plugin.
 - `PULUMI_IGNORE_AMBIENT_PLUGINS` stops the search of `$PATH`, and
@@ -289,7 +295,8 @@ refused (section D).
   mirror proof" below.
 - **Storage.** Each archive is one blob of a new kind `package`, addressed
   by its SHA-256, through the `blob` port (fs or S3). Two admissions of the
-  same bytes in one namespace share one blob. See "Who owns a blob".
+  same bytes in one namespace share one blob. Each namespace has its own
+  copy, sealed under its own key. See "Who owns a blob".
 - **Size limits (proposal).** 512 MiB for one archive, 2 GiB unpacked, 20,000
   entries in one archive, 16 platforms for one version. An installation
   setting can raise them. Large cloud providers are above 100 MiB for one
@@ -303,15 +310,54 @@ refused (section D).
   (`namespace:read-packages`) opens it, and that read gives the bytes with no
   signed URL.
 
-**Signed archive URLs.** A signed URL binds the namespace, the ID of the
-record, the platform, the SHA-256 of the archive and the expiry. It expires
-after 10 minutes (proposal). The signature is a MAC with a key of the
-installation. The archive route:
+**The package signing key.** Signed archive URLs and the Pulumi capability
+(see "Pulumi mirror proof") use one MAC key, stored as ADR 129 decision 19
+stores the conversation HMAC key:
+
+- One random 32-byte value, sealed in the scope `@server` (ADR 23). It is not
+  a secret item, and no route lists or answers it. The server makes it at
+  start, before it serves a route: an insert with an on-conflict clause that
+  does nothing, and then a read of the row, so two instances that start at
+  the same time make one key. The key is in the table list of a backup
+  (ADR 30), sealed.
+- It is a separate row with its own random value, not a value derived from
+  the conversation HMAC key (recommended): a leak or a rotation of one key
+  never touches the other. The alternative is one master value and a key
+  for each label (`pkgmirror/url/v1`, `pkgmirror/cap/v1`, the conversation
+  label), derived with HMAC-SHA256. That has less storage and links the
+  lifetime of the three uses. Each use also puts its label in the MAC input,
+  so a signed URL is never valid as a capability.
+- Each key has a **key ID** (one byte, in the table). Each capability and
+  each signed URL holds the key ID. The server picks the key by that ID. An
+  unknown ID gives 404 and an audit entry.
+- **Rotation.** `POST /api/server/package-keys/rotate` (action
+  `installation:manage-packages`, a fresh authentication, a reason, an audit
+  entry) makes a new key with the next ID. New values use the new key. The
+  server accepts the old key for the longest lifetime that a value can have
+  (the longest phase deadline, see below, or 10 minutes for a URL), and then
+  deletes it. A job that runs during a rotation keeps its capability, which
+  stays valid until its phase deadline, and receives a capability with the
+  new key at its next phase. A rotation after a compromise can ask to delete the
+  old key at once. Every value with that key then fails (404), a running
+  phase fails closed at its next download, and the job retries with a new
+  value at its next phase.
+- **Restore.** A restore brings back the keys of the backup. A value that
+  the server signed with a key that is not in the backup fails (404), so the
+  job step that holds it fails closed and the next phase receives a value that
+  the restored key signs. No route rotates the key in the first slice
+  except this one.
+
+**Signed archive URLs.** A signed URL binds the key ID, the namespace, the
+ID of the record, the platform, the SHA-256 of the archive and the expiry.
+It expires after 10 minutes (proposal). The archive route:
 
 1. refuses a URL that the server did not build. It recomputes the MAC over
-   the fields, and it reads the record by ID. The namespace, the platform and
-   the SHA-256 of the URL must equal the record. A URL with other fields,
-   an extra query key or a bad MAC gives 404 and an audit entry.
+   the fields with the key of the key ID, and it reads the record by ID **in
+   the effective allowlist of the namespace of the URL** (its own records and
+   the inherited records that the namespace did not revoke, see "Scope" in
+   section C). The namespace, the platform and the SHA-256 of the URL must
+   equal the record. A URL with other fields, an extra query key or a bad MAC
+   gives 404 and an audit entry.
 2. checks, on each download, that the record is still admitted and not
    revoked. So a revocation acts at once, also for a URL that has not yet
    expired.
@@ -321,14 +367,46 @@ The server deletes the query of a signed URL from its access log and from
 its traces (the route pattern is logged, not the URL). The URL is not a
 secret that outlives its expiry, but it is a bearer token until then.
 
-**Who owns a blob (ADR 220).** A blob has the owner that holds the record
-that stored it: a namespace, or the installation for an installation
-admission. A namespace never reads the blob of another namespace. For an
-installation admission, a namespace reads the blob only through its own
-effective allowlist: the route finds the record in the allowlist of the
-namespace of the signed URL (its own record or an inherited one that the
-namespace did not revoke), then reads the blob from the owner of that
-record. The route never takes a blob address from the request.
+**Who owns a blob (ADR 220 decisions 7 to 9 and 20, ADR 217).** ADR 220 puts
+each blob of a namespace under `namespaces/<namespace ID>/`, gives a domain
+service of a namespace a view that refuses each other key, and seals each
+blob under a key of its namespace. An installation admission has no
+namespace, and a namespace must not read a blob of another. Two options:
+
+1. **A copy for each namespace (recommended).** The installation admission
+   fetches the archives into a staging prefix of the installation. Only the
+   admission service reads that prefix, through an installation view. No view
+   of a namespace reaches it. When a namespace first uses the record, the
+   server copies each archive into the prefix of that namespace
+   (`namespaces/<namespace ID>/packages/<SHA-256>`), seals it under the key of
+   that namespace (ADR 217), and checks the SHA-256 of the copy against the
+   record while it streams. The copy starts at the first request of the
+   version document of the record (a route that has already checked
+   `namespace:download-packages`), which answers 503 with `Retry-After` until
+   the platforms that it lists are copied. So the archive route only reads
+   and the route never takes a blob address from the request. A namespace
+   admission fetches directly into the prefix of its namespace. Cost: one
+   copy for each namespace that uses the package. This needs no change of
+   ADR 220 or ADR 217. The ADR checks that the installation staging prefix
+   fits ADR 220 decision 7 (it holds only data that no namespace view
+   reads), and it keeps a test that a view of a namespace refuses the staging
+   key (decision 20). A revocation of the installation record stops service
+   at once, because the effective allowlist no longer holds it. The copies
+   stay until the retention of section B deletes them.
+2. **One shared blob under the installation prefix.** The blob stays under
+   an installation prefix, sealed under an installation key. A namespace
+   reads it through a new read-only installation view that refuses writes and
+   every key but `installation/packages/<SHA-256>`. This needs one copy only,
+   and it amends ADR 220 decisions 7 to 9: a second, read-only view and a
+   blob that no namespace key seals. ADR 217 would name the key. The
+   `blobtest` suite gets a case for the read-only view (refuses a write, a
+   list and a key outside the prefix), and decision 20 gets a test that a
+   namespace reads only a key of the effective allowlist. The route finds the
+   record in the effective allowlist of the namespace of the proof, then
+   reads the blob from the installation.
+
+Option 1 is the recommendation: it keeps the isolation rule of ADR 220
+whole, at the price of storage.
 
 **Module address.** The module registry protocol has an address with three
 parts, `<namespace>/<name>/<system>`. The upstream address of a module is
@@ -352,19 +430,62 @@ URL, and the override list splits on `=` and on `,`, so a token in the query
 1. **A capability in a path segment (recommended).** The launcher sets
    `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES=.*=https://<server>/pulumi/plugins/v1/cap/<cap>`.
    The `<cap>` is a MAC-signed value in base64url, with no `=` and no `,`.
-   It binds one job, one namespace and an expiry that is not later than the
-   end of the job and not more than two hours from now. The server checks
-   the MAC, the expiry, that the job is still running, and then the record
-   of each package as for a signed URL. The server redacts the segment from
-   its access log and traces and adds the value to the secrets that the log
-   of the job redacts. A copy of the value gives the same read as the
-   namespace has for the rest of the job, and no more.
+   It holds the key ID (see "The package signing key"), one job, one phase
+   or tool step, one namespace and an expiry. The launcher asks for a new
+   capability at **each phase or tool step**, and the expiry is the deadline
+   of that phase, not the end of the job. At use the server checks the MAC,
+   the expiry, that the job is still running, that the namespace of the job
+   record equals the namespace of the capability, and then the record of each
+   package in the effective allowlist of that namespace, as for a signed URL.
+   A copy of the value gives the same read as that namespace has until the
+   phase deadline, and no more. If an actor replays it in another job of the
+   same namespace, the reader gets that namespace's allowlist and nothing
+   else, so a replay across jobs of one namespace gives no extra right.
+   A replay needs a running job: the server refuses a capability when its
+   job is no longer running.
 2. **Public routes keyed by hash.** The routes have no proof, and the path
    holds the SHA-256 of the archive. The CLI asks for a file name, not a
    hash, so the file name route needs the version and the platform, and the
    route cannot tell which namespace asks. It would also serve one
    namespace's admitted package to anyone who knows the name. Not
    recommended.
+
+**Where the capability can leak, and what the proposal does.** The segment
+is part of a URL that the CLI treats as public, so it can appear in more
+places than a header would:
+
+- *The CLI logs.* With `-v=1` the CLI logs the full override URL
+  (`plugins.go:771`), and the text of a download error holds the URL
+  (`plugins.go:1745`). The `RedactURL` function of the CLI does not delete a
+  path segment. The launcher adds the capability to the secrets that the log
+  of the job redacts, before it uploads a line. The capability stops working
+  at the phase deadline and when the job ends.
+- *The update events.* The CLI sends its diagnostics, with that text, to
+  the update events of the server (the Pulumi Cloud-compatible API). So the
+  capability could come back to the server in an event, and then into the
+  stored events that a console reader sees. The server **redacts the
+  segment from incoming update events** before it stores them (recommended):
+  any text that matches `/pulumi/plugins/v1/cap/<base64url>`, and the exact
+  capability of the running job. The alternative is to accept the stored
+  capability, which is expired when a reader sees it, and to keep only the
+  test below. Redaction is cheap, so the proposal prefers it.
+- *Log files of the CLI in the sandbox.* The CLI can write a log file in its
+  temporary directory. The launcher sets a temporary directory for each tool
+  step, deletes it at the end of the step, and never collects it as a job
+  artifact.
+- *OpenTofu signed URLs in `TF_LOG`.* An OpenTofu archive URL can appear in
+  the debug log of the CLI. The proposal accepts this: the URL lives 10
+  minutes, the route checks the revocation on each download, and the URL
+  names one record in one namespace. The launcher redacts it from the job
+  log as well.
+
+Test (e2e, with the real Pulumi CLI at a high verbosity and a forced
+download error): the capability value is **absent** from the stored
+checkpoint, from the plan, from the job log and from the stored update
+events. Other tests: a capability of a finished job, of an expired phase, of
+a job of another namespace (the namespace of the job record differs from the
+capability), with a key ID that was deleted by a rotation, and with a bad
+MAC, each with the other checks skipped.
 
 With option 1 the `cap` routes, and the signed archive routes of the OpenTofu
 mirror, carry their own proof and no bearer header. They go on the explicit
@@ -387,7 +508,9 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
    that rule. The fact schema `package.admit/1.0` holds the kind, the
    upstream host, the address, the version, the number of platforms, the
    signature result (`verified`, `unsigned`, `unknown-key`, `not-checked` or
-   `failed`), a `keyChanged` fact (the signing key of this address differs
+   `failed`), the `principal` group of ADR 226 (`kind`, `credential`) and a
+   `source` group with `kind` only (`api`, `cli` or `agent`), so a gate can
+   refuse an admission that an agent or an access token asks for, a `keyChanged` fact (the signing key of this address differs
    from the key of an earlier admission), the SHA-256 of each archive, and
    two groups with an `available` flag as ADR 226 decision 3 asks: `age`
    (the age of the upstream version, see section D) and `scan` (for later,
@@ -400,21 +523,43 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
      installation, as its resource. It has no unit. One admission gives one
      request and one decision record.
    - ADR 224 decision 5: the gates that apply are the gates of the
-     installation and of the namespace. No collection, unit, blueprint or
-     profile gate applies.
-   - ADR 225 decision 7: a new approve action,
-     `namespace:approve-package`, with the same rules for who may approve.
+     installation and of the namespace. A gate for `package.admit` at the
+     scope of a collection or a unit is refused at save (`gate.ErrInvalid`),
+     because no collection or unit is in the request.
+   - ADR 224 decisions 13 and 14 apply with the namespace or the installation
+     as the one resource: the combining runs once for it, and an error of a
+     gate stops the admission (`gate.ErrRuleFailed`). A break-glass for a gate
+     in error passes a final gate of the installation only with
+     `installation:break-gate-error`.
+   - ADR 229 decision 1: the record "for the change" is a record for the
+     admission. It names the admission request in place of a job or change
+     order, and it holds one resource entry (the namespace or the
+     installation) in place of one entry for each unit.
+   - ADR 225 decision 1: a new `approvers` entry, `holders`: the persons who
+     hold the approve action of the resource of the request. The reserved
+     list of rule IDs gets `package-admission`.
+   - ADR 225 decision 7: two approve actions, `namespace:approve-package`
+     and `installation:approve-package`, with the same rules for who may
+     approve.
    - ADR 226: the new schema `package.admit/1.0`, with its own version line.
-   - ADR 230 decision 2: the ADR checks whether the table of actions for
-     gate configuration needs an entry for the new decision point.
+   - ADR 230 decision 2: **no new row**. The rows
+     `installation:manage-gates` and `namespace:manage-gates` already cover
+     the gates and approval rules of every decision point at their scope, so
+     they cover the gates and the rule of `package.admit`. The new actions
+     of this RFC are in its own table below, and they are not actions for
+     the configuration of gates. The ADR keeps the text of those two rows
+     and adds `package.admit` to the examples.
 
    **The built-in gate cannot be bypassed.** The installation holds a
-   built-in starter gate for `package.admit` with `final: true`, and a
-   built-in approval rule (one approval, `authorMayApprove: false`,
-   approvers: the holders of `namespace:approve-package`). The gate and the
-   rule live at installation scope, as a final gate does (ADR 224 decision
-   12), so no narrower scope deletes or relaxes them. Three rules, each
-   with its own test (proposal names):
+   built-in starter gate for `package.admit` with `final: true`, and the
+   built-in approval rule `package-admission` (one approval,
+   `authorMayApprove: false`, approvers: `holders`). The approve action is
+   `namespace:approve-package` for the admission of a namespace, and
+   `installation:approve-package` for the admission of the installation.
+   Both the gate and the rule live at installation scope, as a final gate does
+   (ADR 224 decision 12), so no narrower scope deletes or relaxes them. A
+   rule with the ID `package-admission` at a narrower scope gives
+   `gate.ErrFinal`. Three rules, each with its own test (proposal names):
    - **No gate means approval.** An admission that finds no gate in its
      chain does not admit. It waits for approval under the built-in rule.
      The code never reads "no gate" as "allowed". This fails closed
@@ -424,13 +569,22 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
      gate cannot lower the final gate of the installation. The requester
      cannot approve the own admission, because the approve action is
      separate, the author is not eligible, and a job token, a service
-     principal or an agent never approves (ADR 225 decision 7). Test:
-     `TestPackageAdmitRequesterWithManageGatesCannotApprove`, which also
-     tries to save a namespace gate that returns `allow`, and to approve with
-     the same session.
+     principal, an access token or an agent never approves (ADR 225
+     decision 7). Test: `TestPackageAdmitRequesterWithManageGatesCannotApprove`,
+     which also tries to save a namespace gate that returns `allow`, and to
+     approve with the same session.
    - **No self-admit.** The route for an admission has no way to set the
      state to admitted. Only the engine, after the decision record, writes
      it. Test: `TestPackageAdmitRouteCannotSetAdmitted`.
+
+   **Approvers: the choice.** `holders` is a new entry kind, and a rule
+   with it needs the amendment of ADR 225 decision 1 above (recommended). It
+   names no group that an installation must create, so a new installation
+   has approvers as soon as one person holds the approve action. The
+   alternative is a default group `package-approvers` that the installation
+   creates, empty. It needs no new entry kind. But with an empty group no
+   admission can pass, so a new installation is stuck until an owner finds
+   the group and fills it. Not recommended.
 2. **A fixed approval on the allowlist.** Each admission needs one approval
    by a holder of an action, with no gates. Simple, but no facts, no
    `evaluate` mode, no exemptions, and a second approval system, which
@@ -439,8 +593,13 @@ not of a unit. The six fixed decision points of ADR 224 do not cover it.
    entry. This is the minimum for a small team. It is not a mode of option
    1, because option 1 never reads "no gate" as "allowed". A small team
    instead edits the built-in approval rule at the installation (one
-   approver, who may be the author), and that edit needs
-   `installation:manage-packages`.
+   approver, who may be the author). A change of the approval rule that a
+   final gate names counts as a change of the gate, and it makes the gate
+   weaker (ADR 224 decision 12, effect 4). So the edit needs
+   `installation:manage-gates` (ADR 230 decision 2), a `reason`, a fresh
+   authentication (ADR 227) and an audit entry of the kind `change`. It does
+   not need `installation:manage-packages`, so a person who manages
+   admissions cannot weaken the control that governs them.
 
 **Scope (proposal).** The allowlist belongs to a namespace. The installation
 can hold admissions that each namespace inherits, as gates do. A namespace
@@ -453,10 +612,11 @@ admit one that the installation revoked (question 3).
 | --- | --- | --- |
 | `namespace:read-packages` | namespace | read the allowlist, the records and the hashes |
 | `namespace:request-package` | namespace | ask for an admission (the gates of `package.admit` decide) |
-| `namespace:approve-package` | namespace | approve an admission as an eligible approver (ADR 225 decision 7) |
+| `namespace:approve-package` | namespace | approve an admission of the namespace as an eligible approver (ADR 225 decision 7) |
+| `installation:approve-package` | installation | approve an admission of the installation as an eligible approver (ADR 225 decision 7) |
 | `namespace:revoke-package` | namespace | revoke a vetted package, with a fresh authentication and a reason |
-| `namespace:download-packages` | namespace | the mirror routes (a job token of the namespace holds it) |
-| `installation:manage-packages` | installation | the admissions, revocations and the built-in rule of the installation |
+| `namespace:download-packages` | namespace | the mirror routes. A job token of the namespace holds it. The token of a person (a laptop, a team CI) needs it as well |
+| `installation:manage-packages` | installation | request and revoke the admissions of the installation, and rotate the package signing key. It does not change gates or the built-in rule (that needs `installation:manage-gates`) |
 
 A revocation needs no approval: it only takes away. It is in the audit log
 with the reason.
@@ -501,11 +661,13 @@ source needs a signature (see the facts). The primary path has two parts,
 and both are checked in the e2e suite:
 
 1. **A lock file that the server builds.**
-   `GET /tofu/mirror/v1/{namespace}/lock-file?providers=...` (in the
+   `GET /tofu/mirror/v1/{namespace}/_lock-file?providers=...` (in the
    adapter of OpenTofu, `internal/api/tfe/`) answers the text of a
    `.terraform.lock.hcl` for the named providers and versions, with the
    `h1:` and `zh:` hashes of every admitted platform. A team commits it and
-   needs no `tofu init` on each platform.
+   needs no `tofu init` on each platform. The segment `_lock-file` starts
+   with an underscore, so it cannot be an upstream hostname, which is the
+   segment in that place on the other mirror routes.
 2. **`tofu providers lock -net-mirror=<url> -platform=...`.** The
    documentation names this command for each platform that the team uses.
    The mirror answers the hashes of all admitted platforms to it.
@@ -636,7 +798,8 @@ suite checks both with real state before the ADR (question 8).
 
 **What a team's own CI and a laptop receive.** The team can point its CLI at
 the mirror (layers 1 and 2 in its own configuration) and receive the same
-hashes. The server cannot see the binary that ran, the CLI configuration, or
+hashes. The token of a person or of a team CI needs
+`namespace:download-packages`, as a job token does. The server cannot see the binary that ran, the CLI configuration, or
 the network of that CI or laptop. So a laptop receives no enforcement. A write
 from a team's CI receives the audit finding or the fact of layer 5, and no more.
 A security team that needs all five layers runs its writes on runners of
