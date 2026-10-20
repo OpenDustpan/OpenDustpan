@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // testPostgresURL returns the PostgreSQL URL for the keep-access lock test,
@@ -142,7 +143,7 @@ func TestKeepAccessHoldsShareLocksAcrossSwap(t *testing.T) {
 		t.Fatalf("export portable: %v", err)
 	}
 
-	if _, err := s.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := s.StagePortable(ctx, sink.read, sum, files, storetest.NoStageOptions()); err != nil {
 		t.Fatalf("stage portable: %v", err)
 	}
 

@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -106,7 +107,11 @@ func (l *restoreServiceLive) PeekPortableKey(
 }
 
 func (l *restoreServiceLive) StagePortable(
-	ctx context.Context, open backup.PortableOpener, want backup.Summary, files []backup.PortableFile,
+	ctx context.Context,
+	open backup.PortableOpener,
+	want backup.Summary,
+	files []backup.PortableFile,
+	opts backup.StageOptions,
 ) (backup.Summary, error) {
 	l.mu.Lock()
 	block := l.stageBlock
@@ -131,7 +136,7 @@ func (l *restoreServiceLive) StagePortable(
 		}
 	}
 
-	return l.checks.StagePortable(ctx, open, want, files)
+	return l.checks.StagePortable(ctx, open, want, files, opts)
 }
 
 func (l *restoreServiceLive) DiscardStaging(ctx context.Context) error {
@@ -171,6 +176,25 @@ func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, err
 	l.bumped++
 
 	return 1, nil
+}
+
+// ReadKind, StripDevStaged and RecordDevReport satisfy the dev data ports of
+// backup.RestoreLive. The service does not call them yet, so the fake holds
+// no state for them.
+func (l *restoreServiceLive) ReadKind(_ context.Context) (installation.Kind, error) {
+	return installation.KindProduction, nil
+}
+
+func (l *restoreServiceLive) StripDevStaged(
+	_ context.Context, _ backup.DevStripMode,
+) (backup.DevStripReport, error) {
+	return backup.DevStripReport{Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil}, nil
+}
+
+func (l *restoreServiceLive) RecordDevReport(
+	_ context.Context, _ backup.RestoreID, _ backup.DevStripReport,
+) error {
+	return nil
 }
 
 // liveCounts counts the applies and fences of the fake live store.

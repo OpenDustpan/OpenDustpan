@@ -233,7 +233,7 @@ func testPortableStages(t *testing.T, newStore PortableFactory) {
 
 	sink, sum, files := exportPortable(t, s)
 
-	staged, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	staged, err := s.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions())
 	if err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
@@ -263,7 +263,7 @@ func testPortableStageRefusesCorrupt(t *testing.T, newStore PortableFactory) {
 	raw := data.Bytes()
 	raw[len(raw)/2] ^= 0xff
 
-	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions())
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage a corrupt table file: err = %v, want ErrCorrupt", err)
 	}
@@ -280,7 +280,7 @@ func testPortableStageRefusesVersion(t *testing.T, newStore PortableFactory) {
 	sink, sum, files := exportPortable(t, s)
 	sum.SchemaVersion++
 
-	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions())
 	if !errors.Is(err, backup.ErrSchemaMismatch) {
 		t.Fatalf("stage another schema version: err = %v, want ErrSchemaMismatch", err)
 	}
@@ -297,7 +297,7 @@ func testPortableStageRefusesBaseline(t *testing.T, newStore PortableFactory) {
 	sink, sum, files := exportPortable(t, s)
 	sum.SchemaVersion = backup.BaselineSchemaVersion - 1
 
-	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions())
 	if !errors.Is(err, backup.ErrSchemaBeforeBaseline) {
 		t.Fatalf("stage a backup from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
@@ -659,7 +659,7 @@ func assertStageRefused(
 ) {
 	t.Helper()
 
-	_, err := s.StagePortable(t.Context(), sink.read, export.sum, export.files)
+	_, err := s.StagePortable(t.Context(), sink.read, export.sum, export.files, NoStageOptions())
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage a bad files list: err = %v, want ErrCorrupt", err)
 	}
@@ -730,7 +730,7 @@ func testPortableStageRefusesForeignKeys(t *testing.T, newStore PortableFactory)
 
 	dst := newStore(t)
 
-	_, err := dst.StagePortable(t.Context(), PortableOpener(tampered), want, tamperedFiles)
+	_, err := dst.StagePortable(t.Context(), PortableOpener(tampered), want, tamperedFiles, NoStageOptions())
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage stacks without their namespace: err = %v, want ErrCorrupt", err)
 	}
@@ -767,7 +767,7 @@ func testPortableStageRefusesBrokenStream(t *testing.T, newStore PortableFactory
 
 	dst := newStore(t)
 
-	_, err := dst.StagePortable(t.Context(), PortableOpener(raw), sum, files)
+	_, err := dst.StagePortable(t.Context(), PortableOpener(raw), sum, files, NoStageOptions())
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage a corrupt stream: err = %v, want ErrCorrupt", err)
 	}
@@ -796,7 +796,7 @@ func testPortableStageRefusesBlobs(t *testing.T, newStore PortableFactory) {
 
 	dst := newStore(t)
 
-	_, err := dst.StagePortable(t.Context(), sink.read, sum, files)
+	_, err := dst.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions())
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage wrong blob references: err = %v, want ErrCorrupt", err)
 	}
@@ -847,4 +847,11 @@ func testPortablePendingNamesNoBlob(t *testing.T, newStore PortableFactory) {
 	}
 
 	t.Fatalf("export names %+v, want the finalized key %q", sum.Blobs, finalized.Content)
+}
+
+// NoStageOptions returns the options of a stage call that names no backup
+// kind and does not allow a dev backup. The suites that do not test the dev
+// data rules stage with it.
+func NoStageOptions() backup.StageOptions {
+	return backup.StageOptions{BackupKind: "", AllowDev: false}
 }

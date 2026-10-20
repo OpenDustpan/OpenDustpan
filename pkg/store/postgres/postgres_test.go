@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -1930,4 +1931,18 @@ func BenchmarkAuthorizer(b *testing.B) {
 	}
 
 	accesstest.Bench(b, open(b, base))
+}
+
+// ReadKind, StripDevStaged and RecordDevReport satisfy the dev data ports of
+// backup.RestoreLive. The adapter implements them in a later change.
+func (s *backupStore) ReadKind(_ context.Context) (installation.Kind, error) {
+	return installation.KindProduction, nil
+}
+
+func (s *backupStore) StripDevStaged(_ context.Context, _ backup.DevStripMode) (backup.DevStripReport, error) {
+	return backup.DevStripReport{Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil}, nil
+}
+
+func (s *backupStore) RecordDevReport(_ context.Context, _ backup.RestoreID, _ backup.DevStripReport) error {
+	return nil
 }

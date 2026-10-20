@@ -749,7 +749,7 @@ func newRouteTestRestores(
 	t.Helper()
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        st,
+		Live:        devPortsLive{Store: st},
 		Registry:    st,
 		Backups:     service,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal),

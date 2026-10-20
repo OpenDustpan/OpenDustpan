@@ -26,10 +26,17 @@ import (
 // check ports of CheckRestore (ADR 38 decision 3), the one-step swap of
 // ApplyStaging (decision 6), and the fencing of BumpFailoverVersions
 // (decision 7). Every store adapter serves them from one database connection.
+//
+// KindReader, DevStripper and DevReportRecorder are part of it, so a live
+// store that lacks one cannot run a restore: NewRestoreService fails with
+// ErrMissingDependency and no restore runs without the dev data rules.
 type RestoreLive interface {
 	CheckStore
 	Applier
 	Fencer
+	KindReader
+	DevStripper
+	DevReportRecorder
 }
 
 // RestoreMaintenance enters and leaves maintenance mode around the apply

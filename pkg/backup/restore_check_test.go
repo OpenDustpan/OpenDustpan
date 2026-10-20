@@ -60,7 +60,7 @@ func (s *checkLiveStore) PeekPortableKey(
 }
 
 func (s *checkLiveStore) StagePortable(
-	_ context.Context, open backup.PortableOpener, _ backup.Summary, files []backup.PortableFile,
+	_ context.Context, open backup.PortableOpener, _ backup.Summary, files []backup.PortableFile, _ backup.StageOptions,
 ) (backup.Summary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

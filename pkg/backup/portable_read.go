@@ -31,7 +31,13 @@ type PortableStager interface {
 	// descriptor, then the summary against want. It returns ErrCorrupt for a
 	// file that does not match its descriptor, ErrSchemaMismatch for another
 	// schema version, and the check errors of Stager.
-	StagePortable(ctx context.Context, open PortableOpener, want Summary, files []PortableFile) (Summary, error)
+	StagePortable(
+		ctx context.Context,
+		open PortableOpener,
+		want Summary,
+		files []PortableFile,
+		opts StageOptions,
+	) (Summary, error)
 }
 
 // ReadPortableTable reads the rows of one table file and calls emit for each

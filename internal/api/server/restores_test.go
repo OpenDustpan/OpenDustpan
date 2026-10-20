@@ -17,9 +17,30 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
+
+// devPortsLive adds the dev data ports of backup.RestoreLive to the SQLite
+// store. The adapters implement them in a later change; the route tests do
+// not call them.
+type devPortsLive struct {
+	*sqlite.Store
+}
+
+func (devPortsLive) ReadKind(_ context.Context) (installation.Kind, error) {
+	return installation.KindProduction, nil
+}
+
+func (devPortsLive) StripDevStaged(_ context.Context, _ backup.DevStripMode) (backup.DevStripReport, error) {
+	return backup.DevStripReport{Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil}, nil
+}
+
+func (devPortsLive) RecordDevReport(_ context.Context, _ backup.RestoreID, _ backup.DevStripReport) error {
+	return nil
+}
 
 // restoreFixture is a Handler with a backup service and a restore service
 // over fresh stores, with the services kept for synchronous setup.
@@ -64,7 +85,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        stores.registry,
+		Live:        devPortsLive{Store: stores.registry},
 		Registry:    stores.registry,
 		Backups:     backups,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal),
@@ -846,7 +867,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        stores.registry,
+		Live:        devPortsLive{Store: stores.registry},
 		Registry:    stores.registry,
 		Backups:     backups,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal),
@@ -957,7 +978,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:        stores.registry,
+		Live:        devPortsLive{Store: stores.registry},
 		Registry:    stores.registry,
 		Backups:     backups,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal),

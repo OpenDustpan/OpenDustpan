@@ -20,7 +20,11 @@ const portableBatchRows = 200
 // foreign-key order, one transaction for each batch of rows, and checks it as
 // the checks of a restore require. The live database is never written.
 func (s *Store) StagePortable(
-	ctx context.Context, open backup.PortableOpener, want backup.Summary, files []backup.PortableFile,
+	ctx context.Context,
+	open backup.PortableOpener,
+	want backup.Summary,
+	files []backup.PortableFile,
+	_ backup.StageOptions,
 ) (backup.Summary, error) {
 	version, err := func() (int64, error) {
 		s.mu.RLock()

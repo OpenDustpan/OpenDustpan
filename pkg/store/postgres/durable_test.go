@@ -211,7 +211,7 @@ func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 	files, sum, descs := storetest.PortableFiles(t, s)
 	checkBackupHoldsNoDurable(t, sum, descs, files)
 
-	staged, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs)
+	staged, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, storetest.NoStageOptions())
 	if stageErr != nil {
 		t.Fatalf("stage the portable backup: %v", stageErr)
 	}

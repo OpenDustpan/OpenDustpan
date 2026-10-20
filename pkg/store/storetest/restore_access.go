@@ -441,7 +441,7 @@ func stageKeepBackup(
 ) {
 	t.Helper()
 
-	if _, err := ps.StagePortable(t.Context(), sink.read, sum, files); err != nil {
+	if _, err := ps.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions()); err != nil {
 		t.Fatalf("stage backup: %v", err)
 	}
 }

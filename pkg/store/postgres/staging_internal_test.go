@@ -143,7 +143,8 @@ func TestCloseDropsStagingSchema(t *testing.T) {
 
 	files, sum, descs := storetest.PortableFiles(t, s)
 
-	if _, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs); stageErr != nil {
+	_, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, storetest.NoStageOptions())
+	if stageErr != nil {
 		t.Fatalf("stage backup: %v", stageErr)
 	}
 
@@ -195,7 +196,8 @@ func TestCloseContextDropsStagingSchemaWithCanceledContext(t *testing.T) {
 
 	files, sum, descs := storetest.PortableFiles(t, s)
 
-	if _, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs); stageErr != nil {
+	_, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, storetest.NoStageOptions())
+	if stageErr != nil {
 		t.Fatalf("stage backup: %v", stageErr)
 	}
 

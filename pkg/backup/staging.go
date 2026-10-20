@@ -158,7 +158,13 @@ func stageBackup(
 ) (Summary, error) {
 	var none Summary
 
-	staged, stageErr := live.StagePortable(ctx, portableOpener(ctx, target, id), plan.want, plan.files)
+	staged, stageErr := live.StagePortable(
+		ctx,
+		portableOpener(ctx, target, id),
+		plan.want,
+		plan.files,
+		StageOptions{BackupKind: "", AllowDev: false},
+	)
 	if stageErr != nil {
 		// Best-effort cleanup after a failed stage: the staging area must go,
 		// and the error below already names the cause.

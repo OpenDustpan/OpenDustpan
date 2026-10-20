@@ -2706,6 +2706,13 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 	return service, nil
 }
 
+// restoreBase is RestoreLive without the ports of the dev data rules.
+type restoreBase interface {
+	backup.CheckStore
+	backup.Applier
+	backup.Fencer
+}
+
 // newRestoreService builds the installation restore service when a backup
 // target is configured, else returns nil. The live store, the registry and
 // the check ports come from the namespace store: every SQL adapter serves
@@ -2726,6 +2733,17 @@ func newRestoreService(
 
 	live, ok := cfg.namespaceStore.(backup.RestoreLive)
 	if !ok {
+		_, base := cfg.namespaceStore.(restoreBase)
+		if base {
+			// The store restores but lacks the ports of the dev data rules.
+			// Fail closed: run no restore, and keep the server up.
+			cfg.logger.Warn("restore is off: the namespace store lacks the dev data ports " +
+				"(KindReader, DevStripper, DevReportRecorder)")
+
+			//nolint:nilnil // Nil without an error means the server runs no restore.
+			return nil, nil
+		}
+
 		return nil, errRestoreNeedsLive
 	}
 

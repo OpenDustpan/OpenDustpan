@@ -19,7 +19,11 @@ const portableBatchRows = 200
 // foreign-key order, one transaction for each batch, and checks it as
 // the checks of a restore require. The live tables are never written.
 func (s *Store) StagePortable(
-	ctx context.Context, open backup.PortableOpener, want backup.Summary, files []backup.PortableFile,
+	ctx context.Context,
+	open backup.PortableOpener,
+	want backup.Summary,
+	files []backup.PortableFile,
+	_ backup.StageOptions,
 ) (backup.Summary, error) {
 	version, err := s.schemaVersion(ctx)
 	if err != nil {
