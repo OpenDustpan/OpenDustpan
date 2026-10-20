@@ -72,7 +72,7 @@ both together.
 | [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing; MFA, sign-in methods, MFA freshness and break-glass accepted (ADR 46, ADR 55, ADR 56, ADR 57) |
 | [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60), trusted proxies and the restore entries (ADR 212) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | accepted |
-| [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
+| [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | accepted (ADRs 153, 267) |
 | [25](0025-drift-detection.md) | Drift detection and remediation | discussing; a person approves a remediation by a built-in gate (ADR 258); detection is a plan-only refresh job (ADR 263) |
 | [26](0026-unit-status.md) | Unit status in the inventory | accepted (ADRs 213, 265) |
 | [27](0027-pull-request-automation.md) | Pull request automation | draft |
@@ -147,3 +147,4 @@ both together.
 | [98](0098-chat-sinks-one-sender-a-renderer-for-each-platform.md) | Chat sinks, with one sender and a renderer for each chat platform (ADR 262) | discussing |
 | [99](0099-the-api-description-and-the-generated-sdks.md) | The API description and the generated SDKs (ADR 264) | discussing |
 | [100](0100-saved-views.md) | Saved views of the unit list, a part of RFC 40 | accepted (ADR 266) |
+| [101](0101-a-private-registry-for-opentofu-providers-and-modules.md) | A private registry for OpenTofu providers and modules (ADR 269) | discussing |

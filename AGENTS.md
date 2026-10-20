@@ -74,7 +74,10 @@ pkg/                   the public SDK (ADR 35)
   graph/               domain: the unit graph, blast radius and focus view
   unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
   drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
+  trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
+  cron/                helper: the 5-field UTC cron parser and the schedule presets, standard library only
   savedview/           domain: saved views, a named query of the unit list (RFC 100)
+  registry/            domain: the private registry, with the address, the release and the store port (RFC 101)
   unitimport/          domain: imports of units from a source, the import ledger and the move check
   gate/                domain: gates, access limits, approval rules, facts and decision records
   gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
@@ -124,7 +127,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
   `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
-  `unmanaged`, `drift`, `savedview`, `unitimport`, `gate`) never import
+  `unmanaged`, `drift`, `trigger`, `savedview`, `registry`, `unitimport`, `gate`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.
