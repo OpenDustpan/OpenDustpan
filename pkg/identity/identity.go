@@ -793,6 +793,12 @@ func (o Object) IsUnit() bool {
 	return o.isUnit
 }
 
+// IsNamespace reports whether the reference names a namespace itself rather
+// than a unit, a collection, a principal, the caller or the installation.
+func (o Object) IsNamespace() bool {
+	return o.ns != "" && !o.isUnit && !o.isCollection && !o.isCaller && !o.isServer && o.principal == ""
+}
+
 // IsCaller reports whether the reference names the authenticated caller
 // itself rather than a namespace, a unit or the installation.
 func (o Object) IsCaller() bool {

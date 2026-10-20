@@ -190,6 +190,10 @@ func webUnit() collection.UnitRef {
 	return collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"}
 }
 
+func acmeTarget() manuallock.Target {
+	return manuallock.NamespaceTarget("acme")
+}
+
 func paymentsRef() collection.Ref {
 	return collection.Ref{Namespace: "acme", Name: "payments"}
 }
@@ -198,7 +202,7 @@ func paymentsRef() collection.Ref {
 func zeroTarget() manuallock.Target {
 	return manuallock.Target{
 		Kind: "", Unit: collection.UnitRef{Namespace: "", Tool: "", Name: ""},
-		Collection: collection.Ref{Namespace: "", Name: ""},
+		Collection: collection.Ref{Namespace: "", Name: ""}, Space: "",
 	}
 }
 
@@ -523,6 +527,14 @@ func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 			want: "workspace acme/web is in collection acme/payments, which has a manual lock " + detail,
 		},
 		{
+			name: "stack in a locked namespace", target: acmeTarget(), noun: "stack", object: "acme/web/prod",
+			want: "stack acme/web/prod is in namespace acme, which has a manual lock " + detail,
+		},
+		{
+			name: "workspace in a locked namespace", target: acmeTarget(), noun: "workspace", object: "acme/web",
+			want: "workspace acme/web is in namespace acme, which has a manual lock " + detail,
+		},
+		{
 			name: "a tool that sets no noun", target: manuallock.UnitTarget(webUnit()), noun: "", object: "acme/web",
 			want: "stack or workspace acme/web has a manual lock " + detail,
 		},
@@ -565,6 +577,11 @@ func TestTarget(t *testing.T) {
 	}{
 		{name: "unit", target: manuallock.UnitTarget(webUnit()), wantNS: "acme", wantValid: true},
 		{name: "collection", target: manuallock.CollectionTarget(paymentsRef()), wantNS: "acme", wantValid: true},
+		{name: "namespace", target: acmeTarget(), wantNS: "acme", wantValid: true},
+		{name: "namespace with no name", target: manuallock.NamespaceTarget(""), wantNS: "", wantValid: false},
+		{name: "unknown kind", target: manuallock.Target{
+			Kind: "tenant", Unit: webUnit(), Collection: paymentsRef(), Space: "acme",
+		}, wantNS: "", wantValid: false},
 		{name: "zero", target: zeroTarget(), wantNS: "", wantValid: false},
 	}
 
@@ -591,6 +608,7 @@ func TestServiceChecksAuthorizationAtThePointOfUse(t *testing.T) {
 
 	unit := manuallock.UnitTarget(webUnit())
 	coll := manuallock.CollectionTarget(paymentsRef())
+	space := acmeTarget()
 
 	cases := []struct {
 		name   string
@@ -662,6 +680,45 @@ func TestServiceChecksAuthorizationAtThePointOfUse(t *testing.T) {
 				return err
 			},
 			action: "collection:read", object: "",
+		},
+		{
+			// namespace:break-freeze lets a job start through a freeze. It is no
+			// action on a manual lock, so it never lets a caller lock a namespace.
+			name: "lock a namespace with only namespace:break-freeze", allow: []identity.Action{
+				identity.ActionNamespaceBreakFreeze, identity.ActionNamespaceRead, identity.ActionUnitManage,
+			},
+			call: func(s *manuallock.Service) error {
+				_, err := s.Lock(context.Background(), person("alice"), space, "r", entry())
+
+				return err
+			},
+			action: "unit:lock", object: "acme",
+		},
+		{
+			name: "unlock a namespace without unit:lock", allow: []identity.Action{
+				identity.ActionNamespaceBreakFreeze, identity.ActionNamespaceRead, identity.ActionUnitManage,
+			},
+			call: func(s *manuallock.Service) error {
+				return s.Unlock(context.Background(), person("alice"), space, entry())
+			},
+			action: "unit:lock", object: "acme",
+		},
+		{
+			name:  "force-unlock a namespace with unit:lock but without unit:manage",
+			allow: []identity.Action{identity.ActionUnitLock, identity.ActionNamespaceBreakFreeze},
+			call: func(s *manuallock.Service) error {
+				return s.ForceUnlock(context.Background(), person("alice"), space, entry())
+			},
+			action: "unit:manage", object: "acme",
+		},
+		{
+			name: "get a namespace lock without namespace:read", allow: []identity.Action{identity.ActionUnitRead},
+			call: func(s *manuallock.Service) error {
+				_, err := s.Get(context.Background(), person("alice"), space)
+
+				return err
+			},
+			action: "namespace:read", object: "acme",
 		},
 	}
 
@@ -783,5 +840,125 @@ func TestSafeText(t *testing.T) {
 				t.Errorf("SafeText(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// fakePhases answers the start of the phase of one job.
+type fakePhases struct {
+	jobs map[string]time.Time
+	err  error
+}
+
+func (f fakePhases) PhaseStartedAt(_ context.Context, jobID string, _ collection.UnitRef) (time.Time, error) {
+	if f.err != nil {
+		return time.Time{}, f.err
+	}
+
+	started, ok := f.jobs[jobID]
+	if !ok {
+		return time.Time{}, manuallock.ErrNoPhase
+	}
+
+	return started, nil
+}
+
+var errClockDown = errors.New("job store is down")
+
+// TestCoveringForLetsAnEarlierPhasePass proves a lock request that carries the
+// job token of a phase that started before the manual lock passes, and that
+// every other request meets the lock: another job, a phase that started at or
+// after the lock, a clock that fails, a clock of zero and a service with no clock.
+func TestCoveringForLetsAnEarlierPhasePass(t *testing.T) {
+	t.Parallel()
+
+	since := fixedNow()
+	held := manuallock.Lock{Since: since, Target: acmeTarget(), Holder: "alice", Reason: "freeze"}
+
+	cases := []struct {
+		name       string
+		phases     manuallock.PhaseClock
+		jobID      string
+		wantLocked bool
+	}{
+		{
+			name: "phase started before the lock", jobID: "job-1", wantLocked: false,
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(-time.Minute)}},
+		},
+		{
+			name: "phase started at the time of the lock", jobID: "job-1", wantLocked: true,
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since}},
+		},
+		{
+			name: "phase started after the lock", jobID: "job-1", wantLocked: true,
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(time.Second)}},
+		},
+		{
+			name: "job with no live phase on the unit", jobID: "job-2", wantLocked: true,
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": since.Add(-time.Minute)}},
+		},
+		{name: "no job token", jobID: "", wantLocked: true, phases: fakePhases{
+			jobs: map[string]time.Time{"": since.Add(-time.Minute)},
+		}},
+		{
+			name: "clock fails", jobID: "job-1", wantLocked: true,
+			phases: fakePhases{jobs: nil, err: errClockDown},
+		},
+		{
+			name: "clock answers zero", jobID: "job-1", wantLocked: true,
+			phases: fakePhases{jobs: map[string]time.Time{"job-1": {}}},
+		},
+		{name: "no clock", jobID: "job-1", wantLocked: true, phases: nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+			store.held = held
+
+			svc, err := manuallock.NewService(manuallock.Config{
+				Store: store, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Phases: tc.phases, Now: fixedNow,
+			})
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+
+			got, err := svc.CoveringFor(t.Context(), webUnit(), tc.jobID)
+			if tc.wantLocked {
+				if err != nil || got != held {
+					t.Fatalf("CoveringFor = %+v, %v; want the lock", got, err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, manuallock.ErrNotLocked) {
+				t.Fatalf("CoveringFor = %+v, %v; want ErrNotLocked", got, err)
+			}
+		})
+	}
+}
+
+// TestCoveringForKeepsTheStoreAnswer proves an unlocked unit and a failing
+// store give the same answer with and without a job token.
+func TestCoveringForKeepsTheStoreAnswer(t *testing.T) {
+	t.Parallel()
+
+	for _, storeErr := range []error{manuallock.ErrNotLocked, errClockDown} {
+		store := newStore()
+		store.getErr = storeErr
+
+		svc, err := manuallock.NewService(manuallock.Config{
+			Store: store, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Now: fixedNow,
+			Phases: fakePhases{jobs: map[string]time.Time{"job-1": fixedNow().Add(-time.Hour)}},
+		})
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+
+		if _, err := svc.CoveringFor(t.Context(), webUnit(), "job-1"); !errors.Is(err, storeErr) {
+			t.Errorf("CoveringFor err = %v, want %v", err, storeErr)
+		}
 	}
 }

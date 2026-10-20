@@ -31,11 +31,15 @@ const unitLockPath = "/api/inventory/unit-lock"
 // collectionLockPath is the route of the manual lock of one collection.
 const collectionLockPath = v1Prefix + "/namespaces/{namespace}/collections/{collection}/lock"
 
+// namespaceLockPath is the route of the manual lock of a whole namespace.
+const namespaceLockPath = v1Prefix + "/namespaces/{namespace}/lock"
+
 // lockRoutes returns the manual lock rows of the route table. Reading a lock
 // needs read access to the object. Taking a lock and removing your own lock
 // need unit:lock on the object, and a force-unlock needs unit:manage on it.
 // The object of a collection route is the collection, so a grant on the
-// collection or on its namespace reaches it.
+// collection or on its namespace reaches it. The object of a namespace route is
+// the namespace, so only a grant on the namespace reaches it.
 func (h *Handler) lockRoutes() []Route {
 	unit := func(method, path string, action identity.Action, serve RouteHandler) Route {
 		return Route{
@@ -63,6 +67,19 @@ func (h *Handler) lockRoutes() []Route {
 		}
 	}
 
+	space := func(method, path string, action identity.Action, serve RouteHandler) Route {
+		return Route{
+			Method:           method,
+			Path:             path,
+			Scope:            ScopeAuthorized,
+			Actions:          []identity.Action{action},
+			Resolve:          resolveCollectionNamespace,
+			NamespaceActions: nil,
+			DeniedAsNotFound: false,
+			Serve:            serve,
+		}
+	}
+
 	return []Route{
 		unit(http.MethodPut, unitLockPath, identity.ActionUnitLock, h.putLock),
 		unit(http.MethodGet, unitLockPath, identity.ActionUnitRead, h.getLock),
@@ -72,12 +89,17 @@ func (h *Handler) lockRoutes() []Route {
 		coll(http.MethodGet, collectionLockPath, identity.ActionCollectionRead, h.getLock),
 		coll(http.MethodDelete, collectionLockPath, identity.ActionUnitLock, h.deleteLock),
 		coll(http.MethodPost, collectionLockPath+"/force-unlock", identity.ActionUnitManage, h.forceUnlock),
+		space(http.MethodPut, namespaceLockPath, identity.ActionUnitLock, h.putLock),
+		space(http.MethodGet, namespaceLockPath, identity.ActionNamespaceRead, h.getLock),
+		space(http.MethodDelete, namespaceLockPath, identity.ActionUnitLock, h.deleteLock),
+		space(http.MethodPost, namespaceLockPath+"/force-unlock", identity.ActionUnitManage, h.forceUnlock),
 	}
 }
 
-// lockEntryDocument is a manual lock as the console reads it. Kind is "unit" or
-// "collection". Object is the unit reference, or <namespace>/<collection>. Since
-// is an RFC 3339 time in UTC.
+// lockEntryDocument is a manual lock as the console reads it. Kind is "unit",
+// "collection" or "namespace". Object is the unit reference,
+// <namespace>/<collection>, or the name of the namespace. Since is an RFC 3339
+// time in UTC.
 //
 // Contract: never remove or rename these fields.
 type lockEntryDocument struct {
@@ -94,11 +116,17 @@ type lockEntryDocument struct {
 // Contract: never remove or rename these fields.
 type manualLockEntry = lockEntryDocument
 
-// lockTarget returns the object of a lock route: the unit or the collection that
-// the route resolved.
+// lockTarget returns the object of a lock route: the unit, the collection or the
+// namespace that the route resolved. An object of another kind gives a target
+// that is not valid, which the lock service refuses.
 func lockTarget(obj identity.Object) manuallock.Target {
-	if obj.IsCollection() {
+	switch {
+	case obj.IsCollection():
 		return manuallock.CollectionTarget(collectionRef(obj))
+	case obj.IsNamespace():
+		return manuallock.NamespaceTarget(obj.Namespace())
+	case !obj.IsUnit():
+		return manuallock.Target{}
 	}
 
 	return manuallock.UnitTarget(collection.UnitRef{
@@ -108,11 +136,16 @@ func lockTarget(obj identity.Object) manuallock.Target {
 
 // lockObjectName returns the name that a lock document shows for its object.
 func lockObjectName(t manuallock.Target) string {
-	if t.Kind == manuallock.KindCollection {
+	switch t.Kind {
+	case manuallock.KindCollection:
 		return t.Collection.String()
+	case manuallock.KindNamespace:
+		return t.Space.String()
+	case manuallock.KindUnit:
+		return t.Unit.String()
+	default:
+		return ""
 	}
-
-	return t.Unit.String()
 }
 
 // toLockDocument maps a manual lock to its wire shape.
