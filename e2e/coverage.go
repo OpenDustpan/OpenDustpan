@@ -459,8 +459,8 @@ func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (wo
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
-func (coverageTofuHTTPWorkspaces) LockWithID(
-	_ context.Context, _ workspace.ID, _, _, _ string,
+func (coverageTofuHTTPWorkspaces) LockWithIDForJob(
+	_ context.Context, _ workspace.ID, _, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
@@ -526,8 +526,8 @@ func (coverageWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace
 	return nil, nil
 }
 
-func (coverageWorkspaces) Lock(
-	_ context.Context, _ workspace.ID, _, _ string,
+func (coverageWorkspaces) LockForJob(
+	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	var none workspace.Workspace
 
