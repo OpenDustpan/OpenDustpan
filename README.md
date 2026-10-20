@@ -320,6 +320,10 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Preferences API](docs/reference/preferences-api.md): the routes that read
+  and change the preferences of a person.
+- [Languages and digits](docs/reference/languages-and-digits.md): the
+  languages, the `digits` setting and the plural forms.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 

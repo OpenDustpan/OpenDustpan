@@ -224,7 +224,7 @@ func (h *Handler) getPreferences(w http.ResponseWriter, r *http.Request, p ident
 }
 
 // patchPreferences answers PATCH /api/dustpan/v1/me/preferences. The body is a
-// JSON merge patch (RFC 7396): a field that the body leaves out keeps its
+// JSON merge patch (IETF RFC 7396): a field that the body leaves out keeps its
 // value, and null sets a field back to its default. It answers 200 with the
 // full document, also for a patch that changes nothing. Such a patch does not
 // change updatedAt and writes no audit entry.

@@ -34,8 +34,11 @@ var principalColumn = regexp.MustCompile(
 //
 //nolint:gochecknoglobals // A frozen decision table shared by the coverage tests.
 var devColumnDecisions = map[string]devDecision{
-	"principals.subject":              {strip: true, reason: "the dev principal itself"},
-	"grants.subject":                  {strip: true, reason: "text form of the subject of a grant of a removed principal"},
+	"principals.subject": {strip: true, reason: "the dev principal itself"},
+	"grants.subject": {
+		strip:  true,
+		reason: "text form of the subject of a grant of a removed principal",
+	},
 	"grants.subject_id":               {strip: true, reason: "ID of the principal that holds the grant"},
 	"group_members.principal_id":      {strip: true, reason: "membership of a removed principal"},
 	"sessions.principal_id":           {strip: true, reason: "session of a removed principal"},

@@ -1296,6 +1296,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
 		jobAllowEntries(),
+		preferencesAllowEntries(),
 	)
 }
 
