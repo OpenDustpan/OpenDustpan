@@ -207,6 +207,13 @@ type lockEntry struct {
 	Operation string `json:"operation"`
 }
 
+// stateEntry is one state of a unit: its wire value and the time it began, an
+// RFC 3339 time in UTC.
+type stateEntry struct {
+	State string `json:"state"`
+	Since string `json:"since"`
+}
+
 // unitEntry is one unit as the console reads it. Tool is the tool label of
 // the glossary ("Pulumi" or "OpenTofu"); Reference is the unit reference
 // with the stored lowercase tool code ("pulumi:acme/web/prod"). UnitID is the
@@ -221,15 +228,18 @@ type lockEntry struct {
 // API, and it ships on its own schedule, so a released console keeps working
 // only while every field stays.
 type unitEntry struct {
-	Tool          string     `json:"tool"`
-	Reference     string     `json:"reference"`
-	UnitID        string     `json:"unitID"`
-	Namespace     string     `json:"namespace"`
-	Name          string     `json:"name"`
-	LastChange    string     `json:"lastChange"`
-	Status        string     `json:"status,omitempty"`
-	ResourceCount *int64     `json:"resourceCount,omitempty"`
-	Lock          *lockEntry `json:"lock,omitempty"`
+	Tool       string `json:"tool"`
+	Reference  string `json:"reference"`
+	UnitID     string `json:"unitID"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	LastChange string `json:"lastChange"`
+	Status     string `json:"status,omitempty"`
+	// States are the states of the unit in the order of the badges. The array
+	// is empty when nothing needs attention.
+	States        []stateEntry `json:"states"`
+	ResourceCount *int64       `json:"resourceCount,omitempty"`
+	Lock          *lockEntry   `json:"lock,omitempty"`
 	// ManualLock is the manual lock that covers the unit, omitted when none
 	// does. Like Lock, it is a flag and not a status.
 	ManualLock *manualLockEntry `json:"manualLock,omitempty"`
@@ -277,6 +287,7 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		Name:          e.Name,
 		LastChange:    formatTime(e.LastChanged),
 		Status:        e.Status,
+		States:        toStateEntries(e),
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
 		ManualLock:    toManualLockEntry(e.ManualLock),
@@ -284,6 +295,19 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		Labels:        e.Labels,
 		ConsoleURL:    h.consoleURL(e.UnitID),
 	}
+}
+
+// toStateEntries maps the states of the entry e to their wire shape. The
+// array is never nil, so the field reads as a list in every response.
+func toStateEntries(e coreinventory.Entry) []stateEntry {
+	states := e.StatesOf()
+	out := make([]stateEntry, len(states))
+
+	for i, s := range states {
+		out[i] = stateEntry{State: string(s.State), Since: formatTime(s.Since)}
+	}
+
+	return out
 }
 
 // consoleURL returns the URL of the page of the unit in the console, or an

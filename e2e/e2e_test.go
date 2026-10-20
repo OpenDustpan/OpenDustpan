@@ -5600,13 +5600,21 @@ type inventoryLockDoc struct {
 
 // inventoryUnitDoc decodes one unit of GET /api/dustpan/v1/namespaces/{namespace}/units.
 type inventoryUnitDoc struct {
-	Tool       string            `json:"tool"`
-	Reference  string            `json:"reference"`
-	UnitID     string            `json:"unitID"`
-	Namespace  string            `json:"namespace"`
-	Name       string            `json:"name"`
-	LastChange string            `json:"lastChange"`
-	Lock       *inventoryLockDoc `json:"lock"`
+	Tool       string              `json:"tool"`
+	Reference  string              `json:"reference"`
+	UnitID     string              `json:"unitID"`
+	Namespace  string              `json:"namespace"`
+	Name       string              `json:"name"`
+	LastChange string              `json:"lastChange"`
+	Lock       *inventoryLockDoc   `json:"lock"`
+	States     []inventoryStateDoc `json:"states"`
+}
+
+// inventoryStateDoc decodes one state of a unit: its wire value and the time
+// it began as an RFC 3339 time.
+type inventoryStateDoc struct {
+	State string `json:"state"`
+	Since string `json:"since"`
 }
 
 // readInventoryUnits reads the inventory units of ns through the API as
@@ -5614,9 +5622,22 @@ type inventoryUnitDoc struct {
 func readInventoryUnits(ctx context.Context, t *testing.T, env *e2e.Env, ns string) []inventoryUnitDoc {
 	t.Helper()
 
-	got, err := env.StatusWithHeader(
-		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/"+ns+"/units", "",
-	)
+	return readInventoryUnitsQuery(ctx, t, env, ns, "")
+}
+
+// readInventoryUnitsQuery is readInventoryUnits with a query string, for
+// example "state=locked".
+func readInventoryUnitsQuery(
+	ctx context.Context, t *testing.T, env *e2e.Env, ns, query string,
+) []inventoryUnitDoc {
+	t.Helper()
+
+	path := "/api/dustpan/v1/namespaces/" + ns + "/units"
+	if query != "" {
+		path += "?" + query
+	}
+
+	got, err := env.StatusWithHeader(ctx, "token "+env.TokenA(), http.MethodGet, path, "")
 	if err != nil {
 		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units: %v", err)
 	}
@@ -5756,6 +5777,19 @@ func checkInventoryLock(ctx context.Context, t *testing.T, env *e2e.Env, want lo
 			want.operation,
 		)
 	}
+
+	// The unit shows the locked state since the take time, and the state
+	// filter lists it.
+	if len(unit.States) != 1 || unit.States[0].State != "locked" || unit.States[0].Since != unit.Lock.Since {
+		t.Fatalf("inventory states of %q = %+v, want locked since %q", want.ref, unit.States, unit.Lock.Since)
+	}
+
+	filtered := findInventoryUnit(
+		readInventoryUnitsQuery(ctx, t, env, namespaceOf(want.ref), "state=locked"), want.ref,
+	)
+	if filtered == nil {
+		t.Fatalf("the list with state=locked holds no entry %q", want.ref)
+	}
 }
 
 // checkInventoryUnlocked proves the inventory entry of ref holds no lock. It
@@ -5771,6 +5805,19 @@ func checkInventoryUnlocked(ctx context.Context, t *testing.T, env *e2e.Env, ref
 
 	if unit.Lock != nil {
 		t.Fatalf("inventory entry %q holds %+v, want no lock", ref, unit.Lock)
+	}
+
+	// An unlocked unit shows no locked state, and the state filter drops it.
+	for _, st := range unit.States {
+		if st.State == "locked" {
+			t.Fatalf("inventory entry %q shows states %+v, want no locked state", ref, unit.States)
+		}
+	}
+
+	if filtered := findInventoryUnit(
+		readInventoryUnitsQuery(ctx, t, env, namespaceOf(ref), "state=locked"), ref,
+	); filtered != nil {
+		t.Fatalf("the list with state=locked holds the unlocked entry %q", ref)
 	}
 }
 

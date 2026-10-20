@@ -1,8 +1,11 @@
 package inventory_test
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/inventory"
 )
@@ -67,5 +70,85 @@ func TestStatesBadgeOrder(t *testing.T) {
 	}
 	if got := inventory.States(); !slices.Equal(got, want) {
 		t.Errorf("States() = %v, want %v", got, want)
+	}
+}
+
+func TestParseState(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range inventory.States() {
+		got, err := inventory.ParseState(string(s))
+		if err != nil || got != s {
+			t.Errorf("ParseState(%q) = %q, %v; want the same state", s, got, err)
+		}
+	}
+
+	for _, raw := range []string{"", "Locked", "LOCKED", "locked ", " locked", "in_sync", "in sync", "winning", "locked\n"} {
+		got, err := inventory.ParseState(raw)
+		if !errors.Is(err, inventory.ErrUnknownState) {
+			t.Errorf("ParseState(%q) error = %v, want ErrUnknownState", raw, err)
+		}
+
+		if got != "" {
+			t.Errorf("ParseState(%q) = %q, want no state", raw, got)
+		}
+
+		for _, s := range inventory.States() {
+			if !strings.Contains(err.Error(), string(s)) {
+				t.Errorf("ParseState(%q) error %q does not name %q", raw, err, s)
+			}
+		}
+	}
+}
+
+func TestEntryLockedState(t *testing.T) {
+	t.Parallel()
+
+	early := time.Date(2026, time.October, 1, 8, 0, 0, 0, time.UTC)
+	late := early.Add(48 * time.Hour)
+	lock := func(at time.Time) *inventory.Lock { return &inventory.Lock{Since: at, Holder: "u", Operation: "lock"} }
+	manual := func(at time.Time) *inventory.ManualLock {
+		return &inventory.ManualLock{Since: at, Kind: "unit", Object: "o", Holder: "u", Reason: "r"}
+	}
+
+	tests := []struct {
+		name   string
+		lock   *inventory.Lock
+		manual *inventory.ManualLock
+		want   []inventory.StateSince
+	}{
+		{"neither", nil, nil, []inventory.StateSince{}},
+		{"lock only", lock(late), nil, []inventory.StateSince{{Since: late, State: inventory.StateLocked}}},
+		{"manual lock only", nil, manual(late), []inventory.StateSince{{Since: late, State: inventory.StateLocked}}},
+		{
+			"both, lock earlier", lock(early), manual(late),
+			[]inventory.StateSince{{Since: early, State: inventory.StateLocked}},
+		},
+		{
+			"both, manual lock earlier", lock(late), manual(early),
+			[]inventory.StateSince{{Since: early, State: inventory.StateLocked}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := inventory.Entry{Lock: tt.lock, ManualLock: tt.manual}
+			if got := e.StatesOf(); !slices.Equal(got, tt.want) || got == nil {
+				t.Errorf("StatesOf() = %v, want %v", got, tt.want)
+			}
+
+			wantLocked := tt.lock != nil || tt.manual != nil
+			if got := e.HasState(inventory.StateLocked); got != wantLocked {
+				t.Errorf("HasState(locked) = %v, want %v", got, wantLocked)
+			}
+
+			for _, s := range inventory.States() {
+				if s != inventory.StateLocked && e.HasState(s) {
+					t.Errorf("HasState(%q) = true, want false: no other state is derived", s)
+				}
+			}
+		})
 	}
 }

@@ -1,14 +1,26 @@
 package inventory
 
-import "slices"
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+)
+
+// ErrUnknownState reports a string that is not the wire value of a unit
+// state. The match is exact: the case, the spaces and the separators of the
+// value count.
+var ErrUnknownState = errors.New("unknown unit state")
 
 // State is one state of a unit, as the inventory shows it to a person. A
 // unit can have several at once, for example locked and drifted: a list shows
 // all of them and picks no winner. The values are the stable wire strings.
 // They are tool-neutral. A page of one tool shows the tool's own words.
 //
-// No code stores or serves a State yet. The values are fixed. A change to a
-// value, or to the word set, needs a new decision.
+// Only locked is served so far, and the server derives it at read time. The
+// values are fixed. A change to a value, or to the word set, needs a new
+// decision.
 type State string
 
 // The unit states.
@@ -50,4 +62,89 @@ func States() []State {
 // Valid reports whether s is a unit state. An empty string is not one.
 func (s State) Valid() bool {
 	return slices.Contains(States(), s)
+}
+
+// ParseState returns the unit state whose wire value is raw. The match is
+// exact: it does not trim, fold case or change a separator. A value that is
+// not a state gives an error that wraps ErrUnknownState and names the valid
+// values.
+func ParseState(raw string) (State, error) {
+	s := State(raw)
+	if !s.Valid() {
+		return "", fmt.Errorf("%w %q: use one of %s", ErrUnknownState, raw, validStateList())
+	}
+
+	return s, nil
+}
+
+// validStateList returns the wire values in the order of the badges, joined
+// with a comma and a space.
+func validStateList() string {
+	states := States()
+	names := make([]string, len(states))
+
+	for i, s := range states {
+		names[i] = string(s)
+	}
+
+	return strings.Join(names, ", ")
+}
+
+// StateSince is one state that a unit has, and when it began.
+type StateSince struct {
+	Since time.Time
+	State State
+}
+
+// since returns when the state s began for the unit e, and whether e has the
+// state. This function is the one place that derives a state from an entry.
+// Only locked is derived so far. No other state is stored yet, so an entry
+// has none of them.
+func (e Entry) since(s State) (time.Time, bool) {
+	if s != StateLocked {
+		return time.Time{}, false
+	}
+
+	switch {
+	case e.Lock != nil && e.ManualLock != nil:
+		return earlier(e.Lock.Since, e.ManualLock.Since), true
+	case e.Lock != nil:
+		return e.Lock.Since, true
+	case e.ManualLock != nil:
+		return e.ManualLock.Since, true
+	default:
+		return time.Time{}, false
+	}
+}
+
+// earlier returns the earlier of two times.
+func earlier(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+
+	return a
+}
+
+// HasState reports whether the unit e has the state s. The answer comes from
+// the fields of e alone, never from a second read.
+func (e Entry) HasState(s State) bool {
+	_, ok := e.since(s)
+
+	return ok
+}
+
+// StatesOf returns the states of the unit e in the order of the badges. A unit
+// with no state that needs attention gives an empty list that is not nil. The
+// lock is a flag, so a locked unit keeps every other state.
+func (e Entry) StatesOf() []StateSince {
+	out := []StateSince{}
+
+	for _, s := range States() {
+		if since, ok := e.since(s); ok {
+			out = append(out, StateSince{Since: since, State: s})
+		}
+	}
+
+	return out
 }
