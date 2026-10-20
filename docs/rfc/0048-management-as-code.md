@@ -7,10 +7,10 @@ created: 2026-10-10
 
 # RFC 48. Managing OpenDustpan as code
 
-Status: discussing. ADR 270 records the decisions of the project owner: a
-CLI and the OpenTofu and Pulumi providers now, from the published API
-description, with a version pin before 1.0; unit settings are not kept in the
-repository; ownership rules are managed as code through the providers. ADR 270
+Status: discussing. ADR 270 records three decisions of the project owner. A
+CLI and the OpenTofu and Pulumi providers come now, from the published API
+description, with a version pin before 1.0. Unit settings are not kept in the
+repository. Ownership rules are managed as code through the providers. ADR 270
 also records the answers to questions 1 and 4 to 8, which the product manager
 decided under the owner's delegation of 20 October 2026. Questions 2 and 3 stay
 open, because they need the owner: question 2 asks for a generator dependency,
@@ -188,13 +188,13 @@ Pulumi CLI. The GitHub CLI is one repository apart from the GitHub servers.
 
 ### 4. Which objects come first?
 
-Criteria for an object in the first release. The object:
+Criteria for an object in the first release:
 
-1. is configuration, not state, not a secret and not a runtime record;
-2. has a stable ID and the full create, read, update and delete life cycle in
-   the REST API, with `ETag` and `If-Match`, and a create-only write;
-3. is a control that the regulated persona needs under review (a policy);
-4. has a conflict rule that a client can show: a change by another actor
+1. It is configuration, not state, not a secret and not a runtime record.
+2. It has a stable ID and the full create, read, update and delete life cycle
+   in the REST API, with `ETag` and `If-Match`, and a create-only write.
+3. It is a control that the regulated persona needs under review (a policy).
+4. It has a conflict rule that a client can show: a change by another actor
    gives `409` or `412`, and the server changes nothing.
 
 | Option | Objects | Note |
@@ -217,7 +217,7 @@ and added the rest later. The AWS Cloud Control API requires a resource type to
 define create, read, update, delete and list before it supports it, which
 matches criterion 2. ISO/IEC 27001:2022 control 8.9 (configuration management)
 asks that configurations, including security configurations, are documented,
-implemented, monitored and reviewed; the policy objects are the ones that this
+implemented, monitored and reviewed. The policy objects are the ones that this
 control covers first.
 
 ### 5. How does a team bring an existing object under management?
@@ -242,9 +242,9 @@ both tools take. Google Config Connector acquires an existing resource
 automatically when a manifest names a resource that exists, which is the risk
 of option C. A team can set the `abandon` deletion policy, but the take-over has
 already happened. For
-a regulated entity, an unreviewed take-over bypasses the change record (DORA
-Article 9 names ICT change management; SOC 2 CC8.1 asks that changes are
-authorized before they are made).
+a regulated entity, an unreviewed take-over bypasses the change record. DORA
+Article 9 names ICT change management, and SOC 2 CC8.1 asks that changes are
+authorized before they are made.
 
 ### 6. How do the CLI and the providers sign in?
 
@@ -260,7 +260,7 @@ follow-up work).
 | Option | Gives | Costs |
 | --- | --- | --- |
 | A. The client returns `ErrFreshAuthRequired` and its message names the path of a new sign-in. The write changes nothing. No exemption for any token. | Matches ADR 227 with no new server code. A provider shows the error in the plan or in the apply. | A pipeline cannot weaken an approval rule. A person must do that step. |
-| B. A step-up for a person: the CLI opens a sign-in, the person completes MFA, and the CLI gets a short-lived credential that carries the fresh authentication. | A person at a terminal can apply a rule change in one run. This is how a cloud CLI works. | Needs server code and a decision of the owner, because ADR 227 says an access token never gives a fresh authentication. A new credential type is a new design. |
+| B. A step-up for a person: the CLI opens a sign-in and the person completes MFA. Then the CLI gets a short-lived credential that carries the fresh authentication. | A person at a terminal can apply a rule change in one run. This is how a cloud CLI works. | Needs server code and a decision of the owner, because ADR 227 says an access token never gives a fresh authentication. A new credential type is a new design. |
 | C. An exemption for a service principal. | A pipeline can change any rule. | It breaks ADR 227 and the control that the regulated persona needs. |
 | D. A change of an approval rule goes through a change order that people approve. | The review that the regulated persona wants. | The change of a policy becomes a long process, and the provider cannot show the result in one apply. |
 
@@ -276,7 +276,7 @@ that names the client and its version, so the audit entry shows which client
 made the change.
 
 Benchmark: AWS lets a policy require MFA for an API call (`aws:MultiFactorAuthPresent`)
-and a person obtains a temporary credential with `sts get-session-token` and
+and a person gets a temporary credential with `sts get-session-token` and
 an MFA code, which is option B. PCI DSS 4.0 requirement 8.4 asks for MFA for
 access to the cardholder data environment and for administrative access, so a
 control that needs a person is the expected design. Google Cloud can require
@@ -350,7 +350,7 @@ version:
   describe build counts as its tag, and the client compares that tag.
 - `dev` and a commit hash are a dev build. A dev build counts as newer than
   every release. The client does not refuse it. It prints a warning that names
-  both versions (for example "server is a dev build; this client expects
+  both versions (for example "server is a dev build, and this client expects
   >=0.12.0 <0.13.0") and continues. An empty version is not a dev build: it
   means that the server sent nothing, and the client refuses it.
 - Build metadata after `+` is ignored. The client accepts it only when it is
@@ -379,11 +379,11 @@ this rule.
 
 **The e2e suite.** The suite runs dev server binaries. A dev build passes the
 server range by the dev rule (with a warning), and the description pin is the
-strict check. The suite therefore has three steps: a client whose description
-pin the dev server meets, which works and prints the warning; a client with a
-different description pin, which is refused with a message that names both
-versions; and a stub server that sends a release outside the server range,
-which is refused.
+strict check. The suite therefore has three steps. In the first, a client whose
+description pin the dev server meets works and prints the warning. In the
+second, a client with a different description pin is refused, with a message
+that names both versions. In the third, a stub server sends a release outside
+the server range, and the client refuses it.
 
 Benchmark: the Kubernetes version skew policy allows `kubectl` one minor
 version apart from the API server, and `kubectl` warns about version skew
@@ -458,7 +458,7 @@ reference. The reference never selects the kind.
 | `List(kind, scope, page)` | Returns one page in a stable order, and the cursor of the next page. | `ErrInvalidRef`, `ErrNotFound` (a namespace that does not exist) |
 | `Create(ref, spec)` | Makes the object. Sends `If-None-Match: *`. Never adopts. A collection is created with `POST`, which does not read `If-None-Match` today and answers `409` with no code. It needs `If-None-Match: *` with `412`, as the other kinds do (see "Follow-up work"). | `ErrAlreadyExists` (from `412`), `ErrInvalidSpec` |
 | `Update(object)` | Replaces or patches the object. Sends `If-Match` with the `ETag` of the read. | `ErrConflict` (from `412`), `ErrNotFound`, `ErrInvalidSpec` |
-| `Delete(ref, etag)` | Removes the object. Sends `If-Match`. An object that is already gone is success. Only the approval default answers `204` for a missing object. A missing approval rule or collection answers `404`, so the adapter maps `404` on a delete to success: the object is gone. | `ErrConflict` (from `412`, which stays an error) |
+| `Delete(ref, etag)` | Deletes the object. Sends `If-Match`. An object that is already gone is success. Only the approval default answers `204` for a missing object. A missing approval rule or collection answers `404`, so the adapter maps `404` on a delete to success: the object is gone. | `ErrConflict` (from `412`, which stays an error) |
 
 Every method also returns the error of the context, `ErrUnauthenticated`
 (`401`), `ErrForbidden` (`403`), and `ErrFreshAuthRequired` (`403` with the code
@@ -515,7 +515,7 @@ one field.
 | `ownership-rule` | `{"mode": "evaluate", "paths": ["modules/network/**"], "when": "", "groups": ["netops"], "users": [], "count": 1, "freshAuthSeconds": 0}` | the same with `"count": 2` |
 
 The ownership rule fields follow ADR 225 decision 9. The server work for the
-ownership rule routes fixes them.
+ownership rule routes sets them.
 
 ## Proposal
 
@@ -540,7 +540,7 @@ A client that holds a token is security code. The steps are those of ADR 250.
 | Step | Note |
 | --- | --- |
 | 1. Check the input | The reference check is an allowlist for the namespace and the ID. The version parser reads only the accepted forms and caps the length. The server version, the description version and the error text from the server are untrusted. |
-| 2. Encode or contain | The adapter encodes each path segment and sends JSON from typed values. A server version in an error message is quoted and cut to a fixed length. Build metadata with a character outside the allowlist is refused. |
+| 2. Encode or contain | The adapter encodes each path segment and sends JSON from typed values. A server version in an error message is quoted and cut to a set length. Build metadata with a character outside the allowlist is refused. |
 | 3. Limit the effect | An update and a delete always carry `If-Match`, so a stale client changes nothing. A client has a timeout and a size limit for a response. |
 | 4. Check authorization | The server checks the action on the object for every call. The client assumes nothing. |
 | 5. Fail closed | An unknown kind, a bad reference, a version outside the pin and a server with no version number all refuse. A `403` with `mfa.fresh-step-required` is an error, not a retry with another credential. |
@@ -555,24 +555,25 @@ Each item is a separate issue with the label `needs-triage`. The first five are
 server work and block the first provider release in issue 967.
 
 - #1230: a route that gives the server version and the version of the
-  description to any signed-in caller, with no `server:observe` (question 8);
-- #1237: a collection update route with `ETag` and `If-Match`;
-- #1238: REST routes for ownership rules;
-- #1239: create-only writes (`If-None-Match: *`) on `PUT` routes that upsert
-  and on the `POST` route that creates a collection (it ignores `If-None-Match`
-  today and answers `409` with no code, and it needs `412`), which blocks the
-  first provider release, and a `412` for a stale `If-Match` on the approval default and approval
-  rule routes of gate configuration, which answer `409` today (ADR 210
-  decision 6 says `412`);
+  description to any signed-in caller, with no `server:observe` (question 8).
+- #1237: a collection update route with `ETag` and `If-Match`.
+- #1238: REST routes for ownership rules.
+- #1239: create-only writes (`If-None-Match: *`) on `PUT` routes that upsert,
+  and on the `POST` route that creates a collection. The collection route
+  ignores `If-None-Match` today and answers `409` with no code, and it needs
+  `412`. This blocks the first provider release. The same issue asks for a
+  `412` for a stale `If-Match` on the approval default and approval rule
+  routes of gate configuration, which answer `409` today (ADR 210 decision 6
+  says `412`).
 - #1240: writes to gate configuration accept an access token for a change that
   does not weaken security, and answer `mfa.fresh-step-required` for one that
-  does;
+  does.
 - #1231 and #1233: the client and the CLI, and the providers, after the owner
-  answers questions 2 and 3;
-- #1232: the e2e steps for the real OpenTofu CLI and the Pulumi CLI;
+  answers questions 2 and 3.
+- #1232: the e2e steps for the real OpenTofu CLI and the Pulumi CLI.
 - #1234: a later RFC for a step-up sign-in of a person in the CLI (question 6,
-  option B), which must keep the rule that an access token never gives fresh
-  authentication, or go to the owner;
+  option B). It must keep the rule that an access token never gives fresh
+  authentication, or go to the owner.
 - the user documentation page for the first client (ADR 214).
 
 ## Outcome
