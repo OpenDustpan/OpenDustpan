@@ -3,8 +3,6 @@ package backup_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -625,32 +623,9 @@ func (e *stubBackupExporter) ExportPortable(
 		e.order.add("export")
 	}
 
-	path := backup.PortablePath("namespaces")
-
-	w, err := sink(path)
-	if err != nil {
-		return backup.Summary{}, nil, fmt.Errorf("open stub table file: %w", err)
-	}
-
-	if _, err := w.Write(e.data); err != nil {
-		return backup.Summary{}, nil, fmt.Errorf("write stub export: %w", err)
-	}
-
-	if err := w.Close(); err != nil {
-		return backup.Summary{}, nil, fmt.Errorf("close stub table file: %w", err)
-	}
-
-	digest := sha256.Sum256(e.data)
-	file := backup.PortableFile{
-		Table:   "namespaces",
-		Path:    path,
-		SHA256:  hex.EncodeToString(digest[:]),
-		Columns: nil,
-		Rows:    0,
-		Size:    int64(len(e.data)),
-	}
-
-	return e.sum, []backup.PortableFile{file}, nil
+	// Every table gets a file, as the real export does: a backup without a
+	// file for each table is corrupt, and the finish step checks the files.
+	return writeTestTableFile(sink, e.data, e.sum)
 }
 
 // newRestoreServiceSetup builds the fakes and the RestoreService under test.
