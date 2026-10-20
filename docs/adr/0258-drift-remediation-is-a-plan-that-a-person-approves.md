@@ -1,6 +1,6 @@
 # 258. Drift remediation is a plan that a person approves, by a built-in gate
 
-Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Accepts part of RFC 25 (the open question on automatic remediation). Uses ADR 226 decision 7. Decision 7 of ADR 226 extended by a third built-in gate of wider scope. Phase table of ADR 205 extended by a plan phase for a scheduled refresh job
+Status: accepted · 2026-10-20. Decided by the product manager under the owner's delegation of 20 October 2026. Accepts part of RFC 25 (the open question on automatic remediation). Uses ADR 226 decision 7. Decision 7 of ADR 226 extended by a third built-in gate of wider scope. Phase table of ADR 205 extended by a plan phase for a scheduled refresh job. Decision 3 scope narrowed by ADR 263
 
 ## Context
 
