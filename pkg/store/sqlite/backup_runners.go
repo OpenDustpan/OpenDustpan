@@ -75,7 +75,7 @@ func sqliteRunnerControlTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
 		{
 			table:   "runner_claims",
-			columns: []string{backupColOperationID, backupColToken, "claimed_at_ms", "job_id", "phase"},
+			columns: []string{backupColOperationID, backupColToken, "claimed_at_ms", backupColJobID, "phase"},
 		},
 		{
 			table: "runner_handoff_tokens",

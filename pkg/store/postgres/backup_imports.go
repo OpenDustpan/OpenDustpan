@@ -20,7 +20,7 @@ func pgCopyImportTables() []pgCopyTable {
 				"profile_path",
 				"options",
 				pgColState,
-				"reason",
+				pgColReason,
 				pgColCreatedBy,
 				"created_at_ms",
 				"plan",

@@ -29,7 +29,7 @@ func portableProfileTables() []PortableTable {
 				{Name: "document_sha256", Kind: KindText},
 				{Name: "author", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "reason", Kind: KindText},
+				{Name: portColReason, Kind: KindText},
 			},
 		},
 	}

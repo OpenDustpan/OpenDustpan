@@ -481,3 +481,32 @@ func TestValidateChecksThePrincipalFields(t *testing.T) {
 		})
 	}
 }
+
+func TestIsHiddenRune(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		r      rune
+		hidden bool
+	}{
+		{"letter", 'a', false},
+		{"space", ' ', false},
+		{"newline (Cc)", '\n', true},
+		{"NUL (Cc)", 0, true},
+		{"right-to-left override (Cf)", rune(0x202e), true},
+		{"zero width space (Cf)", rune(0x200b), true},
+		{"line separator (Zl)", rune(0x2028), true},
+		{"paragraph separator (Zp)", rune(0x2029), true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := audit.IsHiddenRune(tc.r); got != tc.hidden {
+				t.Fatalf("IsHiddenRune(%U) = %v, want %v", tc.r, got, tc.hidden)
+			}
+		})
+	}
+}
