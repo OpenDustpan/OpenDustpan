@@ -58,7 +58,7 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 	}
 
 	unit := collection.UnitRef{Namespace: ns.Name, Tool: "opentofu", Name: "web"}
-	move := collection.Move{Unit: unit, From: "", To: payments, ToID: paymentsCol.ID}
+	move := collection.Move{Unit: unit, From: "", To: payments, ToID: paymentsCol.ID, EndsLock: false}
 	if moveErr := svc.SetUnit(ctx, move, membershipEntry(at, ns.Name, "unit:move")); moveErr != nil {
 		t.Fatalf("move into collection: %v", moveErr)
 	}

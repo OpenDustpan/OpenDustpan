@@ -41,6 +41,11 @@ var (
 	// ErrCollectionChanged reports a move whose expected source collection is
 	// no longer the collection of the unit. The caller reads again and retries.
 	ErrCollectionChanged = errors.New("unit collection changed: read it again and retry")
+	// ErrMoveOutOfLockedCollection reports a move of a unit out of a collection
+	// that has a manual lock, by a caller that may not end that lock. The
+	// store refuses it in the transaction of the move.
+	ErrMoveOutOfLockedCollection = errors.New("collection has a manual lock: " +
+		"moving a unit out of it needs unit:manage on the unit")
 	// ErrMoveUnchecked reports a move that names no stable ID for its target
 	// collection. The caller checks the target, then passes its ID in the move.
 	ErrMoveUnchecked = errors.New("move names no checked target collection ID")
@@ -152,6 +157,10 @@ type Move struct {
 	From Name
 	To   Ref
 	ToID string
+	// EndsLock is true when the caller may end the manual lock of From, that
+	// is, holds unit:manage on the unit. The store refuses a move out of a
+	// collection with a manual lock when it is false.
+	EndsLock bool
 }
 
 // Store is the persistence port for collections and for the collection of each

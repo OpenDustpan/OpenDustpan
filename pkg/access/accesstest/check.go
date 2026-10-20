@@ -861,7 +861,7 @@ func seedCollections(t *testing.T, s access.Store) {
 func moveTo(from, to collection.Name, toID string) collection.Move {
 	return collection.Move{
 		Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
-		From: from, To: collection.Ref{Namespace: "acme", Name: to}, ToID: toID,
+		From: from, To: collection.Ref{Namespace: "acme", Name: to}, ToID: toID, EndsLock: false,
 	}
 }
 

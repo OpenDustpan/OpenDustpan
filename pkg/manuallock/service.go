@@ -27,8 +27,27 @@ type Config struct {
 	Store      Store
 	Namespaces namespace.Store
 	Authorizer Authorizer
-	Now        func() time.Time
+	// Phases lets a tool lock request of a job pass a manual lock that came
+	// after its phase started. A nil Phases makes the service refuse every
+	// such request, as it refuses the request of any other caller.
+	Phases PhaseClock
+	Now    func() time.Time
 }
+
+// PhaseClock tells when the phase of a job started. The job store implements it
+// (job.PhaseClock). The manual lock service uses it to decide whether the job
+// token of a lock request belongs to a phase that started before the lock.
+type PhaseClock interface {
+	// PhaseStartedAt returns when the current phase of the job jobID started,
+	// if that phase is live (dispatched, running or canceling) and the job is
+	// a job of unit. It returns ErrNoPhase for an unknown job, for a job of
+	// another unit and for a job with no live phase.
+	PhaseStartedAt(ctx context.Context, jobID string, unit collection.UnitRef) (time.Time, error)
+}
+
+// ErrNoPhase reports that a job has no live phase on the unit that a lock
+// request names. A PhaseClock returns it.
+var ErrNoPhase = errors.New("job has no live phase on this unit")
 
 // Service implements the manual lock use cases. It reads the fence of the
 // namespace before each write, so a write carries the failover version that
@@ -37,6 +56,7 @@ type Service struct {
 	store      Store
 	namespaces namespace.Store
 	authorizer Authorizer
+	phases     PhaseClock
 	now        func() time.Time
 }
 
@@ -52,7 +72,13 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{store: cfg.Store, namespaces: cfg.Namespaces, authorizer: cfg.Authorizer, now: now}, nil
+	return &Service{
+		store:      cfg.Store,
+		namespaces: cfg.Namespaces,
+		authorizer: cfg.Authorizer,
+		phases:     cfg.Phases,
+		now:        now,
+	}, nil
 }
 
 // Lock puts a manual lock on t for the principal p, who needs unit:lock on the
@@ -160,15 +186,23 @@ func (s *Service) ForceUnlock(ctx context.Context, p identity.Principal, t Targe
 
 // Get returns the manual lock of t, or ErrNotLocked. The principal p needs
 // read access to the object: unit:read on a unit, collection:read on a
-// collection.
+// collection, namespace:read on a namespace.
 func (s *Service) Get(ctx context.Context, p identity.Principal, t Target) (Lock, error) {
 	if err := t.Valid(); err != nil {
 		return Lock{}, err
 	}
 
-	action := identity.ActionUnitRead
-	if t.Kind == KindCollection {
+	var action identity.Action
+
+	switch t.Kind {
+	case KindCollection:
 		action = identity.ActionCollectionRead
+	case KindNamespace:
+		action = identity.ActionNamespaceRead
+	case KindUnit:
+		action = identity.ActionUnitRead
+	default:
+		return Lock{}, fmt.Errorf("get %s: %w", t, ErrInvalidTarget)
 	}
 
 	if err := s.authorize(ctx, p, action, t); err != nil {
@@ -184,6 +218,72 @@ func (s *Service) Covering(ctx context.Context, unit collection.UnitRef) (Lock, 
 	return s.store.CoveringLock(ctx, unit)
 }
 
+// LockOn returns the manual lock that t itself holds, or ErrNotLocked. Unlike
+// Covering it does not look at the lock of a wider target, and unlike Get it
+// does not check the access of a caller: it is for a server check that has
+// authorized the caller on its own action, such as the move of a unit out of a
+// locked collection.
+func (s *Service) LockOn(ctx context.Context, t Target) (Lock, error) {
+	if err := t.Valid(); err != nil {
+		return Lock{}, err
+	}
+
+	return s.store.GetLock(ctx, t)
+}
+
+// NamespaceLock returns the manual lock of the namespace ns, or ErrNotLocked.
+// The restore of a deleted unit asks it: a deleted unit has no inventory entry,
+// so Covering cannot find the lock of its namespace.
+func (s *Service) NamespaceLock(ctx context.Context, ns namespace.Name) (Lock, error) {
+	return s.LockOn(ctx, NamespaceTarget(ns))
+}
+
+// CoveringFor is Covering for the lock request of the caller that holds the job
+// token of the job jobID (empty for any other caller). A lock request of a job
+// whose phase on the unit started before the manual lock passes: it answers
+// ErrNotLocked. The phase runs to its end, and so do its tool locks. Every other
+// case answers as Covering does. The service fails closed: a missing phase
+// clock, an error of the clock, a phase that started at or after the lock and a
+// time of zero all keep the lock. When several locks cover the unit, the phase
+// passes only if it started before each of them, and the answer is the first lock
+// that it did not start before.
+//
+// Defense in depth: the authenticator sets the job ID only for a verified job
+// token, and the clock checks that the job is live on this unit. This check
+// stays so that a caller which sets a job ID by mistake cannot pass a lock.
+func (s *Service) CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (Lock, error) {
+	locks, err := s.store.CoveringLocks(ctx, unit)
+	if err != nil {
+		return Lock{}, err
+	}
+
+	if len(locks) == 0 {
+		return Lock{}, ErrNotLocked
+	}
+
+	if jobID == "" || s.phases == nil {
+		return locks[0], nil
+	}
+
+	// The request passes only on a positive answer: a clock that fails or answers
+	// zero leaves the lock in place.
+	started, clockErr := s.phases.PhaseStartedAt(ctx, jobID, unit)
+	if clockErr != nil || started.IsZero() {
+		return locks[0], nil //nolint:nilerr // Fail closed: a clock that fails or answers zero keeps the lock.
+	}
+
+	// The phase passes only when it started before every lock that covers the
+	// unit, so a new lock on a wider object never lifts a refusal that an older
+	// lock gives.
+	for i := range locks {
+		if !started.Before(locks[i].Since) {
+			return locks[i], nil
+		}
+	}
+
+	return Lock{}, ErrNotLocked
+}
+
 // authorize checks that p may do action on the object of t. It fails closed:
 // an object that cannot be named is refused.
 func (s *Service) authorize(ctx context.Context, p identity.Principal, action identity.Action, t Target) error {
@@ -197,6 +297,8 @@ func (s *Service) authorize(ctx context.Context, p identity.Principal, action id
 		obj, err = identity.UnitObject(t.Unit.Tool, t.Unit.Namespace, t.Unit.Name)
 	case KindCollection:
 		obj = identity.CollectionObject(t.Collection.Namespace, string(t.Collection.Name))
+	case KindNamespace:
+		obj = identity.NamespaceObject(t.Space)
 	default:
 		err = ErrInvalidTarget
 	}

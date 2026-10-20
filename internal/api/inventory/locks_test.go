@@ -28,6 +28,9 @@ const lockUnitRef = "pulumi:acme/web/prod"
 // lockCollectionPath is the lock route of the collection that the lock tests lock.
 const lockCollectionPath = "/api/dustpan/v1/namespaces/acme/collections/payments/lock"
 
+// lockNamespacePath is the lock route of the namespace that the lock tests lock.
+const lockNamespacePath = "/api/dustpan/v1/namespaces/acme/lock"
+
 // memLocks is an in-memory manuallock.Store for the route tests. It knows one
 // unit and one collection, and keeps every audit entry that a write appends.
 type memLocks struct {
@@ -97,6 +100,10 @@ func (m *memLocks) CoveringLock(_ context.Context, _ collection.UnitRef) (manual
 	return manuallock.Lock{}, manuallock.ErrNotLocked
 }
 
+func (m *memLocks) CoveringLocks(_ context.Context, _ collection.UnitRef) ([]manuallock.Lock, error) {
+	return nil, manuallock.ErrNotLocked
+}
+
 func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (manuallock.Lock, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -126,7 +133,7 @@ func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (ma
 
 // known reports whether the route tests have the object.
 func (m *memLocks) known(t manuallock.Target) bool {
-	return t.String() == lockUnitRef || t.String() == "collection acme/payments"
+	return t.String() == lockUnitRef || t.String() == "collection acme/payments" || t.String() == "namespace acme"
 }
 
 // subjectAuthenticator maps the token "<subject>-token" to the subject.
@@ -217,7 +224,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 	auditStore := &memAudit{mu: sync.Mutex{}, entries: nil}
 
 	locks, err := manuallock.NewService(
-		manuallock.Config{Store: store, Namespaces: nsStore, Authorizer: authz, Now: nil},
+		manuallock.Config{Store: store, Namespaces: nsStore, Authorizer: authz, Now: nil, Phases: nil},
 	)
 	if err != nil {
 		t.Fatalf("manual lock service: %v", err)
@@ -273,6 +280,7 @@ func lockObjects() []lockObject {
 	return []lockObject{
 		{name: "unit", path: "/api/inventory/unit-lock?unit=" + url.QueryEscape(lockUnitRef)},
 		{name: "collection", path: lockCollectionPath},
+		{name: "namespace", path: lockNamespacePath},
 	}
 }
 
@@ -546,6 +554,10 @@ func checkDenied(t *testing.T, obj lockObject, tc deniedCase) {
 func mustTarget(t *testing.T, obj lockObject) manuallock.Target {
 	t.Helper()
 
+	if obj.name == "namespace" {
+		return manuallock.NamespaceTarget("acme")
+	}
+
 	if obj.name == "collection" {
 		name, err := collection.ParseName("payments")
 		if err != nil {
@@ -569,6 +581,7 @@ func TestLockRoutesOfAnUnknownObject(t *testing.T) {
 	}{
 		{name: "unit", path: "/api/inventory/unit-lock?unit=" + url.QueryEscape("pulumi:acme/web/absent")},
 		{name: "collection", path: "/api/dustpan/v1/namespaces/acme/collections/absent/lock"},
+		{name: "namespace", path: "/api/dustpan/v1/namespaces/absent/lock"},
 	}
 
 	for _, tc := range cases {
@@ -644,6 +657,10 @@ func TestLockRoutesDeclareActions(t *testing.T) {
 		"GET /api/dustpan/v1/namespaces/{namespace}/collections/{collection}/lock":               identity.ActionCollectionRead,
 		"DELETE /api/dustpan/v1/namespaces/{namespace}/collections/{collection}/lock":            identity.ActionUnitLock,
 		"POST /api/dustpan/v1/namespaces/{namespace}/collections/{collection}/lock/force-unlock": identity.ActionUnitManage,
+		"PUT /api/dustpan/v1/namespaces/{namespace}/lock":                                        identity.ActionUnitLock,
+		"GET /api/dustpan/v1/namespaces/{namespace}/lock":                                        identity.ActionNamespaceRead,
+		"DELETE /api/dustpan/v1/namespaces/{namespace}/lock":                                     identity.ActionUnitLock,
+		"POST /api/dustpan/v1/namespaces/{namespace}/lock/force-unlock":                          identity.ActionUnitManage,
 	}
 
 	for pattern, action := range want {
