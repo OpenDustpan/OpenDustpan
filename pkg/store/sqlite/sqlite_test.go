@@ -157,6 +157,23 @@ func TestSignInFailuresConformance(t *testing.T) {
 	})
 }
 
+// TestAuditCheckConformance runs the shared suite of the audit chain check
+// state: one SQLite file allows one store, so the suite gets that store for
+// every handle.
+func TestAuditCheckConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunAuditCheck(t, func(t *testing.T) storetest.AuditCheckHarness {
+		t.Helper()
+
+		s := open(t)
+
+		return storetest.AuditCheckHarness{
+			Open: func(*testing.T) audit.CheckStore { return s },
+		}
+	})
+}
+
 // TestSessionFreshConformance runs the session cases that change a policy
 // on one handle and use a session on the other. One SQLite file allows one
 // store, so the suite gets that store twice.

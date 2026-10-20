@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"strconv"
 	"strings"
@@ -42,8 +43,11 @@ import (
 //
 // Every check reads the newest checkpoint of each scope and fails when the
 // log ends before it, so a cut at the end of the log shows at the next
-// check. A mismatch stays in memory until a new epoch starts: later checks
-// of the scope fail, and the server signs nothing more for it.
+// check. A mismatch stays until a new epoch starts: later checks of the scope
+// fail, and the server signs nothing more for it. With a CheckStore the first
+// mismatch of a scope in an epoch is also stored in a row, so every instance
+// sees it and stops signing of that scope while it stands. Without a CheckStore it stays in the memory of
+// the process.
 
 // CheckpointPrefix is the first segment of every checkpoint key. No other
 // writer may use it.
@@ -390,7 +394,10 @@ type CheckpointsConfig struct {
 	Blobs   blob.Store
 	Entries EntryReader
 	Signer  *Signer
-	Now     func() time.Time
+	// Marks keeps the mark of a checkpoint mismatch, or is nil for a mark
+	// in the memory of the process only.
+	Marks CheckStore
+	Now   func() time.Time
 }
 
 // Checkpoints writes and checks the checkpoints of the audit log. It keeps
@@ -400,11 +407,15 @@ type CheckpointsConfig struct {
 // later checks of the same epoch fail until a new epoch starts. It is safe
 // for concurrent use.
 type Checkpoints struct {
-	good    map[goodKey]int64
-	bad     map[goodKey]int64
+	good map[goodKey]int64
+	bad  map[goodKey]int64
+	// unsaved holds the marks that the store did not take yet. Each Write and
+	// Verify stores them again before it does anything else.
+	unsaved map[goodKey]CheckMark
 	blobs   blob.Store
 	entries EntryReader
 	signer  *Signer
+	marks   CheckStore
 	now     func() time.Time
 	mu      sync.Mutex
 }
@@ -420,9 +431,11 @@ func NewCheckpoints(cfg CheckpointsConfig) *Checkpoints {
 	return &Checkpoints{
 		good:    map[goodKey]int64{},
 		bad:     map[goodKey]int64{},
+		unsaved: map[goodKey]CheckMark{},
 		blobs:   cfg.Blobs,
 		entries: cfg.Entries,
 		signer:  cfg.Signer,
+		marks:   cfg.Marks,
 		now:     cfg.Now,
 		mu:      sync.Mutex{},
 	}
@@ -552,23 +565,24 @@ func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error
 // sequence already holds the same hash. When the stored checkpoint holds
 // another hash, it answers false and an error that wraps
 // ErrCheckpointMismatch, and later checks of the scope fail until a new
-// epoch starts. When the scope failed to match before in this epoch, it
-// signs nothing and answers false and an error that wraps
-// ErrCheckpointMismatch. When the log ends before the newest stored
-// checkpoint, it signs nothing, marks the scope, and answers false and an
-// error that wraps ErrCheckpointMismatch. A bad epoch object also signs
-// nothing and returns an error that wraps ErrCheckpointMismatch. The caller
-// counts such an error as a scope that does not match. When the epoch
-// changes before the store, it stores nothing and answers false and no
-// error.
+// epoch starts. When the scope failed to match before in this epoch, or
+// another instance stored a mark of scope in this epoch, it signs nothing
+// and answers false and an error that wraps ErrCheckpointMismatch. The same holds when
+// the stored mark cannot be read: a failed read denies. It lists the stored
+// checkpoints first and reads the last entry second. The log only grows, so
+// a stored checkpoint above the last entry then means a cut log, never a
+// checkpoint that another instance stored between the two reads. When the log
+// ends before the newest stored checkpoint, it signs nothing, marks the
+// scope, and answers false and an error that wraps ErrCheckpointMismatch. A
+// bad epoch object also signs nothing and returns an error that wraps
+// ErrCheckpointMismatch. The caller counts such an error as a scope that does
+// not match. When the epoch changes before the store, it stores nothing and
+// answers false and no error. The stored mark is read before the signature
+// and not in the same step: a mark that another instance stores in that small
+// window stops the next Write of the scope, not this one.
 func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
-	last, found, err := c.entries.LastEntry(ctx, scope)
-	if err != nil {
-		return false, fmt.Errorf("read last audit entry of %s: %w", scope, err)
-	}
-
-	if !found || last.Hash == "" {
-		return false, nil
+	if err := c.flushMarks(ctx); err != nil {
+		return false, fmt.Errorf("%w: %w", ErrCheckpointMismatch, err)
 	}
 
 	epoch, err := c.Epoch(ctx)
@@ -582,8 +596,35 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 		return false, fmt.Errorf("audit checkpoint of %s at %d does not match: %w", scope, seq, ErrCheckpointMismatch)
 	}
 
-	if headErr := c.checkHead(ctx, gk, epoch, scope, last.Sequence); headErr != nil {
-		return false, headErr
+	mark, err := c.standingMark(ctx, epoch, scope)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrCheckpointMismatch, err)
+	}
+
+	if mark != nil {
+		return false, fmt.Errorf("audit checkpoint of %s at %d does not match, signing stops: %w",
+			mark.Scope, mark.Sequence, ErrCheckpointMismatch)
+	}
+
+	highest, err := c.highestStored(ctx, epoch, scope)
+	if err != nil {
+		return false, err
+	}
+
+	last, found, err := c.entries.LastEntry(ctx, scope)
+	if err != nil {
+		return false, fmt.Errorf("read last audit entry of %s: %w", scope, err)
+	}
+
+	if !found || last.Hash == "" {
+		return false, nil
+	}
+
+	if last.Sequence < highest {
+		c.markBad(ctx, gk, highest)
+
+		return false, fmt.Errorf("audit checkpoint of %s: log ends at %d before checkpoint %d: %w",
+			scope, last.Sequence, highest, ErrCheckpointMismatch)
 	}
 
 	return c.storeNew(ctx, gk, last, now)
@@ -603,20 +644,13 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (CheckpointResult, error) {
 	result := CheckpointResult{Reason: "", Checked: 0, BadSequence: 0, Valid: true}
 
-	epoch, err := c.Epoch(ctx)
-	if err != nil {
-		if errors.Is(err, ErrCheckpointMismatch) {
-			return result.fail(0, err.Error()), nil
-		}
-
-		return result, err
+	gate, err := c.verifyGate(ctx, scope, result)
+	if gate.stop || err != nil {
+		return gate.result, err
 	}
 
+	epoch, result := gate.epoch, gate.result
 	gk := goodKey{scope: scope, epoch: epoch}
-
-	if seq, ok := c.sticky(gk); ok {
-		return result.fail(seq, "an earlier check in this epoch found a mismatch"), nil
-	}
 
 	dir := checkpointDir(epoch, scope)
 
@@ -629,7 +663,7 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 	highest, highestKey := highestCheckpoint(objects)
 
 	if highest < good {
-		c.markBad(gk, good)
+		c.markBad(ctx, gk, good)
 
 		return result.fail(good, fmt.Sprintf("checkpoints are missing: newest stored checkpoint is %d, want %d",
 			highest, good)), nil
@@ -644,7 +678,7 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 		result.Checked++
 
 		if errors.Is(err, ErrCheckpointMismatch) {
-			c.markBad(gk, seq)
+			c.markBad(ctx, gk, seq)
 
 			return result.fail(seq, err.Error()), nil
 		}
@@ -669,6 +703,53 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 	return result, nil
 }
 
+// verifyGateResult is the outcome of verifyGate: the epoch, the result so far,
+// and whether Verify stops with that result.
+type verifyGateResult struct {
+	result CheckpointResult
+	epoch  int64
+	stop   bool
+}
+
+// verifyGate runs the steps of Verify that need no list of checkpoints: it
+// stores marks that a failed store did not take, reads the epoch, and fails
+// the scope when a mark stands.
+func (c *Checkpoints) verifyGate(
+	ctx context.Context, scope namespace.Name, result CheckpointResult,
+) (verifyGateResult, error) {
+	if err := c.flushMarks(ctx); err != nil {
+		return verifyGateResult{result: result.fail(0, err.Error()), epoch: 0, stop: true}, nil
+	}
+
+	epoch, err := c.Epoch(ctx)
+	if errors.Is(err, ErrCheckpointMismatch) {
+		return verifyGateResult{result: result.fail(0, err.Error()), epoch: 0, stop: true}, nil
+	}
+
+	if err != nil {
+		return verifyGateResult{result: result, epoch: 0, stop: true}, err
+	}
+
+	stop := func(r CheckpointResult) verifyGateResult {
+		return verifyGateResult{result: r, epoch: epoch, stop: true}
+	}
+
+	if seq, ok := c.sticky(goodKey{scope: scope, epoch: epoch}); ok {
+		return stop(result.fail(seq, "an earlier check in this epoch found a mismatch")), nil
+	}
+
+	mark, err := c.standingMark(ctx, epoch, scope)
+	if err != nil {
+		return stop(result.fail(0, err.Error())), nil
+	}
+
+	if mark != nil {
+		return stop(result.fail(mark.Sequence, "a check on another instance in this epoch found a mismatch")), nil
+	}
+
+	return verifyGateResult{result: result, epoch: epoch, stop: false}, nil
+}
+
 // keep answers a write that found a checkpoint under key: false and no
 // error when the stored checkpoint holds hash, and false and an error that
 // wraps ErrCheckpointMismatch when it holds another hash. A stored
@@ -677,7 +758,7 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 func (c *Checkpoints) keep(ctx context.Context, gk goodKey, key blob.Key, hash string) (bool, error) {
 	stored, err := c.read(ctx, key)
 	if errors.Is(err, ErrCheckpointMismatch) {
-		c.markBad(gk, checkpointSeq(key))
+		c.markBad(ctx, gk, checkpointSeq(key))
 
 		return false, err
 	}
@@ -687,7 +768,7 @@ func (c *Checkpoints) keep(ctx context.Context, gk goodKey, key blob.Key, hash s
 	}
 
 	if stored.Hash != hash {
-		c.markBad(gk, stored.Sequence)
+		c.markBad(ctx, gk, stored.Sequence)
 
 		return false, fmt.Errorf("audit checkpoint %s does not match: %w", key, ErrCheckpointMismatch)
 	}
@@ -776,30 +857,17 @@ func withNewest(plan readPlan, highest int64, key blob.Key, good int64) readPlan
 	return out
 }
 
-// checkHead fails when the last sequence ends before the newest stored
-// checkpoint of the scope, so a cut below it signs nothing. It marks the
-// scope, so later checks fail until a new epoch starts.
-func (c *Checkpoints) checkHead(
-	ctx context.Context,
-	gk goodKey,
-	epoch int64,
-	scope namespace.Name,
-	seq int64,
-) error {
+// highestStored answers the highest sequence of the checkpoints that are
+// stored for scope in epoch, or 0 when none is.
+func (c *Checkpoints) highestStored(ctx context.Context, epoch int64, scope namespace.Name) (int64, error) {
 	stored, err := c.blobs.List(ctx, checkpointDir(epoch, scope))
 	if err != nil {
-		return fmt.Errorf("list audit checkpoints of %s: %w", scope, err)
+		return 0, fmt.Errorf("list audit checkpoints of %s: %w", scope, err)
 	}
 
 	highest, _ := highestCheckpoint(stored)
-	if seq < highest {
-		c.markBad(gk, highest)
 
-		return fmt.Errorf("audit checkpoint of %s: log ends at %d before checkpoint %d: %w",
-			scope, seq, highest, ErrCheckpointMismatch)
-	}
-
-	return nil
+	return highest, nil
 }
 
 // storeNew signs the hash of last and stores it. When the epoch changes
@@ -865,7 +933,7 @@ func (c *Checkpoints) checkTail(
 	}
 
 	if !ok || last.Sequence < highest {
-		c.markBad(gk, highest)
+		c.markBad(ctx, gk, highest)
 
 		return highest, true, nil
 	}
@@ -904,15 +972,83 @@ func (c *Checkpoints) sticky(gk goodKey) (int64, bool) {
 }
 
 // markBad records seq as a checkpoint of gk that did not match, so later
-// checks of the same epoch fail until a new epoch starts. It keeps the
-// first mismatch.
-func (c *Checkpoints) markBad(gk goodKey, seq int64) {
+// checks of the same epoch fail until a new epoch starts. It keeps the first
+// mismatch of the scope in memory, and stores the mark when the checkpoints
+// have a CheckStore, so every instance stops signing that scope while it
+// stands. A store that fails keeps the mark in memory and flushMarks stores
+// it again: this process signs nothing for the scope meanwhile, and the next
+// Write or Verify stores the mark before it does anything else.
+func (c *Checkpoints) markBad(ctx context.Context, gk goodKey, seq int64) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if _, ok := c.bad[gk]; !ok {
 		c.bad[gk] = seq
 	}
+
+	c.mu.Unlock()
+
+	if c.marks == nil {
+		return
+	}
+
+	mark := CheckMark{At: time.Time{}, Scope: gk.scope, Sequence: seq, Epoch: gk.epoch}
+
+	if err := c.marks.SaveCheckMark(ctx, mark); err != nil {
+		c.mu.Lock()
+		c.unsaved[gk] = mark
+		c.mu.Unlock()
+	}
+}
+
+// flushMarks stores the marks that a failed store did not take. It answers
+// an error while one stays unsaved, so a caller signs nothing and treats the
+// check as failed.
+func (c *Checkpoints) flushMarks(ctx context.Context) error {
+	if c.marks == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	pending := make(map[goodKey]CheckMark, len(c.unsaved))
+	maps.Copy(pending, c.unsaved)
+	c.mu.Unlock()
+
+	for gk, mark := range pending {
+		if err := c.marks.SaveCheckMark(ctx, mark); err != nil {
+			return fmt.Errorf("store audit checkpoint mark of %s: %w", mark.Scope, err)
+		}
+
+		c.mu.Lock()
+		delete(c.unsaved, gk)
+		c.mu.Unlock()
+	}
+
+	return nil
+}
+
+// standingMark answers the stored mark of scope that stops signing in epoch:
+// a mark of this epoch or of a newer one. A mark of another scope stops
+// nothing here, and a mark of an older epoch stops nothing, so a new epoch
+// ends it. It answers nil without a CheckStore. A store that cannot be read
+// returns an error, and the caller denies: signing stops whenever the mark is
+// unknown.
+func (c *Checkpoints) standingMark(ctx context.Context, epoch int64, scope namespace.Name) (*CheckMark, error) {
+	if c.marks == nil {
+		return nil, nil //nolint:nilnil // Nil without an error means no mark stands.
+	}
+
+	state, err := c.marks.CheckState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the audit checkpoint mark: %w", err)
+	}
+
+	for _, m := range state.Marks {
+		if m.Scope == scope && m.Epoch >= epoch {
+			return &m, nil
+		}
+	}
+
+	return nil, nil //nolint:nilnil // Nil without an error means no mark stands.
 }
 
 // verifyOne checks the checkpoint under key in dir of epoch and answers

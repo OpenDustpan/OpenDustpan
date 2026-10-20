@@ -3185,3 +3185,29 @@ WHERE id = 1 AND wrapped_key = sqlc.arg(old_wrapped_key);
 DELETE FROM idempotency_records;
 
 
+
+-- name: GetAuditChainCheck :one
+-- The stored result of the scheduled audit chain check. No row means no check
+-- ran.
+SELECT checked_at_ms, invalid FROM audit_chain_check WHERE id = 1;
+
+-- name: SaveAuditChainCheckResult :exec
+-- Stores the count of scopes that did not match, with the time of the clock
+-- of the store.
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid)
+VALUES (1, sqlc.arg('now_ms'), sqlc.arg('invalid'))
+ON CONFLICT (id) DO UPDATE SET checked_at_ms = excluded.checked_at_ms, invalid = excluded.invalid;
+
+-- name: ListAuditChainMarks :many
+-- The marks of checkpoint mismatches, one for each scope.
+SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope;
+
+-- name: SaveAuditChainMark :exec
+-- Stores the mark of a checkpoint mismatch of one scope. The first mark of a
+-- scope in an epoch stays, and a mark of a newer epoch replaces the older
+-- one.
+INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms)
+VALUES (sqlc.arg('scope'), sqlc.arg('epoch'), sqlc.arg('sequence'), sqlc.arg('now_ms'))
+ON CONFLICT (scope) DO UPDATE SET epoch = excluded.epoch, sequence = excluded.sequence,
+    marked_at_ms = excluded.marked_at_ms
+WHERE audit_chain_mark.epoch < excluded.epoch;

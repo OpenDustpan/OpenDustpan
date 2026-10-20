@@ -434,6 +434,14 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{"source", "window_end_ms", "count"},
 		},
 		{
+			table:   backup.TableAuditChainCheck,
+			columns: []string{"id", "checked_at_ms", "invalid"},
+		},
+		{
+			table:   backup.TableAuditChainMark,
+			columns: []string{"scope", "epoch", "sequence", "marked_at_ms"},
+		},
+		{
 			table: backup.TableBackups,
 			columns: []string{
 				"id",
