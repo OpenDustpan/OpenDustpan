@@ -98,10 +98,10 @@ func (r Revocation) Validate() error {
 		return fmt.Errorf("%w: row %d has an actor or an object that is not valid text", ErrInvalidRevocation, r.ID)
 	}
 
-	// A row without a time would end its target at the zero time, and the
-	// stores read that as not ended.
-	if r.At.IsZero() {
-		return fmt.Errorf("%w: row %d has no time", ErrInvalidRevocation, r.ID)
+	// A row without a time, or at the epoch or before it, would end its
+	// target at the time 0, and the stores read that as not ended.
+	if r.At.UnixMilli() <= 0 {
+		return fmt.Errorf("%w: row %d has no time after the epoch", ErrInvalidRevocation, r.ID)
 	}
 
 	return nil
@@ -184,8 +184,9 @@ func (r Revocation) ReplayEntry(invalid error) audit.Entry {
 
 	// A hostile row can hold any text. The denial names the row by its
 	// number and the subject is the fixed name of this component. A row
-	// without a time takes the epoch, so that the denial can be written.
-	if e.At.IsZero() {
+	// without a time after the epoch takes the epoch, so that the denial can
+	// be written.
+	if e.At.UnixMilli() <= 0 {
 		e.At = time.UnixMilli(0).UTC()
 	}
 

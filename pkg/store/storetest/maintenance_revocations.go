@@ -1503,19 +1503,21 @@ func testReplayRefusesHostileRows(t *testing.T, s RevocationStore) {
 		}
 	}
 
-	// A row without a time would end its target at the zero time, which reads
-	// as not ended. The replay refuses it as it refuses the rows above, and
-	// its denied entry takes a fixed time.
-	noTime := RawRevocation{
-		Kind: maintenance.RevokedToken, Target: revKeepToken, Actor: "mallory", Object: "token:x",
-		AtMs: time.Time{}.UnixMilli(),
+	// A row without a time after the epoch would end its target at the time
+	// 0, which reads as not ended. The replay refuses it as it refuses the
+	// rows above, and its denied entry takes a fixed time.
+	for _, atMs := range []int64{time.Time{}.UnixMilli(), 0, -1} {
+		noTime := RawRevocation{
+			Kind: maintenance.RevokedToken, Target: revKeepToken, Actor: "mallory", Object: "token:x",
+			AtMs: atMs,
+		}
+
+		if err := s.InsertRawRevocation(t.Context(), noTime); err != nil {
+			t.Fatalf("insert the row with the time %d: %v", atMs, err)
+		}
 	}
 
-	if err := s.InsertRawRevocation(t.Context(), noTime); err != nil {
-		t.Fatalf("insert the row without a time: %v", err)
-	}
-
-	denials := len(hostile) + 1
+	denials := len(hostile) + 3
 
 	revStageAndApply(t, s, export)
 

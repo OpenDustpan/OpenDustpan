@@ -247,15 +247,30 @@ func checkReplayEntry(t *testing.T, e audit.Entry, want audit.Outcome) {
 }
 
 // TestRevocationValidateRefusesARowWithoutATime proves that a row without a
-// time is refused: its target would end at the zero time, which reads as not
-// ended.
+// time after the epoch is refused: its target would end at the time 0, which
+// reads as not ended.
 func TestRevocationValidateRefusesARowWithoutATime(t *testing.T) {
 	t.Parallel()
 
-	row := revocationRow(maintenance.RevokedToken, "tok-1")
-	row.At = time.Time{}
+	tests := []struct {
+		name string
+		at   time.Time
+	}{
+		{"zero time", time.Time{}},
+		{"epoch", time.UnixMilli(0)},
+		{"before the epoch", time.UnixMilli(-1)},
+	}
 
-	if err := row.Validate(); !errors.Is(err, maintenance.ErrInvalidRevocation) {
-		t.Fatalf("err = %v, want ErrInvalidRevocation", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			row := revocationRow(maintenance.RevokedToken, "tok-1")
+			row.At = tc.at
+
+			if err := row.Validate(); !errors.Is(err, maintenance.ErrInvalidRevocation) {
+				t.Fatalf("err = %v, want ErrInvalidRevocation", err)
+			}
+		})
 	}
 }

@@ -183,13 +183,15 @@ func TestAdminOnlyGuardRefusesANonAdministrator(t *testing.T) {
 func TestZeroServiceRefusesANonAdministrator(t *testing.T) {
 	t.Parallel()
 
-	var svc principal.Service
+	for _, op := range guardOps() {
+		t.Run(op.name, func(t *testing.T) {
+			t.Parallel()
 
-	if err := svc.DeletePrincipal(t.Context(), testEntry(), callerOf(false), "p"); !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("delete principal = %v, want identity.ErrDenied", err)
-	}
+			var svc principal.Service
 
-	if err := svc.DeleteGroup(t.Context(), testEntry(), callerOf(false), "g"); !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("delete group = %v, want identity.ErrDenied", err)
+			if err := op.run(t.Context(), &svc, callerOf(false), "p", "g"); !errors.Is(err, identity.ErrDenied) {
+				t.Fatalf("%s = %v, want identity.ErrDenied", op.name, err)
+			}
+		})
 	}
 }
