@@ -289,7 +289,7 @@ func classifyLock(err error) (int, string, bool) {
 	case errors.Is(err, manuallock.ErrTargetNotFound), errors.Is(err, manuallock.ErrNotLocked):
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, manuallock.ErrAlreadyLocked), errors.Is(err, manuallock.ErrNotHolder),
-		errors.Is(err, manuallock.ErrLockChanged):
+		errors.Is(err, manuallock.ErrLockChanged), errors.Is(err, manuallock.ErrLocked):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, manuallock.ErrReasonRequired), errors.Is(err, manuallock.ErrInvalidTarget),
 		errors.Is(err, audit.ErrInvalidReason), errors.Is(err, errLockBody):

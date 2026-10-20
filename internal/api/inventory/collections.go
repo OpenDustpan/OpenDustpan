@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -324,6 +325,17 @@ func (h *Handler) moveUnit(
 
 	version := "from=" + nameOrNone(fromName) + ";to=" + to.Name.String()
 
+	held, lockErr := h.checkMoveOutOfLock(ctx, p, obj, unit, from)
+	if lockErr != nil {
+		h.writeError(ctx, w, lockErr)
+
+		return
+	}
+
+	if held != "" {
+		version += ";manual-lock=" + held
+	}
+
 	err = h.collections.SetUnit(ctx, collection.Move{Unit: unit, From: fromName, To: to, ToID: toID},
 		auditEntry(r, p, obj, identity.ActionUnitMove, version))
 	if err != nil {
@@ -337,6 +349,66 @@ func (h *Handler) moveUnit(
 		Collection:         to.Name.String(),
 		PreviousCollection: fromName.String(),
 	})
+}
+
+// movedOutOfLockError is the refusal of a move out of a collection that has a
+// manual lock, for a caller without unit:manage. It matches
+// manuallock.ErrLocked and names the holder and the reason of the lock.
+type movedOutOfLockError struct {
+	locked *manuallock.LockedError
+}
+
+func (e *movedOutOfLockError) Error() string {
+	return e.locked.Error() + ": moving it out of the collection needs unit:manage on it"
+}
+
+// Is reports whether target is manuallock.ErrLocked.
+func (e *movedOutOfLockError) Is(target error) bool {
+	return target == manuallock.ErrLocked
+}
+
+// checkMoveOutOfLock refuses a move of unit out of the collection from while a
+// manual lock of that collection covers the unit, unless the caller holds
+// unit:manage on the unit. The move ends the coverage of the collection lock,
+// so it would get around the lock for a caller that only holds unit:move. It
+// returns the name of the collection whose lock the move leaves, for the audit
+// entry of the move, or the empty string when no lock of from covers the unit.
+// A lock that cannot be read refuses the move: the check fails closed.
+//
+// Defense in depth: the route and authorizeMove check the access of the move.
+// This check stays so that a role with unit:move and no unit:manage cannot use
+// the move to end a manual lock.
+func (h *Handler) checkMoveOutOfLock(
+	ctx context.Context, p identity.Principal, obj identity.Object, unit collection.UnitRef, from collection.Ref,
+) (string, error) {
+	if h.locks == nil || from.Name == "" {
+		return "", nil
+	}
+
+	l, err := h.locks.Covering(ctx, unit)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read manual lock of %s: %w", unit, err)
+	}
+
+	if l.Target.Kind != manuallock.KindCollection || l.Target.Collection != from {
+		return "", nil
+	}
+
+	if authErr := h.authorize(ctx, p, identity.ActionUnitManage, obj); authErr != nil {
+		if !errors.Is(authErr, identity.ErrDenied) {
+			return "", authErr
+		}
+
+		return "", &movedOutOfLockError{locked: &manuallock.LockedError{
+			Lock: l, Noun: "", Name: unit.Namespace.String() + "/" + unit.Name,
+		}}
+	}
+
+	return from.Name.String(), nil
 }
 
 // moveCheck is one action that a move needs, on one object.
