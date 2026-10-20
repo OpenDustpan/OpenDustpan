@@ -332,7 +332,8 @@ may be added on top.** Both checks run once, before any other call. Both must
 pass.
 
 **The description pin.** The pin has the form `>=MIN <MAX`. A client generated
-from description `0.12.3` pins `>=0.12.0 <0.13.0` before 1.0. A description
+from description `0.12.3` pins `>=0.12.0 <0.13.0` before 1.0. A pin to the
+minor range of the description satisfies ADR 264 decision 5. A description
 version outside the pin, or a server that sends none, is refused with a message
 that names the description version and the pin. The refusal has no flag that
 skips it, because a check that a flag skips is advice. A dev build of the server
@@ -371,8 +372,10 @@ package is in the module of the server, and a client must not pull the
 **Pre-release.** With a lower bound that is a pre-release, the range accepts a
 pre-release of any patch version in the range. This differs from node-semver,
 which accepts a pre-release only on the same `MAJOR.MINOR.PATCH` as a bound.
-With a lower bound that is a release, no pre-release passes, so `0.13.0-rc.1`
-does not pass `>=0.12.0 <0.13.0`.
+With a lower bound that is a release, no pre-release passes. So `0.12.5-rc.1`
+does not pass `>=0.12.0 <0.13.0`, although its number lies between the two
+bounds, and `0.13.0-rc.1` does not pass it either. An implementation keeps
+this rule.
 
 **The e2e suite.** The suite runs dev server binaries. A dev build passes the
 server range by the dev rule (with a warning), and the description pin is the
@@ -453,9 +456,9 @@ reference. The reference never selects the kind.
 | `ServerVersion` | Returns the server version and the description version. | |
 | `Get(ref)` | Returns the object with its `ETag`. | `ErrNotFound` |
 | `List(kind, scope, page)` | Returns one page in a stable order, and the cursor of the next page. | `ErrInvalidRef`, `ErrNotFound` (a namespace that does not exist) |
-| `Create(ref, spec)` | Makes the object. Sends `If-None-Match: *`. Never adopts. | `ErrAlreadyExists` (from `412`), `ErrInvalidSpec` |
+| `Create(ref, spec)` | Makes the object. Sends `If-None-Match: *`. Never adopts. A collection is created with `POST`, which does not read `If-None-Match` today and answers `409` with no code. It needs `If-None-Match: *` with `412`, as the other kinds do (see "Follow-up work"). | `ErrAlreadyExists` (from `412`), `ErrInvalidSpec` |
 | `Update(object)` | Replaces or patches the object. Sends `If-Match` with the `ETag` of the read. | `ErrConflict` (from `412`), `ErrNotFound`, `ErrInvalidSpec` |
-| `Delete(ref, etag)` | Removes the object. Sends `If-Match`. An object that is already gone is success: the server answers `204`, and the provider treats the object as deleted. | `ErrConflict` (from `412`) |
+| `Delete(ref, etag)` | Removes the object. Sends `If-Match`. An object that is already gone is success. Only the approval default answers `204` for a missing object. A missing approval rule or collection answers `404`, so the adapter maps `404` on a delete to success: the object is gone. | `ErrConflict` (from `412`, which stays an error) |
 
 Every method also returns the error of the context, `ErrUnauthenticated`
 (`401`), `ErrForbidden` (`403`), and `ErrFreshAuthRequired` (`403` with the code
@@ -555,8 +558,10 @@ server work and block the first provider release in issue 967.
   description to any signed-in caller, with no `server:observe` (question 8);
 - #1237: a collection update route with `ETag` and `If-Match`;
 - #1238: REST routes for ownership rules;
-- #1239: create-only writes (`If-None-Match: *`) on `PUT` routes that upsert,
-  and a `412` for a stale `If-Match` on the approval default and approval
+- #1239: create-only writes (`If-None-Match: *`) on `PUT` routes that upsert
+  and on the `POST` route that creates a collection (it ignores `If-None-Match`
+  today and answers `409` with no code, and it needs `412`), which blocks the
+  first provider release, and a `412` for a stale `If-Match` on the approval default and approval
   rule routes of gate configuration, which answer `409` today (ADR 210
   decision 6 says `412`);
 - #1240: writes to gate configuration accept an access token for a change that
