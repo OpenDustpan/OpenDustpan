@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -25,6 +24,11 @@ import (
 // The store turns it into job.ErrUnitBusy. An adapter never returns a driver
 // error for this case.
 var ErrHolderIndex = errors.New("another job holds the unit for a change")
+
+// ErrUnitNotInInventory is what a Tx returns from CoveringLocks when the
+// inventory holds no unit with the ID in the namespace: a unit that left the
+// inventory has no lock to read, so the dispatch must not go on.
+var ErrUnitNotInInventory = errors.New("the unit is not in the inventory")
 
 // ErrKeyIndex is what a Tx returns from InsertJob when the unique index on
 // the idempotency key of a namespace refuses the row: a second create with
@@ -38,7 +42,8 @@ type Row struct {
 	ID        job.ID
 	Namespace namespace.Name
 	UnitID    string
-	// Seq orders the jobs of the store, oldest first.
+	// Seq orders the jobs of one namespace, oldest first. The jobs of two
+	// namespaces can have the same Seq.
 	Seq   int64
 	State job.State
 	Wait  job.WaitReason
@@ -83,8 +88,9 @@ type OrphanRow struct {
 	Missing bool
 }
 
-// Query selects jobs for List. The adapter applies After as: the jobs that
-// come before the job After in the newest-first order.
+// Query selects jobs for List. The order is newest first by Seq, then by job
+// ID, so the order is total across namespaces. The adapter applies After as:
+// the jobs that come after the job After in this order.
 type Query struct {
 	Namespace namespace.Name
 	UnitID    string
@@ -119,11 +125,11 @@ type Tx interface {
 	// of the namespace ns, or of the whole namespace when unitID is empty.
 	CountOpen(ctx context.Context, ns namespace.Name, unitID string) (int, error)
 	// HolderOf returns the ID of a job other than except that holds the unit
-	// for a change, and false when none does.
-	HolderOf(ctx context.Context, unitID string, except job.ID) (job.ID, bool, error)
-	// Awaiting returns the jobs of the unit that wait for a state version,
-	// oldest first.
-	Awaiting(ctx context.Context, unitID string) ([]Row, error)
+	// of the namespace ns for a change, and false when none does.
+	HolderOf(ctx context.Context, ns namespace.Name, unitID string, except job.ID) (job.ID, bool, error)
+	// Awaiting returns the jobs of the unit of the namespace ns that wait for
+	// a state version, oldest first.
+	Awaiting(ctx context.Context, ns namespace.Name, unitID string) ([]Row, error)
 	// List returns the jobs that q selects, newest first.
 	List(ctx context.Context, q Query) ([]Row, error)
 	// Orphans returns at most limit jobs that hold their unit and whose
@@ -133,14 +139,18 @@ type Tx interface {
 	// ActiveFreeze returns the ID of a freeze of the namespace that is active
 	// at t, and false when none is.
 	ActiveFreeze(ctx context.Context, ns namespace.Name, t time.Time) (string, bool, error)
-	// CoveringLocks returns the manual locks that cover the unit, the lock
-	// of the unit first. It returns none when no lock covers the unit.
-	CoveringLocks(ctx context.Context, unit collection.UnitRef) ([]manuallock.Lock, error)
-	// StateVersion returns the current state version of the unit, or empty.
-	StateVersion(ctx context.Context, unitID string) (string, error)
-	// FinalVersion returns the last final state version of the unit, and
-	// false when none was recorded.
-	FinalVersion(ctx context.Context, unitID string) (FinalVersion, bool, error)
+	// CoveringLocks returns the manual locks that cover the unit unitID of the
+	// namespace ns, the lock of the unit first. It finds the unit by its stable
+	// ID, so a rename does not hide a lock. It returns none when no lock
+	// covers the unit, and ErrUnitNotInInventory when the inventory holds no
+	// such unit.
+	CoveringLocks(ctx context.Context, ns namespace.Name, unitID string) ([]manuallock.Lock, error)
+	// StateVersion returns the current state version of the unit of the
+	// namespace ns, or empty.
+	StateVersion(ctx context.Context, ns namespace.Name, unitID string) (string, error)
+	// FinalVersion returns the last final state version of the unit of the
+	// namespace ns, and false when none was recorded.
+	FinalVersion(ctx context.Context, ns namespace.Name, unitID string) (FinalVersion, bool, error)
 	// PutFinalVersion records v as the last final state version of the unit
 	// of the namespace ns.
 	PutFinalVersion(ctx context.Context, ns namespace.Name, v FinalVersion) error

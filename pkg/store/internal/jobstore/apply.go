@@ -145,17 +145,12 @@ func observeIn(ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Nam
 		return nil, nil
 	}
 
-	rows, err := tx.Awaiting(ctx, v.Unit.UnitID())
+	rows, err := tx.Awaiting(ctx, ns, v.Unit.UnitID())
 	if err != nil {
 		return nil, err
 	}
 
-	now, err := tx.Now(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	closed, err := closeAwaiting(ctx, tx, rows, v, now)
+	closed, err := closeAwaiting(ctx, tx, ns, rows, v)
 	if err != nil {
 		return nil, err
 	}
@@ -167,11 +162,26 @@ func observeIn(ctx context.Context, tx Tx, v *job.StateVersion, ns namespace.Nam
 	return closed, err
 }
 
-// closeAwaiting closes each job of rows that v closes, and returns them.
-func closeAwaiting(ctx context.Context, tx Tx, rows []Row, v *job.StateVersion, now time.Time) ([]job.Job, error) {
+// closeAwaiting closes each job of rows that v closes, and returns them. It
+// refuses a row of another namespace than ns.
+func closeAwaiting(
+	ctx context.Context, tx Tx, ns namespace.Name, rows []Row, v *job.StateVersion,
+) ([]job.Job, error) {
+	now, nowErr := tx.Now(ctx)
+	if nowErr != nil {
+		return nil, nowErr
+	}
+
 	var closed []job.Job
 
 	for i := range rows {
+		// Defense in depth: the query of Awaiting filters by the namespace too;
+		// this check stays so that a Tx that skips that filter cannot close the
+		// job of another namespace.
+		if rows[i].Namespace != ns {
+			return nil, job.ErrNotFound
+		}
+
 		j, err := jobOf(&rows[i])
 		if err != nil {
 			return nil, err

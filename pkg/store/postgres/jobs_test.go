@@ -11,7 +11,9 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -99,6 +101,58 @@ func (d *jobDomain) CreateUnit(
 	}
 
 	return identity.Object{}, fmt.Errorf("%w: unit %s not in the inventory", identity.ErrInvalidObject, name)
+}
+
+func (d *jobDomain) RenameUnit(
+	ctx context.Context, fence namespace.Fence, unit identity.Object, newName string,
+) (identity.Object, error) {
+	ref, err := pulumiRef(fence.Namespace, unit)
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	_, stackName, _ := strings.Cut(newName, "/")
+
+	if err = d.s.RenameStack(ctx, ref, stack.Name(stackName), fence); err != nil {
+		return identity.Object{}, fmt.Errorf("rename stack: %w", err)
+	}
+
+	o, err := identity.UnitObject("pulumi", fence.Namespace, newName)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("unit object: %w", err)
+	}
+
+	return o.WithUnitID(unit.UnitID()), nil
+}
+
+func (d *jobDomain) RemoveUnit(ctx context.Context, fence namespace.Fence, unit identity.Object) error {
+	ref, err := pulumiRef(fence.Namespace, unit)
+	if err != nil {
+		return err
+	}
+
+	entry := lockEntry(fence.Namespace, manuallock.UnitTarget(collection.UnitRef{
+		Namespace: fence.Namespace, Tool: "pulumi", Name: unit.UnitName(),
+	}))
+	entry.Action = "unit:delete"
+
+	deletion := inventory.Deletion{Entry: entry, PurgeAfter: entry.At.Add(inventory.DeletedRetention)}
+	if err := d.s.DeleteStack(ctx, ref, fence, stack.EmptyGuard(), deletion); err != nil {
+		return fmt.Errorf("delete stack: %w", err)
+	}
+
+	return nil
+}
+
+// pulumiRef returns the stack reference of a Pulumi unit.
+func pulumiRef(ns namespace.Name, unit identity.Object) (stack.Ref, error) {
+	if unit.Tool() != "pulumi" {
+		return stack.Ref{}, fmt.Errorf("%w: tool %q", identity.ErrInvalidObject, unit.Tool())
+	}
+
+	project, stackName, _ := strings.Cut(unit.UnitName(), "/")
+
+	return stack.Ref{Namespace: ns, Project: stack.ProjectName(project), Stack: stack.Name(stackName)}, nil
 }
 
 func (d *jobDomain) BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error) {

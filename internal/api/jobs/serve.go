@@ -9,9 +9,9 @@ import (
 )
 
 // jobResponse is the answered document of a job read. A step answers its
-// name, role and phase, and never its arguments or its variables.
-//
-// Contract: never remove or rename these fields.
+// name, role and phase, and never its arguments or its variables. The name of
+// the unit is the name at the start of the job; the unit ID stays the same
+// after a rename.
 type jobResponse struct {
 	ID           string            `json:"id"`
 	Namespace    string            `json:"namespace"`

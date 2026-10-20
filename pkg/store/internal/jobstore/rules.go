@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -95,15 +94,17 @@ func checkDispatch(ctx context.Context, tx Tx, j *job.Job, at dispatchTimes) err
 
 // checkManualLock returns ErrLocked when a manual lock covers the unit of j.
 // It reads the lock in the transaction of the dispatch, with the coverage of
-// manuallock.Store.CoveringLock.
+// manuallock.Store.CoveringLock, and fails closed for a unit that is not in
+// the inventory.
 func checkManualLock(ctx context.Context, tx Tx, j *job.Job) error {
 	unit := j.Spec.Unit
 
-	locks, err := tx.CoveringLocks(ctx, collection.UnitRef{
-		Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName(),
-	})
+	// The lookup uses the stable unit ID, not the name that the spec stored at
+	// the start: a rename of the unit must not hide its locks. A unit that
+	// is not in the inventory fails the dispatch, because no lock can be read.
+	locks, err := tx.CoveringLocks(ctx, unit.Namespace(), unit.UnitID())
 	if err != nil {
-		return err
+		return fmt.Errorf("check the manual locks of unit %s: %w", unit, err)
 	}
 
 	if len(locks) == 0 {
@@ -121,7 +122,7 @@ func checkManualLock(ctx context.Context, tx Tx, j *job.Job) error {
 // change. The partial unique index on the jobs table holds the same rule at
 // the write; this read gives the answer before the write and names the job.
 func checkUnit(ctx context.Context, tx Tx, j *job.Job) error {
-	other, busy, err := tx.HolderOf(ctx, j.Spec.Unit.UnitID(), j.ID)
+	other, busy, err := tx.HolderOf(ctx, j.Spec.Unit.Namespace(), j.Spec.Unit.UnitID(), j.ID)
 	if err != nil {
 		return err
 	}
@@ -159,7 +160,7 @@ func checkPlans(ctx context.Context, tx Tx, j *job.Job, notBefore time.Time) err
 		return nil
 	}
 
-	current, err := tx.StateVersion(ctx, j.Spec.Unit.UnitID())
+	current, err := tx.StateVersion(ctx, j.Spec.Unit.Namespace(), j.Spec.Unit.UnitID())
 	if err != nil {
 		return err
 	}

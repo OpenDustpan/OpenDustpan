@@ -4207,6 +4207,65 @@ func (q *Queries) GetCoveringManualLocks(ctx context.Context, arg GetCoveringMan
 	return i, err
 }
 
+const getCoveringManualLocksByUnitID = `-- name: GetCoveringManualLocksByUnitID :one
+SELECT i.tool AS unit_tool, i.name AS unit_name,
+       ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
+       cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       nl.holder AS namespace_holder, nl.reason AS namespace_reason, nl.since_ms AS namespace_since_ms,
+       c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
+WHERE i.namespace = $1 AND i.unit_id = $2
+`
+
+type GetCoveringManualLocksByUnitIDParams struct {
+	Namespace string
+	UnitID    string
+}
+
+type GetCoveringManualLocksByUnitIDRow struct {
+	UnitTool          string
+	UnitName          string
+	UnitHolder        pgtype.Text
+	UnitReason        pgtype.Text
+	UnitSinceMs       pgtype.Int8
+	CollectionHolder  pgtype.Text
+	CollectionReason  pgtype.Text
+	CollectionSinceMs pgtype.Int8
+	NamespaceHolder   pgtype.Text
+	NamespaceReason   pgtype.Text
+	NamespaceSinceMs  pgtype.Int8
+	CollectionName    pgtype.Text
+}
+
+// The same locks as GetCoveringManualLocks, found by the stable unit ID of the
+// unit in the namespace. A rename of the unit does not hide its locks. No row
+// means that the inventory holds no such unit: the caller fails closed.
+func (q *Queries) GetCoveringManualLocksByUnitID(ctx context.Context, arg GetCoveringManualLocksByUnitIDParams) (GetCoveringManualLocksByUnitIDRow, error) {
+	row := q.db.QueryRow(ctx, getCoveringManualLocksByUnitID, arg.Namespace, arg.UnitID)
+	var i GetCoveringManualLocksByUnitIDRow
+	err := row.Scan(
+		&i.UnitTool,
+		&i.UnitName,
+		&i.UnitHolder,
+		&i.UnitReason,
+		&i.UnitSinceMs,
+		&i.CollectionHolder,
+		&i.CollectionReason,
+		&i.CollectionSinceMs,
+		&i.NamespaceHolder,
+		&i.NamespaceReason,
+		&i.NamespaceSinceMs,
+		&i.CollectionName,
+	)
+	return i, err
+}
+
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
@@ -4992,20 +5051,22 @@ func (q *Queries) GetJobFreeze(ctx context.Context, id string) (GetJobFreezeRow,
 }
 
 const getJobHolderOfUnit = `-- name: GetJobHolderOfUnit :one
-SELECT id FROM jobs
-WHERE unit_id = $1 AND id <> $2 AND current_changes
-  AND state IN ('dispatched', 'running', 'canceling')
+SELECT j.id FROM jobs AS j
+WHERE j.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND j.unit_id = $2 AND j.id <> $3 AND j.current_changes
+  AND j.state IN ('dispatched', 'running', 'canceling')
 LIMIT 1
 `
 
 type GetJobHolderOfUnitParams struct {
-	UnitID   string
-	ExceptID string
+	Namespace string
+	UnitID    string
+	ExceptID  string
 }
 
 // A job other than the given one that holds the unit for a change.
 func (q *Queries) GetJobHolderOfUnit(ctx context.Context, arg GetJobHolderOfUnitParams) (string, error) {
-	row := q.db.QueryRow(ctx, getJobHolderOfUnit, arg.UnitID, arg.ExceptID)
+	row := q.db.QueryRow(ctx, getJobHolderOfUnit, arg.Namespace, arg.UnitID, arg.ExceptID)
 	var id string
 	err := row.Scan(&id)
 	return id, err
@@ -6151,8 +6212,14 @@ func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (str
 }
 
 const getUnitFinalVersion = `-- name: GetUnitFinalVersion :one
-SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions WHERE unit_id = $1
+SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
 `
+
+type GetUnitFinalVersionParams struct {
+	Namespace string
+	UnitID    string
+}
 
 type GetUnitFinalVersionRow struct {
 	UnitID    string
@@ -6162,8 +6229,8 @@ type GetUnitFinalVersionRow struct {
 	AtMs      int64
 }
 
-func (q *Queries) GetUnitFinalVersion(ctx context.Context, unitID string) (GetUnitFinalVersionRow, error) {
-	row := q.db.QueryRow(ctx, getUnitFinalVersion, unitID)
+func (q *Queries) GetUnitFinalVersion(ctx context.Context, arg GetUnitFinalVersionParams) (GetUnitFinalVersionRow, error) {
+	row := q.db.QueryRow(ctx, getUnitFinalVersion, arg.Namespace, arg.UnitID)
 	var i GetUnitFinalVersionRow
 	err := row.Scan(
 		&i.UnitID,
@@ -6195,11 +6262,17 @@ func (q *Queries) GetUnitOutputSeq(ctx context.Context, arg GetUnitOutputSeqPara
 }
 
 const getUnitStateVersion = `-- name: GetUnitStateVersion :one
-SELECT version_id FROM unit_state_versions WHERE unit_id = $1
+SELECT version_id FROM unit_state_versions
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
 `
 
-func (q *Queries) GetUnitStateVersion(ctx context.Context, unitID string) (string, error) {
-	row := q.db.QueryRow(ctx, getUnitStateVersion, unitID)
+type GetUnitStateVersionParams struct {
+	Namespace string
+	UnitID    string
+}
+
+func (q *Queries) GetUnitStateVersion(ctx context.Context, arg GetUnitStateVersionParams) (string, error) {
+	row := q.db.QueryRow(ctx, getUnitStateVersion, arg.Namespace, arg.UnitID)
 	var version_id string
 	err := row.Scan(&version_id)
 	return version_id, err
@@ -8271,9 +8344,15 @@ SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_p
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
 FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
-WHERE j.unit_id = $1 AND j.state = 'awaiting-state'
+WHERE j.namespace_id = (SELECT x.id FROM namespaces AS x WHERE x.name = $1)
+  AND j.unit_id = $2 AND j.state = 'awaiting-state'
 ORDER BY j.seq
 `
+
+type ListAwaitingJobsOfUnitParams struct {
+	Namespace string
+	UnitID    string
+}
 
 type ListAwaitingJobsOfUnitRow struct {
 	ID               string
@@ -8292,8 +8371,8 @@ type ListAwaitingJobsOfUnitRow struct {
 	UpdatedAtMs      int64
 }
 
-func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, unitID string) ([]ListAwaitingJobsOfUnitRow, error) {
-	rows, err := q.db.Query(ctx, listAwaitingJobsOfUnit, unitID)
+func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJobsOfUnitParams) ([]ListAwaitingJobsOfUnitRow, error) {
+	rows, err := q.db.Query(ctx, listAwaitingJobsOfUnit, arg.Namespace, arg.UnitID)
 	if err != nil {
 		return nil, err
 	}
@@ -10245,6 +10324,7 @@ FROM jobs AS j
 JOIN namespaces AS n ON n.id = j.namespace_id
 LEFT JOIN durable_operations AS d ON d.id = j.current_operation
 WHERE j.state IN ('dispatched', 'running', 'canceling')
+  AND j.state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired')
   AND (d.id IS NULL OR d.state IN ('succeeded', 'failed', 'canceled'))
 ORDER BY j.seq
 LIMIT $1
@@ -11741,12 +11821,17 @@ func (q *Queries) NextInventoryChangeSeq(ctx context.Context, namespaceID string
 }
 
 const nextJobSeq = `-- name: NextJobSeq :one
-SELECT (COALESCE(MAX(seq), 0) + 1)::bigint AS seq FROM jobs
+SELECT (COALESCE(MAX(j.seq), 0) + 1)::bigint AS seq
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = $1
 `
 
-// The sequence number of the next job. The write transaction orders it.
-func (q *Queries) NextJobSeq(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, nextJobSeq)
+// The sequence number of the next job of a namespace. The write transaction
+// holds the namespace row FOR UPDATE, so two creates of one namespace never read
+// the same maximum. The unique index on (namespace_id, seq) refuses a duplicate.
+func (q *Queries) NextJobSeq(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, nextJobSeq, namespace)
 	var seq int64
 	err := row.Scan(&seq)
 	return seq, err

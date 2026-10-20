@@ -1,6 +1,6 @@
 # Jobs API
 
-A job is work that the server asks an executor to do on one unit: a plan, an
+A job is work that the server asks an executor to do on one stack or workspace: a plan, an
 apply, a destroy or a refresh. The jobs API lets a person or a client read a
 job, its phases and the records of its phases.
 
@@ -15,7 +15,7 @@ access token or a console session.
 
 | Method and path | Action | Answer |
 | --- | --- | --- |
-| `GET /namespaces/{namespace}/jobs/{job_id}` | `namespace:read` on the namespace, and `job:read` on the unit of the job | One job |
+| `GET /namespaces/{namespace}/jobs/{job_id}` | `namespace:read` on the namespace, and `job:read` on the stack or workspace of the job | One job |
 
 A caller who cannot read the job gets the same 404 as for a job that does not
 exist. The answer never tells that the job exists. This holds for a job ID that
@@ -31,13 +31,13 @@ than `GET` on this path gets 405.
 | --- | --- |
 | `id` | The job ID, which starts with `job-` |
 | `namespace` | The name of the namespace |
-| `unit` | `id` (the stable unit ID), `tool` (`Pulumi` or `OpenTofu`) and `name` (the name of the unit in its tool) |
+| `unit` | `id` (the stable ID of the stack or workspace), `tool` (`Pulumi` or `OpenTofu`) and `name` (the name in its tool at the start) |
 | `operation` | `plan`, `apply`, `destroy` or `refresh` |
 | `executor` | `runner` or `write-back` |
 | `state` | `queued`, `awaiting-approval`, `dispatched`, `running`, `canceling`, `awaiting-state`, `succeeded`, `failed`, `canceled`, `rejected` or `expired` |
 | `wait` | Why a queued job does not dispatch: `unit-busy`, `frozen` or `locked`. The field is not there when nothing holds the job. |
 | `reason` | Why a job that ended did end. The field is not there for a job that runs. |
-| `location` | Where the program and the config of the unit are in git: `connection`, `repository`, `ref`, `directory` and `revision` |
+| `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision` |
 | `pool` | The runner pool of a runner job |
 | `steps` | The steps of a runner job. Each step has `name`, `role`, `phase` and `changesResources`. |
 | `phases` | The phases of the job, in order (see below) |
@@ -50,6 +50,9 @@ than `GET` on this path gets 405.
 | `version` | A number that grows with each change of the job record |
 | `createdAt`, `updatedAt` | Times in RFC 3339 format |
 
+The `unit.name` field keeps the name from the start of the job. A rename does
+not change it. To find the current stack or workspace, use `unit.id`.
+
 A step never shows its arguments or its variables. The document does not show
 the idempotency key, the runner profile, the durable operation of a phase or
 the item key of a plan or of a log.
@@ -61,7 +64,7 @@ the item key of a plan or of a log.
 | `kind` | `plan`, `apply` or `deliver` |
 | `claims` | How many claims the phase had. A takeover adds one. |
 | `executor` | The runner or the instance that holds or held the last claim |
-| `stateVersion` | The state version of the unit that a plan phase read |
+| `stateVersion` | The state version of the stack or workspace that a plan phase read |
 | `steps` | The records of the steps that ran: `name`, `exitCode`, `startedAt`, `finishedAt` and the metadata of the log (`id`, `version`, `size`, `closed`, `redacted`) |
 | `plan` | The metadata of the stored plan: `id`, `stateVersion`, `parts`, `createdAt`, `expiresAt` and `redactedAt`. A part has `kind`, `size`, `sha256` and `secret`. |
 | `gates` | The gates in front of the phase: `type`, `approvals`, `groups`, `allowSelf` and `bindPlan` |

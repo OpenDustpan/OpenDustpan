@@ -34,6 +34,9 @@ func TestMemConformance(t *testing.T) {
 	})
 }
 
+// errNotInInventory is the error for a unit that the inventory does not hold.
+var errNotInInventory = errors.New("the unit is not in the inventory")
+
 // errUnitBusyIndex is the error of the partial unique index on the unit
 // of the jobs that hold it, as a SQL adapter gets it from its driver.
 var errUnitBusyIndex = errors.New("unique index on the unit of the jobs that hold it")
@@ -59,6 +62,8 @@ type memDB struct {
 	audit   map[namespace.Name][]audit.Entry
 	// locks maps the String of a manual lock target to the lock.
 	locks map[string]manuallock.Lock
+	// units maps a unit ID to the unit in the inventory, under its current name.
+	units map[string]collection.UnitRef
 }
 
 func newMemDB() *memDB {
@@ -74,6 +79,7 @@ func newMemDB() *memDB {
 		freezes: map[string]*job.Freeze{},
 		audit:   map[namespace.Name][]audit.Entry{},
 		locks:   map[string]manuallock.Lock{},
+		units:   map[string]collection.UnitRef{},
 	}
 }
 
@@ -94,7 +100,63 @@ func (m *memDB) CreateUnit(_ context.Context, fence namespace.Fence, tool, name 
 		return o, fmt.Errorf("unit object: %w", err)
 	}
 
-	return o.WithUnitID(ident.NewID("unt-")), nil
+	o = o.WithUnitID(ident.NewID("unt-"))
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.units[o.UnitID()] = collection.UnitRef{Namespace: o.Namespace(), Tool: o.Tool(), Name: o.UnitName()}
+
+	return o, nil
+}
+
+// RenameUnit implements jobtest.Domain. The locks of the unit follow it.
+func (m *memDB) RenameUnit(
+	_ context.Context, fence namespace.Fence, unit identity.Object, newName string,
+) (identity.Object, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return identity.Object{}, err
+	}
+
+	old, ok := m.units[unit.UnitID()]
+	if !ok {
+		return identity.Object{}, fmt.Errorf("unit %s: %w", unit, job.ErrNotFound)
+	}
+
+	renamed := collection.UnitRef{Namespace: old.Namespace, Tool: old.Tool, Name: newName}
+
+	if l, ok := m.locks[manuallock.UnitTarget(old).String()]; ok {
+		delete(m.locks, manuallock.UnitTarget(old).String())
+
+		l.Target = manuallock.UnitTarget(renamed)
+		m.locks[l.Target.String()] = l
+	}
+
+	m.units[unit.UnitID()] = renamed
+
+	o, err := identity.UnitObject(renamed.Tool, renamed.Namespace, renamed.Name)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("unit object: %w", err)
+	}
+
+	return o.WithUnitID(unit.UnitID()), nil
+}
+
+// RemoveUnit implements jobtest.Domain.
+func (m *memDB) RemoveUnit(_ context.Context, fence namespace.Fence, unit identity.Object) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	delete(m.units, unit.UnitID())
+
+	return nil
 }
 
 // PutManualLock implements jobtest.Domain.
@@ -241,7 +303,16 @@ func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
 
 	var out []job.Job
 
+	// After is the last job of the previous page: the page starts behind it.
+	passed := f.After == ""
+
 	for _, id := range slices.Backward(m.order) {
+		if !passed {
+			passed = id == f.After
+
+			continue
+		}
+
 		j, ok := m.lookup(id)
 		if !ok {
 			continue
@@ -575,15 +646,18 @@ func (m *memDB) checkDispatch(j *job.Job, notBefore, now time.Time) error {
 }
 
 // checkManualLock returns ErrLocked when a manual lock covers the unit of j: the
-// lock of the unit, else the lock of its namespace. It stands for the read of
-// manuallock.Store.CoveringLock in the transaction of the dispatch.
+// lock of the unit, else the lock of its namespace. It finds the unit by its
+// ID, as the transaction of a dispatch does, and fails closed for a unit that
+// is not in the inventory.
 func (m *memDB) checkManualLock(j *job.Job) error {
 	unit := j.Spec.Unit
-	own := manuallock.UnitTarget(
-		collection.UnitRef{Namespace: unit.Namespace(), Tool: unit.Tool(), Name: unit.UnitName()},
-	)
 
-	for _, t := range []manuallock.Target{own, manuallock.NamespaceTarget(unit.Namespace())} {
+	ref, ok := m.units[unit.UnitID()]
+	if !ok || ref.Namespace != unit.Namespace() {
+		return fmt.Errorf("check the manual locks of unit %s: %w", unit, errNotInInventory)
+	}
+
+	for _, t := range []manuallock.Target{manuallock.UnitTarget(ref), manuallock.NamespaceTarget(unit.Namespace())} {
 		if l, ok := m.locks[t.String()]; ok {
 			return fmt.Errorf(
 				"%w: %w",

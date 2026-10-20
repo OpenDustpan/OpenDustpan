@@ -54,7 +54,7 @@ func claim(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.Ti
 	p := &next.Phases[next.Current]
 
 	if p.Kind == job.PhasePlan {
-		v, err := tx.StateVersion(ctx, next.Spec.Unit.UnitID())
+		v, err := tx.StateVersion(ctx, next.Spec.Unit.Namespace(), next.Spec.Unit.UnitID())
 		if err != nil {
 			return err
 		}
@@ -188,7 +188,7 @@ func closeLate(ctx context.Context, tx Tx, next *job.Job, ev job.Event) error {
 		return nil
 	}
 
-	f, ok, err := tx.FinalVersion(ctx, next.Spec.Unit.UnitID())
+	f, ok, err := tx.FinalVersion(ctx, next.Spec.Unit.Namespace(), next.Spec.Unit.UnitID())
 	if err != nil || !ok {
 		return err
 	}

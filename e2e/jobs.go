@@ -54,7 +54,7 @@ func jobsOf(st any) (job.Store, bool) {
 	}
 }
 
-// CreateJob makes a OpenTofu workspace called name in the scenario namespace
+// CreateJob makes an OpenTofu workspace called name in the scenario namespace
 // and a queued runner job that plans it, and returns their IDs. No route
 // starts a job yet, so this is a direct store write. The binary server owns
 // its database, so the write runs while the binary is stopped, on a handle

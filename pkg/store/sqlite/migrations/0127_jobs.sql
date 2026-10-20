@@ -3,7 +3,8 @@
 -- namespace. The unit of a job is its stable unit ID: a rename of the unit
 -- keeps its jobs, and a job outlives its unit, so there is no foreign key to
 -- the inventory. body holds the JSON of the fields that no query reads.
--- seq orders the jobs, newest first. current_operation is the durable
+-- seq orders the jobs of one namespace, newest first. It counts per namespace,
+-- and the namespace row lock of a write serializes the count. current_operation is the durable
 -- operation of the current phase, or empty before its dispatch.
 -- current_changes is 1 when the current phase changes resources, state or the
 -- code in git.
@@ -33,8 +34,13 @@ CREATE UNIQUE INDEX jobs_one_change ON jobs (unit_id)
 CREATE UNIQUE INDEX jobs_key ON jobs (namespace_id, idempotency_key)
     WHERE idempotency_key <> '';
 
-CREATE INDEX jobs_list ON jobs (namespace_id, seq);
+CREATE UNIQUE INDEX jobs_list ON jobs (namespace_id, seq);
 CREATE INDEX jobs_unit ON jobs (unit_id, seq);
+
+-- The open jobs of a namespace: the count of the limits, the orphan scan and
+-- the reconcile read only these rows.
+CREATE INDEX jobs_open ON jobs (namespace_id, state)
+    WHERE state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired');
 
 CREATE TABLE job_freezes (
     id            TEXT    NOT NULL PRIMARY KEY,

@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -164,7 +163,7 @@ func (t *jobTx) JobByKey(ctx context.Context, ns namespace.Name, key string) (jo
 
 // InsertJob implements jobstore.Tx.
 func (t *jobTx) InsertJob(ctx context.Context, r jobstore.Row) error {
-	seq, err := t.q.NextJobSeq(ctx)
+	seq, err := t.q.NextJobSeq(ctx, r.Namespace.String())
 	if err != nil {
 		return fmt.Errorf("read next job sequence: %w", err)
 	}
@@ -237,8 +236,13 @@ func (t *jobTx) CountOpen(ctx context.Context, ns namespace.Name, unitID string)
 }
 
 // HolderOf implements jobstore.Tx.
-func (t *jobTx) HolderOf(ctx context.Context, unitID string, except job.ID) (job.ID, bool, error) {
-	id, err := t.q.GetJobHolderOfUnit(ctx, db.GetJobHolderOfUnitParams{UnitID: unitID, ExceptID: string(except)})
+func (t *jobTx) HolderOf(
+	ctx context.Context, ns namespace.Name, unitID string, except job.ID,
+) (job.ID, bool, error) {
+	id, err := t.q.GetJobHolderOfUnit(
+		ctx,
+		db.GetJobHolderOfUnitParams{Namespace: ns.String(), UnitID: unitID, ExceptID: string(except)},
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
@@ -251,8 +255,11 @@ func (t *jobTx) HolderOf(ctx context.Context, unitID string, except job.ID) (job
 }
 
 // Awaiting implements jobstore.Tx.
-func (t *jobTx) Awaiting(ctx context.Context, unitID string) ([]jobstore.Row, error) {
-	rows, err := t.q.ListAwaitingJobsOfUnit(ctx, unitID)
+func (t *jobTx) Awaiting(ctx context.Context, ns namespace.Name, unitID string) ([]jobstore.Row, error) {
+	rows, err := t.q.ListAwaitingJobsOfUnit(
+		ctx,
+		db.ListAwaitingJobsOfUnitParams{Namespace: ns.String(), UnitID: unitID},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("select awaiting jobs: %w", err)
 	}
@@ -296,7 +303,10 @@ func (t *jobTx) List(ctx context.Context, q jobstore.Query) ([]jobstore.Row, err
 	}
 
 	if q.After != "" {
-		where = append(where, "j.seq < (SELECT a.seq FROM jobs AS a WHERE a.id = "+arg(string(q.After))+")")
+		where = append(
+			where,
+			"(j.seq, j.id) < (SELECT a.seq, a.id FROM jobs AS a WHERE a.id = "+arg(string(q.After))+")",
+		)
 	}
 
 	query := `SELECT j.id, n.name, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
@@ -306,7 +316,7 @@ func (t *jobTx) List(ctx context.Context, q jobstore.Query) ([]jobstore.Row, err
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
 
-	query += " ORDER BY j.seq DESC LIMIT " + arg(q.Limit)
+	query += " ORDER BY j.seq DESC, j.id DESC LIMIT " + arg(q.Limit)
 
 	rows, err := t.tx.Query(ctx, query, args...)
 	if err != nil {
@@ -315,6 +325,11 @@ func (t *jobTx) List(ctx context.Context, q jobstore.Query) ([]jobstore.Row, err
 
 	defer rows.Close()
 
+	return scanJobRows(rows)
+}
+
+// scanJobRows reads every row of a job query.
+func scanJobRows(rows pgx.Rows) ([]jobstore.Row, error) {
 	var out []jobstore.Row
 
 	for rows.Next() {
@@ -389,8 +404,8 @@ func (t *jobTx) ActiveFreeze(ctx context.Context, ns namespace.Name, at time.Tim
 }
 
 // CoveringLocks implements jobstore.Tx.
-func (t *jobTx) CoveringLocks(ctx context.Context, unit collection.UnitRef) ([]manuallock.Lock, error) {
-	locks, err := coveringLocks(ctx, t.q, unit)
+func (t *jobTx) CoveringLocks(ctx context.Context, ns namespace.Name, unitID string) ([]manuallock.Lock, error) {
+	locks, err := coveringLocksOfUnitID(ctx, t.q, ns, unitID)
 	if errors.Is(err, manuallock.ErrNotLocked) {
 		return nil, nil
 	}
@@ -399,8 +414,8 @@ func (t *jobTx) CoveringLocks(ctx context.Context, unit collection.UnitRef) ([]m
 }
 
 // StateVersion implements jobstore.Tx.
-func (t *jobTx) StateVersion(ctx context.Context, unitID string) (string, error) {
-	v, err := t.q.GetUnitStateVersion(ctx, unitID)
+func (t *jobTx) StateVersion(ctx context.Context, ns namespace.Name, unitID string) (string, error) {
+	v, err := t.q.GetUnitStateVersion(ctx, db.GetUnitStateVersionParams{Namespace: ns.String(), UnitID: unitID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -413,10 +428,12 @@ func (t *jobTx) StateVersion(ctx context.Context, unitID string) (string, error)
 }
 
 // FinalVersion implements jobstore.Tx.
-func (t *jobTx) FinalVersion(ctx context.Context, unitID string) (jobstore.FinalVersion, bool, error) {
+func (t *jobTx) FinalVersion(
+	ctx context.Context, ns namespace.Name, unitID string,
+) (jobstore.FinalVersion, bool, error) {
 	var none jobstore.FinalVersion
 
-	r, err := t.q.GetUnitFinalVersion(ctx, unitID)
+	r, err := t.q.GetUnitFinalVersion(ctx, db.GetUnitFinalVersionParams{Namespace: ns.String(), UnitID: unitID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return none, false, nil
 	}
