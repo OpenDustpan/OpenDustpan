@@ -94,6 +94,9 @@ func viewerActions() []identity.Action {
 		identity.ActionUnitRead,
 		identity.ActionProfileRead,
 		identity.ActionNamespaceReadGates,
+		identity.ActionViewCreate,
+		identity.ActionViewRead,
+		identity.ActionViewDelete,
 	}
 }
 

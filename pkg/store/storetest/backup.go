@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -276,6 +277,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBlameRows(t, s, blameSeed{ns: acme, w: net, first: current.ID.String(), second: pending.ID.String()})
 	profiles := seedBackupProfiles(t, s, acme)
 	seedBackupGate(t, s, acme)
+	seedBackupSavedViews(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -296,6 +298,40 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		audit:      entries,
 		imports:    imports,
 		profiles:   profiles,
+	}
+}
+
+// seedBackupSavedViews writes two saved views of one person in the namespace
+// acme, one with a label and a reference and one with the empty query, when s
+// keeps saved views. A store with no saved view port skips it: the fake of this
+// package's own tests is one.
+func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	keeper, ok := s.(interface{ SavedViews() savedview.Store })
+	if !ok {
+		return
+	}
+
+	entry := audit.Entry{
+		At: now(), Namespace: acme.Name, Subject: "alice", IDPSubject: "", TokenID: "", Action: "view:create",
+		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
+		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+	}
+
+	for i, query := range []savedview.Query{
+		{Labels: []savedview.Label{{Key: "team", Value: "payments"}}, References: []string{"pulumi:acme/web/prod"}},
+		{Labels: nil, References: nil},
+	} {
+		v := savedview.View{
+			CreatedAt: now(), ID: savedview.NewID(), Namespace: acme.Name, Name: fmt.Sprintf("view %d", i),
+			Owner: "prn-seedseedseedseedseed", Query: query,
+		}
+
+		if err := keeper.SavedViews().Create(t.Context(), v, acme.Fence(), entry); err != nil {
+			t.Fatalf("create saved view %d: %v", i, err)
+		}
 	}
 }
 

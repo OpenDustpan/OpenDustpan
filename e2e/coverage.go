@@ -37,6 +37,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/profile"
+	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -687,6 +688,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Views:         coverageViews(tb),
 		Locks:         locks,
 		PublicURL:     "",
 		Moves:         nil,
@@ -1296,6 +1298,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
 		jobAllowEntries(),
+		savedViewAllowEntries(),
 	)
 }
 
@@ -2334,4 +2337,40 @@ func jobAllowEntries() []AllowEntry {
 		Reason: "Console and client route: no CLI reads a job. The harness steps of TestJobsAPI read a job " +
 			"through the API.",
 	}}
+}
+
+// savedViewAllowEntries covers the routes of the saved views. No CLI calls
+// them: the console and the clients of the API do. The steps of
+// TestSavedViewsAPI call each of them with the personal token of a person.
+func savedViewAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/views"
+		test = "TestSavedViewsAPI"
+		why  = "Console and client route: no CLI calls it. The steps of TestSavedViewsAPI call it with the token of a person."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodPost, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/{view_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: base + "/{view_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/{view_id}/units", CoveringTest: test, Reason: why},
+	}
+}
+
+// coverageViews returns the saved view config for the route table. The
+// services are empty shells: they exist only to build a Handler.
+func coverageViews(tb testing.TB) *inventoryapi.ViewsConfig {
+	tb.Helper()
+
+	service, err := savedview.NewService(savedview.Config{
+		Store: struct{ savedview.Store }{nil}, Namespaces: coverageNamespaceStore{}, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("saved view service: %v", err)
+	}
+
+	return &inventoryapi.ViewsConfig{
+		Service: service, Principals: struct{ inventoryapi.ViewPrincipals }{nil}, Idempotency: nil,
+	}
 }

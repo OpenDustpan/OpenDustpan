@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -82,6 +83,9 @@ type Config struct {
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
+	// Views serves the saved view routes. It is optional: nil serves no
+	// saved view route.
+	Views *ViewsConfig
 	// PublicURL is the external base URL of the server, for example
 	// https://dustpan.example.com. It makes the consoleUrl of each unit.
 	// Empty means the installation has no public URL, and the entries have
@@ -102,6 +106,7 @@ type Handler struct {
 	collections *collection.Service
 	locks       *manuallock.Service
 	moves       MoveChecker
+	views       *views
 	authn       identity.Authenticator
 	sessions    *sessionauth.Checker
 	authz       identity.Authorizer
@@ -135,17 +140,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
-	now := cfg.Now
-	if now == nil {
-		now = time.Now
-	}
-
 	publicURL, err := parsePublicURL(cfg.PublicURL)
 	if err != nil {
 		return nil, err
 	}
 
+	viewState, err := newViews(cfg.Views)
+	if err != nil {
+		return nil, err
+	}
+
 	h := &Handler{
+		views:       viewState,
 		namespaces:  cfg.Namespaces,
 		units:       cfg.Units,
 		deleted:     cfg.Deleted,
@@ -163,7 +169,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 			WithSurface("inventory"),
 		publicURL: publicURL,
 		logger:    cfg.Logger,
-		now:       now,
+		now:       clockOf(cfg.Now),
 		mux:       newPatternMux(),
 		routes:    nil,
 	}
@@ -174,6 +180,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// clockOf returns now, or time.Now when now is nil.
+func clockOf(now func() time.Time) func() time.Time {
+	if now == nil {
+		return time.Now
+	}
+
+	return now
 }
 
 // parsePublicURL parses the public URL of the server. An empty value is no
@@ -374,6 +389,17 @@ func (h *Handler) listUnits(
 		return
 	}
 
+	h.serveUnitList(w, r, p, ns, filter)
+}
+
+// serveUnitList answers one page of the units of ns that pass the filter and
+// that the caller may read. The unit list and the units of a saved view both
+// end here, so a view returns the same page as the query that it stores.
+func (h *Handler) serveUnitList(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, ns namespace.Name, filter unitFilter,
+) {
+	ctx := r.Context()
+
 	page, err := parseUnitPage(r, ns, filter)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -493,9 +519,18 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 type errorResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
+	// ErrorCode is a stable machine code. Only the Idempotency-Key refusals
+	// set it.
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		h.writeJSON(ctx, w, ie.Status, errorResponse{Code: ie.Status, Message: ie.Message, ErrorCode: ie.Code})
+
+		return
+	}
+
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
@@ -507,7 +542,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message, ErrorCode: ""})
 }
 
 // classifyAuth maps the errors of the authentication and the
@@ -530,6 +565,10 @@ func classifyAuth(err error) (int, string, bool) {
 // classify maps domain errors to an HTTP status and a message safe to show callers.
 func classify(err error) (int, string) {
 	if status, message, ok := classifyAuth(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyView(err); ok {
 		return status, message
 	}
 
