@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -59,7 +60,9 @@ func decodeQuery(s string) (savedview.Query, error) {
 		return savedview.Query{}, fmt.Errorf("%w: query: %w", ErrCorrupt, err)
 	}
 
-	if dec.More() {
+	// A second decode must reach the end of the text. dec.More does not say
+	// this: it is false before a stray closing brace.
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return savedview.Query{}, fmt.Errorf("%w: query: text after the document", ErrCorrupt)
 	}
 

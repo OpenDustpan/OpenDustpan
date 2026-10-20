@@ -623,7 +623,18 @@ func readViewBody(w http.ResponseWriter, r *http.Request) (string, savedview.Que
 	dec.DisallowUnknownFields()
 
 	var in createViewBody
-	if err := dec.Decode(&in); err != nil || dec.More() || in.Name == nil {
+	if err := dec.Decode(&in); err != nil {
+		return "", savedview.Query{}, errViewBody
+	}
+
+	// A second decode must reach the end of the body. dec.More does not say
+	// this: it is false before a stray closing brace, so `{"name":"a"}}` would
+	// pass.
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", savedview.Query{}, errViewBody
+	}
+
+	if in.Name == nil {
 		return "", savedview.Query{}, errViewBody
 	}
 

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +136,36 @@ func checkTamperedRow(t *testing.T, update string) {
 	views, err := s.SavedViews().List(t.Context(), "acme", owner)
 	if err != nil || len(views) != 0 {
 		t.Fatalf("list of a bad row = %v, %v; want none", views, err)
+	}
+}
+
+// TestCheckStagedSavedViewsRefusesAMissingNamespace proves that a view whose
+// namespace the backup does not hold is corrupt. An inner join would skip such
+// a row, and the restore would bring it in.
+func TestCheckStagedSavedViewsRefusesAMissingNamespace(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedSavedView(t, s)
+
+	// The foreign key refuses this change, so the test drops the key in its
+	// own schema first.
+	for _, stmt := range []string{
+		`ALTER TABLE saved_views DROP CONSTRAINT saved_views_namespace_id_fkey`,
+		`UPDATE saved_views SET namespace_id = 'ns-gone'`,
+	} {
+		if _, execErr := s.pool.Exec(t.Context(), stmt); execErr != nil {
+			t.Fatalf("%s: %v", stmt, execErr)
+		}
+	}
+
+	err := checkStagedSavedViews(t.Context(), s.pool, currentSchema(t, s))
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
+	}
+
+	if !strings.Contains(err.Error(), "has no namespace") {
+		t.Fatalf("check = %v, want the refusal of a view with no namespace", err)
 	}
 }
 

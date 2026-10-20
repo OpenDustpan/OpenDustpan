@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +136,45 @@ func checkTamperedRow(t *testing.T, update string) {
 	views, err := s.SavedViews().List(t.Context(), "acme", owner)
 	if err != nil || len(views) != 0 {
 		t.Fatalf("list of a bad row = %v, %v; want none", views, err)
+	}
+}
+
+// TestCheckStagedSavedViewsRefusesAMissingNamespace proves that a view whose
+// namespace the backup does not hold is corrupt. An inner join would skip such
+// a row, and the restore would bring it in.
+func TestCheckStagedSavedViewsRefusesAMissingNamespace(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedSavedView(t, s)
+
+	// The foreign key refuses this change, so the connection that makes it
+	// switches the key check off. It is closed before the check runs.
+	pinned, err := s.conn.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("take a connection: %v", err)
+	}
+
+	for _, stmt := range []string{
+		`PRAGMA foreign_keys = OFF`,
+		`UPDATE saved_views SET namespace_id = 'ns-gone'`,
+	} {
+		if _, execErr := pinned.ExecContext(t.Context(), stmt); execErr != nil {
+			t.Fatalf("%s: %v", stmt, execErr)
+		}
+	}
+
+	if closeErr := pinned.Close(); closeErr != nil {
+		t.Fatalf("release the connection: %v", closeErr)
+	}
+
+	err = checkStagedSavedViews(t.Context(), s.conn)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
+	}
+
+	if !strings.Contains(err.Error(), "has no namespace") {
+		t.Fatalf("check = %v, want the refusal of a view with no namespace", err)
 	}
 }
 

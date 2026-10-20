@@ -688,7 +688,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Views:         coverageViews(tb, namespaces),
+		Views:         coverageViews(tb),
 		Locks:         locks,
 		PublicURL:     "",
 		Moves:         nil,
@@ -2360,7 +2360,7 @@ func savedViewAllowEntries() []AllowEntry {
 
 // coverageViews returns the saved view config for the route table. The
 // services are empty shells: they exist only to build a Handler.
-func coverageViews(tb testing.TB, namespaces *namespace.Service) *inventoryapi.ViewsConfig {
+func coverageViews(tb testing.TB) *inventoryapi.ViewsConfig {
 	tb.Helper()
 
 	service, err := savedview.NewService(savedview.Config{
@@ -2369,8 +2369,6 @@ func coverageViews(tb testing.TB, namespaces *namespace.Service) *inventoryapi.V
 	if err != nil {
 		tb.Fatalf("saved view service: %v", err)
 	}
-
-	_ = namespaces
 
 	return &inventoryapi.ViewsConfig{
 		Service: service, Principals: struct{ inventoryapi.ViewPrincipals }{nil}, Idempotency: nil,
