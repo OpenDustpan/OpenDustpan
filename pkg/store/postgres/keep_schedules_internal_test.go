@@ -25,7 +25,9 @@ func TestRestoreKeepsTheLiveSchedules(t *testing.T) {
 			return s.ApplyStaging(ctx)
 		}},
 		{name: "keep the access tables", apply: func(ctx context.Context, s *Store) error {
-			return s.ApplyStagingKeepingAccess(ctx)
+			_, err := s.ApplyStagingKeepingAccess(ctx)
+
+			return err
 		}},
 	}
 
@@ -71,7 +73,7 @@ func stageEmptyBackup(t *testing.T, s *Store) {
 		t.Fatalf("export portable: %v", err)
 	}
 
-	summary, err := s.StagePortable(ctx, sink.read, sum, files, storetest.NoStageOptions())
+	summary, err := s.StagePortable(ctx, sink.read, sum, files, storetest.StageAs(t, s))
 	if err != nil {
 		t.Fatalf("stage portable: %v", err)
 	}

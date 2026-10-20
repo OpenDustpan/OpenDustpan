@@ -18,12 +18,12 @@ import (
 // staged file passed every check in StagePortable. A kept grant or principal
 // that names a namespace or a unit the staged backup does not hold reports
 // ErrRestoreAccessMismatch and changes nothing.
-func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
+func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAccessResult, error) {
 	s.stagingMu.Lock()
 	defer s.stagingMu.Unlock()
 
 	if s.stagingPath == "" {
-		return backup.ErrCorrupt
+		return backup.KeepAccessResult{}, backup.ErrCorrupt
 	}
 
 	staged := s.stagingPath
@@ -34,7 +34,7 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 	// write lock, because the read takes the read lock.
 	keep, err := s.liveBookkeeping(ctx)
 	if err != nil {
-		return err
+		return backup.KeepAccessResult{}, err
 	}
 
 	// Hold the write lock from the live snapshot through the swap, so a
@@ -43,21 +43,35 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// The check covers the whole staging area, also the access tables that
+	// the swap does not take, and runs before any write to the staged file.
+	if err := s.checkSwapDevLocked(ctx, staged); err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
 	if err := s.keepLiveAccessTables(ctx, staged); err != nil {
-		return err
+		return backup.KeepAccessResult{}, err
+	}
+
+	// The swap takes temp_admins from the backup and keeps the live
+	// principals, so a staged row can name a principal that the live
+	// principals table does not hold.
+	dropped, err := dropDanglingTempAdmins(ctx, staged)
+	if err != nil {
+		return backup.KeepAccessResult{}, err
 	}
 
 	if err := fenceStagedFile(ctx, staged, s.path, keep); err != nil {
-		return err
+		return backup.KeepAccessResult{}, err
 	}
 
 	if err := s.swapDatabaseLocked(ctx, staged); err != nil {
-		return err
+		return backup.KeepAccessResult{}, err
 	}
 
 	s.stagingPath = ""
 
-	return nil
+	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
 }
 
 // keepLiveAccessTables replaces the access tables of the staged file at path

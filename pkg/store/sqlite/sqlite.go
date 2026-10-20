@@ -391,7 +391,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		stepTxBound:         DefaultStepTransactionBound,
 		gate:                nil,
 	}
-	s.gate = gatestore.New(gateRunner{s: s})
+	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
 	return s
 }

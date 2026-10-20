@@ -15,6 +15,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // errSealedOpen is the injected failure of opening a tampered sealed blob.
@@ -101,6 +102,7 @@ func newStreamFixture(
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,
 		Blobs:       source,
 		StateOpener: opener,
@@ -161,6 +163,7 @@ func restoreStreamedBackup(
 	}
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    newFakeRegistry(),
 		Blobs:       newMemStore(),
 		StateOpener: nil,

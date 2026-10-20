@@ -143,7 +143,7 @@ func TestKeepAccessHoldsShareLocksAcrossSwap(t *testing.T) {
 		t.Fatalf("export portable: %v", err)
 	}
 
-	if _, err := s.StagePortable(ctx, sink.read, sum, files, storetest.NoStageOptions()); err != nil {
+	if _, err := s.StagePortable(ctx, sink.read, sum, files, storetest.StageAs(t, s)); err != nil {
 		t.Fatalf("stage portable: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestKeepAccessHoldsShareLocksAcrossSwap(t *testing.T) {
 		got, want = count, int64(len(backup.AccessTables))
 	}
 
-	if err := s.ApplyStagingKeepingAccess(ctx); err != nil {
+	if _, err := s.ApplyStagingKeepingAccess(ctx); err != nil {
 		t.Fatalf("apply keeping the access tables: %v", err)
 	}
 

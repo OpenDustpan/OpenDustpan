@@ -24,8 +24,15 @@ func (s *Store) StagePortable(
 	open backup.PortableOpener,
 	want backup.Summary,
 	files []backup.PortableFile,
-	_ backup.StageOptions,
+	opts backup.StageOptions,
 ) (backup.Summary, error) {
+	// Layer 1: compare the kind of the backup with the kind that this
+	// database holds, before any row loads. The service checks too; this
+	// check stays so that a caller of the port cannot skip it.
+	if kindErr := s.checkStageKind(ctx, opts); kindErr != nil {
+		return backup.Summary{}, kindErr
+	}
+
 	version, err := func() (int64, error) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()

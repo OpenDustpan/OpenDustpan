@@ -37,6 +37,15 @@ type CheckInput struct {
 	Key    secret.Wrapper
 	ID     ID
 	Region string
+	// Stage is passed to the stage call: the kind that the manifest claims
+	// and whether a dev backup is allowed. The store adapter compares it with
+	// the live kind that it reads from its own database.
+	Stage StageOptions
+	// AfterStage runs after the stage call and its count checks, before the
+	// staging area is discarded. An error fails the check and discards the
+	// staging area. Nil skips it. The restore service uses it to look for dev
+	// data in the staged data.
+	AfterStage func(ctx context.Context) error
 }
 
 // CheckRestore runs every restore check of ADR 38 decision 3 in check-only
@@ -88,9 +97,20 @@ func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
 	staged, err := stageBackup(ctx, in.Target, in.Live, in.ID, stagePlan{
 		want:  restoreWant(plan.manifest, plan.wantBlobs),
 		files: plan.manifest.SQLFiles,
+		opts:  in.Stage,
 	})
 	if err != nil {
 		return none, "", err
+	}
+
+	if in.AfterStage != nil {
+		if afterErr := in.AfterStage(ctx); afterErr != nil {
+			// Best-effort cleanup: the staging area must go, and the error
+			// below names the cause.
+			_ = in.Live.DiscardStaging(context.WithoutCancel(ctx)) //nolint:errcheck // Best-effort cleanup.
+
+			return none, "", fmt.Errorf("check restore of backup %s: %w", in.ID, afterErr)
+		}
 	}
 
 	if discardErr := in.Live.DiscardStaging(context.WithoutCancel(ctx)); discardErr != nil {
@@ -148,6 +168,7 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 type stagePlan struct {
 	want  Summary
 	files []PortableFile
+	opts  StageOptions
 }
 
 // stageBackup stages the table files of backup id in the live store. A failed
@@ -163,7 +184,7 @@ func stageBackup(
 		portableOpener(ctx, target, id),
 		plan.want,
 		plan.files,
-		StageOptions{BackupKind: "", AllowDev: false},
+		plan.opts,
 	)
 	if stageErr != nil {
 		// Best-effort cleanup after a failed stage: the staging area must go,

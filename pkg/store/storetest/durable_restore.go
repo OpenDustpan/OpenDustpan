@@ -76,7 +76,7 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 	seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, NoStageOptions()); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
 
@@ -246,7 +246,7 @@ func testRestoreEmptiesIdempotencyRecords(t *testing.T, newStore RestoreFactory)
 	seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, NoStageOptions()); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
 

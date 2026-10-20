@@ -156,17 +156,17 @@ func (l *restoreServiceLive) ApplyStaging(_ context.Context) error {
 // ApplyStagingKeepingAccess implements backup.AccessKeepingApplier for the
 // service tests: it counts keeping applies separately. When keepingErr is
 // set it reports it instead, so tests prove a mismatch fails the restore.
-func (l *restoreServiceLive) ApplyStagingKeepingAccess(ctx context.Context) error {
+func (l *restoreServiceLive) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAccessResult, error) {
 	l.mu.Lock()
 	l.kept++
 	keepingErr := l.keepingErr
 	l.mu.Unlock()
 
 	if keepingErr != nil {
-		return keepingErr
+		return backup.KeepAccessResult{}, keepingErr
 	}
 
-	return l.ApplyStaging(ctx)
+	return backup.KeepAccessResult{}, l.ApplyStaging(ctx)
 }
 
 func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, error) {
@@ -543,6 +543,7 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    newFakeRegistry(),
 		Blobs:       newMemStore(),
 		StateOpener: nil,
@@ -1247,6 +1248,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: nil},
+		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
@@ -1702,6 +1704,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
 		Blobs:       newMemStore(),
 		StateOpener: nil,
@@ -2132,4 +2135,12 @@ func TestRestoreKeepAccessChecksTheKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fixedKind is a backup.KindReader that returns one kind.
+type fixedKind installation.Kind
+
+// ReadKind implements backup.KindReader.
+func (k fixedKind) ReadKind(_ context.Context) (installation.Kind, error) {
+	return installation.Kind(k), nil
 }

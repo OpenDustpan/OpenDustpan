@@ -773,6 +773,29 @@ func TestPortableExportConformance(t *testing.T) {
 	})
 }
 
+func TestDevDataConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("%s is not set", envURL)
+	}
+
+	storetest.RunDevData(t, func(t *testing.T, kind installation.Kind) storetest.DevDataStore {
+		t.Helper()
+
+		var store storetest.DevDataStore = openBackup(t, base)
+
+		if kind != "" {
+			if _, err := store.ClaimKind(t.Context(), kind); err != nil {
+				t.Fatalf("claim the installation kind: %v", err)
+			}
+		}
+
+		return store
+	})
+}
+
 func TestRestoreConformance(t *testing.T) {
 	t.Parallel()
 
@@ -841,6 +864,11 @@ func checkRestoreAuditEntryAfterSwap(t *testing.T, keep bool, want string) {
 
 	ctx := t.Context()
 	st := openBackup(t, base)
+
+	if _, err := st.ClaimKind(ctx, installation.KindProduction); err != nil {
+		t.Fatalf("claim the installation kind: %v", err)
+	}
+
 	live, target := openRestoreAuditBlobs(t)
 	backups, restores := newRestoreAuditServices(t, st, live, target)
 
@@ -911,6 +939,7 @@ func newRestoreAuditServices(
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    st,
+		Kinds:       st,
 		Registry:    st,
 		Blobs:       live,
 		StateOpener: nil,
@@ -935,8 +964,11 @@ func newRestoreAuditServices(
 		Region:      "test",
 		AfterApply:  nil,
 		Admit:       nil,
-		Now:         nil,
-		Logger:      nil,
+
+		AllowDevBackups: false,
+		AllowDevHint:    "",
+		Now:             nil,
+		Logger:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1066,6 +1098,32 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 	s.t.Cleanup(reopened.Close)
 
 	return &backupStore{Store: reopened, url: s.url, t: s.t}
+}
+
+// EraseKindForTest implements storetest.KindEraser: it sets the stored
+// installation kind back to NULL through a second connection, behind the port.
+func (s *backupStore) EraseKindForTest(ctx context.Context) error {
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close(ctx) //nolint:errcheck // Test-only connection.
+	}()
+
+	var live string
+	if err := conn.QueryRow(ctx, `SELECT current_schema()`).Scan(&live); err != nil {
+		return fmt.Errorf("read the schema: %w", err)
+	}
+
+	// The installation table lives in the control schema of the live schema.
+	control := pgx.Identifier{live + "_control"}.Sanitize()
+	if _, err := conn.Exec(ctx, `UPDATE `+control+`.installation SET kind = NULL`); err != nil {
+		return fmt.Errorf("erase the kind: %w", err)
+	}
+
+	return nil
 }
 
 // CurrentStagingID implements storetest.StagingWitness: the name of the kept
@@ -1931,18 +1989,4 @@ func BenchmarkAuthorizer(b *testing.B) {
 	}
 
 	accesstest.Bench(b, open(b, base))
-}
-
-// ReadKind, StripDevStaged and RecordDevReport satisfy the dev data ports of
-// backup.RestoreLive. The adapter implements them in a later change.
-func (s *backupStore) ReadKind(_ context.Context) (installation.Kind, error) {
-	return installation.KindProduction, nil
-}
-
-func (s *backupStore) StripDevStaged(_ context.Context, _ backup.DevStripMode) (backup.DevStripReport, error) {
-	return backup.DevStripReport{Principals: nil, OtherPrincipals: 0, OtherCounts: nil, Classes: nil}, nil
-}
-
-func (s *backupStore) RecordDevReport(_ context.Context, _ backup.RestoreID, _ backup.DevStripReport) error {
-	return nil
 }

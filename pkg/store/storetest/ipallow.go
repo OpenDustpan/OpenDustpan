@@ -338,7 +338,7 @@ func testIPAllowlistBackupRoundTrip(t *testing.T, newStore IPAllowlistFactory) {
 	dst := newStore(t)
 	staged := ipAllowlistPortable(t, dst)
 
-	if _, err := staged.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions()); err != nil {
+	if _, err := staged.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, staged)); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
 

@@ -184,6 +184,7 @@ func restoreRecord(row db.Restore) (backup.RestoreRecord, error) {
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
 		EndedAtMs:   codec.OptionalMillis(endedAt),
+		DevReport:   row.DevReport,
 	})
 }
 
@@ -243,6 +244,12 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 
 		if live == "" || live == staging {
 			return fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
+		}
+
+		// The check covers the whole staging area, in the swap transaction,
+		// before the first rename.
+		if err := checkSwapDev(ctx, tx, staging); err != nil {
+			return err
 		}
 
 		previous := live + "_previous"

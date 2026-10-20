@@ -1,0 +1,366 @@
+package backup
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strconv"
+	"strings"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
+)
+
+// devRefusal is the error of a refused dev backup. It wraps
+// ErrDevBackupRefused and carries the text that the restore row and the API
+// answer show, with the words of AllowDevHint.
+type devRefusal struct {
+	text string
+}
+
+// Error implements error.
+func (e *devRefusal) Error() string {
+	return ErrDevBackupRefused.Error()
+}
+
+// Is makes errors.Is(err, ErrDevBackupRefused) true.
+func (e *devRefusal) Is(target error) bool {
+	return target == ErrDevBackupRefused
+}
+
+// Text returns the refusal text for an operator.
+func (e *devRefusal) Text() string {
+	return e.text
+}
+
+// refusalText returns the text of a refusal. reason names why the backup is
+// refused: the backup claims to come from a dev installation, or the staged
+// data holds dev people. hint names how to allow the restore, and is left out
+// when empty.
+func refusalText(reason, hint string) string {
+	text := "This installation is a production installation. " + reason + " We do not recommend this restore."
+	if hint != "" {
+		text += " To restore it, start the server with " + hint + "."
+	}
+
+	return text
+}
+
+// The reasons of a refusal.
+const (
+	reasonDevBackup = "The backup is from a dev installation."
+	reasonDevData   = "The backup holds people of a dev installation."
+)
+
+// warningTexts holds the text of each warning that a restore answer carries.
+//
+//nolint:gochecknoglobals // A frozen lookup table of fixed sentences.
+var warningTexts = map[RestoreWarningCode]string{
+	WarnDevBackupIntoProduction: "This restore removed the dev users and their grants. " +
+		"Things that depend on them may break. We do not recommend this restore.",
+	WarnProductionBackupIntoDev: "This backup is from a production installation. " +
+		"Its tokens and sessions are now in a dev data directory.",
+	WarnAuditAppendFailed: "The restore finished. The server could not write an audit entry for the removed dev data. " +
+		"The restore record holds the report.",
+}
+
+// WarningFor returns the warning of code, and false for an unknown code.
+func WarningFor(code RestoreWarningCode) (RestoreWarning, bool) {
+	text, ok := warningTexts[code]
+	if !ok {
+		return RestoreWarning{}, false
+	}
+
+	return RestoreWarning{Code: code, Text: text}, true
+}
+
+// Warnings returns the warnings of the record, in the order of the codes of
+// its report. A record without a report has none.
+func (r RestoreRecord) Warnings() []RestoreWarning {
+	if r.DevReport == nil {
+		return nil
+	}
+
+	out := make([]RestoreWarning, 0, len(r.DevReport.Warnings))
+
+	for _, code := range r.DevReport.Warnings {
+		if warning, ok := WarningFor(code); ok {
+			out = append(out, warning)
+		}
+	}
+
+	return out
+}
+
+// devRun holds what the dev data rules of one restore know: the kind of the
+// live installation, the kind that the pinned manifest claims, and the report
+// of the staged data.
+type devRun struct {
+	live   installation.Kind
+	backup installation.Kind
+	report DevStripReport
+}
+
+// production reports whether the live installation is a production
+// installation, the only side that the dev data rules protect.
+func (d *devRun) production() bool {
+	return d.live == installation.KindProduction
+}
+
+// warnings returns the codes of the warnings that the restore carries.
+func (d *devRun) warnings() []RestoreWarningCode {
+	var codes []RestoreWarningCode
+
+	switch {
+	case d.production() && !d.report.Empty():
+		codes = append(codes, WarnDevBackupIntoProduction)
+	case d.live == installation.KindDev && d.backup == installation.KindProduction:
+		codes = append(codes, WarnProductionBackupIntoDev)
+	}
+
+	return codes
+}
+
+// devKinds reads the live installation kind and compares it with the kind of
+// the pinned manifest, before the restore enters maintenance mode, takes the
+// backup of the live data or stages anything. A live kind that cannot be read
+// fails the restore: the rules never skip because a port failed.
+func (s *RestoreService) devKinds(ctx context.Context, pinned pinnedManifest) (*devRun, error) {
+	live, err := s.live.ReadKind(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the installation kind of the live data: %w", err)
+	}
+
+	if !live.Valid() {
+		return nil, fmt.Errorf("read the installation kind of the live data: %w", installation.ErrUnavailable)
+	}
+
+	run := &devRun{live: live, backup: pinned.kind, report: emptyDevReport()}
+
+	if live == installation.KindProduction && pinned.kind == installation.KindDev && !s.allowDev {
+		return nil, &devRefusal{text: refusalText(reasonDevBackup, s.devHint)}
+	}
+
+	return run, nil
+}
+
+// emptyDevReport returns a report with no removal.
+func emptyDevReport() DevStripReport {
+	return DevStripReport{
+		Principals:      nil,
+		OtherPrincipals: 0,
+		OtherCounts:     nil,
+		Classes:         nil,
+		Approvers:       nil,
+		Warnings:        nil,
+	}
+}
+
+// detectStaged looks at the staged data of a production restore for dev data
+// and refuses when it finds some and the server did not start with the
+// setting that allows a dev backup. It removes nothing. A failure to look
+// fails the restore. The result lands in run.report.
+func (s *RestoreService) detectStaged(ctx context.Context, run *devRun) error {
+	report, err := s.live.StripDevStaged(ctx, DevStripDetect)
+	if err != nil {
+		return fmt.Errorf("look for dev data in the staged data: %w", err)
+	}
+
+	run.report = report
+
+	if !report.Empty() && !s.allowDev {
+		return &devRefusal{text: refusalText(reasonDevData, s.devHint)}
+	}
+
+	return nil
+}
+
+// stripStaged removes the dev data from the staged data of a production
+// restore and proves that none remains. The staged data decides, not the kind
+// in the manifest. It never touches a live table. A failure wraps
+// ErrDevStripIncomplete, and the caller discards the staging area.
+func (s *RestoreService) stripStaged(ctx context.Context, run *devRun) error {
+	if err := s.detectStaged(ctx, run); err != nil {
+		return err
+	}
+
+	if run.report.Empty() {
+		return nil
+	}
+
+	removed, err := s.live.StripDevStaged(ctx, DevStripRemove)
+	if err != nil {
+		return errors.Join(ErrDevStripIncomplete, fmt.Errorf("remove the dev data from the staged data: %w", err))
+	}
+
+	run.report = removed
+
+	return nil
+}
+
+// recordDevReport stores the report, with the warnings of the restore, in the
+// restore record. The restores table survives the swap, so the report is
+// there also when the audit entries cannot be written.
+func (s *RestoreService) recordDevReport(ctx context.Context, id RestoreID, run *devRun) error {
+	run.report.Warnings = run.warnings()
+
+	if len(run.report.Warnings) == 0 && run.report.Empty() {
+		return nil
+	}
+
+	if err := s.live.RecordDevReport(ctx, id, run.report); err != nil {
+		return fmt.Errorf("record the dev data report of restore %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// appendDevAudit writes the audit entries of the dev data that a restore
+// removed, after the swap, in the restored data: one entry for each removed
+// principal up to MaxAuditedPrincipals, one summary entry for the other
+// principals, and one entry for each class that has no principal. It returns
+// false when an append failed. Then the restore still ends as finished and
+// the caller adds the warning WarnAuditAppendFailed.
+func (s *RestoreService) appendDevAudit(ctx context.Context, id RestoreID, req RestoreRequest, run *devRun) bool {
+	store, ok := s.live.(serverAuditAppender)
+	if !ok || run.report.Empty() {
+		return ok
+	}
+
+	ok = true
+
+	for _, entry := range devAuditObjects(id, req.BackupID, run.report) {
+		if _, err := store.AppendServer(ctx, s.devAuditEntry(req, entry)); err != nil {
+			s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", id.String()))
+
+			ok = false
+		}
+	}
+
+	return ok
+}
+
+// serverAuditAppender is the port of the server audit log that the restore
+// service writes to after the swap.
+type serverAuditAppender interface {
+	AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
+}
+
+// devAuditEntry returns the audit entry for one removal line.
+func (s *RestoreService) devAuditEntry(req RestoreRequest, object string) audit.Entry {
+	return audit.Entry{
+		At:            s.now().UTC(),
+		Namespace:     audit.ServerScope,
+		Subject:       req.RequestedBy,
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        string(identity.ActionServerRestore),
+		Object:        object,
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+	}
+}
+
+// devAuditObjects returns the object text of each audit entry of a report.
+// The subjects are cleaned a second time here: the adapters clean them, and
+// this layer does not rely on that. No line holds a token, a session ID or a
+// digest.
+func devAuditObjects(id RestoreID, backupID ID, report DevStripReport) []string {
+	prefix := "restore " + id.String() + " of backup " + backupID.String() + " removed "
+
+	var out []string
+
+	for _, removal := range report.Principals {
+		subject, cut := CleanSubject(removal.Subject)
+		cut = cut || removal.SubjectCut
+
+		line := prefix + "dev principal " + strconv.Quote(subject)
+		if cut {
+			line += " (subject cut)"
+		}
+
+		out = append(out, line+countsText(removal.Counts))
+	}
+
+	if report.OtherPrincipals > 0 {
+		out = append(out, prefix+strconv.FormatInt(report.OtherPrincipals, 10)+
+			" other dev principals"+countsText(report.OtherCounts))
+	}
+
+	for _, class := range []DevRemovalClass{
+		RemovedProviders, RemovedSignInRequests, RemovedApprovers, RemovedDangling,
+	} {
+		if n := report.Classes[class]; n > 0 {
+			out = append(out, prefix+strconv.FormatInt(n, 10)+" "+string(class)+approverNames(class, report))
+		}
+	}
+
+	return out
+}
+
+// approverNames lists the objects that lost an approver, for the entry of the
+// class approvers.
+func approverNames(class DevRemovalClass, report DevStripReport) string {
+	if class != RemovedApprovers || len(report.Approvers) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(report.Approvers))
+
+	for _, a := range report.Approvers {
+		name := a.Kind + " " + strconv.Quote(a.Scope)
+		if a.ID != "" {
+			name += " " + strconv.Quote(a.ID)
+		}
+
+		if a.Replaced {
+			name += " (no approver left)"
+		}
+
+		names = append(names, name)
+	}
+
+	return ": " + strings.Join(names, ", ")
+}
+
+// countsText renders the counts of a removal in the order of the class names.
+func countsText(counts map[DevRemovalClass]int64) string {
+	if len(counts) == 0 {
+		return ""
+	}
+
+	classes := make([]string, 0, len(counts))
+
+	for class, n := range counts {
+		if n > 0 {
+			classes = append(classes, string(class)+"="+strconv.FormatInt(n, 10))
+		}
+	}
+
+	sort.Strings(classes)
+
+	if len(classes) == 0 {
+		return ""
+	}
+
+	return " (" + strings.Join(classes, " ") + ")"
+}

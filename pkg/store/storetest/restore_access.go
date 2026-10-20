@@ -43,7 +43,7 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 
 	stageKeepBackup(t, ports.stager, sink, sum, files)
 
-	if err := ports.keeper.ApplyStagingKeepingAccess(t.Context()); err != nil {
+	if _, err := ports.keeper.ApplyStagingKeepingAccess(t.Context()); err != nil {
 		t.Fatalf("apply keeping the access tables: %v", err)
 	}
 
@@ -441,7 +441,7 @@ func stageKeepBackup(
 ) {
 	t.Helper()
 
-	if _, err := ps.StagePortable(t.Context(), sink.read, sum, files, NoStageOptions()); err != nil {
+	if _, err := ps.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, ps)); err != nil {
 		t.Fatalf("stage backup: %v", err)
 	}
 }
@@ -855,7 +855,7 @@ func checkKeepMismatchNamespace(t *testing.T, s RestoreStore) {
 
 	stageKeepBackup(t, ports.stager, sink, sum, files)
 
-	err := ports.keeper.ApplyStagingKeepingAccess(ctx)
+	_, err := ports.keeper.ApplyStagingKeepingAccess(ctx)
 	if !errors.Is(err, backup.ErrRestoreAccessMismatch) {
 		t.Fatalf("apply with a grant on a missing namespace: err = %v, want ErrRestoreAccessMismatch", err)
 	}
@@ -911,7 +911,7 @@ func checkKeepMismatchUnit(t *testing.T, s RestoreStore) {
 
 	stageKeepBackup(t, ports.stager, sink, sum, files)
 
-	applyErr := ports.keeper.ApplyStagingKeepingAccess(ctx)
+	_, applyErr := ports.keeper.ApplyStagingKeepingAccess(ctx)
 	if !errors.Is(applyErr, backup.ErrRestoreAccessMismatch) {
 		t.Fatalf("apply with a grant on a missing unit: err = %v, want ErrRestoreAccessMismatch", applyErr)
 	}
@@ -1038,7 +1038,7 @@ func checkKeepMismatchPrincipal(t *testing.T, s RestoreStore) {
 
 	stageKeepBackup(t, ports.stager, sink, sum, files)
 
-	applyErr := ports.keeper.ApplyStagingKeepingAccess(ctx)
+	_, applyErr := ports.keeper.ApplyStagingKeepingAccess(ctx)
 	if !errors.Is(applyErr, backup.ErrRestoreAccessMismatch) {
 		t.Fatalf("apply with a principal on a missing namespace: err = %v, want ErrRestoreAccessMismatch", applyErr)
 	}
@@ -1068,7 +1068,7 @@ func testRestoreKeepsLiveOnlyPrincipal(t *testing.T, newStore RestoreFactory) {
 	createLiveOnlyPrincipal(t, ports)
 	stageKeepBackup(t, ports.stager, sink, sum, files)
 
-	if err := ports.keeper.ApplyStagingKeepingAccess(t.Context()); err != nil {
+	if _, err := ports.keeper.ApplyStagingKeepingAccess(t.Context()); err != nil {
 		t.Fatalf("apply keeping the access tables with a live-only principal: %v", err)
 	}
 

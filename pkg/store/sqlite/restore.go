@@ -189,6 +189,7 @@ func restoreFromRow(row db.Restore) (backup.RestoreRecord, error) {
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
 		EndedAtMs:   row.EndedAtMs,
+		DevReport:   row.DevReport,
 	})
 }
 
@@ -228,6 +229,10 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 	// Lock order is stagingMu before mu.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.checkSwapDevLocked(ctx, staged); err != nil {
+		return err
+	}
 
 	if err := fenceStagedFile(ctx, staged, s.path, keep); err != nil {
 		return err
@@ -442,7 +447,7 @@ const backupColumns = `id, state, started_at_ms, ended_at_ms, target, error`
 
 // restoreColumns lists the columns of restores, for the copy of the control
 // tables.
-const restoreColumns = `id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error`
+const restoreColumns = `id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report`
 
 // keepControlStatements replace the rows of each table of
 // backup.ControlTables in the staged file (main) with the rows of the live

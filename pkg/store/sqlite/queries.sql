@@ -834,12 +834,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetRestore :one
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 WHERE id = ?;
 
 -- name: ListRestores :many
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 ORDER BY started_at_ms DESC, id ASC;
 
@@ -856,6 +856,13 @@ WHERE id = ? AND state IN ('checking', 'applying');
 UPDATE restores
 SET state = 'applying', pre_backup_id = ?
 WHERE id = ? AND state = 'checking';
+
+-- name: SetRestoreDevReport :execrows
+-- Stores the report of the dev data of one restore, with the codes of its
+-- warnings. A restore that does not exist matches no row.
+UPDATE restores
+SET dev_report = ?
+WHERE id = ?;
 
 -- name: FailRunningRestores :exec
 -- Marks every running restore failed. The server calls it at start, after a

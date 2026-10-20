@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/installation"
 )
@@ -62,6 +63,31 @@ type StageOptions struct {
 	AllowDev bool
 }
 
+// CheckStageKind is the check that a stage call makes before it loads a row.
+// Every store adapter calls it with the options of the stage call and the live
+// kind that it read from its own database. It returns
+// ErrManifestKindInvalid when opts.BackupKind is not a known kind,
+// ErrDevBackupRefused when the live installation is a production installation,
+// the backup claims the kind dev and opts.AllowDev is false, and nil
+// otherwise. A live kind that is not a known kind returns
+// installation.ErrUnavailable: the check never passes because it could not
+// read.
+func CheckStageKind(opts StageOptions, live installation.Kind) error {
+	if !live.Valid() {
+		return fmt.Errorf("stage portable backup: read the live installation kind: %w", installation.ErrUnavailable)
+	}
+
+	if !opts.BackupKind.Valid() {
+		return fmt.Errorf("stage portable backup: %w", ErrManifestKindInvalid)
+	}
+
+	if live == installation.KindProduction && opts.BackupKind == installation.KindDev && !opts.AllowDev {
+		return fmt.Errorf("stage portable backup: %w", ErrDevBackupRefused)
+	}
+
+	return nil
+}
+
 // DevReportRecorder stores the removal report in the restore record before
 // the swap. The restores table survives the swap, so the report is still
 // there if the audit entries cannot be written.
@@ -85,21 +111,27 @@ const (
 	RemovedGrants DevRemovalClass = "grants"
 	// RemovedGroupMembers counts group memberships of a removed principal.
 	RemovedGroupMembers DevRemovalClass = "group-members"
-	// RemovedSessions counts sessions of a removed principal.
+	// RemovedSessions counts sessions of a removed principal, and sessions
+	// that the reserved provider ID made.
 	RemovedSessions DevRemovalClass = "sessions"
 	// RemovedAccessTokens counts access tokens of a removed principal.
 	RemovedAccessTokens DevRemovalClass = "access-tokens"
-	// RemovedSignInRequests counts open sign-in requests of a removed
-	// principal.
+	// RemovedSignInRequests counts open sign-in requests that name the
+	// reserved provider ID. A sign-in request holds no principal, so the class
+	// has no principal.
 	RemovedSignInRequests DevRemovalClass = "sign-in-requests"
-	// RemovedProviders counts sign-in providers with the reserved provider ID.
+	// RemovedProviders counts sign-in providers and issuer records with the
+	// reserved provider ID.
 	RemovedProviders DevRemovalClass = "providers"
 	// RemovedTempAdmins counts temp_admins rows, matched by the principal ID
 	// of a removed principal and by a subject with the reserved prefix.
 	RemovedTempAdmins DevRemovalClass = "temp-admins"
-	// RemovedApprovers counts dev subjects removed from the approvers and
-	// owners of approval rules and ownership rules. The rule stays, so a
-	// rule with no approver left cannot be met and the gate refuses.
+	// RemovedApprovers counts dev subjects removed from Approvers.Users of
+	// approval rules, approval defaults and ownership rules. The rule stays.
+	// A rule that loses its last approver gets Users with the value
+	// gate.NoApprover, so nobody can meet it and the gate refuses the change
+	// that it covers. The report names each such object in
+	// DevStripReport.Approvers.
 	RemovedApprovers DevRemovalClass = "approvers"
 	// RemovedDangling counts grants, group memberships, sessions and tokens
 	// that name a principal that does not exist, or a subject with the
@@ -108,17 +140,40 @@ const (
 	RemovedDangling DevRemovalClass = "dangling"
 )
 
+// MaxReportedApprovers is the most objects that DevStripReport.Approvers
+// names. The count of RemovedApprovers in DevStripReport.Classes holds the
+// total.
+const MaxReportedApprovers = 100
+
 // DevRemoval is one removed principal with the counts of the rows that went
 // with it. The audit entry of the restore names the subject, never a token or
 // a session ID.
 type DevRemoval struct {
 	// Subject has no control character and at most MaxReportedSubjectBytes.
-	Subject string
+	Subject string `json:"subject"`
 	// SubjectCut is true when the cleaning cut Subject.
-	SubjectCut bool
-	// Counts holds the count of removed rows for each class, without
-	// RemovedPrincipals and RemovedDangling.
-	Counts map[DevRemovalClass]int64
+	SubjectCut bool `json:"subjectCut"`
+	// Counts holds the count of removed rows for each class that a principal
+	// owns: RemovedGrants, RemovedGroupMembers, RemovedSessions,
+	// RemovedAccessTokens and RemovedTempAdmins. The other classes are not in
+	// it.
+	Counts map[DevRemovalClass]int64 `json:"counts"`
+}
+
+// DevApproverRemoval names one object of the policy model that lost a dev
+// subject from Approvers.Users.
+type DevApproverRemoval struct {
+	// Kind is the kind of the object: approval-rule, approval-default or
+	// ownership-rule.
+	Kind string `json:"kind"`
+	// Scope is the scope key of the object.
+	Scope string `json:"scope"`
+	// ID is the ID of the object, and empty for an approval default.
+	ID string `json:"id"`
+	// Replaced is true when the strip removed the last approver and wrote
+	// Users with the value gate.NoApprover, so the gate refuses the change
+	// that the object covers.
+	Replaced bool `json:"replaced"`
 }
 
 // DevStripReport is what a strip removed, or, for a check-only restore, what
@@ -126,15 +181,56 @@ type DevRemoval struct {
 type DevStripReport struct {
 	// Principals holds one entry for each removed principal, up to
 	// MaxAuditedPrincipals.
-	Principals []DevRemoval
+	Principals []DevRemoval `json:"principals"`
 	// OtherPrincipals is the number of removed principals beyond the entries
 	// of Principals. OtherCounts is the sum of their row counts. One summary
 	// entry in the audit log holds both.
-	OtherPrincipals int64
-	OtherCounts     map[DevRemovalClass]int64
-	// Classes holds the total count for each class, with the classes that
-	// have no principal: RemovedProviders and RemovedDangling.
-	Classes map[DevRemovalClass]int64
+	OtherPrincipals int64                     `json:"otherPrincipals"`
+	OtherCounts     map[DevRemovalClass]int64 `json:"otherCounts"`
+	// Classes holds the total count of each class, also of the rows that
+	// belong to no removed principal.
+	Classes map[DevRemovalClass]int64 `json:"classes"`
+	// Approvers names the objects that lost a dev subject, up to
+	// MaxReportedApprovers. The count of RemovedApprovers in Classes holds
+	// the total.
+	Approvers []DevApproverRemoval `json:"approvers"`
+	// Warnings holds the codes of the warnings that the answer of the restore
+	// carries. The restore service sets them. A strip leaves them empty.
+	Warnings []RestoreWarningCode `json:"warnings"`
+}
+
+// HasDev reports whether the report names dev data: a principal, or a class
+// other than RemovedDangling with a count above zero. Dangling rows alone are
+// not dev data: the strip removes them only together with dev data, and a
+// restore of a backup that has them and no dev data changes no row.
+func (r DevStripReport) HasDev() bool {
+	if len(r.Principals) > 0 || r.OtherPrincipals > 0 {
+		return true
+	}
+
+	for class, n := range r.Classes {
+		if n > 0 && class != RemovedDangling {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Empty reports whether the report names no removal: no principal and no
+// class with a count above zero.
+func (r DevStripReport) Empty() bool {
+	if len(r.Principals) > 0 || r.OtherPrincipals > 0 {
+		return false
+	}
+
+	for _, n := range r.Classes {
+		if n > 0 {
+			return false
+		}
+	}
+
+	return true
 }
 
 // DevStripMode tells StripDevStaged to look or to remove.
