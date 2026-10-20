@@ -132,6 +132,11 @@ type CollectionMember struct {
 	AssignedAtMs  int64
 }
 
+type DurableHeartbeat struct {
+	Owner string
+	AtMs  int64
+}
+
 type DurableOperation struct {
 	ID               string
 	StartKey         string

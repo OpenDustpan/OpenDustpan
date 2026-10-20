@@ -43,7 +43,9 @@ var ControlTables = []string{
 
 // EmptiedTables lists the tables of the schema that a backup leaves out and
 // a restore leaves empty: the replay records of the Idempotency-Key header and
-// the server key of their fingerprints. A replay record answers for the state
+// the server key of their fingerprints, and the heartbeats of the workers. A
+// heartbeat describes the workers that run now, and the next beat of a worker
+// makes its row again. A replay record answers for the state
 // at the time of the first request, so a replay after a restore of older state
 // would answer for state that the restore removed. The schema holds these
 // tables and the tables of Tables and ControlTables, and no other table.
@@ -53,6 +55,7 @@ var ControlTables = []string{
 var EmptiedTables = []string{
 	TableIdempotencyRecords,
 	TableIdempotencyServerKey,
+	TableDurableHeartbeats,
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

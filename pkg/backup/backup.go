@@ -50,11 +50,13 @@ const (
 	TableSignInFailures    = "sign_in_failures"
 )
 
-// The tables of the replay records of the Idempotency-Key header and the
-// server key of their fingerprints. See EmptiedTables.
+// The tables of the replay records of the Idempotency-Key header, the server
+// key of their fingerprints, and the heartbeats of the workers. See
+// EmptiedTables.
 const (
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
+	TableDurableHeartbeats    = "durable_heartbeats"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides

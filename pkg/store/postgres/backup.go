@@ -274,9 +274,16 @@ func pgCopyCollectionTables() []pgCopyTable {
 		{
 			table: "object_context_owners",
 			columns: []string{
-				pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource,
+				pgColNamespaceID, pgColOwner, pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource,
 			},
-			orderBy: []string{pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
+			orderBy: []string{
+				pgColNamespaceID,
+				pgColOwner,
+				pgColObjectKind,
+				pgColObjectID,
+				pgColResourceKey,
+				pgColSource,
+			},
 		},
 		{
 			table:   "blob_purges",
@@ -403,6 +410,11 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TableIdempotencyServerKey,
 			columns: []string{"id", "wrapped_key", pgColWrapperID},
 			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableDurableHeartbeats,
+			columns: []string{pgColOwner, pgColAtMs},
+			orderBy: []string{pgColOwner},
 		},
 	}
 }

@@ -2626,6 +2626,15 @@ func (q *Queries) DeleteStackTags(ctx context.Context, stackID string) error {
 	return err
 }
 
+const deleteStaleDurableHeartbeats = `-- name: DeleteStaleDurableHeartbeats :exec
+DELETE FROM durable_heartbeats WHERE at_ms < ?1
+`
+
+func (q *Queries) DeleteStaleDurableHeartbeats(ctx context.Context, thresholdMs int64) error {
+	_, err := q.db.ExecContext(ctx, deleteStaleDurableHeartbeats, thresholdMs)
+	return err
+}
+
 const deleteStateVersion = `-- name: DeleteStateVersion :execrows
 DELETE FROM state_versions
 WHERE id = ? AND status = 'pending'
@@ -4334,6 +4343,17 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Chec
 		&i.BlobSize,
 		&i.BlobMd5,
 	)
+	return i, err
+}
+
+const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
+SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbeat, error) {
+	row := q.db.QueryRowContext(ctx, getLatestDurableHeartbeat)
+	var i DurableHeartbeat
+	err := row.Scan(&i.Owner, &i.AtMs)
 	return i, err
 }
 
@@ -13051,6 +13071,24 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const upsertDurableHeartbeat = `-- name: UpsertDurableHeartbeat :exec
+
+INSERT INTO durable_heartbeats (owner, at_ms) VALUES (?1, ?2)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms
+`
+
+type UpsertDurableHeartbeatParams struct {
+	Owner string
+	NowMs int64
+}
+
+// Durable heartbeats. Every time comes from DatabaseNowMs, the clock of the
+// store, read in the transaction of the write.
+func (q *Queries) UpsertDurableHeartbeat(ctx context.Context, arg UpsertDurableHeartbeatParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs)
+	return err
 }
 
 const upsertInventory = `-- name: UpsertInventory :exec

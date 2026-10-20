@@ -74,6 +74,7 @@ type Cluster struct {
 	client    *http.Client
 	transport *http.Transport
 	opts      []dustpan.Option
+	sets      []dustpan.Components
 	schemaURL string
 	blobDir   string
 
@@ -100,6 +101,26 @@ type instance struct {
 func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 	t.Helper()
 
+	return startCluster(t, make([]dustpan.Components, n), opts)
+}
+
+// StartSplit runs one server for each entry of sets, on one fresh schema,
+// and waits until each one answers ready. Server i runs the components of
+// sets[i], so a test can start a split topology, for example one api server
+// and one worker server. An option in opts wins over the components.
+func StartSplit(t *testing.T, sets []dustpan.Components, opts ...dustpan.Option) *Cluster {
+	t.Helper()
+
+	return startCluster(t, sets, opts)
+}
+
+// startCluster starts one server for each entry of sets. A zero entry runs
+// every component.
+func startCluster(t *testing.T, sets []dustpan.Components, opts []dustpan.Option) *Cluster {
+	t.Helper()
+
+	n := len(sets)
+
 	base := os.Getenv(EnvURL)
 	if base == "" {
 		t.Skipf("set %s to run the multi-instance tests", EnvURL)
@@ -111,6 +132,7 @@ func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 		client:    &http.Client{Transport: transport, Timeout: waitLimit},
 		transport: transport,
 		opts:      opts,
+		sets:      sets,
 		schemaURL: "",
 		blobDir:   filepath.Join(t.TempDir(), "blobs"),
 		mu:        sync.Mutex{},
@@ -268,7 +290,12 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 		t.Fatalf("listen for server %d: %v", i, err)
 	}
 
-	srv, err := dustpan.NewServer(append(serverOptions(t, i, store, blobs, ln), c.opts...)...)
+	own := serverOptions(t, i, store, blobs, ln)
+	if len(c.sets[i].Names()) > 0 {
+		own = append(own, dustpan.WithComponents(c.sets[i]))
+	}
+
+	srv, err := dustpan.NewServer(append(own, c.opts...)...)
 	if err != nil {
 		closeAll(t, store, blobs, db)
 		t.Fatalf("new server %d: %v", i, err)

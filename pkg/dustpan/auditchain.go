@@ -102,12 +102,16 @@ type auditChain struct {
 	runner *durable.Runner
 	// migrationsRunning reports whether the runner loop runs.
 	migrationsRunning atomic.Bool
-	limit             time.Duration
-	setting           audit.ChainSetting
-	mu                sync.Mutex
-	rec               audit.ChainRecord
-	readAt            time.Time
-	read              bool
+	// runsMigrations is true when this process runs the worker component,
+	// so its own loop must run for an approval. A process without the worker
+	// leaves the migration to the loop of a worker process.
+	runsMigrations bool
+	limit          time.Duration
+	setting        audit.ChainSetting
+	mu             sync.Mutex
+	rec            audit.ChainRecord
+	readAt         time.Time
+	read           bool
 }
 
 // Messages of the audit chain gate.
@@ -193,6 +197,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		durableOps:        nil,
 		runner:            nil,
 		migrationsRunning: atomic.Bool{},
+		runsMigrations:    cfg.components.Has(ComponentWorker),
 		limit:             maintenance.DefaultCacheLimit,
 		setting:           cfg.auditChain,
 		mu:                sync.Mutex{},
@@ -212,7 +217,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		return nil, fmt.Errorf("namespace store keeps no atomic audit chain approval: %w", ErrMissingOption)
 	}
 
-	runner, err := newChainRunner(chain.durableOps, cfg, chain)
+	runner, err := newChainRunner(cfg, chain)
 	if err != nil {
 		return nil, err
 	}
@@ -222,9 +227,16 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 	return chain, nil
 }
 
-// newChainRunner answers the runner that claims migration operations on
-// ops for chain.
-func newChainRunner(ops durable.Store, cfg *settings, chain *auditChain) (*durable.Runner, error) {
+// newChainRunner answers the runner that claims migration operations for
+// chain. Its claims go through the claim recorder of the worker watch, so a
+// worker that runs only a migration still writes its heartbeat, and it takes
+// claims with the configured lease period.
+func newChainRunner(cfg *settings, chain *auditChain) (*durable.Runner, error) {
+	ops := chain.durableOps
+	if cfg.watch != nil {
+		ops = trackingOps{Store: ops, watch: cfg.watch}
+	}
+
 	runner, err := durable.NewRunner(durable.RunnerConfig{
 		Store: ops,
 		Owner: auditChainOwner(cfg),
@@ -236,7 +248,7 @@ func newChainRunner(ops durable.Store, cfg *settings, chain *auditChain) (*durab
 				Steps:      []durable.Step{{Name: auditChainStep, Run: chain.runMigrationStep}},
 			},
 		},
-		Lease:        0,
+		Lease:        cfg.operationLease,
 		RenewEvery:   0,
 		PollEvery:    0,
 		MaxAttempts:  0,
@@ -408,7 +420,7 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 // checkApprovalGate refuses an approval while the migration loop stops,
 // by a service principal for a change to off, or without a fresh MFA step.
 func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) error {
-	if !c.migrationsRunning.Load() {
+	if c.runsMigrations && !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
 	}
 
@@ -586,15 +598,20 @@ func (c *auditChain) startUp(ctx context.Context) error {
 // continues the migration, and the start sets no wait of its own while it
 // runs.
 func (c *auditChain) startUpRecord(ctx context.Context) (audit.ChainRecord, error) {
-	drainCtx, cancel := context.WithTimeout(ctx, auditChainDrainTimeout)
-	defer cancel()
+	// A process without the worker component claims no durable operation,
+	// also not at start. It reads the stored record, and a worker process
+	// continues a migration that an earlier instance left.
+	if c.runsMigrations {
+		drainCtx, cancel := context.WithTimeout(ctx, auditChainDrainTimeout)
+		defer cancel()
 
-	if err := c.drainMigrations(drainCtx); err != nil {
-		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(drainCtx.Err(), context.DeadlineExceeded) {
-			return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+		if err := c.drainMigrations(drainCtx); err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(drainCtx.Err(), context.DeadlineExceeded) {
+				return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+			}
+
+			c.logger.WarnContext(ctx, "audit chain drain timed out; the background runner continues the migration")
 		}
-
-		c.logger.WarnContext(ctx, "audit chain drain timed out; the background runner continues the migration")
 	}
 
 	rec, err := c.store.ChainRecord(ctx)
@@ -1459,4 +1476,12 @@ func (s *Server) startAuditChain(ctx context.Context) func() {
 		waitCheck()
 		waitMigrations()
 	}
+}
+
+// admits reports whether the audit chain gate lets requests through: the
+// stored chain state matches the setting of the process and no change waits.
+func (c *auditChain) admits(ctx context.Context) bool {
+	rec := c.current(ctx)
+
+	return c.setting.State() == rec.State && !rec.Pending
 }

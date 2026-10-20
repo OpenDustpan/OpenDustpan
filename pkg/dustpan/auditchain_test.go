@@ -447,7 +447,9 @@ func waitForMaintenance(t *testing.T, st *sqlite.Store, want maintenance.State) 
 
 // runChainServer starts a server on st with setting, waits until it
 // serves, and answers it. The test stops it at its end.
-func runChainServer(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) chainServer {
+func runChainServer(
+	t *testing.T, st *sqlite.Store, setting audit.ChainSetting, extra ...dustpan.Option,
+) chainServer {
 	t.Helper()
 
 	authn, err := identity.NewStaticToken("admin", adminToken)
@@ -469,7 +471,7 @@ func runChainServer(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) 
 	ln := openTestListener(t)
 	addr := ln.Addr().String()
 
-	srv, err := dustpan.NewServer(
+	srv, err := dustpan.NewServer(append([]dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -485,7 +487,7 @@ func runChainServer(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) 
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListener(ln),
 		dustpan.WithAuditChain(setting),
-	)
+	}, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

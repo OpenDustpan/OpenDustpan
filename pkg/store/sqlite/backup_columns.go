@@ -483,6 +483,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			table:   backup.TableIdempotencyServerKey,
 			columns: []string{"id", "wrapped_key", backupColWrapperID},
 		},
+		{
+			table:   backup.TableDurableHeartbeats,
+			columns: []string{"owner", "at_ms"},
+		},
 	}
 }
 

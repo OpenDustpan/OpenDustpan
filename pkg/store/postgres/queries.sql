@@ -2389,6 +2389,19 @@ SET next_run_at_ms = sqlc.arg('now_ms')::bigint + interval_ms,
 WHERE name = sqlc.arg('name')::text AND next_run_at_ms = sqlc.arg('due_at_ms')::bigint
   AND next_run_at_ms <= sqlc.arg('now_ms')::bigint;
 
+-- Durable heartbeats. Every time comes from the database clock, read in the
+-- transaction of the write.
+
+-- name: UpsertDurableHeartbeat :exec
+INSERT INTO durable_heartbeats (owner, at_ms) VALUES (sqlc.arg('owner')::text, sqlc.arg('now_ms')::bigint)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms;
+
+-- name: DeleteStaleDurableHeartbeats :exec
+DELETE FROM durable_heartbeats WHERE at_ms < sqlc.arg('threshold_ms')::bigint;
+
+-- name: GetLatestDurableHeartbeat :one
+SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1;
+
 -- name: GetNamespaceID :one
 -- The stable ID of the namespace that has the name now.
 SELECT id
