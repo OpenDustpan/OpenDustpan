@@ -968,7 +968,7 @@ func testDevSwapRefuses(t *testing.T, newStore DevDataFactory) {
 func applyPlain(t *testing.T, dst DevDataStore) error {
 	t.Helper()
 
-	return dst.ApplyStaging(t.Context()) //nolint:wrapcheck // The test compares the sentinel the adapter returns.
+	return dst.ApplyStaging(t.Context())
 }
 
 // applyKeeping runs the swap that keeps access and returns its error as it is.
@@ -977,7 +977,7 @@ func applyKeeping(t *testing.T, dst DevDataStore) error {
 
 	_, err := dst.ApplyStagingKeepingAccess(t.Context())
 
-	return err //nolint:wrapcheck // The test compares the sentinel the adapter returns.
+	return err
 }
 
 // checkSwapRefused stages e into dst with no strip, and expects the swap to
