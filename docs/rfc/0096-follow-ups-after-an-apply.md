@@ -82,6 +82,14 @@ systems that a follow-up calls. They are not part of OpenDustpan.
 
 - ADR 129 decision 25: the egress allowlist would cover follow-up targets
   too, as a second list or with a purpose on each entry (section C).
+- ADR 129 decisions 26 and 27: the URL check (the analog of
+  `CheckModelURL`) and the dial guard would also run for the purpose
+  `follow-up`, with the target list of the namespace as a second allowlist
+  (section C).
+- ADR 130 and ADR 134, as amended by E4 (section C): a runner that makes a
+  follow-up call opens the token outside the sandbox of the launcher and
+  outside the secrets directory of any claim that runs team code. Each ADR
+  gets one paragraph.
 - ADR 145 decision 5: two new notification types, `unit.applied` (section
   A), so subscriptions get the same signal, and `follow-up.failed`
   (section C).
@@ -217,7 +225,11 @@ The options for what fires a follow-up of an OpenTofu workspace:
 - **A2b. Only when a mapped output value changed.** OpenTofu does not know
   an apply from a refresh, but the values of the mapped outputs do show a
   change. The call compares the SHA-256 of the mapped values with the hash
-  of the last call of the same follow-up and unit that was not `skipped`.
+  of the last call of the same follow-up and unit that reached AWX. Only
+  the states `started`, `succeeded` and `failed` in AWX count. A call that
+  OpenDustpan refused (`output-refused`, egress, lost access) or
+  `abandoned`, and a `skipped` call, never become the baseline, so the
+  next signal compares with the last value that AWX got.
   The first signal for a unit always fires. A refresh that changes no
   mapped output fires nothing.
 - **A2c. A setting for each follow-up**, `fireOn`: `output-change` (A2b) or
@@ -232,8 +244,8 @@ state version that has some outputs but lacks a mapped one ends
 (question 3).** `unit.applied` is also a new notification type, so a
 subscription can use it. Its dedupe key is the unit ID and the serial or the
 update version, so a retried write makes one signal. A follow-up selects
-units by a filter: one unit, a collection, or `opentofu:shop/*`, with the
-same matcher as a subscription filter. A `pulumi preview` and a plan fire
+units by a filter: one unit or a fixed list of units, with no wildcard in
+the first slice (section D). A `pulumi preview` and a plan fire
 nothing. In the first slice the Pulumi CLI is out, so the docs say that a
 follow-up of a workspace starts after a change of a mapped output, not after
 a proof of success.
@@ -275,16 +287,32 @@ does not retry by itself. `egress.ErrRefused` and other `4xx` stop at once
 
 **Reconciliation before a redeliver.** Before a person redelivers an
 `unknown` call, the server looks for the job that the first attempt may have
-made:
+made. These rules hold together:
 
-1. `GET /job_templates/{id}/jobs/?created__gte=<time of the send minus 5
-   minutes>`. The 5 minutes cover clock skew between the two servers. At most
-   100 jobs.
-2. For each job, `GET /jobs/{id}/` and read `extra_vars` for the value of
-   `dustpan_call_id`. The server keeps no other part of `extra_vars`.
-3. When a job has the call ID, the call records that job ID and the status
-   `started`, and no second start is sent. When no job has it, the redeliver
-   goes on.
+- **Minimum wait.** The reconciliation starts no sooner than 90 seconds
+  after the last attempt (the 30 second request timeout plus a 60 second
+  margin), and only after the claim of that attempt has ended. Before that,
+  the redeliver is refused and the answer names the time to wait.
+- **Clock skew.** The server reads the `Date` header of the AWX answer and
+  measures the skew against its own clock. Above 60 seconds, the
+  reconciliation fails closed: the call stays `unknown` and the person
+  checks AWX. Else the window below uses the measured skew.
+- **The search.** `GET /job_templates/{id}/jobs/?created__gte=<time of the
+  send minus the skew and a 60 second margin>`. At most 100 jobs, in one
+  page. For each job, `GET /jobs/{id}/` and read `extra_vars` for the value
+  of `dustpan_call_id`. The server keeps no other part of `extra_vars`.
+- **A truncated page fails closed.** When the answer has a `next` link or
+  more than 100 results, the call stays `unknown`, the redeliver is
+  refused, and the person must check AWX. Option: page through all
+  results, which costs more reads on a busy template. **Recommendation:
+  fail closed.**
+- **Result.** When a job has the call ID, the call records that job ID and
+  the status `started`, and no second start is sent. When no job has it,
+  the second start goes on.
+- **One durable operation.** The reconciliation and the second start are
+  one durable operation under the claim of the call, with a version check
+  on the call. A second redeliver at the same time gets a conflict (`409`)
+  and sends nothing.
 
 **Rate.** Each follow-up has a minimum interval between two starts (default
 60 seconds, from 0 seconds to 24 hours). A call that comes earlier waits. It
@@ -318,7 +346,11 @@ sender refuses. The options:
   (ADR 101, ADR 130). This reaches an AWX on a private address on an
   installation that runs `--egress-public-only`, where E1 to E3 cannot. It
   needs a decision on how a runner gets the sealed credential for one
-  request, so it is not in the first slice.
+  request, so it is not in the first slice. Rule for that decision: the
+  token never enters a launcher sandbox or the secrets directory of a claim
+  that runs team code. The runner opens it for one request in a separate
+  process of the runner, and no step of a claim reads it. ADR 130 and ADR
+  134 are amended by this rule (one paragraph each).
 
 **Recommendation: E3 in the first slice, and E4 later for installations with
 `--egress-public-only`.** On a multitenant installation, the operator keeps
@@ -339,19 +371,33 @@ scope `write` (question 7). It is a secret item sealed for the follow-up, in
 the way of ADR 149 decision 10. The API answers it never, also not at the
 create, because the person typed it.
 
-**The credential is bound to its target.** At seal time, the server binds
-the credential to the origin of the target (scheme, host and port), the
-template ID, the fixed inventory ID and the fixed `limit`. The binding is
+**The credential is bound to its target and its data.** At seal time, the
+server binds the credential to the origin of the target (scheme, host and
+port), the template ID, the fixed inventory ID, the fixed `limit`, the unit
+filter, and the full mapping: each output, variable, type and pattern, and
+the allowed ranges and suffixes of the types `ip-list` and `host-name`. The
+binding is
 part of the sealed item, in the way ADR 145 decision 13 binds the secrets of
-a sink to the sink. Any change of one of these four values deletes the
-credential, and the person must enter it again. "Sent only to the origin of
+a sink to the sink. Any change of one of these values deletes the
+credential, and the follow-up stays suspended until a person enters the
+token again. Option: record who sealed the token, and let only a person who
+enters the token again resume; the stored token then stays valid for
+changed data, so it protects less. **Recommendation: the binding.** "Sent only to the origin of
 the target" means the origin at seal time. Before each request, the server
 compares the bound origin with the origin that it will dial. A mismatch
 fails the call, and the token never leaves the server. A change of the
-credential or of the mapping suspends the follow-up, and a person resumes
-it, as ADR 149 decision 12 does for a sink. A person with
-`namespace:manage-follow-ups` can so never point a stored token at a
-host that the token owner did not choose.
+credential suspends the follow-up, and a person resumes it, as ADR 149
+decision 12 does for a sink. A person with `namespace:manage-follow-ups`
+can so never point a stored token at a host, or send other data with it,
+that the token owner did not choose.
+
+**No wildcard filter in the first slice.** A filter such as
+`opentofu:shop/*` would admit units that a person creates later, with a
+token that nobody sealed for them. The first slice allows one unit or a
+fixed list of units, and the list is part of the binding. Option for a
+later slice: a wildcard filter that suspends the follow-up when a new unit
+matches, until a person seals the token again. **Recommendation: no
+wildcard in slice 1.**
 
 **Output mapping.** An explicit list of entries `{output, variable, type,
 pattern}`. No wildcard, no "all outputs". A variable name matches
@@ -359,6 +405,14 @@ pattern}`. No wildcard, no "all outputs". A variable name matches
 example `ansible_*`, `hostvars`, `inventory_hostname`). OpenDustpan adds two
 variables of its own: `dustpan_call_id` and `dustpan_unit`. `extra_vars`
 goes as a JSON object, never as a YAML string.
+
+**Ranges for host types.** The types `ip-list` and `host-name` need allowed
+CIDR ranges (`ip-list`) or allowed name suffixes (`host-name`), set at the
+save and part of the binding (above). A value outside them ends the call
+`output-refused`. The save refuses a mapping of these types with no range
+or suffix. So the rule "take no host from a variable that a unit writer can
+set" holds with one exception: a host inside the bound ranges, which the
+token owner chose.
 
 **Who controls the playbook input.** A person who can write the state of a
 unit controls its outputs, and so controls the input of the playbook: the
@@ -370,7 +424,8 @@ send, a value that does not match its type or pattern ends the call
 `output-refused` and sends nothing (an allowlist, not a clean-up). The user
 documentation tells teams to use survey types and choices for each variable,
 and a fixed `limit` and a fixed inventory, and to write playbooks that take
-no host or path from a variable that a unit writer can set.
+no host or path from a variable that a unit writer can set, except a host
+inside the bound ranges or suffixes.
 
 **Variables that the template allows.** When the template has
 `ask_variables_on_launch` false and a survey, AWX puts a key that the survey
@@ -486,8 +541,8 @@ list stops a target alone would not hold.
 action `namespace:bind-follow-up-credentials`, so a platform team holds
 the AWX token and an application team edits the mapping. A change of the
 mapping suspends the follow-up in both options, and a change of the target,
-the template, the inventory or the `limit` deletes the credential (section
-D). **Recommendation: one action, and only with that binding (question
+the template, the inventory, the `limit`, the unit filter or the mapping
+deletes the credential (section D). **Recommendation: one action, and only with that binding (question
 6).** The target list needs its own action in either option.
 
 **Call history.** A reader with `namespace:read-follow-ups` sees the state,
@@ -498,7 +553,9 @@ output values and never the credential.
 **Audit.** A create, a change, a delete, a resume, a test and a redeliver
 write one entry each, of the kind `change`. Each AWX start request writes
 one entry of the kind `change` before the server sends it, with the call ID,
-the follow-up, the template ID and no value. The job ID is in the call
+the follow-up, the template ID and no value. This is fail closed (ADR 240
+decision 8): when the server cannot write the entry, it sends nothing and
+the call ends `abandoned`. The job ID is in the call
 history. A refusal writes one entry of the kind `denied`: a target outside
 the allowlist, a refused output, a suspend for lost access. A delivered
 webhook call writes no entry. The call history is its record.
@@ -513,10 +570,10 @@ the gates of its decision points. Option: a fact `followUps` at
 | Input | 1. Check at the boundary | 2. Contain at use | 3. Limit | 4. Authorize at use | 5. Fail closed and audit |
 | --- | --- | --- | --- | --- | --- |
 | Follow-up document (API) | Allowlist for each field. URL scheme `https`. Variable name pattern. Reserved names refused | Values stored as typed fields, never as text that a template reads | 100 follow-ups, 50 outputs | `namespace:manage-follow-ups` on the route, the store checks the fence | Unknown field refused (`422`). Denial audited |
-| Target URL and DNS | `egress.CheckURL` at save | Dial guard on each resolved address. No redirect. No proxy | Connect 10 s, request 30 s | Installation list and namespace list, both before each attempt | Refusal is `abandoned`, `denied` entry |
-| Output values (from tool state). A unit writer controls them | JSON value types only. The type and the pattern of each mapped variable, with refusal of a non-match. Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
-| Credential | Length and character set at save | Sealed secret item, opened in memory for one request. Sent only to the origin that the item is bound to at seal time | One credential for each follow-up | Store refuses an item sealed for another follow-up, scope, origin, template, inventory or `limit` | Item that does not open: call fails, nothing sent |
-| AWX answer | Parse a fixed schema: `job` as a positive integer, `status` from the eight values, `ignored_fields` keys only | Store parsed fields only, never the raw body. Strip control characters from names | Body at most `egress.MaxBodyBytes`, 100 names of 64 bytes | A job ID is only shown, never used for another call | Unknown status or bad JSON: `unknown`, no retry |
+| Target URL and DNS | `egress.CheckURL` at save, and the allowlist check in the way of `CheckModelURL` (ADR 129 decision 26) with the purpose `follow-up` | Dial guard on each resolved address. No redirect. No proxy | Connect 10 s, request 30 s | Installation list and namespace list, both before each attempt | Refusal is `abandoned`, `denied` entry |
+| Output values (from tool state). A unit writer controls them | JSON value types only. The type and the pattern of each mapped variable, with refusal of a non-match. `ip-list` only inside the bound CIDR ranges, `host-name` only inside the bound suffixes (an IP outside the ranges is refused). Size per value. For the AWX kind, refuse a string with `{{`, `{%` or `{#` | `extra_vars` as a JSON object. Webhook body JSON-encoded. Never put in a URL, a header or a log | 16 KiB each, 64 KiB total | Creator holds `unit:read` at send time | Sensitive or missing output: `output-refused`, nothing sent, `denied` entry |
+| Credential | Length and character set at save | Sealed secret item, opened in memory for one request. Sent only to the origin that the item is bound to at seal time | One credential for each follow-up | Store refuses an item sealed for another follow-up, scope, origin, template, inventory, `limit`, unit filter or mapping | Item that does not open: call fails, nothing sent |
+| AWX answer (start, job and jobs list, from a hostile AWX) | Parse a fixed schema: `job` as a positive integer, `status` from the eight values, `ignored_fields` keys only. In the jobs list: `id`, `status`, `created` and `extra_vars` only, and of `extra_vars` only `dustpan_call_id` as a string | Store parsed fields only, never the raw body or another `extra_vars` key. Strip control characters from names | Body at most `egress.MaxBodyBytes`, 100 names of 64 bytes, 100 jobs, 64 KiB for each `extra_vars` | A job ID is only shown, never used for another call | Unknown status or bad JSON: `unknown`, no retry |
 | Webhook answer | Status code only | No body stored, except an excerpt of at most 512 bytes of a non-`2xx` answer, with no control characters and the secret filter applied | 512 bytes | Shown only with `namespace:read-follow-ups` | Non-`2xx`: retry or `abandoned` |
 
 **No template injection.** OpenDustpan renders no template. The mapping is
@@ -546,8 +603,10 @@ path of this table: the row of output values covers it.
 **Persona.** The ops team of a retailer runs the AWX job template
 `configure-web` (ID 12) after each apply of the workspace
 `opentofu:shop/web-prod`. The template asks for variables on start. AWX
-is at `https://awx.corp.example` on `10.20.0.15`. Today an engineer copies
-the host addresses from `tofu output` into the AWX form.
+is at `https://awx.corp.example` on `10.20.0.15`. The mapping sends the
+output `web_ips` as an `ip-list` inside the bound range `10.30.0.0/16`.
+Today an engineer copies the host addresses from `tofu output` into the AWX
+form.
 
 **What ships.**
 
@@ -591,6 +650,10 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
      `tofu destroy` starts no job and writes no failure entry.
    - A mapping of `db_password` fails at save. A mapping with no type fails
      at save.
+   - An `ip-list` output with an address outside the bound CIDR ranges ends
+     `output-refused`, and the fake AWX gets nothing.
+   - A change of the mapping or of the unit filter deletes the credential
+     and suspends the follow-up.
    - A change of the target URL deletes the credential, and the call after
      it fails with no request to the fake AWX.
    - An output value that does not match its pattern ends `output-refused`.
@@ -615,9 +678,12 @@ at `127.0.0.1`, with the server trusting its certificate. It serves the
 4. When applies come faster than calls end, do older pending calls of the
    same unit become `superseded`, or does each call go out in order?
 5. Do ignored AWX fields fail the call (this RFC) or only warn?
-6. One action for follow-ups and their credentials, or a second action to
-   bind a credential? One action is acceptable only with the binding of the
-   credential to its target (section D). The target list needs its own
+6. Does the credential bind the unit filter and the full mapping, so that
+   any change deletes it (this RFC), or does the server only record who
+   sealed it? Is a wildcard filter out of the first slice? One action for
+   follow-ups and their credentials, or a second action to bind a
+   credential? One action is acceptable only with the binding of the
+   credential to its target and data (section D). The target list needs its own
    action in either case.
 7. Which credential types does the AWX kind accept? This RFC recommends
    bearer tokens only: an AWX 24.x personal access token or a gateway token
