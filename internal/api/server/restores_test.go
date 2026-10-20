@@ -114,6 +114,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -573,6 +574,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -778,6 +780,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -899,6 +902,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1011,6 +1015,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

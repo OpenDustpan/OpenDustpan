@@ -119,6 +119,7 @@ func newAuditedPrincipalHandler(
 		Audit:            entries,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -958,6 +959,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Schema:           stubSchema{migrations: nil},
 		Principals:       svc,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1042,6 +1044,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Schema:           stubSchema{migrations: nil},
 		Principals:       newTestPrincipals(t),
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
