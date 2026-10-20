@@ -86,6 +86,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a collection lock covers its units", test: testCollectionLockCovers},
 		{name: "a unit that joins a locked collection is covered", test: testJoinCovered},
 		{name: "a unit that leaves a locked collection is not covered", test: testLeaveNotCovered},
+		{name: "a move out of a locked collection needs the right to end the lock", test: testLeaveNeedsEndsLock},
+		{name: "a restore under a manual lock is refused and rolled back", test: testRestoreUnderLock},
 		{name: "the lock of the unit wins over the lock of its collection", test: testUnitLockWins},
 		{name: "a lock does not cross a namespace", test: testNamespaceIsolation},
 		{name: "a deleted collection takes its lock with it", test: testCollectionDeleteDropsLock},
@@ -616,6 +618,154 @@ func testLeaveNotCovered(t *testing.T, s Store) {
 
 	if _, err := s.CoveringLock(t.Context(), f.web); !errors.Is(err, manuallock.ErrNotLocked) {
 		t.Errorf("after the move to another collection: err = %v, want ErrNotLocked", err)
+	}
+}
+
+// testLeaveNeedsEndsLock proves the store refuses, in the transaction of the
+// move, a move out of a collection with a manual lock when the caller may not
+// end the lock. The unit stays covered. The same move with the right to end the
+// lock goes through, and a move out of a collection with no lock needs no right.
+func testLeaveNeedsEndsLock(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+	f.put(t, f.web, f.payments)
+	f.lock(t, manuallock.CollectionTarget(f.payments.Ref), alice, testReason)
+
+	m := collection.Move{
+		Unit:     f.web,
+		From:     f.payments.Ref.Name,
+		To:       f.platform.Ref,
+		ToID:     f.platform.ID,
+		EndsLock: false,
+	}
+
+	err := s.SetUnitCollection(t.Context(), m, f.ns.Fence(), auditFor(f.ns.Fence()))
+	if !errors.Is(err, collection.ErrMoveOutOfLockedCollection) {
+		t.Fatalf("move out without the right to end the lock: err = %v, want ErrMoveOutOfLockedCollection", err)
+	}
+
+	if got, covErr := s.CoveringLock(t.Context(), f.web); covErr != nil || got.Holder != alice {
+		t.Errorf("after the refused move: covering lock = %+v, %v; want the lock of the collection", got, covErr)
+	}
+
+	// A move inside the same collection ends no coverage.
+	same := collection.Move{
+		Unit:     f.web,
+		From:     f.payments.Ref.Name,
+		To:       f.payments.Ref,
+		ToID:     f.payments.ID,
+		EndsLock: false,
+	}
+	if sameErr := s.SetUnitCollection(t.Context(), same, f.ns.Fence(), auditFor(f.ns.Fence())); sameErr != nil {
+		t.Errorf("move into the same collection: %v", sameErr)
+	}
+
+	m.EndsLock = true
+	if allowErr := s.SetUnitCollection(t.Context(), m, f.ns.Fence(), auditFor(f.ns.Fence())); allowErr != nil {
+		t.Fatalf("move out with the right to end the lock: %v", allowErr)
+	}
+
+	// platform has no lock: leaving it needs no right.
+	back := collection.Move{
+		Unit:     f.web,
+		From:     f.platform.Ref.Name,
+		To:       f.payments.Ref,
+		ToID:     f.payments.ID,
+		EndsLock: false,
+	}
+	if backErr := s.SetUnitCollection(t.Context(), back, f.ns.Fence(), auditFor(f.ns.Fence())); backErr != nil {
+		t.Errorf("move out of a collection with no lock: %v", backErr)
+	}
+}
+
+// testRestoreUnderLock proves the restore of a deleted workspace and of a
+// deleted stack is refused, and rolled back, while a manual lock covers the
+// place the unit comes back to: its collection or its namespace. The unit stays
+// deleted. After the lock goes, the restore works.
+func testRestoreUnderLock(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newFixture(t, s)
+
+	t.Run("workspace in a locked collection", func(t *testing.T) {
+		f.put(t, f.web, f.payments)
+		restoreWorkspaceUnderLock(t, f, f.web, manuallock.CollectionTarget(f.payments.Ref))
+	})
+	t.Run("workspace in a locked namespace", func(t *testing.T) {
+		restoreWorkspaceUnderLock(t, f, f.api, manuallock.NamespaceTarget(f.ns.Name))
+	})
+	t.Run("stack in a locked namespace", func(t *testing.T) {
+		restoreStackUnderLock(t, f, manuallock.NamespaceTarget(f.ns.Name))
+	})
+}
+
+// restoreWorkspaceUnderLock deletes the workspace unit, takes the lock target,
+// and checks the restore against it.
+func restoreWorkspaceUnderLock(t *testing.T, f *fixture, unit collection.UnitRef, target manuallock.Target) {
+	t.Helper()
+
+	ctx, fence := t.Context(), f.ns.Fence()
+
+	ws, err := f.s.GetWorkspace(ctx, workspace.Ref{Namespace: f.ns.Name, Name: workspace.Name(unit.Name)})
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+
+	deletion := inventory.Deletion{Entry: auditFor(fence), PurgeAfter: now().Add(time.Hour)}
+	if delErr := f.s.DeleteWorkspace(ctx, ws.Ref, fence, deletion); delErr != nil {
+		t.Fatalf("DeleteWorkspace: %v", delErr)
+	}
+
+	f.lock(t, target, alice, testReason)
+
+	_, restoreErr := f.s.RestoreWorkspace(ctx, ws.ID, "", fence, auditFor(fence))
+	if !errors.Is(restoreErr, manuallock.ErrLocked) {
+		t.Fatalf("restore under the %s lock: err = %v, want ErrLocked", target.Kind, restoreErr)
+	}
+
+	if _, getErr := f.s.GetWorkspace(ctx, ws.Ref); !errors.Is(getErr, workspace.ErrNotFound) {
+		t.Errorf("workspace after the refused restore: err = %v, want ErrNotFound", getErr)
+	}
+
+	f.forceRemove(t, target)
+
+	if _, restoreErr := f.s.RestoreWorkspace(ctx, ws.ID, "", fence, auditFor(fence)); restoreErr != nil {
+		t.Errorf("restore after the lock goes: %v", restoreErr)
+	}
+}
+
+// restoreStackUnderLock deletes a stack, takes the lock target, and checks the
+// restore against it.
+func restoreStackUnderLock(t *testing.T, f *fixture, target manuallock.Target) {
+	t.Helper()
+
+	ctx, fence := t.Context(), f.ns.Fence()
+	st := newPulumiStack(f.ns.Name, "web", "prod")
+
+	if err := f.s.CreateStack(ctx, st, fence); err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+
+	deletion := inventory.Deletion{Entry: auditFor(fence), PurgeAfter: now().Add(time.Hour)}
+	if err := f.s.ForceDeleteStack(ctx, st.Ref, fence, deletion); err != nil {
+		t.Fatalf("ForceDeleteStack: %v", err)
+	}
+
+	f.lock(t, target, alice, testReason)
+
+	if _, err := f.s.RestoreStack(ctx, st.ID, "", fence, auditFor(fence)); !errors.Is(err, manuallock.ErrLocked) {
+		t.Fatalf("restore under the %s lock: err = %v, want ErrLocked", target.Kind, err)
+	}
+
+	if _, err := f.s.GetStack(ctx, st.Ref); !errors.Is(err, stack.ErrNotFound) {
+		t.Errorf("stack after the refused restore: err = %v, want ErrNotFound", err)
+	}
+
+	f.forceRemove(t, target)
+
+	if _, err := f.s.RestoreStack(ctx, st.ID, "", fence, auditFor(fence)); err != nil {
+		t.Errorf("restore after the lock goes: %v", err)
 	}
 }
 

@@ -96,8 +96,18 @@ type Store interface {
 	//     manual lock covers the unit (its own lock, the lock of its
 	//     collection now, or the lock of its namespace). Break-glass does not
 	//     pass it. The adapter reads the lock in the transaction of the
-	//     change, with the same coverage as manuallock.Store.CoveringLock. The
-	//     job stays queued and keeps its queue timeout: EventExpire still
+	//     change, with the same coverage as manuallock.Store.CoveringLock. A
+	//     SQL adapter under READ COMMITTED reads the lock in a statement that
+	//     runs after the transaction holds the namespace row FOR UPDATE. The
+	//     append of the audit entry takes that row in every fenced audited
+	//     change, and so do PutLock and this change. A manual lock that
+	//     committed before is then seen, and a PutLock that starts later waits
+	//     for the dispatch. A read before the row is held can miss a lock that
+	//     commits before the dispatch does. A higher isolation level does not
+	//     replace this order: the lock write does not read the job tables, so
+	//     the database finds no conflict. An adapter needs a test that
+	//     dispatches and locks in parallel. The job
+	//     stays queued and keeps its queue timeout: EventExpire still
 	//     ends it. No other event is refused for a lock, so a phase that
 	//     runs when the lock arrives claims, writes and ends as before.
 	//   - EventDispatch of a phase that changes resources: ErrUnitBusy when

@@ -427,14 +427,17 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 
 	// A manual lock stops the delete of the workspace. The workspace must exist
 	// to be covered: a missing one falls through to the not-found answer of the
-	// store.
-	if w, getErr := s.Get(ctx, ref); getErr == nil {
+	// store. Any other read error refuses the delete (fail closed).
+	w, getErr := s.Get(ctx, ref)
+	if getErr != nil && !errors.Is(getErr, ErrNotFound) {
+		return fmt.Errorf("delete workspace %s: %w", ref, getErr)
+	}
+
+	if getErr == nil {
 		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
 			return fmt.Errorf("delete workspace %s: %w", ref, lockErr)
 		}
-	}
 
-	if w, getErr := s.Get(ctx, ref); getErr == nil {
 		if sweepErr := s.sweepExpiredRows(ctx, w); sweepErr != nil {
 			s.logger.WarnContext(
 				ctx,

@@ -28,6 +28,10 @@ While a manual lock covers a stack or a workspace, these requests fail:
 - The restore of an earlier state version of a workspace, unless the caller
   holds the lock of the workspace.
 - The removal of the stack or of the workspace.
+- The restore of a stack or workspace that someone removed, when a manual lock
+  covers the place it comes back to: its own lock, the lock of its collection, or
+  the lock of its namespace. The server refuses the restore and the stack or
+  workspace stays removed. A lock stops every change, and a restore is a change.
 - The start of a job for the stack or workspace, and the dispatch of a queued
   phase, see "Jobs" below.
 
@@ -38,11 +42,22 @@ example `tofu force-unlock`, ends the lock of the tool only.
 A tool that already holds its own lock on the stack or workspace keeps it. The
 lock holder can still write state and release the lock. A request that is in
 progress at the moment of the lock can pass: the check and the request run in
-separate transactions. The next request meets the lock.
+separate transactions. The next request meets the lock. This holds for the lock
+requests of the tools and for the removal, the rename and the move of a stack or
+workspace out of a collection. The check of a move out of a collection and the
+check of a restore run in the transaction of the write, so a lock taken before
+the write commits is seen.
 
 ## Jobs
 
-A manual lock stops the jobs of the units that it covers:
+The job rules below are part of the job domain, but the server does not run them
+yet. The server has no job store, and the clock that lets a running phase pass
+the lock is not connected. Until a job store is connected, no job is started or
+dispatched, so the lock check of a job has no effect. The check of a job token
+on a lock request fails closed: a job token never passes a manual lock now.
+
+When a job store is connected, a manual lock stops the jobs of the units that it
+covers:
 
 - A new job for a covered unit does not start. The job is queued with the wait
   reason `locked`. This holds for a plan job too.

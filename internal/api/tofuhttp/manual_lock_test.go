@@ -167,3 +167,50 @@ func TestLockPassesTheJobOfTheToken(t *testing.T) {
 		})
 	}
 }
+
+// TestStateWriteRefusedByAManualLock proves a POST of state that a manual lock
+// refuses answers 423 with lock info that names the holder, with or without the
+// lock ID of the client. The write without a lock ID is the one that `tofu
+// -lock=false` sends.
+func TestStateWriteRefusedByAManualLock(t *testing.T) {
+	t.Parallel()
+
+	held := manuallock.Lock{
+		Since:  time.Date(2026, time.October, 19, 10, 0, 0, 0, time.UTC),
+		Target: manuallock.CollectionTarget(collection.Ref{Namespace: "acme", Name: "payments"}),
+		Holder: "alice",
+		Reason: "change window closed",
+	}
+	refusal := fmt.Errorf("%w: %w", workspace.ErrLocked, &manuallock.LockedError{
+		Lock: held, Noun: "workspace", Name: "acme/web",
+	})
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "without a lock ID", path: unitPath},
+		{name: "with a lock ID", path: unitPath + "?ID=lock-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(true)
+			units.writeErr = refusal
+			h := newTestHandler(t, units)
+
+			rec := do(h, http.MethodPost, tc.path, `{"serial":1,"lineage":"l"}`, bearer(adminToken))
+			if rec.Code != http.StatusLocked {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusLocked, rec.Body.String())
+			}
+
+			checkManualInfo(t, rec.Body.Bytes(), manualInfoWant{
+				who:    "alice",
+				remove: "/api/dustpan/v1/namespaces/acme/collections/payments/lock",
+				force:  "/api/dustpan/v1/namespaces/acme/collections/payments/lock/force-unlock",
+				text: "workspace acme/web is in collection acme/payments, which has a manual lock " +
+					"by alice since 2026-10-19T10:00:00Z: change window closed",
+			})
+		})
+	}
+}

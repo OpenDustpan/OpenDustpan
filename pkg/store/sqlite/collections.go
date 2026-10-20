@@ -195,6 +195,10 @@ func setUnitCollection(ctx context.Context, q *db.Queries, m collection.Move, e 
 		return collection.ErrCollectionChanged
 	}
 
+	if leaveErr := checkLeaveLockedCollection(ctx, q, m); leaveErr != nil {
+		return leaveErr
+	}
+
 	if joinErr := checkGateJoin(ctx, q, m); joinErr != nil {
 		return joinErr
 	}
@@ -345,4 +349,44 @@ func removeCollection(ctx context.Context, q *db.Queries, ref collection.Ref) er
 	}
 
 	return nil
+}
+
+// checkLeaveLockedCollection refuses, in the transaction of the move, a move of
+// the unit out of a collection that has a manual lock, unless the caller may
+// end that lock. The move ends the coverage of the collection lock, so it would
+// get around the lock.
+//
+// Defense in depth: the HTTP handler checks unit:manage before it calls the
+// service. This check stays so that a new caller of the service cannot use a
+// move to end a manual lock, and it reads the lock in the same transaction as
+// the write, so a lock taken after the handler's read still holds.
+func checkLeaveLockedCollection(ctx context.Context, q *db.Queries, m collection.Move) error {
+	if m.EndsLock || m.From == "" || m.From.Key() == m.To.Name.Key() {
+		return nil
+	}
+
+	source, err := q.GetCollection(ctx, db.GetCollectionParams{
+		Namespace: m.Unit.Namespace.String(),
+		NameKey:   m.From.Key(),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("select source collection: %w", err)
+	}
+
+	_, err = q.GetManualLock(ctx, db.GetManualLockParams{
+		Kind: string(manuallock.KindCollection), ObjectID: source.ID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("select manual lock of source collection: %w", err)
+	}
+
+	return collection.ErrMoveOutOfLockedCollection
 }

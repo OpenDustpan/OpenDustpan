@@ -505,7 +505,8 @@ func classify(err error) (int, string) {
 	case errors.Is(err, collection.ErrNotFound), errors.Is(err, collection.ErrUnitNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, collection.ErrAlreadyExists), errors.Is(err, collection.ErrNotEmpty),
-		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection):
+		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection),
+		errors.Is(err, collection.ErrMoveOutOfLockedCollection):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody), errors.Is(err, errMissingUnit):
 		return http.StatusBadRequest, err.Error()

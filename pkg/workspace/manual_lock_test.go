@@ -468,3 +468,101 @@ func TestRestoreMeetsTheManualLock(t *testing.T) {
 		t.Fatalf("restore under the lock of the caller: %v", err)
 	}
 }
+
+// TestStreamedUnlockedWriteMeetsTheManualLock proves the streamed write of the
+// OpenTofu HTTP backend, which names no lock ID, fails while a manual lock
+// covers the workspace, even with the unlocked-write override on. It records no
+// override entry and stores no state version. A streamed write under the lock
+// of the caller is not refused.
+func TestStreamedUnlockedWriteMeetsTheManualLock(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	allow := namespace.Overrides{Unlocked: true, Forced: false}
+
+	if _, err := f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, allow); err != nil {
+		t.Fatalf("namespace switch: %v", err)
+	}
+
+	if _, err := f.svc.SetOverrides(ctx, f.ws.ID, allow); err != nil {
+		t.Fatalf("unit switch: %v", err)
+	}
+
+	svc := withManualLocks(t, f, answering(heldCollectionLock()))
+	recorded := 0
+
+	_, err := svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "", MD5: ""},
+		streamAuthority(allow, func(workspace.Override, int64) error { recorded++; return nil }),
+		strings.NewReader(streamDoc("lin-m", 1)),
+	)
+	checkLockedError(t, err)
+
+	if recorded != 0 {
+		t.Errorf("override entries = %d, want 0: a refused write records no override", recorded)
+	}
+
+	checkHistoryTotal(t, f, 0)
+
+	// A tool lock taken before the manual lock stays usable for its holder.
+	if _, lockErr := f.svc.LockWithID(ctx, f.ws.ID, "alice", "apply", "lock-1"); lockErr != nil {
+		t.Fatalf("lock before the manual lock: %v", lockErr)
+	}
+
+	_, err = svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
+		streamAuthority(allow, nil),
+		strings.NewReader(streamDoc("lin-m", 1)),
+	)
+	if err != nil {
+		t.Fatalf("streamed write under the lock of the caller: %v", err)
+	}
+}
+
+// getFailingStore is a store whose read of a workspace by name fails.
+type getFailingStore struct {
+	*memStore
+}
+
+func (getFailingStore) GetWorkspace(context.Context, workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errManualLockRead
+}
+
+// TestDeleteFailsClosedWhenTheWorkspaceCannotBeRead proves a delete does not
+// skip the manual lock check when the read of the workspace fails with an error
+// other than not found: it returns that error and deletes nothing.
+func TestDeleteFailsClosedWhenTheWorkspaceCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        failing(manuallock.ErrNotLocked),
+		Workspaces:         getFailingStore{f.store},
+		States:             f.store,
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Sealer:             f.secrets,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if delErr := svc.Delete(t.Context(), f.ws.Ref, retentionEntry()); !errors.Is(delErr, errManualLockRead) {
+		t.Fatalf("Delete = %v, want the read error", delErr)
+	}
+
+	if _, getErr := f.svc.GetByID(t.Context(), f.ws.ID); getErr != nil {
+		t.Errorf("workspace after the refused delete: %v", getErr)
+	}
+}

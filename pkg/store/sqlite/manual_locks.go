@@ -144,7 +144,13 @@ func (s *Store) CoveringLock(ctx context.Context, unit collection.UnitRef) (manu
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row, err := s.queries.GetCoveringManualLocks(ctx, db.GetCoveringManualLocksParams{
+	return coveringLock(ctx, s.queries, unit)
+}
+
+// coveringLock is CoveringLock in the transaction of q. A restore reads the lock
+// of the unit it has just brought back, in its own transaction.
+func coveringLock(ctx context.Context, q *db.Queries, unit collection.UnitRef) (manuallock.Lock, error) {
+	row, err := q.GetCoveringManualLocks(ctx, db.GetCoveringManualLocksParams{
 		Namespace: unit.Namespace.String(),
 		Tool:      unit.Tool,
 		Name:      unit.Name,

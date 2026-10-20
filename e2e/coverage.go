@@ -1207,6 +1207,7 @@ func CoverageAllowlist() []AllowEntry {
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
+		manualLockAllowEntries(),
 	)
 }
 
@@ -2168,6 +2169,40 @@ func reviewAllowEntries() []AllowEntry {
 		out = append(out, AllowEntry{
 			Method: http.MethodGet, Path: path, CoveringTest: reviewCoveringTest, Reason: reason,
 		})
+	}
+
+	return out
+}
+
+// manualLockAllowEntries returns the lock routes of a collection and of a
+// namespace. The real CLIs never call them: the steps of TestManualLockStopsBothTools
+// and TestManualLockOnNamespaceStopsTheChangeRoutes take, read, remove and
+// force-remove each lock through the API, and drive both CLIs against it. Those
+// tests write no matrix report, so the coverage check must not depend on the
+// order in which they finish.
+func manualLockAllowEntries() []AllowEntry {
+	// routesPerLock counts the put, get, delete and force-unlock routes of one object.
+	const routesPerLock = 4
+
+	const prefix = "/api/dustpan/v1/namespaces/{namespace}"
+
+	cases := []struct{ path, test string }{
+		{prefix + "/collections/{collection}/lock", "TestManualLockStopsBothTools"},
+		{prefix + "/lock", "TestManualLockOnNamespaceStopsTheChangeRoutes"},
+	}
+
+	out := make([]AllowEntry, 0, routesPerLock*len(cases))
+
+	for _, c := range cases {
+		reason := "Console and client route: no CLI takes a manual lock. The harness steps of " +
+			c.test + " take, read and end the lock through the API and run both CLIs against it."
+
+		out = append(out,
+			AllowEntry{Method: http.MethodPut, Path: c.path, CoveringTest: c.test, Reason: reason},
+			AllowEntry{Method: http.MethodGet, Path: c.path, CoveringTest: c.test, Reason: reason},
+			AllowEntry{Method: http.MethodDelete, Path: c.path, CoveringTest: c.test, Reason: reason},
+			AllowEntry{Method: http.MethodPost, Path: c.path + "/force-unlock", CoveringTest: c.test, Reason: reason},
+		)
 	}
 
 	return out

@@ -314,8 +314,6 @@ func (h *Handler) moveUnit(
 	default:
 	}
 
-	fromName := from.Name
-
 	toID, authErr := h.authorizeMove(ctx, p, obj, from, to)
 	if authErr != nil {
 		h.writeError(ctx, w, authErr)
@@ -323,7 +321,7 @@ func (h *Handler) moveUnit(
 		return
 	}
 
-	version := "from=" + nameOrNone(fromName) + ";to=" + to.Name.String()
+	version := "from=" + nameOrNone(from.Name) + ";to=" + to.Name.String()
 
 	held, lockErr := h.checkMoveOutOfLock(ctx, p, obj, unit, from)
 	if lockErr != nil {
@@ -336,8 +334,11 @@ func (h *Handler) moveUnit(
 		version += ";manual-lock=" + held
 	}
 
-	err = h.collections.SetUnit(ctx, collection.Move{Unit: unit, From: fromName, To: to, ToID: toID},
-		auditEntry(r, p, obj, identity.ActionUnitMove, version))
+	err = h.collections.SetUnit(
+		ctx,
+		collection.Move{Unit: unit, From: from.Name, To: to, ToID: toID, EndsLock: held != ""},
+		auditEntry(r, p, obj, identity.ActionUnitMove, version),
+	)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -347,7 +348,7 @@ func (h *Handler) moveUnit(
 	h.writeJSON(ctx, w, http.StatusOK, moveResponse{
 		Unit:               unit.String(),
 		Collection:         to.Name.String(),
-		PreviousCollection: fromName.String(),
+		PreviousCollection: from.Name.String(),
 	})
 }
 
