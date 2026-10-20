@@ -1957,6 +1957,15 @@ func (s *fakeBackupStore) StartBackup(ctx context.Context, r backup.Record, star
 		return errFakeClosed
 	}
 
+	// The check of the adapters: the request must belong to this backup.
+	if err := start.Validate(); err != nil {
+		return fmt.Errorf("start backup operation: %w", err)
+	}
+
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return fmt.Errorf("start backup %s: operation %q: %w", r.ID, start.Key, durable.ErrKeyConflict)
+	}
+
 	hooks := durabletest.Hooks{Before: nil, After: func() error { return s.createBackupLocked(r) }}
 
 	if _, err := s.mem.Harness().Domain.StartWith(ctx, start, "", hooks); err != nil {
