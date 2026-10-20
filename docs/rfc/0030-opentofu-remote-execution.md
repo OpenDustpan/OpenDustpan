@@ -34,4 +34,7 @@ follow-up to RFC 1.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 254](../adr/0254-speculative-remote-plans-for-opentofu-first.md)
+on 2026-10-20: speculative plans on runners come first. The apply, the
+saved cloud plan, the `remote` backend and the map of runner labels to
+agent pools stay open (ADR 254 decision 10).
