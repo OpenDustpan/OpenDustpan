@@ -1,6 +1,6 @@
 # 267. Run triggers: three kinds, a plan only, started through the job service
 
-Status: accepted · 2026-10-20. Records decisions 24.1, 24.3 and 6.1 of the owner, and the scope and the acceptance criteria that the owner wrote in issue 909. Decisions 9 to 23 are decided by the product manager under the owner's delegation of 20 October 2026. Accepts RFC 24 and answers its questions 1 to 12. Uses ADR 153 decisions 2 and 5, ADR 213 decision 1, ADR 258 decision 3 and ADR 263 decisions 14 and 15
+Status: accepted · 2026-10-20. Records decisions 24.1, 24.3 and 6.1 of the owner, and the scope and the acceptance criteria that the owner wrote in issue 909. Decisions 9 to 23 are decided by the product manager under the owner's delegation of 20 October 2026. Accepts RFC 24 and answers its questions 1 to 12. Uses ADR 153 decisions 2 and 5, ADR 213 decision 1, ADR 258 decision 3 and ADR 263 decisions 14 and 15. Decision 1 of ADR 213 extended by decision 14
 
 ## Context
 
@@ -142,7 +142,7 @@ durable schedule and one cron parser.
 - This change adds the ports (`pkg/trigger`), their conformance suite
   (`pkg/trigger/triggertest`) and the cron parser (`pkg/cron`). It adds no
   adapter, no SQL and no route.
-- RFC 24 is accepted. Its slices stay in the RFC.
+- This ADR accepts RFC 24. Its slices stay in the RFC.
 - Decision 9 keeps the first slices free of an apply that no person approves.
   A later decision can allow an apply from a trigger. It must keep the gate of
   decision 3.
