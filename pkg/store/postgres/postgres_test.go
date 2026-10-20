@@ -188,6 +188,31 @@ func TestSignInFailuresConformance(t *testing.T) {
 	})
 }
 
+// TestAuditCheckConformance runs the shared suite of the audit chain check
+// state: both handles open one schema, as two servers open one database.
+func TestAuditCheckConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunAuditCheck(t, func(t *testing.T) storetest.AuditCheckHarness {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return storetest.AuditCheckHarness{
+			Open: func(t *testing.T) audit.CheckStore {
+				t.Helper()
+
+				return openURL(t, schemaURL)
+			},
+		}
+	})
+}
+
 // TestSessionFreshConformance runs the session cases that change a policy
 // on one handle and use a session on the other: two pools on one schema.
 func TestSessionFreshConformance(t *testing.T) {

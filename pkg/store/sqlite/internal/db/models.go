@@ -33,6 +33,17 @@ type AccessTokenPolicy struct {
 	UpdatedAtMs       int64
 }
 
+type AuditChainCheck struct {
+	ID           int64
+	CheckedAtMs  int64
+	Invalid      int64
+	Marked       int64
+	MarkEpoch    int64
+	MarkScope    string
+	MarkSequence int64
+	MarkedAtMs   int64
+}
+
 type AuditChainState struct {
 	ID                 int64
 	State              string

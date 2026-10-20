@@ -371,6 +371,13 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{"source", "window_end_ms"},
 		},
 		{
+			table: backup.TableAuditChainCheck,
+			columns: []string{
+				"id", "checked_at_ms", "invalid", "marked", "mark_epoch", "mark_scope", "mark_sequence", "marked_at_ms",
+			},
+			orderBy: []string{"id"},
+		},
+		{
 			table:   backup.TableBackups,
 			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},

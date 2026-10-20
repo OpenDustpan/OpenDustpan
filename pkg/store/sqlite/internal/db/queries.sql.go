@@ -3428,6 +3428,38 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 	return i, err
 }
 
+const getAuditChainCheck = `-- name: GetAuditChainCheck :one
+SELECT checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms
+FROM audit_chain_check WHERE id = 1
+`
+
+type GetAuditChainCheckRow struct {
+	CheckedAtMs  int64
+	Invalid      int64
+	Marked       int64
+	MarkEpoch    int64
+	MarkScope    string
+	MarkSequence int64
+	MarkedAtMs   int64
+}
+
+// The stored result of the scheduled audit chain check and the mark of a
+// checkpoint mismatch. No row means no check ran and no mark stands.
+func (q *Queries) GetAuditChainCheck(ctx context.Context) (GetAuditChainCheckRow, error) {
+	row := q.db.QueryRowContext(ctx, getAuditChainCheck)
+	var i GetAuditChainCheckRow
+	err := row.Scan(
+		&i.CheckedAtMs,
+		&i.Invalid,
+		&i.Marked,
+		&i.MarkEpoch,
+		&i.MarkScope,
+		&i.MarkSequence,
+		&i.MarkedAtMs,
+	)
+	return i, err
+}
+
 const getAuditChainState = `-- name: GetAuditChainState :one
 SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1
 `
@@ -11742,6 +11774,51 @@ func (q *Queries) RunningUpdateAt(ctx context.Context, arg RunningUpdateAtParams
 	var version int64
 	err := row.Scan(&version)
 	return version, err
+}
+
+const saveAuditChainCheckMark = `-- name: SaveAuditChainCheckMark :exec
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms)
+VALUES (1, 0, 0, 1, ?1, ?2, ?3, ?4)
+ON CONFLICT (id) DO UPDATE SET marked = 1, mark_epoch = excluded.mark_epoch, mark_scope = excluded.mark_scope,
+    mark_sequence = excluded.mark_sequence, marked_at_ms = excluded.marked_at_ms
+WHERE audit_chain_check.marked = 0 OR audit_chain_check.mark_epoch < excluded.mark_epoch
+`
+
+type SaveAuditChainCheckMarkParams struct {
+	Epoch    int64
+	Scope    string
+	Sequence int64
+	NowMs    int64
+}
+
+// Stores the mark of a checkpoint mismatch. The first mark of an epoch
+// stays, and a mark of a newer epoch replaces the older one.
+func (q *Queries) SaveAuditChainCheckMark(ctx context.Context, arg SaveAuditChainCheckMarkParams) error {
+	_, err := q.db.ExecContext(ctx, saveAuditChainCheckMark,
+		arg.Epoch,
+		arg.Scope,
+		arg.Sequence,
+		arg.NowMs,
+	)
+	return err
+}
+
+const saveAuditChainCheckResult = `-- name: SaveAuditChainCheckResult :exec
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms)
+VALUES (1, ?1, ?2, 0, 0, '', 0, 0)
+ON CONFLICT (id) DO UPDATE SET checked_at_ms = excluded.checked_at_ms, invalid = excluded.invalid
+`
+
+type SaveAuditChainCheckResultParams struct {
+	NowMs   int64
+	Invalid int64
+}
+
+// Stores the count of scopes that did not match, with the time of the clock
+// of the store. It keeps the mark.
+func (q *Queries) SaveAuditChainCheckResult(ctx context.Context, arg SaveAuditChainCheckResultParams) error {
+	_, err := q.db.ExecContext(ctx, saveAuditChainCheckResult, arg.NowMs, arg.Invalid)
+	return err
 }
 
 const saveSensitiveMarks = `-- name: SaveSensitiveMarks :execrows

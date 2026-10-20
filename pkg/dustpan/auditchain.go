@@ -27,6 +27,10 @@ import (
 // auditChainCheckInterval is the time between two scheduled chain checks.
 const auditChainCheckInterval = time.Hour
 
+// auditChainReadTimeout bounds the read of the stored check result when a
+// scrape asks for dustpan_audit_chain_invalid.
+const auditChainReadTimeout = 2 * time.Second
+
 // auditChainDrainTimeout bounds the startup drain of left migration
 // operations: a long log or a stuck database call delays startup by at
 // most this time, then the background runner continues the migration.
@@ -52,11 +56,22 @@ const auditChainStep = "migrate"
 // audit.ChainOn, the default, or audit.ChainOff. The server reads it once at
 // start. When it differs from the state that the database keeps, the server
 // starts in maintenance mode, and a person approves the change through the
-// installation API, which migrates the log. The server checks the chain of
-// every scope at start and every hour, and sets
-// dustpan_audit_chain_invalid.
+// installation API, which migrates the log. One instance checks the chain of
+// every scope at start and every hour, and stores the result. Each instance
+// exports it as dustpan_audit_chain_invalid.
 func WithAuditChain(setting audit.ChainSetting) Option {
 	return func(o *settings) { o.auditChain = setting }
+}
+
+// WithAuditChainCheckInterval sets the time between two audit chain checks.
+// The default is one hour. One instance runs each check. A value of zero or
+// less keeps the default.
+func WithAuditChainCheckInterval(every time.Duration) Option {
+	return func(o *settings) {
+		if every > 0 {
+			o.auditChainInterval = every
+		}
+	}
 }
 
 // WithAuditCheckpoints turns signed checkpoints of the audit log on. They
@@ -89,6 +104,10 @@ type auditChain struct {
 	// checkpoints signs and checks the signed checkpoints of the log, or
 	// nil while they are off.
 	checkpoints *audit.Checkpoints
+	// checks keeps the result of the last scheduled check and the mark of a
+	// checkpoint mismatch, or is nil when the store keeps none. Every
+	// instance reads the result at scrape time.
+	checks audit.CheckStore
 	// maint, restoreRunning and freshness are set after the services that
 	// need the chain exist. A nil freshness asks for no MFA step: built-in
 	// MFA does not exist yet.
@@ -175,7 +194,13 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		principals = p
 	}
 
-	checkpoints, err := newCheckpoints(cfg)
+	var checks audit.CheckStore
+
+	if c, ok := cfg.namespaceStore.(audit.CheckStore); ok {
+		checks = c
+	}
+
+	checkpoints, err := newCheckpoints(cfg, checks)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +216,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		now:               cfg.now,
 		observed:          observed,
 		checkpoints:       checkpoints,
+		checks:            checks,
 		maint:             nil,
 		restoreRunning:    nil,
 		freshness:         nil,
@@ -223,6 +249,10 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 	}
 
 	chain.runner = runner
+
+	if checks != nil && observed != nil {
+		observed.SetAuditChainInvalidSource(chain.storedInvalid)
+	}
 
 	return chain, nil
 }
@@ -316,7 +346,7 @@ func auditChainOwner(cfg *settings) string {
 // newCheckpoints answers the signed checkpoints of cfg, or nil while they
 // are off. They need a blob store and a store that reads one entry at a
 // sequence.
-func newCheckpoints(cfg *settings) (*audit.Checkpoints, error) {
+func newCheckpoints(cfg *settings, checks audit.CheckStore) (*audit.Checkpoints, error) {
 	if cfg.auditSigner == nil {
 		return nil, nil //nolint:nilnil // Nil without an error means signed checkpoints are off.
 	}
@@ -334,6 +364,7 @@ func newCheckpoints(cfg *settings) (*audit.Checkpoints, error) {
 		Blobs:   cfg.blobStore,
 		Entries: reader,
 		Signer:  cfg.auditSigner,
+		Marks:   checks,
 		Now:     cfg.now,
 	}), nil
 }
@@ -1174,13 +1205,16 @@ func (c *auditChain) scopes(ctx context.Context) ([]namespace.Name, error) {
 	return append(scopes, audit.ServerScope), nil
 }
 
-// startCheck checks the chain of every scope now and then every hour until
-// ctx is done. The returned function waits until the check loop stopped.
-func (c *auditChain) startCheck(ctx context.Context) func() {
+// startCheckTicker checks the chain of every scope now and then every hour
+// until ctx is done. The returned function waits until the check loop
+// stopped. A server with a durable store runs the check as the schedule
+// audit-chain-check and never calls it. A server without one has no
+// schedule table, so each instance runs its own loop, as for the other jobs.
+func (c *auditChain) startCheckTicker(ctx context.Context, every time.Duration) func() {
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		ticker := time.NewTicker(auditChainCheckInterval)
+		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 
 		for {
@@ -1360,10 +1394,47 @@ func (c *auditChain) reportCheck(ctx context.Context, invalid int, err error) {
 		}
 	}
 
+	if err == nil || invalid > 0 {
+		c.storeResult(ctx, invalid)
+	}
+
 	if invalid > 0 {
 		c.logger.ErrorContext(ctx, "audit chain check found scopes that do not match",
 			slog.Int("scopes", invalid))
 	}
+}
+
+// storeResult stores invalid as the result of the last check, so every
+// instance exports it. A failed write logs a warning: the instance that
+// reads the row then exports the result of an earlier check, and the next
+// check writes it again.
+func (c *auditChain) storeResult(ctx context.Context, invalid int) {
+	if c.checks == nil {
+		return
+	}
+
+	if err := c.checks.SaveCheckResult(ctx, invalid); err != nil && ctx.Err() == nil {
+		c.logger.WarnContext(ctx, "audit chain check: store the result", slog.String("error", err.Error()))
+	}
+}
+
+// storedInvalid answers the count of scopes that did not match in the last
+// stored result, for dustpan_audit_chain_invalid. It fails closed: a row that
+// cannot be read counts as one scope that does not match, and the read logs a
+// warning, so a database fault never reads as a good chain.
+func (c *auditChain) storedInvalid() int {
+	ctx, cancel := context.WithTimeout(context.Background(), auditChainReadTimeout)
+	defer cancel()
+
+	state, err := c.checks.CheckState(ctx)
+	if err != nil {
+		c.logger.WarnContext(ctx, "audit chain check: read the stored result; export it as invalid",
+			slog.String("error", err.Error()))
+
+		return 1
+	}
+
+	return state.Invalid
 }
 
 // bindAuditChain gives chain the services that are built after it: the
@@ -1462,14 +1533,31 @@ func (s *Server) startUpAuditChain(ctx context.Context) error {
 	return s.chain.startUp(ctx)
 }
 
-// startAuditChain starts the scheduled check and the migration loop of the
-// chain until ctx is done. The returned function waits until both stopped.
+// auditChainPeriod answers the period of the audit chain check: the
+// configured one, or an hour when none is set.
+func (s *Server) auditChainPeriod() time.Duration {
+	if s.auditChainEvery > 0 {
+		return s.auditChainEvery
+	}
+
+	return auditChainCheckInterval
+}
+
+// startAuditChain starts the check loop, when the server has no durable store
+// for the schedule, and the migration loop of the chain until ctx is done. The returned function waits until both stopped.
 func (s *Server) startAuditChain(ctx context.Context) func() {
 	if s.chain == nil {
 		return func() {}
 	}
 
-	waitCheck := s.chain.startCheck(ctx)
+	waitCheck := func() {}
+
+	// With a durable store the schedule audit-chain-check runs the check on
+	// one instance for each tick.
+	if s.durable == nil {
+		waitCheck = s.chain.startCheckTicker(ctx, s.auditChainPeriod())
+	}
+
 	waitMigrations := s.chain.startMigrations(ctx)
 
 	return func() {

@@ -33,6 +33,7 @@ const (
 	deletedScheduleName     = "deleted-sweep"
 	signInPruneScheduleName = "signin-prune"
 	idempotencyScheduleName = "idempotency-sweep"
+	auditChainScheduleName  = "audit-chain-check"
 
 	jobScheduleVersion = 1
 )
@@ -46,6 +47,7 @@ const (
 	kindDeleted     durable.Kind = deletedScheduleName
 	kindSignInPrune durable.Kind = signInPruneScheduleName
 	kindIdempotency durable.Kind = idempotencyScheduleName
+	kindAuditChain  durable.Kind = auditChainScheduleName
 )
 
 // durableOwner returns the owner name of the job runner: the instance ID
@@ -88,6 +90,13 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		specs = append(specs, durable.ScheduleSpec{
 			Name: idempotencyScheduleName, Kind: kindIdempotency, Version: jobScheduleVersion,
 			Interval: s.idempotencyEvery, Input: nil,
+		})
+	}
+
+	if s.chain != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: auditChainScheduleName, Kind: kindAuditChain, Version: jobScheduleVersion,
+			Interval: s.auditChainPeriod(), Input: nil,
 		})
 	}
 
@@ -152,6 +161,21 @@ func (s *Server) jobKinds() []durable.KindSpec {
 			Steps: []durable.Step{
 				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
 					s.sweepIdempotencyOnce(ctx)
+
+					return nil, nil
+				}},
+			},
+		})
+	}
+
+	if s.chain != nil {
+		kinds = append(kinds, durable.KindSpec{
+			Kind:       kindAuditChain,
+			Version:    jobScheduleVersion,
+			MinVersion: jobScheduleVersion,
+			Steps: []durable.Step{
+				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+					s.chain.check(ctx)
 
 					return nil, nil
 				}},

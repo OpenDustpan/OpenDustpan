@@ -458,6 +458,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.durable_operations`,
 	`DELETE FROM main.durable_schedules`,
 	`DELETE FROM main.sign_in_failures`,
+	`DELETE FROM main.audit_chain_check`,
 	`DELETE FROM main.backups`,
 	`DELETE FROM main.restores`,
 	`DELETE FROM main.installation`,
@@ -473,6 +474,8 @@ var keepControlStatements = []string{
 		`SELECT ` + durableScheduleColumns + ` FROM live.durable_schedules`,
 	`INSERT INTO main.sign_in_failures (` + signInFailureColumns + `) ` +
 		`SELECT ` + signInFailureColumns + ` FROM live.sign_in_failures`,
+	`INSERT INTO main.audit_chain_check (` + auditChainCheckColumns + `) ` +
+		`SELECT ` + auditChainCheckColumns + ` FROM live.audit_chain_check`,
 	`INSERT INTO main.backups (` + backupColumns + `) ` +
 		`SELECT ` + backupColumns + ` FROM live.backups`,
 	`INSERT INTO main.restores (` + restoreColumns + `) ` +
@@ -501,6 +504,10 @@ const (
 // signInFailureColumns lists every column of sign_in_failures, for the copy
 // of the control tables.
 const signInFailureColumns = `source, window_end_ms, count`
+
+// auditChainCheckColumns lists every column of audit_chain_check, for the
+// copy of the control tables.
+const auditChainCheckColumns = `id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms`
 
 // copyControlTables runs keepControlStatements in tx, which holds the live
 // database attached as live.

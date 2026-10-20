@@ -89,6 +89,12 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		t.Fatalf("insert sign-in failure: %v", execErr)
 	}
 
+	insertCheck := "INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope," +
+		" mark_sequence, marked_at_ms) VALUES (1, $1, $1, true, $1, $2, $1, $1)"
+	if _, execErr := conn.Exec(ctx, insertCheck, token, key); execErr != nil {
+		t.Fatalf("insert audit chain check: %v", execErr)
+	}
+
 	if _, execErr := conn.Exec(ctx, "RESET search_path"); execErr != nil {
 		t.Fatalf("reset search path: %v", execErr)
 	}
@@ -147,6 +153,32 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 	checkKeptSchedules(t, conn, ident)
 
 	checkKeptSignInFailures(t, conn, ident)
+
+	checkKeptAuditChainCheck(t, conn, ident)
+}
+
+// checkKeptAuditChainCheck fails t unless the schema ident holds only the
+// live audit chain check row, with the mark that it had before the swap: a
+// restore must not clear the mark of a checkpoint mismatch.
+func checkKeptAuditChainCheck(t *testing.T, conn *pgx.Conn, ident string) {
+	t.Helper()
+
+	var (
+		scope string
+		epoch int64
+		seq   int64
+		rows  int
+	)
+
+	read := "SELECT mark_scope, mark_epoch, mark_sequence, (SELECT count(*) FROM " + ident +
+		".audit_chain_check) FROM " + ident + ".audit_chain_check WHERE marked"
+	if scanErr := conn.QueryRow(t.Context(), read).Scan(&scope, &epoch, &seq, &rows); scanErr != nil {
+		t.Fatalf("read restored audit chain check: %v", scanErr)
+	}
+
+	if scope != "live" || epoch != 5 || seq != 5 || rows != 1 {
+		t.Fatalf("restored audit chain check: scope %q epoch %d sequence %d rows %d", scope, epoch, seq, rows)
+	}
 }
 
 // checkKeptSchedules fails t unless the schema ident holds only the live

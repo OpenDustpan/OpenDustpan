@@ -20,7 +20,7 @@ import (
 // TestAuditCheckpointsAreWrittenAndChecked proves that with the chain and
 // checkpoints on, the check at start signs the last hash of each scope into
 // the blob store. A start with another key finds that the checkpoint does
-// not match.
+// not match, and a later start still finds it until a new epoch starts.
 func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 	t.Parallel()
 
@@ -45,16 +45,27 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 	waitForInvalidScopes(t, other)
 	other.stop()
 
-	// With the first key as a verify key, the checkpoint matches again.
+	// The mismatch is stored with the epoch, so a start with the first key as
+	// a verify key still finds it: only a new epoch ends it.
 	rotated := newTestSigner(t, 2)
 	if err := rotated.AddVerifyKey(newTestSigner(t, 1).PublicKey()); err != nil {
 		t.Fatalf("add verify key: %v", err)
 	}
 
-	rotatedSrv := runCheckpointServer(t, st, blobs,
+	stillMarked := runCheckpointServer(t, st, blobs,
 		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(rotated))
-	waitForMetricLine(t, rotatedSrv.srv, "dustpan_audit_chain_invalid 0")
-	rotatedSrv.stop()
+	waitForInvalidScopes(t, stillMarked)
+	stillMarked.stop()
+
+	epochs := audit.NewCheckpoints(audit.CheckpointsConfig{Blobs: blobs, Signer: rotated, Marks: nil, Entries: nil, Now: nil})
+	if _, err := epochs.NewEpoch(t.Context(), time.Now()); err != nil {
+		t.Fatalf("new epoch: %v", err)
+	}
+
+	newEpochSrv := runCheckpointServer(t, st, blobs,
+		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(rotated))
+	waitForMetricLine(t, newEpochSrv.srv, "dustpan_audit_chain_invalid 0")
+	newEpochSrv.stop()
 }
 
 // TestAuditCheckpointsNeedTheChain proves that checkpoints with the chain

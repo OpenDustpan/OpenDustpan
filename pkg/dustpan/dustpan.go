@@ -191,6 +191,9 @@ type settings struct {
 	disablePulumiJournaling bool
 	// auditChain is the hash chain setting. See WithAuditChain.
 	auditChain audit.ChainSetting
+	// auditChainInterval is the time between two audit chain checks. See
+	// WithAuditChainCheckInterval.
+	auditChainInterval time.Duration
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
 	// oidcProviders are the OpenID Connect providers of the console
@@ -582,6 +585,10 @@ type Server struct {
 	// schedule.
 	idempotency      idempotency.Store
 	idempotencyEvery time.Duration
+	// auditChainEvery is the period of the audit chain check: the schedule
+	// audit-chain-check, or the loop of each instance without a durable
+	// store.
+	auditChainEvery time.Duration
 	// signInProviders binds each provider of the console sign-in to its
 	// issuer at the start, or is the zero value with no console sign-in.
 	signInProviders providerBinding
@@ -679,6 +686,7 @@ func defaultSettings() *settings {
 		devSignIn:               nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainOn,
+		auditChainInterval:      auditChainCheckInterval,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
 		instanceID:              "",
@@ -951,8 +959,9 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		durableOwner:     durableOwner(cfg),
 		inactivityEvery:  sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components,
-		watch:      cfg.watch,
+		auditChainEvery: cfg.auditChainInterval,
+		components:      cfg.components,
+		watch:           cfg.watch,
 	}
 
 	cfg.watch.attach(srv, observed.Registry())
