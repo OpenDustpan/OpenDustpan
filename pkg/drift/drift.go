@@ -1,15 +1,15 @@
 // Package drift is the tool-neutral model of drift detection: the result of
 // one drift check, the status that follows from it, the schedule setting that
-// turns the checks on, and the ports that store them (RFC 25).
+// turns the checks on, and the ports that store them.
 //
 // A drift check is a job of the operation refresh with one phase, plan. It
 // changes nothing. The runner reduces its plan to a list of resource
 // addresses, and this package keeps that list. The package never holds an
 // attribute value and never reads the state of a tool, so it stays apart from
-// the models of the tools (ADR 12, ADR 13).
+// the models of the tools.
 //
-// The design is in RFC 25 and the decisions are in ADR 263. The status
-// values and their wire names are proposed there and not final.
+// The status values are final. Their wire spelling is the work of the unit
+// status vocabulary and can change.
 package drift
 
 import (
@@ -54,9 +54,9 @@ const (
 	MaxAddressBytes = 1024
 )
 
-// Status is the drift status of a unit. The values are proposed in RFC 25
-// question 3 and follow the status words that the owner decided for the unit
-// status vocabulary. The wire spelling is not final.
+// Status is the drift status of a unit. The values follow the status words
+// that the owner decided for the unit status vocabulary. The wire spelling is
+// not final.
 type Status string
 
 // The drift statuses.
@@ -70,7 +70,7 @@ const (
 	StatusUnknown Status = "unknown"
 )
 
-// Statuses returns the drift statuses, in the order of the table in RFC 25.
+// Statuses returns the drift statuses, in the order of the design table.
 // Each call returns a new slice.
 func Statuses() []Status {
 	return []Status{StatusDrifted, StatusInSync, StatusUnknown}
@@ -82,7 +82,7 @@ func (s Status) Valid() bool {
 }
 
 // Kind is the kind of difference at one address. A resource that no state
-// holds is not drift. It is an unmanaged resource (ADR 163).
+// holds is not drift. It is an unmanaged resource.
 type Kind string
 
 // The kinds of difference.
@@ -115,6 +115,9 @@ type Resource struct {
 // Result is what one finished drift check reports. A runner produces it, so
 // the store treats it as untrusted input and calls Validate first.
 type Result struct {
+	// CheckedAt is the end of the plan phase of the job. The server sets it
+	// from the job and never takes it from the runner, because a runner is not
+	// trusted. The store refuses a time outside the run of the job.
 	CheckedAt time.Time
 	Unit      graph.Unit
 	JobID     job.ID
@@ -153,8 +156,11 @@ func (r Result) Validate() error {
 		return fmt.Errorf("%w: %d resources, the limit is %d", ErrInvalid, len(r.Resources), MaxResources)
 	}
 
-	if r.Truncated && len(r.Resources) == 0 {
-		return fmt.Errorf("%w: a result with no resource cannot be truncated", ErrInvalid)
+	// A runner cuts the list only at the limit, so a shorter list cannot be
+	// truncated.
+	if r.Truncated && len(r.Resources) != MaxResources {
+		return fmt.Errorf("%w: a truncated result lists %d resources, not %d",
+			ErrInvalid, len(r.Resources), MaxResources)
 	}
 
 	seen := make(map[string]bool, len(r.Resources))
@@ -222,7 +228,7 @@ type Latest struct {
 }
 
 // ResourceCount returns the number of listed addresses. It is the field
-// resources of the fact group drift (ADR 226 decision 4).
+// resources of the fact group drift of the gate model.
 func (l Latest) ResourceCount() int {
 	return len(l.Resources)
 }
@@ -234,8 +240,8 @@ func (l Latest) Age(now time.Time) time.Duration {
 }
 
 // Transition is the change of the drift status that a stored result made. The
-// store returns it from Record, so the caller can send the notification in
-// the same transaction (ADR 145 decision 7).
+// store returns it from Record. The store also appends the notification of
+// the change in the transaction of Record, so the caller sends nothing.
 type Transition struct {
 	At    time.Time
 	Unit  graph.Unit
@@ -250,13 +256,13 @@ func (t Transition) Changed() bool {
 }
 
 // BecameDrifted reports whether the unit was not drifted and now is. It is the
-// condition of the notification type unit.drifted (RFC 25).
+// condition of the notification type unit.drifted.
 func (t Transition) BecameDrifted() bool {
 	return t.To == StatusDrifted && t.From != StatusDrifted
 }
 
 // Cleared reports whether a clean check ended a drift. It is the condition of
-// the notification type unit.drift-cleared (RFC 25).
+// the notification type unit.drift-cleared.
 func (t Transition) Cleared() bool {
 	return t.From == StatusDrifted && t.To == StatusInSync
 }

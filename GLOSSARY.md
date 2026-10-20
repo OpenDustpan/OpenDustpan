@@ -655,12 +655,12 @@ A difference between the state of a unit and the real resources that the state n
 _Avoid_: Out-of-band change (except to name a cause), configuration drift
 
 **Drift check**:
-A job with the operation `refresh` and one phase, `plan`, that finds drift (ADR 263). It changes no resource and writes no state version. OpenTofu runs `plan -refresh-only -detailed-exitcode` and the Pulumi CLI runs `refresh --preview-only`. It starts on its own only when a drift schedule is on, and a person can start it at any time. Remediation is a separate job (ADR 258).
+A job with the operation `refresh` and one phase, `plan`, that finds drift (ADR 263). It changes no resource and writes no state version. OpenTofu runs a refresh-only plan and the Pulumi CLI runs a refresh preview. It starts on its own only when a drift schedule is on, and a person can start it at any time. Remediation is a separate job (ADR 258).
 _Avoid_: Drift run (older ADRs only), drift scan (a scan is a Sweep), health assessment
 _Copy says_: "drift check" for both tools. On the page of one tool, that tool's own words: "refresh-only plan" for OpenTofu and "refresh preview" for the Pulumi CLI.
 
 **Drift result**:
-What one finished drift check reports: the unit, the job and the time. It also lists the address of each resource that differs, with the kind of difference: `changed` or `deleted`. It holds no attribute value. A unit keeps its latest drift result. The **drift status** follows from it: `drifted`, `in-sync` or `unknown`. The status `drifted` is one badge of the unit among others.
+What one finished drift check reports: the unit, the job and the time. It also lists the address of each resource that differs. It holds no attribute value. A unit keeps its latest drift result. The **drift status** follows from it: `drifted`, `in-sync` or `unknown`. The status `drifted` is one badge of the unit among others.
 _Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
 
 **Drift schedule**:

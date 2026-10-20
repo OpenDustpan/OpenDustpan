@@ -19,8 +19,7 @@ const cronFields = 5
 // a scope. It is the bound of an ID in the unit graph.
 const maxScopeNameLength = 100
 
-// Preset is a frequency from the fixed list. The list is proposed in RFC 25
-// question 8 and is not final.
+// Preset is a frequency from the fixed list.
 type Preset string
 
 // The frequency presets.
@@ -47,8 +46,7 @@ type Frequency struct {
 // Validate reports whether f is a valid frequency. It returns an error that
 // wraps ErrInvalid. For a custom expression it checks the form only: five
 // fields of digits and the characters "*", "/", "," and "-". The schedule
-// slice adds the parser and the minimum interval of one hour (RFC 25
-// question 8), after the decision on a cron dependency.
+// slice adds the parser and the minimum interval of one hour.
 func (f Frequency) Validate() error {
 	switch {
 	case f.Preset != "" && f.Cron != "":
@@ -86,7 +84,7 @@ func validateCron(expr string) error {
 }
 
 // Policy is the drift schedule setting of one scope. The zero value is off:
-// without a setting, no drift check starts on its own (ADR 263 decision 5).
+// without a setting, no drift check starts on its own.
 // A disabled policy may keep a frequency, so a team can switch checks off and
 // on again.
 type Policy struct {

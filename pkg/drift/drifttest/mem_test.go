@@ -22,6 +22,8 @@ const (
 	kindDriftCheck jobKind = iota
 	kindRunning
 	kindPlain
+	kindFailed
+	kindCanceled
 )
 
 type knownJob struct {
@@ -74,9 +76,8 @@ func (m *mem) Record(_ context.Context, r drift.Result, fence namespace.Fence) (
 		return none, err
 	}
 
-	j, ok := m.jobs[r.JobID]
-	if !ok || j.unit != r.Unit || j.kind != kindDriftCheck {
-		return none, fmt.Errorf("job %s: %w", r.JobID, drift.ErrJobMismatch)
+	if err := m.checkJob(r); err != nil {
+		return none, err
 	}
 
 	prev, had := m.latest[r.Unit]
@@ -228,6 +229,20 @@ func (m *mem) EffectivePolicy(_ context.Context, unit graph.Unit, collection str
 	return drift.Resolve(get(drift.ScopeUnit, unit.ID), coll, get(drift.ScopeNamespace, "")), nil
 }
 
+// checkJob must run with m.mu held.
+func (m *mem) checkJob(r drift.Result) error {
+	j, ok := m.jobs[r.JobID]
+	if !ok || j.unit != r.Unit || j.kind != kindDriftCheck {
+		return fmt.Errorf("job %s: %w", r.JobID, drift.ErrJobMismatch)
+	}
+
+	if w := drifttest.JobWindow(); r.CheckedAt.Before(w.Start) || r.CheckedAt.After(w.End) {
+		return fmt.Errorf("job %s: checked outside the run of the job: %w", r.JobID, drift.ErrJobMismatch)
+	}
+
+	return nil
+}
+
 // mintJob makes a job of the given kind and returns its ID.
 func (m *mem) mintJob(unit graph.Unit, kind jobKind) job.ID {
 	m.mu.Lock()
@@ -274,6 +289,8 @@ func TestConformance(t *testing.T) {
 			Jobs: drifttest.Jobs{
 				DriftCheck: func(_ *testing.T, u graph.Unit) job.ID { return m.mintJob(u, kindDriftCheck) },
 				Running:    func(_ *testing.T, u graph.Unit) job.ID { return m.mintJob(u, kindRunning) },
+				Failed:     func(_ *testing.T, u graph.Unit) job.ID { return m.mintJob(u, kindFailed) },
+				Canceled:   func(_ *testing.T, u graph.Unit) job.ID { return m.mintJob(u, kindCanceled) },
 				Plain:      func(_ *testing.T, u graph.Unit) job.ID { return m.mintJob(u, kindPlain) },
 			},
 			Projection: func(_ *testing.T, u graph.Unit) drift.Status {

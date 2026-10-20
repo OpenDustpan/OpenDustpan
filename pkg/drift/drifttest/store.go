@@ -20,6 +20,7 @@ func storeCases() []suiteCase {
 		{"store: an older or equal result is stale", testRecordStale},
 		{"store: the same job twice is stale", testRecordSameJob},
 		{"store: a job that is not a finished drift check of the unit is refused", testRecordJobMismatch},
+		{"store: a result checked outside the run of its job is refused", testRecordOutsideJob},
 		{"store: a stale fence or the fence of another namespace refuses each write", testStoreFenced},
 		{"store: a delete removes the result and is idempotent", testStoreDelete},
 		{"store: a unit with no result is not found", testGetNotFound},
@@ -192,6 +193,8 @@ func testRecordJobMismatch(t *testing.T, h Harness) {
 		"a drift check of another unit":   h.Jobs.DriftCheck(t, other),
 		"a job that is not a drift check": h.Jobs.Plain(t, u),
 		"a drift check that did not end":  h.Jobs.Running(t, u),
+		"a failed drift check":            h.Jobs.Failed(t, u),
+		"a canceled drift check":          h.Jobs.Canceled(t, u),
 		"a job that does not exist":       "job-does-not-exist",
 	}
 
@@ -202,6 +205,38 @@ func testRecordJobMismatch(t *testing.T, h Harness) {
 
 	_, err := h.Store.GetLatest(t.Context(), u)
 	wantErr(t, "get after refused records", err, drift.ErrNotFound)
+}
+
+func testRecordOutsideJob(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	u := unit("acme", "wsp-1")
+	id := h.Jobs.DriftCheck(t, u)
+
+	// A runner sets the time of its own result. A time after the job ended
+	// would make every later result stale, so the store refuses it. The far
+	// future is the hostile case.
+	late := result(u, id, minuteLate, "a")
+	farFuture := result(u, id, 1, "a")
+	farFuture.CheckedAt = time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
+	early := result(u, id, -1, "a")
+
+	for name, r := range map[string]drift.Result{
+		"a result checked after its job ended": late,
+		"a result checked in the far future":   farFuture,
+		"a result checked before its job":      early,
+	} {
+		_, err := h.Store.Record(t.Context(), r, f)
+		wantErr(t, name, err, drift.ErrJobMismatch)
+	}
+
+	_, err := h.Store.GetLatest(t.Context(), u)
+	wantErr(t, "get after refused records", err, drift.ErrNotFound)
+
+	// The job is still usable with a time inside its run.
+	_, err = h.Store.Record(t.Context(), result(u, id, 1, "a"), f)
+	must(t, "record inside the run", err)
 }
 
 func testStoreFenced(t *testing.T, h Harness) {
@@ -323,13 +358,21 @@ func testNotification(t *testing.T, h Harness) {
 	f := h.Namespace(t, "acme")
 	u := unit("acme", "wsp-1")
 
-	_, err := h.Store.Record(t.Context(), result(u, h.Jobs.DriftCheck(t, u), 1, "a"), f)
+	first := h.Jobs.DriftCheck(t, u)
+
+	_, err := h.Store.Record(t.Context(), result(u, first, 1, "a"), f)
 	must(t, "first drifted record", err)
 
 	want := 1
 
-	if got := h.Notified(t, "acme"); len(got) != want {
+	got := h.Notified(t, "acme")
+	if len(got) != want {
 		t.Fatalf("notifications after a change into drifted = %v, want %d", got, want)
+	}
+
+	// The dedupe key holds the unit ID and the job ID.
+	if !strings.Contains(got[0], u.ID) || !strings.Contains(got[0], string(first)) {
+		t.Errorf("dedupe key = %q, want the unit ID %q and the job ID %q", got[0], u.ID, first)
 	}
 
 	_, err = h.Store.Record(t.Context(), result(u, h.Jobs.DriftCheck(t, u), minute2, "a", "b"), f)

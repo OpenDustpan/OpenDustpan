@@ -51,7 +51,7 @@ func changed(address string) drift.Resource {
 func TestStatuses(t *testing.T) {
 	t.Parallel()
 
-	// The wire values are stable strings (RFC 25 question 3).
+	// The wire values are stable strings.
 	want := []string{"drifted", "in-sync", "unknown"}
 
 	got := drift.Statuses()
@@ -127,7 +127,10 @@ func TestResultValidate(t *testing.T) {
 	}{
 		{"valid", valid(func(*drift.Result) {}), true},
 		{"valid with no resource", result(), true},
-		{"valid truncated", valid(func(r *drift.Result) { r.Truncated = true }), true},
+		{"valid truncated", valid(func(r *drift.Result) {
+			r.Truncated = true
+			r.Resources = many[:drift.MaxResources]
+		}), true},
 		{"unit with no namespace", valid(func(r *drift.Result) { r.Unit.Namespace = "" }), false},
 		{"unit with no tool", valid(func(r *drift.Result) { r.Unit.Tool = "" }), false},
 		{"unit with no ID", valid(func(r *drift.Result) { r.Unit.ID = "" }), false},
@@ -141,6 +144,7 @@ func TestResultValidate(t *testing.T) {
 		},
 		{"zero time", valid(func(r *drift.Result) { r.CheckedAt = time.Time{} }), false},
 		{"truncated with no resource", func() drift.Result { r := result(); r.Truncated = true; return r }(), false},
+		{"truncated below the limit", valid(func(r *drift.Result) { r.Truncated = true }), false},
 		{"too many resources", valid(func(r *drift.Result) { r.Resources = many }), false},
 		{"empty address", valid(func(r *drift.Result) { r.Resources = []drift.Resource{changed("")} }), false},
 		{"long address", valid(func(r *drift.Result) {

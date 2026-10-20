@@ -3,7 +3,7 @@
 //
 // The cases for Store and PolicyStore are complete and run on the memory
 // reference in this package's tests. The cases for Checker need a job service
-// and wait for the first slice of RFC 25. The cases for the inventory
+// and wait for the first slice of drift detection. The cases for the inventory
 // projection, the notification and the audit entry run when the harness gives
 // the hook that reads them.
 package drifttest
@@ -22,16 +22,32 @@ import (
 )
 
 // Jobs makes the jobs that Store.Record checks. Each function makes a job of
-// unit in the store of the adapter and returns its ID.
+// unit in the store of the adapter and returns its ID. Every job starts at the
+// start of JobWindow. A job that ended, ended at the end of JobWindow.
 type Jobs struct {
 	// DriftCheck makes a drift check job (operation refresh, purpose drift
 	// check) that succeeded.
 	DriftCheck func(t *testing.T, unit graph.Unit) job.ID
 	// Running makes a drift check job that has not ended.
 	Running func(t *testing.T, unit graph.Unit) job.ID
+	// Failed makes a drift check job that ended in the state failed.
+	Failed func(t *testing.T, unit graph.Unit) job.ID
+	// Canceled makes a drift check job that ended in the state canceled.
+	Canceled func(t *testing.T, unit graph.Unit) job.ID
 	// Plain makes a job without the purpose drift check that succeeded, for
 	// example a plan job.
 	Plain func(t *testing.T, unit graph.Unit) job.ID
+}
+
+// Window is a span of time.
+type Window struct {
+	Start, End time.Time
+}
+
+// JobWindow returns the start and the end of the jobs that the harness makes.
+// The results of the fixtures are checked inside this window.
+func JobWindow() Window {
+	return Window{Start: at(0), End: at(minuteJobEnd)}
 }
 
 // Harness is one fresh, empty store for one subtest. Namespace makes the
@@ -79,11 +95,14 @@ const acme namespace.Name = "acme"
 
 // The minutes of the checks in the fixtures, and the epoch of at.
 const (
-	minute2  = 2
-	minute3  = 3
-	minute4  = 4
-	minute5  = 5
-	fixtureT = 1_800_000_000_000
+	minute2 = 2
+	minute3 = 3
+	minute4 = 4
+	minute5 = 5
+	// minuteJobEnd is the minute at which the ended jobs of the harness end.
+	minuteJobEnd = 10
+	minuteLate   = 11
+	fixtureT     = 1_800_000_000_000
 )
 
 // at returns the time of the fixtures, plus n minutes.
