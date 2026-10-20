@@ -400,7 +400,8 @@ fails closed (E). An allowlist in two places drifts.
   started row with no end `not-reported`.
 - OpenDustpan records what the tool reports. It cannot prove that the
   provider did what it reported.
-- A drift run (RFC 25) must invoke nothing. A denylist of arguments is not
+- A drift run (RFC 25) must invoke nothing. RFC 25 now holds this allowlist
+  (section "Fixed steps of a drift run"), as ADR 260 decision 2 asks. A denylist of arguments is not
   enough (ADR 250 asks for an allowlist). `TF_CLI_ARGS` and
   `TF_CLI_ARGS_apply` in the step environment, a custom step of a team
   (ADR 101 decision 8) and a wrapper binary can add `-invoke` after any
