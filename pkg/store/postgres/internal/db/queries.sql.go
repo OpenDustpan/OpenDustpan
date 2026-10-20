@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const abandonIdempotencyRecord = `-- name: AbandonIdempotencyRecord :exec
+DELETE FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4 AND token = $5 AND status = 0
+`
+
+type AbandonIdempotencyRecordParams struct {
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+	Token     string
+}
+
+func (q *Queries) AbandonIdempotencyRecord(ctx context.Context, arg AbandonIdempotencyRecordParams) error {
+	_, err := q.db.Exec(ctx, abandonIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Token,
+	)
+	return err
+}
+
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -574,6 +599,23 @@ func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurable
 	return result.RowsAffected(), nil
 }
 
+const claimInstallationKind = `-- name: ClaimInstallationKind :execrows
+UPDATE installation
+SET kind = $1
+WHERE id = 1 AND kind IS NULL
+`
+
+// Stores the kind in the seeded row only when no kind is stored: a
+// compare-and-set, so several instances on one new database all claim and one
+// wins. It changes nothing when a kind is stored or the row is missing.
+func (q *Queries) ClaimInstallationKind(ctx context.Context, kind pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, claimInstallationKind, kind)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimSinkOperation = `-- name: ClaimSinkOperation :one
 UPDATE durable_operations
 SET state = 'running', attempt = attempt + 1, expiries = expiries + $1::bigint,
@@ -634,6 +676,18 @@ func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOp
 	return err
 }
 
+const clearMaintenanceRevocationsOnEnter = `-- name: ClearMaintenanceRevocationsOnEnter :exec
+DELETE FROM maintenance_revocations
+WHERE (SELECT state FROM installation WHERE id = 1) <> 'maintenance'
+`
+
+// Starts a new stay in maintenance mode: it clears the journal when the stored
+// state is not maintenance yet. Run it before the state changes.
+func (q *Queries) ClearMaintenanceRevocationsOnEnter(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, clearMaintenanceRevocationsOnEnter)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2
@@ -647,6 +701,43 @@ type CloseJournalParams struct {
 func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) error {
 	_, err := q.db.Exec(ctx, closeJournal, arg.StackID, arg.ID)
 	return err
+}
+
+const completeIdempotencyRecord = `-- name: CompleteIdempotencyRecord :execrows
+UPDATE idempotency_records
+SET status = $1, headers = $2, body = $3
+WHERE principal = $4 AND method = $5 AND path = $6
+  AND idem_key = $7 AND token = $8 AND status = 0
+`
+
+type CompleteIdempotencyRecordParams struct {
+	Status    int64
+	Headers   string
+	Body      []byte
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+	Token     string
+}
+
+// Stores the final answer of the pending record that holds token. It changes
+// no row when another request holds the record or the record is done.
+func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIdempotencyRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeIdempotencyRecord,
+		arg.Status,
+		arg.Headers,
+		arg.Body,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Token,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const contextUnitExists = `-- name: ContextUnitExists :one
@@ -1041,6 +1132,39 @@ func (q *Queries) CountNamespacesByNames(ctx context.Context, names []string) (i
 	return count, err
 }
 
+const countOpenJobsOfNamespace = `-- name: CountOpenJobsOfNamespace :one
+SELECT COUNT(*) FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = $1
+  AND j.state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired')
+`
+
+func (q *Queries) CountOpenJobsOfNamespace(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenJobsOfNamespace, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenJobsOfUnit = `-- name: CountOpenJobsOfUnit :one
+SELECT COUNT(*) FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = $1 AND j.unit_id = $2
+  AND j.state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired')
+`
+
+type CountOpenJobsOfUnitParams struct {
+	Namespace string
+	UnitID    string
+}
+
+func (q *Queries) CountOpenJobsOfUnit(ctx context.Context, arg CountOpenJobsOfUnitParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenJobsOfUnit, arg.Namespace, arg.UnitID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countOpenOperationsOfKinds = `-- name: CountOpenOperationsOfKinds :one
 SELECT COUNT(*)
 FROM durable_operations
@@ -1322,6 +1446,35 @@ WHERE status = 'running' AND journal_version > 0
 // answers its journal batches with 404, which the Pulumi CLI does not retry.
 func (q *Queries) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countRunningJournaledUpdates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSavedViewsInNamespace = `-- name: CountSavedViewsInNamespace :one
+SELECT COUNT(*) FROM saved_views
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+`
+
+func (q *Queries) CountSavedViewsInNamespace(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, countSavedViewsInNamespace, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSavedViewsOfOwner = `-- name: CountSavedViewsOfOwner :one
+SELECT COUNT(*) FROM saved_views
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND owner = $2
+`
+
+type CountSavedViewsOfOwnerParams struct {
+	Namespace string
+	Owner     string
+}
+
+func (q *Queries) CountSavedViewsOfOwner(ctx context.Context, arg CountSavedViewsOfOwnerParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSavedViewsOfOwner, arg.Namespace, arg.Owner)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2173,6 +2326,15 @@ func (q *Queries) DatabaseNowMs(ctx context.Context) (int64, error) {
 	return now_ms, err
 }
 
+const deleteAllIdempotencyRecords = `-- name: DeleteAllIdempotencyRecords :exec
+DELETE FROM idempotency_records
+`
+
+func (q *Queries) DeleteAllIdempotencyRecords(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteAllIdempotencyRecords)
+	return err
+}
+
 const deleteBlobPurge = `-- name: DeleteBlobPurge :exec
 DELETE FROM blob_purges WHERE tool = $1 AND unit_id = $2
 `
@@ -2269,6 +2431,44 @@ WHERE stack_id = $1
 
 func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.Exec(ctx, deleteEventsOfStack, stackID)
+	return err
+}
+
+const deleteExpiredIdempotencyRecord = `-- name: DeleteExpiredIdempotencyRecord :exec
+DELETE FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4
+  AND (created_at_ms < (
+         CASE WHEN $5::bigint <> 0 THEN $5::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $6
+       OR (status = 0 AND created_at_ms < (
+         CASE WHEN $5::bigint <> 0 THEN $5::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $7))
+`
+
+type DeleteExpiredIdempotencyRecordParams struct {
+	Principal     string
+	Method        string
+	Path          string
+	IdemKey       string
+	NowOverrideMs int64
+	RecordTtlMs   interface{}
+	PendingTtlMs  interface{}
+}
+
+// Deletes the record of the name when it is past its period: a record past
+// record_ttl_ms, or a pending record past pending_ttl_ms. The time is the
+// clock of the database. A non-zero now_override_ms replaces it, for tests.
+func (q *Queries) DeleteExpiredIdempotencyRecord(ctx context.Context, arg DeleteExpiredIdempotencyRecordParams) error {
+	_, err := q.db.Exec(ctx, deleteExpiredIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.NowOverrideMs,
+		arg.RecordTtlMs,
+		arg.PendingTtlMs,
+	)
 	return err
 }
 
@@ -2494,6 +2694,52 @@ func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID str
 	return err
 }
 
+const deleteManualLock = `-- name: DeleteManualLock :execrows
+DELETE FROM manual_locks
+WHERE kind = $1 AND object_id = $2 AND holder = $3 AND since_ms = $4
+`
+
+type DeleteManualLockParams struct {
+	Kind     string
+	ObjectID string
+	Holder   string
+	SinceMs  int64
+}
+
+// Deletes the lock that the caller read, and no other lock: the holder and the
+// time must match too.
+func (q *Queries) DeleteManualLock(ctx context.Context, arg DeleteManualLockParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteManualLock,
+		arg.Kind,
+		arg.ObjectID,
+		arg.Holder,
+		arg.SinceMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteManualLocksOfObject = `-- name: DeleteManualLocksOfObject :exec
+DELETE FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+`
+
+type DeleteManualLocksOfObjectParams struct {
+	Kind     string
+	ObjectID string
+}
+
+// Removes the manual lock of one object by its kind and its stable ID. The purge
+// of a unit and the delete of a collection call it in the same transaction as
+// their own rows. Defense in depth: the kind is in the filter too, so that an ID
+// of one kind never removes the lock of another kind.
+func (q *Queries) DeleteManualLocksOfObject(ctx context.Context, arg DeleteManualLocksOfObjectParams) error {
+	_, err := q.db.Exec(ctx, deleteManualLocksOfObject, arg.Kind, arg.ObjectID)
+	return err
+}
+
 const deleteMissingCollectionMembership = `-- name: DeleteMissingCollectionMembership :exec
 DELETE FROM collection_members
 WHERE unit_id = $1 AND NOT EXISTS (
@@ -2639,6 +2885,26 @@ func (q *Queries) DeleteRunnerPoolRunners(ctx context.Context, poolID string) er
 	return err
 }
 
+const deleteSavedView = `-- name: DeleteSavedView :execrows
+DELETE FROM saved_views
+WHERE saved_views.id = $1 AND saved_views.owner = $2
+  AND saved_views.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+`
+
+type DeleteSavedViewParams struct {
+	ID        string
+	Owner     string
+	Namespace string
+}
+
+func (q *Queries) DeleteSavedView(ctx context.Context, arg DeleteSavedViewParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSavedView, arg.ID, arg.Owner, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteScopeGateObjects = `-- name: DeleteScopeGateObjects :exec
 DELETE FROM gate_objects
 WHERE namespace_id = $1 AND scope_key = $2
@@ -2685,6 +2951,15 @@ WHERE stack_id = $1
 
 func (q *Queries) DeleteStackTags(ctx context.Context, stackID string) error {
 	_, err := q.db.Exec(ctx, deleteStackTags, stackID)
+	return err
+}
+
+const deleteStaleDurableHeartbeats = `-- name: DeleteStaleDurableHeartbeats :exec
+DELETE FROM durable_heartbeats WHERE at_ms < $1::bigint
+`
+
+func (q *Queries) DeleteStaleDurableHeartbeats(ctx context.Context, thresholdMs int64) error {
+	_, err := q.db.Exec(ctx, deleteStaleDurableHeartbeats, thresholdMs)
 	return err
 }
 
@@ -2913,6 +3188,27 @@ func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInac
 	return items, nil
 }
 
+const disablePrincipal = `-- name: DisablePrincipal :execrows
+UPDATE principals SET disabled_at_ms = $1::bigint,
+  updated_at_ms = $1::bigint
+WHERE id = $2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+`
+
+type DisablePrincipalParams struct {
+	DisabledAtMs int64
+	ID           string
+}
+
+// Disables the principal. A principal that is disabled or ended stays as it
+// is. The write only narrows access.
+func (q *Queries) DisablePrincipal(ctx context.Context, arg DisablePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, disablePrincipal, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const disablePrincipalForExpiry = `-- name: DisablePrincipalForExpiry :execrows
 UPDATE principals SET disabled_at_ms = $1::bigint
 WHERE id = $2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
@@ -2927,6 +3223,29 @@ type DisablePrincipalForExpiryParams struct {
 // record. A principal that is already disabled stays as it is.
 func (q *Queries) DisablePrincipalForExpiry(ctx context.Context, arg DisablePrincipalForExpiryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, disablePrincipalForExpiry, arg.DisabledAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const disableSignInProvider = `-- name: DisableSignInProvider :execrows
+UPDATE sign_in_providers
+SET enabled = FALSE, updated_at_ms = $1, version = $2 + 1
+WHERE provider_id = $3 AND version = $2
+`
+
+type DisableSignInProviderParams struct {
+	UpdatedAtMs int64
+	Version     interface{}
+	ProviderID  string
+}
+
+// Disables the provider. The update applies only to the version that the
+// change read, and changes nothing but the flag, the update time and the
+// version. The write only narrows access.
+func (q *Queries) DisableSignInProvider(ctx context.Context, arg DisableSignInProviderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, disableSignInProvider, arg.UpdatedAtMs, arg.Version, arg.ProviderID)
 	if err != nil {
 		return 0, err
 	}
@@ -3030,6 +3349,22 @@ type EndExpiredCanceledDurableOperationsParams struct {
 // holds is skipped.
 func (q *Queries) EndExpiredCanceledDurableOperations(ctx context.Context, arg EndExpiredCanceledDurableOperationsParams) error {
 	_, err := q.db.Exec(ctx, endExpiredCanceledDurableOperations, arg.Kinds, arg.MaxVersions)
+	return err
+}
+
+const endJobFreeze = `-- name: EndJobFreeze :exec
+UPDATE job_freezes SET ends_at_ms = $1, ended_by = $2
+WHERE id = $3
+`
+
+type EndJobFreezeParams struct {
+	EndsAtMs int64
+	EndedBy  string
+	ID       string
+}
+
+func (q *Queries) EndJobFreeze(ctx context.Context, arg EndJobFreezeParams) error {
+	_, err := q.db.Exec(ctx, endJobFreeze, arg.EndsAtMs, arg.EndedBy, arg.ID)
 	return err
 }
 
@@ -3199,20 +3534,39 @@ func (q *Queries) ExtendDurableClaim(ctx context.Context, arg ExtendDurableClaim
 	return err
 }
 
-const failRunningBackups = `-- name: FailRunningBackups :exec
-UPDATE backups
-SET state = 'failed', error = $1, ended_at_ms = $2
-WHERE state = 'running'
+const failEndedBackups = `-- name: FailEndedBackups :execrows
+UPDATE backups AS b
+SET state = 'failed',
+    error = COALESCE(NULLIF(o.last_error, ''), $1::text),
+    ended_at_ms = $2
+FROM durable_operations AS o
+WHERE b.state = 'running'
+  AND o.start_key = $3::text || b.id
+  AND o.kind = $4
+  AND o.state IN ('failed', 'canceled')
 `
 
-type FailRunningBackupsParams struct {
-	Error     string
+type FailEndedBackupsParams struct {
+	Fallback  string
 	EndedAtMs pgtype.Int8
+	Prefix    string
+	Kind      string
 }
 
-func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackupsParams) error {
-	_, err := q.db.Exec(ctx, failRunningBackups, arg.Error, arg.EndedAtMs)
-	return err
+// Marks failed each running backup whose operation ended failed or canceled
+// without a finish write. The error text is the last error of the
+// operation, or the fallback when it holds none.
+func (q *Queries) FailEndedBackups(ctx context.Context, arg FailEndedBackupsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failEndedBackups,
+		arg.Fallback,
+		arg.EndedAtMs,
+		arg.Prefix,
+		arg.Kind,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const failRunningRestores = `-- name: FailRunningRestores :exec
@@ -3558,6 +3912,45 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 	return i, err
 }
 
+const getActiveJobFreeze = `-- name: GetActiveJobFreeze :one
+SELECT f.id FROM job_freezes AS f
+JOIN namespaces AS n ON n.id = f.namespace_id
+WHERE n.name = $1 AND f.starts_at_ms <= $2
+  AND (f.ends_at_ms = 0 OR $2 < f.ends_at_ms)
+ORDER BY f.starts_at_ms, f.id
+LIMIT 1
+`
+
+type GetActiveJobFreezeParams struct {
+	Namespace string
+	NowMs     int64
+}
+
+func (q *Queries) GetActiveJobFreeze(ctx context.Context, arg GetActiveJobFreezeParams) (string, error) {
+	row := q.db.QueryRow(ctx, getActiveJobFreeze, arg.Namespace, arg.NowMs)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getAuditChainCheck = `-- name: GetAuditChainCheck :one
+SELECT checked_at_ms, invalid FROM audit_chain_check WHERE id = 1
+`
+
+type GetAuditChainCheckRow struct {
+	CheckedAtMs int64
+	Invalid     int64
+}
+
+// The stored result of the scheduled audit chain check. No row means no check
+// ran.
+func (q *Queries) GetAuditChainCheck(ctx context.Context) (GetAuditChainCheckRow, error) {
+	row := q.db.QueryRow(ctx, getAuditChainCheck)
+	var i GetAuditChainCheckRow
+	err := row.Scan(&i.CheckedAtMs, &i.Invalid)
+	return i, err
+}
+
 const getAuditChainState = `-- name: GetAuditChainState :one
 SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1
 `
@@ -3826,6 +4219,119 @@ func (q *Queries) GetCollectionNameByID(ctx context.Context, arg GetCollectionNa
 	var name string
 	err := row.Scan(&name)
 	return name, err
+}
+
+const getCoveringManualLocks = `-- name: GetCoveringManualLocks :one
+SELECT ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
+       cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       nl.holder AS namespace_holder, nl.reason AS namespace_reason, nl.since_ms AS namespace_since_ms,
+       c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3
+`
+
+type GetCoveringManualLocksParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+type GetCoveringManualLocksRow struct {
+	UnitHolder        pgtype.Text
+	UnitReason        pgtype.Text
+	UnitSinceMs       pgtype.Int8
+	CollectionHolder  pgtype.Text
+	CollectionReason  pgtype.Text
+	CollectionSinceMs pgtype.Int8
+	NamespaceHolder   pgtype.Text
+	NamespaceReason   pgtype.Text
+	NamespaceSinceMs  pgtype.Int8
+	CollectionName    pgtype.Text
+}
+
+// The manual locks that can cover one unit: its own lock, the lock of the
+// collection it is in now, and the lock of its namespace. No row means that the inventory holds no such unit.
+func (q *Queries) GetCoveringManualLocks(ctx context.Context, arg GetCoveringManualLocksParams) (GetCoveringManualLocksRow, error) {
+	row := q.db.QueryRow(ctx, getCoveringManualLocks, arg.Namespace, arg.Tool, arg.Name)
+	var i GetCoveringManualLocksRow
+	err := row.Scan(
+		&i.UnitHolder,
+		&i.UnitReason,
+		&i.UnitSinceMs,
+		&i.CollectionHolder,
+		&i.CollectionReason,
+		&i.CollectionSinceMs,
+		&i.NamespaceHolder,
+		&i.NamespaceReason,
+		&i.NamespaceSinceMs,
+		&i.CollectionName,
+	)
+	return i, err
+}
+
+const getCoveringManualLocksByUnitID = `-- name: GetCoveringManualLocksByUnitID :one
+SELECT i.tool AS unit_tool, i.name AS unit_name,
+       ul.holder AS unit_holder, ul.reason AS unit_reason, ul.since_ms AS unit_since_ms,
+       cl.holder AS collection_holder, cl.reason AS collection_reason, cl.since_ms AS collection_since_ms,
+       nl.holder AS namespace_holder, nl.reason AS namespace_reason, nl.since_ms AS namespace_since_ms,
+       c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
+WHERE i.namespace = $1 AND i.unit_id = $2
+`
+
+type GetCoveringManualLocksByUnitIDParams struct {
+	Namespace string
+	UnitID    string
+}
+
+type GetCoveringManualLocksByUnitIDRow struct {
+	UnitTool          string
+	UnitName          string
+	UnitHolder        pgtype.Text
+	UnitReason        pgtype.Text
+	UnitSinceMs       pgtype.Int8
+	CollectionHolder  pgtype.Text
+	CollectionReason  pgtype.Text
+	CollectionSinceMs pgtype.Int8
+	NamespaceHolder   pgtype.Text
+	NamespaceReason   pgtype.Text
+	NamespaceSinceMs  pgtype.Int8
+	CollectionName    pgtype.Text
+}
+
+// The same locks as GetCoveringManualLocks, found by the stable unit ID of the
+// unit in the namespace. A rename of the unit does not hide its locks. No row
+// means that the inventory holds no such unit: the caller fails closed.
+func (q *Queries) GetCoveringManualLocksByUnitID(ctx context.Context, arg GetCoveringManualLocksByUnitIDParams) (GetCoveringManualLocksByUnitIDRow, error) {
+	row := q.db.QueryRow(ctx, getCoveringManualLocksByUnitID, arg.Namespace, arg.UnitID)
+	var i GetCoveringManualLocksByUnitIDRow
+	err := row.Scan(
+		&i.UnitTool,
+		&i.UnitName,
+		&i.UnitHolder,
+		&i.UnitReason,
+		&i.UnitSinceMs,
+		&i.CollectionHolder,
+		&i.CollectionReason,
+		&i.CollectionSinceMs,
+		&i.NamespaceHolder,
+		&i.NamespaceReason,
+		&i.NamespaceSinceMs,
+		&i.CollectionName,
+	)
+	return i, err
 }
 
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
@@ -4189,6 +4695,84 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 	return i, err
 }
 
+const getIdempotencyRecord = `-- name: GetIdempotencyRecord :one
+SELECT fingerprint, token, status, headers, body, created_at_ms
+FROM idempotency_records
+WHERE principal = $1 AND method = $2 AND path = $3
+  AND idem_key = $4
+`
+
+type GetIdempotencyRecordParams struct {
+	Principal string
+	Method    string
+	Path      string
+	IdemKey   string
+}
+
+type GetIdempotencyRecordRow struct {
+	Fingerprint []byte
+	Token       string
+	Status      int64
+	Headers     string
+	Body        []byte
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetIdempotencyRecord(ctx context.Context, arg GetIdempotencyRecordParams) (GetIdempotencyRecordRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+	)
+	var i GetIdempotencyRecordRow
+	err := row.Scan(
+		&i.Fingerprint,
+		&i.Token,
+		&i.Status,
+		&i.Headers,
+		&i.Body,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getIdempotencyServerKeyExclusive = `-- name: GetIdempotencyServerKeyExclusive :one
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR UPDATE
+`
+
+type GetIdempotencyServerKeyExclusiveRow struct {
+	WrappedKey []byte
+	WrapperID  string
+}
+
+// A reset takes this lock. Two processes that hold the share lock and then
+// write the row wait for each other, so a reset starts again with this lock.
+func (q *Queries) GetIdempotencyServerKeyExclusive(ctx context.Context) (GetIdempotencyServerKeyExclusiveRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyServerKeyExclusive)
+	var i GetIdempotencyServerKeyExclusiveRow
+	err := row.Scan(&i.WrappedKey, &i.WrapperID)
+	return i, err
+}
+
+const getIdempotencyServerKeyShared = `-- name: GetIdempotencyServerKeyShared :one
+SELECT wrapped_key, wrapper_id FROM idempotency_server_key WHERE id = 1 FOR SHARE
+`
+
+type GetIdempotencyServerKeySharedRow struct {
+	WrappedKey []byte
+	WrapperID  string
+}
+
+// The share lock keeps a reset by another process from changing the row before
+// the transaction ends.
+func (q *Queries) GetIdempotencyServerKeyShared(ctx context.Context) (GetIdempotencyServerKeySharedRow, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyServerKeyShared)
+	var i GetIdempotencyServerKeySharedRow
+	err := row.Scan(&i.WrappedKey, &i.WrapperID)
+	return i, err
+}
+
 const getImport = `-- name: GetImport :one
 SELECT namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
        state, reason, created_by, created_at_ms, plan, ended_at_ms
@@ -4261,6 +4845,21 @@ func (q *Queries) GetImportUnit(ctx context.Context, arg GetImportUnitParams) (I
 	return i, err
 }
 
+const getInstallationKind = `-- name: GetInstallationKind :one
+SELECT kind
+FROM installation
+WHERE id = 1
+`
+
+// The installation kind: dev, production or NULL before the first claim. The
+// migration seeds the one row; a missing row is a fault.
+func (q *Queries) GetInstallationKind(ctx context.Context) (pgtype.Text, error) {
+	row := q.db.QueryRow(ctx, getInstallationKind)
+	var kind pgtype.Text
+	err := row.Scan(&kind)
+	return kind, err
+}
+
 const getInstallationSecretKey = `-- name: GetInstallationSecretKey :one
 SELECT scope_id, wrapper_id, ciphertext, created_at_ms
 FROM installation_secret_keys
@@ -4297,26 +4896,44 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 const getInventoryEntryByUnitID = `-- name: GetInventoryEntryByUnitID :one
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
-       COALESCE(c.name, '') AS collection
+       COALESCE(c.name, '') AS collection,
+       ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
+       cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
+       cl.since_ms AS collection_manual_since_ms,
+       nl.holder AS namespace_manual_holder, nl.reason AS namespace_manual_reason,
+       nl.since_ms AS namespace_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.unit_id = $1
 `
 
 type GetInventoryEntryByUnitIDRow struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount pgtype.Int8
-	LockHolder    pgtype.Text
-	LockSinceMs   pgtype.Int8
-	LockOperation pgtype.Text
-	Collection    string
+	Namespace               string
+	Tool                    string
+	Name                    string
+	UnitID                  string
+	DisplayName             string
+	LastChangedMs           int64
+	Status                  string
+	ResourceCount           pgtype.Int8
+	LockHolder              pgtype.Text
+	LockSinceMs             pgtype.Int8
+	LockOperation           pgtype.Text
+	Collection              string
+	UnitManualHolder        pgtype.Text
+	UnitManualReason        pgtype.Text
+	UnitManualSinceMs       pgtype.Int8
+	CollectionManualHolder  pgtype.Text
+	CollectionManualReason  pgtype.Text
+	CollectionManualSinceMs pgtype.Int8
+	NamespaceManualHolder   pgtype.Text
+	NamespaceManualReason   pgtype.Text
+	NamespaceManualSinceMs  pgtype.Int8
 }
 
 // One live unit by its stable ID, which is unique in the installation.
@@ -4336,6 +4953,15 @@ func (q *Queries) GetInventoryEntryByUnitID(ctx context.Context, unitID string) 
 		&i.LockSinceMs,
 		&i.LockOperation,
 		&i.Collection,
+		&i.UnitManualHolder,
+		&i.UnitManualReason,
+		&i.UnitManualSinceMs,
+		&i.CollectionManualHolder,
+		&i.CollectionManualReason,
+		&i.CollectionManualSinceMs,
+		&i.NamespaceManualHolder,
+		&i.NamespaceManualReason,
+		&i.NamespaceManualSinceMs,
 	)
 	return i, err
 }
@@ -4359,6 +4985,159 @@ func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitPara
 	var unit_id string
 	err := row.Scan(&unit_id)
 	return unit_id, err
+}
+
+const getJob = `-- name: GetJob :one
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE j.id = $1
+`
+
+type GetJobRow struct {
+	ID               string
+	Namespace        string
+	UnitID           string
+	Seq              int64
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	IdempotencyKey   string
+	Version          int64
+	Body             string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) GetJob(ctx context.Context, id string) (GetJobRow, error) {
+	row := q.db.QueryRow(ctx, getJob, id)
+	var i GetJobRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.UnitID,
+		&i.Seq,
+		&i.State,
+		&i.Wait,
+		&i.CurrentPhase,
+		&i.CurrentChanges,
+		&i.CurrentOperation,
+		&i.IdempotencyKey,
+		&i.Version,
+		&i.Body,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getJobByKey = `-- name: GetJobByKey :one
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = $1 AND j.idempotency_key = $2
+`
+
+type GetJobByKeyParams struct {
+	Namespace      string
+	IdempotencyKey string
+}
+
+type GetJobByKeyRow struct {
+	ID               string
+	Namespace        string
+	UnitID           string
+	Seq              int64
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	IdempotencyKey   string
+	Version          int64
+	Body             string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) GetJobByKey(ctx context.Context, arg GetJobByKeyParams) (GetJobByKeyRow, error) {
+	row := q.db.QueryRow(ctx, getJobByKey, arg.Namespace, arg.IdempotencyKey)
+	var i GetJobByKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.UnitID,
+		&i.Seq,
+		&i.State,
+		&i.Wait,
+		&i.CurrentPhase,
+		&i.CurrentChanges,
+		&i.CurrentOperation,
+		&i.IdempotencyKey,
+		&i.Version,
+		&i.Body,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getJobFreeze = `-- name: GetJobFreeze :one
+SELECT f.id, n.name AS namespace, f.reason, f.starts_at_ms, f.ends_at_ms, f.created_by, f.ended_by
+FROM job_freezes AS f
+JOIN namespaces AS n ON n.id = f.namespace_id
+WHERE f.id = $1
+`
+
+type GetJobFreezeRow struct {
+	ID         string
+	Namespace  string
+	Reason     string
+	StartsAtMs int64
+	EndsAtMs   int64
+	CreatedBy  string
+	EndedBy    string
+}
+
+func (q *Queries) GetJobFreeze(ctx context.Context, id string) (GetJobFreezeRow, error) {
+	row := q.db.QueryRow(ctx, getJobFreeze, id)
+	var i GetJobFreezeRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Reason,
+		&i.StartsAtMs,
+		&i.EndsAtMs,
+		&i.CreatedBy,
+		&i.EndedBy,
+	)
+	return i, err
+}
+
+const getJobHolderOfUnit = `-- name: GetJobHolderOfUnit :one
+SELECT j.id FROM jobs AS j
+WHERE j.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND j.unit_id = $2 AND j.id <> $3 AND j.current_changes
+  AND j.state IN ('dispatched', 'running', 'canceling')
+LIMIT 1
+`
+
+type GetJobHolderOfUnitParams struct {
+	Namespace string
+	UnitID    string
+	ExceptID  string
+}
+
+// A job other than the given one that holds the unit for a change.
+func (q *Queries) GetJobHolderOfUnit(ctx context.Context, arg GetJobHolderOfUnitParams) (string, error) {
+	row := q.db.QueryRow(ctx, getJobHolderOfUnit, arg.Namespace, arg.UnitID, arg.ExceptID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
@@ -4406,6 +5185,17 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 		&i.BlobSize,
 		&i.BlobMd5,
 	)
+	return i, err
+}
+
+const getLatestDurableHeartbeat = `-- name: GetLatestDurableHeartbeat :one
+SELECT owner, at_ms FROM durable_heartbeats ORDER BY at_ms DESC, owner DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestDurableHeartbeat(ctx context.Context) (DurableHeartbeat, error) {
+	row := q.db.QueryRow(ctx, getLatestDurableHeartbeat)
+	var i DurableHeartbeat
+	err := row.Scan(&i.Owner, &i.AtMs)
 	return i, err
 }
 
@@ -4460,6 +5250,57 @@ func (q *Queries) GetLiveProfileByName(ctx context.Context, arg GetLiveProfileBy
 		&i.UpdatedAtMs,
 		&i.DeletedAtMs,
 	)
+	return i, err
+}
+
+const getManualLock = `-- name: GetManualLock :one
+SELECT holder, reason, since_ms
+FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+`
+
+type GetManualLockParams struct {
+	Kind     string
+	ObjectID string
+}
+
+type GetManualLockRow struct {
+	Holder  string
+	Reason  string
+	SinceMs int64
+}
+
+func (q *Queries) GetManualLock(ctx context.Context, arg GetManualLockParams) (GetManualLockRow, error) {
+	row := q.db.QueryRow(ctx, getManualLock, arg.Kind, arg.ObjectID)
+	var i GetManualLockRow
+	err := row.Scan(&i.Holder, &i.Reason, &i.SinceMs)
+	return i, err
+}
+
+const getManualLockForUpdate = `-- name: GetManualLockForUpdate :one
+SELECT holder, reason, since_ms
+FROM manual_locks
+WHERE kind = $1 AND object_id = $2
+FOR UPDATE
+`
+
+type GetManualLockForUpdateParams struct {
+	Kind     string
+	ObjectID string
+}
+
+type GetManualLockForUpdateRow struct {
+	Holder  string
+	Reason  string
+	SinceMs int64
+}
+
+// Reads the lock and holds a row lock until the transaction ends, so that a
+// removal and a new lock cannot interleave between the read and the delete.
+func (q *Queries) GetManualLockForUpdate(ctx context.Context, arg GetManualLockForUpdateParams) (GetManualLockForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getManualLockForUpdate, arg.Kind, arg.ObjectID)
+	var i GetManualLockForUpdateRow
+	err := row.Scan(&i.Holder, &i.Reason, &i.SinceMs)
 	return i, err
 }
 
@@ -4688,7 +5529,7 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 }
 
 const getRestore = `-- name: GetRestore :one
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 WHERE id = $1
 `
@@ -4705,6 +5546,7 @@ func (q *Queries) GetRestore(ctx context.Context, id string) (Restore, error) {
 		&i.StartedAtMs,
 		&i.EndedAtMs,
 		&i.Error,
+		&i.DevReport,
 	)
 	return i, err
 }
@@ -5003,6 +5845,43 @@ func (q *Queries) GetRunnerSession(ctx context.Context, id string) (GetRunnerSes
 		&i.KeyCreatedAtMs,
 		&i.CreatedAtMs,
 		&i.RunnerRetiredAtMs,
+	)
+	return i, err
+}
+
+const getSavedView = `-- name: GetSavedView :one
+SELECT v.id, n.name AS namespace, v.owner, v.name, v.query_json, v.created_at_ms
+FROM saved_views AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1 AND v.id = $2 AND v.owner = $3
+`
+
+type GetSavedViewParams struct {
+	Namespace string
+	ID        string
+	Owner     string
+}
+
+type GetSavedViewRow struct {
+	ID          string
+	Namespace   string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
+// The owner is part of the key: a view of another owner reads as no row.
+func (q *Queries) GetSavedView(ctx context.Context, arg GetSavedViewParams) (GetSavedViewRow, error) {
+	row := q.db.QueryRow(ctx, getSavedView, arg.Namespace, arg.ID, arg.Owner)
+	var i GetSavedViewRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Owner,
+		&i.Name,
+		&i.QueryJson,
+		&i.CreatedAtMs,
 	)
 	return i, err
 }
@@ -5437,6 +6316,37 @@ func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (str
 	return name, err
 }
 
+const getUnitFinalVersion = `-- name: GetUnitFinalVersion :one
+SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
+`
+
+type GetUnitFinalVersionParams struct {
+	Namespace string
+	UnitID    string
+}
+
+type GetUnitFinalVersionRow struct {
+	UnitID    string
+	VersionID string
+	CommitID  string
+	JobID     string
+	AtMs      int64
+}
+
+func (q *Queries) GetUnitFinalVersion(ctx context.Context, arg GetUnitFinalVersionParams) (GetUnitFinalVersionRow, error) {
+	row := q.db.QueryRow(ctx, getUnitFinalVersion, arg.Namespace, arg.UnitID)
+	var i GetUnitFinalVersionRow
+	err := row.Scan(
+		&i.UnitID,
+		&i.VersionID,
+		&i.CommitID,
+		&i.JobID,
+		&i.AtMs,
+	)
+	return i, err
+}
+
 const getUnitOutputSeq = `-- name: GetUnitOutputSeq :one
 SELECT item_seq
 FROM object_context
@@ -5454,6 +6364,23 @@ func (q *Queries) GetUnitOutputSeq(ctx context.Context, arg GetUnitOutputSeqPara
 	var item_seq int64
 	err := row.Scan(&item_seq)
 	return item_seq, err
+}
+
+const getUnitStateVersion = `-- name: GetUnitStateVersion :one
+SELECT version_id FROM unit_state_versions
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
+`
+
+type GetUnitStateVersionParams struct {
+	Namespace string
+	UnitID    string
+}
+
+func (q *Queries) GetUnitStateVersion(ctx context.Context, arg GetUnitStateVersionParams) (string, error) {
+	row := q.db.QueryRow(ctx, getUnitStateVersion, arg.Namespace, arg.UnitID)
+	var version_id string
+	err := row.Scan(&version_id)
+	return version_id, err
 }
 
 const getUpdate = `-- name: GetUpdate :one
@@ -6234,6 +7161,64 @@ func (q *Queries) InsertGateReference(ctx context.Context, arg InsertGateReferen
 	return err
 }
 
+const insertIdempotencyRecord = `-- name: InsertIdempotencyRecord :execrows
+INSERT INTO idempotency_records (
+    principal, method, path, idem_key, fingerprint, token, status, headers, body, created_at_ms
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, 0, '', ''::bytea,
+    CASE WHEN $7::bigint <> 0 THEN $7::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END
+)
+ON CONFLICT (principal, method, path, idem_key) DO NOTHING
+`
+
+type InsertIdempotencyRecordParams struct {
+	Principal     string
+	Method        string
+	Path          string
+	IdemKey       string
+	Fingerprint   []byte
+	Token         string
+	NowOverrideMs int64
+}
+
+// Writes a pending record. It changes no row when a record holds the name.
+// created_at_ms is the clock of the database. A non-zero now_override_ms
+// replaces it, for tests.
+func (q *Queries) InsertIdempotencyRecord(ctx context.Context, arg InsertIdempotencyRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertIdempotencyRecord,
+		arg.Principal,
+		arg.Method,
+		arg.Path,
+		arg.IdemKey,
+		arg.Fingerprint,
+		arg.Token,
+		arg.NowOverrideMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertIdempotencyServerKey = `-- name: InsertIdempotencyServerKey :exec
+INSERT INTO idempotency_server_key (id, wrapped_key, wrapper_id)
+VALUES (1, $1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type InsertIdempotencyServerKeyParams struct {
+	WrappedKey []byte
+	WrapperID  string
+}
+
+// It changes no row when a key is in place: the first writer wins.
+func (q *Queries) InsertIdempotencyServerKey(ctx context.Context, arg InsertIdempotencyServerKeyParams) error {
+	_, err := q.db.Exec(ctx, insertIdempotencyServerKey, arg.WrappedKey, arg.WrapperID)
+	return err
+}
+
 const insertImport = `-- name: InsertImport :exec
 INSERT INTO imports (
     namespace_id, id, kind, address, selection, credential, profile, profile_path, options,
@@ -6421,6 +7406,90 @@ func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventory
 	return err
 }
 
+const insertJob = `-- name: InsertJob :exec
+INSERT INTO jobs (
+    id, namespace_id, unit_id, seq, state, wait, current_phase, current_changes, current_operation,
+    idempotency_key, version, body, created_at_ms, updated_at_ms
+) VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), $3,
+    $4, $5, $6, $7, $8,
+    $9, $10, $11, $12,
+    $13, $14
+)
+`
+
+type InsertJobParams struct {
+	ID               string
+	Namespace        string
+	UnitID           string
+	Seq              int64
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	IdempotencyKey   string
+	Version          int64
+	Body             string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) error {
+	_, err := q.db.Exec(ctx, insertJob,
+		arg.ID,
+		arg.Namespace,
+		arg.UnitID,
+		arg.Seq,
+		arg.State,
+		arg.Wait,
+		arg.CurrentPhase,
+		arg.CurrentChanges,
+		arg.CurrentOperation,
+		arg.IdempotencyKey,
+		arg.Version,
+		arg.Body,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const insertJobFreeze = `-- name: InsertJobFreeze :execrows
+INSERT INTO job_freezes (id, namespace_id, reason, starts_at_ms, ends_at_ms, created_by, ended_by)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), $3,
+    $4, $5, $6, $7
+)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertJobFreezeParams struct {
+	ID         string
+	Namespace  string
+	Reason     string
+	StartsAtMs int64
+	EndsAtMs   int64
+	CreatedBy  string
+	EndedBy    string
+}
+
+func (q *Queries) InsertJobFreeze(ctx context.Context, arg InsertJobFreezeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertJobFreeze,
+		arg.ID,
+		arg.Namespace,
+		arg.Reason,
+		arg.StartsAtMs,
+		arg.EndsAtMs,
+		arg.CreatedBy,
+		arg.EndedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -6505,6 +7574,38 @@ func (q *Queries) InsertJournalSequence(ctx context.Context, arg InsertJournalSe
 		arg.Sha256,
 	)
 	return err
+}
+
+const insertManualLock = `-- name: InsertManualLock :execrows
+INSERT INTO manual_locks (kind, object_id, namespace, holder, reason, since_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (kind, object_id) DO NOTHING
+`
+
+type InsertManualLockParams struct {
+	Kind      string
+	ObjectID  string
+	Namespace string
+	Holder    string
+	Reason    string
+	SinceMs   int64
+}
+
+// Records the manual lock of one object. A row that exists for the object is
+// not written. The caller checks the fence in the same transaction.
+func (q *Queries) InsertManualLock(ctx context.Context, arg InsertManualLockParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertManualLock,
+		arg.Kind,
+		arg.ObjectID,
+		arg.Namespace,
+		arg.Holder,
+		arg.Reason,
+		arg.SinceMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertOIDCProvider = `-- name: InsertOIDCProvider :exec
@@ -6831,6 +7932,41 @@ func (q *Queries) InsertRunnerSession(ctx context.Context, arg InsertRunnerSessi
 		arg.CreatedAtMs,
 	)
 	return err
+}
+
+const insertSavedView = `-- name: InsertSavedView :execrows
+INSERT INTO saved_views (id, namespace_id, owner, name, query_json, created_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6
+)
+ON CONFLICT (namespace_id, owner, name) DO NOTHING
+`
+
+type InsertSavedViewParams struct {
+	ID          string
+	Namespace   string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A view of the same
+// owner with the same name in the namespace is not written.
+func (q *Queries) InsertSavedView(ctx context.Context, arg InsertSavedViewParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertSavedView,
+		arg.ID,
+		arg.Namespace,
+		arg.Owner,
+		arg.Name,
+		arg.QueryJson,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertWorkspaceBlameItem = `-- name: InsertWorkspaceBlameItem :exec
@@ -7183,6 +8319,36 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 	return items, nil
 }
 
+const listAuditChainMarks = `-- name: ListAuditChainMarks :many
+SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope
+`
+
+// The marks of checkpoint mismatches, one for each scope.
+func (q *Queries) ListAuditChainMarks(ctx context.Context) ([]AuditChainMark, error) {
+	rows, err := q.db.Query(ctx, listAuditChainMarks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditChainMark
+	for rows.Next() {
+		var i AuditChainMark
+		if err := rows.Scan(
+			&i.Scope,
+			&i.Epoch,
+			&i.Sequence,
+			&i.MarkedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
@@ -7302,6 +8468,73 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.Reason,
 			&i.PrincipalKind,
 			&i.JobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAwaitingJobsOfUnit = `-- name: ListAwaitingJobsOfUnit :many
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE j.namespace_id = (SELECT x.id FROM namespaces AS x WHERE x.name = $1)
+  AND j.unit_id = $2 AND j.state = 'awaiting-state'
+ORDER BY j.seq
+`
+
+type ListAwaitingJobsOfUnitParams struct {
+	Namespace string
+	UnitID    string
+}
+
+type ListAwaitingJobsOfUnitRow struct {
+	ID               string
+	Namespace        string
+	UnitID           string
+	Seq              int64
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	IdempotencyKey   string
+	Version          int64
+	Body             string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJobsOfUnitParams) ([]ListAwaitingJobsOfUnitRow, error) {
+	rows, err := q.db.Query(ctx, listAwaitingJobsOfUnit, arg.Namespace, arg.UnitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAwaitingJobsOfUnitRow
+	for rows.Next() {
+		var i ListAwaitingJobsOfUnitRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.UnitID,
+			&i.Seq,
+			&i.State,
+			&i.Wait,
+			&i.CurrentPhase,
+			&i.CurrentChanges,
+			&i.CurrentOperation,
+			&i.IdempotencyKey,
+			&i.Version,
+			&i.Body,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -8495,27 +9728,45 @@ func (q *Queries) ListInstallationWrapperIDs(ctx context.Context) ([]string, err
 const listInventory = `-- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
-       COALESCE(c.name, '') AS collection
+       COALESCE(c.name, '') AS collection,
+       ul.holder AS unit_manual_holder, ul.reason AS unit_manual_reason, ul.since_ms AS unit_manual_since_ms,
+       cl.holder AS collection_manual_holder, cl.reason AS collection_manual_reason,
+       cl.since_ms AS collection_manual_since_ms,
+       nl.holder AS namespace_manual_holder, nl.reason AS namespace_manual_reason,
+       nl.since_ms AS namespace_manual_since_ms
 FROM inventory AS i
 LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
 LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+LEFT JOIN manual_locks AS ul ON ul.kind = 'unit' AND ul.object_id = i.unit_id
+LEFT JOIN manual_locks AS cl ON cl.kind = 'collection' AND cl.object_id = c.id
+LEFT JOIN namespaces AS ns ON ns.name = i.namespace
+LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.namespace = $1
 ORDER BY i.tool, i.name
 `
 
 type ListInventoryRow struct {
-	Namespace     string
-	Tool          string
-	Name          string
-	UnitID        string
-	DisplayName   string
-	LastChangedMs int64
-	Status        string
-	ResourceCount pgtype.Int8
-	LockHolder    pgtype.Text
-	LockSinceMs   pgtype.Int8
-	LockOperation pgtype.Text
-	Collection    string
+	Namespace               string
+	Tool                    string
+	Name                    string
+	UnitID                  string
+	DisplayName             string
+	LastChangedMs           int64
+	Status                  string
+	ResourceCount           pgtype.Int8
+	LockHolder              pgtype.Text
+	LockSinceMs             pgtype.Int8
+	LockOperation           pgtype.Text
+	Collection              string
+	UnitManualHolder        pgtype.Text
+	UnitManualReason        pgtype.Text
+	UnitManualSinceMs       pgtype.Int8
+	CollectionManualHolder  pgtype.Text
+	CollectionManualReason  pgtype.Text
+	CollectionManualSinceMs pgtype.Int8
+	NamespaceManualHolder   pgtype.Text
+	NamespaceManualReason   pgtype.Text
+	NamespaceManualSinceMs  pgtype.Int8
 }
 
 func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListInventoryRow, error) {
@@ -8540,6 +9791,15 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 			&i.LockSinceMs,
 			&i.LockOperation,
 			&i.Collection,
+			&i.UnitManualHolder,
+			&i.UnitManualReason,
+			&i.UnitManualSinceMs,
+			&i.CollectionManualHolder,
+			&i.CollectionManualReason,
+			&i.CollectionManualSinceMs,
+			&i.NamespaceManualHolder,
+			&i.NamespaceManualReason,
+			&i.NamespaceManualSinceMs,
 		); err != nil {
 			return nil, err
 		}
@@ -8809,6 +10069,57 @@ func (q *Queries) ListInventoryUnitLabels(ctx context.Context, unitID string) ([
 	for rows.Next() {
 		var i ListInventoryUnitLabelsRow
 		if err := rows.Scan(&i.LabelKey, &i.LabelValue); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobFreezes = `-- name: ListJobFreezes :many
+SELECT f.id, n.name AS namespace, f.reason, f.starts_at_ms, f.ends_at_ms, f.created_by, f.ended_by
+FROM job_freezes AS f
+JOIN namespaces AS n ON n.id = f.namespace_id
+WHERE n.name = $1 AND (f.ends_at_ms = 0 OR f.ends_at_ms > $2)
+ORDER BY f.starts_at_ms, f.id
+`
+
+type ListJobFreezesParams struct {
+	Namespace string
+	SinceMs   int64
+}
+
+type ListJobFreezesRow struct {
+	ID         string
+	Namespace  string
+	Reason     string
+	StartsAtMs int64
+	EndsAtMs   int64
+	CreatedBy  string
+	EndedBy    string
+}
+
+func (q *Queries) ListJobFreezes(ctx context.Context, arg ListJobFreezesParams) ([]ListJobFreezesRow, error) {
+	rows, err := q.db.Query(ctx, listJobFreezes, arg.Namespace, arg.SinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJobFreezesRow
+	for rows.Next() {
+		var i ListJobFreezesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Reason,
+			&i.StartsAtMs,
+			&i.EndsAtMs,
+			&i.CreatedBy,
+			&i.EndedBy,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -9145,6 +10456,76 @@ func (q *Queries) ListObjectContext(ctx context.Context, arg ListObjectContextPa
 	return items, nil
 }
 
+const listOrphanJobs = `-- name: ListOrphanJobs :many
+SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+       j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
+       d.state AS op_state
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+LEFT JOIN durable_operations AS d ON d.id = j.current_operation
+WHERE j.state IN ('dispatched', 'running', 'canceling')
+  AND j.state NOT IN ('succeeded', 'failed', 'canceled', 'rejected', 'expired')
+  AND (d.id IS NULL OR d.state IN ('succeeded', 'failed', 'canceled'))
+ORDER BY j.seq
+LIMIT $1
+`
+
+type ListOrphanJobsRow struct {
+	ID               string
+	Namespace        string
+	UnitID           string
+	Seq              int64
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	IdempotencyKey   string
+	Version          int64
+	Body             string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	OpState          pgtype.Text
+}
+
+// Jobs that hold their unit while the durable operation of their current
+// phase does not exist or ended. op_state is NULL for a missing operation.
+func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int32) ([]ListOrphanJobsRow, error) {
+	rows, err := q.db.Query(ctx, listOrphanJobs, maxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOrphanJobsRow
+	for rows.Next() {
+		var i ListOrphanJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.UnitID,
+			&i.Seq,
+			&i.State,
+			&i.Wait,
+			&i.CurrentPhase,
+			&i.CurrentChanges,
+			&i.CurrentOperation,
+			&i.IdempotencyKey,
+			&i.Version,
+			&i.Body,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.OpState,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -9274,7 +10655,7 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 }
 
 const listRestores = `-- name: ListRestores :many
-SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report
 FROM restores
 ORDER BY started_at_ms DESC, id ASC
 `
@@ -9297,6 +10678,7 @@ func (q *Queries) ListRestores(ctx context.Context) ([]Restore, error) {
 			&i.StartedAtMs,
 			&i.EndedAtMs,
 			&i.Error,
+			&i.DevReport,
 		); err != nil {
 			return nil, err
 		}
@@ -9538,6 +10920,88 @@ func (q *Queries) ListRunners(ctx context.Context, poolID string) ([]ListRunners
 			&i.RetiredAtMs,
 			&i.LastSeenAtMs,
 			&i.JoinedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSavedViewIDsOfOwner = `-- name: ListSavedViewIDsOfOwner :many
+SELECT v.id
+FROM saved_views AS v
+WHERE v.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND v.owner = $2
+ORDER BY v.id COLLATE "C"
+`
+
+type ListSavedViewIDsOfOwnerParams struct {
+	Namespace string
+	Owner     string
+}
+
+func (q *Queries) ListSavedViewIDsOfOwner(ctx context.Context, arg ListSavedViewIDsOfOwnerParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSavedViewIDsOfOwner, arg.Namespace, arg.Owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSavedViewsOfOwner = `-- name: ListSavedViewsOfOwner :many
+SELECT v.id, n.name AS namespace, v.owner, v.name, v.query_json, v.created_at_ms
+FROM saved_views AS v
+JOIN namespaces AS n ON n.id = v.namespace_id
+WHERE n.name = $1 AND v.owner = $2
+ORDER BY v.name COLLATE "C", v.id COLLATE "C"
+`
+
+type ListSavedViewsOfOwnerParams struct {
+	Namespace string
+	Owner     string
+}
+
+type ListSavedViewsOfOwnerRow struct {
+	ID          string
+	Namespace   string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
+// The order is by code point, whatever the collation of the database.
+func (q *Queries) ListSavedViewsOfOwner(ctx context.Context, arg ListSavedViewsOfOwnerParams) ([]ListSavedViewsOfOwnerRow, error) {
+	rows, err := q.db.Query(ctx, listSavedViewsOfOwner, arg.Namespace, arg.Owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSavedViewsOfOwnerRow
+	for rows.Next() {
+		var i ListSavedViewsOfOwnerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Owner,
+			&i.Name,
+			&i.QueryJson,
+			&i.CreatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -10455,6 +11919,18 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 	return i, err
 }
 
+const lockWritesExclusive = `-- name: LockWritesExclusive :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext(current_schema()))
+`
+
+// Takes the exclusive form of the write lock for this transaction. It waits
+// for every write transaction in flight, and holds every later write back
+// until this transaction ends. Each write transaction takes the shared form.
+func (q *Queries) LockWritesExclusive(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockWritesExclusive, class)
+	return err
+}
+
 const markProfileDeleted = `-- name: MarkProfileDeleted :execrows
 UPDATE profiles
 SET deleted_at_ms = $1
@@ -10564,6 +12040,23 @@ func (q *Queries) NextInventoryChangeSeq(ctx context.Context, namespaceID string
 	var last_seq int64
 	err := row.Scan(&last_seq)
 	return last_seq, err
+}
+
+const nextJobSeq = `-- name: NextJobSeq :one
+SELECT (COALESCE(MAX(j.seq), 0) + 1)::bigint AS seq
+FROM jobs AS j
+JOIN namespaces AS n ON n.id = j.namespace_id
+WHERE n.name = $1
+`
+
+// The sequence number of the next job of a namespace. The write transaction
+// holds the namespace row FOR UPDATE, so two creates of one namespace never read
+// the same maximum. The unique index on (namespace_id, seq) refuses a duplicate.
+func (q *Queries) NextJobSeq(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, nextJobSeq, namespace)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
 }
 
 const nextJournalArrival = `-- name: NextJournalArrival :one
@@ -10935,6 +12428,63 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 	return err
 }
 
+const putUnitFinalVersion = `-- name: PutUnitFinalVersion :exec
+INSERT INTO unit_final_versions (unit_id, namespace_id, version_id, commit_id, job_id, at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6
+)
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, commit_id = excluded.commit_id,
+    job_id = excluded.job_id, at_ms = excluded.at_ms
+`
+
+type PutUnitFinalVersionParams struct {
+	UnitID    string
+	Namespace string
+	VersionID string
+	CommitID  string
+	JobID     string
+	AtMs      int64
+}
+
+func (q *Queries) PutUnitFinalVersion(ctx context.Context, arg PutUnitFinalVersionParams) error {
+	_, err := q.db.Exec(ctx, putUnitFinalVersion,
+		arg.UnitID,
+		arg.Namespace,
+		arg.VersionID,
+		arg.CommitID,
+		arg.JobID,
+		arg.AtMs,
+	)
+	return err
+}
+
+const putUnitStateVersion = `-- name: PutUnitStateVersion :exec
+INSERT INTO unit_state_versions (unit_id, namespace_id, version_id, updated_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4
+)
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, updated_at_ms = excluded.updated_at_ms
+`
+
+type PutUnitStateVersionParams struct {
+	UnitID      string
+	Namespace   string
+	VersionID   string
+	UpdatedAtMs int64
+}
+
+func (q *Queries) PutUnitStateVersion(ctx context.Context, arg PutUnitStateVersionParams) error {
+	_, err := q.db.Exec(ctx, putUnitStateVersion,
+		arg.UnitID,
+		arg.Namespace,
+		arg.VersionID,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
 const queryGateRecords = `-- name: QueryGateRecords :many
 SELECT body
 FROM gate_records
@@ -10978,6 +12528,41 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec
+INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
+SELECT $1::text, $2::text, $3::text, $4::text,
+       $5::text, $6::bigint
+WHERE (SELECT state FROM installation WHERE id = 1 FOR SHARE) = 'maintenance'
+`
+
+type RecordMaintenanceRevocationParams struct {
+	Kind      string
+	Target    string
+	EndReason string
+	Actor     string
+	Object    string
+	AtMs      int64
+}
+
+// Journals one write that only reduces access, when the installation is in
+// maintenance mode, and nothing otherwise. A restore applies the journal
+// again after the swap. The read of the state holds the installation row FOR
+// SHARE until the transaction ends. An enter updates that row, so it waits
+// for a revocation in flight, and a revocation that starts after the enter
+// reads maintenance: no revocation commits in maintenance mode without its
+// journal row.
+func (q *Queries) RecordMaintenanceRevocation(ctx context.Context, arg RecordMaintenanceRevocationParams) error {
+	_, err := q.db.Exec(ctx, recordMaintenanceRevocation,
+		arg.Kind,
+		arg.Target,
+		arg.EndReason,
+		arg.Actor,
+		arg.Object,
+		arg.AtMs,
+	)
+	return err
 }
 
 const rejoinRunner = `-- name: RejoinRunner :exec
@@ -11054,6 +12639,27 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Project,
 		arg.Name_2,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const replaceIdempotencyServerKey = `-- name: ReplaceIdempotencyServerKey :execrows
+UPDATE idempotency_server_key
+SET wrapped_key = $1, wrapper_id = $2
+WHERE id = 1 AND wrapped_key = $3
+`
+
+type ReplaceIdempotencyServerKeyParams struct {
+	NewWrappedKey []byte
+	NewWrapperID  string
+	OldWrappedKey []byte
+}
+
+// It changes no row when another process replaced the key first.
+func (q *Queries) ReplaceIdempotencyServerKey(ctx context.Context, arg ReplaceIdempotencyServerKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceIdempotencyServerKey, arg.NewWrappedKey, arg.NewWrapperID, arg.OldWrappedKey)
 	if err != nil {
 		return 0, err
 	}
@@ -11604,6 +13210,44 @@ func (q *Queries) RunningUpdateAt(ctx context.Context, arg RunningUpdateAtParams
 	return version, err
 }
 
+const saveAuditChainCheckResult = `-- name: SaveAuditChainCheckResult :exec
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid)
+VALUES (1, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint, $1::bigint)
+ON CONFLICT (id) DO UPDATE SET checked_at_ms = excluded.checked_at_ms, invalid = excluded.invalid
+`
+
+// Stores the count of scopes that did not match, with the time of the clock
+// of the store read in the statement.
+func (q *Queries) SaveAuditChainCheckResult(ctx context.Context, invalid int64) error {
+	_, err := q.db.Exec(ctx, saveAuditChainCheckResult, invalid)
+	return err
+}
+
+const saveAuditChainMark = `-- name: SaveAuditChainMark :exec
+INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms)
+VALUES (
+    $1::text, $2::bigint, $3::bigint,
+    FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+)
+ON CONFLICT (scope) DO UPDATE SET epoch = excluded.epoch, sequence = excluded.sequence,
+    marked_at_ms = excluded.marked_at_ms
+WHERE audit_chain_mark.epoch < excluded.epoch
+`
+
+type SaveAuditChainMarkParams struct {
+	Scope    string
+	Epoch    int64
+	Sequence int64
+}
+
+// Stores the mark of a checkpoint mismatch of one scope. The first mark of a
+// scope in an epoch stays, and a mark of a newer epoch replaces the older
+// one. The time of the mark is the clock of the store, read in the statement.
+func (q *Queries) SaveAuditChainMark(ctx context.Context, arg SaveAuditChainMarkParams) error {
+	_, err := q.db.Exec(ctx, saveAuditChainMark, arg.Scope, arg.Epoch, arg.Sequence)
+	return err
+}
+
 const saveSensitiveMarks = `-- name: SaveSensitiveMarks :execrows
 UPDATE state_versions
 SET sensitive_marks = $1
@@ -12009,6 +13653,17 @@ func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) er
 	return err
 }
 
+const setLockTimeout = `-- name: SetLockTimeout :exec
+SELECT set_config('lock_timeout', $1::text, true)
+`
+
+// Limits the wait for a lock in this transaction, as SET LOCAL lock_timeout.
+// The timeout is a PostgreSQL duration text, for example 10000ms.
+func (q *Queries) SetLockTimeout(ctx context.Context, timeout string) error {
+	_, err := q.db.Exec(ctx, setLockTimeout, timeout)
+	return err
+}
+
 const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows
 UPDATE namespaces
 SET ip_allowlist = $1
@@ -12065,6 +13720,27 @@ type SetPendingContentKeyParams struct {
 // matches no row, so a late attempt reports no change.
 func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingContentKeyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setPendingContentKey, arg.ContentKey, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setRestoreDevReport = `-- name: SetRestoreDevReport :execrows
+UPDATE restores
+SET dev_report = $1
+WHERE id = $2
+`
+
+type SetRestoreDevReportParams struct {
+	DevReport string
+	ID        string
+}
+
+// Stores the report of the dev data of one restore, with the codes of its
+// warnings. A restore that does not exist matches no row.
+func (q *Queries) SetRestoreDevReport(ctx context.Context, arg SetRestoreDevReportParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setRestoreDevReport, arg.DevReport, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -12338,6 +14014,32 @@ func (q *Queries) SubjectsOfEnabledCaller(ctx context.Context, subject string) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const sweepIdempotencyRecords = `-- name: SweepIdempotencyRecords :execrows
+DELETE FROM idempotency_records
+WHERE created_at_ms < (
+         CASE WHEN $1::bigint <> 0 THEN $1::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $2
+   OR (status = 0 AND created_at_ms < (
+         CASE WHEN $1::bigint <> 0 THEN $1::bigint
+            ELSE (extract(epoch FROM clock_timestamp()) * 1000)::bigint END) - $3)
+`
+
+type SweepIdempotencyRecordsParams struct {
+	NowOverrideMs int64
+	RecordTtlMs   interface{}
+	PendingTtlMs  interface{}
+}
+
+// The time is the clock of the database. A non-zero now_override_ms replaces
+// it, for tests.
+func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempotencyRecordsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepIdempotencyRecords, arg.NowOverrideMs, arg.RecordTtlMs, arg.PendingTtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const takeSignInRequest = `-- name: TakeSignInRequest :one
@@ -12712,6 +14414,48 @@ func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLo
 	return err
 }
 
+const updateJob = `-- name: UpdateJob :execrows
+UPDATE jobs
+SET state = $1, wait = $2, current_phase = $3,
+    current_changes = $4, current_operation = $5,
+    version = $6, body = $7, updated_at_ms = $8
+WHERE id = $9 AND version = $10
+`
+
+type UpdateJobParams struct {
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	Version          int64
+	Body             string
+	UpdatedAtMs      int64
+	ID               string
+	PrevVersion      int64
+}
+
+// It changes no row when the stored version is not the one that the caller
+// read.
+func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateJob,
+		arg.State,
+		arg.Wait,
+		arg.CurrentPhase,
+		arg.CurrentChanges,
+		arg.CurrentOperation,
+		arg.Version,
+		arg.Body,
+		arg.UpdatedAtMs,
+		arg.ID,
+		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updatePrincipal = `-- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = $1, updated_at_ms = $2
 WHERE id = $3 AND namespace = $4 AND deleted_at_ms IS NULL
@@ -12858,6 +14602,24 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const upsertDurableHeartbeat = `-- name: UpsertDurableHeartbeat :exec
+
+INSERT INTO durable_heartbeats (owner, at_ms) VALUES ($1::text, $2::bigint)
+ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms
+`
+
+type UpsertDurableHeartbeatParams struct {
+	Owner string
+	NowMs int64
+}
+
+// Durable heartbeats. Every time comes from the database clock, read in the
+// transaction of the write.
+func (q *Queries) UpsertDurableHeartbeat(ctx context.Context, arg UpsertDurableHeartbeatParams) error {
+	_, err := q.db.Exec(ctx, upsertDurableHeartbeat, arg.Owner, arg.NowMs)
+	return err
 }
 
 const upsertInventory = `-- name: UpsertInventory :exec

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 )
 
 // DurableHolder is an optional store capability for the control table case
@@ -75,7 +76,7 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 	seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
 
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
 		t.Fatalf("stage portable backup: %v", err)
 	}
 
@@ -189,4 +190,72 @@ func mustClaimDurable(t *testing.T, s durable.Store) durable.Operation {
 	}
 
 	return op
+}
+
+// restoreAnswerStatus is the status of the answer that the restore case stores.
+const restoreAnswerStatus = 201
+
+// IdempotencyHolder is an optional store capability for the idempotency case
+// of the restore suite: the store of replay records on the database of the
+// store.
+type IdempotencyHolder interface {
+	IdempotencyStore() idempotency.Store
+}
+
+// testRestoreEmptiesIdempotencyRecords proves that a restore leaves no replay
+// record: a record answers for the state at the time of the first request,
+// and the restore removed that state.
+func testRestoreEmptiesIdempotencyRecords(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	dst := newStore(t)
+
+	srcRecords, ok := src.(IdempotencyHolder)
+	if !ok {
+		t.Skip("the store keeps no replay records")
+	}
+
+	dstRecords, ok := dst.(IdempotencyHolder)
+	if !ok {
+		t.Skip("the store keeps no replay records")
+	}
+
+	ps := portableRestoreStores(t, src, dst)
+	ctx := t.Context()
+	ref := idempotency.Ref{
+		Principal: "alice", Method: "POST", Path: "/api/dustpan/v1/namespaces/dev/profiles", Key: "restore-key",
+	}
+	now := time.Now()
+
+	answer := idempotency.Answer{Status: restoreAnswerStatus, Headers: nil, Body: []byte("{}")}
+
+	for name, records := range map[string]idempotency.Store{
+		"backup": srcRecords.IdempotencyStore(), "live": dstRecords.IdempotencyStore(),
+	} {
+		res, err := records.Begin(ctx, ref, []byte("body"), now)
+		if err != nil || res.Outcome != idempotency.Started {
+			t.Fatalf("begin in the %s store: outcome = %d, err = %v", name, res.Outcome, err)
+		}
+
+		if err = records.Complete(ctx, ref, res.Token, answer); err != nil {
+			t.Fatalf("complete in the %s store: %v", name, err)
+		}
+	}
+
+	seedBackupStore(t, ps.src)
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
+	}
+
+	res, err := dstRecords.IdempotencyStore().Begin(ctx, ref, []byte("body"), now)
+	if err != nil || res.Outcome != idempotency.Started {
+		t.Fatalf("begin after the restore: outcome = %d, err = %v, want Started (no record)", res.Outcome, err)
+	}
 }

@@ -55,7 +55,8 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	}
 
 	stmts := make([]string, 0, len(all)+2)
-	stmts = append(stmts, "CREATE SCHEMA "+ident, "SET search_path TO "+ident)
+	stmts = append(stmts, "CREATE SCHEMA "+ident,
+		"SET search_path TO "+ident+", "+pgx.Identifier{name + "_control"}.Sanitize())
 	for _, m := range all {
 		stmts = append(stmts, m.SQL)
 	}
@@ -88,11 +89,31 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		t.Fatalf("insert sign-in failure: %v", execErr)
 	}
 
+	insertAuditChainRows(t, conn, key, token)
+
 	if _, execErr := conn.Exec(ctx, "RESET search_path"); execErr != nil {
 		t.Fatalf("reset search path: %v", execErr)
 	}
 
 	return name
+}
+
+// insertAuditChainRows adds the audit chain check row and the mark of scope
+// key to the schema on the search path of conn.
+func insertAuditChainRows(t *testing.T, conn *pgx.Conn, key string, token int64) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	insertCheck := "INSERT INTO audit_chain_check (id, checked_at_ms, invalid) VALUES (1, $1, $1)"
+	if _, execErr := conn.Exec(ctx, insertCheck, token); execErr != nil {
+		t.Fatalf("insert audit chain check: %v", execErr)
+	}
+
+	insertMark := "INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms) VALUES ($1, $2, $2, $2)"
+	if _, execErr := conn.Exec(ctx, insertMark, key, token); execErr != nil {
+		t.Fatalf("insert audit chain mark: %v", execErr)
+	}
 }
 
 // TestKeepControlTablesKeepsTheLiveRows proves that the swap of a restore
@@ -146,6 +167,32 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 	checkKeptSchedules(t, conn, ident)
 
 	checkKeptSignInFailures(t, conn, ident)
+
+	checkKeptAuditChainCheck(t, conn, ident)
+}
+
+// checkKeptAuditChainCheck fails t unless the schema ident holds only the
+// live audit chain mark row, with the mark that it had before the swap: a
+// restore must not clear the mark of a checkpoint mismatch.
+func checkKeptAuditChainCheck(t *testing.T, conn *pgx.Conn, ident string) {
+	t.Helper()
+
+	var (
+		scope string
+		epoch int64
+		seq   int64
+		rows  int
+	)
+
+	read := "SELECT scope, epoch, sequence, (SELECT count(*) FROM " + ident +
+		".audit_chain_mark) FROM " + ident + ".audit_chain_mark"
+	if scanErr := conn.QueryRow(t.Context(), read).Scan(&scope, &epoch, &seq, &rows); scanErr != nil {
+		t.Fatalf("read restored audit chain check: %v", scanErr)
+	}
+
+	if scope != "live" || epoch != 5 || seq != 5 || rows != 1 {
+		t.Fatalf("restored audit chain check: scope %q epoch %d sequence %d rows %d", scope, epoch, seq, rows)
+	}
 }
 
 // checkKeptSchedules fails t unless the schema ident holds only the live

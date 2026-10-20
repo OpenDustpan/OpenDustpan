@@ -35,7 +35,7 @@ func (s *Store) AcquireSinkLease(
 
 	var claim durable.Claim
 
-	err = s.inTx(ctx, func(q *db.Queries) error {
+	err = s.inControlTx(ctx, func(q *db.Queries) error {
 		op, _, startErr := startOperation(ctx, q, durable.StartRequest{
 			Key:     audit.SinkLeaseKey(sink),
 			Kind:    audit.SinkLeaseKind,
@@ -164,7 +164,7 @@ func claimSinkOperation(ctx context.Context, q *db.Queries, bid sinkClaimBid) (d
 // transaction. It answers durable.ErrClaimLost, and changes nothing, when
 // claim is not the live claim of its operation.
 func (s *Store) ReleaseSinkLease(ctx context.Context, claim durable.Claim) error {
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inControlTx(ctx, func(q *db.Queries) error {
 		row, err := q.GetDurableOperation(ctx, string(claim.Operation))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return durable.ErrClaimLost

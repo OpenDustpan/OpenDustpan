@@ -20,6 +20,7 @@ import (
 func labeledEntries() []coreinventory.Entry {
 	entry := func(tool, name, id string, labels map[string]string) coreinventory.Entry {
 		return coreinventory.Entry{
+			ManualLock:  nil,
 			LastChanged: changeTime(), Namespace: "acme", Tool: tool, Name: name, UnitID: id,
 			DisplayName: name, Status: "", ResourceCount: nil, Lock: nil, Collection: "", Labels: labels,
 		}
@@ -63,6 +64,7 @@ func newOutsideGrammarHandler(t *testing.T, labels map[string]string) *apiinvent
 	seedNamespace(t, nsStore)
 
 	entry := coreinventory.Entry{
+		ManualLock:  nil,
 		LastChanged: changeTime(), Namespace: "acme", Tool: "pulumi", Name: "web/prod", UnitID: "stk-1",
 		DisplayName: "web/prod", Status: "", ResourceCount: nil, Lock: nil, Collection: "", Labels: labels,
 	}

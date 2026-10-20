@@ -79,12 +79,14 @@ func (h *Handler) buildRoutes() []Route {
 	routes := append([]Route{}, h.coreRoutes()...)
 	routes = append(routes, h.backupRoutes()...)
 	routes = append(routes, h.checkRoutes()...)
+	routes = append(routes, h.workerRoutes()...)
 	routes = append(routes, h.restoreRoutes()...)
 	routes = append(routes, h.maintenanceRoutes()...)
 	routes = append(routes, h.auditChainRoutes()...)
 	routes = append(routes, h.deletedUnitRoutes()...)
 	routes = append(routes, h.namespaceOverrideRoutes()...)
 	routes = append(routes, h.ipAllowlistRoutes()...)
+	routes = append(routes, h.gateConfigRoutes()...)
 	routes = append(routes, h.principalRoutes()...)
 	routes = append(routes, h.namespacePrincipalRoutes()...)
 	routes = append(routes, h.groupRoutes()...)
@@ -98,6 +100,8 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.auditSinkRoutes()...)
 	routes = append(routes, h.checkpointRoutes()...)
 	routes = append(routes, h.signInRoutes()...)
+	routes = append(routes, h.devSignInRoutes()...)
+	routes = append(routes, h.capabilitiesRoutes()...)
 	routes = append(routes, h.signInProviderRoutes()...)
 
 	return routes
@@ -401,7 +405,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		}
 
 		for _, action := range actions {
-			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
+			if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
 				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
 
 				return

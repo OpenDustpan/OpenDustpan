@@ -2,19 +2,23 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
-// DurableStore keeps the durable operations and the job schedules. Both SQL
-// adapters serve it from the same database connection as the other ports.
+// DurableStore keeps the durable operations, the job schedules and the
+// heartbeats of the workers. Both SQL adapters serve it from the same
+// database connection as the other ports.
 type DurableStore interface {
 	durable.Store
 	durable.ScheduleStore
+	durable.HeartbeatStore
 }
 
 // WithDurableStore sets the store of the durable job schedules. With it the
@@ -30,6 +34,8 @@ const (
 	inactivityScheduleName  = "inactivity-disable"
 	deletedScheduleName     = "deleted-sweep"
 	signInPruneScheduleName = "signin-prune"
+	idempotencyScheduleName = "idempotency-sweep"
+	auditChainScheduleName  = "audit-chain-check"
 
 	jobScheduleVersion = 1
 )
@@ -42,6 +48,8 @@ const (
 	kindInactivity  durable.Kind = inactivityScheduleName
 	kindDeleted     durable.Kind = deletedScheduleName
 	kindSignInPrune durable.Kind = signInPruneScheduleName
+	kindIdempotency durable.Kind = idempotencyScheduleName
+	kindAuditChain  durable.Kind = auditChainScheduleName
 )
 
 // durableOwner returns the owner name of the job runner: the instance ID
@@ -80,6 +88,20 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	if s.idempotency != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: idempotencyScheduleName, Kind: kindIdempotency, Version: jobScheduleVersion,
+			Interval: s.idempotencyEvery, Input: nil,
+		})
+	}
+
+	if s.chain != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: auditChainScheduleName, Kind: kindAuditChain, Version: jobScheduleVersion,
+			Interval: s.auditChainPeriod(), Input: nil,
+		})
+	}
+
 	return specs
 }
 
@@ -89,51 +111,42 @@ func (s *Server) jobKinds() []durable.KindSpec {
 	var kinds []durable.KindSpec
 
 	if s.tokens != nil {
-		kinds = append(kinds, durable.KindSpec{
-			Kind:       kindInactivity,
-			Version:    jobScheduleVersion,
-			MinVersion: jobScheduleVersion,
-			Steps: []durable.Step{
-				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-					s.sweepOnce(ctx)
-
-					return nil, nil
-				}},
-			},
-		})
+		kinds = append(kinds, jobKind(kindInactivity, s.sweepOnce))
 	}
 
 	if s.deleted != nil {
-		kinds = append(kinds, durable.KindSpec{
-			Kind:       kindDeleted,
-			Version:    jobScheduleVersion,
-			MinVersion: jobScheduleVersion,
-			Steps: []durable.Step{
-				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-					s.sweepDeletedOnce(ctx)
-
-					return nil, nil
-				}},
-			},
-		})
+		kinds = append(kinds, jobKind(kindDeleted, s.sweepDeletedOnce))
 	}
 
 	if s.signInRequests != nil {
-		kinds = append(kinds, durable.KindSpec{
-			Kind:       kindSignInPrune,
-			Version:    jobScheduleVersion,
-			MinVersion: jobScheduleVersion,
-			Steps: []durable.Step{
-				{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-					s.pruneSignInRequestsOnce(ctx)
+		kinds = append(kinds, jobKind(kindSignInPrune, s.pruneSignInRequestsOnce))
+	}
 
-					return nil, nil
-				}},
-			},
-		})
+	if s.idempotency != nil {
+		kinds = append(kinds, jobKind(kindIdempotency, s.sweepIdempotencyOnce))
+	}
+
+	if s.chain != nil {
+		kinds = append(kinds, jobKind(kindAuditChain, s.chain.check))
 	}
 
 	return kinds
+}
+
+// jobKind returns the runner kind of a job with one step that runs body.
+func jobKind(kind durable.Kind, body func(context.Context)) durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       kind,
+		Version:    jobScheduleVersion,
+		MinVersion: jobScheduleVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				body(ctx)
+
+				return nil, nil
+			}},
+		},
+	}
 }
 
 // jobPollShare is the part of the shortest schedule interval between two
@@ -175,7 +188,7 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 	}
 
 	scheduler, err := durable.NewScheduler(durable.SchedulerConfig{
-		Store:         s.durable,
+		Store:         s.tracked(),
 		Schedules:     specs,
 		MaxFirstDelay: 0,
 		ErrorBackoff:  durable.Backoff{Base: 0, Max: 0},
@@ -187,10 +200,10 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 	}
 
 	runner, err := durable.NewRunner(durable.RunnerConfig{
-		Store:        s.durable,
+		Store:        s.tracked(),
 		Owner:        s.durableOwner,
 		Kinds:        s.jobKinds(),
-		Lease:        0,
+		Lease:        s.leaseSetting(),
 		RenewEvery:   0,
 		PollEvery:    jobPollEvery(specs),
 		MaxAttempts:  0,
@@ -198,14 +211,37 @@ func (s *Server) newJobRunner() (*durable.Scheduler, *durable.Runner, error) {
 		Backoff:      durable.Backoff{Base: 0, Max: 0},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
 		WriteTimeout: 0,
-		Logger:       s.logger,
-		Rand:         nil,
+		// Maintenance mode refuses the checked writes of a job. The operation
+		// waits, and the wait counts no attempt.
+		Deferred: func(err error) bool { return errors.Is(err, maintenance.ErrInMaintenance) },
+		Logger:   s.logger,
+		Rand:     nil,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("job runner: %w", err)
 	}
 
 	return scheduler, runner, nil
+}
+
+// leaseSetting returns the configured lease period, or 0 for the default.
+func (s *Server) leaseSetting() time.Duration {
+	if s.watch == nil {
+		return 0
+	}
+
+	return s.watch.lease
+}
+
+// tracked returns the durable store with the claim recorder around it.
+//
+//nolint:ireturn // The scheduler and the runner take the port.
+func (s *Server) tracked() DurableStore {
+	if s.watch == nil {
+		return s.durable
+	}
+
+	return trackingStore{DurableStore: s.durable, watch: s.watch}
 }
 
 // startSweeps starts the background sweeps on ctx: the durable job schedules
@@ -216,6 +252,7 @@ func (s *Server) startSweeps(ctx context.Context, sweeps *sync.WaitGroup) error 
 		sweeps.Go(func() { s.sweepInactive(ctx) })
 		sweeps.Go(func() { s.sweepDeleted(ctx) })
 		sweeps.Go(func() { s.pruneSignInRequests(ctx) })
+		sweeps.Go(func() { s.sweepIdempotency(ctx) })
 
 		return nil
 	}

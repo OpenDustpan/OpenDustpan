@@ -12,8 +12,9 @@ import (
 
 // Objects is gate.Objects[T] over a Runner.
 type Objects[T gate.Object] struct {
-	run   Runner
-	codec codec[T]
+	run       Runner
+	codec     codec[T]
+	approvers approverChecker
 }
 
 var (
@@ -24,8 +25,8 @@ var (
 	_ gate.Objects[gate.PathSet]       = (*Objects[gate.PathSet])(nil)
 )
 
-func newObjects[T gate.Object](run Runner) *Objects[T] {
-	return &Objects[T]{run: run, codec: codecOf[T]()}
+func newObjects[T gate.Object](run Runner, approvers approverChecker) *Objects[T] {
+	return &Objects[T]{run: run, codec: codecOf[T](), approvers: approvers}
 }
 
 // checkFence returns gate.ErrInvalid when fence is not the fence of scope: the
@@ -135,6 +136,10 @@ func (o *Objects[T]) Put(
 	}
 
 	if err := validateObject(obj); err != nil {
+		return 0, err
+	}
+
+	if err := o.approvers.checkObject(ctx, obj); err != nil {
 		return 0, err
 	}
 
@@ -350,9 +355,10 @@ func validateObject(obj any) error {
 
 		return err
 	case gate.ApprovalRule:
-		_, err := gate.ParseRuleID(string(v.ID))
-
-		return err
+		// Defense in depth: the service validates the rule too; this check
+		// stays so that a new caller of the port cannot store a rule that
+		// nobody can meet or that needs no approval.
+		return v.Validate()
 	case gate.OwnershipRule:
 		if _, err := gate.ParseID(string(v.ID)); err != nil {
 			return err

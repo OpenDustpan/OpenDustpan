@@ -31,10 +31,17 @@ _Avoid_: Namespace key, org ID, UUID
 **Unit**:
 One deployable instance of infrastructure with its own state, in the model of the tool that owns it. A Pulumi stack and an OpenTofu workspace are units.
 _Avoid_: Environment, deployment, target
+_Copy says_: "stack" or "workspace". Both together: "stacks and workspaces". "Unit" stays in code and in the API. Never use it in copy.
 
 **Unit reference**:
 The tool, the namespace and the tool's own name for a unit, written as `<tool>:<namespace>/<name>`, for example `pulumi:acme/web/prod`.
 _Avoid_: Unit ID, path, address
+_Copy says_: the name of the stack or the workspace, with its tool and namespace. `<tool>:<namespace>/<name>` stays in the API.
+
+**Manual lock**:
+A lock that a person puts on one unit, on one collection or on a whole namespace, with a reason of at most 500 characters. While it covers a unit, a lock request of a tool for that unit fails and names the holder and the reason. No new job of the unit starts, and a queued phase does not dispatch. A phase that already runs runs to its end. It covers each unit that is in the collection or in the namespace now. The holder unlocks it, or a person with `unit:manage` on the object force-unlocks it with an audit entry. A tool force-unlock never ends it. The inventory shows it as a flag that is apart from the unit lock (ADR 213 decision 10).
+_Avoid_: Freeze (that is a schedule of a namespace), hold, pause
+_Copy says_: "manual lock", on a stack, a workspace, a collection or a namespace. Both stacks and workspaces: "stacks and workspaces". The `unit:lock` and `unit:manage` action names stay in the API.
 
 **State**:
 The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state and may read it. A read masks secret values (ADR 41).
@@ -43,10 +50,12 @@ _Avoid_: State file (except for OpenTofu), snapshot
 **Inventory**:
 The list of all units in a namespace across all tools, with their last change and status. Each tool keeps it current with its own writes.
 _Avoid_: Catalog, registry, index
+_Copy says_: "Inventory" as the console navbar label for the list across all tools (the one short exception). In other copy: "the stacks and workspaces of a namespace".
 
 **Collection**:
 A named set of units in one namespace, from any tool, that a team manages. Each unit is in exactly one collection, and collections do not nest (ADR 51). A collection can be the object of a grant.
 _Avoid_: Group (that is a set of principals), project, folder, system
+_Copy says_: "collection", with the things it holds: "a collection of stacks and workspaces". Do not use "collection" as a plain word for any other set.
 
 **Placement rule**:
 A rule of a namespace that matches a Pulumi project and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61).
@@ -55,6 +64,15 @@ _Avoid_: Routing rule, assignment rule
 **Label**:
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51). A label change needs `unit:edit-labels` and writes no state (ADR 223 decision 11). A key has 1 to 128 characters: letters, digits and `.`, `_`, `:`, `/` and `-`. A value has 0 to 256 characters of valid UTF-8 and no control character. The label filter of the unit list accepts only this form. A Pulumi stack tag outside this form still shows in the list as a label.
 _Avoid_: Tag (except when naming a tool's own field), attribute
+
+**Unit state**:
+One fact about a unit that the inventory shows as a badge: `in-sync`, `running`, `queued`, `locked`, `awaiting-approval`, `apply-needed`, `drifted`, `failed` or `unknown` (ADR 265). A unit has all the states that apply, and a list shows them all, each with a tooltip. No one state wins. The words and the badge rule are an owner decision. The server derives `locked` at read time from the unit lock, which stays the only source (ADR 265 decision 5). The drift statuses are three of the states.
+_Avoid_: Unit status (for the set), winning status, health
+_Copy says_: the tool's own words on its own pages. "Approval wait" is the human word for `awaiting-approval`.
+
+**Saved view**:
+A name for a query of the unit list, stored on the server and read through the REST API (ADR 266). A saved view holds the query and never its results. A reader runs the query again with the access of the reader, so the view shows only units that the reader can read. A saved view grants no access (ADR 51 decision 7). One person in one namespace owns a view, and a view is private first (ADR 266).
+_Avoid_: Filter preset, bookmark, smart collection (a collection holds units by explicit membership, ADR 51)
 
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
@@ -103,10 +121,12 @@ _Avoid_: Breakage, gap
 **Installation**:
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path, and its actions have the area `installation:` (ADR 210). The authorization and audit object of the installation keeps the name `@server`. Write `@server` only for that object, and "installation" in each other place. An installation owns its namespaces. A namespace holds collections, and a collection holds units (ADR 248).
 _Avoid_: Cluster, instance (one server process), deployment
+_Copy says_: "installation", explained once: "one OpenDustpan setup, with its database, its blob store and its key-encryption key". For one program, write "the server".
 
 **Instance**:
 One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
 _Avoid_: Node, replica (alone), host
+_Copy says_: "server process". Never write "instance" in copy.
 
 **Component**:
 A part of the server that a process runs: `api` or `worker` (ADR 249). One process runs one or more components, and a start flag selects the components. All components run by default. A component is a setting of one process. A module switch is a setting of the installation.
@@ -119,6 +139,14 @@ _Avoid_: Mode, purpose, origin
 **Dev installation**:
 An installation with the installation kind `dev`, which `opendustpan dev` made for a trial or for CI (ADR 237). Its key-encryption key, and the admin token that `dev` makes, live in its data directory. It has no backup, and no command turns it into a production installation. To keep a unit, a user moves it with the export and import commands of its tool.
 _Avoid_: Test installation, sandbox, demo installation
+
+**Dev data**:
+The people and the rows that `opendustpan dev` makes: the person `dev:admin` and the data that depends on it, such as its grants, sessions and tokens. Its subject starts with `dev:`, in any ASCII letter case. A production installation holds no dev data (ADR 253).
+_Avoid_: Test data, demo data
+
+**Strip**:
+The step of a restore that deletes the dev data from the staged data before the swap. It runs on every restore into a production installation. The staged data decides, not the installation kind in the manifest (ADR 253).
+_Avoid_: Scrub, sanitize, clean
 
 **IP allowlist**:
 A list of CIDRs on a namespace. A request that acts on the namespace from outside the list gets 403. The feature is off unless the operator turns it on.
@@ -147,6 +175,10 @@ _Avoid_: Feature flag, plugin, add-on, module (alone)
 **Capabilities document**:
 The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 211). `apiVersion` is public, so the console reads it before the sign-in. The module list needs `caller:read`, so the console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
 _Avoid_: Feature list, handshake, capability (alone)
+
+**API description**:
+The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The SDKs, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
+_Avoid_: Swagger file, API spec, OpenAPI spec, schema file
 
 **Forge**:
 A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection (RFC 89, proposed). Internal term. User-facing text names the service (GitHub, GitLab, Forgejo). Where a generic term is needed, it says Git host.
@@ -243,6 +275,31 @@ _Avoid_: Tombstone (that is the shred record of a purged unit)
 The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/dustpan/v1/maintenance/enter`. The other state is `normal`.
 _Avoid_: Downtime, freeze
 
+**Forge**:
+The Git host where people review and approve changes, such as GitHub, Forgejo or GitLab. A source of the repository model may sit on one.
+_Avoid_: Provider, platform
+_Copy says_: the name of the host: "GitHub" or "Forgejo". Where the text must cover every kind: "Git host". Never write "forge".
+
+**Review request**:
+The change that OpenDustpan sends to a forge for approval, as a pull request or a merge request.
+_Avoid_: Change request, PR (alone)
+_Copy says_: "pull request" for GitHub and Forgejo, "merge request" for GitLab. Where the text must cover both: "pull request or merge request". Never write "review request".
+
+**Write-back**:
+The act of committing an edit that OpenDustpan received through its API to the Git repository that holds the source.
+_Avoid_: Sync back, push-back
+_Copy says_: "commits to <repo> on GitHub", with the repository and the host named.
+
+**Subject**:
+The identifier of a principal that is unique on the whole installation. For a principal that signs in through a provider, it holds the provider ID and the identity provider subject.
+_Avoid_: User ID, username
+_Copy says_: "the ID of the principal". The API field `subject` keeps its name. Explain it once where it first shows.
+
+**Durable operation**:
+A piece of background work that the database keeps. If the server process that runs it stops, another process can claim it and finish it (ADR 72).
+_Avoid_: Job (alone), task queue item
+_Copy says_: "background task". Name the task in plain words, for example "the backup", not the mechanism. Say the one next step.
+
 ### Federation
 
 **Installation name**:
@@ -280,16 +337,19 @@ _Avoid_: Conflict, lost writes, split brain (as a name of the data)
 **Failover version**:
 A number that increases by one at each promotion of a namespace, and at each restore.
 _Avoid_: Epoch, generation
+_Copy says_: no name. Say the effect and the one next step: "The namespace changed while this write ran. Run the command again." Where a name is needed, write "the number of changes of the namespace by a promotion or a restore".
 
 **Fence**:
 The namespace and failover version that a write carries. A store rejects the write when the failover version is no longer current.
 _Avoid_: Token, guard
+_Copy says_: no name. Say the effect, as for the failover version. Never use "fence" as a plain verb.
 
 ### Identity
 
 **Principal**:
 A caller whose identity OpenDustpan checked: a person, a service or a workload. Each principal has a principal home: the installation or one namespace (ADR 215).
 _Avoid_: User (when the caller can be a machine), actor
+_Copy says_: "principal", explained once where it first shows: "a person, a service or a workload".
 
 **Principal kind**:
 What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload`. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
@@ -313,6 +373,7 @@ _Avoid_: Identity source, IdP connection
 **Installation scope**:
 The scope of a secret value that belongs to the installation and to no namespace, for example the client secret of a sign-in provider. The server binds its data key to `@server`, a name that no namespace can have.
 _Avoid_: Global scope, server namespace
+_Copy says_: "the whole installation".
 
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
@@ -369,6 +430,7 @@ _Avoid_: Permission set, policy
 **Action family**:
 One of four sets of actions that do not overlap: operator, administration, data and delegation. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only. A role on a service principal holds delegation actions only.
 _Avoid_: Permission category, scope
+_Copy says_: "kind of action". Never use "scope" for it.
 
 **Grant**:
 A record that gives one role to a principal or a group on one object. The object is the installation, a namespace, a collection, a unit or a service principal. A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
@@ -393,6 +455,7 @@ _Avoid_: Permission, verb, scope
 **Reach**:
 The set of actions on objects that a principal can do. It comes from the grants of the principal and the grants of its groups. It also holds the grants of each principal it can act as through an act-as edge. One reach covers another when it holds each of its actions on each of its objects.
 _Avoid_: Effective access, permission set
+_Copy says_: "what the principal can do", with the actions named. Never use "reach" as a plain verb.
 
 **Act-as edge**:
 A right that lets one principal use the authority of another. It has two forms: `principal:manage-tokens` on a principal, and the right to write a trust rule that names a principal.
@@ -489,14 +552,17 @@ _Avoid_: Lease
 **Override switch**:
 A setting of a namespace or of a unit that allows an override (ADR 44, decision 6). Both settings are off by default. A unit setting only narrows the setting of its namespace.
 _Avoid_: Flag, toggle
+_Copy says_: "forced-write switch" and "unlocked-write switch". Say where to turn each on. "Override switch" stays in code and in the API.
 
 **Forced write**:
 A state write that skips the lineage and serial checks, as `tofu state push -force` does. It needs the action `unit:write-forced` and both override switches on.
 _Avoid_: Force push, override (alone)
+_Copy says_: "forced write", with the permission (`unit:write-forced`) after the plain words.
 
 **Unlocked write**:
 A state write to a workspace that no principal holds, as `tofu apply -lock=false` does. It needs the action `unit:write-unlocked` and both override switches on.
 _Avoid_: Lockless write
+_Copy says_: "write without the lock", with the permission (`unit:write-unlocked`) after the plain words.
 
 **State version**:
 One immutable copy of the state of a workspace, with a lineage and a serial.
@@ -519,6 +585,7 @@ _Avoid_: Version number, revision
 **Scope**:
 The namespace and the stable identity of a unit that one data key protects.
 _Avoid_: Context, key ID
+_Copy says_: "the secrets of one stack or workspace". Never use "scope" as a plain word for range or limit.
 
 **Data key**:
 The random key that encrypts all secret values of one scope. OpenDustpan stores it only in encrypted form.
@@ -543,6 +610,8 @@ _Avoid_: Key status, KMS state
 **Sealed**:
 Encrypted at rest with the data key of a scope, or with the item key of a history item. The server seals each checkpoint blob, event payload and journal batch of a Pulumi update with the item key of the update (ADR 151). It seals the state blob and the outputs document of an OpenTofu state version with the item key of the state version. The part of the server that seals and opens content is the sealer.
 _Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
+_Copy says_: "encrypted by the server". Do not use "sealed" in copy. It means locked in Vault.
+The _Avoid_ rule ("Encrypted") is for names in code. The _Copy says_ rule ("encrypted by the server") is for text that users read.
 
 **Secret value**:
 A value in state that the tool marks as secret: a Pulumi secret, or an OpenTofu sensitive output or attribute.
@@ -583,6 +652,16 @@ _Avoid_: Signed head, anchor, checkpoint (alone, outside the audit log)
 **Log sink**:
 An output adapter of the port `pkg/logsink` that delivers structured records to one target: stdout, a file, syslog, a webhook, OTLP logs or object storage. The audit log and the application log use the same port (ADR 60).
 _Avoid_: Log target, log destination, exporter
+_Copy says_: "log output", with the target: a file, syslog or a webhook. Never write "sink" in copy.
+
+**Chat platform**:
+A chat service that OpenDustpan posts messages to: Slack, Microsoft Teams, Mattermost or Matrix (ADR 262). The code type is `chat.Platform`, and the wire value is the lower-case name in the field `platform`. `chatops.Request.Platform` takes this type later.
+_Avoid_: Tool (for a chat service, because a tool is an infrastructure-as-code CLI), provider, integration
+
+**Chat sink**:
+A notification sink of the kind `chat`. It posts a message to one chat platform. The field `platform` names it, and the person who creates the sink gives it. The first form posts to an incoming webhook URL, which is a secret item of the scope. A read of the sink shows its platform, its name and the host of the URL, and whether a URL exists. One sender serves every chat sink, and a renderer for each platform builds the request (RFC 98).
+_Avoid_: Chat connection (for a webhook sink)
+_Copy says_: "Slack channel" or "Slack webhook" for a sink that posts to a webhook URL, and the same pattern for the other platforms. "Slack connection" stays the word for the later connection to a Slack app. Never write "sink" in copy.
 
 **Kind of access**:
 The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The principal kind decides the kind of a state download, never the declared channel (ADR 240). A download with a session or an access token of a principal of the kind `person` writes `reveal`. This includes `tofu state pull` with a personal token or the bootstrap admin token. A download with a service token, a token from a trust rule or a job token writes `tool-operation`. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log). ADR 52 adds `read-access`: a read of the access-review export of an object.
@@ -607,6 +686,40 @@ _Avoid_: Quota (the catalog quota is another concept), storage quota
 **Unmanaged resource**:
 A cloud resource that does not have exactly one unit that manages it. It has three kinds. **Not in any unit**: the state of no unit holds the resource, and only a cloud sweep can find it. **Left behind**: only deleted units hold its resource key. **Managed twice**: two or more live units hold its resource key, from one tool or from both (ADR 163).
 _Avoid_: Orphan (that is a stored file), ghost resource, shadow resource
+
+**Drift**:
+A difference between the state of a unit and the real resources that the state names. A change outside the tool causes it, for example a manual edit in a cloud console. A cloud resource that no unit manages is not drift. It is an unmanaged resource (ADR 163).
+_Avoid_: Out-of-band change (except to name a cause), configuration drift
+
+**Drift check**:
+A job with the operation `refresh` and one phase, `plan`, that finds drift (ADR 263). It changes no resource and writes no state version. OpenTofu runs a refresh-only plan and the Pulumi CLI runs a refresh preview. It starts on its own only when a drift schedule is on, and a person can start it at any time. Remediation is a separate job (ADR 258).
+_Avoid_: Drift run (older ADRs only), drift scan (a scan is a Sweep), health assessment
+_Copy says_: "drift check" for both tools. On the page of one tool, that tool's own words: "refresh-only plan" for OpenTofu and "refresh preview" for the Pulumi CLI.
+
+**Drift result**:
+What one finished drift check reports: the unit, the job and the time. It also lists the address of each resource that differs. It holds no attribute value. A unit keeps its latest drift result. The **drift status** follows from it: `drifted`, `in-sync` or `unknown`. The status `drifted` is one badge of the unit among others.
+_Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
+
+**Drift schedule**:
+The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
+_Avoid_: Drift policy (a policy alone names no object), drift trigger
+
+**Trigger**:
+A rule of one unit that starts a plan of that unit on its own (ADR 267). It has one kind: `review-request-push`, `schedule` or `follows`. A trigger starts a plan and nothing else. The job passes through the job service, so the gates, the approval rules, the freezes and the manual locks apply. A trigger has no pool: the job takes the runner pool of the unit settings.
+_Avoid_: Run trigger (except for the TFE-compatible object of that name), webhook (an inbound webhook is another idea), automation, hook
+_Copy says_: "trigger". On the page of one tool, that tool's own words: "plan" for OpenTofu and "preview" for the Pulumi CLI.
+
+**Follows trigger**:
+A trigger of the kind `follows`. It names a source unit. After the source applies, a plan of the unit of the trigger starts. A unit of one tool can follow a unit of another tool. The server refuses a cycle of follows triggers when a person saves one. A follows trigger is a declared dependency edge (ADR 153).
+_Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
+
+**Registry release**:
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+_Avoid_: Package, artifact (that is a plan or a log of a job)
+
+**Registry address**:
+The name of a provider or module in a namespace: the namespace, the kind and the name, with the system for a module. The host of the address is the host of the server (RFC 101).
+_Avoid_: Source address (that is the field of OpenTofu), package name
 
 **Catalog**:
 The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
@@ -661,10 +774,6 @@ _Avoid_: Autonomy level, agent permission
 **Freeze**:
 A change freeze on a namespace (ADR 103 decision 4). While it is active, no phase that changes resources, state or the code in git dispatches. Freezes are opt-in. A namespace has no freeze until a principal with `namespace:manage-freezes` creates one. A freeze has a reason, a start and an optional end. Plans still run, and a phase that runs when the freeze starts runs to its end. A queued job waits with the reason `frozen`, and dispatches after the freeze ends. A freeze never refuses a state write, because it stops only the work that OpenDustpan starts (ADR 103 decision 5).
 _Avoid_: Maintenance mode (that stops the tool APIs of a whole installation), lock
-
-**Manual lock**:
-A lock that a person puts on one unit, one collection or a whole namespace, with a reason (ADR 213 decision 10). It needs `unit:lock`. While it covers a unit, no new job of the unit starts and no queued phase dispatches. A lock request of a tool fails with the holder and the reason. The inventory shows it as the lock flag of the unit, not as a status. A freeze is a schedule for a whole namespace. A manual lock is not a freeze.
-_Avoid_: Freeze, hold, pause
 
 **Write-back**:
 The executor in which OpenDustpan writes a change to git, and the team's existing CI applies it (ADR 100). The change is a direct push or a review request. It runs in the server: each instance claims a deliver phase with a `durable.Runner` (ADR 101 decision 3). It commits through the API of the forge, never with a git client. Each commit has the trailer `Dustpan-Job: <job ID>`. A write-back job does `apply` only, and edits only the config or variable files of the unit. The next final state version of the unit closes the job, after the merge for a review request. A job that sees no such version expires after 14 days by default. OpenDustpan approvals add to the approvals of the forge.
@@ -1113,7 +1222,7 @@ The state item of a unit that no redaction can target (ADR 150, ADR 151). For a 
 _Avoid_: Current item, head
 
 **Item key**:
-The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
+The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `namespaces/<namespace ID>/item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
 _Avoid_: Version key, derived key, data key (that is the one key of a scope)
 
 **Redaction**:
@@ -1344,6 +1453,8 @@ A record of a cyber threat in a namespace, with an ID that has the prefix `thr-`
 _Avoid_: Threat (alone), alert, vulnerability
 
 ## Flagged ambiguities
+
+- **Copy** is every text that a user reads: the console, `README.md`, `docs/guides/`, `docs/reference/`, `docs/explanation/`, CLI output, and the text of API errors and messages. Copy follows ADR 251. Code, API field names, wire values, metrics and logs keep the glossary terms. A `_Copy says_` line gives the word that copy uses instead.
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
 

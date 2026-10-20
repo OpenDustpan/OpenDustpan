@@ -5,44 +5,48 @@ import "slices"
 // Column names that more than one table holds. goconst keeps each one a
 // constant.
 const (
-	portColName         = "name"
-	portColNameKey      = "name_key"
-	portColCreatedAtMs  = "created_at_ms"
-	portColDisplayName  = "display_name"
-	portColProviderID   = "provider_id"
-	portColCreatedBy    = "created_by"
-	portColNamespace    = "namespace"
-	portColNamespaceID  = "namespace_id"
-	portColReason       = "reason"
-	portTableNamespaces = "namespaces"
-	portColVersion      = "version"
-	portColStackID      = "stack_id"
-	portColStatus       = "status"
-	portColStartedAtMs  = "started_at_ms"
-	portColEndedAtMs    = "ended_at_ms"
-	portColUpdateID     = "update_id"
-	portColSequence     = "sequence"
-	portColSize         = "size"
-	portColArrival      = "arrival"
-	portColState        = "state"
-	portColUpdatedAtMs  = "updated_at_ms"
-	portColDeletedAtMs  = "deleted_at_ms"
-	portColDisabledAtMs = "disabled_at_ms"
-	portColSource       = "source"
-	portColKind         = "kind"
-	portColSubject      = "subject"
-	portColDeletedName  = "deleted_name"
-	portColTool         = "tool"
-	portColUnitID       = "unit_id"
-	portColPrincipalID  = "principal_id"
-	portColDigest       = "digest"
-	portColSink         = "sink"
-	portColExpiresAtMs  = "expires_at_ms"
-	portColObjectKind   = "object_kind"
-	portColObjectID     = "object_id"
-	portColResourceKey  = "resource_key"
-	portColAtMs         = "at_ms"
-	portColScopeKey     = "scope_key"
+	portColName          = "name"
+	portColNameKey       = "name_key"
+	portColCreatedAtMs   = "created_at_ms"
+	portColDisplayName   = "display_name"
+	portColProviderID    = "provider_id"
+	portColCreatedBy     = "created_by"
+	portColNamespace     = "namespace"
+	portColNamespaceID   = "namespace_id"
+	portColReason        = "reason"
+	portTableNamespaces  = "namespaces"
+	portTableManualLocks = "manual_locks"
+	portColVersion       = "version"
+	portColStackID       = "stack_id"
+	portColStatus        = "status"
+	portColStartedAtMs   = "started_at_ms"
+	portColEndedAtMs     = "ended_at_ms"
+	portColUpdateID      = "update_id"
+	portColSequence      = "sequence"
+	portColSize          = "size"
+	portColArrival       = "arrival"
+	portColState         = "state"
+	portColUpdatedAtMs   = "updated_at_ms"
+	portColDeletedAtMs   = "deleted_at_ms"
+	portColDisabledAtMs  = "disabled_at_ms"
+	portColSource        = "source"
+	portColKind          = "kind"
+	portColSubject       = "subject"
+	portColDeletedName   = "deleted_name"
+	portColTool          = "tool"
+	portColUnitID        = "unit_id"
+	portColPrincipalID   = "principal_id"
+	portColDigest        = "digest"
+	portColSink          = "sink"
+	portColExpiresAtMs   = "expires_at_ms"
+	portColObjectKind    = "object_kind"
+	portColObjectID      = "object_id"
+	portColResourceKey   = "resource_key"
+	portColAtMs          = "at_ms"
+	portColScopeKey      = "scope_key"
+	portColSeq           = "seq"
+	portColOwner         = "owner"
+	portColBody          = "body"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -246,7 +250,7 @@ func portableSpec() []PortableTable {
 		},
 		{
 			Table:   "inventory_changes",
-			OrderBy: []string{portColNamespaceID, "seq"},
+			OrderBy: []string{portColNamespaceID, portColSeq},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
 				{Name: "seq", Kind: KindInteger},
@@ -312,7 +316,7 @@ func portableSpec() []PortableTable {
 			Table: "object_context_owners",
 			OrderBy: []string{
 				portColNamespaceID,
-				"owner",
+				portColOwner,
 				portColObjectKind,
 				portColObjectID,
 				portColResourceKey,
@@ -320,7 +324,7 @@ func portableSpec() []PortableTable {
 			},
 			Columns: []Column{
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "owner", Kind: KindText},
+				{Name: portColOwner, Kind: KindText},
 				{Name: portColObjectKind, Kind: KindText},
 				{Name: portColObjectID, Kind: KindText},
 				{Name: portColResourceKey, Kind: KindText},
@@ -339,7 +343,7 @@ func portableSpec() []PortableTable {
 				{Name: portColTool, Kind: KindText},
 				{Name: "unit_name", Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
-				{Name: "body", Kind: KindText},
+				{Name: portColBody, Kind: KindText},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},
 		},
@@ -698,6 +702,9 @@ func portableSpec() []PortableTable {
 		portableImportTables(),
 		portableBlameTables(),
 		portableRunnerTables(),
+		portableJobTables(),
 		portableProfileTables(),
+		portableManualLockTables(),
+		portableSavedViewTables(),
 	)
 }

@@ -14,8 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
@@ -38,11 +44,28 @@ type Config struct {
 	Profiles      *profile.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
+	// writes none.
+	Audit audit.Store
+	// Namespaces reads the namespace of an entry that the shared denial limiter
+	// flushes for a key of another adapter. Nil makes such a flush entry fail
+	// with a count in OnAuditFailure.
+	Namespaces refusal.Namespaces
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it.
+	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
-	Logger   *slog.Logger
-	Now      func() time.Time
+	// Idempotency serves the Idempotency-Key header. Nil makes every request
+	// with the header answer 400.
+	Idempotency *idempotent.Middleware
+	Logger      *slog.Logger
+	Now         func() time.Time
 }
 
 // Handler serves the profile API.
@@ -50,7 +73,9 @@ type Handler struct {
 	profiles *profile.Service
 	authn    identity.Authenticator
 	authz    identity.Authorizer
+	guard    *refusal.Recorder
 	sessions *sessionauth.Checker
+	idem     *idempotent.Middleware
 	logger   *slog.Logger
 	mux      *patternMux
 	routes   []Route
@@ -73,7 +98,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		profiles: cfg.Profiles,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("profile"),
 		sessions: cfg.Sessions,
+		idem:     cfg.Idempotency,
 		logger:   cfg.Logger,
 		mux:      newPatternMux(),
 		routes:   nil,
@@ -145,6 +174,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", pr.status))
 	}
 
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
 	w.Header().Set("Cache-Control", "no-store")
 	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
 }
@@ -166,6 +199,17 @@ func classify(err error) problem {
 		return problem{status: se.status, code: se.code, message: se.message}
 	}
 
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		return problem{status: ie.Status, code: ie.Code, message: ie.Message}
+	}
+
+	if errors.Is(err, idempotency.ErrLost) {
+		return problem{
+			status: http.StatusConflict, code: idempotent.CodeInProgress,
+			message: "a newer request took this Idempotency-Key before this request ended: retry later",
+		}
+	}
+
 	if pr, ok := classifyNamespace(err); ok {
 		return pr
 	}
@@ -180,11 +224,20 @@ func classifyNamespace(err error) (problem, bool) {
 	case errors.Is(err, namespace.ErrNotFound):
 		return problem{status: http.StatusNotFound, code: "namespace.not-found", message: "namespace not found"}, true
 	case errors.Is(err, namespace.ErrFenced):
-		return problem{status: http.StatusConflict, code: "namespace.fenced", message: "write fenced: try again"}, true
+		return problem{
+			status:  http.StatusConflict,
+			code:    "namespace.fenced",
+			message: namespace.ErrFenced.Error(),
+		}, true
 	case errors.Is(err, namespace.ErrNotHome):
 		return problem{
 			status: http.StatusMisdirectedRequest, code: "namespace.not-home",
 			message: "namespace is not homed in this region",
+		}, true
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return problem{
+			status: http.StatusServiceUnavailable, code: "maintenance.in-maintenance",
+			message: maintenance.ErrInMaintenance.Error() + ": try again later",
 		}, true
 	default:
 		return problem{status: 0, code: "", message: ""}, false

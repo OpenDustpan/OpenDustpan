@@ -124,8 +124,10 @@ func checkTickKeysOnce(t *testing.T, srv *Server, kind durable.Kind) {
 // testServer returns a Server with only the fields that the job tests use.
 func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
+		kind:             kindState{store: nil, principals: nil, kind: ""},
 		tempAdmins:       nil,
 		handler:          nil,
+		ungated:          nil,
 		logger:           slog.New(slog.DiscardHandler),
 		listenAddr:       "",
 		listener:         nil,
@@ -134,7 +136,6 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		secretWrapper:    nil,
 		workspaces:       nil,
 		backups:          nil,
-		backupRegistry:   nil,
 		restores:         nil,
 		restoreRegistry:  nil,
 		now:              nil,
@@ -154,6 +155,12 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		durableOwner:     owner,
 		inactivityEvery:  scheduleTestEvery,
 		deletedEvery:     scheduleTestEvery,
+		idempotency:      nil,
+		idempotencyEvery: 0,
+		auditChainEvery:  0,
+		components:       AllComponents(),
+		watch:            nil,
+		flushDenials:     nil,
 	}
 }
 

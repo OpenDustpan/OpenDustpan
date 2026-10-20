@@ -107,6 +107,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testWorkspaceInventoryAfterCreate,
 		},
 		{name: "lock, unlock and finalize move the inventory entry", test: testInventoryFollowsWrites},
+		{name: "a workspace lock reads as the locked state and an unlock clears it", test: testInventoryLockedState},
 		{name: "a stale fence on lock writes no lock", test: testWorkspaceInventoryLockFenced},
 		{name: "a failed write leaves the inventory unchanged", test: testWorkspaceInventoryFailedWrite},
 		{name: "list returns only finalized versions, newest first", test: testListStateVersionsNewestFirst},
@@ -1489,6 +1490,45 @@ func testWorkspaceInventoryAfterCreate(t *testing.T, s WorkspaceStore) {
 
 	if entries := listWorkspaceInventory(t, s, "ghost"); len(entries) != 0 {
 		t.Fatalf("inventory of a missing namespace = %+v, want none", entries)
+	}
+}
+
+// testInventoryLockedState checks that the entry which the store reads derives
+// the locked state from the lock it carries: locked since the take time while
+// the workspace is locked, and no state after the unlock.
+func testInventoryLockedState(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	if got := listWorkspaceInventory(t, s, ns.Name)[0].StatesOf(); len(got) != 0 {
+		t.Fatalf("states of an unlocked workspace = %v, want none", got)
+	}
+
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	entries := listWorkspaceInventory(t, s, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries after lock = %+v, want one", entries)
+	}
+
+	states := entries[0].StatesOf()
+	if len(states) != 1 || states[0].State != inventory.StateLocked || !states[0].Since.Equal(locked.Lock.LockedAt) {
+		t.Fatalf("states after lock = %v, want locked since %v", states, locked.Lock.LockedAt)
+	}
+
+	unlocked := locked
+	unlocked.Lock = clearedLock()
+	unlocked.UpdatedAt = now().Add(2 * time.Hour)
+	unlocked.Revision++
+
+	if err := s.SaveWorkspace(t.Context(), unlocked, ns.Fence()); err != nil {
+		t.Fatalf("save unlocked workspace: %v", err)
+	}
+
+	if got := listWorkspaceInventory(t, s, ns.Name)[0].StatesOf(); len(got) != 0 {
+		t.Fatalf("states after unlock = %v, want none", got)
 	}
 }
 
@@ -3998,6 +4038,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 
 	for i := range services {
 		svc, err := workspace.NewService(workspace.Config{
+			ManualLocks:        nil,
 			Workspaces:         s,
 			States:             s,
 			Blobs:              blobs,

@@ -55,10 +55,6 @@ const (
 	// healthReadyPath and healthLivePath are the probe paths (ADR 34).
 	healthReadyPath = "/health/ready"
 	healthLivePath  = "/health/live"
-	// readyOKBody is the readiness body when every check passes.
-	readyOKBody = `{"status":"ok"}`
-	// readyStoreFailedBody is the readiness body when only the store fails.
-	readyStoreFailedBody = `{"status":"unavailable","failed":["store"]}`
 	// readyWaitTimeout bounds the wait for the readiness status to change
 	// after the proxy closes or reopens. The probe itself has a 2-second
 	// limit per check, so this covers several probes.
@@ -962,8 +958,15 @@ func checkRecoveredDatabase(ctx context.Context, env *e2e.Env) error {
 		return err
 	}
 
-	if strings.TrimSpace(body) != readyOKBody {
-		return fmt.Errorf("%w: GET %s body %q, want %q", errUnexpected, healthReadyPath, body, readyOKBody)
+	var doc readyDoc
+
+	if jsonErr := json.Unmarshal([]byte(body), &doc); jsonErr != nil {
+		return fmt.Errorf("%w: GET %s body %q is not JSON: %w", errUnexpected, healthReadyPath, body, jsonErr)
+	}
+
+	if doc.Status != "ok" || len(doc.Failed) != 0 || len(doc.Components) == 0 {
+		return fmt.Errorf("%w: GET %s body %q, want status ok, no failed and a components list",
+			errUnexpected, healthReadyPath, body)
 	}
 
 	return nil
@@ -1048,8 +1051,46 @@ func checkStoppedBody(status int, body string) error {
 		}
 	}
 
-	if trimmed != readyStoreFailedBody {
-		return fmt.Errorf("%w: GET %s body %q, want %q", errUnexpected, healthReadyPath, body, readyStoreFailedBody)
+	return checkStoppedFields(trimmed)
+}
+
+// readyComponent is one component in the readiness body.
+type readyComponent struct {
+	Name   string   `json:"name"`
+	Status string   `json:"status"`
+	Failed []string `json:"failed"`
+}
+
+// readyDoc is the readiness body.
+type readyDoc struct {
+	Status     string           `json:"status"`
+	Failed     []string         `json:"failed"`
+	Components []readyComponent `json:"components"`
+}
+
+// checkStoppedFields proves the 503 body keeps the fields status and failed
+// and lists the components of the process.
+func checkStoppedFields(body string) error {
+	var doc readyDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: GET %s body %q is not JSON: %w", errUnexpected, healthReadyPath, body, err)
+	}
+
+	if doc.Status != "unavailable" || !slices.Equal(doc.Failed, []string{"store"}) {
+		return fmt.Errorf("%w: GET %s body %q, want status unavailable and failed [store]",
+			errUnexpected, healthReadyPath, body)
+	}
+
+	if len(doc.Components) == 0 {
+		return fmt.Errorf("%w: GET %s body %q lists no components", errUnexpected, healthReadyPath, body)
+	}
+
+	for _, component := range doc.Components {
+		if component.Status != "unavailable" || !slices.Contains(component.Failed, "store") {
+			return fmt.Errorf("%w: GET %s component %q is %q with failed %v, want unavailable with store",
+				errUnexpected, healthReadyPath, component.Name, component.Status, component.Failed)
+		}
 	}
 
 	return nil
@@ -4154,6 +4195,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	inventorySchemeScenario(t, env)
 	// The collection routes move the e2e workspace between two collections (ADR 51).
 	collectionsScenario(t, env)
+	// The manual lock routes stop an OpenTofu plan until the lock goes.
+	manualLockRoutesScenario(t, env)
 	// The context routes: the workspace reads the owners of its namespace.
 	tofuContextScenario(t, env)
 
@@ -5557,13 +5600,21 @@ type inventoryLockDoc struct {
 
 // inventoryUnitDoc decodes one unit of GET /api/dustpan/v1/namespaces/{namespace}/units.
 type inventoryUnitDoc struct {
-	Tool       string            `json:"tool"`
-	Reference  string            `json:"reference"`
-	UnitID     string            `json:"unitID"`
-	Namespace  string            `json:"namespace"`
-	Name       string            `json:"name"`
-	LastChange string            `json:"lastChange"`
-	Lock       *inventoryLockDoc `json:"lock"`
+	Tool       string              `json:"tool"`
+	Reference  string              `json:"reference"`
+	UnitID     string              `json:"unitID"`
+	Namespace  string              `json:"namespace"`
+	Name       string              `json:"name"`
+	LastChange string              `json:"lastChange"`
+	Lock       *inventoryLockDoc   `json:"lock"`
+	States     []inventoryStateDoc `json:"states"`
+}
+
+// inventoryStateDoc decodes one state of a unit: its wire value and the time
+// it began as an RFC 3339 time.
+type inventoryStateDoc struct {
+	State string `json:"state"`
+	Since string `json:"since"`
 }
 
 // readInventoryUnits reads the inventory units of ns through the API as
@@ -5571,9 +5622,22 @@ type inventoryUnitDoc struct {
 func readInventoryUnits(ctx context.Context, t *testing.T, env *e2e.Env, ns string) []inventoryUnitDoc {
 	t.Helper()
 
-	got, err := env.StatusWithHeader(
-		ctx, "token "+env.TokenA(), http.MethodGet, "/api/dustpan/v1/namespaces/"+ns+"/units", "",
-	)
+	return readInventoryUnitsQuery(ctx, t, env, ns, "")
+}
+
+// readInventoryUnitsQuery is readInventoryUnits with a query string, for
+// example "state=locked".
+func readInventoryUnitsQuery(
+	ctx context.Context, t *testing.T, env *e2e.Env, ns, query string,
+) []inventoryUnitDoc {
+	t.Helper()
+
+	path := "/api/dustpan/v1/namespaces/" + ns + "/units"
+	if query != "" {
+		path += "?" + query
+	}
+
+	got, err := env.StatusWithHeader(ctx, "token "+env.TokenA(), http.MethodGet, path, "")
 	if err != nil {
 		t.Fatalf("GET /api/dustpan/v1/namespaces/{namespace}/units: %v", err)
 	}
@@ -5713,6 +5777,19 @@ func checkInventoryLock(ctx context.Context, t *testing.T, env *e2e.Env, want lo
 			want.operation,
 		)
 	}
+
+	// The unit shows the locked state since the take time, and the state
+	// filter lists it.
+	if len(unit.States) != 1 || unit.States[0].State != "locked" || unit.States[0].Since != unit.Lock.Since {
+		t.Fatalf("inventory states of %q = %+v, want locked since %q", want.ref, unit.States, unit.Lock.Since)
+	}
+
+	filtered := findInventoryUnit(
+		readInventoryUnitsQuery(ctx, t, env, namespaceOf(want.ref), "state=locked"), want.ref,
+	)
+	if filtered == nil {
+		t.Fatalf("the list with state=locked holds no entry %q", want.ref)
+	}
 }
 
 // checkInventoryUnlocked proves the inventory entry of ref holds no lock. It
@@ -5728,6 +5805,18 @@ func checkInventoryUnlocked(ctx context.Context, t *testing.T, env *e2e.Env, ref
 
 	if unit.Lock != nil {
 		t.Fatalf("inventory entry %q holds %+v, want no lock", ref, unit.Lock)
+	}
+
+	// An unlocked unit shows no locked state, and the state filter drops it.
+	for _, st := range unit.States {
+		if st.State == "locked" {
+			t.Fatalf("inventory entry %q shows states %+v, want no locked state", ref, unit.States)
+		}
+	}
+
+	filtered := findInventoryUnit(readInventoryUnitsQuery(ctx, t, env, namespaceOf(ref), "state=locked"), ref)
+	if filtered != nil {
+		t.Fatalf("the list with state=locked holds the unlocked entry %q", ref)
 	}
 }
 
@@ -12387,7 +12476,7 @@ func startBackupForCheck(ctx context.Context, t *testing.T, env *e2e.Env) string
 		t.Fatalf("POST backups answers %q, want an id: %v", body, decodeErr)
 	}
 
-	doc := pollBackupState(ctx, t, env, started.ID, "succeeded")
+	doc := pollBackupState(ctx, t, env, started.ID)
 	t.Logf("backup %s succeeded with SQL size %d", doc.ID, doc.Manifest.SQLSize)
 
 	return started.ID
@@ -12452,8 +12541,8 @@ const backupPollInterval = 100 * time.Millisecond
 // 409, calls without a token answer 401, and the list holds the backups
 // newest first. It runs on every store under test with the first Pulumi
 // version of the matrix. The restart part needs the real server binary: it
-// stops the server during a running backup and sees the row failed after the
-// start. Without E2E_SERVER=binary the test proves the routes and skips only
+// stops the server during a running backup and sees the backup succeed after
+// the start. Without E2E_SERVER=binary the test proves the routes and skips only
 // the restart.
 func TestBackups(t *testing.T) {
 	t.Parallel()
@@ -12503,7 +12592,7 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	writeBackupData(ctx, t, env)
 
 	id := startBackupAndConflict(ctx, t, env)
-	doc := pollBackupState(ctx, t, env, id, "succeeded")
+	doc := pollBackupState(ctx, t, env, id)
 	checkBackupManifest(t, store, doc)
 	checkPortableObjects(t, env, id, doc.Manifest.SQLFiles)
 	checkBackupList(ctx, t, env, id)
@@ -12515,7 +12604,7 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	checkBackupCommand(ctx, t, env)
-	checkBackupRestartFailed(ctx, t, env, id)
+	checkBackupRestartResumes(ctx, t, env, id)
 }
 
 // writeBackupData writes Pulumi state with the CLI and grows the database
@@ -12674,7 +12763,7 @@ func startBackupAndConflict(ctx context.Context, t *testing.T, env *e2e.Env) str
 
 // pollBackupState polls one backup until it reaches want, failing the test
 // when it reaches another terminal state or the deadline passes first.
-func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id, want string) backupDoc {
+func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id string) backupDoc {
 	t.Helper()
 
 	deadline, cancel := context.WithTimeout(ctx, backupPollTimeout)
@@ -12700,16 +12789,16 @@ func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id, want s
 		}
 
 		switch doc.State {
-		case want:
+		case "succeeded":
 			return doc
 		case "running":
 		default:
-			t.Fatalf("backup %s reads %q with error %q, want %q", id, doc.State, doc.Error, want)
+			t.Fatalf("backup %s reads %q with error %q, want succeeded", id, doc.State, doc.Error)
 		}
 
 		select {
 		case <-deadline.Done():
-			t.Fatalf("backup %s stays running, want %q", id, want)
+			t.Fatalf("backup %s stays running, want succeeded", id)
 		case <-timer.C:
 			timer.Reset(backupPollInterval)
 		}
@@ -12728,8 +12817,8 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 		t.Fatalf("manifest id = %q, want backup %q", manifest.ID, doc.ID)
 	}
 
-	if manifest.Format != 2 {
-		t.Fatalf("manifest format = %d, want 2", manifest.Format)
+	if manifest.Format != 3 {
+		t.Fatalf("manifest format = %d, want 3", manifest.Format)
 	}
 
 	if manifest.SQLFormat != "portable" {
@@ -12933,7 +13022,7 @@ func checkBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("opendustpan backup exits with status %d: %s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	for _, want := range []string{"bkp-", "succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "sealed"} {
+	for _, want := range []string{"bkp-", "succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "encrypted"} {
 		if !strings.Contains(res.Stdout, want) {
 			t.Fatalf("opendustpan backup output lacks %q: %q", want, res.Stdout)
 		}
@@ -12942,11 +13031,12 @@ func checkBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Logf("opendustpan backup: %s", strings.TrimSpace(res.Stdout))
 }
 
-// checkBackupRestartFailed stops the server during a running backup, starts
-// it, and proves the row reads failed. The padded checkpoint holds the backup
-// running, so the stop lands mid-backup with no test hook. It also proves the
-// earlier backup survives the restart still succeeded.
-func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, firstID string) {
+// checkBackupRestartResumes stops the server during a running backup, starts
+// it, and proves the backup ends succeeded: the stopped server released its
+// claim, and the new process continues the backup. The padded checkpoint
+// holds the backup running, so the stop lands mid-backup with no test hook.
+// It also proves the earlier backup survives the restart still succeeded.
+func checkBackupRestartResumes(ctx context.Context, t *testing.T, env *e2e.Env, firstID string) {
 	t.Helper()
 
 	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
@@ -12969,15 +13059,12 @@ func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, f
 	env.StopServer(ctx, t)
 	env.StartServer(ctx, t)
 
-	doc := pollBackupState(ctx, t, env, started.ID, "failed")
-
-	if doc.Error == "" {
-		t.Fatalf("backup %s reads failed with no error text", started.ID)
+	doc := pollBackupState(ctx, t, env, started.ID)
+	if doc.Error != "" {
+		t.Fatalf("backup %s reads succeeded with the error text %q", started.ID, doc.Error)
 	}
 
-	t.Logf("backup %s failed after the restart: %q", started.ID, doc.Error)
-
-	again := pollBackupState(ctx, t, env, firstID, "succeeded")
+	again := pollBackupState(ctx, t, env, firstID)
 	if backupCheckpointBlobSize(again.Manifest) < backupPadMinBlob {
 		t.Fatalf("backup %s after the restart holds no checkpoint blob of %d pad bytes gzipped",
 			firstID, backupPadMinBlob)
@@ -13655,7 +13742,7 @@ func runBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) string {
 		t.Fatalf("opendustpan backup exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	for _, want := range []string{"succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "sealed"} {
+	for _, want := range []string{"succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "encrypted"} {
 		if !strings.Contains(res.Stdout, want) {
 			t.Fatalf("opendustpan backup output lacks %q:\n%s", want, res.Stdout)
 		}

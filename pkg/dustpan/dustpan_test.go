@@ -635,8 +635,8 @@ func checkCORSHeaders(t *testing.T, h http.Header, tc corsRow) {
 		return
 	}
 
-	if got := h.Get("Access-Control-Expose-Headers"); got != "Retry-After, ETag" {
-		t.Fatalf("Access-Control-Expose-Headers = %q, want Retry-After, ETag", got)
+	if got := h.Get("Access-Control-Expose-Headers"); got != "Retry-After, ETag, Idempotent-Replayed" {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want Retry-After, ETag, Idempotent-Replayed", got)
 	}
 }
 
@@ -656,7 +656,7 @@ func checkPreflightHeaders(t *testing.T, h http.Header) {
 	}
 
 	allowHeaders := strings.Split(h.Get("Access-Control-Allow-Headers"), ", ")
-	for _, want := range []string{"Authorization", "Content-Type", "Dustpan-Channel", "X-Dustpan-CSRF"} {
+	for _, want := range []string{"Authorization", "Content-Type", "Dustpan-Channel", "Idempotency-Key", "If-Match", "X-Dustpan-CSRF"} {
 		if !slices.Contains(allowHeaders, want) {
 			t.Fatalf("Access-Control-Allow-Headers = %q, want %q", allowHeaders, want)
 		}
@@ -1313,10 +1313,10 @@ func sendEvilTarget(t *testing.T, base, evil string) {
 	}
 }
 
-// TestRunMarksRunningBackupsFailed proves the server marks running backups
-// failed at start (ADR 30 decision 9): a running row from before the stop
-// reads failed with error text after Run starts.
-func TestRunMarksRunningBackupsFailed(t *testing.T) {
+// TestRunLeavesRunningBackupAlone proves that a start writes no backup row:
+// a running row, which another instance may run, reads running with no
+// error text after the start-up steps ended.
+func TestRunLeavesRunningBackupAlone(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
@@ -1325,11 +1325,18 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	seedRunningBackup(t, st, now)
 
+	started := make(chan struct{})
+
 	srv, err := dustpan.NewServer(append(
 		fullServerOptions(t, st, blobs, authn),
 		dustpan.WithBackupTarget(target, "dir:/var/backups"),
 		dustpan.WithClock(func() time.Time { return now }),
 		dustpan.WithListenAddr("127.0.0.1:0"),
+		dustpan.WithBeforeServe(func(context.Context) error {
+			close(started)
+
+			return nil
+		}),
 	)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -1344,7 +1351,20 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 		done <- srv.Run(ctx)
 	}()
 
-	waitForFailedBackup(t, st, "bkp-restart00000000001", now)
+	select {
+	case <-started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the server did not finish its start-up steps")
+	}
+
+	row, err := st.GetBackup(t.Context(), "bkp-restart00000000001")
+	if err != nil {
+		t.Fatalf("get backup: %v", err)
+	}
+
+	if row.State != backup.StateRunning || row.Error != "" || !row.EndedAt.IsZero() {
+		t.Fatalf("backup after start = %+v, want the running row unchanged", row)
+	}
 
 	cancel()
 
@@ -1402,47 +1422,59 @@ func seedRunningBackup(t *testing.T, st *sqlite.Store, now time.Time) {
 	}
 }
 
-// waitForFailedBackup waits until id reads failed, then checks the row.
-func waitForFailedBackup(t *testing.T, st *sqlite.Store, id backup.ID, now time.Time) {
-	t.Helper()
+// The three stores below shadow one dev data port of the SQLite store with a
+// method of another signature, so the store holds every other port and fails
+// the type assertion to the missing one.
+type (
+	noKindReaderStore struct{ *sqlite.Store }
+	noStripperStore   struct{ *sqlite.Store }
+	noRecorderStore   struct{ *sqlite.Store }
+)
 
-	deadline := time.Now().Add(10 * time.Second)
+func (noKindReaderStore) ReadKind() {}
 
-	for {
-		row, err := st.GetBackup(t.Context(), id)
-		if err != nil {
-			t.Fatalf("get backup: %v", err)
-		}
+func (noStripperStore) StripDevStaged() {}
 
-		if row.State == backup.StateFailed {
-			checkFailedRow(t, row, now)
+func (noRecorderStore) RecordDevReport() {}
 
-			return
-		}
+// TestServerWithoutDevPortsDoesNotStart proves that no restore route works
+// with a store that lacks a dev data port: the server does not start, and the
+// error names the port. A production restore never skips the kind check, the
+// strip or the report because a port is missing.
+func TestServerWithoutDevPortsDoesNotStart(t *testing.T) {
+	t.Parallel()
 
-		if time.Now().After(deadline) {
-			t.Fatalf("backup %s = %+v, want failed after start", id, row)
-		}
+	for _, tc := range []struct {
+		name    string
+		wrap    func(*sqlite.Store) namespace.Store
+		missing string
+	}{
+		{name: "no KindReader", wrap: func(s *sqlite.Store) namespace.Store { return noKindReaderStore{s} }, missing: "KindReader"},
+		{name: "no DevStripper", wrap: func(s *sqlite.Store) namespace.Store { return noStripperStore{s} }, missing: "DevStripper"},
+		{name: "no DevReportRecorder", wrap: func(s *sqlite.Store) namespace.Store { return noRecorderStore{s} }, missing: "DevReportRecorder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-timer.C:
-		case <-t.Context().Done():
-			timer.Stop()
-			t.Fatal("test ended before the server marked the running backup failed")
-		}
-	}
-}
+			st, blobs, authn := requireServerPorts(t)
+			target := openBackupTarget(t)
 
-// checkFailedRow proves row failed with the stop text, keeping its start time.
-func checkFailedRow(t *testing.T, row backup.Record, now time.Time) {
-	t.Helper()
+			srv, err := dustpan.NewServer(append(
+				fullServerOptions(t, st, blobs, authn),
+				dustpan.WithNamespaceStore(tc.wrap(st)),
+				dustpan.WithBackupTarget(target, "dir:/var/backups"),
+			)...)
+			if err == nil {
+				t.Fatalf(
+					"NewServer with a store that lacks %s started, want a start error (server %v)",
+					tc.missing,
+					srv,
+				)
+			}
 
-	if row.Error != "server stopped during backup" {
-		t.Fatalf("backup error = %q, want the stop text", row.Error)
-	}
-
-	if !row.StartedAt.Equal(now) || !row.EndedAt.Equal(now) {
-		t.Fatalf("backup times = %v to %v, want %v to %v", row.StartedAt, row.EndedAt, now, now)
+			if !strings.Contains(err.Error(), "lacks "+tc.missing) {
+				t.Fatalf("start error = %q, want it to name %s", err, tc.missing)
+			}
+		})
 	}
 }

@@ -4,3 +4,15 @@ updates:
     directory: /
     schedule:
       interval: daily
+    # Matches scripts/module-age-gate.py: a version must be 14 days old.
+    # Security updates ignore the cooldown.
+    cooldown:
+      default-days: 14
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+    # Actions are pinned to commit SHAs; the cooldown holds a bump until the
+    # release is 14 days old, as for modules.
+    cooldown:
+      default-days: 14

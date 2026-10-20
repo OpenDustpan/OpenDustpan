@@ -187,7 +187,7 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 			return
 		}
 
-		if err := h.authorizeRoute(ctx, route, p, t); err != nil {
+		if err := h.authorizeRoute(ctx, r, route, p, t); err != nil {
 			h.writeError(ctx, w, err)
 
 			return
@@ -200,10 +200,13 @@ func (h *Handler) enforce(route Route) http.HandlerFunc {
 // authorizeRoute runs the checks of route for p on t. It returns errNotFound
 // for a refused read check and an error that wraps identity.ErrDenied for a
 // refused action.
-func (h *Handler) authorizeRoute(ctx context.Context, route Route, p identity.Principal, t target) error {
+func (h *Handler) authorizeRoute(
+	ctx context.Context, r *http.Request, route Route, p identity.Principal, t target,
+) error {
 	nsRead := identity.ActionNamespaceRead
 
-	if err := readRefusal(nsRead, h.authz.Authorize(ctx, p, nsRead, identity.NamespaceObject(t.ns.Name))); err != nil {
+	nsErr := h.guard.Authorize(ctx, r, p, nsRead, identity.NamespaceObject(t.ns.Name))
+	if err := readRefusal(nsRead, nsErr); err != nil {
 		return err
 	}
 
@@ -213,13 +216,13 @@ func (h *Handler) authorizeRoute(ctx context.Context, route Route, p identity.Pr
 			continue
 		}
 
-		if err := readRefusal(action, h.authz.Authorize(ctx, p, action, t.obj)); err != nil {
+		if err := readRefusal(action, h.guard.Authorize(ctx, r, p, action, t.obj)); err != nil {
 			return err
 		}
 	}
 
 	for _, action := range route.Actions {
-		if err := h.authz.Authorize(ctx, p, action, t.obj); err != nil {
+		if err := h.guard.Authorize(ctx, r, p, action, t.obj); err != nil {
 			return fmt.Errorf("authorize %s: %w", action, err)
 		}
 	}

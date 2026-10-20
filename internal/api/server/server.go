@@ -16,11 +16,14 @@ import (
 	"strings"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -89,6 +92,10 @@ type Config struct {
 	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
 	// allowlist store is configured: the IP allowlist routes are not mounted.
 	IPAllowlists *ipallow.Service
+	// Gates keeps the approval defaults and the approval rules of each
+	// namespace. Nil means the store keeps none: the approval default and
+	// approval rule routes are not mounted.
+	Gates GateConfig
 	// SessionPolicy keeps the session policy of the installation. Nil
 	// means the store keeps none: the session policy routes are not
 	// mounted. Both SQL adapters keep it.
@@ -99,6 +106,10 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter. Nil means a limiter of this handler
+	// only.
+	DenialLimiter *denylimit.Limiter
 	// AuditChain reads the state of the audit chain and approves a waiting
 	// change. Nil means the store keeps no audit chain: the audit chain
 	// routes answer 501.
@@ -116,11 +127,18 @@ type Config struct {
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
+	// Workers reports the components of the process and the state of the
+	// worker, and refuses the start of a durable operation when no worker
+	// claimed or renewed a claim. Nil means no refusal and an empty report.
+	Workers WorkerSource
 	// SignIn is the console sign-in through OpenID Connect providers. Nil
 	// means no sign-in: the sign-in routes are not mounted, and the
 	// session cookie authenticates nothing. With SignIn set, Principals is
 	// required.
 	SignIn *SignIn
+	// InstallationKind is the kind that the capabilities document answers
+	// to a signed-in caller. Empty means production.
+	InstallationKind installation.Kind
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -145,6 +163,7 @@ type JournalReporter interface {
 type Handler struct {
 	authn          identity.Authenticator
 	authz          identity.Authorizer
+	guard          *denials.Recorder
 	logger         *slog.Logger
 	namespaces     *namespace.Service
 	backups        *backup.Service
@@ -159,6 +178,7 @@ type Handler struct {
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
+	gates          GateConfig
 	sessions       *session.Policies
 	epochs         CheckpointEpochs
 	onAuditFailure func()
@@ -167,7 +187,9 @@ type Handler struct {
 	now            func() time.Time
 	auditChain     AuditChain
 	auditSinks     AuditSinkSource
+	workers        WorkerSource
 	signIn         *signInState
+	kind           installation.Kind
 	mux            *patternMux
 	routes         []Route
 }
@@ -180,14 +202,25 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 
-	signIn, err := newSignInState(cfg.SignIn)
+	signIn, err := newSignInState(cfg.SignIn, cfg.InstallationKind)
 	if err != nil {
 		return nil, err
 	}
 
+	// The audit store keeps the entries of refused requests when it also keeps
+	// the entries of each namespace. Otherwise denialStore stays nil and a
+	// refusal writes no entry.
+	var denialStore audit.Store
+	if st, ok := cfg.Audit.(audit.Store); ok {
+		denialStore = st
+	}
+
 	h := &Handler{
-		authn:          cfg.Authenticator,
-		authz:          cfg.Authorizer,
+		authn: cfg.Authenticator,
+		authz: cfg.Authorizer,
+		guard: denials.New(cfg.Authorizer, denialStore, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("installation"),
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		backups:        cfg.Backups,
@@ -205,12 +238,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 		auditChain:     cfg.AuditChain,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
+		gates:          cfg.Gates,
 		sessions:       cfg.SessionPolicy,
 		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
 		now:            cfg.Now,
 		auditSinks:     cfg.AuditSinks,
+		workers:        cfg.Workers,
 		signIn:         signIn,
+		kind:           cfg.InstallationKind,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -359,12 +395,24 @@ type errorResponse struct {
 	Code    int    `json:"code"`
 }
 
+// maintenanceRetryAfter is the Retry-After value, in seconds, of an
+// installation API write that maintenance mode refused.
+const maintenanceRetryAfter = "30"
+
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+	}
+
+	if errors.Is(err, maintenance.ErrInMaintenance) {
+		w.Header().Set("Retry-After", maintenanceRetryAfter)
+	}
+
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
 	}
 
 	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
@@ -391,7 +439,7 @@ func classifyIdentity(err error) (int, string, bool) {
 // classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
 	for _, try := range []func(error) (int, string, bool){
-		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity,
+		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
 	} {
 		if status, message, ok := try(err); ok {
 			return status, message
@@ -399,6 +447,10 @@ func classify(err error) (int, string) {
 	}
 
 	if status, message, ok := classifyIPAllowlist(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyGateConfig(err); ok {
 		return status, message
 	}
 
@@ -428,6 +480,8 @@ func classifyRequest(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", true
+	case errors.Is(err, errFreshSession):
+		return http.StatusForbidden, errFreshSession.Error(), true
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden", true
 	case errors.Is(err, identity.ErrInvalidObject):
@@ -472,7 +526,17 @@ func classifyRegistry(err error) (int, string) {
 // a second start 409, and a server with no backup target 503 that names the
 // setting.
 func classifyBackup(err error) (int, string, bool) {
+	if text, ok := backup.RefusalText(err); ok {
+		// The refusal of a dev backup carries its own text, which names the
+		// setting that allows it. It holds no driver detail.
+		return http.StatusConflict, text, true
+	}
+
 	switch {
+	case errors.Is(err, backup.ErrDevBackupRefused):
+		return http.StatusConflict, backup.ErrDevBackupRefused.Error(), true
+	case errors.Is(err, backup.ErrManifestKindInvalid):
+		return http.StatusConflict, backup.ErrManifestKindInvalid.Error(), true
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return http.StatusConflict, "a backup is already running", true
 	case errors.Is(err, backup.ErrAlreadyExists):
@@ -491,7 +555,7 @@ func classifyBackup(err error) (int, string, bool) {
 
 // classifyNamespace maps the namespace errors to their status and message: a
 // bad namespace name, body, page or cursor answers 400, a duplicate
-// namespace 409, an unknown namespace 404, and a store without the paging
+// namespace or a fenced write 409, an unknown namespace 404, and a store without the paging
 // port 501.
 func classifyNamespace(err error) (int, string, bool) {
 	switch {
@@ -500,6 +564,10 @@ func classifyNamespace(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, namespace.ErrFenced):
+		// The sentence of the sentinel only: a wrap adds the name of the
+		// operation, which the log holds.
+		return http.StatusConflict, namespace.ErrFenced.Error(), true
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, namespace.ErrNoPaging):
@@ -534,6 +602,8 @@ func classifyMaintenance(err error) (int, string, bool) {
 		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
 	case errors.Is(err, audit.ErrChainNeedsPerson):
 		return http.StatusForbidden, audit.ErrChainNeedsPerson.Error(), true
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later", true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
 	default:

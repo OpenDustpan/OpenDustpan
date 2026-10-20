@@ -10,11 +10,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -137,6 +139,17 @@ type SignIn struct {
 	Admin     *session.ProviderAdmin
 	Providers []SignInProvider
 	Origins   []string
+	// DevCode is the one-time code of opendustpan dev. With it, the handler
+	// mounts the route that signs a browser in as the dev administrator.
+	// Nil mounts no such route.
+	DevCode *devcode.Code
+	// DevAdmin is the bootstrap administrator of opendustpan dev. The dev
+	// sign-in grants the role of the site administrator as DevAdmin, and
+	// refuses to sign in when the handler has no access service.
+	DevAdmin identity.Principal
+	// OnDevRefused is called with the subject of each dev person whose session
+	// a server of another kind refuses. Nil means no call.
+	OnDevRefused func(ctx context.Context, subject string)
 }
 
 // StoredProviders finds the sign-in providers that the API keeps.
@@ -155,6 +168,8 @@ type signInState struct {
 	admin     *session.ProviderAdmin
 	providers map[string]SignInProvider
 	checker   *sessionauth.Checker
+	devCode   *devcode.Code
+	devAdmin  identity.Principal
 }
 
 // provider returns the sign-in provider id: a provider of the
@@ -185,7 +200,7 @@ func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, 
 }
 
 // newSignInState returns the sign-in of cfg, or nil when cfg is nil.
-func newSignInState(cfg *SignIn) (*signInState, error) {
+func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 	if cfg == nil {
 		return nil, nil //nolint:nilnil // No sign-in is a valid configuration.
 	}
@@ -203,14 +218,19 @@ func newSignInState(cfg *SignIn) (*signInState, error) {
 		providers[p.ID] = p
 	}
 
-	checker, err := sessionauth.New(cfg.Sessions, cfg.Origins)
+	var opts []sessionauth.Option
+	if kind != installation.KindDev {
+		opts = append(opts, sessionauth.RefuseDevSubjects(), sessionauth.OnDevRefused(cfg.OnDevRefused))
+	}
+
+	checker, err := sessionauth.New(cfg.Sessions, cfg.Origins, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("session cookie check: %w", err)
 	}
 
 	return &signInState{
 		sessions: cfg.Sessions, limiter: cfg.Limiter, stored: cfg.Stored, admin: cfg.Admin, providers: providers,
-		checker: checker,
+		checker: checker, devCode: cfg.DevCode, devAdmin: cfg.DevAdmin,
 	}, nil
 }
 
@@ -748,6 +768,8 @@ func classifySignIn(err error) (int, string, bool) {
 		return http.StatusBadRequest, errSignInFailed.Error(), true
 	case errors.Is(err, errNoSession):
 		return http.StatusNotFound, errNoSession.Error(), true
+	case errors.Is(err, errDevCode), errors.Is(err, errDevKind):
+		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, errSignInRefused), errors.Is(err, errCSRF), errors.Is(err, errOtherSite):
 		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, errFreshParam):

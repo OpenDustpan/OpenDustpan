@@ -22,8 +22,21 @@ var (
 )
 
 // signInOptions returns the console sign-in option of the serve flags: one
-// OpenID Connect provider when --oidc-issuer is set, else none.
+// OpenID Connect provider when --oidc-issuer is set, else none. A process
+// without the api component gets none.
 func (f *serveFlags) signInOptions() ([]dustpan.Option, error) {
+	set, err := dustpan.ParseComponents(f.components)
+	if err != nil {
+		return nil, fmt.Errorf("--components: %w", err)
+	}
+
+	// Only the api component serves the console sign-in. A process without it
+	// ignores the --oidc-* settings, also when they are not complete, and does
+	// not read the client secret.
+	if !set.Has(dustpan.ComponentAPI) {
+		return nil, nil
+	}
+
 	if f.oidcIssuer == "" {
 		if f.oidcProvider != "" || f.oidcClientID != "" {
 			return nil, fmt.Errorf("%w: unset --oidc-provider and --oidc-client-id, or set the issuer", errNoOIDCIssuer)

@@ -195,7 +195,8 @@ func checkMaxLifetime(ctx context.Context, t *testing.T, env *e2e.Env, service e
 // used inside the hour stay enabled, and their tokens keep signing in. The
 // e2e suite cannot make a record older than one hour, so the conformance
 // suites of both stores and the service tests cover the disable itself.
-// The enable of a principal that is not disabled answers 409.
+// The enable of a principal that is not disabled answers 409. The disable and
+// the enable of a principal answer 200.
 func checkInactivityPolicy(ctx context.Context, t *testing.T, env *e2e.Env, service, person e2ePrincipal) {
 	t.Helper()
 
@@ -242,6 +243,13 @@ func checkInactivityPolicy(ctx context.Context, t *testing.T, env *e2e.Env, serv
 
 	enable := "/api/server/principals/" + person.ID + "/enable"
 	principalCall(ctx, t, env, principalStep{http.MethodPost, enable, "", http.StatusConflict}, nil)
+
+	// The disable answers 200 with the principal, a second disable answers
+	// 409, and the enable then answers 200.
+	disable := "/api/server/principals/" + person.ID + "/disable"
+	principalCall(ctx, t, env, principalStep{http.MethodPost, disable, "", http.StatusOK}, nil)
+	principalCall(ctx, t, env, principalStep{http.MethodPost, disable, "", http.StatusConflict}, nil)
+	principalCall(ctx, t, env, principalStep{http.MethodPost, enable, "", http.StatusOK}, nil)
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPatch, "/api/server/token-policy", `{"inactivitySeconds":0}`, http.StatusOK,

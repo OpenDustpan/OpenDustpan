@@ -175,7 +175,7 @@ The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 | Data | Where | Protection |
 | --- | --- | --- |
 | Namespaces, stacks, workspaces, locks, history | The SQL database: a SQLite file, or PostgreSQL | None of its own. Protect the database. |
-| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is sealed with the key-encryption key. |
+| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | The server encrypts OpenTofu state with the key-encryption key. |
 | Data keys of Pulumi secret config values | The SQL database | Wrapped with the key-encryption key. The encrypted values stay in your stack configuration. |
 
 The database and the backups hold no copy of the key-encryption key. It
@@ -197,7 +197,7 @@ address of the local server.
    key in a different place from the backups. The default key file sits next
    to the SQLite database, so a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
-   and the blobs to a backup target. A backup holds sealed OpenTofu state, so protect the target.
+   and the blobs to a backup target. A backup holds OpenTofu state that the server encrypted, so protect the target.
 
 The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
 
@@ -282,6 +282,9 @@ trailer.
 
 How-to guides:
 
+- [Run a trial server](docs/guides/dev-server.md) with `opendustpan dev`: no
+  setup, a one-time sign-in link and the settings of the Pulumi CLI and
+  OpenTofu.
 - [Import existing state](docs/guides/import.md) from a Pulumi service
   backend, a file backend, or an OpenTofu backend.
 - [Migrate out](docs/guides/migrate-out.md) to another backend.
@@ -295,8 +298,15 @@ How-to guides:
   namespace and the check of their chain.
 - [Deleted units](docs/guides/deleted-units.md): list, restore and purge
   the units that a delete keeps until its retention period ends.
+- [Manual locks](docs/guides/manual-locks.md): stop OpenTofu locks and Pulumi updates on a
+  stack, a workspace or a collection, with a reason, and end the lock.
+- [Approval defaults and approval rules](docs/guides/approval-rules.md): turn on
+  approval before apply for a namespace, and store named approval rules.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
+- [Save and open a view of the unit list](docs/guides/saved-views.md): store
+  the labels and references of a unit list under a name, and open the view
+  again.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
@@ -411,7 +421,8 @@ flag and environment variable of `opendustpan serve`.
 ## Development
 
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
-golangci-lint, NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
+golangci-lint, the module age check (no module version is younger than 14
+days), NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
 check, the docs lint and the tests with the race detector. goleak fails a test
 package that leaves a goroutine running. The `Makefile` lists the tool
 versions to install. NilAway and govulncheck need no install. Set

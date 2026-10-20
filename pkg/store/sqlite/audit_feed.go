@@ -54,6 +54,10 @@ func (s *Store) SinkCursor(ctx context.Context, sink string, ns namespace.Name) 
 // durable.ErrClaimLost when claim is not the live claim of the sink. The
 // cursor of audit.ServerScope has no fence: the scope describes the
 // installation.
+// The advance runs on the control path with no installation state check:
+// the shipper of a sink is no tool or installation API request, and a
+// refused advance in maintenance mode would deliver the same entries again
+// in a loop.
 func (s *Store) AdvanceSinkCursor(
 	ctx context.Context,
 	fence namespace.Fence,
@@ -61,9 +65,9 @@ func (s *Store) AdvanceSinkCursor(
 	sink string,
 	seq int64,
 ) error {
-	inTx := func(fn func(q *db.Queries) error) error { return s.inFencedTx(ctx, fence, fn) }
+	inTx := func(fn func(q *db.Queries) error) error { return s.inControlFencedTx(ctx, fence, fn) }
 	if fence.Namespace == audit.ServerScope {
-		inTx = func(fn func(q *db.Queries) error) error { return s.inTx(ctx, fn) }
+		inTx = func(fn func(q *db.Queries) error) error { return s.inControlTx(ctx, fn) }
 	}
 
 	return inTx(func(q *db.Queries) error {

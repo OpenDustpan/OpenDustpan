@@ -293,7 +293,7 @@ func TestProofIsCheckedBeforeTheRunnerState(t *testing.T) {
 		t.Fatalf("heartbeat of a retired runner with its key = %d %s, want 403 retired", status, body)
 	}
 
-	if !strings.Contains(string(forgedBody), "does not authenticate") {
-		t.Fatalf("refusal = %s, want the message that the proof does not authenticate", forgedBody)
+	if !strings.Contains(string(forgedBody), runner.ErrBadProof.Error()) {
+		t.Fatalf("refusal = %s, want the sentence of the bad-proof sentinel", forgedBody)
 	}
 }

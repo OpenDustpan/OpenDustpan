@@ -113,7 +113,8 @@ func newHistoryHandlerWithURL(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		Moves:         nil,
+		Views: nil,
+		Audit: nil, OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: nil, err: nil},
@@ -127,6 +128,7 @@ func newHistoryHandlerWithURL(
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		PublicURL:     publicURL,
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -110,6 +110,11 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "installation state conditional write moves back to normal", test: testMaintenanceStateIfRelease},
 		{name: "installation state conditional write rejects other values", test: testMaintenanceStateIfInvalid},
 		{name: "installation state on a closed store is ErrUnavailable", test: testMaintenanceStateUnavailable},
+		{name: "writes fail in maintenance mode and pass after it", test: testMaintenanceRefusesWrites},
+		{
+			name: "enter returns after the writes in flight and stops later writes",
+			test: testMaintenanceEnterStopsWrites,
+		},
 	}
 
 	for _, tc := range cases {
@@ -301,12 +306,12 @@ func testPing(t *testing.T, s Store) {
 
 // closeStore closes s. The built-in adapters close with different signatures,
 // so it accepts both.
-func closeStore(t *testing.T, s Store) {
+func closeStore(t *testing.T, s any) {
 	t.Helper()
 
 	var err error
 
-	switch c := any(s).(type) {
+	switch c := s.(type) {
 	case interface{ Close() error }:
 		err = c.Close()
 	case interface{ Close() }:

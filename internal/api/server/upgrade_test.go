@@ -155,17 +155,19 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Now:           nil,
-		TempAdmins:    nil,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "",
+		Workers:          nil,
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
@@ -179,9 +181,11 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -211,17 +215,19 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		TempAdmins:    nil,
-		Now:           nil,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "v0.3.0",
+		Workers:          nil,
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "v0.3.0",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: "v0.1.0"},
 			{Version: 2, Name: "0002_contract.sql", MinBinaryVersion: "v0.10.0"},
@@ -237,9 +243,11 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -261,6 +269,8 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -283,9 +293,11 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -336,17 +348,19 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Now:           nil,
-		TempAdmins:    nil,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
+		Workers:          nil,
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
@@ -360,9 +374,11 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -394,17 +410,19 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 	t.Helper()
 
 	cfg := apiserver.Config{
-		TempAdmins:    nil,
-		Now:           nil,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
+		Workers:          nil,
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		InstallationKind: "",
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
@@ -416,11 +434,13 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	}
 
 	if journaled >= 0 {

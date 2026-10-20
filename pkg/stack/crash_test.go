@@ -135,7 +135,7 @@ func newCrashFixture(
 	namespaces := crashNamespaces(t, wrappedSQL)
 
 	service, err := stack.NewService(
-		stack.Config{Store: wrappedSQL, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: wrappedSQL, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stacks: %v", err)
@@ -152,6 +152,7 @@ func newCrashFixture(
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            wrappedSQL,
 		Tokens:             nil,
 		Checkpoints:        wrappedSQL,

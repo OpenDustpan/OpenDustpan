@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -100,25 +101,137 @@ func (s *Store) ListBackups(ctx context.Context) ([]backup.Record, error) {
 	return out, nil
 }
 
-// FinishBackup implements backup.Registry: it moves the running backup id to
-// state with the error text and the end time.
-//
-//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
-func (s *Store) FinishBackup(
-	ctx context.Context, id backup.ID, state backup.State, errText string, endedAt time.Time,
-) (backup.Record, error) {
+// StartBackup implements backup.Registry: it stores r as a running backup and
+// starts the operation start in one transaction. It reports ErrAlreadyExists
+// when the ID is taken, and ErrAlreadyRunning when the unique index on
+// running backups refuses the row. A failed start changes nothing.
+func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error {
+	if err := start.Validate(); err != nil {
+		return err
+	}
+
+	// Defense in depth: the service builds the request from the backup ID.
+	// This check stays so that no caller can start the row of one backup
+	// with the operation of another kind or key.
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return fmt.Errorf("start backup %s: operation %q of kind %q: %w",
+			r.ID, start.Key, start.Kind, durable.ErrKeyConflict)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if _, err := s.fetchBackup(ctx, id); err != nil {
-		return backup.Record{}, err
-	}
+	row := codec.ToBackupRow(r)
 
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		n, err := q.CreateBackup(ctx, db.CreateBackupParams{
+			ID:          row.ID,
+			State:       string(backup.StateRunning),
+			StartedAtMs: row.StartedAtMs,
+			EndedAtMs:   row.EndedAtMs,
+			Target:      row.Target,
+			Error:       "",
+		})
+		if err != nil {
+			return fmt.Errorf("insert backup: %w", err)
+		}
+
+		if n == 0 {
+			return backupConflict(ctx, q, r.ID)
+		}
+
+		_, created, err := startDurable(ctx, q, start)
+		if err != nil {
+			return err
+		}
+
+		if !created {
+			// A new row needs a new operation: a taken key is a start of
+			// another backup.
+			return fmt.Errorf("start backup operation %q: %w", start.Key, durable.ErrKeyConflict)
+		}
+
+		return nil
+	})
+}
+
+// FinishBackup implements backup.Registry: it checks the fence f, records
+// its step and moves the running backup id to state with the error text and
+// the end time, in one transaction. A fence that is not the live claim
+// reports the durable sentinel and changes nothing.
+//
+//nolint:revive // argument-limit: the fence, the row and the three fields of its end are one write; a struct would only move the fields.
+func (s *Store) FinishBackup(
+	ctx context.Context, f durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
+) (backup.Record, error) {
 	if state != backup.StateSucceeded && state != backup.StateFailed {
 		return backup.Record{}, backup.ErrNotRunning
 	}
 
-	n, err := s.queries.FinishBackup(ctx, db.FinishBackupParams{
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out backup.Record
+
+	err := s.inStepTx(ctx, func(ctx context.Context, _ *sql.Tx, q *db.Queries) error {
+		// The fence comes first: a stale claim changes nothing and learns
+		// nothing about the row.
+		if err := recordStep(ctx, q, f, nil); err != nil {
+			return err
+		}
+
+		// Defense in depth: the fence checked above is live, but it must
+		// belong to the operation of this backup. The service passes the
+		// right fence; this check stays so that no caller can finish a row
+		// under the claim of another operation.
+		if err := ownsBackup(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		rec, err := finishRow(ctx, q, id, state, errText, endedAt)
+		out = rec
+
+		return err
+	})
+	if err != nil {
+		return backup.Record{}, err
+	}
+
+	return out, nil
+}
+
+// ownsBackup returns durable.ErrClaimLost unless the operation of f is the
+// operation that runs backup id.
+func ownsBackup(ctx context.Context, q *db.Queries, f durable.StepFence, id backup.ID) error {
+	op, err := q.GetDurableOperation(ctx, string(f.Operation))
+	if err != nil {
+		return fmt.Errorf("select operation of the fence: %w", err)
+	}
+
+	if op.Kind != string(backup.OperationKind) || op.StartKey != backup.OperationKey(id) {
+		return durable.ErrClaimLost
+	}
+
+	return nil
+}
+
+// finishRow moves the running row id to state in the transaction of q, and
+// returns the finished row. It reports ErrNotFound for a missing row and
+// ErrNotRunning for a row that is not running.
+//
+//nolint:revive // argument-limit: the transaction, the row and the three fields of its end are one write; a struct would only move the fields.
+func finishRow(
+	ctx context.Context, q *db.Queries, id backup.ID, state backup.State, errText string, endedAt time.Time,
+) (backup.Record, error) {
+	if _, err := q.GetBackup(ctx, id.String()); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return backup.Record{}, backup.ErrNotFound
+		}
+
+		return backup.Record{}, fmt.Errorf("select backup: %w", err)
+	}
+
+	n, err := q.FinishBackup(ctx, db.FinishBackupParams{
 		State:     string(state),
 		Error:     errText,
 		EndedAtMs: codec.OptionalMillis(endedAt),
@@ -132,25 +245,32 @@ func (s *Store) FinishBackup(
 		return backup.Record{}, backup.ErrNotRunning
 	}
 
-	return s.fetchBackup(ctx, id)
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		return backup.Record{}, fmt.Errorf("select finished backup: %w", err)
+	}
+
+	return backupFromRow(row)
 }
 
-// FailRunningBackups implements backup.Registry: it marks every running row
-// failed with the error text and the end time. The server calls it at start,
-// after a stop during a backup.
-func (s *Store) FailRunningBackups(ctx context.Context, endedAt time.Time, errText string) error {
+// FailEndedBackups implements backup.Registry: it marks failed each running
+// row whose operation ended failed or canceled. The error text is the last
+// error of the operation.
+func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	err := s.queries.FailRunningBackups(ctx, db.FailRunningBackupsParams{
-		Error:     errText,
-		EndedAtMs: codec.OptionalMillis(endedAt),
+	n, err := s.queries.FailEndedBackups(ctx, db.FailEndedBackupsParams{
+		Prefix:    backup.OperationKeyPrefix,
+		Fallback:  backup.EndedWithoutFinishText,
+		EndedAtMs: codec.Millis(endedAt),
+		Kind:      string(backup.OperationKind),
 	})
 	if err != nil {
-		return fmt.Errorf("fail running backups: %w", err)
+		return 0, fmt.Errorf("fail ended backups: %w", err)
 	}
 
-	return nil
+	return int(n), nil
 }
 
 // backupFromRow converts a backup row into a domain record. Unknown states
@@ -174,7 +294,7 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	lists := make(map[string][]string, len(backup.Tables)+len(backup.ControlTables))
+	lists := make(map[string][]string, len(backup.Tables)+len(backup.ControlTables)+len(backup.EmptiedTables))
 
 	for _, spec := range sqliteBackupTables() {
 		lists[spec.table] = spec.columns
@@ -184,11 +304,19 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		lists[spec.table] = spec.columns
 	}
 
+	for _, spec := range sqliteEmptiedTables() {
+		lists[spec.table] = spec.columns
+	}
+
 	if err := s.checkListedTables(ctx, backup.Tables, lists, "backup"); err != nil {
 		return err
 	}
 
 	if err := s.checkListedTables(ctx, backup.ControlTables, lists, "control"); err != nil {
+		return err
+	}
+
+	if err := s.checkListedTables(ctx, backup.EmptiedTables, lists, "emptied"); err != nil {
 		return err
 	}
 
@@ -520,6 +648,10 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 
 	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
+	}
+
+	if viewsErr := checkStagedSavedViews(ctx, conn); viewsErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", viewsErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)
@@ -1015,16 +1147,21 @@ func corrupt(err error) error {
 // taken (ErrAlreadyExists), or the unique index on running backups refused a
 // second running backup (ErrAlreadyRunning).
 func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
-	_, err := s.fetchBackup(ctx, id)
+	return backupConflict(ctx, s.queries, id)
+}
+
+// backupConflict is createBackupConflict for the queries of one transaction.
+func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
+	_, err := q.GetBackup(ctx, id.String())
 	if err == nil {
 		return backup.ErrAlreadyExists
 	}
 
-	if errors.Is(err, backup.ErrNotFound) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return backup.ErrAlreadyRunning
 	}
 
-	return err
+	return fmt.Errorf("select backup: %w", err)
 }
 
 // createRestoreConflict answers why CreateRestore inserted no row: the ID is

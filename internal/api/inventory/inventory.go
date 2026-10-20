@@ -17,10 +17,16 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -55,14 +61,31 @@ type Config struct {
 	// service serves no collection route, so a namespace store that holds no
 	// collections keeps the rest of the API unchanged.
 	Collections *collection.Service
+	// Locks serves the manual lock routes. It is optional: a nil service serves
+	// no lock route, so a namespace store that holds no manual locks keeps the
+	// rest of the API unchanged.
+	Locks *manuallock.Service
 	// Moves checks the escalation of a move into a collection. It is required
 	// with Collections: a move with no checker is refused.
 	Moves         MoveChecker
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
+	// writes none.
+	Audit audit.Store
+	// OnAuditFailure, when set, runs once for each refusal whose entry could not
+	// be written, so the server can count it.
+	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// Sessions checks the console session cookie of a request with no
 	// Authorization header. Nil accepts access tokens only.
 	Sessions *sessionauth.Checker
+	// Views serves the saved view routes. It is optional: nil serves no
+	// saved view route.
+	Views *ViewsConfig
 	// PublicURL is the external base URL of the server, for example
 	// https://dustpan.example.com. It makes the consoleUrl of each unit.
 	// Empty means the installation has no public URL, and the entries have
@@ -81,10 +104,13 @@ type Handler struct {
 	lifecycles  map[string]coreinventory.Lifecycle
 	readScope   DeletedReadScope
 	collections *collection.Service
+	locks       *manuallock.Service
 	moves       MoveChecker
+	views       *views
 	authn       identity.Authenticator
 	sessions    *sessionauth.Checker
 	authz       identity.Authorizer
+	guard       *refusal.Recorder
 	publicURL   *url.URL
 	logger      *slog.Logger
 	now         func() time.Time
@@ -114,17 +140,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
-	now := cfg.Now
-	if now == nil {
-		now = time.Now
-	}
-
 	publicURL, err := parsePublicURL(cfg.PublicURL)
 	if err != nil {
 		return nil, err
 	}
 
+	viewState, err := newViews(cfg.Views)
+	if err != nil {
+		return nil, err
+	}
+
 	h := &Handler{
+		views:       viewState,
 		namespaces:  cfg.Namespaces,
 		units:       cfg.Units,
 		deleted:     cfg.Deleted,
@@ -132,15 +159,19 @@ func NewHandler(cfg Config) (*Handler, error) {
 		lifecycles:  cfg.Lifecycles,
 		readScope:   cfg.ReadScope,
 		collections: cfg.Collections,
+		locks:       cfg.Locks,
 		moves:       cfg.Moves,
 		authn:       cfg.Authenticator,
 		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
-		publicURL:   publicURL,
-		logger:      cfg.Logger,
-		now:         now,
-		mux:         newPatternMux(),
-		routes:      nil,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure).
+			WithLimiter(cfg.DenialLimiter).
+			WithSurface("inventory"),
+		publicURL: publicURL,
+		logger:    cfg.Logger,
+		now:       clockOf(cfg.Now),
+		mux:       newPatternMux(),
+		routes:    nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -149,6 +180,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// clockOf returns now, or time.Now when now is nil.
+func clockOf(now func() time.Time) func() time.Time {
+	if now == nil {
+		return time.Now
+	}
+
+	return now
 }
 
 // parsePublicURL parses the public URL of the server. An empty value is no
@@ -182,6 +222,13 @@ type lockEntry struct {
 	Operation string `json:"operation"`
 }
 
+// stateEntry is one state of a unit: its wire value and the time it began, an
+// RFC 3339 time in UTC.
+type stateEntry struct {
+	State string `json:"state"`
+	Since string `json:"since"`
+}
+
 // unitEntry is one unit as the console reads it. Tool is the tool label of
 // the glossary ("Pulumi" or "OpenTofu"); Reference is the unit reference
 // with the stored lowercase tool code ("pulumi:acme/web/prod"). UnitID is the
@@ -196,15 +243,21 @@ type lockEntry struct {
 // API, and it ships on its own schedule, so a released console keeps working
 // only while every field stays.
 type unitEntry struct {
-	Tool          string     `json:"tool"`
-	Reference     string     `json:"reference"`
-	UnitID        string     `json:"unitID"`
-	Namespace     string     `json:"namespace"`
-	Name          string     `json:"name"`
-	LastChange    string     `json:"lastChange"`
-	Status        string     `json:"status,omitempty"`
-	ResourceCount *int64     `json:"resourceCount,omitempty"`
-	Lock          *lockEntry `json:"lock,omitempty"`
+	Tool       string `json:"tool"`
+	Reference  string `json:"reference"`
+	UnitID     string `json:"unitID"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	LastChange string `json:"lastChange"`
+	Status     string `json:"status,omitempty"`
+	// States are the states of the unit in the order of the badges. The array
+	// is empty when nothing needs attention.
+	States        []stateEntry `json:"states"`
+	ResourceCount *int64       `json:"resourceCount,omitempty"`
+	Lock          *lockEntry   `json:"lock,omitempty"`
+	// ManualLock is the manual lock that covers the unit, omitted when none
+	// does. Like Lock, it is a flag and not a status.
+	ManualLock *manualLockEntry `json:"manualLock,omitempty"`
 	// Collection is the name of the collection of the unit, omitted when the
 	// unit has none (ADR 51).
 	Collection string `json:"collection,omitempty"`
@@ -249,12 +302,27 @@ func (h *Handler) toUnitEntry(e coreinventory.Entry) unitEntry {
 		Name:          e.Name,
 		LastChange:    formatTime(e.LastChanged),
 		Status:        e.Status,
+		States:        toStateEntries(e),
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
+		ManualLock:    toManualLockEntry(e.ManualLock),
 		Collection:    e.Collection,
 		Labels:        e.Labels,
 		ConsoleURL:    h.consoleURL(e.UnitID),
 	}
+}
+
+// toStateEntries maps the states of the entry e to their wire shape. The
+// array is never nil, so the field reads as a list in every response.
+func toStateEntries(e coreinventory.Entry) []stateEntry {
+	states := e.StatesOf()
+	out := make([]stateEntry, len(states))
+
+	for i, s := range states {
+		out[i] = stateEntry{State: string(s.State), Since: formatTime(s.Since)}
+	}
+
+	return out
 }
 
 // consoleURL returns the URL of the page of the unit in the console, or an
@@ -320,6 +388,17 @@ func (h *Handler) listUnits(
 
 		return
 	}
+
+	h.serveUnitList(w, r, p, ns, filter)
+}
+
+// serveUnitList answers one page of the units of ns that pass the filter and
+// that the caller may read. The unit list and the units of a saved view both
+// end here, so a view returns the same page as the query that it stores.
+func (h *Handler) serveUnitList(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, ns namespace.Name, filter unitFilter,
+) {
+	ctx := r.Context()
 
 	page, err := parseUnitPage(r, ns, filter)
 	if err != nil {
@@ -440,9 +519,18 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 type errorResponse struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
+	// ErrorCode is a stable machine code. Only the Idempotency-Key refusals
+	// set it.
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	if ie, ok := errors.AsType[*idempotent.Error](err); ok {
+		h.writeJSON(ctx, w, ie.Status, errorResponse{Code: ie.Status, Message: ie.Message, ErrorCode: ie.Code})
+
+		return
+	}
+
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
 		// The log names the status only, never the error text: the text
@@ -450,7 +538,11 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
-	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+	if errors.Is(err, namespace.ErrFenced) {
+		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	}
+
+	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message, ErrorCode: ""})
 }
 
 // classifyAuth maps the errors of the authentication and the
@@ -476,6 +568,10 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifyView(err); ok {
+		return status, message
+	}
+
 	switch {
 	case errors.Is(err, errMissingOrganization):
 		return http.StatusBadRequest, err.Error()
@@ -491,7 +587,7 @@ func classify(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, collection.ErrAlreadyExists), errors.Is(err, collection.ErrNotEmpty),
 		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection),
-		errors.Is(err, namespace.ErrFenced):
+		errors.Is(err, collection.ErrMoveOutOfLockedCollection):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody), errors.Is(err, errMissingUnit):
 		return http.StatusBadRequest, err.Error()
@@ -515,12 +611,24 @@ func classifyChange(err error) (int, string) {
 	case errors.Is(err, coreinventory.ErrNameTaken):
 		return http.StatusConflict, "a live unit holds the name: send a new name in the restore body"
 	case errors.Is(err, namespace.ErrFenced):
-		return http.StatusConflict, "write fenced: try again"
+		return http.StatusConflict, namespace.ErrFenced.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
+	case errors.Is(err, maintenance.ErrInMaintenance):
+		return http.StatusServiceUnavailable, maintenance.ErrInMaintenance.Error() + ": try again later"
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return classifyManualLock(err)
 	}
+}
+
+// classifyManualLock maps the errors of the manual lock routes. Any other error
+// is an internal error.
+func classifyManualLock(err error) (int, string) {
+	if status, message, ok := classifyLock(err); ok {
+		return status, message
+	}
+
+	return http.StatusInternalServerError, "internal error"
 }
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {

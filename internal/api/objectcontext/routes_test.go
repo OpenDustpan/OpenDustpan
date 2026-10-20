@@ -67,6 +67,7 @@ func (fakeUnits) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventor
 	}
 
 	return []coreinventory.Entry{{
+		ManualLock:  nil,
 		LastChanged: time.Unix(0, 0), Namespace: ns, Tool: "opentofu", Name: "net", UnitID: testUnitID,
 		DisplayName: "", Status: "", ResourceCount: nil, Lock: nil, Collection: "",
 		Labels: nil,
@@ -250,9 +251,11 @@ func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) *cont
 	}
 
 	handler, err := contextapi.NewHandler(contextapi.Config{
+		Audit: nil, OnAuditFailure: nil,
 		Namespaces: namespaces, Units: fakeUnits{}, Deleted: fakeDeleted{}, Collections: nil, Entries: store,
 		Writer: writer, Authenticator: tokenAuthenticator{}, Authorizer: authz, Sessions: nil,
-		Logger: slog.New(slog.DiscardHandler),
+		Logger:        slog.New(slog.DiscardHandler),
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -540,8 +543,10 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	t.Parallel()
 
 	none := contextapi.Config{
+		Audit: nil, OnAuditFailure: nil,
 		Namespaces: nil, Units: nil, Deleted: nil, Collections: nil, Entries: nil, Writer: nil, Authenticator: nil,
 		Authorizer: nil, Sessions: nil, Logger: nil,
+		DenialLimiter: nil,
 	}
 	if _, err := contextapi.NewHandler(none); !errors.Is(err, contextapi.ErrMissingDependency) {
 		t.Errorf("NewHandler with no dependency: %v, want ErrMissingDependency", err)

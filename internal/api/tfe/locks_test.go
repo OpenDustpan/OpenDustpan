@@ -26,8 +26,8 @@ type conflictWorkspaces struct {
 	stubWorkspaces
 }
 
-func (conflictWorkspaces) Lock(
-	_ context.Context, id workspace.ID, _, _ string,
+func (conflictWorkspaces) LockForJob(
+	_ context.Context, id workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
 		return workspace.Workspace{}, workspace.ErrNotFound
@@ -114,6 +114,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -240,8 +241,8 @@ type raceWorkspaces struct {
 	holder string
 }
 
-func (r *raceWorkspaces) Lock(
-	_ context.Context, id workspace.ID, holder, _ string,
+func (r *raceWorkspaces) LockForJob(
+	_ context.Context, id workspace.ID, holder, _, _ string,
 ) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
 		return workspace.Workspace{}, workspace.ErrNotFound
@@ -391,6 +392,7 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

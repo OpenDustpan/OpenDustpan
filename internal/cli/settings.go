@@ -6,6 +6,15 @@ import "opendustpan.org/opendustpan/pkg/history"
 // test proves it equals history.DefaultRetention.
 const retentionDefault = "9600h"
 
+// unsafeAllowDevBackupsFlag is the flag that lets a production installation
+// restore a backup of a dev installation. The name says that the choice is
+// unsafe. The flag has no variable and no configuration file key.
+const unsafeAllowDevBackupsFlag = "unsafe-allow-restoring-dev-installation-backups-into-production"
+
+// UnsafeAllowDevBackupsFlag is the name of the flag that lets a production
+// installation restore a backup of a dev installation.
+const UnsafeAllowDevBackupsFlag = unsafeAllowDevBackupsFlag
+
 // defaultFalse is the default of the bool declarations: no opt-in without
 // an explicit flag or variable.
 const defaultFalse = "false"
@@ -124,6 +133,15 @@ var Settings = []*Setting{
 		"`local`",
 	).WithFile("region"),
 	stringSetting(
+		"components", "DUSTPAN_COMPONENTS", "all",
+		"components this process runs: all, or a comma-separated list of api and worker (DUSTPAN_COMPONENTS)",
+		"`all` (or a comma-separated list of `api` and `worker`). `api` runs each HTTP route and starts "+
+			"durable operations, but never claims one. `worker` runs the durable operations, the schedules, "+
+			"the audit shipper and the audit chain check. A process that runs `worker` without `api` answers 404 "+
+			"on each route except the probes and the metrics route. An unknown name stops the start. "+
+			"See the several instances guide (docs/guides/several-instances.md)",
+	).WithFile("components"),
+	stringSetting(
 		"listen", "DUSTPAN_LISTEN", ":8080",
 		"listen address of the server (DUSTPAN_LISTEN)",
 		"`:8080`",
@@ -139,7 +157,7 @@ var Settings = []*Setting{
 		referenceNone+". A comma-separated list. Each origin is a scheme (`http` or `https`), a host and an "+
 			"optional port, in lower case with an ASCII (punycode) host. It has no default port, path, query or "+
 			"fragment. The server refuses `null` and `*`. A listed origin gets CORS headers on `/api/`, with "+
-			"`Access-Control-Expose-Headers: Retry-After, ETag` on answers to requests.",
+			"`Access-Control-Expose-Headers: Retry-After, ETag, Idempotent-Replayed` on answers to requests.",
 	).WithFile("allowed-origins"),
 	stringSetting(
 		"tls-cert", "DUSTPAN_TLS_CERT", "",
@@ -261,7 +279,7 @@ var Settings = []*Setting{
 		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
 		"`0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. "+
 			"The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs "+
-			"document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes "+
+			"document asks for more budget as the document grows. One encrypted state with 16 MiB of outputs takes "+
 			"about 72 MiB of the budget. Installations with large outputs should raise this value. An upload "+
 			"that can never fit answers 413.",
 	).WithFile("max-body-bytes-in-flight"),
@@ -396,6 +414,16 @@ var Settings = []*Setting{
 		referenceNone,
 	),
 	boolSetting(
+		unsafeAllowDevBackupsFlag, "",
+		"let a production installation restore a backup of a dev installation; the restore deletes the dev "+
+			"users and their data. We do not recommend this. Only this flag sets it: no variable, no "+
+			"configuration file key and no API setting",
+		"false. Only the flag sets it. No variable and no configuration file key sets it. "+
+			"The server writes one warning to the log at each start with the flag. Without it, a production "+
+			"installation refuses to restore a backup of a dev installation. A restore of any backup "+
+			"deletes the dev users and their data from the staged data",
+	),
+	boolSetting(
 		"check-only", "",
 		"run the restore checks and apply nothing",
 		"false",
@@ -451,6 +479,17 @@ var Settings = []*Setting{
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
 		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
+	).WithSensitive(),
+	envSetting(
+		DevDataDirEnv,
+		"The parent of the data directory of `dev`. The data directory is `dev` in it. `--ephemeral` "+
+			"ignores it, and `--data-dir` wins over it.",
+	),
+	envSetting(
+		DevAdminTokenEnv,
+		"The administrator token of `dev`, in place of a token that `dev` makes. At least 32 bytes. "+
+			"`dev` clears the variable from its environment after the read, and `dev.env` takes "+
+			"the token from the variable in the shell that loads it.",
 	).WithSensitive(),
 
 	stringSetting(

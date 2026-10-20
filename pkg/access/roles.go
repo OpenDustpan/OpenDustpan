@@ -93,6 +93,10 @@ func viewerActions() []identity.Action {
 		identity.ActionCollectionRead,
 		identity.ActionUnitRead,
 		identity.ActionProfileRead,
+		identity.ActionNamespaceReadGates,
+		identity.ActionViewCreate,
+		identity.ActionViewRead,
+		identity.ActionViewDelete,
 	}
 }
 
@@ -113,6 +117,7 @@ func maintainerActions() []identity.Action {
 		identity.ActionUnitManage,
 		identity.ActionUnitMove,
 		identity.ActionUnitRestore,
+		identity.ActionUnitLock,
 		identity.ActionCollectionCreate,
 		identity.ActionCollectionUpdate,
 		identity.ActionCollectionDelete,

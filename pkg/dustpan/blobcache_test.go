@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/blobfault"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -122,6 +123,12 @@ func TestBlobCacheLeavesOtherReadsUncached(t *testing.T) {
 
 	st, blobs, authn := requireServerPorts(t)
 	counted := &keyCounter{Store: blobs, mu: sync.Mutex{}, gets: map[string]int{}}
+
+	// A server claims its installation kind at start, and the backup records
+	// it.
+	if _, claimErr := st.ClaimKind(t.Context(), installation.KindProduction); claimErr != nil {
+		t.Fatalf("claim the installation kind: %v", claimErr)
+	}
 
 	target, err := fs.Open(t.TempDir())
 	if err != nil {
@@ -268,4 +275,34 @@ func doWithAuth(t *testing.T, f fixture, r authRequest) (int, string) {
 	}
 
 	return resp.StatusCode, string(data)
+}
+
+// TestNewServerChecksTheAuditChainInterval proves that NewServer refuses an
+// audit chain check interval of zero or less and accepts a positive one.
+func TestNewServerChecksTheAuditChainInterval(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		every   time.Duration
+		wantErr bool
+	}{
+		{name: "zero", every: 0, wantErr: true},
+		{name: "negative", every: -time.Second, wantErr: true},
+		{name: "positive", every: time.Minute, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+			opts := append(fullServerOptions(t, st, blobs, authn), dustpan.WithAuditChainCheckInterval(tt.every))
+
+			_, err := dustpan.NewServer(opts...)
+			if tt.wantErr != errors.Is(err, dustpan.ErrInvalidOption) || (!tt.wantErr && err != nil) {
+				t.Fatalf("NewServer with interval %s: err = %v, want invalid option = %t", tt.every, err, tt.wantErr)
+			}
+		})
+	}
 }

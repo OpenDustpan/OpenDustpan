@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -259,5 +260,88 @@ func TestAuditChannel(t *testing.T) {
 
 	if got := sessionauth.AuditChannel(marked, "Dustpan-Channel"); got != audit.ChannelConsole {
 		t.Fatalf("channel of a session request that declares api = %q, want console", got)
+	}
+}
+
+// TestRefuseDevSubjects proves the layer of the session cookie check: with
+// the option, the session of a dev person authenticates nothing, whatever the
+// case of the subject, and the sessions of other people pass. Without the
+// option, the session of a dev person passes, as on a dev installation.
+func TestRefuseDevSubjects(t *testing.T) {
+	t.Parallel()
+
+	secret := newSecret(t)
+
+	for _, tc := range []struct {
+		subject string
+		refuse  bool
+		want    error
+	}{
+		{subject: "dev:admin", refuse: true, want: identity.ErrUnauthenticated},
+		{subject: "DEV:admin", refuse: true, want: identity.ErrUnauthenticated},
+		{subject: "dev:admin", refuse: false, want: nil},
+		{subject: "corp:alice", refuse: true, want: nil},
+		{subject: "developer", refuse: true, want: nil},
+	} {
+		match := aliceMatch()
+		match.Owner.Subject = tc.subject
+
+		var opts []sessionauth.Option
+		if tc.refuse {
+			opts = append(opts, sessionauth.RefuseDevSubjects())
+		}
+
+		c, err := sessionauth.New(&fakeSessions{err: nil, match: match, calls: 0}, []string{consoleOrigin}, opts...)
+		if err != nil {
+			t.Fatalf("new checker: %v", err)
+		}
+
+		p, _, err := c.Authenticate(request(t, http.MethodGet, secret.Reveal(), nil))
+		if !errors.Is(err, tc.want) {
+			t.Errorf("subject %q, refuse %t: err = %v, want %v", tc.subject, tc.refuse, err, tc.want)
+		}
+
+		if tc.want != nil && p.Subject != "" {
+			t.Errorf("subject %q: a refused session returned the principal %q", tc.subject, p.Subject)
+		}
+	}
+}
+
+// TestOnDevRefused proves that the Checker tells the hook the subject of each
+// dev person that it refuses, and only of those.
+func TestOnDevRefused(t *testing.T) {
+	t.Parallel()
+
+	secret := newSecret(t)
+
+	for _, tc := range []struct {
+		subject string
+		want    []string
+	}{
+		{subject: "dev:admin", want: []string{"dev:admin"}},
+		{subject: "DEV:Admin", want: []string{"DEV:Admin"}},
+		{subject: "corp:alice", want: nil},
+		{subject: "developer", want: nil},
+	} {
+		match := aliceMatch()
+		match.Owner.Subject = tc.subject
+
+		var got []string
+
+		c, err := sessionauth.New(&fakeSessions{err: nil, match: match, calls: 0}, []string{consoleOrigin},
+			sessionauth.RefuseDevSubjects(),
+			sessionauth.OnDevRefused(func(_ context.Context, subject string) { got = append(got, subject) }))
+		if err != nil {
+			t.Fatalf("new checker: %v", err)
+		}
+
+		_, _, err = c.Authenticate(request(t, http.MethodGet, secret.Reveal(), nil))
+		if refused := errors.Is(err, identity.ErrUnauthenticated); refused != (len(tc.want) > 0) {
+			t.Errorf("subject %q: refused = %t, want %t", tc.subject, refused, len(tc.want) > 0)
+		}
+
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("subject %q: hook got %v, want %v", tc.subject, got, tc.want)
+		}
 	}
 }

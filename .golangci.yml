@@ -131,6 +131,10 @@ linters:
             - "**/pkg/graph/**"
             - "**/pkg/objectcontext/**"
             - "**/pkg/unmanaged/**"
+            - "**/pkg/drift/**"
+            - "**/pkg/trigger/**"
+            - "**/pkg/savedview/**"
+            - "**/pkg/registry/**"
             - "**/pkg/runner/**"
             - "**/pkg/launcher/**"
             - "**/pkg/source/**"
@@ -141,7 +145,7 @@ linters:
             - "**/pkg/tempadmin/**"
             - "**/pkg/oncall/**"
             - "**/pkg/cost/**"
-            - "**/pkg/notify/**"
+            - "**/pkg/notify/*.go"
             - "**/pkg/egress/*.go"
             - "**/pkg/chatops/**"
             - "**/pkg/incident/**"
@@ -152,6 +156,7 @@ linters:
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
             - "**/pkg/unitimport/*.go"
+            - "**/pkg/installation/**"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
           deny:
@@ -161,6 +166,8 @@ linters:
               desc: Domain code must not import transport adapters.
             - pkg: opendustpan.org/opendustpan/pkg/blob/
               desc: Domain code depends on the blob port, never on an adapter.
+            - pkg: opendustpan.org/opendustpan/pkg/notify/
+              desc: Domain code depends on the notify.Sender port, never on a sender adapter.
             - pkg: net/http
               desc: HTTP belongs in api/, not in the domain.
             - pkg: database/sql

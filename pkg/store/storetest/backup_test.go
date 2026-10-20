@@ -2,7 +2,8 @@
 // suite. The SQL adapters run the suite once they implement the ports (issues
 // #143 and #144); until then this fake runs it. Its knobs (tear, dropTable,
 // extraSchemaTable, omitSchemaTable, skipEmptyCheck, skipReferences,
-// allowDuplicate, allowRefinish, oldestFirst, noopFailRunning, dropOnClose)
+// allowDuplicate, allowRefinish, oldestFirst, noopFailEnded, ignoreFence,
+// failLive, dropOnClose)
 // break the store on purpose, so the tests below prove that each suite case
 // can fail.
 package storetest_test
@@ -22,6 +23,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -120,9 +123,14 @@ type fakeBackupStore struct {
 	allowDuplicate   bool
 	allowRefinish    bool
 	oldestFirst      bool
-	noopFailRunning  bool
+	noopFailEnded    bool
+	ignoreFence      bool
+	failLive         bool
 	dropOnClose      bool
 	closed           bool
+	// mem is the store of durable operations of the fake. Reopened handles
+	// share it, as handles on one database do.
+	mem *durabletest.Mem
 }
 
 var (
@@ -158,9 +166,12 @@ func newFakeBackupStore() *fakeBackupStore {
 		allowDuplicate:   false,
 		allowRefinish:    false,
 		oldestFirst:      false,
-		noopFailRunning:  false,
+		noopFailEnded:    false,
+		ignoreFence:      false,
+		failLive:         false,
 		dropOnClose:      false,
 		closed:           false,
+		mem:              durabletest.NewMem(),
 	}
 }
 
@@ -1916,6 +1927,14 @@ func (s *fakeBackupStore) SetStateIf(
 	return nil
 }
 
+// DurableOperationsPort implements storetest.BackupStore: the store of durable
+// operations of the fake.
+//
+//nolint:ireturn // The port returns the interface, as the store adapters do.
+func (s *fakeBackupStore) DurableOperationsPort() durable.Store {
+	return s.mem.Store()
+}
+
 // CreateBackup implements backup.Registry.
 func (s *fakeBackupStore) CreateBackup(_ context.Context, r backup.Record) error {
 	s.mu.Lock()
@@ -1925,26 +1944,45 @@ func (s *fakeBackupStore) CreateBackup(_ context.Context, r backup.Record) error
 		return errFakeClosed
 	}
 
-	if _, ok := s.data.backups[r.ID.String()]; ok && !s.allowDuplicate {
-		return backup.ErrAlreadyExists
+	return s.createBackupLocked(r)
+}
+
+// StartBackup implements backup.Registry. The row check runs inside the
+// transaction of the operation start, so a refused row rolls the start back.
+func (s *fakeBackupStore) StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
 	}
 
-	if r.State == backup.StateRunning && !s.allowDuplicate {
-		for id := range s.data.backups {
-			if s.data.backups[id].State == backup.StateRunning {
-				return backup.ErrAlreadyRunning
-			}
-		}
+	// The check of the adapters: the request must belong to this backup.
+	if err := start.Validate(); err != nil {
+		return fmt.Errorf("start backup operation: %w", err)
 	}
 
-	s.data.backups[r.ID.String()] = r
+	if start.Key != backup.OperationKey(r.ID) || start.Kind != backup.OperationKind {
+		return fmt.Errorf("start backup %s: operation %q: %w", r.ID, start.Key, durable.ErrKeyConflict)
+	}
+
+	hooks := durabletest.Hooks{Before: nil, After: func() error { return s.createBackupLocked(r) }}
+
+	if _, err := s.mem.Harness().Domain.StartWith(ctx, start, "", hooks); err != nil {
+		return fmt.Errorf("start backup operation: %w", err)
+	}
 
 	return nil
 }
 
-// FinishBackup implements backup.Registry.
+// FinishBackup implements backup.Registry. The row change runs inside the
+// step write of the durable harness, which checks the claim first and records
+// the step only when the row change succeeds. The ignoreFence knob skips the
+// claim check on purpose.
+//
+//nolint:revive // The signature of the backup.Registry port.
 func (s *fakeBackupStore) FinishBackup(
-	_ context.Context, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context, f durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
 ) (backup.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1953,25 +1991,54 @@ func (s *fakeBackupStore) FinishBackup(
 		return backup.Record{}, errFakeClosed
 	}
 
-	r, ok := s.data.backups[id.String()]
-	if !ok {
-		return backup.Record{}, backup.ErrNotFound
+	// The check runs before the domain write: the write holds the lock of the
+	// durable store while its hook runs, and the check reads that store.
+	if !s.fenceOwnsRow(ctx, f, id) {
+		return backup.Record{}, durable.ErrClaimLost
 	}
 
-	if state != backup.StateSucceeded && state != backup.StateFailed {
-		return backup.Record{}, backup.ErrNotRunning
+	var out backup.Record
+
+	finish := func() error {
+		r, ok := s.data.backups[id.String()]
+		if !ok {
+			return backup.ErrNotFound
+		}
+
+		if state != backup.StateSucceeded && state != backup.StateFailed {
+			return backup.ErrNotRunning
+		}
+
+		if r.State != backup.StateRunning && !s.allowRefinish {
+			return backup.ErrNotRunning
+		}
+
+		r.State = state
+		r.Error = errText
+		r.EndedAt = endedAt
+		s.data.backups[id.String()] = r
+		out = r
+
+		return nil
 	}
 
-	if r.State != backup.StateRunning && !s.allowRefinish {
-		return backup.Record{}, backup.ErrNotRunning
+	if s.ignoreFence {
+		if err := finish(); err != nil {
+			return backup.Record{}, err
+		}
+
+		return out, nil
 	}
 
-	r.State = state
-	r.Error = errText
-	r.EndedAt = endedAt
-	s.data.backups[id.String()] = r
+	hooks := durabletest.Hooks{Before: nil, After: finish}
 
-	return r, nil
+	zero := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	if err := s.mem.Harness().Domain.WriteStep(ctx, f, zero, "", hooks); err != nil {
+		return backup.Record{}, fmt.Errorf("finish backup step: %w", err)
+	}
+
+	return out, nil
 }
 
 // GetBackup implements backup.Registry.
@@ -2035,30 +2102,57 @@ func (s *fakeBackupStore) ListBackups(_ context.Context) ([]backup.Record, error
 	return out, nil
 }
 
-// FailRunningBackups implements backup.Registry. The noopFailRunning knob
-// leaves running rows alone on purpose.
-func (s *fakeBackupStore) FailRunningBackups(_ context.Context, endedAt time.Time, errText string) error {
+// FailEndedBackups implements backup.Registry. The noopFailEnded knob leaves
+// the rows alone on purpose. The failLive knob also fails the rows of
+// operations that run or wait.
+func (s *fakeBackupStore) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return errFakeClosed
+		return 0, errFakeClosed
 	}
 
-	if s.noopFailRunning {
-		return nil
+	if s.noopFailEnded {
+		return 0, nil
 	}
+
+	ops, err := s.mem.Store().List(ctx, durable.Filter{Kind: backup.OperationKind, States: nil, Limit: 0})
+	if err != nil {
+		return 0, fmt.Errorf("list backup operations: %w", err)
+	}
+
+	byKey := make(map[string]durable.Operation, len(ops))
+	for i := range ops {
+		byKey[ops[i].Key] = ops[i]
+	}
+
+	changed := 0
 
 	for id, r := range s.data.backups {
-		if r.State == backup.StateRunning {
-			r.State = backup.StateFailed
-			r.Error = errText
-			r.EndedAt = endedAt
-			s.data.backups[id] = r
+		op, ok := byKey[backup.OperationKey(r.ID)]
+		if !ok || r.State != backup.StateRunning {
+			continue
 		}
+
+		ended := op.State == durable.StateFailed || op.State == durable.StateCanceled
+		if !ended && !s.failLive {
+			continue
+		}
+
+		r.State = backup.StateFailed
+		r.Error = op.LastError
+
+		if r.Error == "" {
+			r.Error = backup.EndedWithoutFinishText
+		}
+
+		r.EndedAt = endedAt
+		s.data.backups[id] = r
+		changed++
 	}
 
-	return nil
+	return changed, nil
 }
 
 // CreateRestore implements backup.RestoreRegistry.
@@ -2257,8 +2351,10 @@ func (s *fakeBackupStore) ApplyStaging(_ context.Context) error {
 
 // ApplyStagingKeepingAccess implements backup.AccessKeepingApplier: the fake
 // keeps no access tables, so it swaps like ApplyStaging.
-func (s *fakeBackupStore) ApplyStagingKeepingAccess(ctx context.Context) error {
-	return s.ApplyStaging(ctx)
+//
+//nolint:unparam // The port returns the result, and the fake keeps no access tables.
+func (s *fakeBackupStore) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAccessResult, error) {
+	return backup.KeepAccessResult{}, s.ApplyStaging(ctx)
 }
 
 // BumpFailoverVersions implements backup.Fencer: it increments the failover
@@ -2308,6 +2404,7 @@ func (s *fakeBackupStore) SchemaTables(_ context.Context) ([]string, error) {
 	}
 
 	out := append(backup.TablesCopy(), backup.ControlTables...)
+	out = append(out, backup.EmptiedTables...)
 
 	if s.extraSchemaTable != "" {
 		out = append(out, s.extraSchemaTable)
@@ -2357,9 +2454,12 @@ func (s *fakeBackupStore) Reopen() storetest.BackupStore { //nolint:ireturn // R
 		allowDuplicate:   s.allowDuplicate,
 		allowRefinish:    s.allowRefinish,
 		oldestFirst:      s.oldestFirst,
-		noopFailRunning:  s.noopFailRunning,
+		noopFailEnded:    s.noopFailEnded,
+		ignoreFence:      s.ignoreFence,
+		failLive:         s.failLive,
 		dropOnClose:      s.dropOnClose,
 		closed:           false,
+		mem:              s.mem,
 	}
 }
 
@@ -2499,6 +2599,31 @@ func fakeBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
 	}
 }
 
+// fakeOperationClaim starts a bare operation under the start key of the row
+// r and claims it for owner with lease, as the worker of a backup does.
+func fakeOperationClaim(
+	t *testing.T, s *fakeBackupStore, r backup.Record, owner string, lease time.Duration,
+) durable.Claim {
+	t.Helper()
+
+	req := durable.StartRequest{
+		Key: backup.OperationKey(r.ID), Kind: backup.OperationKind, Version: backup.OperationVersion, Input: nil,
+	}
+
+	if _, _, err := s.DurableOperationsPort().Start(t.Context(), req); err != nil {
+		t.Fatalf("start operation: %v", err)
+	}
+
+	op, err := s.DurableOperationsPort().Claim(t.Context(), durable.ClaimRequest{
+		Owner: owner, Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: lease,
+	})
+	if err != nil {
+		t.Fatalf("claim operation: %v", err)
+	}
+
+	return op.Claim
+}
+
 // TestBackupDetectsDuplicateBackup breaks the registry so creating a row
 // with a taken ID overwrites it. The second create succeeds instead of
 // reporting ErrAlreadyExists, so the "backups table creates, finishes, gets
@@ -2546,11 +2671,16 @@ func TestBackupDetectsRefinishAllowed(t *testing.T) {
 		t.Fatalf("create backup: %v", err)
 	}
 
-	if _, err := s.FinishBackup(t.Context(), r.ID, backup.StateSucceeded, "", fakeTime()); err != nil {
-		t.Fatalf("finish backup: %v", err)
+	claim := fakeOperationClaim(t, s, r, "test", time.Hour)
+
+	_, finishErr := s.FinishBackup(
+		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(),
+	)
+	if finishErr != nil {
+		t.Fatalf("finish backup: %v", finishErr)
 	}
 
-	redone, err := s.FinishBackup(t.Context(), r.ID, backup.StateFailed, "again", fakeTime())
+	redone, err := s.FinishBackup(t.Context(), claim.Step("probe"), r.ID, backup.StateFailed, "again", fakeTime())
 	if err != nil {
 		t.Fatalf("finish a finished backup without the running check: %v", err)
 	}
@@ -2583,8 +2713,13 @@ func TestBackupDetectsOldestFirst(t *testing.T) {
 		}
 
 		// One backup runs at a time: each ends before the next starts.
-		if _, err := s.FinishBackup(t.Context(), r.ID, backup.StateSucceeded, "", fakeTime()); err != nil {
-			t.Fatalf("finish backup: %v", err)
+		claim := fakeOperationClaim(t, s, r, "test", time.Hour)
+
+		_, finishErr := s.FinishBackup(
+			t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(),
+		)
+		if finishErr != nil {
+			t.Fatalf("finish backup: %v", finishErr)
 		}
 
 		ids = append(ids, r.ID)
@@ -2600,23 +2735,32 @@ func TestBackupDetectsOldestFirst(t *testing.T) {
 	}
 }
 
-// TestBackupDetectsNoopFailRunning breaks the registry so FailRunningBackups
-// leaves running rows alone. The row stays running instead of failing, so
-// the "restart marks every running backup failed" case of RunBackup fails on
-// this fake.
-func TestBackupDetectsNoopFailRunning(t *testing.T) {
+// TestBackupDetectsNoopFailEnded breaks the registry so FailEndedBackups
+// leaves the rows of failed operations alone. The row stays running instead of
+// failing, so the "ended operations fail their running rows" case of
+// RunBackup fails on this fake.
+func TestBackupDetectsNoopFailEnded(t *testing.T) {
 	t.Parallel()
 
 	s := newFakeBackupStore()
-	s.noopFailRunning = true
+	s.noopFailEnded = true
 
 	r := fakeBackupRecord(backup.ID(ident.NewID("bkp-")), fakeTime())
 	if err := s.CreateBackup(t.Context(), r); err != nil {
 		t.Fatalf("create backup: %v", err)
 	}
 
-	if err := s.FailRunningBackups(t.Context(), fakeTime(), "server stopped during backup"); err != nil {
-		t.Fatalf("fail running backups: %v", err)
+	claim := fakeOperationClaim(t, s, r, "test", time.Hour)
+
+	failure := durable.Failure{Message: "boom", Final: true, RetryAfter: 0}
+
+	err := s.DurableOperationsPort().Fail(t.Context(), claim, failure)
+	if err != nil {
+		t.Fatalf("fail operation: %v", err)
+	}
+
+	if n, failErr := s.FailEndedBackups(t.Context(), fakeTime()); failErr != nil || n != 0 {
+		t.Fatalf("fail ended backups = %d, %v, want 0 and no error", n, failErr)
 	}
 
 	got, err := s.GetBackup(t.Context(), r.ID)
@@ -2626,6 +2770,99 @@ func TestBackupDetectsNoopFailRunning(t *testing.T) {
 
 	if got.State != backup.StateRunning {
 		t.Fatalf("backup state after a no-op fail = %q, want running", got.State)
+	}
+}
+
+// TestBackupDetectsFailLive breaks the registry so FailEndedBackups also
+// fails the row of an operation that runs. The row of a live backup ends
+// failed, so the "live operations keep their running rows" case of RunBackup
+// fails on this fake.
+func TestBackupDetectsFailLive(t *testing.T) {
+	t.Parallel()
+
+	s := newFakeBackupStore()
+	s.failLive = true
+
+	r := fakeBackupRecord(backup.ID(ident.NewID("bkp-")), fakeTime())
+	if err := s.CreateBackup(t.Context(), r); err != nil {
+		t.Fatalf("create backup: %v", err)
+	}
+
+	fakeOperationClaim(t, s, r, "test", time.Hour)
+
+	if n, err := s.FailEndedBackups(t.Context(), fakeTime()); err != nil || n != 1 {
+		t.Fatalf("fail ended backups = %d, %v, want 1 and no error", n, err)
+	}
+
+	got, err := s.GetBackup(t.Context(), r.ID)
+	if err != nil {
+		t.Fatalf("get backup: %v", err)
+	}
+
+	if got.State != backup.StateFailed {
+		t.Fatalf("backup state of a live operation = %q, want failed", got.State)
+	}
+}
+
+// staleFinish takes an operation over after its first claim expired, and
+// finishes the row with the stale claim. It returns the error of that finish.
+func staleFinish(t *testing.T, s *fakeBackupStore) error {
+	t.Helper()
+
+	r := fakeBackupRecord(backup.ID(ident.NewID("bkp-")), fakeTime())
+	if err := s.CreateBackup(t.Context(), r); err != nil {
+		t.Fatalf("create backup: %v", err)
+	}
+
+	stale := fakeOperationClaim(t, s, r, "first", 20*time.Millisecond)
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		_, err := s.DurableOperationsPort().Claim(t.Context(), durable.ClaimRequest{
+			Owner: "second", Kinds: []durable.Kind{backup.OperationKind}, MaxVersions: nil, Lease: time.Hour,
+		})
+		if err == nil {
+			break
+		}
+
+		if !errors.Is(err, durable.ErrNoWork) || time.Now().After(deadline) {
+			t.Fatalf("take the operation over: %v", err)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatal("the test ended while it waited for the claim to expire")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	_, err := s.FinishBackup(t.Context(), stale.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime())
+
+	return err
+}
+
+// TestBackupFakeRefusesStaleFinish is the control of the next test: the fake
+// without a knob refuses a finish with a stale claim.
+func TestBackupFakeRefusesStaleFinish(t *testing.T) {
+	t.Parallel()
+
+	if err := staleFinish(t, newFakeBackupStore()); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("stale finish: err = %v, want durable.ErrClaimLost", err)
+	}
+}
+
+// TestBackupDetectsIgnoredFence breaks the registry so FinishBackup skips the
+// claim check. A holder that lost its claim then writes the row, so the "a
+// stale claim cannot finish a backup" case of RunBackup fails on this fake.
+func TestBackupDetectsIgnoredFence(t *testing.T) {
+	t.Parallel()
+
+	s := newFakeBackupStore()
+	s.ignoreFence = true
+
+	if err := staleFinish(t, s); err != nil {
+		t.Fatalf("stale finish without the claim check: err = %v, want nil", err)
 	}
 }
 
@@ -2671,6 +2908,34 @@ func (s *fakeBackupStore) SaveReleased(
 	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
 ) error {
 	return s.SaveWorkspace(ctx, w, fence)
+}
+
+// fenceOwnsRow reports whether the operation of f is the operation of backup
+// id: the operation of the fence has to be the operation of the row.
+func (s *fakeBackupStore) fenceOwnsRow(ctx context.Context, f durable.StepFence, id backup.ID) bool {
+	op, err := s.mem.Store().Get(ctx, f.Operation)
+
+	return err == nil && op.Key == backup.OperationKey(id)
+}
+
+// createBackupLocked stores r with the rules of CreateBackup. The caller
+// holds the lock.
+func (s *fakeBackupStore) createBackupLocked(r backup.Record) error {
+	if _, ok := s.data.backups[r.ID.String()]; ok && !s.allowDuplicate {
+		return backup.ErrAlreadyExists
+	}
+
+	if r.State == backup.StateRunning && !s.allowDuplicate {
+		for id := range s.data.backups {
+			if s.data.backups[id].State == backup.StateRunning {
+				return backup.ErrAlreadyRunning
+			}
+		}
+	}
+
+	s.data.backups[r.ID.String()] = r
+
+	return nil
 }
 
 // latestResourceCount returns the managed resource count of the latest
@@ -2745,6 +3010,7 @@ func (s *fakeBackupStore) stackIDOf(ref stack.Ref) (string, error) {
 func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed time.Time) {
 	name := ref.Project.String() + "/" + ref.Stack.String()
 	s.data.entries[inventoryKey(ref.Namespace, "pulumi", name)] = inventory.Entry{
+		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,
 		Namespace:     ref.Namespace,
@@ -2764,6 +3030,7 @@ func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed tim
 func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, changed time.Time) {
 	name := ref.Name.String()
 	s.data.entries[inventoryKey(ref.Namespace, "opentofu", name)] = inventory.Entry{
+		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   changed,
 		Namespace:     ref.Namespace,

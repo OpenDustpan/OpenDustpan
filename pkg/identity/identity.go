@@ -103,6 +103,18 @@ const (
 	CredentialTrustToken Credential = "trust-token"
 )
 
+// JobTokenID returns the job whose token authenticated the request, or the
+// empty string for every other credential. A manual lock lets a request pass
+// only on this answer, so a principal that carries a job ID with another
+// credential gets no pass.
+func (p Principal) JobTokenID() string {
+	if p.Credential != CredentialJobToken {
+		return ""
+	}
+
+	return p.JobID
+}
+
 // ActsAsPerson reports whether a person acts through the request: the
 // credential is a session or an access token, and the kind is person or
 // unknown. An empty credential counts as an access token, and an unknown
@@ -147,6 +159,16 @@ const (
 	// covers the read: the list shows the network layout of the operator, so
 	// only a manager may read it.
 	ActionNamespaceManageIPAllowlist Action = "namespace:manage-ip-allowlist"
+	// ActionNamespaceReadGates allows reading the approval defaults and the
+	// approval rules of a namespace, its collections and its units. Its
+	// object is a namespace.
+	ActionNamespaceReadGates Action = "namespace:read-gates"
+	// ActionNamespaceManageGates allows setting and removing the approval
+	// defaults and the approval rules of a namespace, its collections and its
+	// units. Its object is a namespace. Of the namespace roles, only
+	// the administrator holds it. The account administrator and the site
+	// administrator hold it as data actions.
+	ActionNamespaceManageGates Action = "namespace:manage-gates"
 	// ActionUnitSetOverrides allows changing the override switches of a unit.
 	// Its object is a unit.
 	ActionUnitSetOverrides Action = "unit:set-overrides"
@@ -220,6 +242,11 @@ const (
 	// ActionUnitRestore allows bringing back a deleted unit before its
 	// retention period ends (ADR 47). Its object is a unit.
 	ActionUnitRestore Action = "unit:restore"
+	// ActionUnitLock allows putting a manual lock with a reason on an object,
+	// and removing a manual lock that the caller holds. Its object is a unit,
+	// a collection or a namespace. Removing the lock of another principal
+	// needs ActionUnitManage on the same object.
+	ActionUnitLock Action = "unit:lock"
 	// ActionUnitPurge allows the final delete of a deleted unit before its
 	// retention period ends (ADR 47). It cannot be undone. Its object is a
 	// unit.
@@ -470,6 +497,17 @@ const (
 	// ActionProfileManage allows deleting a profile. Its object is the
 	// namespace that holds the profile.
 	ActionProfileManage Action = "profile:manage"
+
+	// ActionViewCreate allows a person to make a saved view of their own.
+	// Its object is the namespace that holds the view.
+	ActionViewCreate Action = "view:create"
+	// ActionViewRead allows reading the saved views of the caller, and
+	// running one. A view of another person is never readable. Its object is
+	// the namespace that holds the view.
+	ActionViewRead Action = "view:read"
+	// ActionViewDelete allows deleting a saved view of the caller. Its object
+	// is the namespace that holds the view.
+	ActionViewDelete Action = "view:delete"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
@@ -786,6 +824,12 @@ func (o Object) String() string {
 // IsUnit reports whether the reference names a unit rather than a namespace.
 func (o Object) IsUnit() bool {
 	return o.isUnit
+}
+
+// IsNamespace reports whether the reference names a namespace itself rather
+// than a unit, a collection, a principal, the caller or the installation.
+func (o Object) IsNamespace() bool {
+	return o.ns != "" && !o.isUnit && !o.isCollection && !o.isCaller && !o.isServer && o.principal == ""
 }
 
 // IsCaller reports whether the reference names the authenticated caller

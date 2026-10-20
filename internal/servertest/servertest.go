@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -74,6 +75,7 @@ type Cluster struct {
 	client    *http.Client
 	transport *http.Transport
 	opts      []dustpan.Option
+	sets      []dustpan.Components
 	schemaURL string
 	blobDir   string
 
@@ -100,6 +102,26 @@ type instance struct {
 func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 	t.Helper()
 
+	return startCluster(t, make([]dustpan.Components, n), opts)
+}
+
+// StartSplit runs one server for each entry of sets, on one fresh schema,
+// and waits until each one answers ready. Server i runs the components of
+// sets[i], so a test can start a split topology, for example one api server
+// and one worker server. An option in opts wins over the components.
+func StartSplit(t *testing.T, sets []dustpan.Components, opts ...dustpan.Option) *Cluster {
+	t.Helper()
+
+	return startCluster(t, sets, opts)
+}
+
+// startCluster starts one server for each entry of sets. A zero entry runs
+// every component.
+func startCluster(t *testing.T, sets []dustpan.Components, opts []dustpan.Option) *Cluster {
+	t.Helper()
+
+	n := len(sets)
+
 	base := os.Getenv(EnvURL)
 	if base == "" {
 		t.Skipf("set %s to run the multi-instance tests", EnvURL)
@@ -111,6 +133,7 @@ func Start(t *testing.T, n int, opts ...dustpan.Option) *Cluster {
 		client:    &http.Client{Transport: transport, Timeout: waitLimit},
 		transport: transport,
 		opts:      opts,
+		sets:      sets,
 		schemaURL: "",
 		blobDir:   filepath.Join(t.TempDir(), "blobs"),
 		mu:        sync.Mutex{},
@@ -140,6 +163,43 @@ func (c *Cluster) URL(i int) string {
 	}
 
 	return ""
+}
+
+// InstanceID returns the instance ID that server i uses as the owner of its
+// claims on durable operations. A restart keeps it.
+func InstanceID(i int) string {
+	return fmt.Sprintf("server-%d", i)
+}
+
+// Operations returns the durable operations as server i reads them, for a
+// test that checks who holds a claim. It fails the test when server i does
+// not run.
+//
+//nolint:ireturn // The test reads the port, as the servers do.
+func (c *Cluster) Operations(t *testing.T, i int) durable.Store {
+	t.Helper()
+
+	c.mu.Lock()
+	in := c.instances[i]
+	c.mu.Unlock()
+
+	if in == nil {
+		t.Fatalf("operations of server %d: the server does not run", i)
+	}
+
+	return in.store.DurableOperationsPort()
+}
+
+// SchemaURL returns the URL of the schema of the cluster, for a test that
+// reads the rows of the database. The URL names a TCP host.
+func (c *Cluster) SchemaURL() string {
+	return c.schemaURL
+}
+
+// BlobDir returns the directory of the blob store that every server of the
+// cluster shares, for a test that reads or changes a blob.
+func (c *Cluster) BlobDir() string {
+	return c.blobDir
 }
 
 // Do sends a request with Token to server i and returns the status and the
@@ -268,7 +328,12 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 		t.Fatalf("listen for server %d: %v", i, err)
 	}
 
-	srv, err := dustpan.NewServer(append(serverOptions(t, i, store, blobs, ln), c.opts...)...)
+	own := serverOptions(t, i, store, blobs, ln)
+	if len(c.sets[i].Names()) > 0 {
+		own = append(own, dustpan.WithComponents(c.sets[i]))
+	}
+
+	srv, err := dustpan.NewServer(append(own, c.opts...)...)
 	if err != nil {
 		closeAll(t, store, blobs, db)
 		t.Fatalf("new server %d: %v", i, err)
@@ -340,6 +405,8 @@ func serverOptions(
 		dustpan.WithLogger(logger),
 		dustpan.WithListener(ln),
 		dustpan.WithDurableStore(store.DurableOperations()),
+		dustpan.WithInstanceID(InstanceID(i)),
+		dustpan.WithInstallationKindStore(store),
 	}
 }
 

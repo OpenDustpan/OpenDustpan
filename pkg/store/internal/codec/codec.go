@@ -3,6 +3,7 @@
 package codec
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -191,6 +192,8 @@ type RestoreRow struct {
 	Error       string
 	StartedAtMs int64
 	EndedAtMs   int64
+	// DevReport is the JSON of the dev data report, or empty for none.
+	DevReport string
 }
 
 // ToRestoreRow converts a domain restore record into a row.
@@ -204,13 +207,44 @@ func ToRestoreRow(r backup.RestoreRecord) RestoreRow {
 		Error:       r.Error,
 		StartedAtMs: Millis(r.StartedAt),
 		EndedAtMs:   OptionalMillis(r.EndedAt),
+		DevReport:   "",
 	}
+}
+
+// EncodeDevReport returns the JSON text of report for the dev_report column.
+func EncodeDevReport(report backup.DevStripReport) (string, error) {
+	data, err := json.Marshal(report)
+	if err != nil {
+		return "", fmt.Errorf("encode dev data report: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// decodeDevReport reads the JSON of the dev_report column. Empty text means
+// no report. Text that is not a report is a corrupt row.
+func decodeDevReport(text string) (*backup.DevStripReport, error) {
+	if text == "" {
+		return nil, nil //nolint:nilnil // No report is a nil report without an error.
+	}
+
+	var report backup.DevStripReport
+	if err := json.Unmarshal([]byte(text), &report); err != nil {
+		return nil, fmt.Errorf("%w: restore dev data report", ErrCorruptRow)
+	}
+
+	return &report, nil
 }
 
 // FromRestoreRow converts a row into a domain restore record.
 func FromRestoreRow(row RestoreRow) (backup.RestoreRecord, error) {
 	switch state := backup.RestoreState(row.State); state {
 	case backup.RestoreChecking, backup.RestoreApplying, backup.RestoreSucceeded, backup.RestoreFailed:
+		report, err := decodeDevReport(row.DevReport)
+		if err != nil {
+			return backup.RestoreRecord{}, err
+		}
+
 		return backup.RestoreRecord{
 			StartedAt:   FromMillis(row.StartedAtMs),
 			EndedAt:     FromOptionalMillis(row.EndedAtMs),
@@ -220,6 +254,7 @@ func FromRestoreRow(row RestoreRow) (backup.RestoreRecord, error) {
 			RequestedBy: row.RequestedBy,
 			Error:       row.Error,
 			State:       state,
+			DevReport:   report,
 		}, nil
 	default:
 		return backup.RestoreRecord{}, fmt.Errorf("%w: unknown restore state %q", ErrCorruptRow, row.State)

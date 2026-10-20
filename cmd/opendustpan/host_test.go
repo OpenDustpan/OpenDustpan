@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -31,7 +32,7 @@ func hostTestDB(t *testing.T) string {
 
 	db := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
 
-	st, err := openStore(t.Context(), db, slog.New(slog.DiscardHandler), openMigrate)
+	st, err := openStore(t.Context(), db, slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("migrate the test database: %v", err)
 	}
@@ -105,7 +106,7 @@ func parseHostOutput(t *testing.T, out string) hostCredentials {
 func openHostStore(ctx context.Context, t *testing.T, db string) *sqlite.Store {
 	t.Helper()
 
-	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate)
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -334,7 +335,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	ctx := t.Context()
 	db := hostTestDB(t)
 
-	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate)
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -470,7 +471,7 @@ func TestHostShortPolicyLifetime(t *testing.T) {
 func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped time.Duration) {
 	t.Helper()
 
-	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate)
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -608,7 +609,7 @@ func TestHostIncompleteSweepWarns(t *testing.T) {
 
 	ctx := t.Context()
 
-	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler), openMigrate)
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -639,7 +640,7 @@ func TestHostFailureLeavesNothing(t *testing.T) {
 
 	ctx := t.Context()
 
-	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler), openMigrate)
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -775,7 +776,7 @@ func TestHostOffOpensNoStore(t *testing.T) { //nolint:paralleltest // It swaps t
 
 	t.Cleanup(func() { openStore = saved })
 
-	openStore = func(context.Context, string, *slog.Logger, openMode) (store, error) {
+	openStore = func(context.Context, string, *slog.Logger, openMode, installation.Kind) (store, error) {
 		t.Fatal("the host command opened a store")
 
 		return nil, errHostOff
@@ -914,7 +915,7 @@ func TestHostReadsTheModeThroughLookup(t *testing.T) { //nolint:paralleltest // 
 
 	t.Cleanup(func() { openStore = saved })
 
-	openStore = func(context.Context, string, *slog.Logger, openMode) (store, error) {
+	openStore = func(context.Context, string, *slog.Logger, openMode, installation.Kind) (store, error) {
 		t.Fatal("the host command opened a store")
 
 		return nil, errHostModeNone

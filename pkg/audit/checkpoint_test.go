@@ -99,7 +99,7 @@ func newCheckpointFixture(t *testing.T, n int) checkpointFixture {
 		blobs:   blobs,
 		entries: entries,
 		cps: audit.NewCheckpoints(audit.CheckpointsConfig{
-			Blobs: blobs, Entries: entries, Signer: newSigner(t, 7), Now: nil,
+			Blobs: blobs, Entries: entries, Signer: newSigner(t, 7), Marks: nil, Now: nil,
 		}),
 	}
 }
@@ -107,7 +107,7 @@ func newCheckpointFixture(t *testing.T, n int) checkpointFixture {
 // with returns checkpoints over the same blobs and entries with signer.
 func (f checkpointFixture) with(signer *audit.Signer) *audit.Checkpoints {
 	return audit.NewCheckpoints(audit.CheckpointsConfig{
-		Blobs: f.blobs, Entries: f.entries, Signer: signer, Now: nil,
+		Blobs: f.blobs, Entries: f.entries, Signer: signer, Marks: nil, Now: nil,
 	})
 }
 
@@ -1088,7 +1088,7 @@ func TestCheckpointsWriteSkipsAnEpochChange(t *testing.T) {
 	signer := newSigner(t, 7)
 	swap := &epochSwapBlobs{inner: f.blobs, signer: signer, lists: 0}
 	cps := audit.NewCheckpoints(audit.CheckpointsConfig{
-		Blobs: swap, Entries: f.entries, Signer: signer, Now: nil,
+		Blobs: swap, Entries: f.entries, Signer: signer, Marks: nil, Now: nil,
 	})
 
 	wrote, err := cps.Write(t.Context(), "acme", time.Unix(1_700_000_100, 0))

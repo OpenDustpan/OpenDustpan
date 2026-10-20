@@ -505,7 +505,7 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
+		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
 	)
 }
 
@@ -514,6 +514,7 @@ func newUpdateFixtureWithCutoff(
 // access token that started an update, and the journal replayer (nil builds
 // no checkpoint).
 type fixtureOptions struct {
+	manual   stack.ManualLocks
 	checker  stack.TokenChecker
 	limit    int
 	cutoff   int
@@ -551,7 +552,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -561,6 +562,7 @@ func newUpdateFixtureWithAuthenticator(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        opts.manual,
 		Updates:            mem,
 		Checkpoints:        mem,
 		Events:             mem,
@@ -595,6 +597,7 @@ func newUpdateFixtureWithAuthenticator(
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -2772,7 +2775,8 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 
 	stacks, err := stack.NewService(stack.Config{
 		Store: stores, Namespaces: namespaces, Now: nil, State: nil,
-		Retention: 0,
+		Retention:   0,
+		ManualLocks: nil,
 	})
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -2781,6 +2785,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            mem,
 		Checkpoints:        mem,
 		Events:             mem,
@@ -2815,6 +2820,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		CheckpointDeltaCutoff:   -1,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
+		DenialLimiter:           nil,
 	})
 	if !errors.Is(err, pulumi.ErrInvalidCutoff) {
 		t.Fatalf("negative cutoff: err = %v, want %v", err, pulumi.ErrInvalidCutoff)

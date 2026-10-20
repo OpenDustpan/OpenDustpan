@@ -18,7 +18,7 @@ Set a backup target on the server. Use the flag or the variable. An empty target
 DUSTPAN_BACKUP_TARGET=dir:/var/backups/dustpan ./bin/opendustpan serve
 ```
 
-The target holds the layout that the next section describes. The server writes the manifest last. A backup holds sealed OpenTofu state. Protect the target. Use a directory that only the server owner can read.
+The target holds the layout that the next section describes. The server writes the manifest last. A backup holds OpenTofu state that the server encrypted. Protect the target. Use a directory that only the server owner can read.
 
 Start a backup with the backup command. It calls the server and waits until the backup leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
@@ -31,10 +31,12 @@ The command takes only `--server` and `--ca-file`. The command prints the backup
 ```text
 backup bkp-opx3krqgb4d7iqglf5gq succeeded (SQL 163840 bytes)
 A backup cannot decrypt secrets without DUSTPAN_KEY_ENCRYPTION_KEY.
-A backup holds sealed OpenTofu state: protect the target.
+A backup holds OpenTofu state that the server encrypted: protect the target.
 ```
 
-The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds sealed OpenTofu state, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
+The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
+
+A backup keeps running when you start or restart an instance, or when you update the instances one at a time. If the instance that runs the backup stops, another instance continues the backup after the lease ends. The lease is 30 seconds by default. The backup writes each object to the same key again, so the second run replaces the objects of the first run. Any instance answers the state of the backup. A backup that fails ends as `failed` with the error text.
 
 Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
 
@@ -54,7 +56,7 @@ A backup is a set of objects under the target:
 - `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
 - `blobs/<key>` holds each blob that the SQL data names, such as an OpenTofu state version or a Pulumi checkpoint.
 
-The manifest records the backup format (`format`: 2) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the home regions and the wrapper IDs.
+The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the home regions and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
 For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5.
 
@@ -123,11 +125,31 @@ list names it:
 opendustpan restore --server https://dustpan.example --backup bkp-bbb
 ```
 
-While the restore applies, the server holds maintenance mode: the tool APIs
-answer 503 and the installation API stays available. The server leaves
-maintenance mode when the restore ends, also after a failure. The server
-does not enter maintenance mode while an update or a run is active, unless
-the request sets `--force`, which cancels them first and names them.
+While the restore applies, the server holds maintenance mode. The tool APIs
+answer 503. A write to the installation API also answers 503 with
+`Retry-After`: the restore replaces tokens, service tokens, principals,
+grants, groups, roles, namespaces and policies, and a write in this time
+would be lost. Reads of the installation API, the maintenance routes and the
+backup and restore routes stay available. The server leaves maintenance mode
+when the restore ends, also after a failure. The server does not enter
+maintenance mode while an update or a run is active, unless the request sets
+`--force`, which cancels them first and names them. If work starts during a
+forced enter, the server tries again and cancels that work too, up to three
+attempts. If work keeps starting, the server answers 409 and stays in normal
+mode. The answer names the work that blocked the enter and, in `canceled`, the
+work that the attempts canceled. Run the command again to cancel the work
+that started last.
+
+Each write checks the stored installation state in its own database
+transaction. After one server enters maintenance mode, every other server
+refuses writes in its next request. A write that is already in progress
+ends before the enter returns. A server that cannot read the installation
+state refuses the write.
+
+The audit log keeps its entries in maintenance mode: an entry that records a
+refusal, a sign-in or a restore is never dropped. A console session that
+exists stays valid, but its last-use time does not change. A new sign-in is
+not possible until the server leaves maintenance mode.
 
 The restore increments the failover version of every namespace. Leases,
 update tokens, locks and upload capabilities from before the restore stop
@@ -163,7 +185,102 @@ database may be the other kind.
 
 A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
-A restore needs the key-encryption key that sealed every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
+A restore needs the key-encryption key that encrypted every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
+
+### Revocations in maintenance mode
+
+A write that only reduces access runs in maintenance mode. You can end a
+compromised session or revoke a compromised token at any time, also while a
+restore applies. These writes run, each with its audit entry:
+
+- a sign-out, which ends the session of the person.
+- the end of a session by an administrator.
+- the revocation of an access token or a service token.
+- the revocation of a grant. A grant only allows, and a limit is a ceiling, so
+  the end of a grant never gives more access. The checks of a
+  revocation in normal operation stay in force: the fence of the namespace,
+  and the rule that the caller holds every action that the grant gives.
+- the revocation of a join token of a runner pool.
+- the disable of a sign-in provider, which also ends its sessions. A change of
+  the provider that sets one more field, and the enable of the provider, stay
+  refused.
+- the disable of a principal (`POST /api/server/principals/{id}/disable`). The
+  grants and tokens of the principal stay, and the principal can not use them
+  until an administrator enables it again. The check of a disable in normal
+  operation stays in force: the caller holds every action that the grants of
+  the principal give.
+- the expiry of a temporary administrator, which ends the record, disables the
+  principal, revokes its grants and tokens and ends its group memberships.
+
+A write that grants or widens access stays refused with 503. This includes a
+new sign-in, a new session, a new token, a new grant and the enable of a
+disabled principal. These writes stay refused too, because they can give more
+access in some cases: the removal of a member of a group (a rule that forbids
+the group could stop to match), the delete of a principal, a role or a group,
+and the inactivity sweep.
+
+A restore replaces the sessions, tokens, grants and principals with the data
+of the backup, so it would bring back a session or a token that you revoked in
+maintenance mode. The server prevents this. It records each revocation that
+it accepts in maintenance mode, and the restore applies the record again
+after it swaps in the backup. The restore ends the restored session, revokes
+the restored token, grant or join token, disables the restored principal or
+provider, and repeats the expiry of the restored temporary administrator, with
+the time of the original revocation. A target that the backup does not hold
+needs no change.
+
+The audit log of the backup replaces the audit log of the live data, so the
+entries of the revocations in the stay are not in the log after the restore.
+For each revocation that it applies again, the restore writes one entry in
+`@server` with the action `maintenance:replay-revocation`. The entry names the
+subject and the object of the original revocation and has the time of the
+original revocation. A record in the journal that the restore can not apply (a
+kind that the server does not know, or a target that is not an ID) changes
+nothing and gets an entry with the outcome `denied`.
+
+The server records only the revocations of the current stay in maintenance mode. A
+new enter starts a new stay. A revocation that you made in normal
+operation, or in an earlier stay, belongs to the data that the restore
+replaces. After a restore, check the sessions and tokens that you revoked
+before the stay, and revoke them again if the backup brings them back. A
+restore by a caller without `server:restore-access` keeps the live sessions,
+tokens, grants and principals, so it keeps every revocation.
+
+## Restore a backup of a dev installation
+
+A backup of an installation that `opendustpan dev` made has the kind `dev`. It holds the person `dev:admin`, with the role of the site administrator, and maybe its sessions and tokens. A dev backup in a production installation brings these into it.
+
+Three layers stop that:
+
+- A production installation refuses to restore a backup of the kind `dev`. The restore answers status 409, before it enters maintenance mode, and it changes nothing:
+
+  ```text
+  This installation is a production installation. The backup is from a dev installation. We do not recommend this restore. To restore it, start the server with `--unsafe-allow-restoring-dev-installation-backups-into-production`.
+  ```
+
+  A check-only restore gets the same refusal. A dev installation restores a dev backup as before. A dev installation also restores a production backup. The answer then carries the warning `production-backup-into-dev`: the tokens and sessions of the backup are now in a dev data directory.
+- A restore into a production installation deletes the dev data from the staged data before it swaps, whatever the manifest says. The manifest is not signed, so the staged data decides. The restore deletes the people with the subject prefix `dev:` in any letter case, and their grants, group memberships, sessions, tokens and open sign-in requests. It deletes the sign-in provider with the ID `dev`. It deletes the dev subjects from the approvers of approval rules, approval defaults and ownership rules. A backup that holds such data and is not allowed is refused, and the live data stays as it was.
+- A production server refuses a session or a token of a person with the prefix `dev:`.
+
+To restore a dev backup into a production installation, start the server with the flag `--unsafe-allow-restoring-dev-installation-backups-into-production`. The flag has no environment variable and no configuration file key, and no API sets it. The server writes one warning to the log at each start with the flag. The restore then goes on and deletes the dev data. The answer of the restore carries the warning `dev-backup-into-production`:
+
+```text
+This restore deleted the dev users and their grants. Things that depend on them may break. We do not recommend this restore.
+```
+
+A check-only restore carries the warning `dev-backup-would-remove`. Its text says that the restore would delete the dev users, and that the check changed no data.
+
+An approval rule can lose its last approver. The restore then writes the value `!no-approver` as its approver. Nobody can meet that rule, and the gate refuses the change that it covers until a person changes the rule.
+
+`opendustpan restore` reads the manifest first. It prints a notice before it starts the restore of a dev backup. The answer of a restore lists the warnings, and the answer of a check-only restore also shows the dev data that the restore would delete:
+
+```text
+restore rst-aaa succeeded
+warning: This restore deleted the dev users and their grants. Things that depend on them may break. We do not recommend this restore.
+dev data: 1 principals; grants 1, principals 1, sessions 1
+```
+
+The restore stores a report of the deletion in its record. It writes one audit entry for each deleted principal, up to 100, and one entry for the other principals. It writes one entry for each class of data that no principal owns. If an audit entry cannot be written, the restore still ends as finished, and the answer carries the warning `audit-append-failed`. The audit log keeps its entries: the restore deletes no audit entry.
 
 ## Upgrade the server
 

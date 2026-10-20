@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/logsink"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -616,4 +617,36 @@ func otherNamespace(t *testing.T, s Store) namespace.Namespace {
 	}
 
 	return ns
+}
+
+// FeedMaintenanceStore is a FeedStore that also keeps the installation state.
+type FeedMaintenanceStore interface {
+	FeedStore
+	maintenance.Store
+}
+
+// RunFeedInMaintenance checks that a sink cursor advances in maintenance
+// mode at both scopes: a refused advance would make the shipper deliver the
+// same entries again in a loop.
+func RunFeedInMaintenance(t *testing.T, newStore func(t *testing.T) FeedMaintenanceStore) {
+	t.Helper()
+
+	s := newStore(t)
+	ns := newNamespace(t, s)
+	claim := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+
+	if err := s.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("set installation state to maintenance: %v", err)
+	}
+
+	advance(t, s, ns.Fence(), claim, 4)
+	advance(t, s, namespace.Fence{Namespace: audit.ServerScope, FailoverVersion: 0}, claim, 2)
+
+	if got := cursor(t, s, "siem", ns.Name); got != 4 {
+		t.Fatalf("namespace cursor after an advance in maintenance mode: got %d, want 4", got)
+	}
+
+	if got := cursor(t, s, "siem", audit.ServerScope); got != 2 {
+		t.Fatalf("server cursor after an advance in maintenance mode: got %d, want 2", got)
+	}
 }

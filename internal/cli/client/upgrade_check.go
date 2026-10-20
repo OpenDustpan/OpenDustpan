@@ -175,8 +175,8 @@ type UpgradeCheckAnswer struct {
 
 // KeyWarning is the upgrade report line for a server that runs without a
 // key-encryption key, or that is too old to say. This release needs a key
-// (ADR 41 decision 12), so the operator sets one before the upgrade.
-const KeyWarning = "warning: this release needs a key-encryption key (ADR 41): " +
+// to encrypt OpenTofu state, so the operator sets one before the upgrade.
+const KeyWarning = "warning: this release needs a key-encryption key: " +
 	"set DUSTPAN_KEY_ENCRYPTION_KEY or --key-encryption-key-file " +
 	"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE), or start serve once with " +
 	"--generate-key-encryption-key (DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true)"

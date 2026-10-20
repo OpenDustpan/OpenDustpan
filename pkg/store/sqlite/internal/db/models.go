@@ -33,6 +33,19 @@ type AccessTokenPolicy struct {
 	UpdatedAtMs       int64
 }
 
+type AuditChainCheck struct {
+	ID          int64
+	CheckedAtMs int64
+	Invalid     int64
+}
+
+type AuditChainMark struct {
+	Scope      string
+	Epoch      int64
+	Sequence   int64
+	MarkedAtMs int64
+}
+
 type AuditChainState struct {
 	ID                 int64
 	State              string
@@ -130,6 +143,11 @@ type CollectionMember struct {
 	Namespace     string
 	CollectionKey string
 	AssignedAtMs  int64
+}
+
+type DurableHeartbeat struct {
+	Owner string
+	AtMs  int64
 }
 
 type DurableOperation struct {
@@ -231,6 +249,25 @@ type GroupMember struct {
 	Pinned        bool
 }
 
+type IdempotencyRecord struct {
+	Principal   string
+	Method      string
+	Path        string
+	IdemKey     string
+	Fingerprint []byte
+	Token       string
+	Status      int64
+	Headers     string
+	Body        []byte
+	CreatedAtMs int64
+}
+
+type IdempotencyServerKey struct {
+	ID         int64
+	WrappedKey []byte
+	WrapperID  string
+}
+
 type Import struct {
 	NamespaceID string
 	ID          string
@@ -291,6 +328,7 @@ type ImportsPurged struct {
 type Installation struct {
 	ID    int64
 	State string
+	Kind  sql.NullString
 }
 
 type InstallationSecretKey struct {
@@ -347,6 +385,52 @@ type InventoryLabel struct {
 	UnitID     string
 	LabelKey   string
 	LabelValue string
+}
+
+type Job struct {
+	ID               string
+	NamespaceID      string
+	UnitID           string
+	Seq              int64
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	IdempotencyKey   string
+	Version          int64
+	Body             string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+type JobFreeze struct {
+	ID          string
+	NamespaceID string
+	Reason      string
+	StartsAtMs  int64
+	EndsAtMs    int64
+	CreatedBy   string
+	EndedBy     string
+}
+
+type MaintenanceRevocation struct {
+	ID        int64
+	Kind      string
+	Target    string
+	EndReason string
+	Actor     string
+	Object    string
+	AtMs      int64
+}
+
+type ManualLock struct {
+	Kind      string
+	ObjectID  string
+	Namespace string
+	Holder    string
+	Reason    string
+	SinceMs   int64
 }
 
 type Namespace struct {
@@ -450,6 +534,7 @@ type Restore struct {
 	StartedAtMs int64
 	EndedAtMs   int64
 	Error       string
+	DevReport   string
 }
 
 type Role struct {
@@ -543,6 +628,15 @@ type RunnerSession struct {
 	KeyPublic      []byte
 	KeyCreatedAtMs int64
 	CreatedAtMs    int64
+}
+
+type SavedView struct {
+	ID          string
+	NamespaceID string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
 }
 
 type SchemaMigration struct {
@@ -670,6 +764,22 @@ type TempAdmin struct {
 	CreatedBy   string
 	Reason      string
 	EndedAtMs   sql.NullInt64
+}
+
+type UnitFinalVersion struct {
+	UnitID      string
+	NamespaceID string
+	VersionID   string
+	CommitID    string
+	JobID       string
+	AtMs        int64
+}
+
+type UnitStateVersion struct {
+	UnitID      string
+	NamespaceID string
+	VersionID   string
+	UpdatedAtMs int64
 }
 
 type Update struct {

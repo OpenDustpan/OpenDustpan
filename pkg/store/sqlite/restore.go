@@ -87,8 +87,8 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 
 	out := make([]backup.RestoreRecord, 0, len(rows))
 
-	for _, row := range rows {
-		r, err := restoreFromRow(row)
+	for i := range rows {
+		r, err := restoreFromRow(rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -101,8 +101,6 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 
 // FinishRestore implements backup.RestoreRegistry: it moves the running
 // restore id to state with the error text and the end time.
-//
-//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
 func (s *Store) FinishRestore(
 	ctx context.Context, id backup.RestoreID, state backup.RestoreState, errText string, endedAt time.Time,
 ) (backup.RestoreRecord, error) {
@@ -189,6 +187,7 @@ func restoreFromRow(row db.Restore) (backup.RestoreRecord, error) {
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
 		EndedAtMs:   row.EndedAtMs,
+		DevReport:   row.DevReport,
 	})
 }
 
@@ -228,6 +227,10 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 	// Lock order is stagingMu before mu.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.checkSwapDevLocked(ctx, staged); err != nil {
+		return err
+	}
 
 	if err := fenceStagedFile(ctx, staged, s.path, keep); err != nil {
 		return err
@@ -318,7 +321,8 @@ func attachLiveDatabase(ctx context.Context, conn *sql.DB, live string) error {
 }
 
 // applyStagedFence fences the staged namespaces, writes the bookkeeping row,
-// resets the runtime rows and copies the control tables, in one transaction.
+// resets the runtime rows, copies the control tables and applies the journaled
+// revocations again, in one transaction.
 func applyStagedFence(ctx context.Context, conn *sql.DB, keep bookkeeping) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -340,6 +344,13 @@ func applyStagedFence(ctx context.Context, conn *sql.DB, keep bookkeeping) error
 	}
 
 	if err := copyControlTables(ctx, tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+
+	// The staged access tables come from the backup. Apply again the
+	// revocations that ran in this stay in maintenance mode, so the swap does not
+	// bring back a session or a token that an operator ended.
+	if err := replayRevocations(ctx, tx); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 
@@ -442,7 +453,7 @@ const backupColumns = `id, state, started_at_ms, ended_at_ms, target, error`
 
 // restoreColumns lists the columns of restores, for the copy of the control
 // tables.
-const restoreColumns = `id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error`
+const restoreColumns = `id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report`
 
 // keepControlStatements replace the rows of each table of
 // backup.ControlTables in the staged file (main) with the rows of the live
@@ -458,6 +469,8 @@ var keepControlStatements = []string{
 	`DELETE FROM main.durable_operations`,
 	`DELETE FROM main.durable_schedules`,
 	`DELETE FROM main.sign_in_failures`,
+	`DELETE FROM main.audit_chain_check`,
+	`DELETE FROM main.audit_chain_mark`,
 	`DELETE FROM main.backups`,
 	`DELETE FROM main.restores`,
 	`DELETE FROM main.installation`,
@@ -465,6 +478,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.runner_handoff_tokens`,
 	`DELETE FROM main.runner_sessions`,
 	`DELETE FROM main.runner_nonces`,
+	`DELETE FROM main.maintenance_revocations`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
@@ -473,11 +487,15 @@ var keepControlStatements = []string{
 		`SELECT ` + durableScheduleColumns + ` FROM live.durable_schedules`,
 	`INSERT INTO main.sign_in_failures (` + signInFailureColumns + `) ` +
 		`SELECT ` + signInFailureColumns + ` FROM live.sign_in_failures`,
+	`INSERT INTO main.audit_chain_check (` + auditChainCheckColumns + `) ` +
+		`SELECT ` + auditChainCheckColumns + ` FROM live.audit_chain_check`,
+	`INSERT INTO main.audit_chain_mark (` + auditChainMarkColumns + `) ` +
+		`SELECT ` + auditChainMarkColumns + ` FROM live.audit_chain_mark`,
 	`INSERT INTO main.backups (` + backupColumns + `) ` +
 		`SELECT ` + backupColumns + ` FROM live.backups`,
 	`INSERT INTO main.restores (` + restoreColumns + `) ` +
 		`SELECT ` + restoreColumns + ` FROM live.restores`,
-	`INSERT INTO main.installation (id, state) SELECT id, state FROM live.installation`,
+	`INSERT INTO main.installation (id, state, kind) SELECT id, state, kind FROM live.installation`,
 	`INSERT INTO main.runner_claims (` + runnerClaimColumns + `) ` +
 		`SELECT ` + runnerClaimColumns + ` FROM live.runner_claims`,
 	`INSERT INTO main.runner_handoff_tokens (` + runnerHandoffColumns + `) ` +
@@ -486,6 +504,8 @@ var keepControlStatements = []string{
 		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions`,
 	`INSERT INTO main.runner_nonces (` + runnerNonceColumns + `) ` +
 		`SELECT ` + runnerNonceColumns + ` FROM live.runner_nonces`,
+	`INSERT INTO main.maintenance_revocations (` + revocationColumns + `) ` +
+		`SELECT ` + revocationColumns + ` FROM live.maintenance_revocations`,
 }
 
 // The columns of the control tables of the runner protocol, for the copy of
@@ -498,9 +518,21 @@ const (
 	runnerNonceColumns   = `subject, nonce, expires_at_ms`
 )
 
+// revocationColumns lists every column of maintenance_revocations, for the
+// copy of the control tables.
+const revocationColumns = `id, kind, target, end_reason, actor, object, at_ms`
+
 // signInFailureColumns lists every column of sign_in_failures, for the copy
 // of the control tables.
 const signInFailureColumns = `source, window_end_ms, count`
+
+// auditChainCheckColumns lists every column of audit_chain_check, for the
+// copy of the control tables.
+const auditChainCheckColumns = `id, checked_at_ms, invalid`
+
+// auditChainMarkColumns lists every column of audit_chain_mark, for the copy
+// of the control tables.
+const auditChainMarkColumns = `scope, epoch, sequence, marked_at_ms`
 
 // copyControlTables runs keepControlStatements in tx, which holds the live
 // database attached as live.

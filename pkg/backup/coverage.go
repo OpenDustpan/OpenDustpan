@@ -22,9 +22,11 @@ var ErrCoverage = errors.New("backup column list and schema differ")
 // again. The installation, backups and restores tables hold the state of
 // this installation: a restore keeps the live rows, so the running restore
 // stays readable during the swap and the pre-backup row survives it. The
-// schema holds every table of Tables and of ControlTables, and no other
-// table (schema_migrations and audit_chain_state aside, which the adapters
-// keep as bookkeeping). Treat the list as a constant and never mutate it.
+// revocation journal holds the writes that only reduce access and that ran
+// in maintenance mode: the swap keeps it and applies it to the restored
+// access tables. The schema holds every table of Tables and of ControlTables,
+// and no other table (schema_migrations and audit_chain_state aside, which
+// the adapters keep as bookkeeping). Treat the list as a constant and never mutate it.
 //
 //nolint:gochecknoglobals // A shared frozen table list, as Tables is.
 var ControlTables = []string{
@@ -32,13 +34,33 @@ var ControlTables = []string{
 	TableDurableSteps,
 	TableDurableSchedules,
 	TableSignInFailures,
+	TableAuditChainCheck,
+	TableAuditChainMark,
 	TableBackups,
 	TableRestores,
 	TableInstallation,
+	TableMaintenanceRevocations,
 	"runner_claims",
 	"runner_handoff_tokens",
 	"runner_sessions",
 	"runner_nonces",
+}
+
+// EmptiedTables lists the tables of the schema that a backup leaves out and
+// a restore leaves empty: the replay records of the Idempotency-Key header and
+// the server key of their fingerprints, and the heartbeats of the workers. A
+// heartbeat describes the workers that run now, and the next beat of a worker
+// makes its row again. A replay record answers for the state
+// at the time of the first request, so a replay after a restore of older state
+// would answer for state that the restore removed. The schema holds these
+// tables and the tables of Tables and ControlTables, and no other table.
+// Treat the list as a constant and never mutate it.
+//
+//nolint:gochecknoglobals // A shared frozen table list, as Tables is.
+var EmptiedTables = []string{
+	TableIdempotencyRecords,
+	TableIdempotencyServerKey,
+	TableDurableHeartbeats,
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

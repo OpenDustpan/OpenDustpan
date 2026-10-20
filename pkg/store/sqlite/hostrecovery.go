@@ -28,7 +28,7 @@ func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecov
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := insertHostRecovery(ctx, q, r); err != nil {
 			return err
 		}

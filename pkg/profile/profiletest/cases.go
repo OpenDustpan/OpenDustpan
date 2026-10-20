@@ -2,12 +2,15 @@ package profiletest
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
@@ -498,3 +501,175 @@ func testLimit(t *testing.T, s Store) {
 		t.Errorf("create after a delete: %v", err)
 	}
 }
+
+// pendingRequest starts a replay record in s and returns a context that
+// carries the Completion of the request, with the Completion. The answer
+// that the Completion builds holds the status and the text of body.
+func pendingRequest(
+	t *testing.T, s Store, key string, build func(result any) (idempotency.Answer, error),
+) (context.Context, *idempotency.Completion, idempotency.Ref) {
+	t.Helper()
+
+	ref := idempotency.Ref{Principal: subject, Method: "POST", Path: "/profiles", Key: idempotency.Key(key)}
+
+	res, err := s.Records.Begin(t.Context(), ref, []byte("body"), epoch())
+	if err != nil || res.Outcome != idempotency.Started {
+		t.Fatalf("Begin: outcome = %d, err = %v, want Started", res.Outcome, err)
+	}
+
+	c := idempotency.NewCompletion(ref, res.Token, build)
+
+	return idempotency.WithCompletion(t.Context(), c), c, ref
+}
+
+// replayOf returns the answer that a repeat of the request finds.
+func replayOf(t *testing.T, s Store, ref idempotency.Ref) idempotency.Answer {
+	t.Helper()
+
+	res, err := s.Records.Begin(t.Context(), ref, []byte("body"), epoch())
+	if err != nil || res.Outcome != idempotency.Replayed {
+		t.Fatalf("Begin after the write: outcome = %d, err = %v, want Replayed", res.Outcome, err)
+	}
+
+	return res.Answer
+}
+
+func testCompletionStored(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	p := completeCreate(t, s, ns)
+	completeSave(t, s, ns, p)
+	completeDelete(t, s, ns, p)
+}
+
+// completeCreate checks that a create passes the profile and its first
+// revision, and returns the created profile.
+func completeCreate(t *testing.T, s Store, ns namespace.Namespace) profile.Profile {
+	t.Helper()
+
+	ctx, c, ref := pendingRequest(t, s, "create", func(result any) (idempotency.Answer, error) {
+		w, ok := result.(profile.Written)
+		if !ok || w.Revision == nil {
+			return idempotency.Answer{}, errNotWritten
+		}
+
+		body := fmt.Sprintf("%s/%d", w.Profile.ID, w.Revision.Number)
+
+		return idempotency.Answer{Status: statusCreated, Headers: nil, Body: []byte(body)}, nil
+	})
+
+	p, r := newProfile(ns.Name, "aws-prod")
+	if _, err := s.Profiles.Create(ctx, p, r, ns.Fence(), entries(ns.Name, "profile:write")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if want := fmt.Sprintf("%s/1", p.ID); !c.Stored() || string(replayOf(t, s, ref).Body) != want {
+		t.Errorf("create: stored = %t, replay = %q, want %q", c.Stored(), replayOf(t, s, ref).Body, want)
+	}
+
+	return p
+}
+
+// completeSave checks that a save passes the profile after the write.
+func completeSave(t *testing.T, s Store, ns namespace.Namespace, p profile.Profile) {
+	t.Helper()
+
+	ctx, c, ref := pendingRequest(t, s, "save", func(result any) (idempotency.Answer, error) {
+		w, ok := result.(profile.Written)
+		if !ok {
+			return idempotency.Answer{}, errNotWritten
+		}
+
+		return idempotency.Answer{
+			Status: statusCreated, Headers: nil, Body: []byte(fmt.Sprintf("latest %d", w.Profile.Latest)),
+		}, nil
+	})
+
+	_, err := s.Profiles.Save(ctx, anchor(ns.Name, p.ID, 1), nextRevision(p, doc), ns.Fence(),
+		entries(ns.Name, "profile:write"))
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if !c.Stored() || string(replayOf(t, s, ref).Body) != "latest 2" {
+		t.Errorf("save: stored = %t, replay = %q, want %q", c.Stored(), replayOf(t, s, ref).Body, "latest 2")
+	}
+}
+
+// completeDelete checks that a delete stores the answer of its request.
+func completeDelete(t *testing.T, s Store, ns namespace.Namespace, p profile.Profile) {
+	t.Helper()
+
+	ctx, c, ref := pendingRequest(t, s, "delete", func(any) (idempotency.Answer, error) {
+		return idempotency.Answer{Status: statusNoContent, Headers: nil, Body: nil}, nil
+	})
+
+	err := s.Profiles.Delete(ctx, anchor(ns.Name, p.ID, 0), ns.Fence(), entries(ns.Name, "profile:manage"))
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if got := replayOf(t, s, ref); !c.Stored() || got.Status != statusNoContent {
+		t.Errorf("delete: stored = %t, replay status = %d, want true, 204", c.Stored(), got.Status)
+	}
+}
+
+func testCompletionKeptPending(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	create(t, s, ns, "aws-prod")
+
+	ctx, c, ref := pendingRequest(t, s, "dup", func(any) (idempotency.Answer, error) {
+		return idempotency.Answer{Status: statusCreated, Headers: nil, Body: nil}, nil
+	})
+
+	p, r := newProfile(ns.Name, "aws-prod")
+	_, err := s.Profiles.Create(ctx, p, r, ns.Fence(), entries(ns.Name, "profile:write"))
+	wantErr(t, "duplicate create with a completion", err, profile.ErrConflict)
+
+	res, beginErr := s.Records.Begin(t.Context(), ref, []byte("body"), epoch())
+	if beginErr != nil || res.Outcome != idempotency.InProgress || c.Stored() {
+		t.Errorf("after a failed write: outcome = %d, err = %v, stored = %t, want InProgress, nil, false",
+			res.Outcome, beginErr, c.Stored())
+	}
+}
+
+func testCompletionLost(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+
+	ctx, c, ref := pendingRequest(t, s, "lost", func(any) (idempotency.Answer, error) {
+		return idempotency.Answer{Status: statusCreated, Headers: nil, Body: nil}, nil
+	})
+
+	// The record expires and a retry takes the key.
+	late := epoch().Add(idempotency.PendingTTL + time.Second)
+	retry, beginErr := s.Records.Begin(t.Context(), ref, []byte("body"), late)
+	if beginErr != nil || retry.Outcome != idempotency.Started {
+		t.Fatalf("retry: outcome = %d, err = %v, want Started", retry.Outcome, beginErr)
+	}
+
+	p, r := newProfile(ns.Name, "aws-prod")
+	_, err := s.Profiles.Create(ctx, p, r, ns.Fence(), entries(ns.Name, "profile:write"))
+	wantErr(t, "create with a lost record", err, idempotency.ErrLost)
+
+	_, err = s.Profiles.Get(t.Context(), ns.Name, profile.RefByName("aws-prod"))
+	wantErr(t, "Get after a lost record", err, profile.ErrNotFound)
+
+	list, listErr := s.Audit.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: bigPage})
+	if listErr != nil || list.Total != 0 || c.Stored() {
+		t.Errorf("after a lost record: audit total = %d, err = %v, stored = %t, want 0, nil, false",
+			list.Total, listErr, c.Stored())
+	}
+}
+
+// The statuses of the answers that the cases build.
+const (
+	statusCreated   = 201
+	statusNoContent = 204
+)
+
+var errNotWritten = errors.New("the store did not pass a written profile")

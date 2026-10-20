@@ -19,6 +19,10 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/durable/durabletest"
+	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Static test errors. The suite injects them as target and export failures.
@@ -98,10 +102,33 @@ func (m *memStore) Delete(ctx context.Context, key blob.Key) error {
 	return nil
 }
 
-// List implements blob.Store: the backup service never lists, so the
-// in-memory store lists nothing.
-func (m *memStore) List(_ context.Context, _ string) ([]blob.Object, error) {
-	return nil, nil
+// List implements blob.Store: it returns the objects under the key directory
+// prefix, ordered by key. A prefix that is a name start only, such as
+// "backups/bkp-a", does not match "backups/bkp-ab/...".
+func (m *memStore) List(_ context.Context, prefix string) ([]blob.Object, error) {
+	dir := strings.TrimSuffix(prefix, "/") + "/"
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := []blob.Object{}
+
+	for name := range m.objects {
+		if !strings.HasPrefix(name, dir) {
+			continue
+		}
+
+		key, err := blob.ParseKey(name)
+		if err != nil {
+			return nil, fmt.Errorf("list %s: %w", prefix, err)
+		}
+
+		out = append(out, blob.Object{ModifiedAt: time.Time{}, Key: key})
+	}
+
+	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return out, nil
 }
 
 // Ping implements blob.Store: the in-memory store always answers.
@@ -254,58 +281,135 @@ func (f *blockingExporter) ExportPortable(
 	return writeTestTableFile(sink, f.data, f.sum)
 }
 
-// fakeRegistry is an in-memory backup.Registry.
+// fakeRegistry is an in-memory backup.Registry. It keeps the backup rows and
+// shares one durabletest.Mem with the Service, so it has the durable
+// semantics of the port: a start stores the row and the operation under one
+// lock, and a finish checks the claim of its fence under the lock of the
+// operation store before it changes the row. Both run inside a hook of the
+// store transaction (durabletest.Domain), so a refused write changes neither
+// the row nor the steps of the operation.
 type fakeRegistry struct {
-	mu      sync.Mutex
-	rows    map[backup.ID]backup.Record
-	failGet error
+	mem    *durabletest.Mem
+	ops    durable.Store
+	domain durabletest.Domain
+	fence  namespace.Fence
+	mu     sync.Mutex
+	rows   map[backup.ID]backup.Record
+	// failGet fails every GetBackup after the first failGetAfter reads.
+	failGet      error
+	failGetAfter int
+	gets         int
+	// lostFinishes counts the FinishBackup calls that a lost claim refused.
+	lostFinishes atomic.Int64
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{mu: sync.Mutex{}, rows: map[backup.ID]backup.Record{}, failGet: nil}
+	mem := durabletest.NewMem()
+	domain := mem.Harness().Domain
+
+	// The domain side needs one namespace fence for its transactions. The
+	// fence never changes in these tests.
+	fence, err := domain.CreateNamespace(context.Background(), "backup-test")
+	if err != nil {
+		panic(fmt.Sprintf("create the fence of the fake registry: %v", err))
+	}
+
+	return &fakeRegistry{
+		mem:     mem,
+		ops:     mem.Store(),
+		domain:  domain,
+		fence:   fence,
+		mu:      sync.Mutex{},
+		rows:    map[backup.ID]backup.Record{},
+		failGet: nil,
+
+		failGetAfter: 0,
+		gets:         0,
+		lostFinishes: atomic.Int64{},
+	}
 }
 
 func (f *fakeRegistry) CreateBackup(_ context.Context, r backup.Record) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if _, ok := f.rows[r.ID]; ok {
-		return fmt.Errorf("create backup %s: %w", r.ID, backup.ErrAlreadyExists)
-	}
+	return f.insertLocked(r)
+}
 
-	f.rows[r.ID] = r
+func (f *fakeRegistry) StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error {
+	r.State = backup.StateRunning
+
+	// The After hook runs inside the store transaction, after the operation
+	// start. An error from it rolls the start back, so a refused row leaves
+	// no operation.
+	_, err := f.domain.StartWith(ctx, start, "", durabletest.Hooks{
+		Before: nil,
+		After: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+
+			return f.insertLocked(r)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("start backup %s: %w", r.ID, err)
+	}
 
 	return nil
 }
 
+// FinishBackup checks the fence first, as the port documents: the store
+// transaction checks the claim, the cancel and the step before the After
+// hook runs, and the hook then checks the row. A refused hook rolls the
+// step record back, so a refused finish records no step.
+//
+//nolint:revive // The method implements backup.Registry, whose signature has six parameters.
 func (f *fakeRegistry) FinishBackup(
-	_ context.Context, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context, fence durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
 ) (backup.Record, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	var finished backup.Record
 
-	row, ok := f.rows[id]
-	if !ok {
-		return backup.Record{}, fmt.Errorf("finish backup %s: %w", id, backup.ErrNotFound)
+	err := f.domain.WriteStep(ctx, fence, f.fence, "", durabletest.Hooks{
+		Before: nil,
+		After: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+
+			row, ok := f.rows[id]
+			if !ok {
+				return fmt.Errorf("finish backup %s: %w", id, backup.ErrNotFound)
+			}
+
+			if row.State != backup.StateRunning || (state != backup.StateSucceeded && state != backup.StateFailed) {
+				return fmt.Errorf("finish backup %s: %w", id, backup.ErrNotRunning)
+			}
+
+			row.State = state
+			row.Error = errText
+			row.EndedAt = endedAt
+			f.rows[id] = row
+			finished = row
+
+			return nil
+		},
+	})
+	if err != nil {
+		if errors.Is(err, durable.ErrClaimLost) {
+			f.lostFinishes.Add(1)
+		}
+
+		return backup.Record{}, fmt.Errorf("finish backup %s: %w", id, err)
 	}
 
-	if row.State != backup.StateRunning || (state != backup.StateSucceeded && state != backup.StateFailed) {
-		return backup.Record{}, fmt.Errorf("finish backup %s: %w", id, backup.ErrNotRunning)
-	}
-
-	row.State = state
-	row.Error = errText
-	row.EndedAt = endedAt
-	f.rows[id] = row
-
-	return row, nil
+	return finished, nil
 }
 
 func (f *fakeRegistry) GetBackup(_ context.Context, id backup.ID) (backup.Record, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if f.failGet != nil {
+	f.gets++
+	if f.failGet != nil && f.gets > f.failGetAfter {
 		return backup.Record{}, f.failGet
 	}
 
@@ -331,18 +435,74 @@ func (f *fakeRegistry) ListBackups(_ context.Context) ([]backup.Record, error) {
 	return out, nil
 }
 
-func (f *fakeRegistry) FailRunningBackups(_ context.Context, endedAt time.Time, errText string) error {
+// FailEndedBackups reads the operations first, without the row lock, because
+// the store transaction takes its own lock before it calls a hook that takes
+// the row lock. A failed or canceled operation never runs again, so the
+// answer stays true when the rows change after the read.
+func (f *fakeRegistry) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, error) {
+	ended, err := f.ops.List(ctx, durable.Filter{
+		Kind:   backup.OperationKind,
+		States: []durable.State{durable.StateFailed, durable.StateCanceled},
+		Limit:  0,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list ended backup operations: %w", err)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	for id, row := range f.rows {
-		if row.State == backup.StateRunning {
-			row.State = backup.StateFailed
-			row.Error = errText
-			row.EndedAt = endedAt
-			f.rows[id] = row
+	changed := 0
+
+	for i := range ended {
+		op := &ended[i]
+		id := backup.ID(strings.TrimPrefix(op.Key, backup.OperationKeyPrefix))
+
+		row, ok := f.rows[id]
+		if !ok || row.State != backup.StateRunning {
+			continue
+		}
+
+		row.State = backup.StateFailed
+		row.Error = op.LastError
+
+		if row.Error == "" {
+			row.Error = backup.EndedWithoutFinishText
+		}
+
+		row.EndedAt = endedAt
+		f.rows[id] = row
+		changed++
+	}
+
+	return changed, nil
+}
+
+// failGetsAfter makes GetBackup fail with err after n successful reads. Run
+// reads the row twice for a backup that one claim finishes, so n = 2 lets a
+// backup run and fails the read that follows it.
+func (f *fakeRegistry) failGetsAfter(n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.failGet, f.failGetAfter = err, n
+}
+
+// insertLocked stores r. The caller holds f.mu.
+func (f *fakeRegistry) insertLocked(r backup.Record) error {
+	if _, ok := f.rows[r.ID]; ok {
+		return fmt.Errorf("create backup %s: %w", r.ID, backup.ErrAlreadyExists)
+	}
+
+	if r.State == backup.StateRunning {
+		for _, row := range f.rows {
+			if row.State == backup.StateRunning {
+				return fmt.Errorf("create backup %s: %w", r.ID, backup.ErrAlreadyRunning)
+			}
 		}
 	}
+
+	f.rows[r.ID] = r
 
 	return nil
 }
@@ -359,6 +519,16 @@ type fixture struct {
 func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *fixture {
 	t.Helper()
 
+	return newFixtureKind(t, exporter, fixedKind(installation.KindProduction), maxSQL)
+}
+
+// newFixtureKind is newFixture with the reader that gives the installation
+// kind of the database.
+func newFixtureKind(
+	t *testing.T, exporter backup.PortableExporter, kinds backup.KindReader, maxSQL int64,
+) *fixture {
+	t.Helper()
+
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	registry := newFakeRegistry()
 	source := newMemStore()
@@ -366,7 +536,9 @@ func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *f
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Kinds:       kinds,
 		Registry:    registry,
+		Operations:  registry.ops,
 		Blobs:       source,
 		StateOpener: nil,
 		Target:      target,
@@ -374,6 +546,9 @@ func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *f
 		Now:         func() time.Time { return now },
 		Version:     "test-1.0",
 		MaxSQLBytes: maxSQL,
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -427,6 +602,21 @@ func mustGetRecord(t *testing.T, registry *fakeRegistry, id backup.ID) backup.Re
 	}
 
 	return row
+}
+
+// assertRunFailed proves that err is the failure of Run: it wraps ErrFailed
+// and carries the text of want. The text comes from the registry row, so the
+// chain of the original error is gone and only its text remains.
+func assertRunFailed(t *testing.T, err, want error) {
+	t.Helper()
+
+	if !errors.Is(err, backup.ErrFailed) {
+		t.Fatalf("run: err = %v, want ErrFailed", err)
+	}
+
+	if !strings.Contains(err.Error(), want.Error()) {
+		t.Fatalf("run: err = %q, want the text of %q", err, want)
+	}
 }
 
 func assertFailed(t *testing.T, registry *fakeRegistry, id backup.ID) {
@@ -521,6 +711,8 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 		RowCounts:     map[string]int64{"namespaces": 1},
 		SQLFormat:     backup.PortableFormat,
 		SQLFiles:      files,
+
+		InstallationKind: installation.KindProduction,
 	}
 }
 
@@ -566,6 +758,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 		"format",
 		"homeRegions",
 		"id",
+		"installationKind",
 		"rowCounts",
 		"schemaVersion",
 		"sqlFiles",
@@ -615,9 +808,9 @@ func assertManifestBlobKeys(t *testing.T, raw map[string]any) {
 func TestManifestFormatIsPinned(t *testing.T) {
 	t.Parallel()
 
-	if backup.FormatVersion != 2 {
+	if backup.FormatVersion != 3 {
 		t.Fatalf(
-			"format version = %d, want 2: the portable format of ADR 42 is the manifest format, and it changes only with a new ADR",
+			"format version = %d, want 3: the portable format is the manifest format, and it changes only with a new decision",
 			backup.FormatVersion,
 		)
 	}
@@ -676,9 +869,8 @@ func TestRunFailsOnBlobMismatch(t *testing.T) {
 			fix := newFixture(t, &stubExporter{sum: testSummary(tc.declare), data: sql, err: nil}, 0)
 			seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": tc.stored})
 
-			if _, err := fix.service.Run(t.Context(), "bkp-bad"); !errors.Is(err, backup.ErrCorrupt) {
-				t.Fatalf("run with a mismatched blob: err = %v, want ErrCorrupt", err)
-			}
+			_, err := fix.service.Run(t.Context(), "bkp-bad")
+			assertRunFailed(t, err, backup.ErrCorrupt)
 
 			assertFailed(t, fix.registry, "bkp-bad")
 			assertNoManifest(t, fix.target, "bkp-bad")
@@ -840,9 +1032,7 @@ func TestRunRefusesSQLPartOverTheTargetLimit(t *testing.T) {
 	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
 
 	_, err := fix.service.Run(t.Context(), "bkp-big")
-	if !errors.Is(err, backup.ErrTooLarge) {
-		t.Fatalf("run over the target limit: err = %v, want ErrTooLarge", err)
-	}
+	assertRunFailed(t, err, backup.ErrTooLarge)
 
 	if !strings.Contains(err.Error(), "8") {
 		t.Fatalf("oversized error = %q, want it to name the limit", err)
@@ -911,7 +1101,9 @@ func TestRunFinishesTableFilesTheExporterLeavesOpen(t *testing.T) {
 
 			service, err := backup.NewService(backup.Config{
 				Exporter:    &openExporter{data: []byte("a part of a table file"), err: tc.err},
+				Kinds:       fixedKind(installation.KindProduction),
 				Registry:    registry,
+				Operations:  registry.ops,
 				Blobs:       newMemStore(),
 				StateOpener: nil,
 				Target:      target,
@@ -919,6 +1111,9 @@ func TestRunFinishesTableFilesTheExporterLeavesOpen(t *testing.T) {
 				Now:         time.Now,
 				Version:     "test-1.0",
 				MaxSQLBytes: 0,
+				Owner:       "",
+				Lease:       0,
+				Logger:      nil,
 			})
 			if err != nil {
 				t.Fatalf("new service: %v", err)
@@ -1038,6 +1233,7 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 		{name: "no registry", change: func(cfg *backup.Config) { cfg.Registry = nil }},
 		{name: "no blob store", change: func(cfg *backup.Config) { cfg.Blobs = nil }},
 		{name: "no target", change: func(cfg *backup.Config) { cfg.Target = nil }},
+		{name: "no kind reader", change: func(cfg *backup.Config) { cfg.Kinds = nil }},
 	}
 
 	for _, tc := range cases {
@@ -1046,7 +1242,9 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 
 			cfg := backup.Config{
 				Exporter:    exporter,
+				Kinds:       fixedKind(installation.KindProduction),
 				Registry:    registry,
+				Operations:  registry.ops,
 				Blobs:       source,
 				StateOpener: nil,
 				Target:      target,
@@ -1054,6 +1252,9 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 				Now:         nil,
 				Version:     "",
 				MaxSQLBytes: 0,
+				Owner:       "",
+				Lease:       0,
+				Logger:      nil,
 			}
 			tc.change(&cfg)
 
@@ -1070,4 +1271,12 @@ func TestCheckRefusesNoTarget(t *testing.T) {
 	if err := backup.Check(t.Context(), nil, "bkp-aaa"); !errors.Is(err, backup.ErrMissingDependency) {
 		t.Fatalf("check without a target: err = %v, want ErrMissingDependency", err)
 	}
+}
+
+// count returns the number of objects in the store.
+func (m *memStore) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return len(m.objects)
 }

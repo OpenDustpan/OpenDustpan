@@ -148,6 +148,7 @@ func seedSealedState(
 	}
 
 	sealed, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         st,
 		States:             st,
 		Blobs:              blobs,

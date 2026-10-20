@@ -390,3 +390,32 @@ func TestCollapseVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadRefusesDuplicateVersion(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		files []string
+	}{
+		{name: "two files with one version", files: []string{"0001_init.sql", "0002_a.sql", "0002_b.sql"}},
+		{name: "a version with leading zeros", files: []string{"0003_a.sql", "003_b.sql"}},
+		{name: "three files with one version", files: []string{"0004_a.sql", "0004_b.sql", "0004_c.sql"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fsys := fstest.MapFS{}
+			for _, f := range tc.files {
+				fsys["m/"+f] = mapFile("SELECT 1;\n")
+			}
+
+			all, err := migrate.Load(fsys, "m")
+			if !errors.Is(err, migrate.ErrDuplicateVersion) {
+				t.Fatalf("load = %v, %v; want ErrDuplicateVersion", all, err)
+			}
+		})
+	}
+}

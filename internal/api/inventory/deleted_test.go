@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -179,7 +180,8 @@ func buildDeletedFixture(
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
-		PublicURL:  "",
+		Views: nil,
+		Audit: nil, OnAuditFailure: nil, Locks: nil, PublicURL: "",
 		Moves:      nil,
 		Namespaces: namespaces,
 		Units:      &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
@@ -196,6 +198,7 @@ func buildDeletedFixture(
 		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
+		DenialLimiter: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -622,6 +625,16 @@ func TestRestoreUnitErrors(t *testing.T) {
 			want: http.StatusNotFound,
 		},
 		{name: "fenced", target: restoreTarget, body: "{}", err: namespace.ErrFenced, want: http.StatusConflict},
+		{
+			name: "manual lock", target: restoreTarget, body: "{}", err: &manuallock.LockedError{
+				Lock: manuallock.Lock{
+					Since:  time.Date(2026, time.October, 9, 9, 0, 0, 0, time.UTC),
+					Target: manuallock.NamespaceTarget("acme"), Holder: "alice", Reason: "freeze",
+				},
+				Noun: "stack", Name: "acme/web/prod",
+			},
+			want: http.StatusConflict,
+		},
 		{
 			name: "not home", target: restoreTarget, body: "{}", err: namespace.ErrNotHome,
 			want: http.StatusMisdirectedRequest,

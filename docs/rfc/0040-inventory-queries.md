@@ -23,7 +23,8 @@ Context API. OpenDustpan is not affiliated with Pulumi.
 ## First ideas
 
 - Search and filters over the inventory, kept in the URL, with saved and
-  shared views.
+  shared views. [RFC 100](0100-saved-views.md) holds the saved views. A saved
+  view is a server object with an API (ADR 266).
 - A graph of both tools' units, with resources, profiles, blueprints, sources
   and runners as nodes. Edges come from facts the backend already has (RFC 5,
   12, 14, 15, 6).

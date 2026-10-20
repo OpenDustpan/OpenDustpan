@@ -542,7 +542,7 @@ func moveWeb(t *testing.T, f *fixture, from, to collection.Name, toID string) {
 	fence, e := storetest.GrantWrite(t, f.store, identity.NamespaceObject("acme"), time.Unix(1, 0), "collection:test")
 	m := collection.Move{
 		Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
-		From: from, To: collection.Ref{Namespace: "acme", Name: to}, ToID: toID,
+		From: from, To: collection.Ref{Namespace: "acme", Name: to}, ToID: toID, EndsLock: false,
 	}
 
 	if err := f.store.SetUnitCollection(t.Context(), m, fence, e); err != nil {

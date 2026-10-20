@@ -43,7 +43,7 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      first,
-			Guard:      nil,
+			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        clock,

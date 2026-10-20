@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -135,7 +136,7 @@ func newProviderEnv(t *testing.T) providerEnv {
 	stale := &atomic.Bool{}
 
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: false,
+		autoCreate: true, noPolicyRoutes: false, authz: nil, namespaces: nil,
 		stored: func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders) {
 			beta = oauthtest.New(t, oauthtest.Config{
 				Now: clock.Now, ClientID: "dustpan-beta", ClientSecret: betaSecret, RedirectURI: betaCallback,
@@ -333,6 +334,10 @@ func TestSignInProvidersRefusals(t *testing.T) {
 			"set a new provider ID only if the identity provider changed", http.StatusConflict,
 		},
 		{http.MethodGet, "/api/server/sign-in-providers/none", "", "not found", http.StatusNotFound},
+		{
+			http.MethodPost, "/api/server/sign-in-providers", strings.Replace(e.betaBody(), `"beta"`, `"dev"`, 1),
+			"reserved for the dev sign-in", http.StatusBadRequest,
+		},
 	} {
 		rec := e.adminDo(t, tc.method, tc.target, tc.body)
 		if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.want) {
@@ -487,6 +492,50 @@ func TestSignInStoredProviderChangesApplyAtOnce(t *testing.T) {
 
 	if subject := e.signInWith(t, e.beta, "beta"); subject != "beta:248289761001" {
 		t.Fatalf("subject after the provider is enabled again = %q", subject)
+	}
+}
+
+// TestSignInProviderDisableRunsInMaintenanceMode proves that the disable of a
+// stored provider answers 200 in maintenance mode, through the route, the
+// service and the store, and ends the sessions of the provider. A change that
+// sets another field with the disable, and the enable, answer 503: only the
+// change that disables and nothing else narrows access.
+func TestSignInProviderDisableRunsInMaintenanceMode(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+	created := e.createBeta(t)
+
+	_, betaSession := e.signInSession(t, e.beta, "beta")
+	version := strconv.FormatInt(created.Version, 10)
+
+	if err := e.store.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	target := "/api/server/sign-in-providers/beta"
+
+	rec := e.adminDo(t, http.MethodPatch, target, `{"version":`+version+`,"enabled":false,"displayName":"Renamed"}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disable with a rename in maintenance mode = %d %s, want 503", rec.Code, rec.Body.String())
+	}
+
+	rec = e.adminDo(t, http.MethodPatch, target, `{"version":`+version+`,"enabled":false}`)
+	if rec.Code != http.StatusOK || decodeProvider(t, rec).Version != 2 || decodeProvider(t, rec).Enabled {
+		t.Fatalf("disable in maintenance mode = %d %s, want 200 with version 2, disabled", rec.Code, rec.Body.String())
+	}
+
+	rec = e.adminDo(t, http.MethodPatch, target, `{"version":2,"enabled":true}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("enable in maintenance mode = %d %s, want 503", rec.Code, rec.Body.String())
+	}
+
+	if err := e.store.SetState(t.Context(), maintenance.StateNormal); err != nil {
+		t.Fatalf("leave maintenance mode: %v", err)
+	}
+
+	if code, _ := e.readSession(t, betaSession); code != http.StatusUnauthorized {
+		t.Fatalf("session of a provider that was disabled in maintenance mode = %d, want 401", code)
 	}
 }
 

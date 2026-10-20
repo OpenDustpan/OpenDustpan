@@ -219,3 +219,18 @@ func TestStoredProvidersRecreatedID(t *testing.T) {
 			again, ok, err)
 	}
 }
+
+// TestStoredProviderRefusesDevID proves the layer of the lookup: the sign-in
+// routes find no provider with the reserved ID of the dev sign-in. The lookup
+// refuses before it asks the store, so a row with that ID, such as an older
+// version might have left, never signs a person in.
+func TestStoredProviderRefusesDevID(t *testing.T) {
+	t.Parallel()
+
+	f := newStoredFixture(t)
+
+	got, found, err := f.lookup.Provider(t.Context(), session.DevProviderID)
+	if err != nil || found || got.ID != "" {
+		t.Fatalf("Provider(dev) = %+v, found %v, %v; want no provider", got, found, err)
+	}
+}

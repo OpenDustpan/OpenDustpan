@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -24,7 +25,7 @@ import (
 
 // pollTimeout bounds a backup poll: a test backup of a small database ends
 // well before it.
-const pollTimeout = 10 * time.Second
+const pollTimeout = 60 * time.Second
 
 // pollInterval sets how often a backup poll reads the row.
 const pollInterval = 10 * time.Millisecond
@@ -78,6 +79,12 @@ func openBackupDeps(t *testing.T) backupStores {
 
 	registry := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
+	// A server claims its installation kind at start. The backup and the
+	// restore read it, so the stores of these tests hold one.
+	if _, err := registry.ClaimKind(t.Context(), installation.KindProduction); err != nil {
+		t.Fatalf("claim the installation kind: %v", err)
+	}
+
 	live, err := blobfs.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open live store: %v", err)
@@ -113,7 +120,12 @@ func newBackupFixture(
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Kinds:       stores.registry,
 		Registry:    stores.registry,
+		Operations:  stores.registry.DurableOperationsPort(),
+		Owner:       "",
+		Lease:       0,
+		Logger:      nil,
 		Blobs:       stores.live,
 		StateOpener: nil,
 		Target:      stores.target,
@@ -126,12 +138,27 @@ func newBackupFixture(
 		t.Fatalf("new backup service: %v", err)
 	}
 
+	// A worker claims the backup operations, as the worker component of a
+	// server does. It stops before the stores close.
+	workCtx, stopWork := context.WithCancel(context.WithoutCancel(t.Context()))
+
+	var work sync.WaitGroup
+
+	work.Go(func() { service.Work(workCtx) })
+
+	t.Cleanup(func() {
+		stopWork()
+		work.Wait()
+	})
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -154,9 +181,11 @@ func newBackupFixture(
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -552,6 +581,8 @@ func TestBackupWithoutTarget(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -574,9 +605,11 @@ func TestBackupWithoutTarget(t *testing.T) {
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

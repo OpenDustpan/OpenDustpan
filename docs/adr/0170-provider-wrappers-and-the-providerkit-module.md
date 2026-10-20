@@ -1,6 +1,6 @@
 # 170. Provider wrappers, and the providerkit module
 
-Status: accepted · 2026-10-18 · ADRs 171 to 179 give the parts
+Status: accepted · 2026-10-18 · ADRs 171 to 179 give the parts. Open question answered in part by ADR 257
 
 The code of the module is in the repository `OpenDustpan/providerkit`. Its
 first pull request is OpenDustpan/providerkit PR #1.

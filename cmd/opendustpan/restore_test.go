@@ -145,6 +145,8 @@ func succeededRestoreScript(sqlSize int64) restoreScript {
 				PreBackupID: "",
 				Error:       "",
 				Manifest:    nil,
+				Warnings:    nil,
+				DevData:     nil,
 			},
 			{
 				ID:          restoreTestID,
@@ -153,6 +155,8 @@ func succeededRestoreScript(sqlSize int64) restoreScript {
 				PreBackupID: restorePreTestID,
 				Error:       "",
 				Manifest:    nil,
+				Warnings:    nil,
+				DevData:     nil,
 			},
 			{
 				ID:          restoreTestID,
@@ -161,6 +165,8 @@ func succeededRestoreScript(sqlSize int64) restoreScript {
 				PreBackupID: restorePreTestID,
 				Error:       "",
 				Manifest:    &restoreManifest{SQLSize: sqlSize},
+				Warnings:    nil,
+				DevData:     nil,
 			},
 		},
 	}
@@ -241,6 +247,8 @@ func TestRestoreCommandCheckOnly(t *testing.T) {
 				PreBackupID: "",
 				Error:       "",
 				Manifest:    nil,
+				Warnings:    nil,
+				DevData:     nil,
 			},
 			{
 				ID:          restoreTestID,
@@ -249,6 +257,8 @@ func TestRestoreCommandCheckOnly(t *testing.T) {
 				PreBackupID: "",
 				Error:       "",
 				Manifest:    nil,
+				Warnings:    nil,
+				DevData:     nil,
 			},
 		},
 	}
@@ -327,6 +337,8 @@ func TestRestoreCommandFailedRestore(t *testing.T) {
 				PreBackupID: restorePreTestID,
 				Error:       "backup is corrupt",
 				Manifest:    nil,
+				Warnings:    nil,
+				DevData:     nil,
 			},
 		},
 	}
@@ -561,6 +573,8 @@ func TestRestoreCommandRetriesTransientMissing(t *testing.T) {
 		PreBackupID: restorePreTestID,
 		Error:       "",
 		Manifest:    nil,
+		Warnings:    nil,
+		DevData:     nil,
 	}
 	checking := restoreStatusResponse{
 		ID:          restoreTestID,
@@ -569,6 +583,8 @@ func TestRestoreCommandRetriesTransientMissing(t *testing.T) {
 		PreBackupID: "",
 		Error:       "",
 		Manifest:    nil,
+		Warnings:    nil,
+		DevData:     nil,
 	}
 
 	var reads atomic.Int64
@@ -620,4 +636,71 @@ func TestRestoreCommandRetriesTransientMissing(t *testing.T) {
 	}
 
 	checkRestoreOutput(t, out, "succeeded")
+}
+
+// TestRestoreCommandWarnsAboutADevBackup proves that the command reads the
+// manifest first and prints the notice before it starts the restore, and that
+// it prints the warnings and the dev data that the server answers.
+func TestRestoreCommandWarnsAboutADevBackup(t *testing.T) {
+	var order []string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/server/backups/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		order = append(order, "manifest")
+
+		writeFake(t, w,
+			`{"id":"`+restoreBackupTestID+`","state":"succeeded","manifest":{"installationKind":"dev"}}`,
+		)
+	})
+	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
+		order = append(order, "start")
+
+		w.WriteHeader(http.StatusAccepted)
+
+		writeFake(t, w,
+			`{"id":"`+restoreTestID+`","warnings":[{"code":"dev-backup-into-production","text":"first text"}]}`,
+		)
+	})
+	mux.HandleFunc("GET /api/server/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		writeFake(t, w,
+			`{"id":"`+restoreTestID+`","state":"succeeded","backupID":"`+restoreBackupTestID+`",`+
+				`"warnings":[{"code":"dev-backup-into-production","text":"first text"},{"code":"audit-append-failed","text":"second text"}],`+
+				`"devData":{"principals":2,"classes":{"grants":3,"principals":2}}}`)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	t.Setenv(adminTokenEnvVar, "dev-token")
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"--server", server.URL, "--backup", restoreBackupTestID}
+	if err := restoreCommand(t.Context(), args, &stdout, &stderr); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	if len(order) < 2 || order[0] != "manifest" || order[1] != "start" {
+		t.Fatalf("calls = %v, want the manifest read before the start", order)
+	}
+
+	if !strings.Contains(stderr.String(), "this backup is from a dev installation") ||
+		!strings.Contains(stderr.String(), "--unsafe-allow-restoring-dev-installation-backups-into-production") {
+		t.Fatalf("stderr = %q, want the notice that names the flag", stderr.String())
+	}
+
+	out := stdout.String()
+	if strings.Count(out, "warning: first text") != 1 || !strings.Contains(out, "warning: second text") ||
+		!strings.Contains(out, "dev data: 2 principals; grants 3, principals 2") {
+		t.Fatalf("stdout = %q, want each warning once and the dev data line", out)
+	}
+}
+
+// writeFake writes the scripted body of a fake server answer.
+func writeFake(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("write fake answer: %v", err)
+	}
 }

@@ -1044,6 +1044,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	secrets := newMemSealer(t, namespaces)
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              blobs,
@@ -1081,6 +1082,7 @@ func TestDeleteRecordsRetention(t *testing.T) {
 	f := newFixture(t)
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
 		Blobs:              f.blobs,
@@ -1192,6 +1194,7 @@ func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
 	}
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             goneStates{StateStore: f.store},
 		Blobs:              f.blobs,
@@ -1300,6 +1303,7 @@ func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture
 	var svc *workspace.Service
 
 	svc, err = workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              blobs,
@@ -1471,6 +1475,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
 		Blobs:              f.blobs,
@@ -3004,6 +3009,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 	t.Helper()
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         gated,
 		States:             gated,
 		Blobs:              f.blobs,
@@ -3187,6 +3193,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 	t.Helper()
 
 	second, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         f.store,
 		States:             f.store,
 		Blobs:              blobs,
@@ -4062,6 +4069,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 	}
 
 	fenced, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         fencedWorkspaces{memStore: f.store},
 		States:             fencedStates{memStore: f.store},
 		Blobs:              blobs,
@@ -4222,6 +4230,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 	}
 
 	raced, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         &raceWorkspaces{memStore: f.store, raced: false},
 		States:             f.store,
 		Blobs:              blobs,
@@ -4397,6 +4406,7 @@ func newSealedFixture(t *testing.T) fixture {
 	blobs := openFixtureBlobs(t)
 
 	svc, err := workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              blobs,
@@ -4467,6 +4477,7 @@ func TestNewServiceWithoutSealerFails(t *testing.T) {
 	}
 
 	_, err = workspace.NewService(workspace.Config{
+		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              openFixtureBlobs(t),
@@ -4936,7 +4947,10 @@ func (m *memStore) ReleaseUnfenced(
 	case !nsOK:
 		return namespace.ErrNotFound
 	case !ns.Overrides.Forced || !stored.Overrides.Forced:
-		return fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+		return workspace.NewOverrideRefusedError(
+			workspace.OverrideForced,
+			"write refused: the forced-write switch is off",
+		)
 	}
 
 	return m.SaveReleased(ctx, w, fence, e)
@@ -5010,6 +5024,7 @@ func (m *memStore) publish(w workspace.Workspace) {
 	name := w.Ref.Name.String()
 
 	m.entries[memInventoryKey{namespace: w.Ref.Namespace, tool: memInventoryTool, name: name}] = inventory.Entry{
+		ManualLock:    nil,
 		Collection:    "",
 		LastChanged:   w.UpdatedAt,
 		Namespace:     w.Ref.Namespace,
@@ -5033,7 +5048,10 @@ func (m *memStore) checkUnlockedSwitches(w workspace.Workspace) error {
 	}
 
 	if !ns.Overrides.Unlocked || !w.Overrides.Unlocked {
-		return fmt.Errorf("%w: the unlocked-write switch is off", workspace.ErrOverrideRefused)
+		return workspace.NewOverrideRefusedError(
+			workspace.OverrideUnlocked,
+			"write refused: the unlocked-write switch is off",
+		)
 	}
 
 	return nil
@@ -5048,7 +5066,10 @@ func (m *memStore) checkForcedSwitches(w workspace.Workspace) error {
 	}
 
 	if !ns.Overrides.Forced || !w.Overrides.Forced {
-		return fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+		return workspace.NewOverrideRefusedError(
+			workspace.OverrideForced,
+			"write refused: the forced-write switch is off",
+		)
 	}
 
 	return nil

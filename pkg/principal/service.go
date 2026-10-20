@@ -27,9 +27,9 @@ type Tokens interface {
 type Config struct {
 	Store Store
 	// Guard checks that the caller of a membership change, a delete or an enable holds
-	// what the grants of the principal or the group give. Nil means
-	// no check: only an installation that grants nothing, where every
-	// caller is an administrator, leaves it nil.
+	// what the grants of the principal or the group give. It is required.
+	// An installation that keeps no grants passes AdminOnlyGuard, which
+	// allows only an administrator.
 	Guard Guard
 	// Namespaces reads the fence of the namespace of a principal of a
 	// namespace. Nil means the Service keeps no principal of a namespace.
@@ -72,10 +72,14 @@ type Service struct {
 	newID      func(prefix string) string
 }
 
-// NewService returns a Service. Store is required.
+// NewService returns a Service. Store and Guard are required.
 func NewService(cfg Config) (*Service, error) {
 	if cfg.Store == nil {
 		return nil, fmt.Errorf("%w: principal store", ErrMissingDependency)
+	}
+
+	if cfg.Guard == nil {
+		return nil, fmt.Errorf("%w: principal guard", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -255,6 +259,28 @@ func (s *Service) EnablePrincipal(
 
 	if err := s.store.EnablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
 		return fmt.Errorf("enable principal %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// DisablePrincipal disables the principal with the ID id, with the entry e. It
+// only narrows access: the grants of the principal stay and it cannot use
+// them until EnablePrincipal clears the disable. The Guard still checks that
+// caller holds every action that the grants of the principal give, so that a
+// caller cannot lock out a principal with more rights than their own. The
+// check is a read and the write works in maintenance mode, as a revocation
+// does. It returns ErrNotFound when no such principal exists and ErrDisabled
+// when it is disabled.
+func (s *Service) DisablePrincipal(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
+) error {
+	if err := s.checkPrincipal(ctx, caller, id); err != nil {
+		return fmt.Errorf("disable principal %q: %w", id, err)
+	}
+
+	if err := s.store.DisablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
+		return fmt.Errorf("disable principal %q: %w", id, err)
 	}
 
 	return nil
@@ -539,6 +565,40 @@ type SignInInput struct {
 // break-glass account or a temporary administrator, and ErrInvalid or
 // ErrReservedSubject for a subject that is not valid.
 func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInInput) (Principal, bool, error) {
+	// Defense in depth: Validate refuses the subject too, but only for a
+	// principal that this call makes. This check runs before the read, so
+	// a provider that composes "dev:admin" never reaches the dev person
+	// that already exists.
+	if IsDevSubject(in.Subject) {
+		return Principal{}, false, fmt.Errorf(
+			"%w: %q starts with %q, which only the dev sign-in of opendustpan dev uses",
+			ErrReservedSubject,
+			in.Subject,
+			DevSubjectPrefix,
+		)
+	}
+
+	return s.signIn(ctx, e, in, Principal.Validate)
+}
+
+// SignInDevAdministrator returns the person DevAdminSubject for the dev
+// sign-in of opendustpan dev, and makes it when none exists: a local person
+// with no grant and no group. It takes no subject, so it cannot make any
+// other principal. It is the only path that makes a principal with a subject
+// that starts with DevSubjectPrefix. It returns the errors of
+// SignInPrincipal, and created is true when it made the person.
+func (s *Service) SignInDevAdministrator(
+	ctx context.Context, e audit.Entry, displayName string,
+) (Principal, bool, error) {
+	in := SignInInput{Subject: DevAdminSubject, Source: SourceLocal, Names: []string{displayName}, Create: true}
+
+	return s.signIn(ctx, e, in, Principal.validateDevAdministrator)
+}
+
+// signIn is SignInPrincipal. validate checks the principal that it makes.
+func (s *Service) signIn(
+	ctx context.Context, e audit.Entry, in SignInInput, validate func(Principal) error,
+) (Principal, bool, error) {
 	p, err := s.store.GetPrincipalBySubject(ctx, in.Subject)
 
 	switch {
@@ -563,7 +623,7 @@ func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInI
 		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
-	if validErr := p.Validate(); validErr != nil {
+	if validErr := validate(p); validErr != nil {
 		return Principal{}, false, validErr
 	}
 
@@ -583,8 +643,10 @@ func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInI
 // checkGroup asks the Guard whether caller may change who holds the grants
 // of the group groupID.
 func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, groupID string) error {
+	// Defense in depth: NewService refuses a missing Guard. This check stays so
+	// that a Service built any other way allows only an administrator.
 	if s.guard == nil {
-		return nil
+		return AdminOnlyGuard{}.CheckGroupGrants(ctx, caller, groupID)
 	}
 
 	return s.guard.CheckGroupGrants(ctx, caller, groupID)
@@ -593,8 +655,10 @@ func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, gro
 // checkPrincipal asks the Guard whether caller may revoke the grants of the
 // principal principalID.
 func (s *Service) checkPrincipal(ctx context.Context, caller identity.Principal, principalID string) error {
+	// Defense in depth: NewService refuses a missing Guard. This check stays so
+	// that a Service built any other way allows only an administrator.
 	if s.guard == nil {
-		return nil
+		return AdminOnlyGuard{}.CheckPrincipalGrants(ctx, caller, principalID)
 	}
 
 	return s.guard.CheckPrincipalGrants(ctx, caller, principalID)

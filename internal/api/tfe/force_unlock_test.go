@@ -88,6 +88,7 @@ func newWriteHandlerWithAuthz(t *testing.T, ws tfe.WorkspaceService, authz ident
 		Gate:           nil,
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
+		DenialLimiter:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -137,12 +139,19 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, deleted 
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishStackInventory(
+	pubErr := publishStackInventory(
 		ctx,
 		q,
 		ref,
 		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
 	)
+	if pubErr != nil {
+		return pubErr
+	}
+
+	return refuseRestoreUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: inventoryTool, Name: stackUnitName(ref),
+	}, "stack", ref.Project.String()+"/"+ref.Stack.String())
 }
 
 // PurgeStack implements stack.Store. In one fenced transaction with the
@@ -319,12 +328,19 @@ func restoreWorkspaceRow(
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
 	}
 
-	return publishWorkspaceInventory(
+	pubErr := publishWorkspaceInventory(
 		ctx,
 		q,
 		ref,
 		unitWrite{unitID: id.String(), atMs: e.At.UnixMilli(), kind: inventory.ChangeRestored},
 	)
+	if pubErr != nil {
+		return pubErr
+	}
+
+	return refuseRestoreUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: workspaceInventoryTool, Name: ref.Name.String(),
+	}, "workspace", ref.Name.String())
 }
 
 // PurgeWorkspace implements workspace.Store. In one fenced transaction with
@@ -516,6 +532,13 @@ func (s *Store) purgeUnit(
 			return fmt.Errorf("delete collection membership: %w", err)
 		}
 
+		lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+			Kind: string(manuallock.KindUnit), ObjectID: u.id,
+		})
+		if lockErr != nil {
+			return fmt.Errorf("delete manual lock: %w", lockErr)
+		}
+
 		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
 			Tool: u.tool, UnitID: u.id, Namespace: fence.Namespace.String(), PurgedAtMs: codec.Millis(e.At),
 		})
@@ -584,7 +607,10 @@ func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if err := s.queries.DeleteBlobPurge(ctx, db.DeleteBlobPurgeParams{Tool: tool, UnitID: unitID}); err != nil {
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		return q.DeleteBlobPurge(ctx, db.DeleteBlobPurgeParams{Tool: tool, UnitID: unitID})
+	})
+	if err != nil {
 		return fmt.Errorf("finish blob purge: %w", err)
 	}
 
@@ -617,4 +643,82 @@ func purgeUnitContext(ctx context.Context, q *db.Queries, ns namespace.Name, uni
 	}
 
 	return nil
+}
+
+// refuseRestoreUnderLock returns an error that matches manuallock.ErrLocked
+// when a manual lock covers the unit that a restore has just brought back, on
+// the unit, on its collection or on its namespace. It runs in the transaction
+// of the restore, after the unit is live again, so the error rolls the restore
+// back: a lock stops every change, and a restore is a change.
+//
+// Defense in depth: the service reads the lock of the namespace before it calls
+// the store. This check stays so that the store does not rely on its caller: it
+// reads the lock of the unit, of its collection and of its namespace in the same
+// transaction as the write, and a lock that appears after the service check
+// still stops the restore.
+func refuseRestoreUnderLock(
+	ctx context.Context, q *db.Queries, unit collection.UnitRef, noun, name string,
+) error {
+	l, err := coveringLock(ctx, q, unit)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of restored %s: %w", noun, err)
+	}
+
+	return &manuallock.LockedError{Lock: l, Noun: noun, Name: unit.Namespace.String() + "/" + name}
+}
+
+// deleteRefusal names what a refused delete says: base is the error of the
+// tool that the refusal matches, noun and name describe the unit.
+type deleteRefusal struct {
+	base error
+	noun string
+	name string
+}
+
+// refuseDeleteUnderLock returns an error that matches base and
+// manuallock.ErrLocked when a manual lock covers the unit that a soft delete is
+// about to remove, on the unit, on its collection or on its namespace. It runs
+// in the transaction of the delete, before the unit row changes, so the error
+// rolls the delete back: a lock stops every change, and a delete is a change.
+// Without it, a lock that commits after the service check leaves a deleted unit
+// with a lock that no route can remove.
+//
+// Defense in depth: the service reads the covering lock before it calls the
+// store. This check stays so that the store does not rely on its caller: it
+// reads the locks in the same transaction as the write, which holds the row of
+// the namespace, so a lock write of the same namespace either commits before
+// this read or waits until the delete commits.
+func refuseDeleteUnderLock(ctx context.Context, q *db.Queries, unit collection.UnitRef, refusal deleteRefusal) error {
+	l, err := coveringLock(ctx, q, unit)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of %s: %w", refusal.noun, err)
+	}
+
+	return fmt.Errorf("%w: %w", refusal.base, &manuallock.LockedError{
+		Lock: l, Noun: refusal.noun, Name: unit.Namespace.String() + "/" + refusal.name,
+	})
+}
+
+// refuseStackDeleteUnderLock is refuseDeleteUnderLock for the stack ref. The
+// error matches stack.ErrUpdateConflict, as the refusal of the service does.
+func refuseStackDeleteUnderLock(ctx context.Context, q *db.Queries, ref stack.Ref) error {
+	return refuseDeleteUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: inventoryTool, Name: stackUnitName(ref),
+	}, deleteRefusal{base: stack.ErrUpdateConflict, noun: "stack", name: ref.Project.String() + "/" + ref.Stack.String()})
+}
+
+// refuseWorkspaceDeleteUnderLock is refuseDeleteUnderLock for the workspace
+// ref. The error matches workspace.ErrLocked, as the refusal of the service does.
+func refuseWorkspaceDeleteUnderLock(ctx context.Context, q *db.Queries, ref workspace.Ref) error {
+	return refuseDeleteUnderLock(ctx, q, collection.UnitRef{
+		Namespace: ref.Namespace, Tool: workspaceInventoryTool, Name: ref.Name.String(),
+	}, deleteRefusal{base: workspace.ErrLocked, noun: "workspace", name: ref.Name.String()})
 }

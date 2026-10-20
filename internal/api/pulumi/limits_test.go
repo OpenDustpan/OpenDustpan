@@ -43,7 +43,7 @@ func newUpdateFixtureWithGate(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -52,6 +52,7 @@ func newUpdateFixtureWithGate(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		ManualLocks:        nil,
 		Updates:            mem,
 		Tokens:             nil,
 		Checkpoints:        mem,
@@ -86,6 +87,7 @@ func newUpdateFixtureWithGate(
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -112,7 +114,14 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+		stack.Config{
+			Store:       newMapStackStore(),
+			Namespaces:  namespaces,
+			Now:         nil,
+			State:       nil,
+			Retention:   0,
+			ManualLocks: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -162,6 +171,7 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
+		DenialLimiter:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

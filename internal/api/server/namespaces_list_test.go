@@ -382,6 +382,8 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    authn,
@@ -401,12 +403,14 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		Audit:            nil,
 		OnAuditFailure:   nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -495,6 +499,8 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    subjectAuthenticator{},
@@ -514,12 +520,14 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 		Audit:            nil,
 		OnAuditFailure:   nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

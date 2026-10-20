@@ -117,7 +117,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: s.stacks, Namespaces: nsSvc, Now: now, State: nil, Retention: 0},
+		stack.Config{Store: s.stacks, Namespaces: nsSvc, Now: now, State: nil, Retention: 0, ManualLocks: nil},
 	)
 	if err != nil {
 		b.Fatalf("stack service: %v", err)
@@ -126,7 +126,8 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	blobs := openBenchBlobs(b)
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
+		ManualLocks: nil,
+		Updates:     s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
 		Replayer: nil,
 	})
@@ -207,7 +208,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      s.principals,
-			Guard:      nil,
+			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        now,
@@ -269,7 +270,7 @@ func startBenchLease(
 		b.Fatalf("create update: %v", err)
 	}
 
-	started, err := updates.StartBy(ctx, ref, u.ID, tokenID, 0)
+	started, err := updates.StartBy(ctx, ref, u.ID, stack.StartedBy{TokenID: tokenID, JobID: ""}, 0)
 	if err != nil {
 		b.Fatalf("start update: %v", err)
 	}

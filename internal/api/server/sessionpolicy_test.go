@@ -46,6 +46,8 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Workers:          nil,
+		InstallationKind: "",
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
@@ -65,12 +67,14 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 		Audit:            st,
 		OnAuditFailure:   nil,
 		IPAllowlists:     nil,
+		Gates:            nil,
 		SessionPolicy:    policies,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
 		SignIn:           nil,
 		CheckpointEpochs: nil,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -512,6 +512,7 @@ func takeoverRunnerConfig(store durable.Store, owner string, kinds []durable.Kin
 		Backoff:      durable.Backoff{Base: 0, Max: 0},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
 		WriteTimeout: 0,
+		Deferred:     nil,
 		Logger:       nil,
 		Rand:         nil,
 	}

@@ -28,7 +28,7 @@ func pgCopyBlameTables() []pgCopyTable {
 		{
 			table: "workspace_resource_changes",
 			columns: []string{
-				pgColWorkspaceID, pgColStateVersionID, pgColAddress, pgColOrdinal, pgColKind, "at_ms", "by_subject",
+				pgColWorkspaceID, pgColStateVersionID, pgColAddress, pgColOrdinal, pgColKind, pgColAtMs, "by_subject",
 				"by_token_id", "by_job_id", "changed_paths", "restored", "forced", "lineage_changed",
 			},
 			orderBy: []string{pgColWorkspaceID, pgColStateVersionID, pgColAddress},

@@ -164,14 +164,14 @@ func runBackupCommand(t *testing.T, server, token string, extra ...string) (stri
 }
 
 // checkBackupOutput proves that out names the backup ID, the state and
-// the key and sealed-state warnings.
+// the key and encrypted-state warnings.
 func checkBackupOutput(t *testing.T, out, state string) {
 	t.Helper()
 
 	for _, want := range []string{
 		"backup " + backupTestID + " " + state,
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
-		"sealed",
+		"encrypted",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("backup output lacks %q:\n%s", want, out)

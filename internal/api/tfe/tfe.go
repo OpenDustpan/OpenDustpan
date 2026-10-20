@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -87,9 +88,10 @@ type WorkspaceReader interface {
 
 // WorkspaceLocker is what the lock routes need.
 type WorkspaceLocker interface {
-	// Lock locks the workspace for holder, the subject of the calling
-	// principal.
-	Lock(ctx context.Context, id workspace.ID, holder, reason string) (workspace.Workspace, error)
+	// LockForJob locks the workspace for holder, the subject of the calling
+	// principal. jobID is the job whose job token made the request, or empty:
+	// a job whose phase started before a manual lock passes that lock.
+	LockForJob(ctx context.Context, id workspace.ID, holder, reason, jobID string) (workspace.Workspace, error)
 	// Unlock releases holder's lock.
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
 	// ForceUnlockLock releases the lock whoever holds it, when it matches
@@ -231,6 +233,10 @@ type Config struct {
 	// to the dustpan_audit_append_failures_total counter. Nil means no
 	// counter: the routes still fail closed with a 500 and no value.
 	OnAuditFailure func()
+	// DenialLimiter bounds the audit entries of refused requests. The server
+	// gives every adapter the same limiter, so its bound on keys holds for all
+	// of them. Nil means a limiter of this handler only.
+	DenialLimiter *denylimit.Limiter
 	// Gate bounds concurrent large bodies by bytes held at once.
 	Gate *bodygate.Gate
 	// MaxStateBytes bounds one OpenTofu state version. Zero means
@@ -285,7 +291,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
-			cfg.OnAuditFailure),
+			cfg.OnAuditFailure).WithLimiter(cfg.DenialLimiter).
+			WithSurface("tfe"),
 		gate:     cfg.Gate,
 		maxState: cfg.MaxStateBytes,
 		mux:      newPatternMux(),

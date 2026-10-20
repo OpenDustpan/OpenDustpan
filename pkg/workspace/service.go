@@ -17,7 +17,9 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -83,7 +85,9 @@ type Store interface {
 	// ErrLocked while the workspace is locked, ErrPendingState while it has a
 	// pending state version, ErrNotFound if no live workspace has ref, namespace.ErrNotFound if the namespace does not
 	// exist, namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry
-	// if e fails validation or names another namespace.
+	// if e fails validation or names another namespace. While a manual lock
+	// covers the workspace, its collection or its namespace, the error matches
+	// ErrLocked and manuallock.ErrLocked.
 	DeleteWorkspace(ctx context.Context, ref Ref, fence namespace.Fence, d inventory.Deletion) error
 	DeletedStore
 }
@@ -265,6 +269,26 @@ type Config struct {
 	// Retention is how long a deleted workspace stays before its final
 	// delete (ADR 47, decision 2). Zero means inventory.DeletedRetention.
 	Retention time.Duration
+	// ManualLocks refuses a lock request on a workspace that a manual lock
+	// covers. Nil turns the check off.
+	ManualLocks ManualLocks
+}
+
+// ManualLocks is the read side of the manual locks of the shared core. A lock
+// request of OpenTofu asks it before the workspace takes its own lock.
+type ManualLocks interface {
+	// CoveringFor returns the manual lock that covers the unit: a lock on the
+	// unit, on the collection that holds it, or on its namespace. jobID is the
+	// job whose job token made the request, or empty. The lock request of a
+	// job whose phase started before the lock passes. It returns
+	// manuallock.ErrNotLocked when no manual lock covers the unit for the
+	// request.
+	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	// NamespaceLock returns the manual lock of the namespace, or
+	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
+	// unit has no inventory entry, so CoveringFor cannot find the lock of its
+	// namespace.
+	NamespaceLock(ctx context.Context, ns namespace.Name) (manuallock.Lock, error)
 }
 
 // lockStripes is the number of striped mutexes serializing declares and
@@ -286,6 +310,7 @@ type Service struct {
 	maxState   int64
 	maxPending int
 	retention  time.Duration
+	manual     ManualLocks
 	stateAt    StateAtReader
 	names      inventory.HistoryReader
 	stripes    [lockStripes]sync.Mutex
@@ -332,6 +357,7 @@ func NewService(cfg Config) (*Service, error) {
 		maxState:   cfg.MaxStateBytes,
 		maxPending: cfg.MaxPendingVersions,
 		retention:  cfg.Retention,
+		manual:     cfg.ManualLocks,
 		stateAt:    nil,
 		names:      nil,
 		stripes:    [lockStripes]sync.Mutex{},
@@ -406,7 +432,19 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 		return err
 	}
 
-	if w, getErr := s.Get(ctx, ref); getErr == nil {
+	// A manual lock stops the delete of the workspace. The workspace must exist
+	// to be covered: a missing one falls through to the not-found answer of the
+	// store. Any other read error refuses the delete (fail closed).
+	w, getErr := s.Get(ctx, ref)
+	if getErr != nil && !errors.Is(getErr, ErrNotFound) {
+		return fmt.Errorf("delete workspace %s: %w", ref, getErr)
+	}
+
+	if getErr == nil {
+		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
+			return fmt.Errorf("delete workspace %s: %w", ref, lockErr)
+		}
+
 		if sweepErr := s.sweepExpiredRows(ctx, w); sweepErr != nil {
 			s.logger.WarnContext(
 				ctx,
@@ -443,6 +481,15 @@ func (s *Service) RestoreDeleted(
 	fence, err := s.fence(ctx, ns)
 	if err != nil {
 		return Ref{}, err
+	}
+
+	// Defense in depth: the store refuses a restore under a manual lock in the
+	// transaction of the restore, after the workspace is live again. This check
+	// stays so that the refusal does not rely on the store: a deleted workspace
+	// has no inventory entry, so it reads the lock of the namespace, and the
+	// store check covers the lock of the workspace and of its collection.
+	if lockErr := s.refuseRestoreUnderNamespaceLock(ctx, ns, id); lockErr != nil {
+		return Ref{}, fmt.Errorf("restore workspace %s: %w", id, lockErr)
 	}
 
 	e.At = s.clock()
@@ -532,8 +579,23 @@ func (s *Service) List(ctx context.Context, ns namespace.Name) ([]Workspace, err
 
 // Lock locks the workspace for holder, the subject of the calling principal.
 func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Workspace, error) {
+	return s.LockForJob(ctx, id, holder, reason, "")
+}
+
+// LockForJob is Lock for a request that carries the job token of the job
+// jobID, or no job token when jobID is empty. A job whose phase started before
+// a manual lock passes that lock.
+func (s *Service) LockForJob(ctx context.Context, id ID, holder, reason, jobID string) (Workspace, error) {
 	if holder == "" {
 		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
+	}
+
+	// The manual lock check and the tool lock below run in separate
+	// transactions. A manual lock that commits between them is missed by this
+	// one request, the same as a job phase that started before the lock. The
+	// next request meets the lock.
+	if err := s.checkManualLock(ctx, id, jobID); err != nil {
+		return Workspace{}, err
 	}
 
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
@@ -546,12 +608,38 @@ func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Works
 // names it again in each write (ADR 49, decision 6). An ID that is empty, too
 // long or has characters outside the lock ID set fails with ErrInvalidLockID.
 func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID string) (Workspace, error) {
+	return s.LockWithIDForJob(ctx, id, LockRequest{Holder: holder, Reason: reason, LockID: lockID, JobID: ""})
+}
+
+// LockRequest is a lock request of the OpenTofu HTTP backend: the holder, the
+// reason and the lock ID that the client chose, and the job whose job token made
+// the request. JobID is empty for a request with another credential.
+type LockRequest struct {
+	Holder string
+	Reason string
+	LockID string
+	JobID  string
+}
+
+// LockWithIDForJob is LockWithID for a request that can carry the job token of
+// a job. A job whose phase started before a manual lock passes that lock.
+func (s *Service) LockWithIDForJob(ctx context.Context, id ID, req LockRequest) (Workspace, error) {
+	holder, reason, lockID, jobID := req.Holder, req.Reason, req.LockID, req.JobID
+
 	if holder == "" {
 		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
 	}
 
 	if !validLockID(lockID) {
 		return Workspace{}, fmt.Errorf("%w: %d characters", ErrInvalidLockID, len(lockID))
+	}
+
+	// The manual lock check and the tool lock below run in separate
+	// transactions. A manual lock that commits between them is missed by this
+	// one request, the same as a job phase that started before the lock. The
+	// next request meets the lock.
+	if err := s.checkManualLock(ctx, id, jobID); err != nil {
+		return Workspace{}, err
 	}
 
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
@@ -753,7 +841,9 @@ type PendingState struct {
 
 // BeginState declares a new state version for the workspace. The caller must
 // hold the lock, or make an unlocked write that allow.Unlocked permits. The
-// content follows through Upload with the returned token.
+// content follows through Upload with the returned token. An unlocked write
+// fails with ErrLocked, matching manuallock.ErrLocked, while a manual lock
+// covers the workspace; a write under the lock of the caller is not refused.
 // It first sweeps the expired pending versions of the workspace with their
 // attempted content, then refuses with ErrTooManyPending when the workspace
 // still holds the maximum pending versions. The sweep is best effort: a
@@ -803,6 +893,16 @@ func (s *Service) BeginState(
 		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
 
+	// A write that holds no lock is not the write of a tool that holds its own
+	// lock, so a manual lock stops it. The check runs before the override is
+	// recorded: a refused write leaves no override entry. A write under the lock
+	// of the caller is never refused here.
+	if unlocked {
+		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
+			return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, lockErr)
+		}
+	}
+
 	if recordErr := recordOverrides(w, used, auth.Record); recordErr != nil {
 		return PendingState{}, recordErr
 	}
@@ -842,6 +942,41 @@ const (
 	// OverrideUnlocked is a declare into a unit that no principal holds.
 	OverrideUnlocked
 )
+
+// OverrideRefusedError is the error of an override that the unit, its namespace or
+// the caller's permissions do not allow. It matches ErrOverrideRefused and any
+// cause that it wraps, so a refused unlocked write still matches ErrNotLocked.
+// Adapters read Override to pick the action to record, never the text.
+type OverrideRefusedError struct {
+	// Override is the override that the refused write needed.
+	Override Override
+	msg      string
+	causes   []error
+}
+
+// NewOverrideRefusedError returns an OverrideRefusedError for override with the text msg.
+// The result matches ErrOverrideRefused and each of causes.
+func NewOverrideRefusedError(override Override, msg string, causes ...error) *OverrideRefusedError {
+	return &OverrideRefusedError{Override: override, msg: msg, causes: causes}
+}
+
+// Error returns the text of the refusal.
+func (e *OverrideRefusedError) Error() string { return e.msg }
+
+// Unwrap returns ErrOverrideRefused and the causes of the refusal.
+func (e *OverrideRefusedError) Unwrap() []error {
+	return append([]error{ErrOverrideRefused}, e.causes...)
+}
+
+// RefusedOverride returns the override of the first OverrideRefusedError in the
+// chain of err, and whether the chain holds one.
+func RefusedOverride(err error) (Override, bool) {
+	if refusal, ok := errors.AsType[*OverrideRefusedError](err); ok {
+		return refusal.Override, true
+	}
+
+	return 0, false
+}
 
 // declareOverrides checks the lock and the overrides of one declare. It returns
 // whether the declare is an unlocked write and the overrides it uses. A forced
@@ -897,10 +1032,13 @@ type pendingDeclare struct {
 
 // forcedRefusal names the action and the switches that allow a forced write.
 func forcedRefusal() error {
-	return fmt.Errorf(
-		"%w: a forced write needs the unit:write-forced action and both forced-write switches on",
+	return NewOverrideRefusedError(OverrideForced, fmt.Sprintf(
+		"%s: a forced write needs the forced-write switch on for the namespace "+
+			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
+			"and the permission to write forced state (`unit:write-forced`)",
 		ErrOverrideRefused,
-	)
+	))
 }
 
 // unlockedRefusal keeps the status of a refused declare on an unlocked unit
@@ -910,11 +1048,13 @@ func unlockedRefusal(lockErr error) error {
 		return lockErr
 	}
 
-	return fmt.Errorf(
-		"%w: a write without the lock is refused; turn on the unlocked-write switch of the namespace and of the unit, "+
-			"and grant unit:write-unlocked",
+	return NewOverrideRefusedError(OverrideUnlocked, fmt.Sprintf(
+		"%s: a write without the lock needs the unlocked-write switch on for the namespace "+
+			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
+			"and the permission to write without the lock (`unit:write-unlocked`)",
 		lockErr,
-	)
+	), lockErr)
 }
 
 // Upload stores the content of a pending state version and makes it current.
@@ -2527,4 +2667,63 @@ func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy tim
 	}
 
 	return nil
+}
+
+// checkManualLock refuses a lock request on the workspace id while a manual
+// lock covers it. The error matches ErrLocked and manuallock.ErrLocked, and
+// names the holder and the reason of the manual lock.
+func (s *Service) checkManualLock(ctx context.Context, id ID, jobID string) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	return s.refuseManualLock(ctx, w, jobID)
+}
+
+// refuseManualLock is checkManualLock for a workspace that the caller has read.
+func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID string) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	l, err := s.manual.CoveringFor(ctx, collection.UnitRef{
+		Namespace: w.Ref.Namespace, Tool: InventoryTool, Name: w.Ref.Name.String(),
+	}, jobID)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of %s: %w", w.Ref, err)
+	}
+
+	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{Lock: l, Noun: "workspace", Name: w.Ref.String()})
+}
+
+// refuseRestoreUnderNamespaceLock returns an error that matches ErrLocked and
+// manuallock.ErrLocked while a manual lock covers the namespace ns, and nil when
+// there is no manual lock service or the namespace has no lock. A lock that
+// cannot be read refuses the restore: the check fails closed.
+func (s *Service) refuseRestoreUnderNamespaceLock(ctx context.Context, ns namespace.Name, id ID) error {
+	if s.manual == nil {
+		return nil
+	}
+
+	l, err := s.manual.NamespaceLock(ctx, ns)
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read manual lock of namespace %s: %w", ns, err)
+	}
+
+	return fmt.Errorf("%w: %w", ErrLocked, &manuallock.LockedError{
+		Lock: l, Noun: "workspace", Name: ns.String() + "/" + id.String(),
+	})
 }

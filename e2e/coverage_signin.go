@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/devcode"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -38,7 +41,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)
@@ -53,18 +56,29 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 
 	admin := coverageProviderAdmin(tb, st)
 
+	// A one-time code mounts the dev sign-in route, so the route table holds it.
+	code, _, err := devcode.Make(nil)
+	if err != nil {
+		tb.Fatalf("make dev sign-in code: %v", err)
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Workers:       nil,
 		TempAdmins:    nil,
 		Now:           nil,
 		Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{}, Logger: slog.New(slog.DiscardHandler),
 		Namespaces: coverageNamespaces(tb), Backups: nil, Restores: nil, Maintenance: coverageMaintenance{},
 		Metrics: coverageMetrics{}, Version: "test", Schema: coverageSchema{}, Journal: nil, Principals: principals,
 		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil, AuditChain: nil,
-		IPAllowlists: nil, SessionPolicy: nil,
+		IPAllowlists: nil, Gates: nil, SessionPolicy: nil,
 		SignIn: &serverapi.SignIn{
-			Sessions: sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
+			OnDevRefused: nil,
+			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
+			DevCode: code, DevAdmin: identity.Principal{}, //nolint:exhaustruct_v5 // The coverage test calls no route.
 		},
 		CheckpointEpochs: nil,
+		InstallationKind: installation.KindDev,
+		DenialLimiter:    nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler with the sign-in: %v", err)

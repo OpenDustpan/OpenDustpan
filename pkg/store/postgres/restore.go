@@ -72,8 +72,8 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 
 	out := make([]backup.RestoreRecord, 0, len(rows))
 
-	for _, row := range rows {
-		r, err := restoreRecord(row)
+	for i := range rows {
+		r, err := restoreRecord(rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -86,8 +86,6 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 
 // FinishRestore implements backup.RestoreRegistry: it moves the running
 // restore id to state with the error text and the end time.
-//
-//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
 func (s *Store) FinishRestore(
 	ctx context.Context, id backup.RestoreID, state backup.RestoreState, errText string, endedAt time.Time,
 ) (backup.RestoreRecord, error) {
@@ -184,6 +182,7 @@ func restoreRecord(row db.Restore) (backup.RestoreRecord, error) {
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
 		EndedAtMs:   codec.OptionalMillis(endedAt),
+		DevReport:   row.DevReport,
 	})
 }
 
@@ -245,7 +244,17 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
 		}
 
+		// The check covers the whole staging area, in the swap transaction,
+		// before the first rename.
+		if err := checkSwapDev(ctx, tx, staging); err != nil {
+			return err
+		}
+
 		previous := live + "_previous"
+
+		if err := lockRevocationJournal(ctx, tx, live); err != nil {
+			return err
+		}
 
 		if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
 			return fmt.Errorf("move live schema aside: %w", err)
@@ -255,22 +264,30 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("move staged schema live: %w", err)
 		}
 
-		return finishSwap(ctx, tx, live, previous, staging)
+		return s.finishSwap(ctx, tx, live, previous, staging)
 	})
 }
 
 // finishSwap ends the swap in tx: it keeps the audit chain state of this
 // installation, keeps the durable control tables of the live installation,
-// drops the schema previous and the control schema of the staging area, and
-// fences the restored schema live (see fenceRestored). The installation,
-// backups and restores tables live in the control schema, which the swap
-// never renames, so they stay across the swap with no copy.
-func finishSwap(ctx context.Context, tx pgx.Tx, live, previous, staging string) error {
+// applies the journaled revocations again, drops the schema previous and the
+// control schema of the staging area, and fences the restored schema live
+// (see fenceRestored). The installation, backups, restores and revocation
+// journal tables live in the control schema, which the swap never renames,
+// so they stay across the swap with no copy.
+func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, live, previous, staging string) error {
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
 		return err
 	}
 
 	if err := keepControlTables(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
+	// The restored access tables come from the backup. Apply again the
+	// revocations that ran in this stay in maintenance mode, so the swap does not
+	// bring back a session or a token that an operator ended.
+	if err := s.replayRevocations(ctx, tx, live); err != nil {
 		return err
 	}
 
@@ -326,6 +343,14 @@ const durableScheduleColumns = "name, interval_ms, next_run_at_ms, last_claimed_
 // of the control tables.
 const signInFailureColumns = "source, window_end_ms, count"
 
+// auditChainCheckColumns lists every column of audit_chain_check, for the
+// copy of the control tables.
+const auditChainCheckColumns = "id, checked_at_ms, invalid"
+
+// auditChainMarkColumns lists every column of audit_chain_mark, for the copy
+// of the control tables.
+const auditChainMarkColumns = "scope, epoch, sequence, marked_at_ms"
+
 // keepControlTables replaces the rows of the durable control tables in the
 // restored schema live with the rows of the schema previous, in tx. A
 // restore keeps the control tables of the live installation: the claim
@@ -339,11 +364,14 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 	stmts := []string{
 		"LOCK TABLE " + pgIdent(previous) + ".durable_operations, " + pgIdent(previous) +
 			".durable_steps, " + pgIdent(previous) + ".durable_schedules, " + pgIdent(previous) +
-			".sign_in_failures IN EXCLUSIVE MODE",
+			".sign_in_failures, " + pgIdent(previous) + ".audit_chain_check, " + pgIdent(previous) +
+			".audit_chain_mark IN EXCLUSIVE MODE",
 		"DELETE FROM " + pgIdent(live) + ".durable_steps",
 		"DELETE FROM " + pgIdent(live) + ".durable_operations",
 		"DELETE FROM " + pgIdent(live) + ".durable_schedules",
 		"DELETE FROM " + pgIdent(live) + ".sign_in_failures",
+		"DELETE FROM " + pgIdent(live) + ".audit_chain_check",
+		"DELETE FROM " + pgIdent(live) + ".audit_chain_mark",
 		"INSERT INTO " + pgIdent(live) + ".durable_operations (" + durableOperationColumns + ") SELECT " +
 			durableOperationColumns + " FROM " + pgIdent(previous) + ".durable_operations",
 		"INSERT INTO " + pgIdent(live) + ".durable_steps (operation_id, name, seq, result, done_at_ms)" +
@@ -352,6 +380,10 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 			durableScheduleColumns + " FROM " + pgIdent(previous) + ".durable_schedules",
 		"INSERT INTO " + pgIdent(live) + ".sign_in_failures (" + signInFailureColumns + ") SELECT " +
 			signInFailureColumns + " FROM " + pgIdent(previous) + ".sign_in_failures",
+		"INSERT INTO " + pgIdent(live) + ".audit_chain_check (" + auditChainCheckColumns + ") SELECT " +
+			auditChainCheckColumns + " FROM " + pgIdent(previous) + ".audit_chain_check",
+		"INSERT INTO " + pgIdent(live) + ".audit_chain_mark (" + auditChainMarkColumns + ") SELECT " +
+			auditChainMarkColumns + " FROM " + pgIdent(previous) + ".audit_chain_mark",
 	}
 
 	for _, stmt := range stmts {
