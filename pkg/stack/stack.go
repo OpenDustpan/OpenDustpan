@@ -183,6 +183,8 @@ type Store interface {
 	// while a mutating update of the stack runs, namespace.ErrNotFound if the
 	// namespace does not exist, namespace.ErrFenced if fence is stale, or
 	// audit.ErrInvalidEntry if e fails validation or names another namespace.
+	// While a manual lock covers the stack, its collection or its namespace,
+	// the error matches ErrUpdateConflict and manuallock.ErrLocked.
 	DeleteStack(
 		ctx context.Context,
 		ref Ref,
@@ -196,7 +198,9 @@ type Store interface {
 	// ErrUpdateConflict while a mutating update of the stack runs,
 	// namespace.ErrNotFound if the namespace does not exist,
 	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
-	// fails validation or names another namespace.
+	// fails validation or names another namespace. While a manual lock covers
+	// the stack, its collection or its namespace, the error matches
+	// ErrUpdateConflict and manuallock.ErrLocked.
 	ForceDeleteStack(ctx context.Context, ref Ref, fence namespace.Fence, d inventory.Deletion) error
 	DeletedStore
 	// UpdateStackTags replaces the tags of the stack identified by ref with
