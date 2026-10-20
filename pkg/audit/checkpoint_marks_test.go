@@ -142,7 +142,8 @@ func markedByA(t *testing.T) (checkpointFixture, *audit.Checkpoints) {
 }
 
 // TestCheckpointsMarkStopsSigningOnEveryInstance proves that a mismatch that
-// instance A finds stops signing on instance B, and that a new epoch ends it.
+// instance A finds stops signing of that scope on instance B and no other scope, and that a new
+// epoch ends it.
 func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
 	t.Parallel()
 
@@ -162,6 +163,8 @@ func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
 			t.Fatalf("objects while the mark stands: got %d, want %d", got, before)
 		}
 	})
+
+	t.Run("B signs another scope while the mark of acme stands", testMarkOtherScope)
 
 	t.Run("B fails the scope of the mark in a check", func(t *testing.T) {
 		t.Parallel()
@@ -188,6 +191,16 @@ func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
 			t.Fatalf("write of B in the new epoch: got %v, %v, want a checkpoint", wrote, err)
 		}
 	})
+}
+
+func testMarkOtherScope(t *testing.T) {
+	t.Parallel()
+
+	_, b := markedByA(t)
+
+	if wrote, err := b.Write(t.Context(), "beta", time.Unix(1_700_000_200, 0)); err != nil || !wrote {
+		t.Fatalf("write of B for another scope: got %v, %v, want a checkpoint", wrote, err)
+	}
 }
 
 // TestCheckpointsFailClosedWithoutTheMark proves that a mark that the store

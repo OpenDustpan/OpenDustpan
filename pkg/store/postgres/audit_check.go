@@ -54,14 +54,14 @@ func (s *Store) CheckState(ctx context.Context) (audit.CheckState, error) {
 }
 
 // SaveCheckResult implements audit.CheckStore in one transaction of one
-// statement. It touches no domain row, so the write can move onto the control
-// path of the store without a change to the statement.
+// statement on the control path: the check stores its result in maintenance
+// mode too.
 func (s *Store) SaveCheckResult(ctx context.Context, invalid int) error {
 	if invalid < 0 {
 		return fmt.Errorf("invalid count %d: %w", invalid, audit.ErrInvalidCheckState)
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		if err := q.SaveAuditChainCheckResult(ctx, int64(invalid)); err != nil {
 			return fmt.Errorf("save audit chain check result: %w", err)
 		}
@@ -77,7 +77,7 @@ func (s *Store) SaveCheckMark(ctx context.Context, mark audit.CheckMark) error {
 		return fmt.Errorf("audit chain check mark: %w", err)
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		err := q.SaveAuditChainCheckMark(ctx, db.SaveAuditChainCheckMarkParams{
 			Epoch: mark.Epoch, Scope: mark.Scope.String(), Sequence: mark.Sequence,
 		})

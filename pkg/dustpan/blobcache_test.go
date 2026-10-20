@@ -269,3 +269,33 @@ func doWithAuth(t *testing.T, f fixture, r authRequest) (int, string) {
 
 	return resp.StatusCode, string(data)
 }
+
+// TestNewServerChecksTheAuditChainInterval proves that NewServer refuses an
+// audit chain check interval of zero or less and accepts a positive one.
+func TestNewServerChecksTheAuditChainInterval(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		every   time.Duration
+		wantErr bool
+	}{
+		{name: "zero", every: 0, wantErr: true},
+		{name: "negative", every: -time.Second, wantErr: true},
+		{name: "positive", every: time.Minute, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+			opts := append(fullServerOptions(t, st, blobs, authn), dustpan.WithAuditChainCheckInterval(tt.every))
+
+			_, err := dustpan.NewServer(opts...)
+			if tt.wantErr != errors.Is(err, dustpan.ErrInvalidOption) || (!tt.wantErr && err != nil) {
+				t.Fatalf("NewServer with interval %s: err = %v, want invalid option = %t", tt.every, err, tt.wantErr)
+			}
+		})
+	}
+}

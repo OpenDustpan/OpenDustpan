@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // auditCheckEvery is the time between two checks in the cluster of the test:
@@ -92,6 +93,23 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// scopeObjects counts the checkpoints of scope in epoch 0 of the blob store.
+func scopeObjects(t *testing.T, store *fs.Store, scope namespace.Name) int {
+	t.Helper()
+
+	key, err := audit.CheckpointKey(0, scope, 1)
+	if err != nil {
+		t.Fatalf("checkpoint key: %v", err)
+	}
+
+	objects, err := store.List(t.Context(), key.String()[:strings.LastIndex(key.String(), "/")+1])
+	if err != nil {
+		t.Fatalf("list checkpoints of %s: %v", scope, err)
+	}
+
+	return len(objects)
+}
+
 // checkpointObjects counts the checkpoints of every scope in epoch 0 of the
 // blob store.
 func checkpointObjects(t *testing.T, store *fs.Store) int {
@@ -116,7 +134,8 @@ func checkpointObjects(t *testing.T, store *fs.Store) int {
 // TestAuditChainCheckRunsOnOneInstance proves, with two servers on one
 // PostgreSQL database, that the audit chain check runs once per tick, that
 // every server exports the same dustpan_audit_chain_invalid, and that a
-// mismatch that one server finds stops signing on the other.
+// mismatch that one server finds stops signing of that scope on the other,
+// while the other scopes keep signing.
 func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 	t.Parallel()
 
@@ -173,10 +192,8 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 		}
 	}
 
-	// Server 0 runs the checks alone. A checkpoint above the end of the log
-	// is a cut log: server 0 finds it and stores the mark.
-	c.Kill(t, 1)
-
+	// Both servers stay live. A checkpoint above the end of the log is a cut
+	// log: whichever server checks first finds it and stores the mark.
 	badKey, err := audit.CheckpointKey(0, "acme", 999_999)
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
@@ -190,42 +207,77 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 		return queryInt(t, c, "SELECT count(*) FROM audit_chain_check WHERE marked") == 1
 	})
 
-	// Server 1 starts after the mark, with no memory of it. Server 0 stops,
-	// so server 1 runs the next checks alone.
-	c.Restart(t, 1)
-	c.Kill(t, 0)
-
 	if err := blobs.Delete(t.Context(), badKey); err != nil {
 		t.Fatalf("delete bad checkpoint: %v", err)
 	}
 
-	before := checkpointObjects(t, blobs)
+	acmeBefore := checkMarkStopsOnlyAcme(t, c, blobs)
 
-	send(t, c, request{
-		server: 1, method: http.MethodPost, path: "/api/server/namespaces", body: `{"name":"later"}`,
-		want: http.StatusCreated,
-	})
+	// A server that starts after the mark has no memory of it.
+	c.Kill(t, 1)
+	c.Restart(t, 1)
 
 	ended := queryInt(t, c, "SELECT count(*) FROM durable_operations WHERE kind = $1 AND state = 'succeeded'",
 		"audit-chain-check")
 
-	eventually(t, "two checks of server 1 after the mark", func() bool {
+	eventually(t, "two more checks", func() bool {
 		return queryInt(t, c, "SELECT count(*) FROM durable_operations WHERE kind = $1 AND state = 'succeeded'",
 			"audit-chain-check") >= ended+2
 	})
 
-	if got := checkpointObjects(t, blobs); got != before {
-		t.Fatalf("checkpoints after the checks of server 1 = %d, want %d: the mark stops signing", got, before)
-	}
-
-	if got := invalidOn(t, c, 1); got == 0 {
-		t.Fatalf("server 1 exports %d invalid scopes, want the scopes that the mark stops", got)
+	if got := scopeObjects(t, blobs, "acme"); got != acmeBefore {
+		t.Fatalf("checkpoints of acme after a restart = %d, want %d", got, acmeBefore)
 	}
 
 	// Server 0 starts again and exports the same stored value.
+	c.Kill(t, 0)
 	c.Restart(t, 0)
 
-	eventually(t, "same value on both servers", func() bool {
-		return invalidOn(t, c, 0) == invalidOn(t, c, 1)
+	eventually(t, "one invalid scope on both servers after a restart", func() bool {
+		return invalidOn(t, c, 0) == 1 && invalidOn(t, c, 1) == 1
 	})
+}
+
+// checkMarkStopsOnlyAcme adds entries to acme and to @server after the mark of
+// acme, waits for two checks, and proves that no server signs acme, that
+// @server keeps signing, and that exactly one scope does not match on both
+// servers. It answers the count of acme checkpoints.
+func checkMarkStopsOnlyAcme(t *testing.T, c *servertest.Cluster, blobs *fs.Store) int {
+	t.Helper()
+
+	acmeBefore := scopeObjects(t, blobs, "acme")
+	serverBefore := scopeObjects(t, blobs, audit.ServerScope)
+
+	send(t, c,
+		request{
+			server: 1, method: http.MethodPost, path: "/api/stacks/acme/web", body: `{"stackName":"after"}`,
+			want: http.StatusOK,
+		},
+		request{
+			server: 0, method: http.MethodPost, path: "/api/server/namespaces", body: `{"name":"later"}`,
+			want: http.StatusCreated,
+		})
+
+	ended := queryInt(t, c, "SELECT count(*) FROM durable_operations WHERE kind = $1 AND state = 'succeeded'",
+		"audit-chain-check")
+
+	eventually(t, "two checks after the mark", func() bool {
+		return queryInt(t, c, "SELECT count(*) FROM durable_operations WHERE kind = $1 AND state = 'succeeded'",
+			"audit-chain-check") >= ended+2
+	})
+
+	if got := scopeObjects(t, blobs, "acme"); got != acmeBefore {
+		t.Fatalf("checkpoints of acme after the checks = %d, want %d: the mark stops signing of acme", got, acmeBefore)
+	}
+
+	eventually(t, "a checkpoint of another scope", func() bool {
+		return scopeObjects(t, blobs, audit.ServerScope) > serverBefore
+	})
+
+	// Exactly one scope does not match, on both servers: acme.
+	eventually(t, "one invalid scope on both servers", func() bool {
+		return invalidOn(t, c, 0) == 1 && invalidOn(t, c, 1) == 1
+	})
+
+	return acmeBefore
 }

@@ -252,7 +252,7 @@ func (m *ServerMetrics) IncAuditAppendFailure() {
 }
 
 // chainInvalidHelp is the help text of dustpan_audit_chain_invalid.
-const chainInvalidHelp = "Audit scopes whose chain check failed in the last scheduled check."
+const chainInvalidHelp = "Audit scopes whose chain or checkpoints did not match in the last scheduled check."
 
 // SetAuditChainInvalid sets the count of audit scopes whose chain check
 // failed in the last scheduled check, for a server that reads no stored
@@ -278,15 +278,24 @@ func (m *ServerMetrics) IncAuditChainCheckError() {
 	m.chain.checkErr.Inc()
 }
 
+// IncAuditChainReadError adds one to the count of scrapes that could not read
+// the stored check result. The gauge exports 1 for such a scrape, so this
+// counter tells a database fault from a scope that does not match.
+func (m *ServerMetrics) IncAuditChainReadError() {
+	m.chain.readErr.Inc()
+}
+
 // chainFamilies holds the audit chain families: the count of scopes whose
-// check failed, the count of checks that could not check every scope, and
-// the count of restores whose restored log failed the check.
+// check failed, the count of checks that could not check every scope, the
+// count of scrapes that could not read the stored result, and the count of
+// restores whose restored log failed the check.
 type chainFamilies struct {
 	// local is the count that SetAuditChainInvalid sets. source, when set,
 	// replaces it at scrape time.
 	local      atomic.Int64
 	source     atomic.Pointer[func() int]
 	checkErr   *Counter
+	readErr    *Counter
 	restoreBad *Counter
 }
 
@@ -305,6 +314,7 @@ func newChainFamilies(reg *Registry) *chainFamilies {
 		local:      atomic.Int64{},
 		source:     atomic.Pointer[func() int]{},
 		checkErr:   newChainCheckErrorCounter(reg),
+		readErr:    newChainReadErrorCounter(reg),
 		restoreBad: newRestoreCheckCounter(reg),
 	}
 
@@ -318,6 +328,19 @@ func newChainFamilies(reg *Registry) *chainFamilies {
 func newChainCheckErrorCounter(reg *Registry) *Counter {
 	c := reg.NewCounter("dustpan_audit_chain_check_errors_total",
 		"Audit chain checks that could not check every scope because a call failed.", nil, 1)
+
+	// The series starts at 0, so an alert on increase() sees the first
+	// error.
+	c.Add(0, []string{}...)
+
+	return c
+}
+
+// newChainReadErrorCounter registers dustpan_audit_chain_read_errors_total in
+// reg.
+func newChainReadErrorCounter(reg *Registry) *Counter {
+	c := reg.NewCounter("dustpan_audit_chain_read_errors_total",
+		"Scrapes that could not read the stored audit chain check result.", nil, 1)
 
 	// The series starts at 0, so an alert on increase() sees the first
 	// error.

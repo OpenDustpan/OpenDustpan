@@ -390,8 +390,9 @@ One instance runs each check, as the schedule `audit-chain-check`.
 The instance stores the result in the database.
 Each instance reads the stored result when Prometheus scrapes it, so all instances export the same value.
 `dustpan_audit_chain_invalid` holds the count of scopes whose chain or checkpoints do not match in the stored result.
-When an instance cannot read the stored result, it exports 1 and logs a warning.
+When an instance cannot read the stored result, it exports 1, adds one to `dustpan_audit_chain_read_errors_total` and logs a warning at most once each minute.
 A database fault never shows as a good chain.
+When `dustpan_audit_chain_read_errors_total` increases together with `dustpan_audit_chain_invalid`, look for a database fault before you look for tampering.
 When a database read, a blob read or a checkpoint write fails, the server does not check that scope.
 It logs a warning and adds one to `dustpan_audit_chain_check_errors_total`.
 Such a check does not lower `dustpan_audit_chain_invalid`.
@@ -455,7 +456,8 @@ A scope with a checkpoint that does not match counts in `dustpan_audit_chain_inv
 The server never signs a scope whose chain or checkpoints do not match.
 Once a checkpoint does not match, later checks fail until a new epoch starts.
 The instance that finds the mismatch stores a mark in the database.
-Every instance reads the mark before it signs, so a mismatch that one instance finds stops signing on all instances.
+Every instance reads the mark before it signs, so a mismatch that one instance finds stops signing of that scope on all instances.
+Other scopes keep signing and each gets its own check, so `dustpan_audit_chain_invalid` stays the count of scopes that do not match.
 The mark stays across a restart of any instance, and only a new epoch ends it.
 When an instance cannot read the mark, it signs nothing, counts the scope as invalid and logs the error.
 When an instance cannot store a mark, it keeps the mark in memory and signs nothing for that scope.
@@ -508,7 +510,7 @@ The server does not start when the file holds a line that is not a 32-byte Ed255
 
 ### Clear the alarm
 
-A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero, and the stored mark keeps every instance from signing.
+A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero, and the stored mark keeps every instance from signing that scope.
 First find the cause: compare the entries of the scope with your audit log sinks and with the backups.
 When you know the cause, start a new epoch.
 The server then checks only the checkpoints that it signs after this time.

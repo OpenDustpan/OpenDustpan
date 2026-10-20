@@ -703,7 +703,7 @@ func TestNewEpochAfterRestoreWritesItsEntryInMaintenance(t *testing.T) {
 	}
 
 	cps := audit.NewCheckpoints(audit.CheckpointsConfig{
-		Blobs: openTestBlobs(t), Entries: reader, Signer: newTestCheckpointSigner(t), Now: nil,
+		Blobs: openTestBlobs(t), Entries: reader, Signer: newTestCheckpointSigner(t), Marks: nil, Now: nil,
 	})
 
 	if err := state.SetState(t.Context(), maintenance.StateMaintenance); err != nil {

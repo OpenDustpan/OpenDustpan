@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -544,5 +545,44 @@ func RunAuditInMaintenance(t *testing.T, newStore func(t *testing.T) AuditMainte
 	late := s.CreateStack(ctx, newStack(ns.Name, "web", "late"), ns.Fence())
 	if !errors.Is(late, maintenance.ErrInMaintenance) {
 		t.Fatalf("write in maintenance mode: err = %v, want ErrInMaintenance", late)
+	}
+}
+
+// AuditCheckMaintenanceStore is the store that RunAuditCheckInMaintenance
+// needs: the check state port and the installation state port.
+type AuditCheckMaintenanceStore interface {
+	audit.CheckStore
+	maintenance.Store
+}
+
+// RunAuditCheckInMaintenance checks that the scheduled audit chain check can
+// save its result and its mark in maintenance mode: a refused save would hide
+// a mismatch that the check found.
+func RunAuditCheckInMaintenance(t *testing.T, newStore func(t *testing.T) AuditCheckMaintenanceStore) {
+	t.Helper()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); err != nil {
+		t.Fatalf("set installation state to maintenance: %v", err)
+	}
+
+	if err := s.SaveCheckResult(ctx, 2); err != nil {
+		t.Fatalf("save check result in maintenance mode: %v", err)
+	}
+
+	mark := audit.CheckMark{At: time.Now(), Scope: "acme", Sequence: 7, Epoch: 1}
+	if err := s.SaveCheckMark(ctx, mark); err != nil {
+		t.Fatalf("save check mark in maintenance mode: %v", err)
+	}
+
+	got, err := s.CheckState(ctx)
+	if err != nil {
+		t.Fatalf("read check state: %v", err)
+	}
+
+	if got.Invalid != 2 || got.Mark == nil || got.Mark.Scope != "acme" || got.Mark.Sequence != 7 {
+		t.Fatalf("check state after saves in maintenance mode = %+v, want invalid 2 and the mark of acme at 7", got)
 	}
 }

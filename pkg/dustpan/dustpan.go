@@ -1291,6 +1291,10 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, err
 	}
 
+	if err := checkAuditChainInterval(cfg.auditChainInterval); err != nil {
+		return baseurl.Resolver{}, err
+	}
+
 	if cfg.secretWrapper == nil {
 		return baseurl.Resolver{}, fmt.Errorf(
 			"%w: WithSecretWrapper: the server needs a key-encryption key to seal OpenTofu state and "+

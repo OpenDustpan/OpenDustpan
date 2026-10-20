@@ -566,8 +566,8 @@ func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error
 // another hash, it answers false and an error that wraps
 // ErrCheckpointMismatch, and later checks of the scope fail until a new
 // epoch starts. When the scope failed to match before in this epoch, or
-// another instance stored a mark in this epoch, it signs nothing and answers
-// false and an error that wraps ErrCheckpointMismatch. The same holds when
+// another instance stored a mark of scope in this epoch, it signs nothing
+// and answers false and an error that wraps ErrCheckpointMismatch. The same holds when
 // the stored mark cannot be read: a failed read denies. It lists the stored
 // checkpoints first and reads the last entry second. The log only grows, so
 // a stored checkpoint above the last entry then means a cut log, never a
@@ -599,7 +599,7 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 		return false, fmt.Errorf("%w: %w", ErrCheckpointMismatch, err)
 	}
 
-	if mark != nil {
+	if mark != nil && mark.Scope == scope {
 		return false, fmt.Errorf("audit checkpoint of %s at %d does not match, signing stops: %w",
 			mark.Scope, mark.Sequence, ErrCheckpointMismatch)
 	}

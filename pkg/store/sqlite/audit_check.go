@@ -55,9 +55,8 @@ func (s *Store) CheckState(ctx context.Context) (audit.CheckState, error) {
 	return state, nil
 }
 
-// SaveCheckResult implements audit.CheckStore in one transaction. It touches
-// no domain row, so the write can move onto the control path of the store
-// without a change to the statement.
+// SaveCheckResult implements audit.CheckStore in one transaction on the
+// control path: the check stores its result in maintenance mode too.
 func (s *Store) SaveCheckResult(ctx context.Context, invalid int) error {
 	if invalid < 0 {
 		return fmt.Errorf("invalid count %d: %w", invalid, audit.ErrInvalidCheckState)
@@ -66,7 +65,7 @@ func (s *Store) SaveCheckResult(ctx context.Context, invalid int) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the clock of the store: %w", err)
@@ -91,7 +90,7 @@ func (s *Store) SaveCheckMark(ctx context.Context, mark audit.CheckMark) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inControlTx(ctx, func(q *db.Queries) error {
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the clock of the store: %w", err)

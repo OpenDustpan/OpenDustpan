@@ -1,17 +1,21 @@
 package dustpan
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -199,4 +203,132 @@ func TestAuditChainGaugeReadsTheStoredResult(t *testing.T) {
 	if got := metricLine(t, b); !strings.Contains(got, "dustpan_audit_chain_invalid 1") {
 		t.Fatalf("metrics with a store that cannot be read:\n%s\nwant one invalid scope: a failed read denies", got)
 	}
+}
+
+// TestAuditChainReadErrorsAreCountedAndLimited proves that a scrape that
+// cannot read the stored result exports 1, adds one to
+// dustpan_audit_chain_read_errors_total, and logs at most one warning each
+// minute.
+func TestAuditChainReadErrorsAreCountedAndLimited(t *testing.T) {
+	t.Parallel()
+
+	chain := newInstanceChain(t, openScheduleChainStore(t))
+
+	var logs bytes.Buffer
+
+	at := time.Unix(1_700_000_000, 0)
+	chain.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	chain.now = func() time.Time { return at }
+	chain.checks = failingChecks{}
+
+	for range 3 {
+		metricLine(t, chain)
+	}
+
+	got := metricLine(t, chain)
+
+	for _, want := range []string{"dustpan_audit_chain_invalid 1", "dustpan_audit_chain_read_errors_total 4"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metrics after 4 failed reads:\n%s\nwant %q", got, want)
+		}
+	}
+
+	if n := strings.Count(logs.String(), "read the stored result"); n != 1 {
+		t.Fatalf("warnings within one minute = %d, want 1:\n%s", n, logs.String())
+	}
+
+	at = at.Add(2 * auditChainReadWarnEvery)
+
+	metricLine(t, chain)
+
+	if n := strings.Count(logs.String(), "read the stored result"); n != 2 {
+		t.Fatalf("warnings after two minutes = %d, want 2:\n%s", n, logs.String())
+	}
+}
+
+// countingEntries counts the chain checks of the entries that it wraps, and
+// signals on first when the first check runs.
+type countingEntries struct {
+	audit.Store
+
+	checks *atomic.Int64
+	first  chan struct{}
+	once   *sync.Once
+}
+
+func (c countingEntries) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
+	c.checks.Add(1)
+	c.once.Do(func() { close(c.first) })
+
+	return c.Store.Check(ctx, ns)
+}
+
+// TestAuditChainChecksOnceAtStartWithADurableStore proves that an instance
+// with a durable store checks once at start and runs no loop of its own: the
+// schedule runs the later checks. Without a durable store the loop of the
+// instance keeps checking.
+func TestAuditChainChecksOnceAtStartWithADurableStore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		setup   func(*Server)
+		name    string
+		durable bool
+	}{
+		{name: "with a durable store", durable: true, setup: func(*Server) {}},
+		{name: "without a durable store", durable: false, setup: func(s *Server) { s.durable = nil }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := countStartChecks(t, tt.setup)
+
+			if tt.durable && got != 1 {
+				t.Fatalf("chain checks with a durable store = %d, want 1", got)
+			}
+
+			if !tt.durable && got < 2 {
+				t.Fatalf("chain checks without a durable store = %d, want 2 or more", got)
+			}
+		})
+	}
+}
+
+// countStartChecks starts the chain checks of one server with a check
+// interval of 20 ms, after setup changed it, lets ten intervals pass after the first check, and
+// answers the count of chain checks.
+func countStartChecks(t *testing.T, setup func(*Server)) int64 {
+	t.Helper()
+
+	st := openScheduleChainStore(t)
+	chain := newInstanceChain(t, st)
+	runs, first := &atomic.Int64{}, make(chan struct{})
+	chain.entries = countingEntries{Store: chain.entries, checks: runs, first: first, once: &sync.Once{}}
+
+	srv := testServer(st.DurableOperations(), "a")
+	srv.chain, srv.auditChainEvery = chain, 20*time.Millisecond
+
+	setup(srv)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	wait := srv.startChainChecks(ctx)
+
+	select {
+	case <-first:
+	case <-time.After(scheduleTestDeadline):
+		t.Fatal("no chain check after the start")
+	}
+
+	// A loop of this instance would check again within these intervals.
+	select {
+	case <-ctx.Done():
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	cancel()
+	wait()
+
+	return runs.Load()
 }
