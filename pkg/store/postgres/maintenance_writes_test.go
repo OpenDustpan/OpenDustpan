@@ -133,3 +133,20 @@ func TestSinkCursorAdvancesInMaintenance(t *testing.T) {
 		return open(t, base)
 	})
 }
+
+// TestAuditCheckSavesPassInMaintenance proves that the scheduled audit chain
+// check can save its result and its mark in maintenance mode.
+func TestAuditCheckSavesPassInMaintenance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL suite", envURL)
+	}
+
+	storetest.RunAuditCheckInMaintenance(t, func(t *testing.T) storetest.AuditCheckMaintenanceStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
