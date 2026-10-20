@@ -36,21 +36,34 @@ type guardOp struct {
 	name string
 	// disabled tells that the principal is disabled before the call.
 	disabled bool
-	run      func(ctx context.Context, svc *principal.Service, caller identity.Principal, pid, gid string) error
+	// member tells that the principal is a member of the group before the call.
+	member bool
+	run    func(ctx context.Context, svc *principal.Service, caller identity.Principal, pid, gid string) error
 }
 
 func guardOps() []guardOp {
 	e := testEntry()
 
 	return []guardOp{
-		{"enable", true, func(ctx context.Context, s *principal.Service, c identity.Principal, pid, _ string) error {
-			return s.EnablePrincipal(ctx, e, c, pid)
-		}},
-		{"disable", false, func(ctx context.Context, s *principal.Service, c identity.Principal, pid, _ string) error {
-			return s.DisablePrincipal(ctx, e, c, pid)
-		}},
+		{
+			"enable",
+			true,
+			false,
+			func(ctx context.Context, s *principal.Service, c identity.Principal, pid, _ string) error {
+				return s.EnablePrincipal(ctx, e, c, pid)
+			},
+		},
+		{
+			"disable",
+			false,
+			false,
+			func(ctx context.Context, s *principal.Service, c identity.Principal, pid, _ string) error {
+				return s.DisablePrincipal(ctx, e, c, pid)
+			},
+		},
 		{
 			"delete principal",
+			false,
 			false,
 			func(ctx context.Context, s *principal.Service, c identity.Principal, pid, _ string) error {
 				return s.DeletePrincipal(ctx, e, c, pid)
@@ -59,12 +72,14 @@ func guardOps() []guardOp {
 		{
 			"delete group",
 			false,
+			false,
 			func(ctx context.Context, s *principal.Service, c identity.Principal, _, gid string) error {
 				return s.DeleteGroup(ctx, e, c, gid)
 			},
 		},
 		{
 			"add member",
+			false,
 			false,
 			func(ctx context.Context, s *principal.Service, c identity.Principal, pid, gid string) error {
 				_, err := s.AddMember(ctx, e, c, gid, pid)
@@ -75,6 +90,7 @@ func guardOps() []guardOp {
 		{
 			"remove member",
 			false,
+			true,
 			func(ctx context.Context, s *principal.Service, c identity.Principal, pid, gid string) error {
 				return s.RemoveMember(ctx, e, c, gid, pid)
 			},
@@ -124,6 +140,12 @@ func runGuardOp(t *testing.T, op guardOp, caller identity.Principal) error {
 	if op.disabled {
 		if err := fx.svc.DisablePrincipal(t.Context(), testEntry(), callerOf(true), fx.pid); err != nil {
 			t.Fatalf("prepare disable: %v", err)
+		}
+	}
+
+	if op.member {
+		if _, err := fx.svc.AddMember(t.Context(), testEntry(), callerOf(true), fx.gid, fx.pid); err != nil {
+			t.Fatalf("prepare member: %v", err)
 		}
 	}
 
