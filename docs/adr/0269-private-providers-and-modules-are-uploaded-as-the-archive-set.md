@@ -1,6 +1,6 @@
 # 269. Private providers and modules: own providers first, uploaded as the archive set
 
-Status: accepted · 2026-10-18 · decided by the project owner. The open design questions are in RFC 101
+Status: accepted · 2026-10-18 · decisions 1 and 2 by the project owner, decisions 3 to 11 by the product manager (2026-10-20). One design question is open in RFC 101
 
 ## Context
 
@@ -14,9 +14,11 @@ Those ADRs do not say which artifacts come first, or how an artifact gets
 into OpenDustpan. The project owner decided both on 2026-10-18. The decisions
 are in the section "Decided" of issue 949.
 
-This ADR records only those decisions. It does not decide the routes, the
-storage, the signing keys, the authorization actions, the limits or the
-module sources. RFC 101 holds those questions.
+Decisions 1 and 2 are the owner's. Decisions 3 to 11 answer the questions of
+RFC 101 that the product manager decided under the owner's delegation of 20
+October 2026. This ADR does not decide the routes, the authorization actions,
+the limits or the OpenPGP library. RFC 101 holds those questions, and the
+library stays open for the owner.
 
 ## Decision
 
@@ -32,11 +34,35 @@ module sources. RFC 101 holds those questions.
    > archive set of ADR 177. Checksums and the signature are checked at
    > upload.
 
+3. **Order of the slices.** The first slice serves providers by upload.
+   Decided by the owner (RFC 101 question 1).
+
+Decisions 4 to 11 are decided by the product manager under the owner's delegation of 20 October 2026.
+
+4. **Address host.** A private address has the host of the server and the
+   namespace of OpenDustpan. The adapter refuses every host except the
+   configured host, compared exactly with the configuration. Only a name in
+   the registry-safe subset can publish: lowercase letters, digits and single
+   dashes, with no dash at the start or the end (RFC 101 question 2).
+5. **No shared code with the package mirror yet.** The first archive check
+   stays in the registry. It moves when a second package needs it (question 3).
+6. **No cross-namespace reads.** A namespace never reads the registry of
+   another namespace (question 4).
+7. **No re-signing.** The server does not sign what it serves (question 5).
+8. **Module sources.** Upload first, git tags second (question 7).
+9. **Trusted keys.** Each namespace registers its own signing keys
+   (question 8).
+10. **Allowlist of SHA-256 sums.** It belongs to the curation of public
+    packages, not to this registry (question 9).
+11. **Life cycle.** A "yank" takes a version out of the index and keeps it
+    downloadable, so a lock file still works. A "revoke" blocks the version.
+    Both keep the record (question 10).
+
 ## Consequences
 
 - The first served artifact is a provider that a team built. The upstream
   proxy and the curation of public packages (RFC 10, RFC 93) come later.
-- A feature has no OCI path, no git tag source and no signature policy from
-  this ADR. RFC 101 proposes them, and each one needs its own decision.
+- A feature has no OCI path and no signature library from this ADR. The
+  OpenPGP library needs its own decision by the owner (RFC 101 question 6).
 - A feature of the registry has a REST API (ADR 17), and the upload is part
   of it. No feature works only through a CLI or a configuration file.

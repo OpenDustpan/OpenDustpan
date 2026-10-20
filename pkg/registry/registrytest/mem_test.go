@@ -23,10 +23,11 @@ type key struct {
 type mem struct {
 	fences   map[namespace.Name]int64
 	releases map[key]registry.Release
+	entries  map[namespace.Name][]audit.Entry
 	mu       sync.Mutex
 }
 
-func (m *mem) Publish(_ context.Context, r registry.Release, fence namespace.Fence, _ audit.Entry) error {
+func (m *mem) Publish(_ context.Context, r registry.Release, fence namespace.Fence, e audit.Entry) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
@@ -49,6 +50,7 @@ func (m *mem) Publish(_ context.Context, r registry.Release, fence namespace.Fen
 
 	r.Archives = slices.Clone(r.Archives)
 	m.releases[k] = r
+	m.entries[r.Address.Namespace] = append(m.entries[r.Address.Namespace], e)
 
 	return nil
 }
@@ -70,7 +72,15 @@ func (m *mem) Get(_ context.Context, addr registry.Address, version string) (reg
 		return registry.Release{}, registry.ErrNotFound
 	}
 
-	return r, nil
+	return clone(r), nil
+}
+
+// clone copies the slice of a release, so a caller never shares the memory of
+// the store.
+func clone(r registry.Release) registry.Release {
+	r.Archives = slices.Clone(r.Archives)
+
+	return r
 }
 
 func (m *mem) List(_ context.Context, addr registry.Address) ([]registry.Release, error) {
@@ -85,11 +95,11 @@ func (m *mem) List(_ context.Context, addr registry.Address) ([]registry.Release
 
 	for k := range m.releases {
 		if k.addr == addr {
-			out = append(out, m.releases[k])
+			out = append(out, clone(m.releases[k]))
 		}
 	}
 
-	slices.SortFunc(out, func(a, b registry.Release) int { return strings.Compare(a.Version, b.Version) })
+	slices.SortFunc(out, func(a, b registry.Release) int { return registry.CompareVersions(a.Version, b.Version) })
 
 	return out, nil
 }
@@ -131,7 +141,12 @@ func TestMemStore(t *testing.T) {
 	t.Parallel()
 
 	registrytest.RunStore(t, func(*testing.T) registrytest.Harness {
-		m := &mem{fences: map[namespace.Name]int64{}, releases: map[key]registry.Release{}, mu: sync.Mutex{}}
+		m := &mem{
+			fences:   map[namespace.Name]int64{},
+			releases: map[key]registry.Release{},
+			entries:  map[namespace.Name][]audit.Entry{},
+			mu:       sync.Mutex{},
+		}
 
 		return registrytest.Harness{
 			Store: m,
@@ -142,6 +157,12 @@ func TestMemStore(t *testing.T) {
 				m.fences[name] = 1
 
 				return namespace.Fence{Namespace: name, FailoverVersion: 1}
+			},
+			Entries: func(_ *testing.T, name namespace.Name) []audit.Entry {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				return slices.Clone(m.entries[name])
 			},
 		}
 	})

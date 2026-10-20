@@ -30,7 +30,12 @@ type VerifierFactory func(t *testing.T) VerifierHarness
 //   - a changed byte of Signature returns ErrBadSignature.
 //   - a signature by OtherKey with only Key trusted returns ErrUntrustedKey.
 //   - an empty key list returns ErrUntrustedKey.
-//   - an expired or revoked key returns ErrBadSignature.
+//   - an expired or revoked key returns ErrBadSignature, checked at the time
+//     of the call.
+//   - a signature by a subkey returns the fingerprint of the primary key, and
+//     the fingerprint is one of the fingerprints in the key list.
+//   - a SHA-1 signature, a DSA key and an RSA key of less than 2048 bits each
+//     return ErrBadSignature.
 //   - a canceled context returns an error and never a fingerprint.
 func RunVerifier(t *testing.T, newHarness VerifierFactory) {
 	t.Helper()

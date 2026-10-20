@@ -7,13 +7,20 @@
 // keeps the names and the SHA-256 hashes. The bytes are blobs in the blob
 // port. The package knows no wire format of a tool. The adapter of each tool
 // builds its own JSON from a release.
+//
+// The ports and the blob keys are shared by every tool. The Release shape is
+// not: it fits the providers and the modules of OpenTofu. A mirror of Pulumi
+// plugins needs its own release shape later.
 package registry
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -45,8 +52,9 @@ const (
 	MaxNameLength = 64
 	// MaxFileNameLength is the longest file name of an archive.
 	MaxFileNameLength = 255
-	// MaxArchives is the most archives in one release.
-	MaxArchives = 16
+	// MaxArchives is the most archives in one release. A provider has one
+	// archive for each platform.
+	MaxArchives = 64
 	// MaxVersionLength is the longest version.
 	MaxVersionLength = 64
 )
@@ -61,14 +69,23 @@ const (
 )
 
 var (
-	nameRE    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
 	versionRE = regexp.MustCompile(
 		`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`,
 	)
 	fileNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	sha256RE   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	platformRE = regexp.MustCompile(`^[a-z0-9]+_[a-z0-9]+$`)
+	// slugRE is the registry-safe subset of a name: lowercase letters and
+	// digits, with single dashes inside. A name outside it cannot publish.
+	slugRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	// systemRE is the target system of a module. OpenTofu allows only ASCII
+	// letters and digits there.
+	systemRE      = regexp.MustCompile(`^[a-z0-9]{1,64}$`)
+	fingerprintRE = regexp.MustCompile(`^[0-9A-F]{40,64}$`)
+	uploadIDRE    = regexp.MustCompile(`^[a-z0-9]{20,64}$`)
 )
+
+const slugRule = "use lowercase letters, digits and single dashes, with no dash at the start or the end"
 
 // Address names a provider or a module in a namespace. The host of the
 // address is the host of the server and is not stored.
@@ -84,9 +101,20 @@ type Address struct {
 
 // Validate reports whether a holds an allowed namespace, kind, name and
 // system. It uses an allowlist and returns ErrInvalid otherwise.
+//
+// The namespace and the name use only the registry-safe subset: lowercase
+// letters, digits and single dashes, with no dash at the start or the end,
+// at most 64 characters. A namespace whose name is outside the subset cannot
+// publish. The check does not fold case, so "Acme" and "acme" never meet.
+// A module name refuses "_" too, although OpenTofu allows it. The system of a
+// module is lowercase letters and digits only, as OpenTofu asks.
 func (a Address) Validate() error {
 	if _, err := namespace.ParseName(a.Namespace.String()); err != nil {
 		return fmt.Errorf("%w: namespace: %w", ErrInvalid, err)
+	}
+
+	if !validSlug(a.Namespace.String()) {
+		return fmt.Errorf("%w: namespace %q cannot publish: %s", ErrInvalid, a.Namespace, slugRule)
 	}
 
 	switch a.Kind {
@@ -95,24 +123,29 @@ func (a Address) Validate() error {
 			return fmt.Errorf("%w: a provider has no system", ErrInvalid)
 		}
 	case KindModule:
-		if !nameRE.MatchString(a.System) {
-			return fmt.Errorf("%w: system", ErrInvalid)
+		if !systemRE.MatchString(a.System) {
+			return fmt.Errorf("%w: system: use 1 to 64 lowercase letters and digits", ErrInvalid)
 		}
 	default:
 		return fmt.Errorf("%w: kind", ErrInvalid)
 	}
 
-	if !nameRE.MatchString(a.Name) {
-		return fmt.Errorf("%w: name", ErrInvalid)
+	if !validSlug(a.Name) {
+		return fmt.Errorf("%w: name %q: %s", ErrInvalid, a.Name, slugRule)
 	}
 
 	return nil
 }
 
+// validSlug reports whether s is in the registry-safe subset.
+func validSlug(s string) bool {
+	return len(s) <= MaxNameLength && slugRE.MatchString(s)
+}
+
 // ValidateVersion reports whether v is a semantic version without build
-// metadata. It returns ErrInvalid otherwise.
+// metadata, with numbers that fit 64 bits. It returns ErrInvalid otherwise.
 func ValidateVersion(v string) error {
-	if len(v) > MaxVersionLength || !versionRE.MatchString(v) {
+	if _, _, ok := splitVersion(v); !ok {
 		return fmt.Errorf("%w: version %q", ErrInvalid, v)
 	}
 
@@ -133,18 +166,46 @@ type Archive struct {
 	Size int64
 }
 
-// BlobKey returns the blob key of the bytes with the given SHA-256 in
-// namespace ns. A namespace never reads the blob of another namespace.
-func BlobKey(ns namespace.Name, sha256 string) (blob.Key, error) {
-	if _, err := namespace.ParseName(ns.String()); err != nil {
-		return "", fmt.Errorf("%w: namespace: %w", ErrInvalid, err)
+// BlobKey returns the content key of the bytes with the given SHA-256 in the
+// namespace with ID id: "namespaces/<id>/registry/sha256/<hash>". The key
+// starts with the prefix of the namespace, so the scoped view of the blob
+// port serves it and refuses the key of another namespace.
+//
+// A blob under this key exists only after a publish passed every check, and
+// a caller reads it only through a published release. The upload writes to
+// StagingKey first, and the server moves the bytes to this key last.
+func BlobKey(id namespace.ID, sha256 string) (blob.Key, error) {
+	if _, err := namespace.ParseID(string(id)); err != nil {
+		return "", fmt.Errorf("%w: namespace ID: %w", ErrInvalid, err)
 	}
 
 	if !sha256RE.MatchString(sha256) {
 		return "", fmt.Errorf("%w: sha256", ErrInvalid)
 	}
 
-	key, err := blob.ParseKey("registry/" + ns.String() + "/sha256/" + sha256)
+	key, err := blob.ParseKey("namespaces/" + string(id) + "/registry/sha256/" + sha256)
+	if err != nil {
+		return "", fmt.Errorf("%w: blob key: %w", ErrInvalid, err)
+	}
+
+	return key, nil
+}
+
+// StagingKey returns the key where an upload streams its bytes before any
+// check: "namespaces/<id>/registry/staging/<upload>". The upload is a random
+// token of 20 to 64 lowercase letters and digits. The server computes the
+// SHA-256 while it writes, and it never serves a staging key. A sweeper
+// removes a staging blob that no publish moved, after a grace period.
+func StagingKey(id namespace.ID, upload string) (blob.Key, error) {
+	if _, err := namespace.ParseID(string(id)); err != nil {
+		return "", fmt.Errorf("%w: namespace ID: %w", ErrInvalid, err)
+	}
+
+	if !uploadIDRE.MatchString(upload) {
+		return "", fmt.Errorf("%w: upload token", ErrInvalid)
+	}
+
+	key, err := blob.ParseKey("namespaces/" + string(id) + "/registry/staging/" + upload)
 	if err != nil {
 		return "", fmt.Errorf("%w: blob key: %w", ErrInvalid, err)
 	}
@@ -161,8 +222,16 @@ type Release struct {
 	SumsFile string
 	// SumsSHA256 is the SHA-256 of the checksums file. It is empty for a module.
 	SumsSHA256 string
-	// KeyFingerprint is the fingerprint of the key that made the verified
-	// signature. It is empty when the release has no signature.
+	// SignatureFile is the name of the detached signature file of the
+	// checksums file. It is required on a provider when KeyFingerprint is set,
+	// and empty otherwise.
+	SignatureFile string
+	// SignatureSHA256 is the SHA-256 of the signature file. It is required on
+	// a provider when KeyFingerprint is set, and empty otherwise.
+	SignatureSHA256 string
+	// KeyFingerprint is the fingerprint of the primary key that made the
+	// verified signature, in uppercase hex. It is empty when the release has
+	// no signature.
 	KeyFingerprint string
 	// PublishedBy is the ID of the principal that published the release.
 	PublishedBy string
@@ -170,7 +239,8 @@ type Release struct {
 }
 
 // Validate reports whether r is complete and allowed. A provider needs at
-// least one archive with a platform, and the checksums file. A module needs
+// least one archive with a platform, and the checksums file. A provider with
+// a KeyFingerprint needs the signature file and its hash too. A module needs
 // exactly one archive with no platform. It returns ErrInvalid otherwise.
 func (r Release) Validate() error {
 	if err := r.Address.Validate(); err != nil {
@@ -196,13 +266,14 @@ func (r Release) Validate() error {
 	return r.validateProvider()
 }
 
-// SameContent reports whether r and other hold the same address, version and
-// hashes. The publisher and the time do not count. Publish uses it to tell a
+// SameContent reports whether r and other hold the same address, version,
+// hashes, signature and key fingerprint. The publisher and the time do not count. Publish uses it to tell a
 // repeat from a conflict.
 func (r Release) SameContent(other Release) bool {
 	if r.Address != other.Address || r.Version != other.Version ||
 		r.SumsFile != other.SumsFile || r.SumsSHA256 != other.SumsSHA256 ||
-		len(r.Archives) != len(other.Archives) {
+		r.SignatureFile != other.SignatureFile || r.SignatureSHA256 != other.SignatureSHA256 ||
+		r.KeyFingerprint != other.KeyFingerprint || len(r.Archives) != len(other.Archives) {
 		return false
 	}
 
@@ -227,8 +298,9 @@ func (r Release) SameContent(other Release) bool {
 }
 
 func (r Release) validateModule() error {
-	if len(r.Archives) != 1 || r.SumsFile != "" || r.SumsSHA256 != "" {
-		return fmt.Errorf("%w: a module has one archive and no checksums file", ErrInvalid)
+	if len(r.Archives) != 1 || r.SumsFile != "" || r.SumsSHA256 != "" ||
+		r.SignatureFile != "" || r.SignatureSHA256 != "" || r.KeyFingerprint != "" {
+		return fmt.Errorf("%w: a module has one archive, no checksums file and no signature", ErrInvalid)
 	}
 
 	if r.Archives[0].Platform != "" {
@@ -244,7 +316,15 @@ func (r Release) validateProvider() error {
 		return fmt.Errorf("%w: checksums file", ErrInvalid)
 	}
 
-	seenName := map[string]bool{}
+	if err := r.validateSignature(); err != nil {
+		return err
+	}
+
+	seenName := map[string]bool{r.SumsFile: true}
+	if r.SignatureFile != "" {
+		seenName[r.SignatureFile] = true
+	}
+
 	seenPlatform := map[string]bool{}
 
 	for _, a := range r.Archives {
@@ -256,12 +336,35 @@ func (r Release) validateProvider() error {
 			return fmt.Errorf("%w: archive %q: platform", ErrInvalid, a.FileName)
 		}
 
+		// An archive never has the name of the checksums file or of the
+		// signature file, and two archives never share a name or a platform.
 		if seenName[a.FileName] || seenPlatform[a.Platform] {
-			return fmt.Errorf("%w: duplicate archive %q", ErrInvalid, a.FileName)
+			return fmt.Errorf("%w: duplicate or reserved archive name %q", ErrInvalid, a.FileName)
 		}
 
 		seenName[a.FileName] = true
 		seenPlatform[a.Platform] = true
+	}
+
+	return nil
+}
+
+// validateSignature checks the signature fields of a provider. The file, its
+// hash and the fingerprint are all set or all empty, because a stored
+// signature names the key that verified it.
+func (r Release) validateSignature() error {
+	set := r.SignatureFile != "" || r.SignatureSHA256 != "" || r.KeyFingerprint != ""
+	if !set {
+		return nil
+	}
+
+	if !fileNameRE.MatchString(r.SignatureFile) || len(r.SignatureFile) > MaxFileNameLength ||
+		!sha256RE.MatchString(r.SignatureSHA256) || !fingerprintRE.MatchString(r.KeyFingerprint) {
+		return fmt.Errorf("%w: signature file, hash and key fingerprint are all required together", ErrInvalid)
+	}
+
+	if r.SignatureFile == r.SumsFile {
+		return fmt.Errorf("%w: the signature file has the name of the checksums file", ErrInvalid)
 	}
 
 	return nil
@@ -278,4 +381,85 @@ func validateArchive(a Archive) error {
 	}
 
 	return nil
+}
+
+// CompareVersions orders two valid versions by semantic version precedence:
+// the numbers compare as numbers, a version with a pre-release is lower than
+// the same version without one, and the pre-release identifiers compare one
+// by one (numbers as numbers, and a number is lower than text). It returns a
+// negative number, zero or a positive number. It returns 0 for an invalid
+// version, so a caller validates first.
+func CompareVersions(a, b string) int {
+	ac, ap, aok := splitVersion(a)
+	bc, bp, bok := splitVersion(b)
+
+	if !aok || !bok {
+		return 0
+	}
+
+	for i := range ac {
+		if c := cmp.Compare(ac[i], bc[i]); c != 0 {
+			return c
+		}
+	}
+
+	switch {
+	case ap == "" && bp == "":
+		return 0
+	case ap == "":
+		return 1
+	case bp == "":
+		return -1
+	}
+
+	return comparePre(strings.Split(ap, "."), strings.Split(bp, "."))
+}
+
+// splitVersion returns the three numbers and the pre-release of v.
+func splitVersion(v string) ([3]uint64, string, bool) {
+	var nums [3]uint64
+
+	if len(v) > MaxVersionLength || !versionRE.MatchString(v) {
+		return nums, "", false
+	}
+
+	core, pre, _ := strings.Cut(v, "-")
+
+	for i, part := range strings.Split(core, ".") {
+		n, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			// A number that does not fit 64 bits is not a version of this registry.
+			return nums, "", false
+		}
+
+		nums[i] = n
+	}
+
+	return nums, pre, true
+}
+
+func comparePre(a, b []string) int {
+	for i := range min(len(a), len(b)) {
+		an, aErr := strconv.ParseUint(a[i], 10, 64)
+		bn, bErr := strconv.ParseUint(b[i], 10, 64)
+
+		var c int
+
+		switch {
+		case aErr == nil && bErr == nil:
+			c = cmp.Compare(an, bn)
+		case aErr == nil:
+			c = -1
+		case bErr == nil:
+			c = 1
+		default:
+			c = strings.Compare(a[i], b[i])
+		}
+
+		if c != 0 {
+			return c
+		}
+	}
+
+	return cmp.Compare(len(a), len(b))
 }

@@ -7,11 +7,13 @@ created: 2026-10-20
 
 # RFC 101. A private registry for OpenTofu providers and modules
 
-Status: discussing. ADR 269 records the decisions of the project owner: own
-and team providers come first, and a team uploads them through the API as the
-archive set of ADR 177. ADR 257 decides the protocols. This RFC holds the
-rest: the order of the first slices, the routes, the signature check, the
-module sources, the authorization actions and the limits. The only code is
+Status: discussing. ADR 269 records the decisions of the project owner and of
+the product manager: own and team providers come first, and a team uploads
+them through the API as the archive set of ADR 177. ADR 257 decides the
+protocols. One question stays open for the owner: the OpenPGP library
+(question 6). This RFC holds the rest: the order of the first slices, the
+routes, the signature check, the module sources, the authorization actions and
+the limits. The only code is
 the types and the ports in `pkg/registry`, with a conformance suite. There is
 no route, no SQL and no new dependency.
 
@@ -67,10 +69,27 @@ Checked on 2026-10-20 against the pages named.
   public key first, and the version names the key. Each platform is created
   with its SHA-256 and file name, and then the binary is uploaded.
   This RFC describes what that product does. It copies none of its code.
-- **Not checked in this session.** The rules of Google Artifact Registry and
-  AWS CodeArtifact for immutable versions, and the numbered controls named in
-  the benchmark below, are from the author's reading. The reviewer checks them
-  before an ADR quotes them.
+- **Address rules of OpenTofu** (<https://github.com/opentofu/registry-address>,
+  `module.go` and `provider.go`, read on 2026-10-20). A module namespace and a
+  module name match `^[0-9A-Za-z](?:[0-9A-Za-z-_]{0,62}[0-9A-Za-z])?$`. The
+  `system` part of a module matches `^[0-9a-z]{1,64}$`: no dash, no
+  underscore, no capital letter. A provider part has no dot and no double
+  dash, and it is folded to lowercase. OpenTofu keeps the case of a module
+  name, so a registry that folds case can collide with a registry that does
+  not.
+- **AWS CodeArtifact** (<https://docs.aws.amazon.com/codeartifact/latest/ug/packages-overview.html>,
+  read on 2026-10-20). A publish of an asset that exists with identical
+  content succeeds, because it is idempotent. A publish with other content
+  returns HTTP 409. An administrator can delete a package version and then
+  publish it again. A version has the states Published, Unfinished, Unlisted,
+  Archived and Disposed. Unlisted leaves the version out of the list that a
+  package manager reads, and the version stays downloadable, so a lock file
+  still works. Archived blocks the download. CodeArtifact refuses a private
+  publish of a name that an upstream repository can reach, for the dependency
+  confusion attack.
+- **Not verified.** The rules of other products and the numbered controls in
+  the benchmark below are from the author's reading, and each row says so. A
+  reviewer checks them before an ADR quotes them.
 
 ## What is decided already
 
@@ -112,8 +131,9 @@ provider mirror with an allowlist of SHA-256 sums second.
    address, the version, the release record and the store port. It knows no
    file layout of OpenTofu except the names of the archive set that ADR 177
    fixes. The mirror JSON, the registry JSON and the discovery entry live in
-   the adapter of the tool (ADR 12). A Pulumi plugin mirror later adds its
-   own adapter and reuses the store.
+   the adapter of the tool (ADR 12). The ports and the blob keys are shared,
+   but the `Release` shape fits the providers and the modules of OpenTofu. A
+   Pulumi plugin mirror needs its own release shape later.
 2. **Put it in `workspace`.** The OpenTofu model of units is a different
    thing from a published artifact. This mixes two concepts.
 3. **Share the package with RFC 93 (`pkgmirror`).** RFC 93 holds vetted
@@ -141,6 +161,30 @@ The mirror URL has the host of the provider address. A provider address is
 A module address is `namespace/name/system`, as the module registry protocol
 asks. The same rule applies.
 
+**The host check (ADR 250).** The adapter of the tool refuses every request
+for a host other than the configured host of the server. It compares the host
+of the address in the request with the configuration, exactly. It never uses
+the `Host` header of the request for this. On an unknown host it denies
+(fail closed), writes an audit entry, and answers as for a missing address.
+The check has its own test with a hostile host, as if every other layer had
+failed.
+
+**The name rule.** Only the registry-safe subset of a name can publish. The
+namespace and the name use lowercase letters, digits and single dashes, with
+no dash at the start or at the end, at most 64 characters. The `system` of a
+module uses lowercase letters and digits only, which is the rule of OpenTofu.
+A namespace whose name is outside the subset, for example one with a dot, an
+underscore, a capital letter or a double dash, cannot publish. The refusal
+names the rule. The registry does not fold case, so "Acme" and "acme" never
+collide. A module name refuses an underscore, although OpenTofu allows it. A
+later escape hatch is a registry slug for each namespace, which a namespace
+with an unsafe name can set. This RFC does not decide it.
+
+**Record for the upstream-proxy slice.** When the server proxies a public
+upstream (RFC 93), it must refuse a private publish of a name that the
+upstream can reach, as AWS CodeArtifact does. This is not needed while there
+is no upstream.
+
 ### D. Where module sources come from
 
 1. **Upload, then git tags later (recommended).** The first slice that
@@ -159,32 +203,52 @@ asks. The same rule applies.
    and its blobs are written once. A second publish of the same version with
    the same hashes does nothing and succeeds, so a retry after a timeout is
    safe. A second publish with other hashes is refused. A person cannot
-   replace a version. A mistake is fixed with a new version. A life cycle
-   state such as deprecated or revoked is the work of issue 951 and does not
-   change a record.
+   replace a version. A mistake is fixed with a new version. The content of a
+   release includes the signature file, its hash and the fingerprint of the
+   key. A life cycle state does not change a record (question 10).
 2. **A version can be replaced by its owner.** This breaks the lock file of
    each user of the version and the record for an audit. Not recommended.
 
-Each archive is one blob in the blob store, addressed by its SHA-256 and
-the namespace (ADR 220). Two releases in one namespace that hold the same
-bytes share one blob. A purge of a namespace removes its blobs.
+Each archive is one blob in the blob store, addressed by its SHA-256 under
+the prefix of the namespace ID: `namespaces/<namespace ID>/registry/sha256/<hash>`
+(ADR 220). The service gets the scoped view of the blob port, which refuses
+every key outside the prefix. Two releases in one namespace that hold the same
+bytes share one blob. A purge of a namespace removes its blobs. The upload
+writes to `namespaces/<namespace ID>/registry/staging/<token>` first, and a
+blob is readable only through a published release (section F).
 
 ### F. Signature and checksum checks at upload
 
-ADR 269 says the checksums and the signature are checked at upload. The
-checks, in order, with a test for each (ADR 250):
+ADR 269 says the checksums and the signature are checked at upload. The upload
+streams each file to a staging key, and the server computes the SHA-256 of
+each file while it writes. The checks run in this order, with a test for each
+(ADR 250). A check that fails refuses the upload, and no blob is moved to its
+content key.
 
-1. The checksums file has one line for each archive, with a SHA-256 and a
+1. The detached signature is valid for the raw bytes of the checksums file,
+   made by a key that the namespace registered. The server checks this before
+   it parses the checksums file, so a parser never reads bytes that nobody
+   signed. The refusal names the signature file.
+2. The checksums file has one line for each archive, with a SHA-256 and a
    file name. A line with a name that is not in the upload, a name with a
-   path, and a duplicate name are refused.
-2. The SHA-256 of each uploaded archive equals the line of its name. The
-   refusal names the file.
-3. The name of each archive gives the provider name, the version and the
+   path, and a duplicate name are refused. The name of the checksums file
+   and the name of the signature file never equal the name of an archive.
+3. The SHA-256 that the server computed for each archive equals the line of
+   its name. The refusal names the file.
+4. The name of each archive gives the provider name, the version and the
    platform that the address and the request give. A mismatch is refused.
-4. The detached signature is valid for the checksums file, made by a key that
-   the namespace registered. The refusal names the signature file.
-5. The server computes the `h1:` hash of each archive itself, and it does not
-   trust a value from the client.
+5. Only then does the server move the blobs from the staging keys to the
+   content keys and call `Store.Publish`. A staging blob that no publish
+   moved is removed by a sweeper after a grace period.
+
+The first slice serves only `zh:` hashes: the SHA-256 of the zip archive,
+which the server computed in check 3. The server does not unpack a provider
+archive, so it computes no `h1:` hash. The `h1:` hash is a later item. It
+needs the unpacking of the archive with limits on the unpacked size, the
+number of files and the paths, and an `H1` field in `Archive` that
+`SameContent` counts. The archive check lives in its own package,
+`pkg/registry/releasecheck`, which holds the checks above. It gets its own
+test suite, with hostile input for each check.
 
 The open point is the OpenPGP library for check 4:
 
@@ -192,7 +256,21 @@ The open point is the OpenPGP library for check 4:
    (recommended).** The license is BSD-3-Clause. It is the standard library
    for the format. The change that adds it comes with the signature check, in
    the second PR, with its own ADR for the dependency. The owner decides (ADR
-   177 left this to the owner).
+   177 left this to the owner). The facts, read on 2026-10-20:
+   - Pinned version: v1.5.2, published on 2026-09-25. It is 25 days old, which
+     is more than the two weeks that ADR 7 asks for. v1.5.1 is from 2026-09-23.
+   - Its `go.mod` asks for `github.com/cloudflare/circl` v1.6.3,
+     `golang.org/x/crypto` v0.41.0 and `golang.org/x/sys` v0.35.0 (indirect).
+     `cloudflare/circl` is a new transitive dependency. The build keeps the
+     higher `golang.org/x/crypto` version if this project already has one.
+   - Vulnerability history (the Go vulnerability database): no entry for
+     `github.com/ProtonMail/go-crypto` itself. `cloudflare/circl` has four
+     entries (GO-2023-1765, GO-2024-2453, GO-2025-3754, GO-2026-4550), fixed
+     in v1.3.3, v1.3.7, v1.6.1 and v1.6.3. v1.6.3 is the first version with
+     no open entry. `make vuln` must pass at the merge.
+   - Rejected option: the frozen `golang.org/x/crypto/openpgp`. The Go team
+     froze it and marked it deprecated. It gets no new features and no fixes
+     to the format, and the adapter needs the algorithm limits below.
 2. **Verify with `gpg` as a process.** The server image needs `gpg`, and the
    process is a new attack surface. Not recommended.
 3. **No signature check in the first slice, the checksums only.** This does
@@ -201,12 +279,18 @@ The open point is the OpenPGP library for check 4:
    read it. It can be a later addition.
 
 Until the owner accepts the library, the port `SignatureVerifier` has no
-adapter and the suite for it is a skeleton (section I).
+adapter and the suite for it is a skeleton (section I). The contract of the
+port: the adapter checks the expiry and the revocation of the key at upload
+time. It returns the fingerprint of the primary key, which is one of the
+registered keys. It refuses SHA-1 signatures, DSA keys and RSA keys of less
+than 2048 bits. A later `KeyStore` port holds the registered keys, with the
+fence, an audit entry and the action `registry:manage-keys`.
 
 The server does not sign again what it serves. The user's CLI checks the
 hashes from the mirror answer. A signature that the mirror protocol cannot
-carry is kept as provenance in the release record: the fingerprint of the
-key and the time. Question 5 asks if the server also signs.
+carry is kept as provenance in the release record: the name and the hash of
+the signature file, and the fingerprint of the primary key. `SameContent`
+counts them.
 
 ### G. Authorization
 
@@ -243,19 +327,19 @@ These are proposals. A setting of the installation can raise them.
 | Unpacked size of a module archive | 1 GiB | a zip bomb limit |
 | Files in a module archive | 20,000 | the same |
 | Versions of one address | 1,000 | a list that a CLI can read |
-| Platforms of one version | 16 | the targets that exist |
+| Platforms of one version | 64 | the targets that exist, with room |
 | Uploads for each principal | 60 per hour | a runaway CI loop |
 
-A provider archive is not unpacked by the server. The server reads the zip
-directory only to check the name of the binary inside it. A module archive is
-read with a limit on the sizes above, and a path that leaves the archive is
-refused (ADR 250, step 2).
+A provider archive is not unpacked by the server in the first slice (section
+F). A module archive is read with a limit on the sizes above, and a path that
+leaves the archive is refused (ADR 250, step 2).
 
 ### I. Design only in this PR
 
 The PR holds ADR 269, this RFC, the domain ports in `pkg/registry` and the
 suite in `pkg/registry/registrytest` with an in-memory reference. The suite
-for `Store` is complete. The suite for `SignatureVerifier` is a skeleton and
+for `Store` is complete. It covers the audit entry, the concurrent publish of
+one version, the copy that a read returns and the order by semantic version. The suite for `SignatureVerifier` is a skeleton and
 skips until an adapter and a key fixture exist. No route, no SQL, no
 dependency.
 
@@ -265,47 +349,54 @@ dependency.
 | --- | --- | --- |
 | HCP Terraform private registry (docs) | A signed release by API, a registered GPG key, a SHA-256 for each platform. Modules from tagged git commits. | The archive set, the key registered first. We refuse a version that is not complete. |
 | OpenTofu public registry | A provider is published from a signed GitHub release. | The signature is a proof of origin, not of safety. |
-| Google Artifact Registry, AWS CodeArtifact (author's reading, to check) | Each package format over its native protocol. A package version can be made immutable. | Native protocols (ADR 257). A version never changes. |
-| PCI DSS v4.0, requirement 6.3.2 (to check) | An inventory of custom software and third-party components. | The list of addresses and versions of a namespace, with the publisher. |
-| SOC 2, CC8.1 change management (to check) | Changes are authorized, tested and approved. | A record of who published each version. |
-| ISO 27001:2022, A.5.21 ICT supply chain (to check) | Manage the security of the supply chain. | A known list of software sources. |
-| DORA, Article 28 (to check) | Management of ICT third-party risk. | The same list, and a log that does not change. |
+| AWS CodeArtifact (docs, read) | An idempotent republish of identical content succeeds. Other content gets HTTP 409. An administrator can delete a version and publish it again. Unlisted leaves a version out of the index and keeps it downloadable. Archived blocks the download. It refuses a private publish of a name that an upstream can reach. | An idempotent repeat and a refusal of other content. Our version has no delete and republish. A yank is like Unlisted, a revoke is like Archived (question 10). The upstream name check, for the upstream-proxy slice (section C). |
+| Google Artifact Registry (not verified) | A review reports that immutable tags apply to Docker repositories only. The author could not read the page. | Nothing yet. Check before an ADR quotes it. |
+| PCI DSS v4.0, requirement 6.3.2 (not verified) | An inventory of custom software and third-party components. | The list of addresses and versions of a namespace, with the publisher. |
+| SOC 2, CC8.1 change management (not verified) | Changes are authorized, tested and approved. | A record of who published each version. |
+| ISO 27001:2022, A.5.21 ICT supply chain (not verified) | Manage the security of the supply chain. | A known list of software sources. |
+| DORA (Regulation (EU) 2022/2554), Article 8, identification: 8(1), 8(4) and 8(6) (the article number is from a review, the text of the paragraphs is not verified) | Identify and document the ICT assets and the sources of ICT risk. | The list of software sources of a plan, and a record that does not change. |
 
 None of these gives a certificate to the feature. A control is met by the
 whole system of a customer, not by one route.
 
-## Open questions
+## Questions and outcome
 
-1. **Order.** Providers by upload first (the recommendation, ADR 269), or
-   modules from git tags first (issue 1149)? The recommendation follows the
-   decision of the owner.
-2. **Address host.** The host of the server as the host of every private
-   address (section C, recommended), or any host?
-3. **Shared code with RFC 93.** One archive check and one blob kind for both
-   packages, or two? Recommended: write the check in the first PR that needs
-   it and move it when the second needs it.
-4. **Cross-namespace reads.** Can a namespace read a release of another
-   namespace? Recommended: no.
-5. **Re-signing.** Does the server sign what it serves with a key of the
-   namespace (RFC 10 asks the same)? Recommended: no in the first slice.
-   Reopen when a tool checks a signature on a mirror.
+The owner decided question 1 (ADR 269). The product manager decided questions
+2 to 5 and 7 to 10 under the owner's delegation of 20 October 2026, and ADR
+269 records them. Question 6 is open.
+
+1. **Order.** Providers by upload first. Decided by the owner.
+2. **Address host.** The host of the server and the namespace of OpenDustpan,
+   with the host check of section C. Decided.
+3. **Shared code with RFC 93.** None yet. Write the archive check in the first
+   PR that needs it, and move it when the second needs it. Decided.
+4. **Cross-namespace reads.** No. Decided.
+5. **Re-signing.** No. The server does not sign what it serves. Decided.
 6. **OpenPGP library.** Add `github.com/ProtonMail/go-crypto` (section F,
-   recommended)? The owner decides.
-7. **Module source.** Upload first and git tags second (recommended), or git
-   tags only?
-8. **Trusted keys.** Does a namespace register keys (recommended, as HCP
-   Terraform does), or does the installation hold one list?
-9. **Overlap with RFC 93.** Where does the allowlist of SHA-256 sums land:
-   in RFC 93, as its first slice, or here? Recommended: RFC 93, because that
-   allowlist admits public packages and this RFC serves private ones.
-10. **Life cycle.** Issue 951 adds states to a release. Does a revoked
-    version leave the index but stay in the record? Recommended: yes.
+   recommended, with the facts of that section)? The owner decides. This
+   question keeps the RFC open.
+7. **Module source.** Upload first, git tags second. Decided.
+8. **Trusted keys.** A namespace registers its own keys. Decided.
+9. **Overlap with RFC 93.** The allowlist of SHA-256 sums lands in RFC 93,
+   because it admits public packages. Decided.
+10. **Life cycle.** A separate "yank" and a separate "revoke". A yanked version
+    leaves the index and stays downloadable, so a lock file still works (like
+    Unlisted in AWS CodeArtifact). A revoked version is blocked (like
+    Archived). Both stay in the record. Issue 951 adds the states. Decided.
 
 ## Follow-up issues
 
 - Provider network mirror, the upload route and the docs page (issue 949).
 - Module registry from git tags (issue 1149, first slice).
 - The OpenPGP dependency and the signature adapter (after question 6).
+- A `KeyStore` port for the registered keys, with the fence, an audit entry
+  and the action `registry:manage-keys`.
+- The check of the upload in `pkg/registry/releasecheck`, with its own suite.
+- The `h1:` hash of a provider archive, with the unpacking limits and the
+  `H1` field.
+- A registry slug for each namespace, for a namespace with an unsafe name.
+- A test of `registry.BlobKey` against the scoped view of the blob port, when
+  the view exists.
 - A SQL adapter and its migration for the store.
 - The registry actions in `pkg/identity` (the shared owner).
 
@@ -321,4 +412,6 @@ _Avoid_: Source address (that is the OpenTofu field), package name
 
 ## Outcome
 
-None yet. ADR 269 records the decisions of the owner that this RFC builds on.
+Not final. ADR 269 records decisions 1 to 11: the decisions of the owner and
+the decisions of the product manager. Question 6 is open, so this RFC stays
+`discussing`.
