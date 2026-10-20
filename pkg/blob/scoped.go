@@ -42,14 +42,16 @@ func NewScoped(s Store, id namespace.ID) (*Scoped, error) {
 		return nil, ErrNilStore
 	}
 
+	// The messages below hold no namespace ID: the ID of a wrong value could
+	// be the ID of another namespace, and an error often reaches a log.
 	if _, err := namespace.ParseID(id.String()); err != nil {
-		return nil, fmt.Errorf("%w: namespace ID: %w", ErrInvalidKey, err)
+		return nil, fmt.Errorf("%w: the namespace ID is not valid", ErrInvalidKey)
 	}
 
 	prefix := namespacesDir + id.String() + "/"
 
 	if _, err := ParseKey(prefix + "x"); err != nil {
-		return nil, fmt.Errorf("%w: namespace ID %q", ErrInvalidKey, id)
+		return nil, fmt.Errorf("%w: the namespace ID cannot be part of a key", ErrInvalidKey)
 	}
 
 	return &Scoped{store: s, prefix: prefix}, nil

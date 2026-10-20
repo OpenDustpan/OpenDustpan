@@ -201,6 +201,15 @@ func hostileKeys() map[string]string {
 		"newline":                  a + "/x\n" + b + "/x",
 		"trailing dot-dot":         a + "/..",
 		"too long":                 a + "/" + strings.Repeat("a", 600),
+		// Characters that look like the ASCII ones. A comparison after a
+		// normalization could treat them as the ASCII character, so the view
+		// must refuse each of them as it is.
+		"fullwidth solidus":        a + "\uff0fx",
+		"division slash":           a + "\u2215x",
+		"fullwidth namespaces":     "\uff4eamespaces/" + scopeA.String() + "/x",
+		"NFD letter after prefix":  a + "/e\u0301x",
+		"non-ASCII in the ID":      "namespaces/" + scopeA.String() + "\u00e9/x",
+		"non-ASCII byte in the ID": "namespaces/" + scopeA.String() + "\xc3/x",
 	}
 }
 
@@ -381,6 +390,13 @@ func hostilePrefixes() map[string]string {
 		"two trailing slashes": a + "/x//",
 		"scope plus junk":      a + "x",
 		"scope with dot":       a + "./",
+		// Characters that look like the ASCII ones (see hostileKeys).
+		"fullwidth solidus":        a + "\uff0f",
+		"division slash":           a + "\u2215",
+		"fullwidth namespaces":     "\uff4eamespaces/" + scopeA.String() + "/",
+		"NFD letter after prefix":  a + "/e\u0301/",
+		"non-ASCII in the ID":      "namespaces/" + scopeA.String() + "\u00e9/",
+		"non-ASCII byte in the ID": "namespaces/" + scopeA.String() + "\xc3/",
 	}
 }
 

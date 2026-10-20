@@ -85,3 +85,71 @@ func TestDeleteRetriedStopsWithTheContext(t *testing.T) {
 		t.Fatalf("calls = %d, want 1 after the context ended", s.calls)
 	}
 }
+
+// countingDeletes counts the deletes that reach it and passes them on.
+type countingDeletes struct {
+	blob.Store
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countingDeletes) Delete(ctx context.Context, key blob.Key) error {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+
+	return c.Store.Delete(ctx, key)
+}
+
+// TestDeleteRetriedDoesNotRetryAPermanentError proves that an error which a
+// retry cannot change ends the loop at once: a key outside the scope of a view,
+// a key that is not valid and an ended context make one attempt and no wait.
+func TestDeleteRetriedDoesNotRetryAPermanentError(t *testing.T) {
+	t.Parallel()
+
+	view, err := blob.NewScoped(newMemStore(), "ns-aaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("new scoped: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		store blob.Store
+		want  error
+	}{
+		{"out of scope", view, blob.ErrOutOfScope},
+		{"invalid key", errStore{err: blob.ErrInvalidKey}, blob.ErrInvalidKey},
+		{"context canceled", errStore{err: context.Canceled}, context.Canceled},
+		{"deadline exceeded", errStore{err: context.DeadlineExceeded}, context.DeadlineExceeded},
+	}
+
+	for _, tc := range cases {
+		counted := &countingDeletes{Store: tc.store, mu: sync.Mutex{}, calls: 0}
+		start := time.Now()
+
+		err := blob.DeleteRetried(t.Context(), counted, "namespaces/ns-bbbbbbbbbbbbbbbbbbbb/x")
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
+
+		if counted.calls != 1 {
+			t.Errorf("%s: %d attempts, want 1", tc.name, counted.calls)
+		}
+
+		if took := time.Since(start); took >= 100*time.Millisecond {
+			t.Errorf("%s: took %s, want no backoff", tc.name, took)
+		}
+	}
+}
+
+// errStore is a store whose delete always fails with err.
+type errStore struct {
+	blob.Store
+
+	err error
+}
+
+func (e errStore) Delete(context.Context, blob.Key) error {
+	return e.err
+}

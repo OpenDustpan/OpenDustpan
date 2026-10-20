@@ -121,6 +121,25 @@ func TestNewScopedRejects(t *testing.T) {
 	}
 }
 
+// TestNewScopedErrorHoldsNoID proves that the error of a refused namespace ID
+// does not show the ID. A wrong value can be the ID of another namespace, and
+// an error often reaches a log.
+func TestNewScopedErrorHoldsNoID(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []namespace.ID{"ns-UPPERCASEID", "ns-secret id", "ns-secret/../b", "ns-secret%2e"} {
+		_, err := blob.NewScoped(newMemStore(), id)
+		if err == nil {
+			t.Fatalf("ID %q: no error", id)
+		}
+
+		if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "UPPERCASEID") ||
+			strings.Contains(err.Error(), id.String()) {
+			t.Errorf("ID %q: the error shows the ID: %q", id, err)
+		}
+	}
+}
+
 func TestScopedKeyAndPrefix(t *testing.T) {
 	t.Parallel()
 
