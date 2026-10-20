@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -173,7 +174,7 @@ func TestCheckStagedSavedViewsRefusesAMissingNamespace(t *testing.T) {
 		t.Fatalf("check = %v, want ErrCorrupt", err)
 	}
 
-	if !strings.Contains(err.Error(), "has no namespace") {
+	if !strings.Contains(fmt.Sprint(err), "has no namespace") {
 		t.Fatalf("check = %v, want the refusal of a view with no namespace", err)
 	}
 }
