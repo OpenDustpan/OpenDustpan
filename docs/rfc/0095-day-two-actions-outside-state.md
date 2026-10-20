@@ -60,7 +60,7 @@ words of each tool. Question 1 asks for the glossary lines.
   `plan-display` (`tofu show -json` or `pulumi preview --json`) and
   `plan-apply`. A gate can bind approvals to it. A stale plan never applies.
   The server keeps it 400 days by default (ADR 152).
-- **ADR 133, ADR 134 and ADR 137.** The launcher starts each step as an
+- **ADR 134 and ADR 137.** The launcher starts each step as an
   argument list from the job spec, masks each secret of 4 bytes or more in
   each log, and runs in a sandbox of the machine coordinator.
 - **ADR 194.** The review view puts each `replace` and each `delete` in
@@ -88,7 +88,19 @@ words of each tool. Question 1 asks for the glossary lines.
 ## ADRs this RFC would amend
 
 - **ADR 226 decision 4**, to add a fact group `actions` to `change.planned`
-  and `change.apply` (C1). A new group is a new minor schema version, for
+  and `change.apply` (C1).
+- **ADR 226 decision 3**, to extend the save check of a gate (C1). A gate
+  that reads `count` or `types` of the group `actions` must also read
+  `complete`.
+- **ADR 101 decision 7**, so that `job.ValidateSteps` refuses `TF_CLI_ARGS`
+  and each `TF_CLI_ARGS_*` variable for a `refresh` job (D).
+- **ADR 101 decision 8**, so that a `refresh` job takes no custom step (D).
+  Today custom steps come from a blueprint or from the settings of a unit.
+- **ADR 134 decision 5**, only if B2a option (a) needs a separate file
+  descriptor for the `-json` stream, because decision 5 merges standard
+  output and standard error into one log.
+- **ADR 134 decision 6**, so that the launcher refuses `TF_CLI_ARGS` and
+  each `TF_CLI_ARGS_*` variable at start of a `refresh` step (D). A new group is a new minor schema version, for
   example `change.planned/1.1` (ADR 226 decision 2).
 - **ADR 194 decision 4**, to add each planned action invocation to "Needs
   attention" (C3).
@@ -151,7 +163,8 @@ need to handle.
   `name`, `config_values`, `config_sensitive`, `config_unknown`,
   `provider_name`, and either `lifecycle_action_trigger`
   (`triggering_resource_address`, `action_trigger_event`, `on_failure` and
-  indexes) or `invoke_action_trigger`. The JSON format page does not
+  indexes) or `invoke_action_trigger`. With `-invoke -target` (v1.16) the
+  invoke trigger also has `calling_resource_address`. The JSON format page does not
   document these keys yet.
   <https://github.com/hashicorp/terraform/blob/main/internal/command/jsonplan/action_invocations.go>
 - **Streaming `-json` output.** Message types `planned_action_invocation`,
@@ -291,8 +304,10 @@ also redacts the `error` text of its rows.
 
 **B5. Reads.** `GET /api/units/.../action-invocations` and a filter on the
 job record. Action names (proposal): `job:read` for the metadata,
-`job:read-plans` for `error` and the progress log, as for plan values
-(ADR 194 decision 9). The action names must be checked against ADR 210 when
+`job:read-logs` for the progress log (ADR 152 decision 10), because the
+log holds free text of the provider, as a job log does. The `error` field
+comes from the log, so it follows the log: **recommendation: `job:read-logs`
+for `error` too.** A reader of plans only then does not see `error`. The action names must be checked against ADR 210 when
 an ADR records them.
 
 ### C. Control
@@ -311,9 +326,15 @@ The group must tell "known none" from "unknown":
   or the parser fails. Then `available` is `false`.
 - **Partial coverage.** For the Pulumi CLI, the server sees `command`
   resource steps only. Hooks and invokes stay invisible. So the group has
-  `complete == false` for Pulumi, and the docs say so. As an alternative,
-  Pulumi never gives `available == true`. Either way, a gate cannot read
-  `count == 0` as "no side effect" for Pulumi.
+  `complete == false` for Pulumi, and the docs say so.
+
+A gate that reads `count` or `types` without `complete` could read
+`count == 0` as "no side effect" for Pulumi. **Recommendation:** extend the
+save check of ADR 226 decision 3, so that the server refuses to save a gate
+that reads `count` or `types` of the group `actions` and does not also read
+`complete`. This amends ADR 226 decision 3. The alternative is that Pulumi
+gives `available == false`. Then each built-in gate that fails closed on a
+missing fact would fire on every Pulumi plan, so we do not recommend it.
 
 A gate "an action of type X in collection prod needs an approval" then reads:
 
@@ -330,9 +351,10 @@ for the `command` gates. A namespace list of "action resource types" adds
 settings and no power.
 
 **C2. Never hidden.** A noise rule (RFC 91) can never collapse a planned
-action invocation, and the reader ignores a match on one. RFC 91 already
-covers this case in its list "What a rule can never collapse", so this RFC
-adds no new rule. We keep C2 as a named defense-in-depth layer. Its two
+action invocation, and the reader ignores a match on one. RFC 91 covers
+this case in its list "What a rule can never collapse" only after C3 amends
+ADR 194 to put each planned invocation in "Needs attention". Until then, the
+list has no entry for an invocation. We keep C2 as a named defense-in-depth layer. Its two
 parts each stop the attack alone: the save check refuses a rule that names
 an invocation, and the render ignores a match on one.
 
@@ -348,8 +370,9 @@ plan is too large) shows "actions unknown" and no approve control.
   after the dispatch does not stop an action in that phase.
 - A CLI-driven `apply -invoke` takes the state lock, so a manual lock
   refuses its lock request. But `-lock=false` skips the lock, and then the
-  manual lock does nothing. The action runs before any state write, so a
-  fenced write is refused after the action ran.
+  manual lock does nothing. The failover fence (not the manual lock) refuses
+  a state write only. An invoke that changes nothing writes no state, so the
+  fence refuses nothing and the action has already run.
 - **The server cannot gate a CLI-driven invocation.** It can refuse the
   lock request of a person who does not use `-lock=false`, and nothing
   else. The docs must say this in plain words.
@@ -375,8 +398,21 @@ fails closed (E). An allowlist in two places drifts.
 - A drift run (RFC 25) must invoke nothing. A denylist of arguments is not
   enough (ADR 250 asks for an allowlist). `TF_CLI_ARGS` and
   `TF_CLI_ARGS_apply` in the step environment, a custom step of a team
-  (ADR 101 decision 7) and a wrapper binary can add `-invoke` after any
-  check of the argument list. The layers, each one alone:
+  (ADR 101 decision 8) and a wrapper binary can add `-invoke` after any
+  check of the argument list. Each vector below meets the layers that stop
+  it:
+
+  | Vector | Fixed steps | Clean environment | Plan check |
+  | --- | --- | --- | --- |
+  | An argument list with `-invoke` | Stops it: the spec check refuses the argument. | Does not apply. | Stops it: the plan holds an invocation. |
+  | `TF_CLI_ARGS` or `TF_CLI_ARGS_apply` | Does not apply. | Stops it: the spec check and the launcher refuse the variable. | Stops it only if the plan step reads the variable. The apply step applies a saved plan, and the spike must prove that it ignores `-invoke` from the variable. |
+  | A custom step | Stops it: a `refresh` job takes no custom step. | Does not apply. | Stops it only if the custom step is not the apply step. |
+  | A wrapper binary in the runner image | No effect: the step names the binary. | No effect: the binary sets its own environment. | Stops it only if the plan shows the invocation. A wrapper that acts after the plan check is outside the server's reach. |
+
+  The runner image, and any wrapper binary in it, are outside the server's
+  reach. The team owns the image. So no layer stops a wrapper binary alone,
+  and the docs must say this in plain words. The three layers are:
+
   1. **Fixed steps.** The server builds the steps of a `refresh` job from
      the step planner of the tool, with a fixed argument list from an
      allowlist. A `refresh` job takes no custom step. The spec check
@@ -404,7 +440,7 @@ unit.
 
 | Layer | What it does | Its test |
 | --- | --- | --- |
-| Check at the boundary | The parser reads `action_invocations` and the `action_*` messages with a strict schema. It accepts known message types, known trigger events and `onFailure` values from the allowlist only. An unknown top-level key gives `available == false`, never "none". Each address must match the address grammar of the tool. A plan holds at most 1,000 invocations. Each string is at most 4 KiB of strict UTF-8. The parser refuses a plan or a message that fails, and never fixes it. | a plan with each bad field and with an unknown top-level key, sent to the parser with the other layers skipped. A plan with no action keys gives `available == true` and `count == 0` |
+| Check at the boundary | The parser reads `action_invocations` and the `action_*` messages with a strict schema. It accepts known message types, known trigger events, `onFailure` values and the fields `invoke_action_trigger`, `lifecycle_action_trigger` and `calling_resource_address` from the allowlist only. An unknown top-level key gives `available == false`, never "none". Each address must match the address grammar of the tool. A plan holds at most 1,000 invocations. Each string is at most 4 KiB of strict UTF-8. The parser refuses a plan or a message that fails, and never fixes it. | a plan with each bad field and with an unknown top-level key, sent to the parser with the other layers skipped. A plan with no action keys gives `available == true` and `count == 0` |
 | Encode or contain | The server never stores `config_values`, only `configDigest`. The server deletes CR, LF and control characters from each text before it writes a log or an audit entry. The launcher masks each secret in `error` and `progress`. SQL uses placeholders only. | a `message` with CR, LF, a secret of the job and a SQL character |
 | Limit the effect | Size limits as above. A progress log has the size limit of a job log. The fact group holds types, not values. A drift job has fixed steps, a clean environment and a plan check (D). | a plan with 1,001 invocations, a progress stream above the log limit, a drift job with `TF_CLI_ARGS=-invoke=...` |
 | Authorize at use | Each read checks `job:read` or `job:read-plans` on the unit of the row. A runner writes rows only for the job of its claim. | a job token of unit A that writes a row of unit B |
@@ -447,6 +483,8 @@ first, so the record (B) and the full fact group (C1) wait.
    -invoke=...` from a person's own CLI. Show that `-lock=false` skips it,
    and that no state version exists after an invoke that changed nothing.
 4. Prove that `apply -refresh-only` without `-invoke` triggers nothing.
+   Prove that `tofu apply <saved plan>` rejects or ignores `-invoke` from
+   `TF_CLI_ARGS_apply`.
 5. Then land B and C1 with their e2e steps, and the persona's gate.
 
 **Pulumi.** `plan.resourceTypes` (ADR 226 decision 4) carries the `command`
