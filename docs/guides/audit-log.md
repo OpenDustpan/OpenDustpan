@@ -389,7 +389,10 @@ The server checks the chain of every namespace and of `@server` at start and eve
 One instance runs each check, as the schedule `audit-chain-check`.
 The instance stores the result in the database.
 Each instance reads the stored result when Prometheus scrapes it, so all instances export the same value.
-`dustpan_audit_chain_invalid` holds the count of scopes whose chain or checkpoints do not match in the stored result.
+`dustpan_audit_chain_invalid` holds the larger of two counts.
+The first count is the scopes that do not match in the stored result.
+The second count is the scopes with a stored mark in the current epoch.
+A check that ends late cannot clear the alarm while a mark stands.
 When an instance cannot read the stored result, it exports 1, adds one to `dustpan_audit_chain_read_errors_total` and logs a warning at most once each minute.
 A database fault never shows as a good chain.
 When `dustpan_audit_chain_read_errors_total` increases together with `dustpan_audit_chain_invalid`, look for a database fault before you look for tampering.
@@ -456,7 +459,7 @@ A scope with a checkpoint that does not match counts in `dustpan_audit_chain_inv
 The server never signs a scope whose chain or checkpoints do not match.
 Once a checkpoint does not match, later checks fail until a new epoch starts.
 The instance that finds the mismatch stores a mark in the database.
-Every instance reads the mark before it signs, so a mismatch that one instance finds stops signing of that scope on all instances.
+Every instance reads the mark before it signs, so a mismatch that one instance finds stops signing of that scope. A mark of one scope does not stop the signing of another scope.
 Other scopes keep signing and each gets its own check, so `dustpan_audit_chain_invalid` stays the count of scopes that do not match.
 The mark stays across a restart of any instance, and only a new epoch ends it.
 When an instance cannot read the mark, it signs nothing, counts the scope as invalid and logs the error.

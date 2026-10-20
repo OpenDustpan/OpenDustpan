@@ -42,11 +42,12 @@ func RunAuditCheck(t *testing.T, newHarness AuditCheckFactory) {
 		{name: "a later result replaces the count", test: testCheckResultReplaces},
 		{name: "a saved mark reads back and leaves the result", test: testCheckMark},
 		{name: "a result keeps the mark", test: testCheckResultKeepsMark},
-		{name: "the first mark of an epoch stays", test: testCheckFirstMarkStays},
-		{name: "a mark of an older epoch changes nothing", test: testCheckOlderMark},
-		{name: "a mark of a newer epoch replaces the older mark", test: testCheckNewerMark},
+		{name: "the first mark of a scope in an epoch stays", test: testCheckFirstMarkStays},
+		{name: "marks of two scopes in one epoch both stand", test: testCheckScopeMarksStand},
+		{name: "a mark of an older epoch changes no mark", test: testCheckOlderMark},
+		{name: "a mark of a newer epoch replaces the older mark of its scope", test: testCheckNewerMark},
 		{name: "two handles share one row", test: testCheckShared},
-		{name: "concurrent writes leave one whole mark", test: testCheckConcurrent},
+		{name: "concurrent writes leave whole marks", test: testCheckConcurrent},
 		{name: "a state that no store keeps is refused", test: testCheckInvalid},
 	}
 
@@ -90,15 +91,32 @@ func saveMark(t *testing.T, s audit.CheckStore, epoch int64, scope namespace.Nam
 	}
 }
 
-// wantMark fails t unless got holds the mark of scope at seq in epoch.
-func wantMark(t *testing.T, got *audit.CheckMark, epoch int64, scope namespace.Name, seq int64) {
+// wantMark fails t unless state holds one mark of scope, at seq in epoch.
+func wantMark(t *testing.T, state audit.CheckState, epoch int64, scope namespace.Name, seq int64) {
 	t.Helper()
 
-	if got == nil || got.Epoch != epoch || got.Scope != scope || got.Sequence != seq {
-		t.Fatalf("mark = %+v, want %s at %d in epoch %d", got, scope, seq, epoch)
+	var found []audit.CheckMark
+
+	for _, m := range state.Marks {
+		if m.Scope == scope {
+			found = append(found, m)
+		}
 	}
 
-	wantNear(t, "mark time", got.At)
+	if len(found) != 1 || found[0].Epoch != epoch || found[0].Sequence != seq {
+		t.Fatalf("marks of %s = %+v, want one at %d in epoch %d", scope, found, seq, epoch)
+	}
+
+	wantNear(t, "mark time", found[0].At)
+}
+
+// wantMarkCount fails t unless state holds n marks.
+func wantMarkCount(t *testing.T, state audit.CheckState, n int) {
+	t.Helper()
+
+	if len(state.Marks) != n {
+		t.Fatalf("marks = %+v, want %d", state.Marks, n)
+	}
 }
 
 func testCheckZero(t *testing.T, h AuditCheckHarness) {
@@ -106,7 +124,7 @@ func testCheckZero(t *testing.T, h AuditCheckHarness) {
 
 	got := checkState(t, h.Open(t))
 
-	if !got.CheckedAt.IsZero() || got.Invalid != 0 || got.Mark != nil {
+	if !got.CheckedAt.IsZero() || got.Invalid != 0 || len(got.Marks) != 0 {
 		t.Fatalf("state of a new database = %+v, want the zero state", got)
 	}
 }
@@ -122,7 +140,7 @@ func testCheckResult(t *testing.T, h AuditCheckHarness) {
 
 	got := checkState(t, s)
 
-	if got.Invalid != 3 || got.Mark != nil {
+	if got.Invalid != 3 || len(got.Marks) != 0 {
 		t.Fatalf("state = %+v, want 3 invalid scopes and no mark", got)
 	}
 
@@ -154,7 +172,7 @@ func testCheckMark(t *testing.T, h AuditCheckHarness) {
 
 	got := checkState(t, s)
 
-	wantMark(t, got.Mark, 4, "acme", 17)
+	wantMark(t, got, 4, "acme", 17)
 
 	if got.Invalid != 0 || !got.CheckedAt.IsZero() {
 		t.Fatalf("state = %+v, want a mark and no result", got)
@@ -174,7 +192,7 @@ func testCheckResultKeepsMark(t *testing.T, h AuditCheckHarness) {
 
 	got := checkState(t, s)
 
-	wantMark(t, got.Mark, 1, "acme", 9)
+	wantMark(t, got, 1, "acme", 9)
 
 	if got.Invalid != 1 {
 		t.Fatalf("invalid = %d, want 1", got.Invalid)
@@ -182,9 +200,13 @@ func testCheckResultKeepsMark(t *testing.T, h AuditCheckHarness) {
 
 	saveMark(t, s, 1, "other", 2)
 
-	if after := checkState(t, s); after.Invalid != 1 || after.CheckedAt.IsZero() {
+	after := checkState(t, s)
+
+	if after.Invalid != 1 || after.CheckedAt.IsZero() {
 		t.Fatalf("state after a second mark = %+v, want the result kept", after)
 	}
+
+	wantMarkCount(t, after, 2)
 }
 
 func testCheckFirstMarkStays(t *testing.T, h AuditCheckHarness) {
@@ -193,10 +215,27 @@ func testCheckFirstMarkStays(t *testing.T, h AuditCheckHarness) {
 	s := h.Open(t)
 
 	saveMark(t, s, 2, "acme", 5)
-	saveMark(t, s, 2, "other", 8)
 	saveMark(t, s, 2, "acme", 1)
 
-	wantMark(t, checkState(t, s).Mark, 2, "acme", 5)
+	got := checkState(t, s)
+
+	wantMark(t, got, 2, "acme", 5)
+	wantMarkCount(t, got, 1)
+}
+
+func testCheckScopeMarksStand(t *testing.T, h AuditCheckHarness) {
+	t.Helper()
+
+	s := h.Open(t)
+
+	saveMark(t, s, 2, "acme", 5)
+	saveMark(t, s, 2, "beta", 8)
+
+	got := checkState(t, s)
+
+	wantMark(t, got, 2, "acme", 5)
+	wantMark(t, got, 2, "beta", 8)
+	wantMarkCount(t, got, 2)
 }
 
 func testCheckOlderMark(t *testing.T, h AuditCheckHarness) {
@@ -205,9 +244,16 @@ func testCheckOlderMark(t *testing.T, h AuditCheckHarness) {
 	s := h.Open(t)
 
 	saveMark(t, s, 3, "acme", 5)
-	saveMark(t, s, 2, "other", 8)
+	saveMark(t, s, 3, "beta", 6)
+	saveMark(t, s, 2, "acme", 9)
+	saveMark(t, s, 1, "gamma", 8)
 
-	wantMark(t, checkState(t, s).Mark, 3, "acme", 5)
+	got := checkState(t, s)
+
+	wantMark(t, got, 3, "acme", 5)
+	wantMark(t, got, 3, "beta", 6)
+	wantMark(t, got, 1, "gamma", 8)
+	wantMarkCount(t, got, 3)
 }
 
 func testCheckNewerMark(t *testing.T, h AuditCheckHarness) {
@@ -216,9 +262,14 @@ func testCheckNewerMark(t *testing.T, h AuditCheckHarness) {
 	s := h.Open(t)
 
 	saveMark(t, s, 1, "acme", 5)
-	saveMark(t, s, 2, "other", 8)
+	saveMark(t, s, 1, "beta", 6)
+	saveMark(t, s, 2, "acme", 8)
 
-	wantMark(t, checkState(t, s).Mark, 2, "other", 8)
+	got := checkState(t, s)
+
+	wantMark(t, got, 2, "acme", 8)
+	wantMark(t, got, 1, "beta", 6)
+	wantMarkCount(t, got, 2)
 }
 
 func testCheckShared(t *testing.T, h AuditCheckHarness) {
@@ -238,7 +289,7 @@ func testCheckShared(t *testing.T, h AuditCheckHarness) {
 		t.Fatalf("invalid on B = %d, want 2", got.Invalid)
 	}
 
-	wantMark(t, got.Mark, 0, "acme", 3)
+	wantMark(t, got, 0, "acme", 3)
 }
 
 func testCheckConcurrent(t *testing.T, h AuditCheckHarness) {
@@ -268,14 +319,10 @@ func testCheckConcurrent(t *testing.T, h AuditCheckHarness) {
 
 	got := checkState(t, s)
 
-	if got.Mark == nil || got.Mark.Epoch != 1 {
-		t.Fatalf("mark = %+v, want one mark of epoch 1", got.Mark)
-	}
+	wantMarkCount(t, got, auditCheckWriters)
 
-	var n int
-
-	if _, err := fmt.Sscanf(got.Mark.Scope.String(), "scope-%d", &n); err != nil || got.Mark.Sequence != int64(n+1) {
-		t.Fatalf("mark = %+v, want a scope and a sequence of one writer", got.Mark)
+	for i := range auditCheckWriters {
+		wantMark(t, got, 1, namespace.Name(fmt.Sprintf("scope-%d", i)), int64(i+1))
 	}
 }
 
@@ -298,7 +345,7 @@ func testCheckInvalid(t *testing.T, h AuditCheckHarness) {
 		}
 	}
 
-	if got := checkState(t, s); got.Mark != nil || got.Invalid != 0 {
+	if got := checkState(t, s); len(got.Marks) != 0 || got.Invalid != 0 {
 		t.Fatalf("state after refused writes = %+v, want the zero state", got)
 	}
 }

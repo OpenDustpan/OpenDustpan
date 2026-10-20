@@ -3375,27 +3375,30 @@ DELETE FROM idempotency_records;
 
 
 -- name: GetAuditChainCheck :one
--- The stored result of the scheduled audit chain check and the mark of a
--- checkpoint mismatch. No row means no check ran and no mark stands.
-SELECT checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms
-FROM audit_chain_check WHERE id = 1;
+-- The stored result of the scheduled audit chain check. No row means no check
+-- ran.
+SELECT checked_at_ms, invalid FROM audit_chain_check WHERE id = 1;
 
 -- name: SaveAuditChainCheckResult :exec
 -- Stores the count of scopes that did not match, with the time of the clock
--- of the store read in the statement. It keeps the mark.
-INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms)
-VALUES (1, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint, sqlc.arg('invalid')::bigint, false, 0, '', 0, 0)
+-- of the store read in the statement.
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid)
+VALUES (1, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint, sqlc.arg('invalid')::bigint)
 ON CONFLICT (id) DO UPDATE SET checked_at_ms = excluded.checked_at_ms, invalid = excluded.invalid;
 
--- name: SaveAuditChainCheckMark :exec
--- Stores the mark of a checkpoint mismatch. The first mark of an epoch
--- stays, and a mark of a newer epoch replaces the older one. The time of the
--- mark is the clock of the store, read in the statement.
-INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms)
+-- name: ListAuditChainMarks :many
+-- The marks of checkpoint mismatches, one for each scope.
+SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope;
+
+-- name: SaveAuditChainMark :exec
+-- Stores the mark of a checkpoint mismatch of one scope. The first mark of a
+-- scope in an epoch stays, and a mark of a newer epoch replaces the older
+-- one. The time of the mark is the clock of the store, read in the statement.
+INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms)
 VALUES (
-    1, 0, 0, true, sqlc.arg('epoch')::bigint, sqlc.arg('scope')::text, sqlc.arg('sequence')::bigint,
+    sqlc.arg('scope')::text, sqlc.arg('epoch')::bigint, sqlc.arg('sequence')::bigint,
     FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
 )
-ON CONFLICT (id) DO UPDATE SET marked = true, mark_epoch = excluded.mark_epoch, mark_scope = excluded.mark_scope,
-    mark_sequence = excluded.mark_sequence, marked_at_ms = excluded.marked_at_ms
-WHERE NOT audit_chain_check.marked OR audit_chain_check.mark_epoch < excluded.mark_epoch;
+ON CONFLICT (scope) DO UPDATE SET epoch = excluded.epoch, sequence = excluded.sequence,
+    marked_at_ms = excluded.marked_at_ms
+WHERE audit_chain_mark.epoch < excluded.epoch;

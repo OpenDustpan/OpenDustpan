@@ -582,7 +582,7 @@ func RunAuditCheckInMaintenance(t *testing.T, newStore func(t *testing.T) AuditC
 		t.Fatalf("read check state: %v", err)
 	}
 
-	if got.Invalid != 2 || got.Mark == nil || got.Mark.Scope != "acme" || got.Mark.Sequence != 7 {
+	if got.Invalid != 2 || len(got.Marks) != 1 || got.Marks[0].Scope != "acme" || got.Marks[0].Sequence != 7 {
 		t.Fatalf("check state after saves in maintenance mode = %+v, want invalid 2 and the mark of acme at 7", got)
 	}
 }

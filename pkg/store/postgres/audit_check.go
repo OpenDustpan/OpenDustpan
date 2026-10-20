@@ -16,38 +16,41 @@ import (
 
 var _ audit.CheckStore = (*Store)(nil)
 
-// CheckState implements audit.CheckStore. A database without a row answers
-// the zero state.
+// CheckState implements audit.CheckStore. A database without a result row
+// answers a zero result, and a database without marks answers no marks.
 func (s *Store) CheckState(ctx context.Context) (audit.CheckState, error) {
+	var state audit.CheckState
+
 	row, err := s.queries.GetAuditChainCheck(ctx)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0}, nil
+
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// No check ran yet: the result stays zero.
+	case err != nil:
+		return audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0}, fmt.Errorf(
+			"read audit chain check: %w",
+			err,
+		)
+	default:
+		state.CheckedAt = codec.FromOptionalMillis(row.CheckedAtMs)
+		state.Invalid = int(row.Invalid)
 	}
 
+	marks, err := s.queries.ListAuditChainMarks(ctx)
 	if err != nil {
-		return audit.CheckState{
-			CheckedAt: time.Time{},
-			Mark:      nil,
-			Invalid:   0,
-		}, fmt.Errorf(
-			"read audit chain check: %w",
+		return audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0}, fmt.Errorf(
+			"read audit chain marks: %w",
 			err,
 		)
 	}
 
-	state := audit.CheckState{
-		CheckedAt: codec.FromOptionalMillis(row.CheckedAtMs),
-		Mark:      nil,
-		Invalid:   int(row.Invalid),
-	}
-
-	if row.Marked {
-		state.Mark = &audit.CheckMark{
-			At:       codec.FromOptionalMillis(row.MarkedAtMs),
-			Scope:    namespace.Name(row.MarkScope),
-			Sequence: row.MarkSequence,
-			Epoch:    row.MarkEpoch,
-		}
+	for _, m := range marks {
+		state.Marks = append(state.Marks, audit.CheckMark{
+			At:       codec.FromOptionalMillis(m.MarkedAtMs),
+			Scope:    namespace.Name(m.Scope),
+			Sequence: m.Sequence,
+			Epoch:    m.Epoch,
+		})
 	}
 
 	return state, nil
@@ -78,7 +81,7 @@ func (s *Store) SaveCheckMark(ctx context.Context, mark audit.CheckMark) error {
 	}
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
-		err := q.SaveAuditChainCheckMark(ctx, db.SaveAuditChainCheckMarkParams{
+		err := q.SaveAuditChainMark(ctx, db.SaveAuditChainMarkParams{
 			Epoch: mark.Epoch, Scope: mark.Scope.String(), Sequence: mark.Sequence,
 		})
 		if err != nil {

@@ -45,8 +45,8 @@ import (
 // log ends before it, so a cut at the end of the log shows at the next
 // check. A mismatch stays until a new epoch starts: later checks of the scope
 // fail, and the server signs nothing more for it. With a CheckStore the first
-// mismatch of an epoch is also stored in a row, so every instance sees it and
-// none signs while it stands. Without a CheckStore it stays in the memory of
+// mismatch of a scope in an epoch is also stored in a row, so every instance
+// sees it and stops signing of that scope while it stands. Without a CheckStore it stays in the memory of
 // the process.
 
 // CheckpointPrefix is the first segment of every checkpoint key. No other
@@ -577,7 +577,9 @@ func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error
 // bad epoch object also signs nothing and returns an error that wraps
 // ErrCheckpointMismatch. The caller counts such an error as a scope that does
 // not match. When the epoch changes before the store, it stores nothing and
-// answers false and no error.
+// answers false and no error. The stored mark is read before the signature
+// and not in the same step: a mark that another instance stores in that small
+// window stops the next Write of the scope, not this one.
 func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
 	if err := c.flushMarks(ctx); err != nil {
 		return false, fmt.Errorf("%w: %w", ErrCheckpointMismatch, err)
@@ -594,12 +596,12 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 		return false, fmt.Errorf("audit checkpoint of %s at %d does not match: %w", scope, seq, ErrCheckpointMismatch)
 	}
 
-	mark, err := c.standingMark(ctx, epoch)
+	mark, err := c.standingMark(ctx, epoch, scope)
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrCheckpointMismatch, err)
 	}
 
-	if mark != nil && mark.Scope == scope {
+	if mark != nil {
 		return false, fmt.Errorf("audit checkpoint of %s at %d does not match, signing stops: %w",
 			mark.Scope, mark.Sequence, ErrCheckpointMismatch)
 	}
@@ -736,12 +738,12 @@ func (c *Checkpoints) verifyGate(
 		return stop(result.fail(seq, "an earlier check in this epoch found a mismatch")), nil
 	}
 
-	mark, err := c.standingMark(ctx, epoch)
+	mark, err := c.standingMark(ctx, epoch, scope)
 	if err != nil {
 		return stop(result.fail(0, err.Error())), nil
 	}
 
-	if mark != nil && mark.Scope == scope {
+	if mark != nil {
 		return stop(result.fail(mark.Sequence, "a check on another instance in this epoch found a mismatch")), nil
 	}
 
@@ -972,10 +974,10 @@ func (c *Checkpoints) sticky(gk goodKey) (int64, bool) {
 // markBad records seq as a checkpoint of gk that did not match, so later
 // checks of the same epoch fail until a new epoch starts. It keeps the first
 // mismatch of the scope in memory, and stores the mark when the checkpoints
-// have a CheckStore, so no instance signs while it stands. A store that
-// fails keeps the mark in memory and flushMarks stores it again: this
-// process signs nothing for the scope meanwhile, and the next Write or Verify
-// stores the mark before it does anything else.
+// have a CheckStore, so every instance stops signing that scope while it
+// stands. A store that fails keeps the mark in memory and flushMarks stores
+// it again: this process signs nothing for the scope meanwhile, and the next
+// Write or Verify stores the mark before it does anything else.
 func (c *Checkpoints) markBad(ctx context.Context, gk goodKey, seq int64) {
 	c.mu.Lock()
 
@@ -1024,12 +1026,13 @@ func (c *Checkpoints) flushMarks(ctx context.Context) error {
 	return nil
 }
 
-// standingMark answers the stored mark that stops signing in epoch: a mark
-// of this epoch or of a newer one. A mark of an older epoch stops nothing,
-// so a new epoch ends it. It answers nil without a CheckStore. A store that
-// cannot be read returns an error, and the caller denies: signing stops
-// whenever the mark is unknown.
-func (c *Checkpoints) standingMark(ctx context.Context, epoch int64) (*CheckMark, error) {
+// standingMark answers the stored mark of scope that stops signing in epoch:
+// a mark of this epoch or of a newer one. A mark of another scope stops
+// nothing here, and a mark of an older epoch stops nothing, so a new epoch
+// ends it. It answers nil without a CheckStore. A store that cannot be read
+// returns an error, and the caller denies: signing stops whenever the mark is
+// unknown.
+func (c *Checkpoints) standingMark(ctx context.Context, epoch int64, scope namespace.Name) (*CheckMark, error) {
 	if c.marks == nil {
 		return nil, nil //nolint:nilnil // Nil without an error means no mark stands.
 	}
@@ -1039,11 +1042,13 @@ func (c *Checkpoints) standingMark(ctx context.Context, epoch int64) (*CheckMark
 		return nil, fmt.Errorf("read the audit checkpoint mark: %w", err)
 	}
 
-	if state.Mark == nil || state.Mark.Epoch < epoch {
-		return nil, nil //nolint:nilnil // Nil without an error means no mark stands.
+	for _, m := range state.Marks {
+		if m.Scope == scope && m.Epoch >= epoch {
+			return &m, nil
+		}
 	}
 
-	return state.Mark, nil
+	return nil, nil //nolint:nilnil // Nil without an error means no mark stands.
 }
 
 // verifyOne checks the checkpoint under key in dir of epoch and answers

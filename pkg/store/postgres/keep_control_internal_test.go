@@ -89,17 +89,31 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		t.Fatalf("insert sign-in failure: %v", execErr)
 	}
 
-	insertCheck := "INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope," +
-		" mark_sequence, marked_at_ms) VALUES (1, $1, $1, true, $1, $2, $1, $1)"
-	if _, execErr := conn.Exec(ctx, insertCheck, token, key); execErr != nil {
-		t.Fatalf("insert audit chain check: %v", execErr)
-	}
+	insertAuditChainRows(t, conn, key, token)
 
 	if _, execErr := conn.Exec(ctx, "RESET search_path"); execErr != nil {
 		t.Fatalf("reset search path: %v", execErr)
 	}
 
 	return name
+}
+
+// insertAuditChainRows adds the audit chain check row and the mark of scope
+// key to the schema on the search path of conn.
+func insertAuditChainRows(t *testing.T, conn *pgx.Conn, key string, token int64) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	insertCheck := "INSERT INTO audit_chain_check (id, checked_at_ms, invalid) VALUES (1, $1, $1)"
+	if _, execErr := conn.Exec(ctx, insertCheck, token); execErr != nil {
+		t.Fatalf("insert audit chain check: %v", execErr)
+	}
+
+	insertMark := "INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms) VALUES ($1, $2, $2, $2)"
+	if _, execErr := conn.Exec(ctx, insertMark, key, token); execErr != nil {
+		t.Fatalf("insert audit chain mark: %v", execErr)
+	}
 }
 
 // TestKeepControlTablesKeepsTheLiveRows proves that the swap of a restore
@@ -158,7 +172,7 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 }
 
 // checkKeptAuditChainCheck fails t unless the schema ident holds only the
-// live audit chain check row, with the mark that it had before the swap: a
+// live audit chain mark row, with the mark that it had before the swap: a
 // restore must not clear the mark of a checkpoint mismatch.
 func checkKeptAuditChainCheck(t *testing.T, conn *pgx.Conn, ident string) {
 	t.Helper()
@@ -170,8 +184,8 @@ func checkKeptAuditChainCheck(t *testing.T, conn *pgx.Conn, ident string) {
 		rows  int
 	)
 
-	read := "SELECT mark_scope, mark_epoch, mark_sequence, (SELECT count(*) FROM " + ident +
-		".audit_chain_check) FROM " + ident + ".audit_chain_check WHERE marked"
+	read := "SELECT scope, epoch, sequence, (SELECT count(*) FROM " + ident +
+		".audit_chain_mark) FROM " + ident + ".audit_chain_mark"
 	if scanErr := conn.QueryRow(t.Context(), read).Scan(&scope, &epoch, &seq, &rows); scanErr != nil {
 		t.Fatalf("read restored audit chain check: %v", scanErr)
 	}

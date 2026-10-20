@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // errMarkStore is the failure that memMarks injects.
@@ -27,7 +28,7 @@ func (m *memMarks) CheckState(context.Context) (audit.CheckState, error) {
 	defer m.mu.Unlock()
 
 	if m.failRead {
-		return audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0}, errMarkStore
+		return audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0}, errMarkStore
 	}
 
 	return m.state, nil
@@ -50,18 +51,35 @@ func (m *memMarks) SaveCheckMark(_ context.Context, mark audit.CheckMark) error 
 		return errMarkStore
 	}
 
-	if m.state.Mark == nil || m.state.Mark.Epoch < mark.Epoch {
-		m.state.Mark = &mark
+	for i, have := range m.state.Marks {
+		if have.Scope != mark.Scope {
+			continue
+		}
+
+		if have.Epoch < mark.Epoch {
+			m.state.Marks[i] = mark
+		}
+
+		return nil
 	}
+
+	m.state.Marks = append(m.state.Marks, mark)
 
 	return nil
 }
 
-func (m *memMarks) mark() *audit.CheckMark {
+// mark answers the stored mark of scope, or nil.
+func (m *memMarks) mark(scope namespace.Name) *audit.CheckMark {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.state.Mark
+	for _, have := range m.state.Marks {
+		if have.Scope == scope {
+			return &have
+		}
+	}
+
+	return nil
 }
 
 func (m *memMarks) setFailSave(fail bool) {
@@ -117,7 +135,7 @@ func markedByA(t *testing.T) (checkpointFixture, *audit.Checkpoints) {
 
 	f := newCheckpointFixture(t, 3)
 	marks := &memMarks{
-		state:    audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0},
+		state:    audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0},
 		failRead: false,
 		failSave: false,
 		mu:       sync.Mutex{},
@@ -134,17 +152,60 @@ func markedByA(t *testing.T) (checkpointFixture, *audit.Checkpoints) {
 		t.Fatalf("verify of A: got %+v, %v, want invalid", got, err)
 	}
 
-	if mark := marks.mark(); mark == nil || mark.Sequence != 3 || mark.Scope != "acme" || mark.Epoch != 0 {
+	if mark := marks.mark("acme"); mark == nil || mark.Sequence != 3 || mark.Scope != "acme" || mark.Epoch != 0 {
 		t.Fatalf("stored mark: got %+v, want acme at 3 in epoch 0", mark)
 	}
 
 	return f, b
 }
 
-// TestCheckpointsMarkStopsSigningOnEveryInstance proves that a mismatch that
-// instance A finds stops signing of that scope on instance B and no other scope, and that a new
-// epoch ends it.
-func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
+// TestCheckpointsMarksOfTwoScopesStopBothOnEveryInstance proves that instance
+// A stores a mark for each scope that it finds bad, so instance B signs
+// neither scope and still signs a third scope.
+func TestCheckpointsMarksOfTwoScopesStopBothOnEveryInstance(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 3)
+	marks := &memMarks{
+		state:    audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0},
+		failRead: false,
+		failSave: false,
+		mu:       sync.Mutex{},
+	}
+	a, b := f.withMarks(t, marks), f.withMarks(t, marks)
+
+	for _, scope := range []namespace.Name{"acme", "beta"} {
+		if wrote, err := a.Write(t.Context(), scope, time.Unix(1_700_000_100, 0)); err != nil || !wrote {
+			t.Fatalf("write of A for %s: %v, %v", scope, wrote, err)
+		}
+	}
+
+	f.changeHead()
+
+	for _, scope := range []namespace.Name{"acme", "beta"} {
+		if got, err := a.Verify(t.Context(), scope); err != nil || got.Valid {
+			t.Fatalf("verify of A for %s: got %+v, %v, want invalid", scope, got, err)
+		}
+	}
+
+	f.entries.add()
+
+	for _, scope := range []namespace.Name{"acme", "beta"} {
+		wrote, err := b.Write(t.Context(), scope, time.Unix(1_700_000_200, 0))
+		if !errors.Is(err, audit.ErrCheckpointMismatch) || wrote {
+			t.Fatalf("write of B for %s: got %v, %v, want ErrCheckpointMismatch", scope, wrote, err)
+		}
+	}
+
+	if wrote, err := b.Write(t.Context(), "gamma", time.Unix(1_700_000_200, 0)); err != nil || !wrote {
+		t.Fatalf("write of B for a third scope: got %v, %v, want a checkpoint", wrote, err)
+	}
+}
+
+// TestCheckpointsMarkStopsSigningOfItsScopeOnEveryInstance proves that a
+// mismatch that instance A finds stops signing of that scope on instance B
+// and of no other scope, and that a new epoch ends it.
+func TestCheckpointsMarkStopsSigningOfItsScopeOnEveryInstance(t *testing.T) {
 	t.Parallel()
 
 	t.Run("B signs nothing while the mark of the epoch stands", func(t *testing.T) {
@@ -218,7 +279,7 @@ func testUnreadableMark(t *testing.T) {
 
 	f := newCheckpointFixture(t, 3)
 	marks := &memMarks{
-		state:    audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0},
+		state:    audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0},
 		failRead: true,
 		failSave: false,
 		mu:       sync.Mutex{},
@@ -244,7 +305,7 @@ func testUnsavedMark(t *testing.T) {
 
 	f := newCheckpointFixture(t, 3)
 	marks := &memMarks{
-		state:    audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0},
+		state:    audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0},
 		failRead: false,
 		failSave: true,
 		mu:       sync.Mutex{},
@@ -261,7 +322,7 @@ func testUnsavedMark(t *testing.T) {
 		t.Fatalf("verify: got %+v, %v, want invalid", got, err)
 	}
 
-	if mark := marks.mark(); mark != nil {
+	if mark := marks.mark("acme"); mark != nil {
 		t.Fatalf("mark stored although the store failed: %+v", mark)
 	}
 
@@ -277,7 +338,7 @@ func testUnsavedMark(t *testing.T) {
 		t.Fatalf("write after the store recovered: got %v, want ErrCheckpointMismatch", err)
 	}
 
-	if mark := marks.mark(); mark == nil || mark.Sequence != 3 {
+	if mark := marks.mark("acme"); mark == nil || mark.Sequence != 3 {
 		t.Fatalf("stored mark after the retry: got %+v, want sequence 3", mark)
 	}
 }

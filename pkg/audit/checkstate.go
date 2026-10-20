@@ -13,9 +13,10 @@ import (
 // sequence that can exist.
 var ErrInvalidCheckState = errors.New("audit chain check state is invalid")
 
-// CheckMark is the first checkpoint mismatch that a check found in one
-// checkpoint epoch. While it stands, no instance signs a checkpoint in that
-// epoch. A new epoch ends it: a mark of an older epoch stops nothing.
+// CheckMark is the first checkpoint mismatch that a check found in one scope
+// in one checkpoint epoch. While it stands, no instance signs a checkpoint of
+// that scope: it stops signing of that scope only. A new epoch ends it: a
+// mark of an older epoch stops nothing.
 type CheckMark struct {
 	// At is the time on the clock of the store when the mark was set. The
 	// store sets it. A caller leaves it zero.
@@ -35,28 +36,58 @@ type CheckState struct {
 	// CheckedAt is the time on the clock of the store of the last result
 	// that was saved, or zero when none was.
 	CheckedAt time.Time
-	// Mark is the checkpoint mismatch mark, or nil when none stands.
-	Mark *CheckMark
+	// Marks holds the checkpoint mismatch marks, one for each scope, in
+	// the order of the scope. It is empty when no mark stands.
+	Marks []CheckMark
 	// Invalid is the count of scopes that did not match in the last saved
 	// result. Each instance exports it as dustpan_audit_chain_invalid.
 	Invalid int
 }
 
-// CheckStore is the port of the stored check state: one row for the
-// installation, written by the instance that runs the scheduled check and
-// read by every instance. It is a control table, so a restore keeps the live
-// row. Each method is one small transaction.
+// Standing answers the count of marks of the newest epoch that Marks holds.
+// An older mark stops nothing, so it does not count. A caller that knows the
+// current epoch uses StandingFrom.
+func (s CheckState) Standing() int {
+	var newest int64
+
+	for _, m := range s.Marks {
+		newest = max(newest, m.Epoch)
+	}
+
+	return s.StandingFrom(newest)
+}
+
+// StandingFrom answers the count of marks of epoch or of a newer epoch. A
+// mark of an older epoch stops nothing, so it does not count.
+func (s CheckState) StandingFrom(epoch int64) int {
+	n := 0
+
+	for _, m := range s.Marks {
+		if m.Epoch >= epoch {
+			n++
+		}
+	}
+
+	return n
+}
+
+// CheckStore is the port of the stored check state: the result of the last
+// check and one mark for each scope that did not match, written by the
+// instances that check and read by every instance. They are control tables,
+// so a restore keeps the live rows. Each method is one small transaction.
 type CheckStore interface {
 	// CheckState answers the stored state. A database without a row
 	// answers the zero CheckState and no error.
 	CheckState(ctx context.Context) (CheckState, error)
 	// SaveCheckResult stores invalid as the count of scopes that did not
 	// match and sets the time of the result to the clock of the store. It
-	// keeps the mark. It returns ErrInvalidCheckState for a negative count.
+	// keeps the marks. It returns ErrInvalidCheckState for a negative count.
 	SaveCheckResult(ctx context.Context, invalid int) error
-	// SaveCheckMark stores mark. The first mark of an epoch stays: a later
-	// mark of the same epoch, or of an older one, changes nothing and
-	// returns no error. A mark of a newer epoch replaces the older mark.
+	// SaveCheckMark stores mark for its scope. The first mark of a scope in
+	// an epoch stays: a later mark of the same scope in the same epoch, or
+	// in an older one, changes nothing and returns no error. A mark of a
+	// newer epoch replaces the older mark of that scope. A mark of one
+	// scope never changes the mark of another scope.
 	// It returns ErrInvalidCheckState for a mark with a negative epoch or
 	// sequence, or with an empty scope.
 	SaveCheckMark(ctx context.Context, mark CheckMark) error

@@ -34,14 +34,16 @@ type AccessTokenPolicy struct {
 }
 
 type AuditChainCheck struct {
-	ID           int16
-	CheckedAtMs  int64
-	Invalid      int64
-	Marked       bool
-	MarkEpoch    int64
-	MarkScope    string
-	MarkSequence int64
-	MarkedAtMs   int64
+	ID          int16
+	CheckedAtMs int64
+	Invalid     int64
+}
+
+type AuditChainMark struct {
+	Scope      string
+	Epoch      int64
+	Sequence   int64
+	MarkedAtMs int64
 }
 
 type AuditChainState struct {

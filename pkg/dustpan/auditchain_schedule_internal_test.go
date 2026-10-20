@@ -94,7 +94,7 @@ func TestJobSchedulesRunAuditChainCheckOncePerTick(t *testing.T) {
 		t.Fatalf("check state: %v", err)
 	}
 
-	if state.CheckedAt.IsZero() || state.Invalid != 0 || state.Mark != nil {
+	if state.CheckedAt.IsZero() || state.Invalid != 0 || len(state.Marks) != 0 {
 		t.Fatalf("stored state after the checks = %+v, want a check time, no invalid scope and no mark", state)
 	}
 }
@@ -157,7 +157,7 @@ var errCheckStore = errors.New("check store fails")
 type failingChecks struct{}
 
 func (failingChecks) CheckState(context.Context) (audit.CheckState, error) {
-	return audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0}, errCheckStore
+	return audit.CheckState{CheckedAt: time.Time{}, Marks: nil, Invalid: 0}, errCheckStore
 }
 
 func (failingChecks) SaveCheckResult(context.Context, int) error { return errCheckStore }
@@ -202,6 +202,49 @@ func TestAuditChainGaugeReadsTheStoredResult(t *testing.T) {
 
 	if got := metricLine(t, b); !strings.Contains(got, "dustpan_audit_chain_invalid 1") {
 		t.Fatalf("metrics with a store that cannot be read:\n%s\nwant one invalid scope: a failed read denies", got)
+	}
+}
+
+// TestAuditChainGaugeKeepsTheStandingMarks proves that an older check that
+// ends late cannot clear the alarm: the stored result is last-writer-wins, so
+// the gauge exports the larger of the stored count and the count of marks in
+// the newest epoch. A mark of an older epoch does not count.
+func TestAuditChainGaugeKeepsTheStandingMarks(t *testing.T) {
+	t.Parallel()
+
+	st := openScheduleChainStore(t)
+	a, b := newInstanceChain(t, st), newInstanceChain(t, st)
+
+	for _, m := range []audit.CheckMark{
+		{At: time.Time{}, Scope: "acme", Sequence: 3, Epoch: 2},
+		{At: time.Time{}, Scope: "beta", Sequence: 4, Epoch: 2},
+		{At: time.Time{}, Scope: "gamma", Sequence: 5, Epoch: 1},
+	} {
+		if err := st.SaveCheckMark(t.Context(), m); err != nil {
+			t.Fatalf("save mark of %s: %v", m.Scope, err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		invalid int
+		want    int
+	}{
+		{name: "a newer check found 3 scopes", invalid: 3, want: 3},
+		{name: "an older check ends late with none", invalid: 0, want: 2},
+		{name: "a result below the marks", invalid: 1, want: 2},
+	}
+
+	for _, tt := range tests {
+		a.storeResult(t.Context(), tt.invalid)
+
+		want := "dustpan_audit_chain_invalid " + strconv.Itoa(tt.want)
+
+		for name, chain := range map[string]*auditChain{"A": a, "B": b} {
+			if got := metricLine(t, chain); !strings.Contains(got, want) {
+				t.Fatalf("%s: instance %s metrics:\n%s\nwant %q", tt.name, name, got, want)
+			}
+		}
 	}
 }
 

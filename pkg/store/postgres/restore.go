@@ -335,7 +335,11 @@ const signInFailureColumns = "source, window_end_ms, count"
 
 // auditChainCheckColumns lists every column of audit_chain_check, for the
 // copy of the control tables.
-const auditChainCheckColumns = "id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms"
+const auditChainCheckColumns = "id, checked_at_ms, invalid"
+
+// auditChainMarkColumns lists every column of audit_chain_mark, for the copy
+// of the control tables.
+const auditChainMarkColumns = "scope, epoch, sequence, marked_at_ms"
 
 // keepControlTables replaces the rows of the durable control tables in the
 // restored schema live with the rows of the schema previous, in tx. A
@@ -350,12 +354,14 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 	stmts := []string{
 		"LOCK TABLE " + pgIdent(previous) + ".durable_operations, " + pgIdent(previous) +
 			".durable_steps, " + pgIdent(previous) + ".durable_schedules, " + pgIdent(previous) +
-			".sign_in_failures, " + pgIdent(previous) + ".audit_chain_check IN EXCLUSIVE MODE",
+			".sign_in_failures, " + pgIdent(previous) + ".audit_chain_check, " + pgIdent(previous) +
+			".audit_chain_mark IN EXCLUSIVE MODE",
 		"DELETE FROM " + pgIdent(live) + ".durable_steps",
 		"DELETE FROM " + pgIdent(live) + ".durable_operations",
 		"DELETE FROM " + pgIdent(live) + ".durable_schedules",
 		"DELETE FROM " + pgIdent(live) + ".sign_in_failures",
 		"DELETE FROM " + pgIdent(live) + ".audit_chain_check",
+		"DELETE FROM " + pgIdent(live) + ".audit_chain_mark",
 		"INSERT INTO " + pgIdent(live) + ".durable_operations (" + durableOperationColumns + ") SELECT " +
 			durableOperationColumns + " FROM " + pgIdent(previous) + ".durable_operations",
 		"INSERT INTO " + pgIdent(live) + ".durable_steps (operation_id, name, seq, result, done_at_ms)" +
@@ -366,6 +372,8 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 			signInFailureColumns + " FROM " + pgIdent(previous) + ".sign_in_failures",
 		"INSERT INTO " + pgIdent(live) + ".audit_chain_check (" + auditChainCheckColumns + ") SELECT " +
 			auditChainCheckColumns + " FROM " + pgIdent(previous) + ".audit_chain_check",
+		"INSERT INTO " + pgIdent(live) + ".audit_chain_mark (" + auditChainMarkColumns + ") SELECT " +
+			auditChainMarkColumns + " FROM " + pgIdent(previous) + ".audit_chain_mark",
 	}
 
 	for _, stmt := range stmts {

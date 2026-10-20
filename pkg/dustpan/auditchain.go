@@ -1470,8 +1470,11 @@ func (c *auditChain) warnReadFailure(ctx context.Context, err error) {
 		slog.String("error", err.Error()))
 }
 
-// storedInvalid answers the count of scopes that did not match in the last
-// stored result, for dustpan_audit_chain_invalid. It fails closed: a row that
+// storedInvalid answers the count of scopes that did not match, for
+// dustpan_audit_chain_invalid: the larger of the count in the last stored
+// result and the count of marks that stand in the current epoch. The stored
+// result is last-writer-wins, so an older check that ends late can store a
+// lower count. The mark is durable, so it keeps the alarm. It fails closed: a row that
 // cannot be read counts as one scope that does not match, so a database
 // fault never reads as a good chain. Each failed read adds one to
 // dustpan_audit_chain_read_errors_total, which tells a fault from a
@@ -1491,7 +1494,25 @@ func (c *auditChain) storedInvalid() int {
 		return 1
 	}
 
-	return state.Invalid
+	return max(state.Invalid, c.standingMarks(ctx, state))
+}
+
+// standingMarks answers the count of marks that stand in the current epoch of
+// the checkpoints. A new epoch ends a mark, so the count uses the current
+// epoch and not the newest epoch of a mark. It reads the epoch only while a
+// mark exists. When the epoch cannot be read, or the server has no
+// checkpoints, it counts the marks of the newest epoch: the alarm stays on.
+func (c *auditChain) standingMarks(ctx context.Context, state audit.CheckState) int {
+	if len(state.Marks) == 0 || c.checkpoints == nil {
+		return state.Standing()
+	}
+
+	epoch, err := c.checkpoints.Epoch(ctx)
+	if err != nil {
+		return state.Standing()
+	}
+
+	return state.StandingFrom(epoch)
 }
 
 // bindAuditChain gives chain the services that are built after it: the

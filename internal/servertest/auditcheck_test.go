@@ -204,7 +204,7 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 	}
 
 	eventually(t, "mark of the mismatch", func() bool {
-		return queryInt(t, c, "SELECT count(*) FROM audit_chain_check WHERE marked") == 1
+		return queryInt(t, c, "SELECT count(*) FROM audit_chain_mark") == 1
 	})
 
 	if err := blobs.Delete(t.Context(), badKey); err != nil {

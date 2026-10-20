@@ -3156,23 +3156,27 @@ DELETE FROM idempotency_records;
 
 
 -- name: GetAuditChainCheck :one
--- The stored result of the scheduled audit chain check and the mark of a
--- checkpoint mismatch. No row means no check ran and no mark stands.
-SELECT checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms
-FROM audit_chain_check WHERE id = 1;
+-- The stored result of the scheduled audit chain check. No row means no check
+-- ran.
+SELECT checked_at_ms, invalid FROM audit_chain_check WHERE id = 1;
 
 -- name: SaveAuditChainCheckResult :exec
 -- Stores the count of scopes that did not match, with the time of the clock
--- of the store. It keeps the mark.
-INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms)
-VALUES (1, sqlc.arg('now_ms'), sqlc.arg('invalid'), 0, 0, '', 0, 0)
+-- of the store.
+INSERT INTO audit_chain_check (id, checked_at_ms, invalid)
+VALUES (1, sqlc.arg('now_ms'), sqlc.arg('invalid'))
 ON CONFLICT (id) DO UPDATE SET checked_at_ms = excluded.checked_at_ms, invalid = excluded.invalid;
 
--- name: SaveAuditChainCheckMark :exec
--- Stores the mark of a checkpoint mismatch. The first mark of an epoch
--- stays, and a mark of a newer epoch replaces the older one.
-INSERT INTO audit_chain_check (id, checked_at_ms, invalid, marked, mark_epoch, mark_scope, mark_sequence, marked_at_ms)
-VALUES (1, 0, 0, 1, sqlc.arg('epoch'), sqlc.arg('scope'), sqlc.arg('sequence'), sqlc.arg('now_ms'))
-ON CONFLICT (id) DO UPDATE SET marked = 1, mark_epoch = excluded.mark_epoch, mark_scope = excluded.mark_scope,
-    mark_sequence = excluded.mark_sequence, marked_at_ms = excluded.marked_at_ms
-WHERE audit_chain_check.marked = 0 OR audit_chain_check.mark_epoch < excluded.mark_epoch;
+-- name: ListAuditChainMarks :many
+-- The marks of checkpoint mismatches, one for each scope.
+SELECT scope, epoch, sequence, marked_at_ms FROM audit_chain_mark ORDER BY scope;
+
+-- name: SaveAuditChainMark :exec
+-- Stores the mark of a checkpoint mismatch of one scope. The first mark of a
+-- scope in an epoch stays, and a mark of a newer epoch replaces the older
+-- one.
+INSERT INTO audit_chain_mark (scope, epoch, sequence, marked_at_ms)
+VALUES (sqlc.arg('scope'), sqlc.arg('epoch'), sqlc.arg('sequence'), sqlc.arg('now_ms'))
+ON CONFLICT (scope) DO UPDATE SET epoch = excluded.epoch, sequence = excluded.sequence,
+    marked_at_ms = excluded.marked_at_ms
+WHERE audit_chain_mark.epoch < excluded.epoch;
