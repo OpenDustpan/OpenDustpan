@@ -27,9 +27,9 @@ type Tokens interface {
 type Config struct {
 	Store Store
 	// Guard checks that the caller of a membership change, a delete or an enable holds
-	// what the grants of the principal or the group give. Nil means
-	// no check: only an installation that grants nothing, where every
-	// caller is an administrator, leaves it nil.
+	// what the grants of the principal or the group give. It is required.
+	// An installation that keeps no grants passes AdminOnlyGuard, which
+	// allows only an administrator.
 	Guard Guard
 	// Namespaces reads the fence of the namespace of a principal of a
 	// namespace. Nil means the Service keeps no principal of a namespace.
@@ -72,10 +72,14 @@ type Service struct {
 	newID      func(prefix string) string
 }
 
-// NewService returns a Service. Store is required.
+// NewService returns a Service. Store and Guard are required.
 func NewService(cfg Config) (*Service, error) {
 	if cfg.Store == nil {
 		return nil, fmt.Errorf("%w: principal store", ErrMissingDependency)
+	}
+
+	if cfg.Guard == nil {
+		return nil, fmt.Errorf("%w: principal guard", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -639,8 +643,10 @@ func (s *Service) signIn(
 // checkGroup asks the Guard whether caller may change who holds the grants
 // of the group groupID.
 func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, groupID string) error {
+	// Defense in depth: NewService refuses a missing Guard. This check stays so
+	// that a Service built any other way allows only an administrator.
 	if s.guard == nil {
-		return nil
+		return AdminOnlyGuard{}.CheckGroupGrants(ctx, caller, groupID)
 	}
 
 	return s.guard.CheckGroupGrants(ctx, caller, groupID)
@@ -649,8 +655,10 @@ func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, gro
 // checkPrincipal asks the Guard whether caller may revoke the grants of the
 // principal principalID.
 func (s *Service) checkPrincipal(ctx context.Context, caller identity.Principal, principalID string) error {
+	// Defense in depth: NewService refuses a missing Guard. This check stays so
+	// that a Service built any other way allows only an administrator.
 	if s.guard == nil {
-		return nil
+		return AdminOnlyGuard{}.CheckPrincipalGrants(ctx, caller, principalID)
 	}
 
 	return s.guard.CheckPrincipalGrants(ctx, caller, principalID)

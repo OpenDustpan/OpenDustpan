@@ -67,7 +67,15 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	principals, err := principal.NewService(
-		principal.Config{TempAdmins: nil, Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+		principal.Config{
+			TempAdmins: nil,
+			Store:      st,
+			Guard:      allowAllGuard{},
+			Namespaces: nil,
+			Tokens:     nil,
+			Now:        nil,
+			NewID:      nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -717,7 +725,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 		principal.Config{
 			TempAdmins: nil,
 			Store:      failingStore{st},
-			Guard:      nil,
+			Guard:      allowAllGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -1089,4 +1097,14 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 				c.principalID, got.TemporaryAdministrator, c.want)
 		}
 	}
+}
+
+// allowAllGuard is a principal.Guard that allows every change. These tests
+// check the routes, not the grant check, which the principal package tests.
+type allowAllGuard struct{}
+
+func (allowAllGuard) CheckGroupGrants(context.Context, identity.Principal, string) error { return nil }
+
+func (allowAllGuard) CheckPrincipalGrants(context.Context, identity.Principal, string) error {
+	return nil
 }

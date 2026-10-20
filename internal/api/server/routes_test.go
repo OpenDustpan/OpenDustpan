@@ -671,7 +671,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

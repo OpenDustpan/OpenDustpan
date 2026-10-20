@@ -617,6 +617,15 @@ An output adapter of the port `pkg/logsink` that delivers structured records to 
 _Avoid_: Log target, log destination, exporter
 _Copy says_: "log output", with the target: a file, syslog or a webhook. Never write "sink" in copy.
 
+**Chat platform**:
+A chat service that OpenDustpan posts messages to: Slack, Microsoft Teams, Mattermost or Matrix (ADR 262). The code type is `chat.Platform`, and the wire value is the lower-case name in the field `platform`. `chatops.Request.Platform` takes this type later.
+_Avoid_: Tool (for a chat service, because a tool is an infrastructure-as-code CLI), provider, integration
+
+**Chat sink**:
+A notification sink of the kind `chat`. It posts a message to one chat platform. The field `platform` names it, and the person who creates the sink gives it. The first form posts to an incoming webhook URL, which is a secret item of the scope. A read of the sink shows its platform, its name and the host of the URL, and whether a URL exists. One sender serves every chat sink, and a renderer for each platform builds the request (RFC 98).
+_Avoid_: Chat connection (for a webhook sink)
+_Copy says_: "Slack channel" or "Slack webhook" for a sink that posts to a webhook URL, and the same pattern for the other platforms. "Slack connection" stays the word for the later connection to a Slack app. Never write "sink" in copy.
+
 **Kind of access**:
 The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The principal kind decides the kind of a state download, never the declared channel (ADR 240). A download with a session or an access token of a principal of the kind `person` writes `reveal`. This includes `tofu state pull` with a personal token or the bootstrap admin token. A download with a service token, a token from a trust rule or a job token writes `tool-operation`. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log). ADR 52 adds `read-access`: a read of the access-review export of an object.
 _Avoid_: Audit type, `log-decryption` as a kind
@@ -640,6 +649,23 @@ _Avoid_: Quota (the catalog quota is another concept), storage quota
 **Unmanaged resource**:
 A cloud resource that does not have exactly one unit that manages it. It has three kinds. **Not in any unit**: the state of no unit holds the resource, and only a cloud sweep can find it. **Left behind**: only deleted units hold its resource key. **Managed twice**: two or more live units hold its resource key, from one tool or from both (ADR 163).
 _Avoid_: Orphan (that is a stored file), ghost resource, shadow resource
+
+**Drift**:
+A difference between the state of a unit and the real resources that the state names. A change outside the tool causes it, for example a manual edit in a cloud console. A cloud resource that no unit manages is not drift. It is an unmanaged resource (ADR 163).
+_Avoid_: Out-of-band change (except to name a cause), configuration drift
+
+**Drift check**:
+A job with the operation `refresh` and one phase, `plan`, that finds drift (ADR 263). It changes no resource and writes no state version. OpenTofu runs a refresh-only plan and the Pulumi CLI runs a refresh preview. It starts on its own only when a drift schedule is on, and a person can start it at any time. Remediation is a separate job (ADR 258).
+_Avoid_: Drift run (older ADRs only), drift scan (a scan is a Sweep), health assessment
+_Copy says_: "drift check" for both tools. On the page of one tool, that tool's own words: "refresh-only plan" for OpenTofu and "refresh preview" for the Pulumi CLI.
+
+**Drift result**:
+What one finished drift check reports: the unit, the job and the time. It also lists the address of each resource that differs. It holds no attribute value. A unit keeps its latest drift result. The **drift status** follows from it: `drifted`, `in-sync` or `unknown`. The status `drifted` is one badge of the unit among others.
+_Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
+
+**Drift schedule**:
+The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
+_Avoid_: Drift policy (a policy alone names no object), drift trigger
 
 **Catalog**:
 The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.

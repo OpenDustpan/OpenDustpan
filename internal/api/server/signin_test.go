@@ -1078,7 +1078,7 @@ func TestSignInProviderDown(t *testing.T) {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: allowAllGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principals: %v", err)

@@ -2624,7 +2624,8 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 		return nil, nil //nolint:nilnil // No principal store is a valid setup: the routes answer 501.
 	}
 
-	var guard principal.Guard
+	// Without grants, only an administrator changes who holds them (none do).
+	var guard principal.Guard = principal.AdminOnlyGuard{}
 
 	var tokens principal.Tokens
 

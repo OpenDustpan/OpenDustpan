@@ -333,16 +333,12 @@ func replayRevocations(ctx context.Context, tx *sql.Tx) error {
 // to append, or nil when the staged data held nothing live to change.
 func replayRevocation(ctx context.Context, tx *sql.Tx, r maintenance.Revocation) (*audit.Entry, error) {
 	if err := r.Validate(); err != nil {
-		denied := r.ReplayEntry(err)
-
-		return &denied, nil
+		return checkedReplayEntry(r, err)
 	}
 
 	plan, known := replayPlan(r.Kind)
 	if !known {
-		denied := r.ReplayEntry(fmt.Errorf("%w: unknown kind %q", maintenance.ErrInvalidRevocation, r.Kind))
-
-		return &denied, nil
+		return checkedReplayEntry(r, fmt.Errorf("%w: unknown kind %q", maintenance.ErrInvalidRevocation, r.Kind))
 	}
 
 	applied := false
@@ -367,7 +363,18 @@ func replayRevocation(ctx context.Context, tx *sql.Tx, r maintenance.Revocation)
 		return nil, nil //nolint:nilnil // No staged row changed: the caller appends no entry.
 	}
 
-	entry := r.ReplayEntry(nil)
+	return checkedReplayEntry(r, nil)
+}
+
+// checkedReplayEntry returns the replay entry of r after Validate accepts it,
+// or the fixed denied entry. A row that passed its own checks has already
+// ended its target: a revocation only narrows access, so a failed entry
+// never undoes it.
+func checkedReplayEntry(r maintenance.Revocation, invalid error) (*audit.Entry, error) {
+	entry, err := r.CheckedReplayEntry(invalid, audit.Entry.Validate)
+	if err != nil {
+		return nil, fmt.Errorf("replay revocation %d: %w", r.ID, err)
+	}
 
 	return &entry, nil
 }
