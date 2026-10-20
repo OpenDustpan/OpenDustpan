@@ -241,6 +241,7 @@ func newMoveFixtureFull(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Views: nil,
 		Audit: nil, OnAuditFailure: nil, Locks: locks, PublicURL: "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

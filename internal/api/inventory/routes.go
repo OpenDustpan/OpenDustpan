@@ -148,6 +148,10 @@ func (h *Handler) buildRoutes() []Route {
 		routes = append(routes, h.lockRoutes()...)
 	}
 
+	if h.views != nil {
+		routes = append(routes, h.viewRoutes()...)
+	}
+
 	return routes
 }
 
