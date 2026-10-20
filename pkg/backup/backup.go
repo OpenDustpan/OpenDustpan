@@ -144,9 +144,15 @@ var Tables = []string{
 	"runner_pools",
 	"runner_join_tokens",
 	"runners",
+	"jobs",
+	"job_freezes",
+	"unit_state_versions",
+	"unit_final_versions",
 	"profiles",
 	"profile_revisions",
 	"manual_locks",
+	TablePersonPreferences,
+	"saved_views",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

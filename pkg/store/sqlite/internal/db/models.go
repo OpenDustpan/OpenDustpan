@@ -387,6 +387,33 @@ type InventoryLabel struct {
 	LabelValue string
 }
 
+type Job struct {
+	ID               string
+	NamespaceID      string
+	UnitID           string
+	Seq              int64
+	State            string
+	Wait             string
+	CurrentPhase     int64
+	CurrentChanges   bool
+	CurrentOperation string
+	IdempotencyKey   string
+	Version          int64
+	Body             string
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+type JobFreeze struct {
+	ID          string
+	NamespaceID string
+	Reason      string
+	StartsAtMs  int64
+	EndsAtMs    int64
+	CreatedBy   string
+	EndedBy     string
+}
+
 type MaintenanceRevocation struct {
 	ID        int64
 	Kind      string
@@ -447,6 +474,12 @@ type OidcProvider struct {
 	ProviderID  string
 	Issuer      string
 	CreatedAtMs int64
+}
+
+type PersonPreference struct {
+	PrincipalID string
+	Document    string
+	UpdatedAtMs int64
 }
 
 type Principal struct {
@@ -603,6 +636,15 @@ type RunnerSession struct {
 	CreatedAtMs    int64
 }
 
+type SavedView struct {
+	ID          string
+	NamespaceID string
+	Owner       string
+	Name        string
+	QueryJson   string
+	CreatedAtMs int64
+}
+
 type SchemaMigration struct {
 	Version          int64
 	Name             string
@@ -728,6 +770,22 @@ type TempAdmin struct {
 	CreatedBy   string
 	Reason      string
 	EndedAtMs   sql.NullInt64
+}
+
+type UnitFinalVersion struct {
+	UnitID      string
+	NamespaceID string
+	VersionID   string
+	CommitID    string
+	JobID       string
+	AtMs        int64
+}
+
+type UnitStateVersion struct {
+	UnitID      string
+	NamespaceID string
+	VersionID   string
+	UpdatedAtMs int64
 }
 
 type Update struct {

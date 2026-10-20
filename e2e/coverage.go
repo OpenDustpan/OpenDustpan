@@ -15,6 +15,7 @@ import (
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	profileapi "opendustpan.org/opendustpan/internal/api/profile"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
@@ -30,11 +31,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/profile"
+	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -78,6 +81,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
+	jobRoutes := coverageJobRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := make(
@@ -98,6 +102,8 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		)+len(
 			profileRoutes,
 		)+len(
+			jobRoutes,
+		)+len(
 			server,
 		)+probeRouteCount,
 	)
@@ -108,6 +114,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	out = append(out, auditRoutes...)
 	out = append(out, contextRoutes...)
 	out = append(out, profileRoutes...)
+	out = append(out, jobRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -682,6 +689,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Views:         coverageViews(tb),
 		Locks:         locks,
 		PublicURL:     "",
 		Moves:         nil,
@@ -733,6 +741,35 @@ func coverageContextRoutes(tb testing.TB, namespaces *namespace.Service) []Route
 	})
 	if err != nil {
 		tb.Fatalf("context handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageJobRoutes returns the jobs adapter's route table.
+func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := jobsapi.NewHandler(jobsapi.Config{
+		Namespaces:     namespaces,
+		Jobs:           struct{ job.Store }{nil},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Audit:          nil,
+		OnAuditFailure: nil,
+		DenialLimiter:  nil,
+		Sessions:       nil,
+		Logger:         slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("jobs handler: %v", err)
 	}
 
 	routes := handler.Routes()
@@ -1117,6 +1154,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Preferences:      nil,
 		Workers:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},
@@ -1262,6 +1300,9 @@ func CoverageAllowlist() []AllowEntry {
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
+		jobAllowEntries(),
+		preferencesAllowEntries(),
+		savedViewAllowEntries(),
 	)
 }
 
@@ -2286,5 +2327,54 @@ func manualLockAllowEntries() []AllowEntry {
 		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: reason},
 		{Method: http.MethodDelete, Path: path, CoveringTest: test, Reason: reason},
 		{Method: http.MethodPost, Path: path + "/force-unlock", CoveringTest: test, Reason: reason},
+	}
+}
+
+// jobAllowEntries covers the route that reads a job. No CLI reads a job: the
+// console and the clients of the API do. The harness steps of TestJobsAPI
+// read a job, a job that the caller may not read and a job that does not
+// exist through the API.
+func jobAllowEntries() []AllowEntry {
+	return []AllowEntry{{
+		Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
+		CoveringTest: "TestJobsAPI",
+		Reason: "Console and client route: no CLI reads a job. The harness steps of TestJobsAPI read a job " +
+			"through the API.",
+	}}
+}
+
+// savedViewAllowEntries covers the routes of the saved views. No CLI calls
+// them: the console and the clients of the API do. The steps of
+// TestSavedViewsAPI call each of them with the personal token of a person.
+func savedViewAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/views"
+		test = "TestSavedViewsAPI"
+		why  = "Console and client route: no CLI calls it. The steps of TestSavedViewsAPI call it with the token of a person."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodPost, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base, CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/{view_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodDelete, Path: base + "/{view_id}", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/{view_id}/units", CoveringTest: test, Reason: why},
+	}
+}
+
+// coverageViews returns the saved view config for the route table. The
+// services are empty shells: they exist only to build a Handler.
+func coverageViews(tb testing.TB) *inventoryapi.ViewsConfig {
+	tb.Helper()
+
+	service, err := savedview.NewService(savedview.Config{
+		Store: struct{ savedview.Store }{nil}, Namespaces: coverageNamespaceStore{}, Now: nil,
+	})
+	if err != nil {
+		tb.Fatalf("saved view service: %v", err)
+	}
+
+	return &inventoryapi.ViewsConfig{
+		Service: service, Principals: struct{ inventoryapi.ViewPrincipals }{nil}, Idempotency: nil,
 	}
 }

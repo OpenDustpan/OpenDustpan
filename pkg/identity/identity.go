@@ -302,6 +302,11 @@ const (
 	// object is CallerObject. Every authenticated person holds it with no
 	// grant.
 	ActionTokenManageOwn Action = "token:manage-own"
+	// ActionCallerManagePreferences allows a person to change its own
+	// preferences. Its object is CallerObject. Every authenticated person
+	// holds it with no grant. A request that acts as a person acts on its
+	// subject. No agent tool holds it.
+	ActionCallerManagePreferences Action = "caller:manage-preferences"
 	// ActionCollectionRead allows reading a collection and listing the
 	// collections of a namespace. Its object is a collection, or the namespace
 	// for a list (ADR 51, decision 11).
@@ -497,6 +502,17 @@ const (
 	// ActionProfileManage allows deleting a profile. Its object is the
 	// namespace that holds the profile.
 	ActionProfileManage Action = "profile:manage"
+
+	// ActionViewCreate allows a person to make a saved view of their own.
+	// Its object is the namespace that holds the view.
+	ActionViewCreate Action = "view:create"
+	// ActionViewRead allows reading the saved views of the caller, and
+	// running one. A view of another person is never readable. Its object is
+	// the namespace that holds the view.
+	ActionViewRead Action = "view:read"
+	// ActionViewDelete allows deleting a saved view of the caller. Its object
+	// is the namespace that holds the view.
+	ActionViewDelete Action = "view:delete"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

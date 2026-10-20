@@ -46,6 +46,8 @@ const (
 	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
+	backupColSeq         = "seq"
+	backupColJobID       = "job_id"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -226,7 +228,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table: "collection_members",
 			columns: []string{
-				"unit_id", backupColNamespace, "collection_key", "assigned_at_ms",
+				backupColUnitID, backupColNamespace, "collection_key", "assigned_at_ms",
 			},
 		},
 		{
@@ -298,7 +300,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table: "inventory_changes",
 			columns: []string{
-				backupColNamespaceID, "seq", backupColAtMs, backupColTool, backupColUnitID, backupColName,
+				backupColNamespaceID, backupColSeq, backupColAtMs, backupColTool, backupColUnitID, backupColName,
 				backupColDisplayName,
 				backupColStatus, "collection", backupColKind, backupColResourceCount,
 			},
@@ -384,7 +386,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"object_id",
 				"fence_version",
 				"principal_kind",
-				"job_id",
+				backupColJobID,
 				backupColReason,
 			},
 		},
@@ -402,8 +404,11 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteImportBackupTables(),
 		sqliteBlameBackupTables(),
 		sqliteRunnerBackupTables(),
+		sqliteJobBackupTables(),
 		sqliteProfileBackupTables(),
 		sqliteManualLockBackupTables(),
+		sqlitePreferenceBackupTables(),
+		sqliteSavedViewBackupTables(),
 	)
 }
 
@@ -416,7 +421,7 @@ func sqliteControlTables() []sqliteBackupTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", backupColKind, "input", "version", "state", "attempt", "expiries", "failures",
+				"id", "start_key", backupColKind, "input", backupColVersion, "state", "attempt", "expiries", "failures",
 				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
 				"not_before_ms", "created_at_ms", "updated_at_ms",
 			},
@@ -515,7 +520,7 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		},
 		{
 			table:   backup.TableDurableHeartbeats,
-			columns: []string{"owner", "at_ms"},
+			columns: []string{"owner", backupColAtMs},
 		},
 	}
 }

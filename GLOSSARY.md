@@ -70,6 +70,10 @@ One fact about a unit that the inventory shows as a badge: `in-sync`, `running`,
 _Avoid_: Unit status (for the set), winning status, health
 _Copy says_: the tool's own words on its own pages. "Approval wait" is the human word for `awaiting-approval`.
 
+**Saved view**:
+A name for a query of the unit list, stored on the server and read through the REST API (ADR 266). A saved view holds the query and never its results. A reader runs the query again with the access of the reader, so the view shows only units that the reader can read. A saved view grants no access (ADR 51 decision 7). One person in one namespace owns a view, and a view is private first (ADR 266).
+_Avoid_: Filter preset, bookmark, smart collection (a collection holds units by explicit membership, ADR 51)
+
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
 _Avoid_: Lease (for the inventory field), unit status
@@ -176,9 +180,33 @@ _Avoid_: Feature list, handshake, capability (alone)
 The machine-readable document that lists the operations of the tool-neutral REST API under `/api/dustpan/v1`. The SDKs, the CLI and the providers are generated from it (ADR 264). It does not describe the Pulumi Cloud-compatible API or the TFE-compatible API.
 _Avoid_: Swagger file, API spec, OpenAPI spec, schema file
 
+**Forge**:
+A git hosting service with an API, for example GitHub, GitLab or Forgejo. The server uses a forge only through the `Forge` port and a forge connection. Internal term. User-facing text names the service (GitHub, GitLab, Forgejo). Where a generic term is needed, it says Git host.
+_Avoid_: VCS provider, SCM, VCS (alone). In user-facing text: forge
+
 **Forge connection**:
-The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server keeps them as sealed credentials of the namespace, not as a setting. A namespace can have many forge connections, and one of them is the default (ADR 213).
+The credentials that let the server use one forge for a namespace. With them, the server reads files, takes webhooks, posts results and, if allowed, pushes. The server keeps them sealed, not as a setting. The credentials of a token connection, and the key and event secret of a per-namespace GitHub App, are namespace credentials. The key and event secret of the installation-level GitHub App, the default for GitHub, are installation credentials. The operator sets them, and a connection of a namespace holds no credential set of its own. A namespace can have many forge connections, and one of them is the default (ADR 213). User-facing text names the service ("GitHub connection"). Where a generic term is needed, it says Git host connection.
 _Avoid_: VCS integration, VCS provider, app (alone)
+
+**Review request**:
+A proposed change on a forge that people review before a merge: a pull request of GitHub or a merge request of GitLab. OpenDustpan approvals add to the approvals of the review request. They never replace them (ADR 103).
+_Avoid_: Pull request, merge request (except when naming the feature of one forge), PR, MR
+
+**Forge capability**:
+One group of operations of the `Forge` port that a forge connection can do, for example `commit`, `review` or `repo-token`. A method outside the capabilities of a connection returns `ErrUnsupported`. The server checks the capabilities that a feature needs when a person names the connection for it.
+_Avoid_: Feature (alone), scope (that is a token permission of the forge), permission
+
+**Forge bridge**:
+A small process that a team runs next to its version control system. The server cannot reach that system, or the system has no forge API. The bridge does the operations of the `Forge` port on that side, and connects out to the server.
+_Avoid_: Proxy, relay, gateway, mirror
+
+**Forge event**:
+A signed request that a forge sends to the server: a push, a change of a review request, or a comment. The server checks its signature, and reads the object through the API of the forge before it changes a record. So an event is a hint, never a fact. The server takes it at `/webhooks/{hook ID}`.
+_Avoid_: Webhook (that is the setting on the forge, or a sink of notifications), callback, hook (alone)
+
+**Comment command**:
+A command that a person writes in a comment of a review request, for example `plan`, `dustpan apply` or `unlock` (RFC 27). The commands include a command that starts a plan or shows a status. `dustpan apply` applies the plan of the current head, and refuses when the head moved since the plan. A comment command never approves a change.
+_Avoid_: Chat command, slash command, bot command
 
 **Sensitive setting**:
 A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
@@ -675,6 +703,23 @@ _Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
 **Drift schedule**:
 The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
 _Avoid_: Drift policy (a policy alone names no object), drift trigger
+
+**Trigger**:
+A rule of one unit that starts a plan of that unit on its own (ADR 267). It has one kind: `review-request-push`, `schedule` or `follows`. A trigger starts a plan and nothing else. The job passes through the job service, so the gates, the approval rules, the freezes and the manual locks apply. A trigger has no pool: the job takes the runner pool of the unit settings.
+_Avoid_: Run trigger (except for the TFE-compatible object of that name), webhook (an inbound webhook is another idea), automation, hook
+_Copy says_: "trigger". On the page of one tool, that tool's own words: "plan" for OpenTofu and "preview" for the Pulumi CLI.
+
+**Follows trigger**:
+A trigger of the kind `follows`. It names a source unit. After the source applies, a plan of the unit of the trigger starts. A unit of one tool can follow a unit of another tool. The server refuses a cycle of follows triggers when a person saves one. A follows trigger is a declared dependency edge (ADR 153).
+_Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)
+
+**Registry release**:
+One published version of an OpenTofu provider or module in a namespace, with its archives, their SHA-256 hashes and the record of who published it. It never changes after the publish (RFC 101).
+_Avoid_: Package, artifact (that is a plan or a log of a job)
+
+**Registry address**:
+The name of a provider or module in a namespace: the namespace, the kind and the name, with the system for a module. The host of the address is the host of the server (RFC 101).
+_Avoid_: Source address (that is the field of OpenTofu), package name
 
 **Catalog**:
 The self-service gateway of OpenDustpan, with its routes under `/api/dustpan/v1` (ADR 210). A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
@@ -1177,7 +1222,7 @@ The state item of a unit that no redaction can target (ADR 150, ADR 151). For a 
 _Avoid_: Current item, head
 
 **Item key**:
-The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
+The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `namespaces/<namespace ID>/item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
 _Avoid_: Version key, derived key, data key (that is the one key of a scope)
 
 **Redaction**:
@@ -1345,7 +1390,7 @@ Branding that an operator sets for the whole installation, for example the palet
 _Avoid_: Scheme, theme (for branding)
 
 **Preferences**:
-The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. They also hold the language, the formatting locale and the digits (ADR 181). They hold the clock (`hourCycle`), the date style, the first day of the week and the time zone too. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme. The server stores only the settings that a person changed, and a field that the person never set has its default. A `PATCH` is a JSON merge patch, and one that changes nothing writes no audit entry. A row belongs to a person, not to a namespace.
 _Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user settings
 
 

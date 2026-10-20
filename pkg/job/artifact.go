@@ -262,8 +262,9 @@ type PlanUpload struct {
 // The content is in the blob store, sealed with the item key of its plan or
 // log version (secret.ItemSealer). The item key follows the rules of the
 // history model: the server writes the wrapped item key as a blob outside
-// SQL first (secret.ItemKeyID.Object), and then its key record in the
-// fenced transaction that creates the plan or the log version.
+// SQL first (secret.ItemKeyBlobs.Key names the blob and secret.ItemKeyBlobs.Put
+// writes it), and then its key record in the fenced transaction that creates
+// the plan or the log version.
 //
 // The adapter implements history.Redactor for the items of the kinds
 // secret.ItemKindPlan and secret.ItemKindJobLog, with the rules of

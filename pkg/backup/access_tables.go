@@ -28,6 +28,11 @@ const (
 	// the client secret of a provider is sealed under an installation key.
 	TableSignInProviders        = "sign_in_providers"
 	TableInstallationSecretKeys = "installation_secret_keys"
+	// TablePersonPreferences holds the preferences of each person. A row
+	// names a principal by a foreign key, so the table moves with the
+	// principals table: a restore that kept the principals and took the
+	// preferences of the backup would leave rows with no person.
+	TablePersonPreferences = "person_preferences"
 )
 
 // AccessTables lists the tables that a restore replaces only when the
@@ -47,6 +52,7 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableOIDCProviders,
 	TableSignInProviders,
 	TableInstallationSecretKeys,
+	TablePersonPreferences,
 }
 
 // ErrRestoreAccessMismatch reports that the backup names access data that

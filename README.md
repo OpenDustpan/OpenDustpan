@@ -307,6 +307,9 @@ How-to guides:
   and what a refusal looks like.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
+- [Save and open a view of the unit list](docs/guides/saved-views.md): store
+  the labels and references of a unit list under a name, and open the view
+  again.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
@@ -323,6 +326,10 @@ Reference:
   steps and the bounds of a journaled update.
 - [Journal limits](docs/reference/journal-limits.md): the size and time limits
   of a journaled update.
+- [Preferences API](docs/reference/preferences-api.md): the routes that read
+  and change the preferences of a person.
+- [Languages and digits](docs/reference/languages-and-digits.md): the
+  languages, the `digits` setting and the plural forms.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 

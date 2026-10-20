@@ -221,6 +221,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 
 	units, err := inventoryapi.NewHandler(inventoryapi.Config{
 		StateGuard:     nil,
+		Views:          nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 		Locks:          nil,

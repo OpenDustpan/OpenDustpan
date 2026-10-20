@@ -389,45 +389,52 @@ func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 // Cancel implements durable.Store.
 func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	err := d.store.inControlTx(ctx, func(q *db.Queries) error {
-		row, err := q.LockDurableOperation(ctx, string(id))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return durable.ErrNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("lock operation: %w", err)
-		}
-
-		params := db.CancelDurableOperationParams{
-			State: row.State, CancelRequested: row.CancelRequested, NowMs: 0, ID: row.ID,
-		}
-
-		switch durable.State(row.State) {
-		case durable.StatePending:
-			params.State = string(durable.StateCanceled)
-		case durable.StateRunning:
-			params.CancelRequested = true
-		case durable.StateSucceeded, durable.StateFailed:
-			return durable.ErrFinished
-		case durable.StateCanceled:
-			return nil
-		default:
-			return fmt.Errorf("%w: state %q", errUnknownDurableState, row.State)
-		}
-
-		params.NowMs, err = q.DatabaseNowMs(ctx)
-		if err != nil {
-			return fmt.Errorf("read the database clock: %w", err)
-		}
-
-		if err := q.CancelDurableOperation(ctx, params); err != nil {
-			return fmt.Errorf("cancel operation: %w", err)
-		}
-
-		return nil
+		return cancelDurable(ctx, q, id)
 	})
 	if err != nil {
 		return fmt.Errorf("cancel durable operation %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// cancelDurable applies the rules of durable.Store.Cancel to the operation id
+// in the transaction of q. A domain write that cancels an operation in its
+// own transaction calls it.
+func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
+	row, err := q.LockDurableOperation(ctx, string(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return durable.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("lock operation: %w", err)
+	}
+
+	params := db.CancelDurableOperationParams{
+		State: row.State, CancelRequested: row.CancelRequested, NowMs: 0, ID: row.ID,
+	}
+
+	switch durable.State(row.State) {
+	case durable.StatePending:
+		params.State = string(durable.StateCanceled)
+	case durable.StateRunning:
+		params.CancelRequested = true
+	case durable.StateSucceeded, durable.StateFailed:
+		return durable.ErrFinished
+	case durable.StateCanceled:
+		return nil
+	default:
+		return fmt.Errorf("%w: state %q", errUnknownDurableState, row.State)
+	}
+
+	params.NowMs, err = q.DatabaseNowMs(ctx)
+	if err != nil {
+		return fmt.Errorf("read the database clock: %w", err)
+	}
+
+	if err := q.CancelDurableOperation(ctx, params); err != nil {
+		return fmt.Errorf("cancel operation: %w", err)
 	}
 
 	return nil

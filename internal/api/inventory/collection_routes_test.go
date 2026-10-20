@@ -16,9 +16,11 @@ import (
 
 // isCollectionRoute reports whether a route belongs to the collection rows. Those
 // rows fill their path values and answer their own statuses, so TestCollectionRoutes
-// checks them instead of the generic route tests.
+// checks them instead of the generic route tests. The saved view rows need a
+// person, a body and a view ID, so TestViewActions checks them.
 func isCollectionRoute(route apiinventory.Route) bool {
-	return strings.Contains(route.Path, "/collections") || strings.Contains(route.Path, "unit-collection")
+	return strings.Contains(route.Path, "/collections") || strings.Contains(route.Path, "unit-collection") ||
+		strings.Contains(route.Path, "/views")
 }
 
 // newCollectionRouteHandler returns a handler with the collections of the acme
@@ -49,6 +51,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Views: nil,
 		Audit: nil, OnAuditFailure: nil, Locks: nil, PublicURL: "",
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

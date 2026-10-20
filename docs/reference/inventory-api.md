@@ -27,6 +27,11 @@ page is relative to that prefix.
 | `GET /namespaces/{namespace}/lock` | `namespace:read` | The manual lock of the namespace |
 | `DELETE /namespaces/{namespace}/lock` | `unit:lock`, and the caller holds the lock | No body |
 | `POST /namespaces/{namespace}/lock/force-unlock` | `unit:manage` | No body |
+| `POST /namespaces/{namespace}/views` | `view:create`, and the caller is a person | A new saved view |
+| `GET /namespaces/{namespace}/views` | `view:read`, and the caller is a person | The saved views of the caller |
+| `GET /namespaces/{namespace}/views/{view_id}` | `view:read`, and the caller is a person | One saved view of the caller |
+| `DELETE /namespaces/{namespace}/views/{view_id}` | `view:delete`, and the caller is a person | No body |
+| `GET /namespaces/{namespace}/views/{view_id}/units` | `view:read` and `namespace:read`, then `unit:read` on each unit | One page of the units of the view |
 | `GET /namespaces/{namespace}/context` | `namespace:read` | The context of the namespace |
 | `PATCH /namespaces/{namespace}/context` | `namespace:set-context` | The new context |
 | `DELETE /namespaces/{namespace}/context` | `namespace:set-context` | No body |
@@ -54,6 +59,8 @@ These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 
 The [manual locks guide](../guides/manual-locks.md) describes the lock routes.
 
+The [saved views guide](../guides/saved-views.md) describes the view routes.
+
 ## The unit list
 
 `GET /api/dustpan/v1/namespaces/{namespace}/units` answers
@@ -68,6 +75,7 @@ The [manual locks guide](../guides/manual-locks.md) describes the lock routes.
 | `name` | The own name of the unit in its tool |
 | `lastChange` | The time of the last change, an RFC 3339 time in UTC |
 | `status` | The status. The field is not there when the status is not known. |
+| `states` | The states of the unit, as a list of `state` and `since` (an RFC 3339 time in UTC). The list is empty when no state applies. See [Unit states](#unit-states). |
 | `resourceCount` | The count of resources. The field is not there when the count is not known. |
 | `lock` | `holder`, `since` (an RFC 3339 time in UTC) and `operation`. The field is not there when the unit is not locked. |
 | `manualLock` | The manual lock that covers the unit: `kind` (`unit`, `collection` or `namespace`), `object`, `holder`, `reason` and `since` (an RFC 3339 time in UTC). The field is not there when no manual lock covers the unit. It is separate from `lock`. |
@@ -87,6 +95,54 @@ The list is in the order of the unit ID. It answers one page. The answer has
 `nextPageToken` when a later page exists, and has no such field on the last
 page. Send the value as `pageToken` to read the next page, with the same
 namespace and the same filters. A `pageToken` from another query answers 400.
+
+## Unit states
+
+A unit can have several states at the same time. The `states` field lists all
+of them. No state is the winner. Today the list holds one state: `locked`. The
+other states in the table are valid values of the `state` query value, and no
+unit has them yet.
+
+| State | Meaning |
+| --- | --- |
+| `failed` | The latest change to end failed. |
+| `awaiting-approval` | A job of the unit waits for an approval. |
+| `apply-needed` | A change is ready and nobody applied it. |
+| `drifted` | The latest drift check found a difference. |
+| `running` | A job of the unit runs. |
+| `queued` | A job of the unit waits to start. |
+| `locked` | A lock or a manual lock covers the unit. |
+| `unknown` | The drift state of the unit is not known. |
+| `in-sync` | The latest drift check found no difference. |
+
+The list is in the order of this table. The order is the order of the badges
+in the console. It does not rank the states.
+
+`locked` is in the list when the unit has a `lock` field, a `manualLock` field, or both.
+This is true for a Pulumi stack with a running update, for an OpenTofu
+workspace that holds a lock, and for a unit that a manual lock covers. The
+`since` of `locked` is the earlier of the `since` of `lock` and the `since` of
+`manualLock`. The server reads both fields from the same entry that it
+returns. An unlock, the end of the update, or the end of the manual lock takes
+`locked` away. A locked unit keeps its other states.
+
+Send `state` to list only the units that have a state. A unit matches when it
+has any of the values. The filter adds to the other filters: a unit must pass
+all of them. The match is exact. The server does not change the case, trim
+spaces or replace a separator, so `Locked` and `locked ` are not valid. The
+server counts the values before it drops duplicates, so 10 values answer 400
+also when they hold duplicates. The answer names the valid values.
+
+```sh
+curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/units?state=locked"
+```
+
+A unit entry in the answer shows the state like this:
+
+```json
+{"states": [{"state": "locked", "since": "2026-10-20T09:30:00Z"}]}
+```
 
 ## One unit by its ID
 
@@ -118,6 +174,7 @@ curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
 | --- | --- |
 | `label` | `key=value`. The unit must have the label. A client can send the name up to 10 times. A unit must have each label. |
 | `reference` | A unit reference in the namespace of the path. A client can send the name up to 20 times. A unit must have one of the references. |
+| `state` | A unit state, for example `locked`. A client can send the name up to 9 times. A unit must have at least one of the states. See [Unit states](#unit-states). |
 | `pageSize` | The number of units in a page, from 1 to 500. The default is 100. |
 | `pageToken` | The `nextPageToken` of the page before. |
 | `at` | A time in Unix milliseconds. The list shows the units at that time. The view at a time has no pages. |
@@ -130,8 +187,8 @@ A label key and a label value follow the grammar in `GLOSSARY.md` under
 "Label". A label outside this grammar shows in the list, but a filter cannot
 select it.
 
-The server answers 400 for a `label` or a `reference` value that is not valid,
-for more values than the limit, for a `reference` in another namespace, for a
+The server answers 400 for a `label`, a `reference` or a `state` value that is
+not valid, for more values than the limit, for a `reference` in another namespace, for a
 `pageSize` outside the limits, for a `pageToken` that is not valid, and for a
 filter or a `pageToken` together with `at`. The list of a `reference` filter
 holds only the units that the caller can read. A reference of a unit that does

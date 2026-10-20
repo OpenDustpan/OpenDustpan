@@ -1,0 +1,391 @@
+package server
+
+import (
+	"errors"
+	"io"
+	"mime"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/preferences"
+)
+
+// preferencesPath is the route of the preferences of the caller.
+const preferencesPath = "/api/dustpan/v1/me/preferences"
+
+// mergePatchType is the only media type of a PATCH of the preferences. A page
+// on another site cannot send it without a CORS preflight, and only the
+// console origins that the server allows pass the preflight. The type check
+// and the CORS allowlist together guard against a change from another site.
+const mergePatchType = "application/merge-patch+json"
+
+// codedError is an error with its status, its stable machine code and the
+// arguments of the code. The code has the form <area>.<reason>. An argument
+// names a field of the document and never holds a value from the request.
+type codedError struct {
+	status  int
+	code    string
+	message string
+	args    map[string]any
+}
+
+func (e *codedError) Error() string { return e.message }
+
+// codedResponse is the error body of a route that has stable machine codes:
+// the fields of errorResponse, the code and its arguments. Code stays the HTTP
+// status, as in every error of this API.
+type codedResponse struct {
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
+}
+
+// The errors of the preferences routes that no domain sentinel carries.
+var (
+	errPreferencesUnavailable = &codedError{
+		status: http.StatusNotImplemented, code: "preferences.unavailable", args: nil,
+		message: "the store of this server keeps no preferences",
+	}
+	errPreferencesNotPerson = &codedError{
+		status: http.StatusForbidden, code: "preferences.person-required", args: nil,
+		message: "preferences belong to a person: sign in as a person to read or change them",
+	}
+	errPreferencesPersonGone = &codedError{
+		status: http.StatusNotFound, code: "preferences.person-not-found", args: nil,
+		message: "the person of this request does not exist",
+	}
+	errPreferencesMediaType = &codedError{
+		status: http.StatusUnsupportedMediaType, code: "preferences.media-type-unsupported", args: nil,
+		message: "content type must be " + mergePatchType,
+	}
+	errPreferencesTooLarge = &codedError{
+		status: http.StatusRequestEntityTooLarge, code: "preferences.body-too-large", args: nil,
+		message: preferences.ErrBodyTooLarge.Error(),
+	}
+	errPreferencesBody = &codedError{
+		status: http.StatusBadRequest, code: "preferences.body-invalid", args: nil,
+		message: preferences.ErrInvalidBody.Error(),
+	}
+	errPreferencesUnknownField = &codedError{
+		status: http.StatusBadRequest, code: "preferences.field-unknown", args: nil,
+		message: preferences.ErrUnknownField.Error(),
+	}
+	errPreferencesIfMatch = &codedError{
+		status: http.StatusBadRequest, code: "preferences.if-match-invalid", args: nil,
+		message: "If-Match must be one version in quotes, as the ETag of a read gives it, or *",
+	}
+	errPreferencesChanged = &codedError{
+		status: http.StatusPreconditionFailed, code: "preferences.precondition-failed", args: nil,
+		message: preferences.ErrPreconditionFailed.Error(),
+	}
+	errPreferencesReadOnly = &codedError{
+		status: http.StatusBadRequest, code: "preferences.field-read-only",
+		args:    map[string]any{"field": preferences.FieldUpdatedAt},
+		message: preferences.ErrReadOnlyField.Error(),
+	}
+)
+
+// preferencesError maps an error of the preferences service or of the patch
+// parser to a coded error. An error that it does not know passes through, so
+// the other classifiers answer it: a store in maintenance mode answers 503,
+// and anything else answers a plain 500.
+func preferencesError(err error) error {
+	var field *preferences.FieldError
+
+	switch {
+	case errors.As(err, &field):
+		return &codedError{
+			status: http.StatusBadRequest, code: "preferences.field-invalid",
+			args: map[string]any{"field": field.Field}, message: field.Error(),
+		}
+	case errors.Is(err, preferences.ErrBodyTooLarge):
+		return errPreferencesTooLarge
+	case errors.Is(err, preferences.ErrInvalidBody):
+		return errPreferencesBody
+	case errors.Is(err, preferences.ErrUnknownField):
+		return errPreferencesUnknownField
+	case errors.Is(err, preferences.ErrReadOnlyField):
+		return errPreferencesReadOnly
+	case errors.Is(err, preferences.ErrPreconditionFailed):
+		return errPreferencesChanged
+	case errors.Is(err, preferences.ErrNotPerson):
+		return errPreferencesNotPerson
+	case errors.Is(err, preferences.ErrPersonNotFound):
+		return errPreferencesPersonGone
+	default:
+		return err
+	}
+}
+
+// preferencesResponse is the document of the preferences on the wire. A
+// nullable field that has no value is null, and updatedAt is null for a
+// person that never changed a preference. It is a time in RFC 3339 format,
+// in UTC, with milliseconds.
+//
+// Contract: the console reads these fields. Never remove or rename them.
+type preferencesResponse struct {
+	Theme              string                  `json:"theme"`
+	ColorMode          string                  `json:"colorMode"`
+	TerminalSchemes    terminalSchemesResponse `json:"terminalSchemes"`
+	ShortcutHints      string                  `json:"shortcutHints"`
+	SingleKeyShortcuts string                  `json:"singleKeyShortcuts"`
+	ShortcutHintStyle  string                  `json:"shortcutHintStyle"`
+	Language           *string                 `json:"language"`
+	FormattingLocale   *string                 `json:"formattingLocale"`
+	HourCycle          *string                 `json:"hourCycle"`
+	DateStyle          string                  `json:"dateStyle"`
+	FirstDayOfWeek     *string                 `json:"firstDayOfWeek"`
+	TimeZone           *string                 `json:"timeZone"`
+	Digits             *string                 `json:"digits"`
+	ResolvedLanguage   *string                 `json:"resolvedLanguage"`
+	UpdatedAt          *string                 `json:"updatedAt"`
+}
+
+// terminalSchemesResponse holds the color scheme of each color mode.
+type terminalSchemesResponse struct {
+	Light string `json:"light"`
+	Dark  string `json:"dark"`
+}
+
+// updatedAtLayout is the RFC 3339 format of updatedAt: UTC, with milliseconds.
+const updatedAtLayout = "2006-01-02T15:04:05.000Z07:00"
+
+// preferencesETag returns the ETag of a document: its version in quotes. The
+// version changes with each change of a preference, so a write with If-Match
+// refuses a document that another request changed after the read.
+func preferencesETag(d preferences.Document) string {
+	return `"` + strconv.FormatInt(d.Version(), 10) + `"`
+}
+
+// preferencesIfMatch returns the version of the If-Match header, and whether
+// the request sent one. The header holds one version in quotes, as the ETag
+// of a read gives it, or *, which matches the preferences of any person. A
+// value that is neither gives errPreferencesIfMatch.
+func preferencesIfMatch(r *http.Request) (*int64, error) {
+	raw := strings.TrimSpace(r.Header.Get("If-Match"))
+	if raw == "" || raw == "*" {
+		return nil, nil //nolint:nilnil // No version means no precondition.
+	}
+
+	if len(raw) < 3 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return nil, errPreferencesIfMatch
+	}
+
+	v, err := strconv.ParseInt(raw[1:len(raw)-1], 10, 64)
+	if err != nil || v < 0 {
+		return nil, errPreferencesIfMatch
+	}
+
+	return &v, nil
+}
+
+// nullable returns nil for the empty text, which is the null of a field.
+func nullable(s string) *string {
+	if s == "" {
+		return nil
+	}
+
+	return &s
+}
+
+// preferencesOf converts a document to its wire form.
+func preferencesOf(d preferences.Document) preferencesResponse {
+	var updated *string
+
+	if !d.UpdatedAt.IsZero() {
+		text := d.UpdatedAt.UTC().Format(updatedAtLayout)
+		updated = &text
+	}
+
+	return preferencesResponse{
+		Theme:              d.Theme,
+		ColorMode:          d.ColorMode,
+		TerminalSchemes:    terminalSchemesResponse{Light: d.TerminalSchemes.Light, Dark: d.TerminalSchemes.Dark},
+		ShortcutHints:      d.ShortcutHints,
+		SingleKeyShortcuts: d.SingleKeyShortcuts,
+		ShortcutHintStyle:  d.ShortcutHintStyle,
+		Language:           nullable(d.Language),
+		FormattingLocale:   nullable(d.FormattingLocale),
+		HourCycle:          nullable(d.HourCycle),
+		DateStyle:          d.DateStyle,
+		FirstDayOfWeek:     nullable(d.FirstDayOfWeek),
+		TimeZone:           nullable(d.TimeZone),
+		Digits:             nullable(d.Digits),
+		ResolvedLanguage:   nullable(d.ResolvedLanguage),
+		UpdatedAt:          updated,
+	}
+}
+
+// preferencesRoutes returns the rows of the preferences of the caller. A
+// request under act-as acts on its subject, so both routes read and change
+// the preferences of the person and never of the agent. A caller that is not
+// a person answers 403.
+func (h *Handler) preferencesRoutes() []Route {
+	return []Route{
+		{
+			Method: http.MethodGet, Path: preferencesPath, Scope: ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
+			Serve: h.getPreferences,
+		},
+		{
+			Method: http.MethodPatch, Path: preferencesPath, Scope: ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionCallerManagePreferences}, Resolve: resolveCaller,
+			ActionsFor: nil, Serve: h.patchPreferences,
+		},
+	}
+}
+
+// getPreferences answers GET /api/dustpan/v1/me/preferences: the full
+// document, with the default of each field that the person never set.
+func (h *Handler) getPreferences(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	if h.preferences == nil {
+		h.writeError(ctx, w, errPreferencesUnavailable)
+
+		return
+	}
+
+	// Defense in depth: the service refuses a caller that is not a person too.
+	if !p.ActsAsPerson() {
+		h.writeError(ctx, w, errPreferencesNotPerson)
+
+		return
+	}
+
+	doc, err := h.preferences.Get(ctx, p)
+	if err != nil {
+		h.writeError(ctx, w, preferencesError(err))
+
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", preferencesETag(doc))
+	h.writeJSON(ctx, w, http.StatusOK, preferencesOf(doc))
+}
+
+// patchPreferences answers PATCH /api/dustpan/v1/me/preferences. The body is a
+// JSON merge patch (IETF RFC 7396): a field that the body leaves out keeps its
+// value, and null sets a field back to its default. It answers 200 with the
+// full document, also for a patch that changes nothing. Such a patch does not
+// change updatedAt and writes no audit entry. The ETag header holds the version
+// of the new document. A request with the If-Match header of an older version
+// answers 412 and changes nothing. Any other refused patch changes nothing and
+// writes one failure entry.
+func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	if h.preferences == nil {
+		h.writeError(ctx, w, errPreferencesUnavailable)
+
+		return
+	}
+
+	patch, err := readPreferencesPatch(w, r, p)
+	if err != nil {
+		h.refusePatch(w, r, p, err)
+
+		return
+	}
+
+	ifMatch, err := preferencesIfMatch(r)
+	if err != nil {
+		h.refusePatch(w, r, p, err)
+
+		return
+	}
+
+	res, err := h.preferences.Update(ctx, p, patch, callerEntry(r, p, identity.ActionCallerManagePreferences), ifMatch)
+	if err != nil {
+		h.refusePatch(w, r, p, preferencesError(err))
+
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", preferencesETag(res.Document))
+	h.writeJSON(ctx, w, http.StatusOK, preferencesOf(res.Document))
+}
+
+// readPreferencesPatch reads and checks the request of a PATCH: the caller is
+// a person, the content type is the merge patch type, the body is within the
+// limit, and the patch passes every check of its fields. It returns a coded
+// error for each refusal.
+func readPreferencesPatch(w http.ResponseWriter, r *http.Request, p identity.Principal) (preferences.Patch, error) {
+	// Defense in depth: the service refuses a caller that is not a person
+	// too. This check stays so that the body of such a caller is never read.
+	if !p.ActsAsPerson() {
+		return nil, errPreferencesNotPerson
+	}
+
+	if !mergePatchContentType(r) {
+		w.Header().Set("Accept-Patch", mergePatchType)
+
+		return nil, errPreferencesMediaType
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, preferences.MaxBodyBytes))
+	if tooLarge, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && tooLarge.Limit > 0 {
+		return nil, errPreferencesTooLarge
+	}
+
+	if err != nil {
+		return nil, errPreferencesBody
+	}
+
+	patch, err := preferences.ParsePatch(body)
+	if err != nil {
+		return nil, preferencesError(err)
+	}
+
+	return patch, nil
+}
+
+// refusePatch answers the refusal err of a PATCH and writes one entry for the
+// refused change, best effort: a lost entry never changes the answer. The
+// entry has the action of the change and the principal reference of the caller
+// as object, as the entry of a successful change has. Its outcome is denied for
+// a caller that is not a person, and failure for any other refusal. It names no
+// value of the request. A refused request that the server cannot attribute to
+// a change (a store in maintenance mode answers 503) writes none, and a change
+// that the If-Match header refuses with 412 writes none.
+func (h *Handler) refusePatch(w http.ResponseWriter, r *http.Request, p identity.Principal, err error) {
+	// A request with an outdated If-Match changes nothing and is no failure of
+	// the caller, so it writes no entry.
+	coded, ok := errors.AsType[*codedError](err)
+	if ok && coded.status < http.StatusInternalServerError && !errors.Is(err, errPreferencesChanged) {
+		outcome := audit.OutcomeFailure
+		if errors.Is(err, errPreferencesNotPerson) {
+			outcome = audit.OutcomeDenied
+		}
+
+		h.appendServerChange(r, p, serverChange{
+			at: h.now(), action: identity.Action(preferences.AuditAction), object: h.preferences.Object(r.Context(), p),
+			outcome: outcome,
+		})
+	}
+
+	h.writeError(r.Context(), w, err)
+}
+
+// mergePatchContentType reports whether the Content-Type of r is the merge
+// patch type, with no parameter or with charset=utf-8 only.
+func mergePatchContentType(r *http.Request) bool {
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != mergePatchType {
+		return false
+	}
+
+	for name, value := range params {
+		if name != "charset" || !strings.EqualFold(value, "utf-8") {
+			return false
+		}
+	}
+
+	return true
+}

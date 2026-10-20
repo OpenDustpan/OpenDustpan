@@ -81,8 +81,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
+	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
+	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -167,6 +169,8 @@ type settings struct {
 	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	profileStore         profile.Store
+	jobStore             job.Store
+	savedViewStore       savedview.Store
 	idempotencyStore     idempotency.Store
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -688,6 +692,8 @@ func defaultSettings() *settings {
 		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		profileStore:            nil,
+		jobStore:                nil,
+		savedViewStore:          nil,
 		idempotencyStore:        nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -809,7 +815,9 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 
 	cfg.authenticator = authn
 	cfg.authorizer = allowlistGate(identity.SelfAllowed{
-		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
+		Next: cfg.authorizer, Actions: []identity.Action{
+			identity.ActionTokenManageOwn, identity.ActionCallerManagePreferences,
+		},
 	}, cfg.ipAllowlists)
 
 	return nil
@@ -1133,6 +1141,8 @@ type neutralHandlers struct {
 	runners http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
+	// jobs is nil when no job store is set.
+	jobs http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1164,8 +1174,13 @@ func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMet
 		return neutralHandlers{}, err
 	}
 
+	jobs, err := newJobsHandler(svc, cfg, onFailure)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
 	return neutralHandlers{
-		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles,
+		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, jobs: jobs,
 	}, nil
 }
 
@@ -2436,7 +2451,13 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		moves = grants
 	}
 
+	views, err := newViewsConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Views:      views,
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
@@ -2582,6 +2603,7 @@ func newServerHandler(
 		AuditSinks:    sinks,
 		Workers:       cfg.watch,
 		SignIn:        deps.signIn,
+		Preferences:   newPreferencesService(cfg),
 
 		InstallationKind: cfg.installationKind,
 	})
@@ -2590,6 +2612,23 @@ func newServerHandler(
 	}
 
 	return handler, nil
+}
+
+// newPreferencesService builds the preferences service from the namespace
+// store, or returns nil when the store keeps no preferences or no principals.
+// Both SQL adapters keep both. A nil service makes the routes answer 501.
+func newPreferencesService(cfg *settings) *preferences.Service {
+	store, ok := cfg.namespaceStore.(preferences.Store)
+	if !ok {
+		return nil
+	}
+
+	people, ok := cfg.namespaceStore.(preferences.People)
+	if !ok {
+		return nil
+	}
+
+	return preferences.NewService(store, people, cfg.now)
 }
 
 // serverAuditOf returns the audit store of the scope @server, or nil when the
@@ -3230,7 +3269,8 @@ func adapterForRequest(pattern, path string) string {
 	}
 
 	switch {
-	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"):
+	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"),
+		strings.HasPrefix(name, v1Prefix+"me/"):
 		return adapterServer
 	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
 		return "inventory"
@@ -3535,6 +3575,9 @@ func mountAPI(mux *http.ServeMux, a adapters, cfg *settings) error {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.profiles, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	// The capabilities document and the dev sign-in belong to the
