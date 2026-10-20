@@ -702,6 +702,7 @@ func TestCheckWritesNoCheckpointWhileAChangeWaits(t *testing.T) {
 		Blobs:   blobs,
 		Entries: reader,
 		Signer:  newTestCheckpointSigner(t),
+		Marks:   nil,
 		Now:     nil,
 	})
 	chain.observed = metrics.NewServerMetrics("test", time.Now())
@@ -763,6 +764,7 @@ func TestCheckWritesNoCheckpointWhileRestoreRuns(t *testing.T) {
 		Blobs:   blobs,
 		Entries: reader,
 		Signer:  newTestCheckpointSigner(t),
+		Marks:   nil,
 		Now:     nil,
 	})
 	chain.observed = metrics.NewServerMetrics("test", time.Now())
@@ -826,6 +828,7 @@ func TestCheckWritesNoCheckpointWhenRestoreCheckFails(t *testing.T) {
 		Blobs:   blobs,
 		Entries: reader,
 		Signer:  newTestCheckpointSigner(t),
+		Marks:   nil,
 		Now:     nil,
 	})
 	chain.observed = metrics.NewServerMetrics("test", time.Now())
@@ -952,6 +955,7 @@ func newFailingTestChain(t *testing.T, fc failCase) *auditChain {
 			Blobs:   blobs,
 			Entries: reader,
 			Signer:  newTestCheckpointSigner(t),
+			Marks:   nil,
 			Now:     nil,
 		})
 	}

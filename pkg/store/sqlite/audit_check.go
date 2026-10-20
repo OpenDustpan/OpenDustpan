@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -22,14 +23,25 @@ func (s *Store) CheckState(ctx context.Context) (audit.CheckState, error) {
 
 	row, err := s.queries.GetAuditChainCheck(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return audit.CheckState{}, nil
+		return audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0}, nil
 	}
 
 	if err != nil {
-		return audit.CheckState{}, fmt.Errorf("read audit chain check: %w", err)
+		return audit.CheckState{
+			CheckedAt: time.Time{},
+			Mark:      nil,
+			Invalid:   0,
+		}, fmt.Errorf(
+			"read audit chain check: %w",
+			err,
+		)
 	}
 
-	state := audit.CheckState{CheckedAt: codec.FromOptionalMillis(row.CheckedAtMs), Mark: nil, Invalid: int(row.Invalid)}
+	state := audit.CheckState{
+		CheckedAt: codec.FromOptionalMillis(row.CheckedAtMs),
+		Mark:      nil,
+		Invalid:   int(row.Invalid),
+	}
 
 	if row.Marked != 0 {
 		state.Mark = &audit.CheckMark{
@@ -60,9 +72,8 @@ func (s *Store) SaveCheckResult(ctx context.Context, invalid int) error {
 			return fmt.Errorf("read the clock of the store: %w", err)
 		}
 
-		if err := q.SaveAuditChainCheckResult(ctx, db.SaveAuditChainCheckResultParams{
-			NowMs: now, Invalid: int64(invalid),
-		}); err != nil {
+		err = q.SaveAuditChainCheckResult(ctx, db.SaveAuditChainCheckResultParams{NowMs: now, Invalid: int64(invalid)})
+		if err != nil {
 			return fmt.Errorf("save audit chain check result: %w", err)
 		}
 

@@ -959,9 +959,8 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		durableOwner:     durableOwner(cfg),
 		inactivityEvery:  sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		auditChainEvery: cfg.auditChainInterval,
-		components:      cfg.components,
-		watch:           cfg.watch,
+		components: cfg.components,
+		watch:      cfg.watch, auditChainEvery: cfg.auditChainInterval,
 	}
 
 	cfg.watch.attach(srv, observed.Registry())

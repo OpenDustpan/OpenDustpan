@@ -27,7 +27,7 @@ func (m *memMarks) CheckState(context.Context) (audit.CheckState, error) {
 	defer m.mu.Unlock()
 
 	if m.failRead {
-		return audit.CheckState{}, errMarkStore
+		return audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0}, errMarkStore
 	}
 
 	return m.state, nil
@@ -112,11 +112,16 @@ func checkpointCount(t *testing.T, f checkpointFixture) int {
 
 // markedByA returns two instances over one store, after instance A found a
 // changed checkpoint of acme at sequence 3 and stored the mark.
-func markedByA(t *testing.T) (checkpointFixture, *memMarks, *audit.Checkpoints) {
+func markedByA(t *testing.T) (checkpointFixture, *audit.Checkpoints) {
 	t.Helper()
 
 	f := newCheckpointFixture(t, 3)
-	marks := &memMarks{state: audit.CheckState{}, failRead: false, failSave: false, mu: sync.Mutex{}}
+	marks := &memMarks{
+		state:    audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0},
+		failRead: false,
+		failSave: false,
+		mu:       sync.Mutex{},
+	}
 	a, b := f.withMarks(t, marks), f.withMarks(t, marks)
 
 	if wrote, err := writeAt(t, a, 1_700_000_100); err != nil || !wrote {
@@ -133,7 +138,7 @@ func markedByA(t *testing.T) (checkpointFixture, *memMarks, *audit.Checkpoints) 
 		t.Fatalf("stored mark: got %+v, want acme at 3 in epoch 0", mark)
 	}
 
-	return f, marks, b
+	return f, b
 }
 
 // TestCheckpointsMarkStopsSigningOnEveryInstance proves that a mismatch that
@@ -144,7 +149,7 @@ func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
 	t.Run("B signs nothing while the mark of the epoch stands", func(t *testing.T) {
 		t.Parallel()
 
-		f, _, b := markedByA(t)
+		f, b := markedByA(t)
 		f.entries.add()
 
 		before := checkpointCount(t, f)
@@ -161,7 +166,7 @@ func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
 	t.Run("B fails the scope of the mark in a check", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, b := markedByA(t)
+		_, b := markedByA(t)
 
 		if got := verifyWith(t, b); got.Valid || got.BadSequence != 3 {
 			t.Fatalf("verify of B: got %+v, want invalid at 3", got)
@@ -171,7 +176,7 @@ func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
 	t.Run("a new epoch ends the mark", func(t *testing.T) {
 		t.Parallel()
 
-		f, _, b := markedByA(t)
+		f, b := markedByA(t)
 
 		if _, err := b.NewEpoch(t.Context(), time.Unix(1_700_000_150, 0)); err != nil {
 			t.Fatalf("new epoch: %v", err)
@@ -191,62 +196,75 @@ func TestCheckpointsMarkStopsSigningOnEveryInstance(t *testing.T) {
 func TestCheckpointsFailClosedWithoutTheMark(t *testing.T) {
 	t.Parallel()
 
-	t.Run("an unreadable mark denies a write and fails a check", func(t *testing.T) {
-		t.Parallel()
+	t.Run("an unreadable mark denies a write and fails a check", testUnreadableMark)
+	t.Run("a mark that the store did not take is stored again", testUnsavedMark)
+}
 
-		f := newCheckpointFixture(t, 3)
-		marks := &memMarks{state: audit.CheckState{}, failRead: true, failSave: false, mu: sync.Mutex{}}
-		cps := f.withMarks(t, marks)
-		before := checkpointCount(t, f)
+func testUnreadableMark(t *testing.T) {
+	t.Parallel()
 
-		if wrote, err := writeAt(t, cps, 1_700_000_100); !errors.Is(err, audit.ErrCheckpointMismatch) || wrote {
-			t.Fatalf("write: got %v, %v, want ErrCheckpointMismatch", wrote, err)
-		}
+	f := newCheckpointFixture(t, 3)
+	marks := &memMarks{
+		state:    audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0},
+		failRead: true,
+		failSave: false,
+		mu:       sync.Mutex{},
+	}
+	cps := f.withMarks(t, marks)
+	before := checkpointCount(t, f)
 
-		if got := checkpointCount(t, f); got != before {
-			t.Fatalf("objects after a write with an unreadable mark: got %d, want %d", got, before)
-		}
+	if wrote, err := writeAt(t, cps, 1_700_000_100); !errors.Is(err, audit.ErrCheckpointMismatch) || wrote {
+		t.Fatalf("write: got %v, %v, want ErrCheckpointMismatch", wrote, err)
+	}
 
-		if got, err := cps.Verify(t.Context(), "acme"); err != nil || got.Valid {
-			t.Fatalf("verify: got %+v, %v, want invalid", got, err)
-		}
-	})
+	if got := checkpointCount(t, f); got != before {
+		t.Fatalf("objects after a write with an unreadable mark: got %d, want %d", got, before)
+	}
 
-	t.Run("a mark that the store did not take is stored again", func(t *testing.T) {
-		t.Parallel()
+	if got, err := cps.Verify(t.Context(), "acme"); err != nil || got.Valid {
+		t.Fatalf("verify: got %+v, %v, want invalid", got, err)
+	}
+}
 
-		f := newCheckpointFixture(t, 3)
-		marks := &memMarks{state: audit.CheckState{}, failRead: false, failSave: true, mu: sync.Mutex{}}
-		cps := f.withMarks(t, marks)
+func testUnsavedMark(t *testing.T) {
+	t.Parallel()
 
-		if wrote, err := writeAt(t, cps, 1_700_000_100); err != nil || !wrote {
-			t.Fatalf("write: %v, %v", wrote, err)
-		}
+	f := newCheckpointFixture(t, 3)
+	marks := &memMarks{
+		state:    audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0},
+		failRead: false,
+		failSave: true,
+		mu:       sync.Mutex{},
+	}
+	cps := f.withMarks(t, marks)
 
-		f.changeHead()
+	if wrote, err := writeAt(t, cps, 1_700_000_100); err != nil || !wrote {
+		t.Fatalf("write: %v, %v", wrote, err)
+	}
 
-		if got, err := cps.Verify(t.Context(), "acme"); err != nil || got.Valid {
-			t.Fatalf("verify: got %+v, %v, want invalid", got, err)
-		}
+	f.changeHead()
 
-		if mark := marks.mark(); mark != nil {
-			t.Fatalf("mark stored although the store failed: %+v", mark)
-		}
+	if got, err := cps.Verify(t.Context(), "acme"); err != nil || got.Valid {
+		t.Fatalf("verify: got %+v, %v, want invalid", got, err)
+	}
 
-		f.entries.add()
+	if mark := marks.mark(); mark != nil {
+		t.Fatalf("mark stored although the store failed: %+v", mark)
+	}
 
-		if wrote, err := writeAt(t, cps, 1_700_000_200); !errors.Is(err, audit.ErrCheckpointMismatch) || wrote {
-			t.Fatalf("write while the mark is unsaved: got %v, %v, want ErrCheckpointMismatch", wrote, err)
-		}
+	f.entries.add()
 
-		marks.setFailSave(false)
+	if wrote, err := writeAt(t, cps, 1_700_000_200); !errors.Is(err, audit.ErrCheckpointMismatch) || wrote {
+		t.Fatalf("write while the mark is unsaved: got %v, %v, want ErrCheckpointMismatch", wrote, err)
+	}
 
-		if _, err := writeAt(t, cps, 1_700_000_300); !errors.Is(err, audit.ErrCheckpointMismatch) {
-			t.Fatalf("write after the store recovered: got %v, want ErrCheckpointMismatch", err)
-		}
+	marks.setFailSave(false)
 
-		if mark := marks.mark(); mark == nil || mark.Sequence != 3 {
-			t.Fatalf("stored mark after the retry: got %+v, want sequence 3", mark)
-		}
-	})
+	if _, err := writeAt(t, cps, 1_700_000_300); !errors.Is(err, audit.ErrCheckpointMismatch) {
+		t.Fatalf("write after the store recovered: got %v, want ErrCheckpointMismatch", err)
+	}
+
+	if mark := marks.mark(); mark == nil || mark.Sequence != 3 {
+		t.Fatalf("stored mark after the retry: got %+v, want sequence 3", mark)
+	}
 }

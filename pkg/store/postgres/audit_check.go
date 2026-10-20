@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -20,14 +21,25 @@ var _ audit.CheckStore = (*Store)(nil)
 func (s *Store) CheckState(ctx context.Context) (audit.CheckState, error) {
 	row, err := s.queries.GetAuditChainCheck(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.CheckState{}, nil
+		return audit.CheckState{CheckedAt: time.Time{}, Mark: nil, Invalid: 0}, nil
 	}
 
 	if err != nil {
-		return audit.CheckState{}, fmt.Errorf("read audit chain check: %w", err)
+		return audit.CheckState{
+			CheckedAt: time.Time{},
+			Mark:      nil,
+			Invalid:   0,
+		}, fmt.Errorf(
+			"read audit chain check: %w",
+			err,
+		)
 	}
 
-	state := audit.CheckState{CheckedAt: codec.FromOptionalMillis(row.CheckedAtMs), Mark: nil, Invalid: int(row.Invalid)}
+	state := audit.CheckState{
+		CheckedAt: codec.FromOptionalMillis(row.CheckedAtMs),
+		Mark:      nil,
+		Invalid:   int(row.Invalid),
+	}
 
 	if row.Marked {
 		state.Mark = &audit.CheckMark{

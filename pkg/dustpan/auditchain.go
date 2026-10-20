@@ -194,13 +194,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		principals = p
 	}
 
-	var checks audit.CheckStore
-
-	if c, ok := cfg.namespaceStore.(audit.CheckStore); ok {
-		checks = c
-	}
-
-	checkpoints, err := newCheckpoints(cfg, checks)
+	checkpoints, err := newCheckpoints(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +210,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		now:               cfg.now,
 		observed:          observed,
 		checkpoints:       checkpoints,
-		checks:            checks,
+		checks:            checkStoreOf(cfg.namespaceStore),
 		maint:             nil,
 		restoreRunning:    nil,
 		freshness:         nil,
@@ -250,11 +244,20 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 
 	chain.runner = runner
 
-	if checks != nil && observed != nil {
-		observed.SetAuditChainInvalidSource(chain.storedInvalid)
-	}
+	chain.exportStoredResult()
 
 	return chain, nil
+}
+
+// checkStoreOf answers the check state port of s, or nil when s keeps none.
+//
+//nolint:ireturn // A nil interface means the store keeps no check state.
+func checkStoreOf(s namespace.Store) audit.CheckStore {
+	if c, ok := s.(audit.CheckStore); ok {
+		return c
+	}
+
+	return nil
 }
 
 // newChainRunner answers the runner that claims migration operations for
@@ -346,7 +349,7 @@ func auditChainOwner(cfg *settings) string {
 // newCheckpoints answers the signed checkpoints of cfg, or nil while they
 // are off. They need a blob store and a store that reads one entry at a
 // sequence.
-func newCheckpoints(cfg *settings, checks audit.CheckStore) (*audit.Checkpoints, error) {
+func newCheckpoints(cfg *settings) (*audit.Checkpoints, error) {
 	if cfg.auditSigner == nil {
 		return nil, nil //nolint:nilnil // Nil without an error means signed checkpoints are off.
 	}
@@ -364,7 +367,7 @@ func newCheckpoints(cfg *settings, checks audit.CheckStore) (*audit.Checkpoints,
 		Blobs:   cfg.blobStore,
 		Entries: reader,
 		Signer:  cfg.auditSigner,
-		Marks:   checks,
+		Marks:   checkStoreOf(cfg.namespaceStore),
 		Now:     cfg.now,
 	}), nil
 }
@@ -1418,6 +1421,14 @@ func (c *auditChain) storeResult(ctx context.Context, invalid int) {
 	}
 }
 
+// exportStoredResult makes the gauge of the chain read the stored check
+// result at scrape time, when the store keeps one.
+func (c *auditChain) exportStoredResult() {
+	if c.checks != nil && c.observed != nil {
+		c.observed.SetAuditChainInvalidSource(c.storedInvalid)
+	}
+}
+
 // storedInvalid answers the count of scopes that did not match in the last
 // stored result, for dustpan_audit_chain_invalid. It fails closed: a row that
 // cannot be read counts as one scope that does not match, and the read logs a
@@ -1544,7 +1555,8 @@ func (s *Server) auditChainPeriod() time.Duration {
 }
 
 // startAuditChain starts the check loop, when the server has no durable store
-// for the schedule, and the migration loop of the chain until ctx is done. The returned function waits until both stopped.
+// for the schedule, and the migration loop of the chain until ctx is done. The returned function waits until both
+// stopped.
 func (s *Server) startAuditChain(ctx context.Context) func() {
 	if s.chain == nil {
 		return func() {}

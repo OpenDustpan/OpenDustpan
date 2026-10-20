@@ -252,9 +252,9 @@ func testCheckConcurrent(t *testing.T, h AuditCheckHarness) {
 		wg.Go(func() {
 			scope := namespace.Name(fmt.Sprintf("scope-%d", i))
 
-			if err := s.SaveCheckMark(t.Context(), audit.CheckMark{
-				At: time.Time{}, Scope: scope, Sequence: int64(i + 1), Epoch: 1,
-			}); err != nil {
+			mark := audit.CheckMark{At: time.Time{}, Scope: scope, Sequence: int64(i + 1), Epoch: 1}
+
+			if err := s.SaveCheckMark(t.Context(), mark); err != nil {
 				t.Errorf("save mark %d: %v", i, err)
 			}
 

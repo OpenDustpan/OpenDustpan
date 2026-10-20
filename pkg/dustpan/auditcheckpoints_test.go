@@ -57,7 +57,9 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 	waitForInvalidScopes(t, stillMarked)
 	stillMarked.stop()
 
-	epochs := audit.NewCheckpoints(audit.CheckpointsConfig{Blobs: blobs, Signer: rotated, Marks: nil, Entries: nil, Now: nil})
+	epochs := audit.NewCheckpoints(
+		audit.CheckpointsConfig{Blobs: blobs, Signer: rotated, Marks: nil, Entries: nil, Now: nil},
+	)
 	if _, err := epochs.NewEpoch(t.Context(), time.Now()); err != nil {
 		t.Fatalf("new epoch: %v", err)
 	}

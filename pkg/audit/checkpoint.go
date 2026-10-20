@@ -642,33 +642,13 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (CheckpointResult, error) {
 	result := CheckpointResult{Reason: "", Checked: 0, BadSequence: 0, Valid: true}
 
-	if err := c.flushMarks(ctx); err != nil {
-		return result.fail(0, err.Error()), nil
+	gate, err := c.verifyGate(ctx, scope, result)
+	if gate.stop || err != nil {
+		return gate.result, err
 	}
 
-	epoch, err := c.Epoch(ctx)
-	if err != nil {
-		if errors.Is(err, ErrCheckpointMismatch) {
-			return result.fail(0, err.Error()), nil
-		}
-
-		return result, err
-	}
-
+	epoch, result := gate.epoch, gate.result
 	gk := goodKey{scope: scope, epoch: epoch}
-
-	if seq, ok := c.sticky(gk); ok {
-		return result.fail(seq, "an earlier check in this epoch found a mismatch"), nil
-	}
-
-	mark, err := c.standingMark(ctx, epoch)
-	if err != nil {
-		return result.fail(0, err.Error()), nil
-	}
-
-	if mark != nil && mark.Scope == scope {
-		return result.fail(mark.Sequence, "a check on another instance in this epoch found a mismatch"), nil
-	}
 
 	dir := checkpointDir(epoch, scope)
 
@@ -719,6 +699,53 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 	c.markGood(gk, best)
 
 	return result, nil
+}
+
+// verifyGateResult is the outcome of verifyGate: the epoch, the result so far,
+// and whether Verify stops with that result.
+type verifyGateResult struct {
+	result CheckpointResult
+	epoch  int64
+	stop   bool
+}
+
+// verifyGate runs the steps of Verify that need no list of checkpoints: it
+// stores marks that a failed store did not take, reads the epoch, and fails
+// the scope when a mark stands.
+func (c *Checkpoints) verifyGate(
+	ctx context.Context, scope namespace.Name, result CheckpointResult,
+) (verifyGateResult, error) {
+	if err := c.flushMarks(ctx); err != nil {
+		return verifyGateResult{result: result.fail(0, err.Error()), epoch: 0, stop: true}, nil
+	}
+
+	epoch, err := c.Epoch(ctx)
+	if errors.Is(err, ErrCheckpointMismatch) {
+		return verifyGateResult{result: result.fail(0, err.Error()), epoch: 0, stop: true}, nil
+	}
+
+	if err != nil {
+		return verifyGateResult{result: result, epoch: 0, stop: true}, err
+	}
+
+	stop := func(r CheckpointResult) verifyGateResult {
+		return verifyGateResult{result: r, epoch: epoch, stop: true}
+	}
+
+	if seq, ok := c.sticky(goodKey{scope: scope, epoch: epoch}); ok {
+		return stop(result.fail(seq, "an earlier check in this epoch found a mismatch")), nil
+	}
+
+	mark, err := c.standingMark(ctx, epoch)
+	if err != nil {
+		return stop(result.fail(0, err.Error())), nil
+	}
+
+	if mark != nil && mark.Scope == scope {
+		return stop(result.fail(mark.Sequence, "a check on another instance in this epoch found a mismatch")), nil
+	}
+
+	return verifyGateResult{result: result, epoch: epoch, stop: false}, nil
 }
 
 // keep answers a write that found a checkpoint under key: false and no

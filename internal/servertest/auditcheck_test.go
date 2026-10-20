@@ -84,7 +84,11 @@ func eventually(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("no %s after %v", what, auditCheckWait)
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("test context done while waiting for %s: %v", what, t.Context().Err())
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }
 
@@ -151,9 +155,15 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 			"audit-chain-check") >= 3
 	})
 
-	if keys, ops := queryInt(t, c, "SELECT count(DISTINCT start_key) FROM durable_operations WHERE kind = $1",
-		"audit-chain-check"), queryInt(t, c, "SELECT count(*) FROM durable_operations WHERE kind = $1",
-		"audit-chain-check"); keys != ops {
+	keys := queryInt(
+		t,
+		c,
+		"SELECT count(DISTINCT start_key) FROM durable_operations WHERE kind = $1",
+		"audit-chain-check",
+	)
+	ops := queryInt(t, c, "SELECT count(*) FROM durable_operations WHERE kind = $1", "audit-chain-check")
+
+	if keys != ops {
 		t.Fatalf("operations of the check = %d with %d tick keys, want one operation for each tick", ops, keys)
 	}
 
@@ -218,5 +228,4 @@ func TestAuditChainCheckRunsOnOneInstance(t *testing.T) {
 	eventually(t, "same value on both servers", func() bool {
 		return invalidOn(t, c, 0) == invalidOn(t, c, 1)
 	})
-
 }

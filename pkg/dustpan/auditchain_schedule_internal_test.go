@@ -119,23 +119,31 @@ func TestJobSchedulesListAuditChainCheckOnlyWithAChain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			found := false
-
-			for _, spec := range tt.srv.jobSchedules() {
-				if spec.Name == auditChainScheduleName {
-					found = true
-
-					if spec.Interval != auditChainCheckInterval {
-						t.Fatalf("interval = %v, want %v", spec.Interval, auditChainCheckInterval)
-					}
-				}
-			}
-
-			if found != tt.want {
-				t.Fatalf("schedule %s listed = %t, want %t", auditChainScheduleName, found, tt.want)
+			if got := hasAuditChainSchedule(t, tt.srv); got != tt.want {
+				t.Fatalf("schedule %s listed = %t, want %t", auditChainScheduleName, got, tt.want)
 			}
 		})
 	}
+}
+
+// hasAuditChainSchedule reports whether srv lists the audit chain schedule
+// with the default interval.
+func hasAuditChainSchedule(t *testing.T, srv *Server) bool {
+	t.Helper()
+
+	for _, spec := range srv.jobSchedules() {
+		if spec.Name != auditChainScheduleName {
+			continue
+		}
+
+		if spec.Interval != auditChainCheckInterval {
+			t.Fatalf("interval = %v, want %v", spec.Interval, auditChainCheckInterval)
+		}
+
+		return true
+	}
+
+	return false
 }
 
 // errCheckStore is the failure of failingChecks.
