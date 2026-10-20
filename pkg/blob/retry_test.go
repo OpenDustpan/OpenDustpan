@@ -119,9 +119,9 @@ func TestDeleteRetriedDoesNotRetryAPermanentError(t *testing.T) {
 		want  error
 	}{
 		{"out of scope", view, blob.ErrOutOfScope},
-		{"invalid key", errStore{err: blob.ErrInvalidKey}, blob.ErrInvalidKey},
-		{"context canceled", errStore{err: context.Canceled}, context.Canceled},
-		{"deadline exceeded", errStore{err: context.DeadlineExceeded}, context.DeadlineExceeded},
+		{"invalid key", errStore{Store: nil, err: blob.ErrInvalidKey}, blob.ErrInvalidKey},
+		{"context canceled", errStore{Store: nil, err: context.Canceled}, context.Canceled},
+		{"deadline exceeded", errStore{Store: nil, err: context.DeadlineExceeded}, context.DeadlineExceeded},
 	}
 
 	for _, tc := range cases {
