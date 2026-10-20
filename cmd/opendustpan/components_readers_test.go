@@ -69,7 +69,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 		"newTFEHandler": "api", "wireTokens": "api",
 	},
 	"oidcProviders": {
-		"bindingOf": "api", "newProviderAdmin": "api", "newSignIn": "api", "staticSignInProviders": "api",
+		"bindingOf": "api", "hasStaticSignIn": "api", "newProviderAdmin": "api", "staticSignInProviders": "api",
 	},
 	// The cache wraps the blob store that the purge of deleted objects also uses.
 	"blobCacheBytes":          {"wrapBlobCache": "all"},
