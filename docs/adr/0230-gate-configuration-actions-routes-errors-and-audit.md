@@ -1,6 +1,6 @@
 # 230. Gate configuration: actions, routes, errors and audit entries
 
-Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 117 decisions 2, 5, 6 and 7. Supersedes in part ADR 196 decisions 1 and 5, and ADR 197 decisions 5 and 6
+Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 117 decisions 2, 5, 6 and 7. Supersedes in part ADR 196 decisions 1 and 5, and ADR 197 decisions 5 and 6. Decision 3 amended by ADR 268
 
 ## Context
 

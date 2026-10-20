@@ -95,6 +95,8 @@ func Run(t *testing.T, newStore Factory) {
 		t.Parallel()
 		testPing(t, newStore(t))
 	})
+
+	runScope(t, newStore)
 }
 
 func testRoundTrip(t *testing.T, s blob.Store) {
