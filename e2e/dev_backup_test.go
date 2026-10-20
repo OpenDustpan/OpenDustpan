@@ -123,7 +123,7 @@ func signInToDev(t *testing.T, bin string) devSignIn {
 
 	server := startPlainDev(t, bin)
 
-	match := devCodePattern.FindStringSubmatch(server.out.String())
+	match := devCodePattern.FindStringSubmatch(server.waitBanner(t, "#code="))
 	if match == nil {
 		t.Fatalf("the first start prints no sign-in link:\n%s", server.out.String())
 	}
