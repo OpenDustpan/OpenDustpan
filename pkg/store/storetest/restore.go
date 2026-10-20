@@ -1198,10 +1198,9 @@ func testRestoreApplyReRecordsBackup(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("create pre-backup %s: %v", pre.ID, createErr)
 	}
 
-	finished, finishErr := pdst.FinishBackup(ctx, pre.ID, backup.StateSucceeded, "", now().Add(time.Hour))
-	if finishErr != nil {
-		t.Fatalf("finish pre-backup %s: %v", pre.ID, finishErr)
-	}
+	finished := mustFinishBackup(t, pdst, backupFinish{
+		ID: pre.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+	})
 
 	if applyErr := pdst.ApplyStaging(ctx); applyErr != nil {
 		t.Fatalf("apply staging area: %v", applyErr)

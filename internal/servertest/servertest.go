@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -162,6 +163,31 @@ func (c *Cluster) URL(i int) string {
 	}
 
 	return ""
+}
+
+// InstanceID returns the instance ID that server i uses as the owner of its
+// claims on durable operations. A restart keeps it.
+func InstanceID(i int) string {
+	return fmt.Sprintf("server-%d", i)
+}
+
+// Operations returns the durable operations as server i reads them, for a
+// test that checks who holds a claim. It fails the test when server i does
+// not run.
+//
+//nolint:ireturn // The test reads the port, as the servers do.
+func (c *Cluster) Operations(t *testing.T, i int) durable.Store {
+	t.Helper()
+
+	c.mu.Lock()
+	in := c.instances[i]
+	c.mu.Unlock()
+
+	if in == nil {
+		t.Fatalf("operations of server %d: the server does not run", i)
+	}
+
+	return in.store.DurableOperationsPort()
 }
 
 // SchemaURL returns the URL of the schema of the cluster, for a test that
@@ -379,6 +405,8 @@ func serverOptions(
 		dustpan.WithLogger(logger),
 		dustpan.WithListener(ln),
 		dustpan.WithDurableStore(store.DurableOperations()),
+		dustpan.WithInstanceID(InstanceID(i)),
+		dustpan.WithInstallationKindStore(store),
 	}
 }
 
