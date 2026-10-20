@@ -1,8 +1,10 @@
 package backup_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"unicode"
@@ -535,5 +537,43 @@ func TestRestoreCountsDroppedTempAdmins(t *testing.T) {
 	row := waitRestoreEnd(t, setup.regs, id)
 	if row.DevReport == nil || row.DevReport.Classes[backup.RemovedTempAdmins] != 2 {
 		t.Fatalf("record = %+v, want 2 dropped temp admins", row.DevReport)
+	}
+}
+
+// TestRestoreLogsOneWarningForEachClass checks that the strip logs one
+// warning for each class that removed rows, with the count, and that no line
+// holds a subject, a token or a session ID.
+func TestRestoreLogsOneWarningForEachClass(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
+		cfg.AllowDevBackups = true
+		cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	})
+	setup.live.dev.detect = dirtyReport()
+	setup.live.dev.remove = dirtyReport()
+
+	id, err := startRestoreOf(t, setup, backup.RestoreRequest{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if row := waitRestoreEnd(t, setup.regs, id); row.State != backup.RestoreSucceeded {
+		t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
+	}
+
+	text := logs.String()
+
+	for class, count := range dirtyReport().Classes {
+		want := fmt.Sprintf("class=%s count=%d", class, count)
+		if strings.Count(text, want) != 1 {
+			t.Fatalf("log holds %d lines for %q, want 1:\n%s", strings.Count(text, want), want, text)
+		}
+	}
+
+	if strings.Contains(text, "dev:admin") {
+		t.Fatalf("log holds a subject:\n%s", text)
 	}
 }

@@ -198,7 +198,29 @@ func (s *RestoreService) stripStaged(ctx context.Context, run *devRun) error {
 
 	run.report = removed
 
+	s.logRemoval(ctx, removed)
+
 	return nil
+}
+
+// logRemoval writes one warning to the log for each class that the strip
+// removed rows of, with the count. A line holds no subject, no token and no
+// session ID.
+func (s *RestoreService) logRemoval(ctx context.Context, report DevStripReport) {
+	classes := make([]string, 0, len(report.Classes))
+
+	for class, n := range report.Classes {
+		if n > 0 {
+			classes = append(classes, string(class))
+		}
+	}
+
+	sort.Strings(classes)
+
+	for _, class := range classes {
+		s.logger.WarnContext(ctx, "the restore removed dev data from the staged data",
+			slog.String("class", class), slog.Int64("count", report.Classes[DevRemovalClass(class)]))
+	}
 }
 
 // recordDevReport stores the report, with the warnings of the restore, in the
