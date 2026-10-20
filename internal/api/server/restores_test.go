@@ -544,11 +544,11 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := apiserver.NewHandler(apiserver.Config{
-		Workers:       nil,
+		Workers:          nil,
 		InstallationKind: "",
-		Now:           nil,
-		TempAdmins:    nil,
-		Authenticator: tokenAuthenticator{},
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    tokenAuthenticator{},
 		Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{
 			identity.ActionServerRestore: true,
 		}},
