@@ -96,6 +96,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		Now:           nil,
 		PublicURL:     "",
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -132,6 +133,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		Now:           nil,
 		PublicURL:     "",
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

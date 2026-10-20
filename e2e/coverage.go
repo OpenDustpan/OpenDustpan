@@ -697,6 +697,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 		Audit:         nil, OnAuditFailure: nil, DenialLimiter: nil,
+		StateGuard: nil,
 	})
 	if err != nil {
 		tb.Fatalf("inventory handler: %v", err)

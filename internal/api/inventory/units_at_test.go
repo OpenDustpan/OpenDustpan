@@ -128,6 +128,7 @@ func newHistoryHandlerWithURL(
 		Now:           nil,
 		PublicURL:     publicURL,
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -356,6 +357,10 @@ func (h *Handler) restoreUnit(
 		return
 	}
 
+	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitRestore, gate.OperationRollback) {
+		return
+	}
+
 	unitID := obj.UnitID()
 	entry := changeEntry(r, p, obj, identity.ActionUnitRestore)
 
@@ -412,6 +417,10 @@ func (h *Handler) purgeUnit(
 	if !ok || life == nil {
 		h.writeError(ctx, w, unknownTool(obj.Tool()))
 
+		return
+	}
+
+	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitPurge, gate.OperationDelete) {
 		return
 	}
 

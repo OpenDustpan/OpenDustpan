@@ -20,5 +20,5 @@ const (
 // ErrorCodes lists every machine code of this API. It is the one place that
 // names them.
 func ErrorCodes() []string {
-	return []string{codeNotLocked, codeLockMismatch, codeClientEncrypted}
+	return append([]string{codeNotLocked, codeLockMismatch, codeClientEncrypted}, gateErrorCodes()...)
 }

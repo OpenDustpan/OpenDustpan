@@ -169,6 +169,20 @@ func buildDeletedFixture(
 ) deletedFixture {
 	t.Helper()
 
+	return buildGuardedFixture(t, entries, authz, lifecycleErr, scope, nil)
+}
+
+// buildGuardedFixture is buildDeletedFixture with the state guard guard.
+func buildGuardedFixture(
+	t *testing.T,
+	entries []coreinventory.DeletedEntry,
+	authz identity.Authorizer,
+	lifecycleErr error,
+	scope apiinventory.DeletedReadScope,
+	guard apiinventory.StateGuard,
+) deletedFixture {
+	t.Helper()
+
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
@@ -198,6 +212,7 @@ func buildDeletedFixture(
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
 		DenialLimiter: nil,
+		StateGuard:    guard,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -256,6 +256,7 @@ func newMoveFixtureFull(
 		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 		DenialLimiter: nil,
+		StateGuard:    nil,
 	})
 	if err != nil {
 		t.Fatalf("inventory handler: %v", err)

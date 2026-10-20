@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -77,7 +78,7 @@ func (h *Handler) lockHolder(ctx context.Context, id workspace.ID) string {
 // lost compare-and-swap also answers so: the loser retries once, then reports
 // the held lock, so the CLI waits and retries under -lock-timeout.
 func (h *Handler) lockWorkspace(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 	id := workspace.ID(r.PathValue("id"))
@@ -90,6 +91,10 @@ func (h *Handler) lockWorkspace(
 	}
 
 	reason := lockReason(body)
+
+	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitWrite, gate.OperationLock) {
+		return
+	}
 
 	locked, err := h.workspaces.LockForJob(ctx, id, p.Subject, reason, p.JobTokenID())
 	if err != nil {
@@ -280,6 +285,10 @@ func (h *Handler) forceUnlockWorkspace(
 	if err != nil {
 		h.writeError(ctx, w, err)
 
+		return
+	}
+
+	if !h.guardStateWrite(w, r, p, obj, identity.ActionUnitWriteForced, gate.OperationUnlock) {
 		return
 	}
 
