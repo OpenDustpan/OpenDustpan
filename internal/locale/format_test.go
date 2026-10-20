@@ -1,32 +1,67 @@
 package locale_test
 
 import (
+	"bufio"
+	"bytes"
+	"embed"
 	"errors"
+	"fmt"
 	"math"
+	"strconv"
+	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/locale"
+	"opendustpan.org/opendustpan/internal/locale"
 )
 
+// TestDefaultDigits pins the 28 CLDR 47 Arabic locales (ar and the 27
+// regional ones) and ar-001, which has no data of its own.
 func TestDefaultDigits(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		locale string
 		want   locale.Digits
 	}{
-		{"ar", locale.DigitsArabic},
-		{"ar-EG", locale.DigitsArabic},
-		{"ar-SA", locale.DigitsArabic},
+		{"ar", locale.DigitsLatin},
+		{"ar-001", locale.DigitsLatin},
 		{"ar-AE", locale.DigitsLatin},
-		{"ar-MA", locale.DigitsLatin},
+		{"ar-BH", locale.DigitsArabic},
+		{"ar-DJ", locale.DigitsArabic},
 		{"ar-DZ", locale.DigitsLatin},
-		{"ar-TN", locale.DigitsLatin},
+		{"ar-EG", locale.DigitsArabic},
+		{"ar-EH", locale.DigitsLatin},
+		{"ar-ER", locale.DigitsArabic},
+		{"ar-IL", locale.DigitsArabic},
+		{"ar-IQ", locale.DigitsArabic},
+		{"ar-JO", locale.DigitsArabic},
+		{"ar-KM", locale.DigitsArabic},
+		{"ar-KW", locale.DigitsArabic},
+		{"ar-LB", locale.DigitsArabic},
 		{"ar-LY", locale.DigitsLatin},
+		{"ar-MA", locale.DigitsLatin},
+		{"ar-MR", locale.DigitsArabic},
+		{"ar-OM", locale.DigitsArabic},
+		{"ar-PS", locale.DigitsArabic},
+		{"ar-QA", locale.DigitsArabic},
+		{"ar-SA", locale.DigitsArabic},
+		{"ar-SD", locale.DigitsArabic},
+		{"ar-SO", locale.DigitsArabic},
+		{"ar-SS", locale.DigitsArabic},
+		{"ar-SY", locale.DigitsArabic},
+		{"ar-TD", locale.DigitsArabic},
+		{"ar-TN", locale.DigitsLatin},
+		{"ar-YE", locale.DigitsArabic},
 		{"en-US", locale.DigitsLatin},
 		{"he", locale.DigitsLatin},
 		{"ru", locale.DigitsLatin},
 		{"uk-UA", locale.DigitsLatin},
 		{"af", locale.DigitsLatin},
+		// A locale with other default digits gets latn: the server has only
+		// latn and arab.
+		{"fa", locale.DigitsLatin},
+		{"fa-IR", locale.DigitsLatin},
+		// A region in a non-Arabic tag does not change the digits.
+		{"en-EG", locale.DigitsLatin},
 	}
 	for _, tc := range tests {
 		t.Run(tc.locale, func(t *testing.T) {
@@ -56,10 +91,11 @@ func TestFormatterNumbers(t *testing.T) {
 		wantDigits locale.Digits
 		want       string
 	}{
-		{"Arabic follows the locale", "ar", "", locale.DigitsArabic, indic},
+		{"Arabic follows the locale", "ar", "", locale.DigitsLatin, latin},
+		{"world Arabic follows the locale", "ar-001", "", locale.DigitsLatin, latin},
 		{"regional Arabic follows the locale", "ar-EG", "", locale.DigitsArabic, indic},
 		{"Arabic in a Western region", "ar-AE", "", locale.DigitsLatin, latin},
-		{"Arabic override to Western", "ar", locale.DigitsLatin, locale.DigitsLatin, latin},
+		{"Arabic override to Western", "ar-SA", locale.DigitsLatin, locale.DigitsLatin, latin},
 		{"regional Arabic override to Western", "ar-EG", locale.DigitsLatin, locale.DigitsLatin, latin},
 		{"Arabic override to Arabic-Indic", "ar", locale.DigitsArabic, locale.DigitsArabic, indic},
 		{"Western region override to Arabic-Indic", "ar-AE", locale.DigitsArabic, locale.DigitsArabic, indic},
@@ -95,8 +131,10 @@ func TestFormatterInt(t *testing.T) {
 		n      int64
 		want   string
 	}{
-		{"Arabic digits", "ar", "", 1204, "١٬٢٠٤"},
-		{"Arabic override off", "ar", locale.DigitsLatin, 1204, "1,204"},
+		{"Arabic digits", "ar-SA", "", 1204, "١٬٢٠٤"},
+		{"bare Arabic has Western digits", "ar", "", 1204, "1,204"},
+		{"Arabic override on", "ar", locale.DigitsArabic, 1204, "١٬٢٠٤"},
+		{"Arabic override off", "ar-SA", locale.DigitsLatin, 1204, "1,204"},
 		{"zero in Arabic", "ar-SA", "", 0, "٠"},
 		{"English override on", "en", locale.DigitsArabic, 7, "٧"},
 	}
@@ -202,8 +240,19 @@ func TestPluralCategory(t *testing.T) {
 		{"af", 1, o},
 		{"af", 2, ot},
 		{"af", 0, ot},
+		{"he", 0, ot},
 		{"he", 1, o},
 		{"he", 2, tw},
+		{"he", 3, ot},
+		{"he", 10, ot},
+		{"he", 20, ot},
+		{"he", 100, ot},
+		{"he", 1000, ot},
+		{"iw", 2, tw},
+		{"he-IL", 20, ot},
+		{"he", -2, tw},
+		{"he", math.MaxInt64, ot},
+		{"he", 1_000_000_001, ot},
 		// A negative count has the category of its absolute value.
 		{"ru", -1, o},
 		{"ar", -2, tw},
@@ -221,6 +270,90 @@ func TestPluralCategory(t *testing.T) {
 	for _, tag := range []string{"", "r", "ru\r\n", "ru_RU", "ру"} {
 		if got, err := locale.PluralCategory(tag, 1); !errors.Is(err, locale.ErrInvalidLanguage) || got != "" {
 			t.Errorf("PluralCategory(%q) = %q, %v, want ErrInvalidLanguage", tag, got, err)
+		}
+	}
+}
+
+//go:embed testdata/cldr47-plural-integers.txt
+var pluralFixture embed.FS
+
+// parseSamples expands a CLDR @integer sample list: numbers and inclusive
+// ranges (a~b) separated by commas.
+func parseSamples(t *testing.T, list string) []int64 {
+	t.Helper()
+	var out []int64
+	for part := range strings.SplitSeq(list, ",") {
+		lo, hi, isRange := strings.Cut(strings.TrimSpace(part), "~")
+		from, err := strconv.ParseInt(lo, 10, 64)
+		if err != nil {
+			t.Fatalf("sample %q: %v", part, err)
+		}
+		to := from
+		if isRange {
+			if to, err = strconv.ParseInt(hi, 10, 64); err != nil {
+				t.Fatalf("sample %q: %v", part, err)
+			}
+		}
+		for n := from; n <= to; n++ {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// readPluralFixture reads the fixture into rows of language, category and
+// whole counts.
+func readPluralFixture(t *testing.T) []pluralRow {
+	t.Helper()
+	data, err := pluralFixture.ReadFile("testdata/cldr47-plural-integers.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []pluralRow
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.SplitN(line, " ", 3)
+		if len(fields) != 3 {
+			t.Fatalf("fixture line %q: want language, category, samples", line)
+		}
+		rows = append(rows, pluralRow{fields[0], locale.Category(fields[1]), parseSamples(t, fields[2])})
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+type pluralRow struct {
+	lang    string
+	want    locale.Category
+	samples []int64
+}
+
+// TestPluralCategoryCLDR47 checks each supported language against the
+// integer samples of CLDR 47, so that a change in the data of x/text fails.
+func TestPluralCategoryCLDR47(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for _, row := range readPluralFixture(t) {
+		seen[row.lang] = true
+		for _, n := range row.samples {
+			t.Run(fmt.Sprintf("%s/%s/%d", row.lang, row.want, n), func(t *testing.T) {
+				t.Parallel()
+				got, err := locale.PluralCategory(row.lang, n)
+				if err != nil || got != row.want {
+					t.Fatalf("PluralCategory(%q, %d) = %q, %v, want %q", row.lang, n, got, err, row.want)
+				}
+			})
+		}
+	}
+	for _, lang := range []string{"af", "ar", "he", "uk", "ru"} {
+		if !seen[lang] {
+			t.Errorf("the fixture has no samples for %q", lang)
 		}
 	}
 }

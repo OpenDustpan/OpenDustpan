@@ -10,11 +10,15 @@ import (
 	"golang.org/x/text/number"
 )
 
-// latinArabicRegion reports whether Arabic text uses Western digits by
-// default in a region. Every other Arabic region uses Arabic-Indic digits.
-func latinArabicRegion(region string) bool {
+// arabicIndicRegion reports whether a region is one of the regions where Arabic text uses Arabic-Indic
+// digits by default, as in CLDR 47 (defaultNumberingSystem of the ar-XX
+// locales). Every other Arabic locale, including ar and ar-001, uses Western
+// digits. This is the data that current browsers use. An engine with CLDR 45
+// or older shows Arabic-Indic digits for bare ar.
+func arabicIndicRegion(region string) bool {
 	switch region {
-	case "AE", "DZ", "EH", "LY", "MA", "TN":
+	case "BH", "DJ", "EG", "ER", "IL", "IQ", "JO", "KM", "KW", "LB", "MR",
+		"OM", "PS", "QA", "SA", "SD", "SO", "SS", "SY", "TD", "YE":
 		return true
 	default:
 		return false
@@ -22,8 +26,10 @@ func latinArabicRegion(region string) bool {
 }
 
 // DefaultDigits returns the digits that a formatting locale uses when the
-// person sets no override. The data of x/text gives Western digits for a
-// regional Arabic tag such as ar-EG, so this function holds the rule and the
+// person sets no override. The result is DigitsLatin or DigitsArabic only.
+// A locale with other default digits (for example fa, which uses arabext)
+// gets DigitsLatin. The data of x/text gives Western digits for a regional
+// Arabic tag such as ar-EG, so this function holds the rule and the
 // Formatter always names the digits it wants.
 func DefaultDigits(formattingLocale string) (Digits, error) {
 	tag, ok := checkTag(formattingLocale)
@@ -38,10 +44,12 @@ func digitsOf(tag language.Tag) Digits {
 	if base.String() != "ar" {
 		return DigitsLatin
 	}
-	if region, conf := tag.Region(); conf == language.Exact && latinArabicRegion(region.String()) {
-		return DigitsLatin
+	// Only a region in the tag counts. A region that x/text adds for a bare
+	// ar is not Exact, and bare ar uses Western digits.
+	if region, conf := tag.Region(); conf == language.Exact && arabicIndicRegion(region.String()) {
+		return DigitsArabic
 	}
-	return DigitsArabic
+	return DigitsLatin
 }
 
 // Formatter formats numbers for one formatting locale and one digits
@@ -117,19 +125,27 @@ const (
 	Other Category = "other"
 )
 
-// PluralCategory returns the plural category of a whole count for a
-// language. The language of the text decides the plural rule, not the
-// formatting locale. It returns ErrInvalidLanguage for a tag with a wrong
-// shape. A negative count has the category of its absolute value.
-func PluralCategory(languageTag string, n int64) (Category, error) {
-	tag, ok := checkTag(languageTag)
-	if !ok {
-		return "", ErrInvalidLanguage
+// hebrewCategory is the Hebrew rule of CLDR 47 for a whole count: one for 1,
+// two for 2, other for the rest.
+func hebrewCategory(n int64) Category {
+	const two = 2
+	switch n {
+	case 1:
+		return One
+	case two:
+		return Two
+	default:
+		return Other
 	}
-	// The rules read the last two digits of a count, and the checks "more
-	// than 10". A count of one billion or more keeps its last nine digits
-	// and stays above one billion, so its category does not change, and
-	// the value fits in a 32-bit int.
+}
+
+// reduceCount maps a whole count to a non-negative count with the same
+// plural category. The rules of the supported languages use n mod 10 and
+// n mod 100, and other languages use n mod 1e6, and the rules compare with
+// values below 1e6. The code keeps n mod 1e9, a multiple of all three, and
+// adds 1e9 to a count of 1e9 or more so that it stays above every compared
+// value. The value fits in a 32-bit int.
+func reduceCount(n int64) int64 {
 	const billion = 1_000_000_000
 	big := n >= billion || n <= -billion
 	rest := n % billion
@@ -139,7 +155,24 @@ func PluralCategory(languageTag string, n int64) (Category, error) {
 	if big {
 		rest += billion
 	}
-	n = rest
+	return rest
+}
+
+// PluralCategory returns the plural category of a whole count for a
+// language. The language of the text decides the plural rule, not the
+// formatting locale. It returns ErrInvalidLanguage for a tag with a wrong
+// shape. A negative count has the category of its absolute value.
+func PluralCategory(languageTag string, n int64) (Category, error) {
+	tag, ok := checkTag(languageTag)
+	if !ok {
+		return "", ErrInvalidLanguage
+	}
+	n = reduceCount(n)
+	// CLDR 42 and later removed the many form of Hebrew, and x/text still
+	// gives it, so Hebrew has its own rule.
+	if base, _ := tag.Base(); base.String() == "he" {
+		return hebrewCategory(n), nil
+	}
 	switch plural.Cardinal.MatchPlural(tag, int(n), 0, 0, 0, 0) {
 	case plural.Zero:
 		return Zero, nil

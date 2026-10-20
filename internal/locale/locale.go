@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/text/language"
 )
@@ -58,6 +59,9 @@ func checkTag(s string) (language.Tag, bool) {
 	if err != nil {
 		// An unknown subtag is a well-formed tag: the shape is right, and
 		// the console owns the list of languages.
+		// With ValueError, x/text drops the unknown subtags (zz-ZZ becomes
+		// und-ZZ). This is harmless: the callers store the text they got, and
+		// use the tag only for the extension checks and the digits rule.
 		if !errors.As(err, new(language.ValueError)) {
 			return language.Und, false
 		}
@@ -101,24 +105,38 @@ func ValidateFormattingLocale(s string) error {
 	}
 	// Two layers: the raw text, and the parsed extensions. Each one alone
 	// refuses the tag, so a change to the parser cannot let one through.
-	lower := strings.ToLower(s)
-	if strings.Contains(lower, "-u-") || strings.Contains(lower, "-x-") || strings.HasPrefix(lower, "x-") {
+	if rawHasExtension(s) || parsedHasExtension(tag) {
 		return ErrInvalidFormattingLocale
 	}
+	return nil
+}
+
+// rawHasExtension reports whether the text of a tag has a -u- or -x-
+// extension. It reads the text and does not use the parser.
+func rawHasExtension(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "-u-") || strings.Contains(lower, "-x-") || strings.HasPrefix(lower, "x-")
+}
+
+// parsedHasExtension reports whether a parsed tag has a u or x extension.
+// It does not read the text of the tag.
+func parsedHasExtension(tag language.Tag) bool {
 	for _, ext := range tag.Extensions() {
 		if t := ext.Type(); t == 'u' || t == 'x' {
-			return ErrInvalidFormattingLocale
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // Digits is the numbering system of the digits in a number. The zero value
 // is the null of the preference: the formatting locale decides.
 type Digits string
 
-// The valid values of the digits preference. The list can grow when a new
-// language uses other digits.
+// The valid values of the digits preference. Only latn and arab are valid.
+// A locale whose default digits are other digits (for example fa, which uses
+// arabext) formats with latn when digits is null, because the server has no
+// other digits to give. The list can grow when a language needs more.
 const (
 	// DigitsLatin is the Western digits, 0 to 9.
 	DigitsLatin Digits = "latn"
@@ -139,11 +157,16 @@ func ParseDigits(s string) (Digits, error) {
 	}
 }
 
-// truncate keeps an error text short when the value is long or hostile.
+// truncate keeps an error text short when the value is long or hostile. It
+// cuts on a rune boundary, so the result is valid UTF-8 when s is.
 func truncate(s string) string {
 	const limit = 16
-	if len(s) > limit {
-		return s[:limit] + "..."
+	if len(s) <= limit {
+		return s
 	}
-	return s
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }

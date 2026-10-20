@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/locale"
+	"opendustpan.org/opendustpan/internal/locale"
 )
 
 func TestValidateLanguage(t *testing.T) {
