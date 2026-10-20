@@ -1,8 +1,9 @@
 // Package apidesc holds the types for the description of the tool-neutral
-// REST API and the check that compares a description with a route table.
+// REST API, the check that compares a description with a route table, and the
+// writer of the OpenAPI document.
 //
-// The package holds the types and the check only. It reads no route table and
-// writes no document.
+// The package reads no route table. A caller gives it the operations that the
+// route tables reduce to.
 package apidesc
 
 import (
@@ -24,27 +25,58 @@ var ErrInvalidOperation = errors.New("apidesc: operation is not valid")
 // Operation is one endpoint of the description: a method and a path pattern,
 // with the actions that the route declares. A route table and a description
 // both reduce to a list of operations, so Diff can compare them.
+//
+// The fields of Operation are the contract of the drift check: Diff compares
+// each of them. A later field that only describes a body, for example a
+// schema, is not part of this contract. The writer holds it, and the golden
+// file of the document checks it, so Diff does not change when a body gets a
+// schema.
 type Operation struct {
+	// ID is the operationId of the description, in lowerCamelCase, for
+	// example listUnits. A generator names an SDK method from it, so an ID
+	// never changes with a path. It is unique in the description.
+	ID string
 	// Method is the HTTP method in capital letters, for example GET.
 	Method string
 	// Path is the path pattern with the wildcards of net/http, for example
 	// /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}.
 	Path string
+	// Tags group the operation in the description and in an SDK. An
+	// operation has one to three tags. The first tag names the group.
+	Tags []string
 	// Actions lists the actions that the route declares, for example
 	// unit:read. A public route has none.
 	Actions []string
 	// Public is true for a route that needs no sign-in.
 	Public bool
+	// IdempotencyKey is true for a route that takes the Idempotency-Key
+	// header.
+	IdempotencyKey bool
+	// IfMatch is true for a route that takes the If-Match header.
+	IfMatch bool
+	// ETag is true for a route whose answer holds the ETag header.
+	ETag bool
 }
 
 // Validate returns ErrInvalidOperation, wrapped, when the operation breaks an
-// allowlist: the method, the path or the actions. It refuses a value and does
-// not change it to make it valid.
+// allowlist: the ID, the method, the path, the tags or the actions. It refuses
+// a value and does not change it to make it valid.
 //
 // Defense in depth: a handler and a route test check the same fields. This
 // check stays so that a new caller of Diff or of the generator cannot skip it
 // and read a hostile path as a match.
 func (o Operation) Validate() error {
+	if !operationID.MatchString(o.ID) {
+		return fmt.Errorf(
+			"%w: operation ID %q of %s %s is not lowerCamelCase",
+			ErrInvalidOperation, o.ID, o.Method, o.Path,
+		)
+	}
+
+	if err := validateTags(o); err != nil {
+		return err
+	}
+
 	if !allowedMethod(o.Method) {
 		return fmt.Errorf("%w: method %q", ErrInvalidOperation, o.Method)
 	}
@@ -66,14 +98,50 @@ func allowedMethod(method string) bool {
 	}
 }
 
+// maxTags is the largest number of tags of one operation.
+const maxTags = 3
+
 var (
+	operationID    = regexp.MustCompile(`^[a-z][a-zA-Z0-9]{2,63}$`)
+	tagGrammar     = regexp.MustCompile(`^[a-z]+(-[a-z]+)*$`)
 	literalSegment = regexp.MustCompile(`^[a-z0-9-]+$`)
-	wildcardName   = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
-	actionGrammar  = regexp.MustCompile(`^[a-z]+:[a-z]+(-[a-z]+)*$`)
+	// fileSegment is a literal with the one suffix .json. Only the last
+	// segment of a path may be one, for a route that serves a document.
+	fileSegment   = regexp.MustCompile(`^[a-z0-9-]+\.json$`)
+	wildcardName  = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+	actionGrammar = regexp.MustCompile(`^[a-z]+:[a-z]+(-[a-z]+)*$`)
 )
 
+// validateTags refuses an operation with no tag, with more than maxTags, with
+// a tag that breaks the grammar or with a tag twice.
+func validateTags(o Operation) error {
+	if len(o.Tags) == 0 || len(o.Tags) > maxTags {
+		return fmt.Errorf(
+			"%w: %s %s has %d tags, want 1 to %d",
+			ErrInvalidOperation,
+			o.Method,
+			o.Path,
+			len(o.Tags),
+			maxTags,
+		)
+	}
+
+	for i, tag := range o.Tags {
+		if !tagGrammar.MatchString(tag) {
+			return fmt.Errorf("%w: tag %q is not kebab-case words", ErrInvalidOperation, tag)
+		}
+
+		if slices.Contains(o.Tags[:i], tag) {
+			return fmt.Errorf("%w: tag %q appears twice", ErrInvalidOperation, tag)
+		}
+	}
+
+	return nil
+}
+
 // validatePath allows a path under Prefix whose segments are literals
-// ([a-z0-9-]+) or wildcards. A wildcard is {name} with name [a-z_][a-z0-9_]*.
+// ([a-z0-9-]+) or wildcards. The last segment may also be a literal with the
+// suffix .json. A wildcard is {name} with name [a-z_][a-z0-9_]*.
 // {name...} and {$} are allowed in the last segment only.
 func validatePath(path string) error {
 	rest, ok := strings.CutPrefix(path, Prefix)
@@ -84,7 +152,7 @@ func validatePath(path string) error {
 	segments := strings.Split(rest, "/")
 	for i, seg := range segments {
 		last := i == len(segments)-1
-		if !validSegment(seg, last) {
+		if !validSegment(seg, last) && (!last || !fileSegment.MatchString(seg)) {
 			return fmt.Errorf("%w: path %q holds the segment %q that is not allowed", ErrInvalidOperation, path, seg)
 		}
 	}
@@ -191,7 +259,8 @@ type Drift struct {
 	// Unrouted holds the keys of the operations that no route serves.
 	Unrouted []string
 	// Mismatch holds the keys of the operations that exist in both lists but
-	// differ in their path, their actions or their public flag.
+	// differ in their ID, their path, their tags, their actions, their public
+	// flag or their header flags.
 	Mismatch []string
 }
 
@@ -227,7 +296,7 @@ func Diff(routes, described []Operation) (Drift, error) {
 
 		// The key ignores the names of wildcards, but a generator turns them
 		// into the names of SDK parameters, so the paths must match exactly.
-		if route.Path != doc.Path || route.Public != doc.Public || !sameActions(route.Actions, doc.Actions) {
+		if !sameOperation(route, doc) {
 			d.Mismatch = append(d.Mismatch, key)
 		}
 	}
@@ -245,9 +314,25 @@ func Diff(routes, described []Operation) (Drift, error) {
 	return d, nil
 }
 
-// index maps the key of each operation to the operation.
+// sameOperation reports whether two operations with the same key agree in
+// every field of the contract. The IDs must match too, so a rename of an
+// operationId is drift: it renames an SDK method.
+func sameOperation(a, b Operation) bool {
+	return a.ID == b.ID &&
+		a.Path == b.Path &&
+		a.Public == b.Public &&
+		a.IdempotencyKey == b.IdempotencyKey &&
+		a.IfMatch == b.IfMatch &&
+		a.ETag == b.ETag &&
+		slices.Equal(a.Tags, b.Tags) &&
+		sameActions(a.Actions, b.Actions)
+}
+
+// index maps the key of each operation to the operation. It refuses an ID
+// that two operations share.
 func index(ops []Operation) (map[string]Operation, error) {
 	byKey := make(map[string]Operation, len(ops))
+	byID := make(map[string]string, len(ops))
 
 	for _, op := range ops {
 		if err := op.Validate(); err != nil {
@@ -259,6 +344,11 @@ func index(ops []Operation) (map[string]Operation, error) {
 			return nil, fmt.Errorf("%w: %s appears twice", ErrInvalidOperation, key)
 		}
 
+		if first, dup := byID[op.ID]; dup {
+			return nil, fmt.Errorf("%w: operation ID %q is on %s and on %s", ErrInvalidOperation, op.ID, first, key)
+		}
+
+		byID[op.ID] = key
 		byKey[key] = op
 	}
 

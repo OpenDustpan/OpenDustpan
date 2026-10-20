@@ -576,7 +576,10 @@ type Server struct {
 	handler http.Handler
 	// ungated is the handler before the component gate. Only the tests read
 	// it.
-	ungated         http.Handler
+	ungated http.Handler
+	// mounted holds the adapters of the server. Only the tests of the API
+	// description read it.
+	mounted         *adapters
 	logger          *slog.Logger
 	listenAddr      string
 	listener        net.Listener
@@ -964,12 +967,12 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	cfg.auditShipper = shipper
 
-	adapters, err := newAdapters(svc, cfg, base, backups, observed)
+	mount, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
 	}
 
-	handlers, err := routes(adapters, cfg, observed)
+	handlers, err := routes(mount, cfg, observed)
 	if err != nil {
 		return nil, err
 	}
@@ -978,7 +981,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	srv := &Server{
 		flushDenials: denialFlusher(cfg, svc, observed),
-		handler:      handlers.served, ungated: handlers.ungated,
+		handler:      handlers.served, ungated: handlers.ungated, mounted: &mount,
 		logger:           cfg.logger,
 		listenAddr:       cfg.listenAddr,
 		listener:         cfg.listener,
@@ -987,22 +990,22 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		secretWrapper:    cfg.secretWrapper,
 		workspaces:       svc.workspaces,
 		backups:          backups,
-		restores:         adapters.restores,
+		restores:         mount.restores,
 		restoreRegistry:  restoreRegistry,
 		now:              cfg.now,
 		registry:         observed.Registry(),
 		tlsCertFile:      cfg.tlsCertFile,
 		tlsKeyFile:       cfg.tlsKeyFile,
 		observed:         observed,
-		chain:            adapters.chain,
+		chain:            mount.chain,
 		tokens:           svc.tokens,
 		tempAdmins:       svc.tempAdmins,
 		shipper:          shipper,
 		beforeServe:      cfg.beforeServe,
 		deleted:          deleted,
-		signInRequests:   adapters.signInSessions(),
+		signInRequests:   mount.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
-		signInProviders:  bindingOf(cfg, adapters.signIn),
+		signInProviders:  bindingOf(cfg, mount.signIn),
 		kind:             newKindState(cfg),
 		durable:          cfg.durableStore,
 		durableOwner:     durableOwner(cfg),
@@ -1113,7 +1116,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	return adapters{
+	mounted := adapters{
 		neutralHandlers: neutral,
 		pulumi:          api,
 		profiles:        neutral.profiles,
@@ -1125,7 +1128,15 @@ func newAdapters(
 		restores:        restores,
 		chain:           chain,
 		signIn:          signIn,
-	}, nil
+	}
+
+	// The server refuses to start with a route under the prefix that has no
+	// valid name in the description, so it never serves a partial description.
+	if _, err = mounted.describeOperations(); err != nil {
+		return adapters{}, err
+	}
+
+	return mounted, nil
 }
 
 // neutralHandlers are the tool-neutral inventory API, audit API and context

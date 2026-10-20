@@ -191,6 +191,17 @@ func (h *Handler) Routes() []Route {
 	return out
 }
 
+// RegisteredPatterns returns every ServeMux pattern the handler serves, in the
+// order of the route table.
+func (h *Handler) RegisteredPatterns() []string {
+	out := make([]string, len(h.routes))
+	for i, route := range h.routes {
+		out[i] = route.Method + " " + route.Path
+	}
+
+	return out
+}
+
 // buildRoutes returns the route table. It is the single source of the patterns
 // that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {

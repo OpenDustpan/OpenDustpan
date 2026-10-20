@@ -25,6 +25,7 @@ func sweepChainServer(
 		tempAdmins:       nil,
 		handler:          nil,
 		ungated:          nil,
+		mounted:          nil,
 		logger:           slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		listenAddr:       "",
 		listener:         nil,
