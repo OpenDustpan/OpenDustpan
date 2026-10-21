@@ -307,6 +307,8 @@ How-to guides:
 - [Save and open a view of the unit list](docs/guides/saved-views.md): store
   the labels and references of a unit list under a name, and open the view
   again.
+- [Publish a provider to the private registry](docs/guides/private-registry.md): register a
+  signing key, publish a signed provider version, and install it with `tofu init`.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
@@ -325,6 +327,8 @@ Reference:
   of a journaled update.
 - [Preferences API](docs/reference/preferences-api.md): the routes that read
   and change the preferences of a person.
+- [Registry API](docs/reference/registry-api.md): the routes that publish a provider,
+  manage signing keys, and the routes that OpenTofu reads.
 - [Languages and digits](docs/reference/languages-and-digits.md): the
   languages, the `digits` setting and the plural forms.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
