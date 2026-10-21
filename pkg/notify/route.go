@@ -187,7 +187,10 @@ func (s Sink) validURL() error {
 	// port is stored, and the answer of the API needs no other layer to be
 	// free of them.
 	if WebhookHost(s.Target) == "" {
-		return fmt.Errorf("%w: a %s sink: the host must be an ASCII DNS name or an IP address, with an optional numeric port", ErrInvalid, s.Kind)
+		return fmt.Errorf(
+			"%w: a %s sink: the host must be an ASCII DNS name or an IP address, with an optional numeric port",
+			ErrInvalid, s.Kind,
+		)
 	}
 
 	if len(s.SecretRefs) == 0 {
@@ -221,7 +224,8 @@ func (s Sink) validChat() error {
 // with its port when the URL has one. It returns an error that matches
 // egress.ErrRefused for a URL that egress.CheckURL refuses for https only,
 // and an error that matches ErrInvalid for a host that is not an ASCII DNS
-// name or an IP literal, with an optional numeric port. The API stores the URL as the secret item of the sink and the host as
+// name or an IP literal, with an optional numeric port. The API stores the URL as the secret item of the sink and the
+// host as
 // its Target. The chat adapter sends only when the host of the URL in the
 // item is the Target.
 func ChatHost(raw string) (string, error) {
@@ -236,7 +240,10 @@ func ChatHost(raw string) (string, error) {
 
 	host := strings.ToLower(u.Host)
 	if !validHostPort(host) {
-		return "", fmt.Errorf("chat webhook: %w: the host must be an ASCII DNS name or an IP address, with an optional numeric port", ErrInvalid)
+		return "", fmt.Errorf(
+			"chat webhook: %w: the host must be an ASCII DNS name or an IP address, with an optional numeric port",
+			ErrInvalid,
+		)
 	}
 
 	return host, nil
@@ -265,88 +272,107 @@ func WebhookHost(raw string) string {
 	return host
 }
 
+// maxPortDigits is the length of the largest port, 65535.
+const maxPortDigits = 5
+
+const (
+	maxDNSNameLen = 253
+	maxLabelLen   = 63
+)
+
 // validHostPort reports whether h, in lower case, is an ASCII DNS name (LDH
 // labels) or an IP literal, with an optional port of 1 to 5 digits that is at
 // most 65535. It is an allowlist: it refuses everything it does not name,
 // for example ";", sub-delimiters, "%", control and bidi characters, raw
 // Unicode, and an empty port.
 func validHostPort(h string) bool {
-	host, port := h, ""
-
-	if strings.HasPrefix(h, "[") {
-		end := strings.IndexByte(h, ']')
-		if end < 0 {
-			return false
-		}
-
-		addr, err := netip.ParseAddr(h[1:end])
-		if err != nil || !addr.Is6() || addr.Zone() != "" {
-			return false
-		}
-
-		host, port = "", h[end+1:]
-		if port != "" {
-			if port[0] != ':' {
-				return false
-			}
-
-			port = port[1:]
-			if port == "" {
-				return false
-			}
-		}
-	} else if i := strings.IndexByte(h, ':'); i >= 0 {
-		host, port = h[:i], h[i+1:]
-		if port == "" {
-			return false
-		}
+	hp := splitHostPort(h)
+	if hp.host == "" || (hp.hasPort && !validPort(hp.port)) {
+		return false
 	}
 
-	if port != "" {
-		if len(port) > 5 {
-			return false
-		}
+	host := hp.host
 
-		n := 0
+	if strings.HasPrefix(host, "[") {
+		addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
 
-		for _, c := range port {
-			if c < '0' || c > '9' {
-				return false
-			}
-
-			n = n*10 + int(c-'0')
-		}
-
-		if n < 1 || n > 65535 {
-			return false
-		}
-	}
-
-	if h[0] == '[' {
-		return true
+		return err == nil && addr.Is6() && addr.Zone() == "" && strings.HasSuffix(host, "]")
 	}
 
 	return validDNSName(host)
+}
+
+// hostPort is a host and the port after it. hasPort is true when a colon
+// starts a port, also when the port is empty.
+type hostPort struct {
+	host, port string
+	hasPort    bool
+}
+
+// splitHostPort splits h at the colon that starts the port. An IPv6 literal
+// in brackets keeps its colons. A text after "]" that is not a colon gives an
+// empty host.
+func splitHostPort(h string) hostPort {
+	if !strings.HasPrefix(h, "[") {
+		host, port, hasPort := strings.Cut(h, ":")
+
+		return hostPort{host: host, port: port, hasPort: hasPort}
+	}
+
+	end := strings.IndexByte(h, ']')
+	if end < 0 {
+		return hostPort{host: "", port: "", hasPort: false}
+	}
+
+	rest := h[end+1:]
+
+	switch {
+	case rest == "":
+		return hostPort{host: h, port: "", hasPort: false}
+	case rest[0] != ':':
+		return hostPort{host: "", port: "", hasPort: false}
+	default:
+		return hostPort{host: h[:end+1], port: rest[1:], hasPort: true}
+	}
+}
+
+// validPort reports whether p is 1 to 5 digits and in the range 1 to 65535.
+func validPort(p string) bool {
+	if p == "" || len(p) > maxPortDigits || strings.ContainsAny(p, "+-") {
+		return false
+	}
+
+	n, err := strconv.ParseUint(p, 10, 16)
+
+	return err == nil && n >= 1
 }
 
 // validDNSName reports whether name is made of 1 to 63 byte labels of
 // letters, digits and hyphens, none of which starts or ends with a hyphen,
 // in at most 253 bytes. A dotted IPv4 address passes as a name.
 func validDNSName(name string) bool {
-	if name == "" || len(name) > 253 {
+	if name == "" || len(name) > maxDNSNameLen {
 		return false
 	}
 
 	for label := range strings.SplitSeq(name, ".") {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		if !validLabel(label) {
 			return false
 		}
+	}
 
-		for i := 0; i < len(label); i++ {
-			c := label[i]
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-				return false
-			}
+	return true
+}
+
+func validLabel(label string) bool {
+	if label == "" || len(label) > maxLabelLen || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+
+	for i := range len(label) {
+		c := label[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
 		}
 	}
 
