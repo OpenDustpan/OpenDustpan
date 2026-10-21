@@ -226,6 +226,7 @@ Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 | [RFC 68](rfc/0068-installation-settings.md) Installation settings                                  | the shape of the installation API (RFC 59)                      |
 | [RFC 69](rfc/0069-community-channels.md) Community channels                                        | the owner sets up the channels                                  |
 | [RFC 72](rfc/0072-programmatic-runs-api-and-sdk.md) Programmatic runs through the API and an SDK   | runners (RFC 6) and the run model (milestone 5)                 |
+| C# (.NET) and Java clients                                                                         | the REST API is stable (#1281). Go first, then Python and TypeScript (#966). |
 | [RFC 73](rfc/0073-ai-agent-for-infrastructure.md) An AI agent for infrastructure across both tools | the interface for AI agents (RFC 41) and access tokens (RFC 20) |
 
 ## Candidates to drop or merge
