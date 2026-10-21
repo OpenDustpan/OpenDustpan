@@ -248,7 +248,9 @@ func (g gitHost) MakeDefault(
 
 	var out forge.ConnectionRecord
 
-	err := g.s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	// The audit append reads the last entry, so the namespace row is held FOR
+	// UPDATE: two make-default calls then run one after the other.
+	err := g.s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		stored, err := moveDefault(ctx, q, defaultTarget{ns: ns, id: id, ifVersion: ifVersion}, &e)
 		if err != nil {
 			return err
@@ -321,6 +323,12 @@ func moveDefault(
 	n, setErr := q.SetGitHostDefault(ctx, db.SetGitHostDefaultParams{
 		UpdatedAtMs: at, Namespace: ns.String(), ID: id, IfVersion: ifVersion,
 	})
+	if isUniqueViolation(setErr) {
+		// Defense in depth: the namespace lock already orders the calls. If
+		// another default appears anyway, the caller read stale state.
+		return forge.ConnectionRecord{}, fmt.Errorf("set default: %w", forge.ErrVersionConflict)
+	}
+
 	if setErr != nil {
 		return forge.ConnectionRecord{}, fmt.Errorf("set default: %w", setErr)
 	}

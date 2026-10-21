@@ -2,6 +2,7 @@ package connectiontest
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -17,6 +18,7 @@ func defaultCases() []suiteCase {
 		{"delete of the only connection is allowed and the next one is the default", testDeleteOnlyConnection},
 		{"delete of a connection that is not the default is allowed", testDeleteNonDefault},
 		{"make default moves the flag in one step and bumps the version", testMakeDefault},
+		{"concurrent make default calls leave one default and one entry each", testMakeDefaultConcurrent},
 		{"make default of the default writes no entry", testMakeDefaultSame},
 		{"make default of an unknown ID is not found", testMakeDefaultUnknown},
 		{"make default with another version is a conflict and changes nothing", testMakeDefaultVersion},
@@ -249,5 +251,79 @@ func testMakeDefaultStaleFence(t *testing.T, h Harness) {
 	read, err := h.Store.GetConnection(t.Context(), nsAcme, second.ID)
 	if err != nil || read.Default {
 		t.Fatalf("get second = %+v, %v; want a connection that is still not the default", read, err)
+	}
+}
+
+// testMakeDefaultConcurrent starts one make-default call for each of several
+// connections at the same time. Each call must succeed, the namespace must
+// end with one default, and the audit chain must hold one entry for each call
+// with no repeated sequence number.
+func testMakeDefaultConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	const callers = 6
+
+	first := mustCreate(t, h, nsAcme, "100")
+	ids := make([]string, 0, callers)
+
+	for i := range callers {
+		ids = append(ids, mustCreate(t, h, nsAcme, "20"+string(rune('0'+i))).ID)
+	}
+
+	fence := h.Namespace(t, nsAcme.String())
+	errs := make([]error, callers)
+
+	var wg sync.WaitGroup
+
+	for i, id := range ids {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			_, errs[i] = h.Store.MakeDefault(
+				t.Context(), nsAcme, id, 0, fence, entry(nsAcme, "git-host-connection:make-default"),
+			)
+		}()
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("make default of %s = %v, want no error", ids[i], err)
+		}
+	}
+
+	list, err := h.Store.ListConnections(t.Context(), nsAcme)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	defaults := 0
+
+	for i := range list {
+		if list[i].Default {
+			defaults++
+		}
+	}
+
+	if defaults != 1 {
+		t.Fatalf("%d default connections after the calls, want 1 (first was %s)", defaults, first.ID)
+	}
+
+	entries := h.Audit(t, nsAcme)
+	if want := 1 + callers + callers; len(entries) != want {
+		t.Fatalf("%d audit entries, want %d", len(entries), want)
+	}
+
+	seen := make(map[int64]bool, len(entries))
+
+	for i := range entries {
+		if seen[entries[i].Sequence] {
+			t.Fatalf("audit sequence %d appears twice", entries[i].Sequence)
+		}
+
+		seen[entries[i].Sequence] = true
 	}
 }
