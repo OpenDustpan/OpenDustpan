@@ -53,7 +53,8 @@ const typesDocument = `{
    "Status": {"type": "string", "enum": ["onCall", "awaiting-approval"]},
    "State": {"type": "string", "enum": ["open", "closed"]},
    "ErrorResponse": {"type": "object", "required": ["code", "message"],
-    "properties": {"code": {"type": "integer"}, "message": {"type": "string"}}}
+    "properties": {"code": {"type": "integer"}, "message": {"type": "string"}, "errorCode": {"type": "string"},
+     "errorArgs": {"type": "object", "additionalProperties": true}}}
   }
  }
 }`

@@ -40,7 +40,8 @@ const baseDocument = `{
   "schemas": {
    "Thing": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}},
    "ErrorResponse": {"type": "object", "required": ["code", "message"],
-    "properties": {"code": {"type": "integer"}, "message": {"type": "string"}}}
+    "properties": {"code": {"type": "integer"}, "message": {"type": "string"}, "errorCode": {"type": "string"},
+     "errorArgs": {"type": "object", "additionalProperties": true}}}
   }
  }
 }`
@@ -440,5 +441,62 @@ func publishedChecks() []publishedCheck {
 		{"getNotificationSink", "has its path parameters in the order of the path", func(o model.Operation) bool {
 			return len(o.Parameters) == 2 && o.Parameters[0].Name == "namespace" && o.Parameters[1].Name == "sink_id"
 		}},
+	}
+}
+
+// TestParseRefusesAnErrorSchemaOfAnotherShape checks that the parser holds the
+// shape of the error answer that every transport decodes.
+func TestParseRefusesAnErrorSchemaOfAnotherShape(t *testing.T) {
+	t.Parallel()
+
+	const good = `"properties": {"code": {"type": "integer"}, "message": {"type": "string"}, "errorCode": {"type": "string"},
+     "errorArgs": {"type": "object", "additionalProperties": true}}}`
+
+	tests := []struct{ name, replacement string }{
+		{"errorCode is missing", `"properties": {"code": {"type": "integer"}, "message": {"type": "string"},
+     "errorArgs": {"type": "object", "additionalProperties": true}}}`},
+		{"errorArgs is missing", `"properties": {"code": {"type": "integer"}, "message": {"type": "string"},
+     "errorCode": {"type": "string"}}}`},
+		{"code is a string", `"properties": {"code": {"type": "string"}, "message": {"type": "string"},
+     "errorCode": {"type": "string"}, "errorArgs": {"type": "object", "additionalProperties": true}}}`},
+		{"message is an integer", `"properties": {"code": {"type": "integer"}, "message": {"type": "integer"},
+     "errorCode": {"type": "string"}, "errorArgs": {"type": "object", "additionalProperties": true}}}`},
+		{"errorCode is an integer", `"properties": {"code": {"type": "integer"}, "message": {"type": "string"},
+     "errorCode": {"type": "integer"}, "errorArgs": {"type": "object", "additionalProperties": true}}}`},
+		{"errorCode can be null", `"properties": {"code": {"type": "integer"}, "message": {"type": "string"},
+     "errorCode": {"type": ["string", "null"]}, "errorArgs": {"type": "object", "additionalProperties": true}}}`},
+		{"errorArgs is a string", `"properties": {"code": {"type": "integer"}, "message": {"type": "string"},
+     "errorCode": {"type": "string"}, "errorArgs": {"type": "string"}}}`},
+		{"errorArgs has typed values", `"properties": {"code": {"type": "integer"}, "message": {"type": "string"},
+     "errorCode": {"type": "string"}, "errorArgs": {"type": "object", "additionalProperties": {"type": "string"}}}}`},
+		{"a member that is not known", `"properties": {"code": {"type": "integer"}, "message": {"type": "string"},
+     "errorCode": {"type": "string"}, "errorArgs": {"type": "object", "additionalProperties": true},
+     "extra": {"type": "string"}}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := change(t, good, tt.replacement)
+			if err := parseErr(string(doc)); !errors.Is(err, clientgen.ErrInvalidDescription) {
+				t.Fatalf("want ErrInvalidDescription, got %v", err)
+			}
+		})
+	}
+
+	// errorCode and errorArgs required: the transport reads a pointer and a
+	// map, so a required member is another shape.
+	for _, member := range []string{"errorCode", "errorArgs"} {
+		doc := change(t, `"required": ["code", "message"]`, `"required": ["code", "message", "`+member+`"]`)
+		if err := parseErr(string(doc)); !errors.Is(err, clientgen.ErrInvalidDescription) {
+			t.Errorf("%s required: want ErrInvalidDescription, got %v", member, err)
+		}
+	}
+
+	// code optional.
+	doc := change(t, `"required": ["code", "message"]`, `"required": ["message"]`)
+	if err := parseErr(string(doc)); !errors.Is(err, clientgen.ErrInvalidDescription) {
+		t.Errorf("code optional: want ErrInvalidDescription, got %v", err)
 	}
 }

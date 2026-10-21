@@ -315,7 +315,61 @@ func (st *parseState) tags() ([]model.Tag, error) {
 // errorSchema reads the schema of the error answer, so that it is in the model
 // whatever the operations reach.
 func (st *parseState) errorSchema() error {
-	return st.namedSchema(errorSchemaName)
+	if err := st.namedSchema(errorSchemaName); err != nil {
+		return err
+	}
+
+	return checkErrorShape(ptrJoin("/components/schemas", errorSchemaName), st.schemas[errorSchemaName])
+}
+
+// checkErrorShape checks that the error schema has the members that every
+// transport reads: code (integer, required), message (string, required),
+// errorCode (string, optional) and errorArgs (an object with free keys,
+// optional). A client decodes the error answer in the same way for each
+// operation, so a description with another shape is refused here and not at
+// the compile or run time of a client.
+func checkErrorShape(ptr string, s *model.Schema) error {
+	if s == nil || s.Kind != model.KindObject || s.Extra != nil {
+		return invalid(ptr, "the error schema must be an object with no additional properties")
+	}
+
+	want := map[string]struct {
+		kind     model.TypeKind
+		required bool
+	}{
+		"code":      {model.TypeInteger, true},
+		"message":   {model.TypeString, true},
+		"errorCode": {model.TypeString, false},
+		"errorArgs": {model.TypeMap, false},
+	}
+
+	if len(s.Fields) != len(want) {
+		return invalid(ptr, "the error schema must have the members code, message, errorCode and errorArgs")
+	}
+
+	for _, f := range s.Fields {
+		fptr := ptrJoin(ptrJoin(ptr, "properties"), f.Name)
+
+		w, ok := want[f.Name]
+		if !ok {
+			return invalid(fptr, "the error schema has a member that is not code, message, errorCode or errorArgs")
+		}
+
+		if f.Required != w.required {
+			return invalid(fptr, "the member of the error schema has the wrong required setting")
+		}
+
+		t := f.Type
+		if t.Kind != w.kind || t.Nullable || t.Format != "" {
+			return invalid(fptr, "the member of the error schema has the wrong type")
+		}
+
+		if w.kind == model.TypeMap && (t.Elem == nil || t.Elem.Kind != model.TypeAny) {
+			return invalid(fptr, "errorArgs must be an object with additionalProperties true")
+		}
+	}
+
+	return nil
 }
 
 // sortedSchemas returns the schemas found, in the order of their names.
