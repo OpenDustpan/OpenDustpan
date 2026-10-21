@@ -54,11 +54,13 @@ jobs:
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
         ports: [ "5432:5432" ]
-        # The image declares a volume at /var/lib/postgresql, and the runner does
-        # not remove that volume after the job. A tmpfs at the same path replaces
-        # the volume. The size limits the memory that the database can use.
+        # The image declares a volume at /var/lib/postgresql on the disk of the
+        # runner. The runner does not remove that volume after the job. The job
+        # hooks of each self-hosted runner remove it. A parallel query keeps its
+        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
+        # small for the tests.
         options: >-
-          --tmpfs /var/lib/postgresql:rw,size=3g
+          --shm-size=1g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
@@ -179,11 +181,13 @@ jobs:
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
         ports: [ "5432:5432" ]
-        # The image declares a volume at /var/lib/postgresql, and the runner does
-        # not remove that volume after the job. A tmpfs at the same path replaces
-        # the volume. The size limits the memory that the database can use.
+        # The image declares a volume at /var/lib/postgresql on the disk of the
+        # runner. The runner does not remove that volume after the job. The job
+        # hooks of each self-hosted runner remove it. A parallel query keeps its
+        # shared memory in /dev/shm, and the Docker default of 64 MiB is too
+        # small for the tests.
         options: >-
-          --tmpfs /var/lib/postgresql:rw,size=3g
+          --shm-size=1g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
       # The network fault tests (make faults) drive this Toxiproxy server.

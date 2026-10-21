@@ -116,15 +116,26 @@ func ParseItemKeyID(s string) (ItemKeyID, error) {
 	return ItemKeyID(s), nil
 }
 
+// ItemKeyBlobInfo describes the wrapped key blob that a record names: its version,
+// and the size and MD5 of its bytes, so that a backup copies and checks it
+// like every other blob. The MD5 is a checksum for integrity only. The AEAD
+// tag of the wrapped key authenticates the bytes.
+type ItemKeyBlobInfo struct {
+	MD5     [16]byte
+	Size    int64
+	Version int
+}
+
 // ItemKey is the record of one item key, as SQL keeps it. The wrapped
-// key itself is not part of the record: it is the blob that ItemKeyBlobs.Key names.
-// ShreddedAt is the zero time while the key exists.
+// key itself is not part of the record: it is the blob that ItemKeyBlobs.Key
+// names with Blob.Version. ShreddedAt is the zero time while the key exists.
 type ItemKey struct {
 	CreatedAt  time.Time
 	ShreddedAt time.Time
 	Ref        ItemRef
 	ID         ItemKeyID
 	WrapperID  string
+	Blob       ItemKeyBlobInfo
 }
 
 // Shredded reports whether the key is shredded.
@@ -165,6 +176,43 @@ type ItemKeyIndex interface {
 	ListItemKeyWrapperIDs(ctx context.Context) ([]string, error)
 }
 
+// ItemKeyTx is the item key part of one open transaction of the store that
+// holds the item rows. Its writes commit or roll back with every other write
+// of that transaction, so a record never exists without its item, and an item
+// never exists without its record. A caller that creates an item opens the
+// transaction with its fence, passes the ItemKeyTx to ItemSealer.NewItemKey,
+// and writes the item row in the same transaction. An ItemKeyTx is valid only
+// inside the function that the store gives it to.
+//
+// The transaction holds the fence that the caller gave when it opened the
+// transaction, and every call checks the namespace of its argument against it.
+type ItemKeyTx interface {
+	// CreateItemKey stores the record k unless a record for k.Ref exists,
+	// and returns the stored record either way. It returns ErrShredded with
+	// the stored record when the record for k.Ref is shredded, and
+	// namespace.ErrFenced when the namespace of k is not the namespace of the
+	// fence of the transaction.
+	CreateItemKey(ctx context.Context, k ItemKey) (ItemKey, error)
+	// GetItemKey returns the record of ref, with the errors of
+	// ItemKeyIndex.GetItemKey.
+	GetItemKey(ctx context.Context, ref ItemRef) (ItemKey, error)
+	// GetNamespace reads a namespace inside the transaction. The sealer needs
+	// the ID of the namespace to name the key blob, and a read through the
+	// store could wait for the transaction that the caller holds open.
+	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+}
+
+// ItemKeyStore is an ItemKeyIndex that also runs a function in one fenced
+// transaction. The SQL store adapters implement it.
+type ItemKeyStore interface {
+	ItemKeyIndex
+	// InItemKeyTx runs fn in one write transaction that checks fence first.
+	// It commits when fn returns nil and rolls back otherwise. It returns
+	// namespace.ErrFenced when the fence is stale. fn must not start another
+	// transaction of the store.
+	InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(ItemKeyTx) error) error
+}
+
 // ItemSealer seals and opens the content of history items, each item
 // under its own random item key. It never derives an item key from
 // another key, so a shred makes every copy of the content unreadable, also
@@ -173,11 +221,15 @@ type ItemKeyIndex interface {
 // does not open as another part of the same item.
 type ItemSealer interface {
 	// NewItemKey makes the item key of ref: it writes the wrapped key
-	// blob, then the record. It returns the stored record when ref already
-	// has one. It returns ErrShredded when the key of ref is shredded,
-	// ErrKeyNotConfigured when no key-encryption key is configured, and
-	// namespace.ErrFenced when the fence is stale.
-	NewItemKey(ctx context.Context, ref ItemRef, fence namespace.Fence) (ItemKey, error)
+	// blob, then the record through tx, so the record commits in the
+	// transaction of the caller, with the item. It returns the stored record
+	// when ref already has one. It returns ErrShredded when the key of ref is
+	// shredded, ErrKeyNotConfigured when no key-encryption key is configured,
+	// and namespace.ErrFenced when fence is not the namespace of ref or the
+	// fence of tx is stale. When the transaction of the caller rolls back,
+	// the blob stays as an orphan for the orphan cleanup, and no record
+	// stays.
+	NewItemKey(ctx context.Context, tx ItemKeyTx, ref ItemRef, fence namespace.Fence) (ItemKey, error)
 	// SealContent seals the plaintext in r with the item key of ref. The
 	// caller streams the result. It returns ErrKeyNotFound when ref has no
 	// item key and ErrShredded when the key is shredded.
@@ -188,4 +240,16 @@ type ItemSealer interface {
 	// ErrKeyNotFound when ref has no item key, and ErrDecrypt for a
 	// stream of another item or binding, or a changed stream.
 	OpenContent(ctx context.Context, ref ItemRef, binding []byte, r io.Reader) (io.Reader, error)
+}
+
+// itemAADLabel starts the associated data of an item key and of the content
+// that it seals. It differs from aadLabel, so no item ciphertext opens as
+// the value of a scope, and no value of a scope opens as an item.
+const itemAADLabel = "opendustpan/item/v1"
+
+// aad is the associated data that binds a wrapped item key and its content
+// to the scope, the kind and the item ID of the reference.
+func (r ItemRef) aad() []byte {
+	return []byte(itemAADLabel + "\x00" + r.Scope.Namespace.String() + "\x00" + r.Scope.ID + "\x00" +
+		string(r.Kind) + "\x00" + r.Item)
 }

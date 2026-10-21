@@ -25,6 +25,11 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[publishBody]("PublishProviderReleaseRequest", apidesc.Named[publishFile]("PublishFile")),
 			releaseBody),
+	apidesc.Pattern(http.MethodGet, providersPath): apidesc.Name("listRegistryProviders", tagRegistry).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.NoBody, apidesc.Typed[listProvidersResponse](
+			"ListRegistryProvidersResponse", apidesc.Named[providerDocument]("RegistryProvider"),
+		)),
 	apidesc.Pattern(http.MethodGet, versionsPath): apidesc.Name("listProviderReleases", tagRegistry).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, apidesc.Typed[listReleasesResponse](

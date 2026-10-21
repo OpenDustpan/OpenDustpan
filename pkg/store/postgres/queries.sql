@@ -1005,7 +1005,8 @@ SELECT wrapper_id FROM installation_secret_keys
 ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
--- Every blob key the finalized state versions and the checkpoints name, with the size
+-- Every blob key the finalized state versions, the checkpoints, the journal
+-- batches and the item keys that are not shredded name, with the size
 -- and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 -- state blobs are stored sealed: the backup opens them to check and stores
 -- the sealed bytes. A pending version has no committed content, so the backup
@@ -1019,6 +1020,11 @@ FROM checkpoints
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
+UNION ALL
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+       k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
+FROM item_keys AS k
+WHERE k.shredded_at_ms = 0
 ORDER BY content_key;
 
 -- name: GetAuditEntry :one
@@ -4020,3 +4026,103 @@ WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool 
 DELETE FROM drift_results
 WHERE drift_results.unit_id = sqlc.arg(unit_id)
   AND drift_results.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+
+-- name: InsertItemKey :execrows
+-- The caller checks the fence in the same transaction. A record for the same
+-- item is not written: the caller reads the stored record.
+INSERT INTO item_keys (
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(scope_id), sqlc.arg(kind), sqlc.arg(item), sqlc.arg(wrapper_id), sqlc.arg(created_at_ms), 0,
+    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5)
+)
+ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING;
+
+-- name: GetItemKey :one
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.kind = sqlc.arg(kind)
+  AND k.item = sqlc.arg(item);
+
+-- name: ShredItemKey :execrows
+-- Only a record that is not shredded changes, so a second shred keeps the
+-- first shred time.
+UPDATE item_keys
+SET shredded_at_ms = sqlc.arg(shredded_at_ms)
+WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = sqlc.arg(scope_id) AND item_keys.kind = sqlc.arg(kind)
+  AND item_keys.item = sqlc.arg(item)
+  AND item_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: ListItemKeys :many
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.id > sqlc.arg(after)
+ORDER BY k.id
+LIMIT sqlc.arg(max_rows)::bigint;
+
+-- name: ListItemKeyWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM item_keys
+WHERE shredded_at_ms = 0
+ORDER BY wrapper_id;
+
+-- name: InsertJobPlan :exec
+-- The caller checks the fence and the claim in the same transaction.
+INSERT INTO job_plans (id, namespace_id, job_id, body, created_at_ms)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(job_id),
+    sqlc.arg(body), sqlc.arg(created_at_ms)
+);
+
+-- name: UpdateJobPlanBody :exec
+-- The caller checks the fence and the claim in the same transaction.
+UPDATE job_plans SET body = sqlc.arg(body)
+WHERE job_plans.id = sqlc.arg(id) AND job_plans.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
+
+-- name: GetJobPlan :one
+SELECT p.id, p.job_id, p.body, p.created_at_ms
+FROM job_plans AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND p.id = sqlc.arg(id);
+
+-- name: InsertJobLog :exec
+INSERT INTO job_logs (id, namespace_id, job_id, phase, step, token, created_at_ms)
+VALUES (
+    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(job_id),
+    sqlc.arg(phase), sqlc.arg(step), sqlc.arg(token), sqlc.arg(created_at_ms)
+);
+
+-- name: GetJobLog :one
+SELECT l.id, l.job_id, l.phase, l.step, l.token, l.created_at_ms
+FROM job_logs AS l
+JOIN namespaces AS n ON n.id = l.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND l.id = sqlc.arg(id);
+
+-- name: InsertJobLogChunk :exec
+-- The write transaction of the namespace serializes the reserves of a chunk,
+-- so the caller reads the row before it inserts. A row that exists stays.
+INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed)
+VALUES (
+    sqlc.arg(log_id), sqlc.arg(seq), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(sha256), sqlc.arg(size), 0
+)
+ON CONFLICT (log_id, seq) DO NOTHING;
+
+-- name: GetJobLogChunk :one
+SELECT c.sha256, c.size, c.confirmed
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND c.log_id = sqlc.arg(log_id) AND c.seq = sqlc.arg(seq);
+
+-- name: ConfirmJobLogChunk :execrows
+UPDATE job_log_chunks
+SET confirmed = 1
+WHERE job_log_chunks.log_id = sqlc.arg(log_id) AND job_log_chunks.seq = sqlc.arg(seq)
+  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));

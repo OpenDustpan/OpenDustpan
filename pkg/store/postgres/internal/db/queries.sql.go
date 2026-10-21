@@ -248,6 +248,11 @@ FROM checkpoints
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
+UNION ALL
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+       k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
+FROM item_keys AS k
+WHERE k.shredded_at_ms = 0
 ORDER BY content_key
 `
 
@@ -258,7 +263,8 @@ type BackupBlobsRow struct {
 	Sealed     bool
 }
 
-// Every blob key the finalized state versions and the checkpoints name, with the size
+// Every blob key the finalized state versions, the checkpoints, the journal
+// batches and the item keys that are not shredded name, with the size
 // and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 // state blobs are stored sealed: the backup opens them to check and stores
 // the sealed bytes. A pending version has no committed content, so the backup
@@ -779,6 +785,27 @@ func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIde
 		arg.IdemKey,
 		arg.Token,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const confirmJobLogChunk = `-- name: ConfirmJobLogChunk :execrows
+UPDATE job_log_chunks
+SET confirmed = 1
+WHERE job_log_chunks.log_id = $1 AND job_log_chunks.seq = $2
+  AND job_log_chunks.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+`
+
+type ConfirmJobLogChunkParams struct {
+	LogID     string
+	Seq       int64
+	Namespace string
+}
+
+func (q *Queries) ConfirmJobLogChunk(ctx context.Context, arg ConfirmJobLogChunkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmJobLogChunk, arg.LogID, arg.Seq, arg.Namespace)
 	if err != nil {
 		return 0, err
 	}
@@ -5373,6 +5400,60 @@ func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitPara
 	return unit_id, err
 }
 
+const getItemKey = `-- name: GetItemKey :one
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = $1 AND k.scope_id = $2 AND k.kind = $3
+  AND k.item = $4
+`
+
+type GetItemKeyParams struct {
+	Namespace string
+	ScopeID   string
+	Kind      string
+	Item      string
+}
+
+type GetItemKeyRow struct {
+	ID           string
+	Namespace    string
+	ScopeID      string
+	Kind         string
+	Item         string
+	WrapperID    string
+	CreatedAtMs  int64
+	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
+}
+
+func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItemKeyRow, error) {
+	row := q.db.QueryRow(ctx, getItemKey,
+		arg.Namespace,
+		arg.ScopeID,
+		arg.Kind,
+		arg.Item,
+	)
+	var i GetItemKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.ScopeID,
+		&i.Kind,
+		&i.Item,
+		&i.WrapperID,
+		&i.CreatedAtMs,
+		&i.ShreddedAtMs,
+		&i.BlobVersion,
+		&i.BlobSize,
+		&i.BlobMd5,
+	)
+	return i, err
+}
+
 const getJob = `-- name: GetJob :one
 SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms
@@ -5524,6 +5605,98 @@ func (q *Queries) GetJobHolderOfUnit(ctx context.Context, arg GetJobHolderOfUnit
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getJobLog = `-- name: GetJobLog :one
+SELECT l.id, l.job_id, l.phase, l.step, l.token, l.created_at_ms
+FROM job_logs AS l
+JOIN namespaces AS n ON n.id = l.namespace_id
+WHERE n.name = $1 AND l.id = $2
+`
+
+type GetJobLogParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetJobLogRow struct {
+	ID          string
+	JobID       string
+	Phase       int64
+	Step        string
+	Token       int64
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetJobLog(ctx context.Context, arg GetJobLogParams) (GetJobLogRow, error) {
+	row := q.db.QueryRow(ctx, getJobLog, arg.Namespace, arg.ID)
+	var i GetJobLogRow
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Phase,
+		&i.Step,
+		&i.Token,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getJobLogChunk = `-- name: GetJobLogChunk :one
+SELECT c.sha256, c.size, c.confirmed
+FROM job_log_chunks AS c
+JOIN namespaces AS n ON n.id = c.namespace_id
+WHERE n.name = $1 AND c.log_id = $2 AND c.seq = $3
+`
+
+type GetJobLogChunkParams struct {
+	Namespace string
+	LogID     string
+	Seq       int64
+}
+
+type GetJobLogChunkRow struct {
+	Sha256    string
+	Size      int64
+	Confirmed int64
+}
+
+func (q *Queries) GetJobLogChunk(ctx context.Context, arg GetJobLogChunkParams) (GetJobLogChunkRow, error) {
+	row := q.db.QueryRow(ctx, getJobLogChunk, arg.Namespace, arg.LogID, arg.Seq)
+	var i GetJobLogChunkRow
+	err := row.Scan(&i.Sha256, &i.Size, &i.Confirmed)
+	return i, err
+}
+
+const getJobPlan = `-- name: GetJobPlan :one
+SELECT p.id, p.job_id, p.body, p.created_at_ms
+FROM job_plans AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = $1 AND p.id = $2
+`
+
+type GetJobPlanParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetJobPlanRow struct {
+	ID          string
+	JobID       string
+	Body        string
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetJobPlan(ctx context.Context, arg GetJobPlanParams) (GetJobPlanRow, error) {
+	row := q.db.QueryRow(ctx, getJobPlan, arg.Namespace, arg.ID)
+	var i GetJobPlanRow
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Body,
+		&i.CreatedAtMs,
+	)
+	return i, err
 }
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
@@ -8093,6 +8266,52 @@ func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventory
 	return err
 }
 
+const insertItemKey = `-- name: InsertItemKey :execrows
+INSERT INTO item_keys (
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6, $7, 0,
+    $8, $9, $10
+)
+ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING
+`
+
+type InsertItemKeyParams struct {
+	ID          string
+	Namespace   string
+	ScopeID     string
+	Kind        string
+	Item        string
+	WrapperID   string
+	CreatedAtMs int64
+	BlobVersion int64
+	BlobSize    int64
+	BlobMd5     []byte
+}
+
+// The caller checks the fence in the same transaction. A record for the same
+// item is not written: the caller reads the stored record.
+func (q *Queries) InsertItemKey(ctx context.Context, arg InsertItemKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertItemKey,
+		arg.ID,
+		arg.Namespace,
+		arg.ScopeID,
+		arg.Kind,
+		arg.Item,
+		arg.WrapperID,
+		arg.CreatedAtMs,
+		arg.BlobVersion,
+		arg.BlobSize,
+		arg.BlobMd5,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertJob = `-- name: InsertJob :exec
 INSERT INTO jobs (
     id, namespace_id, unit_id, seq, state, wait, current_phase, current_changes, current_operation,
@@ -8175,6 +8394,95 @@ func (q *Queries) InsertJobFreeze(ctx context.Context, arg InsertJobFreezeParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertJobLog = `-- name: InsertJobLog :exec
+INSERT INTO job_logs (id, namespace_id, job_id, phase, step, token, created_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), $3,
+    $4, $5, $6, $7
+)
+`
+
+type InsertJobLogParams struct {
+	ID          string
+	Namespace   string
+	JobID       string
+	Phase       int64
+	Step        string
+	Token       int64
+	CreatedAtMs int64
+}
+
+func (q *Queries) InsertJobLog(ctx context.Context, arg InsertJobLogParams) error {
+	_, err := q.db.Exec(ctx, insertJobLog,
+		arg.ID,
+		arg.Namespace,
+		arg.JobID,
+		arg.Phase,
+		arg.Step,
+		arg.Token,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
+const insertJobLogChunk = `-- name: InsertJobLogChunk :exec
+INSERT INTO job_log_chunks (log_id, seq, namespace_id, sha256, size, confirmed)
+VALUES (
+    $1, $2, (SELECT n.id FROM namespaces AS n WHERE n.name = $3),
+    $4, $5, 0
+)
+ON CONFLICT (log_id, seq) DO NOTHING
+`
+
+type InsertJobLogChunkParams struct {
+	LogID     string
+	Seq       int64
+	Namespace string
+	Sha256    string
+	Size      int64
+}
+
+// The write transaction of the namespace serializes the reserves of a chunk,
+// so the caller reads the row before it inserts. A row that exists stays.
+func (q *Queries) InsertJobLogChunk(ctx context.Context, arg InsertJobLogChunkParams) error {
+	_, err := q.db.Exec(ctx, insertJobLogChunk,
+		arg.LogID,
+		arg.Seq,
+		arg.Namespace,
+		arg.Sha256,
+		arg.Size,
+	)
+	return err
+}
+
+const insertJobPlan = `-- name: InsertJobPlan :exec
+INSERT INTO job_plans (id, namespace_id, job_id, body, created_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), $3,
+    $4, $5
+)
+`
+
+type InsertJobPlanParams struct {
+	ID          string
+	Namespace   string
+	JobID       string
+	Body        string
+	CreatedAtMs int64
+}
+
+// The caller checks the fence and the claim in the same transaction.
+func (q *Queries) InsertJobPlan(ctx context.Context, arg InsertJobPlanParams) error {
+	_, err := q.db.Exec(ctx, insertJobPlan,
+		arg.ID,
+		arg.Namespace,
+		arg.JobID,
+		arg.Body,
+		arg.CreatedAtMs,
+	)
+	return err
 }
 
 const insertJournal = `-- name: InsertJournal :exec
@@ -11025,6 +11333,101 @@ func (q *Queries) ListInventoryUnitLabels(ctx context.Context, unitID string) ([
 	for rows.Next() {
 		var i ListInventoryUnitLabelsRow
 		if err := rows.Scan(&i.LabelKey, &i.LabelValue); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listItemKeyWrapperIDs = `-- name: ListItemKeyWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM item_keys
+WHERE shredded_at_ms = 0
+ORDER BY wrapper_id
+`
+
+func (q *Queries) ListItemKeyWrapperIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listItemKeyWrapperIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var wrapper_id string
+		if err := rows.Scan(&wrapper_id); err != nil {
+			return nil, err
+		}
+		items = append(items, wrapper_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listItemKeys = `-- name: ListItemKeys :many
+SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
+       k.blob_version, k.blob_size, k.blob_md5
+FROM item_keys AS k
+JOIN namespaces AS n ON n.id = k.namespace_id
+WHERE n.name = $1 AND k.scope_id = $2 AND k.id > $3
+ORDER BY k.id
+LIMIT $4::bigint
+`
+
+type ListItemKeysParams struct {
+	Namespace string
+	ScopeID   string
+	After     string
+	MaxRows   int64
+}
+
+type ListItemKeysRow struct {
+	ID           string
+	Namespace    string
+	ScopeID      string
+	Kind         string
+	Item         string
+	WrapperID    string
+	CreatedAtMs  int64
+	ShreddedAtMs int64
+	BlobVersion  int64
+	BlobSize     int64
+	BlobMd5      []byte
+}
+
+func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]ListItemKeysRow, error) {
+	rows, err := q.db.Query(ctx, listItemKeys,
+		arg.Namespace,
+		arg.ScopeID,
+		arg.After,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListItemKeysRow
+	for rows.Next() {
+		var i ListItemKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.ScopeID,
+			&i.Kind,
+			&i.Item,
+			&i.WrapperID,
+			&i.CreatedAtMs,
+			&i.ShreddedAtMs,
+			&i.BlobVersion,
+			&i.BlobSize,
+			&i.BlobMd5,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -15286,6 +15689,38 @@ func (q *Queries) SetWorkspaceCurrent(ctx context.Context, arg SetWorkspaceCurre
 	return err
 }
 
+const shredItemKey = `-- name: ShredItemKey :execrows
+UPDATE item_keys
+SET shredded_at_ms = $1
+WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = $2 AND item_keys.kind = $3
+  AND item_keys.item = $4
+  AND item_keys.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $5)
+`
+
+type ShredItemKeyParams struct {
+	ShreddedAtMs int64
+	ScopeID      string
+	Kind         string
+	Item         string
+	Namespace    string
+}
+
+// Only a record that is not shredded changes, so a second shred keeps the
+// first shred time.
+func (q *Queries) ShredItemKey(ctx context.Context, arg ShredItemKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, shredItemKey,
+		arg.ShreddedAtMs,
+		arg.ScopeID,
+		arg.Kind,
+		arg.Item,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const softDeleteStack = `-- name: SoftDeleteStack :execrows
 UPDATE stacks
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1
@@ -15968,6 +16403,23 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, er
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateJobPlanBody = `-- name: UpdateJobPlanBody :exec
+UPDATE job_plans SET body = $1
+WHERE job_plans.id = $2 AND job_plans.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+`
+
+type UpdateJobPlanBodyParams struct {
+	Body      string
+	ID        string
+	Namespace string
+}
+
+// The caller checks the fence and the claim in the same transaction.
+func (q *Queries) UpdateJobPlanBody(ctx context.Context, arg UpdateJobPlanBodyParams) error {
+	_, err := q.db.Exec(ctx, updateJobPlanBody, arg.Body, arg.ID, arg.Namespace)
+	return err
 }
 
 const updateNotificationSink = `-- name: UpdateNotificationSink :execrows

@@ -197,8 +197,15 @@ type Recorder interface {
 	// cancel, and durable.ErrStepDone when the claim already recorded the
 	// end of the step.
 	BeginStep(ctx context.Context, c PhaseClaim, name string) error
-	// EndStep records the outcome of a step that BeginStep started. It
-	// returns ErrInvalid for a step with no begin record.
+	// EndStep records the outcome of a step that BeginStep started. It uses
+	// the Name, the Token and the ExitCode of r: the server sets the times, and
+	// the log version is the one that AppendLog made. When the step has a log
+	// version, EndStep reads its chunks back, closes the version with their
+	// count, the SHA-256 of their plaintext and its size. It returns
+	// ErrInvalid for a step with no begin record under c, for a Token that is
+	// not the token of c, and for an exit code that is not in -1 to 255. A
+	// second EndStep with the same exit code changes nothing, and another exit
+	// code returns ErrConflict.
 	EndStep(ctx context.Context, c PhaseClaim, r StepRecord) error
 	// AppendLog stores the next chunk of the log of the step called step,
 	// as the blob LogChunkKey. Seq starts at 0 and grows by 1. Chunk 0
@@ -225,8 +232,12 @@ type Recorder interface {
 	// above MaxPlanPart, and ErrConflict for a phase that has a plan
 	// already. A plan does not change after PutPlan.
 	PutPlan(ctx context.Context, c PhaseClaim, parts []PlanUpload) (PlanRef, error)
-	// Delivered records the commit of a deliver phase. It returns
-	// ErrInvalid when the phase is not a deliver phase.
+	// Delivered records the commit of a deliver phase, and writes the audit
+	// entry of the delivery (unit:write-back) in the same transaction. A second
+	// call with the same result changes nothing and writes no second entry,
+	// and a call with another result returns ErrConflict. It returns
+	// ErrInvalid when the phase is not a deliver phase or d fails
+	// DeliveryResult.Validate.
 	Delivered(ctx context.Context, c PhaseClaim, d DeliveryResult) error
 }
 

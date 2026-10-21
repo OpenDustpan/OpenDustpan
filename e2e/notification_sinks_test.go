@@ -146,8 +146,8 @@ func sinksScenario(t *testing.T, env *e2e.Env) {
 	sinkStep(t, env, sinkCase("make a chat webhook", http.MethodPost, sinksBase, http.StatusCreated).
 		withBody(chatBody).checking(func(body string) error { return rememberSink(body, &chat, nil) }))
 
-	if hook.Target != "hooks.example.invalid" {
-		t.Fatalf("webhook target = %q, want the host only", hook.Target)
+	if hook.Target != "hooks.example.invalid" || !hook.URLSet {
+		t.Fatalf("webhook target = %q and urlSet = %t, want the host only and a sealed URL", hook.Target, hook.URLSet)
 	}
 
 	if hook.ID == "" || chat.ID == "" || !chat.URLSet || chat.Target != "hooks.slack.com" {
@@ -208,6 +208,10 @@ func sinkReadSteps(t *testing.T, env *e2e.Env, hook, chat sinkDoc, key string) {
 		withBody(`{"version":1,"name":"Operations team"}`))
 	sinkStep(t, env, sinkCase("a stale version is refused", http.MethodPut, sinksBase+"/"+hook.ID,
 		http.StatusConflict).withBody(`{"version":1,"name":"Again"}`))
+	sinkStep(t, env, sinkCase("set a new URL of the webhook", http.MethodPut, sinksBase+"/"+hook.ID, http.StatusOK).
+		withBody(`{"version":2,"name":"Operations team","target":"https://hooks.example.invalid/second/`+
+			sinkChatMarker+`"}`).
+		checking(sinkNeverContains(sinkChatMarker, "/second", key, "signingKey")))
 }
 
 // sinkHasError checks that the answer is an error with this errorCode and this

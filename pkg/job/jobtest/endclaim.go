@@ -368,7 +368,7 @@ func testApplyEndAtomic(t *testing.T, h Harness) {
 
 	// A refused audit entry rolls the end back too.
 	bad := entry(f.unit, job.ActionJobRead)
-	bad.Namespace = "other"
+	bad.Namespace = valueOther
 
 	if _, err := h.Jobs.Apply(t.Context(), good, f.fence, []audit.Entry{bad}); err == nil {
 		t.Fatal("Apply with an entry of another namespace = nil, want an error")

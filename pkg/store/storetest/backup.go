@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,6 +285,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupDrift(t, s, acme)
 	seedBackupGitHost(t, s, acme)
 	seedBackupSinks(t, s, acme)
+	seedBackupItemKeys(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -337,6 +339,48 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 
 		if err := keeper.SavedViews().Create(t.Context(), v, acme.Fence(), entry); err != nil {
 			t.Fatalf("create saved view %d: %v", i, err)
+		}
+	}
+}
+
+// seedBackupItemKeys writes two item key records in the namespace acme, one live
+// and one shredded, when s keeps item keys. A store with no item key index
+// skips it: the fake of this package's own tests is one.
+func seedBackupItemKeys(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	keys, ok := s.(secret.ItemKeyIndex)
+	if !ok {
+		return
+	}
+
+	scope, err := secret.NewScope(acme.Name, "unit-seed")
+	if err != nil {
+		t.Fatalf("item key scope: %v", err)
+	}
+
+	for i, kind := range []secret.ItemKind{secret.ItemKindPlan, secret.ItemKindJobLog} {
+		ref, refErr := secret.NewItemRef(scope, kind, fmt.Sprintf("item-%d", i))
+		if refErr != nil {
+			t.Fatalf("item ref: %v", refErr)
+		}
+
+		k := secret.ItemKey{
+			CreatedAt:  now(),
+			ShreddedAt: time.Time{},
+			Ref:        ref,
+			ID:         secret.NewItemKeyID(),
+			WrapperID:  "kek-1",
+			Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+		}
+		if _, err = keys.CreateItemKey(t.Context(), k, acme.Fence()); err != nil {
+			t.Fatalf("create item key %d: %v", i, err)
+		}
+
+		if i == 1 {
+			if _, err = keys.ShredItemKey(t.Context(), ref, now(), acme.Fence()); err != nil {
+				t.Fatalf("shred item key %d: %v", i, err)
+			}
 		}
 	}
 }
@@ -400,6 +444,19 @@ func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
 	}
 }
 
+// seedWebhookHost is the host of the webhook sink that seedBackupSinks writes.
+const seedWebhookHost = "hooks.example.com"
+
+// seedWebhookToken returns the token in the URL of the seeded webhook sink. It
+// is joined at run time, so that no credential-shaped text sits in the source.
+// An export must never hold it, nor the URL that holds it.
+func seedWebhookToken() string { return strings.Join([]string{"seed", "hook", "token", "7c1e"}, "-") }
+
+// seedWebhookURL returns the URL of the seeded webhook sink.
+func seedWebhookURL() string {
+	return "https://" + seedWebhookHost + "/ops/" + seedWebhookToken() + "?k=1"
+}
+
 // seedBackupSinks writes a chat sink and a webhook sink in the namespace acme,
 // and replaces the secret of the chat sink once, so the store holds a ref that
 // no sink names any more. A store with no sink port skips it: the fake of this
@@ -425,7 +482,7 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 	}
 	hook := notify.Sink{
 		ID: "snk-seedhook", Scope: acme.Name, Kind: notify.SinkWebhook, Name: "Hook", Platform: "",
-		Target: "https://hooks.example.com/seed", SecretRefs: []string{"itm-seedhook1", "itm-seedhook2"},
+		Target: seedWebhookHost, SecretRefs: []string{"itm-seedhook0", "itm-seedhook1", "itm-seedhook2"},
 		CreatedBy: "alice", Version: 0,
 	}
 
@@ -448,7 +505,7 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 	}
 
 	put(chat, "https://hooks.slack.com/services/T0/B0/seed-one")
-	put(hook, "seed-key-one", "seed-key-two")
+	put(hook, seedWebhookURL(), "seed-key-one", "seed-key-two")
 
 	chat.Version, chat.SecretRefs = 1, []string{"itm-seedchat2"}
 	put(chat, "https://hooks.slack.com/services/T0/B0/seed-two")
