@@ -15,7 +15,8 @@ func TestErrorsAreDistinct(t *testing.T) {
 	all := []error{
 		stepup.ErrNotFound, stepup.ErrExpired, stepup.ErrUsed, stepup.ErrMismatch,
 		stepup.ErrBadAnswer, stepup.ErrFactorRefused, stepup.ErrCLIStepUpOff, stepup.ErrLocked,
-		stepup.ErrNotPerson, stepup.ErrInvalid, stepup.ErrLimit, stepup.ErrConflict,
+		stepup.ErrDisabled, stepup.ErrNotPerson, stepup.ErrInvalid, stepup.ErrLimit,
+		stepup.ErrChallengeLimit, stepup.ErrConflict, stepup.ErrCounterRegressed,
 	}
 
 	for i, a := range all {
@@ -24,5 +25,35 @@ func TestErrorsAreDistinct(t *testing.T) {
 				t.Errorf("%v matches %v", a, b)
 			}
 		}
+	}
+}
+
+// TestServiceRules names the rules of the step-up service that no store can
+// check. Each case skips until the service exists, so that the names are the
+// contract that the service meets.
+func TestServiceRules(t *testing.T) {
+	t.Parallel()
+
+	rules := []string{
+		"a TOTP step-up cannot add a step-up key",
+		"a TOTP step-up cannot revoke a step-up key",
+		"a console sign-in with a password only or a recovery code cannot add a step-up key",
+		"the console path counts at the level key only after a WebAuthn assertion",
+		"a replayed TOTP step answers ErrBadAnswer and counts as a failure",
+		"a challenge from a personal token that the token route made fails with ErrNotPerson",
+		"a challenge from a service, job or trust token fails with ErrNotPerson",
+		"a window challenge with an excluded action fails with ErrInvalid",
+		"a window credential on an excluded action fails with ErrMismatch",
+		"the signed text is built from the record, never from the client",
+		"a value with a CR, an LF or a control character fails with ErrInvalid at the challenge create",
+		"a counter regression answers ErrBadAnswer and appends a security entry",
+		"the TOTP secret is sealed before it reaches the store",
+	}
+
+	for _, rule := range rules {
+		t.Run(rule, func(t *testing.T) {
+			t.Parallel()
+			t.Skip("no service implements the step-up yet")
+		})
 	}
 }
