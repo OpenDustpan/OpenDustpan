@@ -173,6 +173,18 @@ type Tx interface {
 	// operation id.
 	CancelOperation(ctx context.Context, id durable.ID) error
 
+	// CheckClaim returns durable.ErrClaimLost unless the claim c is the live
+	// claim of its operation on the clock of the database. It changes nothing.
+	CheckClaim(ctx context.Context, c durable.Claim) error
+	// EndOperation ends the durable operation of the claim of end with the
+	// rules of durable.Store.Complete, Fail or Release for end.Kind, and
+	// checks the token of the claim and its expiry on the clock of the
+	// database. It returns durable.ErrClaimLost when the claim is not live,
+	// and durable.ErrCanceled for EndComplete while a cancel is requested:
+	// the operation then stays as it was, and the caller ends it with
+	// EndRelease. On an error it changes nothing.
+	EndOperation(ctx context.Context, end *job.OperationEnd) error
+
 	// AppendAudit appends the entries to the audit chain of the namespace.
 	AppendAudit(ctx context.Context, e []audit.Entry) error
 }

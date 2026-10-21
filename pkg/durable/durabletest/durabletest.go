@@ -153,6 +153,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a cancel stops a running operation at its next write", testCancelRunning},
 		{"a canceled operation cannot succeed, and fail or release ends it", testCancelBlocksComplete},
 		{"a claim ends an expired operation with a cancel", testCancelExpired},
+		{"a claim with TakeCanceled takes an expired operation with a cancel", testTakeCanceled},
 		{"a cancel of an ended operation is ErrFinished", testCancelFinished},
 		{"status from another instance shows holder, expiry and attempt", testStatusFromOtherInstance},
 		{"list filters and orders operations", testList},
@@ -310,11 +311,11 @@ func testClaimValidates(t *testing.T, h Harness) {
 	mustStart(t, s, "k", kindA)
 
 	for _, req := range []durable.ClaimRequest{
-		{Owner: "", Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: longLease},
-		{Owner: ownerA, Kinds: nil, MaxVersions: nil, Lease: longLease},
-		{Owner: ownerA, Kinds: []durable.Kind{""}, MaxVersions: nil, Lease: longLease},
-		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: 0},
-		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: map[durable.Kind]int{kindA: -1}, Lease: longLease},
+		{Owner: "", Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: longLease, TakeCanceled: false},
+		{Owner: ownerA, Kinds: nil, MaxVersions: nil, Lease: longLease, TakeCanceled: false},
+		{Owner: ownerA, Kinds: []durable.Kind{""}, MaxVersions: nil, Lease: longLease, TakeCanceled: false},
+		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: 0, TakeCanceled: false},
+		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: map[durable.Kind]int{kindA: -1}, Lease: longLease, TakeCanceled: false},
 	} {
 		if _, err := s.Claim(t.Context(), req); !errors.Is(err, durable.ErrInvalid) {
 			t.Errorf("Claim(%+v) error = %v, want ErrInvalid", req, err)
@@ -943,6 +944,65 @@ func testCancelExpired(t *testing.T, h Harness) {
 	}
 }
 
+func testTakeCanceled(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	op := mustStart(t, a, "k", kindA)
+	held := mustClaim(t, a, ownerA, liveLease, kindA)
+
+	if err := b.Cancel(t.Context(), op.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	// While the claim of the holder lives, nobody takes the operation.
+	req := claimReq(ownerB, longLease, kindA)
+	req.TakeCanceled = true
+
+	if _, err := b.Claim(t.Context(), req); !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("Claim with TakeCanceled of a live operation with a cancel: error = %v, want ErrNoWork", err)
+	}
+
+	waitPast(t, b, op.ID, held.Claim.ExpiresAt)
+
+	taken, err := b.Claim(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Claim with TakeCanceled of an expired operation with a cancel: error = %v, want the operation", err)
+	}
+
+	if taken.ID != op.ID || taken.State != durable.StateRunning || !taken.CancelRequested ||
+		taken.Claim.Owner != ownerB || taken.Claim.Token != held.Claim.Token+1 || taken.Expiries != 1 {
+		t.Fatalf("operation taken = %s, owner %q, token %d, cancel %v, expiries %d; want running for %s, token %d, "+
+			"cancel requested, 1 expiry", taken.State, taken.Claim.Owner, taken.Claim.Token, taken.CancelRequested,
+			taken.Expiries, ownerB, held.Claim.Token+1)
+	}
+
+	endTaken(t, a, b, &held, &taken)
+}
+
+// endTaken checks that the replaced holder lost its claim of a taken
+// operation, and that the new holder cannot extend it, and that its release
+// ends the operation canceled.
+func endTaken(t *testing.T, a, b durable.Store, held, taken *durable.Operation) {
+	t.Helper()
+
+	if err := a.Release(t.Context(), held.Claim); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("Release by the replaced holder: error = %v, want ErrClaimLost", err)
+	}
+
+	if _, err := b.Extend(t.Context(), taken.Claim, longLease); !errors.Is(err, durable.ErrCanceled) {
+		t.Fatalf("Extend of a claim with a cancel: error = %v, want ErrCanceled", err)
+	}
+
+	if err := b.Release(t.Context(), taken.Claim); err != nil {
+		t.Fatalf("Release of the taken operation: %v", err)
+	}
+
+	if got := mustGet(t, b, taken.ID); got.State != durable.StateCanceled {
+		t.Fatalf("state after the release of the taken operation = %s, want canceled", got.State)
+	}
+}
+
 func testCancelFinished(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -1278,7 +1338,7 @@ func checkNew(t *testing.T, op durable.Operation, key string, kind durable.Kind,
 }
 
 func claimReq(owner string, lease time.Duration, kinds ...durable.Kind) durable.ClaimRequest {
-	return durable.ClaimRequest{Owner: owner, Kinds: kinds, MaxVersions: nil, Lease: lease}
+	return durable.ClaimRequest{Owner: owner, Kinds: kinds, MaxVersions: nil, Lease: lease, TakeCanceled: false}
 }
 
 func mustStart(t *testing.T, s durable.Store, key string, kind durable.Kind) durable.Operation {

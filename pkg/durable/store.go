@@ -53,7 +53,9 @@ type Store interface {
 	// A claim of a running operation whose claim expired also increments
 	// Expiries.
 	// An operation with an expired claim and a requested cancel ends
-	// canceled instead, and Claim looks for another one. The claim commits before Claim returns, and Claim holds no
+	// canceled instead, and Claim looks for another one, unless
+	// req.TakeCanceled is true: then the claim takes it like any expired
+	// operation, and its CancelRequested stays true. The claim commits before Claim returns, and Claim holds no
 	// lock after it returns. Of several concurrent claims of one operation,
 	// at most one succeeds. It returns ErrNoWork when no operation can run
 	// now, and ErrInvalid for a request that fails Validate.

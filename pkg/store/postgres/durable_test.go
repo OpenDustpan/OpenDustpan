@@ -201,10 +201,11 @@ func TestDurableClaimSkipsALockedRow(t *testing.T) {
 	defer cancel()
 
 	req := durable.ClaimRequest{
-		Owner:       "instance-a",
-		Kinds:       []durable.Kind{"kind-a"},
-		MaxVersions: nil,
-		Lease:       time.Minute,
+		Owner:        "instance-a",
+		Kinds:        []durable.Kind{"kind-a"},
+		MaxVersions:  nil,
+		Lease:        time.Minute,
+		TakeCanceled: false,
 	}
 	if _, err := s.DurableOperations().Claim(ctx, req); !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("claim of a locked operation: err = %v, want ErrNoWork without a wait for the lock", err)
@@ -373,10 +374,11 @@ func seedDurableRows(t *testing.T, d *postgres.DurableOperations) {
 	}
 
 	req := durable.ClaimRequest{
-		Owner:       "instance-a",
-		Kinds:       []durable.Kind{"kind-a"},
-		MaxVersions: nil,
-		Lease:       time.Hour,
+		Owner:        "instance-a",
+		Kinds:        []durable.Kind{"kind-a"},
+		MaxVersions:  nil,
+		Lease:        time.Hour,
+		TakeCanceled: false,
 	}
 
 	held, err := d.Claim(ctx, req)
