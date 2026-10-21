@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -839,8 +840,9 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 	svc, err := sinks.NewService(sinks.Config{
 		Store:      struct{ notify.SinkStore }{nil},
 		Sealer:     notify.SinkSealer{Namespaces: struct{ notify.ScopeSealer }{nil}, Installation: nil},
-		Namespaces: coverageNamespaceStore{},
+		Namespaces: coverageNamespaces(tb),
 		Senders:    nil,
+		Ports:      egress.Ports{},
 		Now:        nil,
 	})
 	if err != nil {

@@ -80,7 +80,7 @@ func chatFixture(t *testing.T) (fixture, *fakeSender) {
 	f := newFixture(t, nil)
 	chatSender := &fakeSender{kind: notify.SinkChat, err: nil, mu: sync.Mutex{}, got: nil, left: 0}
 
-	svc, err := sinks.NewService(config(f.store, fakeNamespaces{}, chatSender))
+	svc, err := sinks.NewService(config(f.store, fakeNamespaces{notHome: false}, chatSender))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestTestClearsThePlaintext(t *testing.T) {
 	f := newFixture(t, nil)
 	k := &keeper{secrets: nil}
 
-	svc, err := sinks.NewService(config(f.store, fakeNamespaces{}, k))
+	svc, err := sinks.NewService(config(f.store, fakeNamespaces{notHome: false}, k))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

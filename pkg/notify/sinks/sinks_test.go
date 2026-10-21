@@ -33,12 +33,14 @@ type fakeStore struct {
 	secrets map[string][]notify.SealedSecret
 	entries []audit.Entry
 	puts    int
+	// testErr, when set, is the error of RecordSinkTest: a failed audit append.
+	testErr error
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		mu: sync.Mutex{}, sinks: map[string]notify.Sink{}, secrets: map[string][]notify.SealedSecret{},
-		entries: nil, puts: 0,
+		entries: nil, puts: 0, testErr: nil,
 	}
 }
 
@@ -120,15 +122,35 @@ func (f *fakeStore) RecordSinkTest(_ context.Context, id string, _ namespace.Fen
 		return notify.ErrNotFound
 	}
 
+	if f.testErr != nil {
+		return f.testErr
+	}
+
 	f.entries = append(f.entries, e)
 
 	return nil
 }
 
-// fakeNamespaces knows the namespace shop.
-type fakeNamespaces struct{}
+// fakeNamespaces knows the namespace shop. With notHome set, shop is homed in
+// another region.
+type fakeNamespaces struct {
+	notHome bool
+}
 
-func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+func (f fakeNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	ns, err := f.Get(ctx, name)
+	if err != nil {
+		return namespace.Namespace{}, err
+	}
+
+	if f.notHome {
+		return namespace.Namespace{}, namespace.ErrNotHome
+	}
+
+	return ns, nil
+}
+
+func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	if name != shop {
 		return namespace.Namespace{}, namespace.ErrNotFound
 	}
@@ -192,7 +214,7 @@ func person(kind identity.Kind) identity.Principal {
 // config returns a service config over store, with the senders.
 func config(store notify.SinkStore, ns sinks.Namespaces, senders ...notify.Sender) sinks.Config {
 	return sinks.Config{
-		Store: store, Sealer: notifytest.Sealer(), Namespaces: ns, Senders: senders,
+		Store: store, Sealer: notifytest.Sealer(), Namespaces: ns, Senders: senders, Ports: egress.Ports{},
 		Now: func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) },
 	}
 }
@@ -203,7 +225,7 @@ func newFixture(t *testing.T, hookErr error) fixture {
 	store := newFakeStore()
 	hook := &fakeSender{kind: notify.SinkWebhook, err: hookErr, mu: sync.Mutex{}, got: nil, left: 0}
 
-	svc, err := sinks.NewService(config(store, fakeNamespaces{}, hook))
+	svc, err := sinks.NewService(config(store, fakeNamespaces{notHome: false}, hook))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -224,9 +246,9 @@ func newFixture(t *testing.T, hookErr error) fixture {
 func TestNewServiceNeedsPorts(t *testing.T) {
 	t.Parallel()
 
-	noStore := config(nil, fakeNamespaces{})
+	noStore := config(nil, fakeNamespaces{notHome: false})
 	noNamespaces := config(newFakeStore(), nil)
-	noSealer := config(newFakeStore(), fakeNamespaces{})
+	noSealer := config(newFakeStore(), fakeNamespaces{notHome: false})
 	noSealer.Sealer = notify.SinkSealer{Namespaces: nil, Installation: nil}
 
 	cases := []struct {
@@ -283,9 +305,9 @@ func TestCreate(t *testing.T) {
 			"a chat webhook in upper case",
 			sinks.New{
 				Kind: notify.SinkChat, Platform: "mattermost", Name: "Ops chat", Target: "",
-				URL: "https://Chat.Example.com:8443/hooks/" + canary,
+				URL: "https://Chat.Example.com/hooks/" + canary,
 			},
-			"chat.example.com:8443", false, true,
+			"chat.example.com", false, true,
 		},
 		{
 			"an email sink",

@@ -122,8 +122,8 @@ func TestIdempotentReplaceDeleteAndTest(t *testing.T) {
 		t.Errorf("delete replay: %d %s, want 204 with the replay header", replayed.code, replayed.body)
 	}
 
-	if n := len(f.sinkEntries(t)); n != 4 {
-		t.Errorf("audit entries = %d, want create, update, test and delete", n)
+	if n := len(f.sinkEntries(t)); n != 5 {
+		t.Errorf("audit entries = %d, want create, update, the start of the test, the result of the test and delete", n)
 	}
 }
 

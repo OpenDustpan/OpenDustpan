@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 
@@ -359,8 +360,13 @@ func (k sinks) Sinks(ctx context.Context, scope namespace.Name) ([]notify.Sink, 
 			ID: row.ID, Namespace: row.Namespace, Kind: row.Kind, Name: row.Name, Platform: row.Platform,
 			Target: row.Target, CreatedBy: row.CreatedBy, Version: row.Version,
 		}, refs[row.ID])
-		// A row that fails its checks is not served.
+		// A row that fails its checks is not served. The warning names the row by
+		// its ID and its namespace: the text of the check can hold a target, so
+		// it stays out of the log.
 		if sinkErr != nil || s.Scope != scope {
+			k.s.logger.WarnContext(ctx, "notification destination left out: it fails its checks",
+				slog.String("id", row.ID), slog.String("namespace", scope.String()))
+
 			continue
 		}
 

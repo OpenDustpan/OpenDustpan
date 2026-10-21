@@ -1,10 +1,12 @@
 package notifications_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -174,6 +177,11 @@ func TestCreateRefusals(t *testing.T) {
 		{"a webhook on loopback", "admin", hook("https://127.0.0.1:8443/" + canary), 400, "sink.invalid"},
 		{"a webhook on IPv6 loopback", "admin", hook("https://[::1]/" + canary), 400, "sink.invalid"},
 		{"a webhook on the metadata address", "admin", hook("https://169.254.169.254/" + canary), 400, "sink.invalid"},
+		{"a webhook on ssh", "admin", hook("https://hooks.example.com:22/" + canary), 400, "sink.invalid"},
+		{"a webhook on redis", "admin", hook("https://hooks.example.com:6379/" + canary), 400, "sink.invalid"},
+		{"a webhook on 8443", "admin", hook("https://hooks.example.com:8443/" + canary), 400, "sink.invalid"},
+		{"a chat URL on smtp", "admin", chat("https://chat.example.com:25/" + canary), 400, "sink.invalid"},
+		{"a chat URL on 8443", "admin", chat("https://chat.example.com:8443/" + canary), 400, "sink.invalid"},
 		{"no kind", "admin", `{"name":"x"}`, 400, "sink.invalid"},
 		{"no name", "admin", `{"kind":"webhook"}`, 400, "sink.invalid"},
 		{"an unknown kind", "admin", `{"kind":"pager","name":"x","target":"x"}`, 400, "sink.invalid"},
@@ -589,5 +597,134 @@ func TestPermissionsAreOnTheNamespace(t *testing.T) {
 					route.Method, route.Path, a)
 			}
 		}
+	}
+}
+
+// errorWire is the error body of the API.
+type errorWire struct {
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode"`
+	ErrorArgs map[string]any `json:"errorArgs"`
+}
+
+// checkLimited checks an answer 429 of the test route: the code, the
+// Retry-After header, errorArgs and that nothing more was sent or written.
+func checkLimited(t *testing.T, f fixture, got response, sent, entries int) {
+	t.Helper()
+
+	if got.code != http.StatusTooManyRequests {
+		t.Fatalf("test: %d %s, want 429", got.code, got.body)
+	}
+
+	body := decode[errorWire](t, got)
+	if body.ErrorCode != "sink.test-rate-limited" || body.Code != http.StatusTooManyRequests ||
+		got.header.Get("Cache-Control") != "no-store" {
+		t.Errorf("error = %+v, want sink.test-rate-limited with no-store", body)
+	}
+
+	wait, err := strconv.Atoi(got.header.Get("Retry-After"))
+	if err != nil || wait < 1 || wait > 60 {
+		t.Errorf("Retry-After = %q, want whole seconds from 1 to 60", got.header.Get("Retry-After"))
+	}
+
+	if args, ok := body.ErrorArgs["retryAfterSeconds"].(float64); !ok || int(args) != wait {
+		t.Errorf("errorArgs = %v, want retryAfterSeconds %d", body.ErrorArgs, wait)
+	}
+
+	if f.hook.count() != sent || len(f.sinkEntries(t)) != entries {
+		t.Errorf("a limited test sent %d messages and wrote %d entries, want none",
+			f.hook.count()-sent, len(f.sinkEntries(t))-entries)
+	}
+}
+
+func TestTestRouteIsLimitedForEachSink(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	s := f.makeWebhook(t)
+	path := base + "/" + s.ID + "/test"
+
+	wantCode(t, "first test", f.do(t, send("admin", http.MethodPost, path, "")), http.StatusOK)
+
+	sent, entries := f.hook.count(), len(f.sinkEntries(t))
+
+	// A new Idempotency-Key for each request does not get round the limit.
+	for i := range 3 {
+		got := f.do(t, keyed(send("admin", http.MethodPost, path, ""), fmt.Sprintf("key-%d", i)))
+		checkLimited(t, f, got, sent, entries)
+	}
+
+	// Another sink of the namespace has its own interval.
+	other := f.makeWebhook(t)
+	wantCode(t, "test of another sink", f.do(t, send("admin", http.MethodPost, base+"/"+other.ID+"/test", "")),
+		http.StatusOK)
+}
+
+func TestTestRouteIsLimitedForEachNamespace(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	for i := range 10 {
+		s := f.makeWebhook(t)
+		wantCode(t, fmt.Sprintf("test %d", i), f.do(t, send("admin", http.MethodPost, base+"/"+s.ID+"/test", "")),
+			http.StatusOK)
+	}
+
+	s := f.makeWebhook(t)
+	sent, entries := f.hook.count(), len(f.sinkEntries(t))
+
+	checkLimited(t, f, f.do(t, send("admin", http.MethodPost, base+"/"+s.ID+"/test", "")), sent, entries)
+
+	// The limits of one namespace leave another namespace alone.
+	elsewhere := "/api/dustpan/v1/namespaces/other/sinks"
+	otherSink := decode[sinkWire](t, f.do(t, send("admin", http.MethodPost, elsewhere, webhookBody(t, "Ops"))))
+	wantCode(t, "test in another namespace",
+		f.do(t, send("admin", http.MethodPost, elsewhere+"/"+otherSink.ID+"/test", "")), http.StatusOK)
+}
+
+// fencedStore bumps the failover version of every namespace just before the
+// first audit append of a test, as a failover does between the read of the
+// fence and the append.
+type fencedStore struct {
+	notify.SinkStore
+
+	bump func(context.Context) error
+}
+
+func (s fencedStore) RecordSinkTest(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
+	if err := s.bump(ctx); err != nil {
+		return err
+	}
+
+	return s.SinkStore.RecordSinkTest(ctx, id, fence, e)
+}
+
+func TestTestRouteSendsNothingToAFencedNamespace(t *testing.T) {
+	t.Parallel()
+
+	f := buildFixtureWith(t, keyMiddleware, func(st *sqlite.Store, inner notify.SinkStore) notify.SinkStore {
+		return fencedStore{SinkStore: inner, bump: func(ctx context.Context) error {
+			_, err := st.BumpFailoverVersions(ctx)
+
+			return err
+		}}
+	})
+	s := f.makeWebhook(t)
+
+	before := len(f.sinkEntries(t))
+
+	got := f.do(t, send("admin", http.MethodPost, base+"/"+s.ID+"/test", ""))
+	if got.code != http.StatusConflict || !strings.Contains(got.body, "namespace.fenced") {
+		t.Fatalf("test: %d %s, want 409 namespace.fenced", got.code, got.body)
+	}
+
+	if f.hook.count() != 0 {
+		t.Fatalf("sender got %d messages, want none", f.hook.count())
+	}
+
+	if n := len(f.sinkEntries(t)); n != before {
+		t.Fatalf("audit entries = %d, want %d", n, before)
 	}
 }

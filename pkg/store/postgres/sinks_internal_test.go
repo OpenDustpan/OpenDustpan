@@ -3,6 +3,8 @@ package postgres
 import (
 	"bytes"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,9 +142,24 @@ func checkTamperedSink(t *testing.T, tc sinkTampering) {
 		return
 	}
 
+	var logs bytes.Buffer
+
+	s.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
 	got, err := s.NotificationSinks().Sinks(t.Context(), "acme")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("Sinks of a bad row = %+v, %v; want none", got, err)
+	}
+
+	// The warning names the row, and shows no value of it.
+	if !strings.Contains(logs.String(), "left out") || !strings.Contains(logs.String(), "acme") {
+		t.Errorf("log = %q, want a warning that names the namespace", logs.String())
+	}
+
+	for _, value := range []string{"hooks.slack.com", "127.0.0.1", "pager", "irc", "Ops"} {
+		if strings.Contains(logs.String(), value) {
+			t.Errorf("log = %q, must not show %q", logs.String(), value)
+		}
 	}
 }
 

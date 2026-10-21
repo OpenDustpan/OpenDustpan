@@ -359,7 +359,7 @@ func (h *Handler) test(w http.ResponseWriter, r *http.Request, p identity.Princi
 	ctx := r.Context()
 	id := r.PathValue("sink_id")
 
-	result, err := h.sinks.SendTest(ctx, obj.Namespace(), id)
+	result, err := h.sinks.SendTest(ctx, caller(r, p), obj.Namespace(), id)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

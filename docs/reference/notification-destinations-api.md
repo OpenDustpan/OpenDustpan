@@ -2,7 +2,8 @@
 
 The paths are under `/api/dustpan/v1/namespaces/{namespace}`. The API names a
 notification destination a `sink`. Every route needs a token or a console
-session. The error body has the fields `code`, `message` and `errorCode`.
+session. The error body has the fields `code`, `message` and `errorCode`, and
+the field `errorArgs` when an error has arguments.
 
 See `docs/guides/notification-destinations.md` for the steps.
 
@@ -48,8 +49,8 @@ The body has at most 64 KiB.
 
 | Kind | Fields |
 | --- | --- |
-| `webhook` | `kind`, `name`, `target` (an `https` URL) |
-| `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL) |
+| `webhook` | `kind`, `name`, `target` (an `https` URL on port 443, or on a port that the operator allows) |
+| `chat` | `kind`, `platform`, `name`, `url` (the incoming webhook URL, on the same ports) |
 | `email` | `kind`, `name`, `target` (one address) |
 
 A field that a kind does not take, for example `url` for a `webhook`, answers
@@ -59,6 +60,11 @@ A field that a kind does not take, for example `url` for a `webhook`, answers
 The answer of the create of a `webhook` holds the signing key. A replay of the
 same `Idempotency-Key` answers 409 `request.idempotency-key-replayed-secret`
 with the ID of the destination.
+
+The operator sets the ports besides 443 with `--destination-ports`
+(`DUSTPAN_DESTINATION_PORTS`). The server checks the port when a person makes
+or changes a destination, before each test, and in the sender. A URL on another
+port answers 400 `sink.invalid`.
 
 ## Change
 
@@ -81,14 +87,38 @@ of the kind of the destination. The answer:
 The answer never holds the URL, the answer of the receiver or the text of an
 error. A destination of a kind with no sender answers 422 `sink.no-sender`.
 
+A name that resolves to an address that the outbound rules refuse gives the
+class `temporary`, the same as a name that does not resolve. The class
+`refused` is for a URL that the rules refuse before any lookup.
+
+### Limits of a test
+
+| Limit | Value |
+| --- | --- |
+| One destination | 1 test in 10 seconds |
+| One namespace | 10 tests in 1 minute |
+
+A test over a limit answers 429 `sink.test-rate-limited` with the header
+`Retry-After` (whole seconds) and `errorArgs.retryAfterSeconds`. The server
+sends no message and writes no audit entry. Each server instance applies the
+limits on its own.
+
+The server sends the message only after these steps: the namespace has its home
+region here, the limits take the test, and the first audit entry is written
+under the fence of the namespace. A namespace of another region answers 421
+`namespace.not-home`. A moved fence answers 409 `namespace.fenced`.
+
 ## Error codes
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
-| 400 | `sink.invalid` | A field is not valid, or the outbound address rules refuse the URL |
+| 400 | `sink.invalid` | A field is not valid, or the outbound address rules refuse the URL or its port |
 | 400 | `request.body-invalid` | The body is not one JSON object with known fields |
 | 404 | `sink.not-found` | No destination with this ID in the namespace |
 | 409 | `sink.conflict` | The destination changed since you read it |
+| 409 | `namespace.fenced` | A failover moved the namespace during the request |
+| 421 | `namespace.not-home` | The namespace has its home region in another region |
+| 429 | `sink.test-rate-limited` | A limit of the test route refuses the test |
 | 422 | `sink.no-sender` | The server has no sender for the kind of the destination |
 
 The text of a `sink.*` error is fixed. It never holds a part of the request.
@@ -100,7 +130,7 @@ The text of a `sink.*` error is fixed. It never holds a part of the request.
 | `sink:create` | A create |
 | `sink:update` | A change |
 | `sink:delete` | A delete |
-| `sink:test` | A test. The outcome is `failure` when the message was not delivered. |
+| `sink:test` | A test. The reason `started` marks the entry before the send. The next entry has the class of the result, and its outcome is `failure` when the message was not delivered. |
 
 The entry has the object `<namespace>` and the ID of the destination. It holds
 no URL, name or secret.

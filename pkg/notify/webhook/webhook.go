@@ -36,18 +36,35 @@ const contentType = "application/json"
 type Sender struct {
 	client *http.Client
 	now    func() time.Time
+	ports  egress.Ports
 }
 
 var _ notify.Sender = (*Sender)(nil)
 
+// Option changes a Sender.
+type Option func(*Sender)
+
+// WithPorts sets the ports that the sender sends to. Without it, the sender
+// sends to the port 443 only.
+func WithPorts(p egress.Ports) Option {
+	return func(s *Sender) { s.ports = p }
+}
+
 // New returns a Sender with the egress rules for a webhook: https only,
-// no redirect, and the dial guard on every connection.
-func New() *Sender {
-	return newSender(egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly), time.Now)
+// the port 443 unless WithPorts adds more, no redirect, and the dial guard
+// on every connection.
+func New(opts ...Option) *Sender {
+	s := newSender(egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly), time.Now)
+
+	for _, o := range opts {
+		o(s)
+	}
+
+	return s
 }
 
 func newSender(c *http.Client, now func() time.Time) *Sender {
-	return &Sender{client: c, now: now}
+	return &Sender{client: c, now: now, ports: egress.Ports{}}
 }
 
 // Close closes the idle connections of the sender.
@@ -59,8 +76,11 @@ func (s *Sender) Kind() notify.SinkKind { return notify.SinkWebhook }
 // Send posts m.Notification to the URL m.To, signed with m.Secrets. A 2xx
 // answer means the receiver holds the notification. Send returns an error
 // that matches:
-//   - egress.ErrRefused for a URL or an address that the egress rules
-//     refuse, and for a redirect;
+//   - egress.ErrRefused for a URL or a port that the egress rules refuse,
+//     and for a redirect. A name that resolves to an address that the
+//     rules refuse is not in this class: it is a failed connection, so that
+//     an answer does not tell such a name from a name that does not
+//     resolve;
 //   - notify.ErrPermanent for a message that is not for a webhook sink, for
 //     secrets that are not one or two non-empty keys, and for a 4xx answer
 //     other than 408 and 429 or any other answer that will not change;
@@ -75,6 +95,14 @@ func (s *Sender) Send(ctx context.Context, m notify.Message) error {
 	body, err := Encode(m.Notification)
 	if err != nil {
 		return fmt.Errorf("%w: %w", notify.ErrPermanent, err)
+	}
+
+	// Defense in depth: Service.Create, Service.Replace and Service.Test check
+	// the port too. This check stays so that a caller of the sender that skips
+	// them cannot reach a port that the operator did not allow. The dial guard
+	// is another layer: it checks the address, not the port.
+	if err = egress.CheckPort(m.To, s.ports); err != nil {
+		return fmt.Errorf("post webhook: %w", err)
 	}
 
 	req, err := s.request(ctx, m, body)
@@ -124,6 +152,11 @@ func (s *Sender) request(ctx context.Context, m notify.Message, body []byte) (*h
 // keeps the class.
 func transportError(ctx context.Context, err error) error {
 	switch {
+	case errors.Is(err, egresshttp.ErrDialRefused):
+		// The dial guard refused the resolved address. Say it is a failed
+		// connection: a refusal here would tell a name that resolves to a
+		// private address from a name that does not resolve.
+		return fmt.Errorf("post webhook: %w: the request failed", notify.ErrTemporary)
 	case errors.Is(err, egress.ErrRefused):
 		return fmt.Errorf("post webhook: %w", egress.ErrRefused)
 	case ctx.Err() != nil:

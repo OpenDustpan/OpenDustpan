@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -148,9 +150,10 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 // errorResponse is the error body of the tool-neutral APIs. ErrorCode is a
 // stable machine code.
 type errorResponse struct {
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
-	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string         `json:"message"`
+	Code      int            `json:"code"`
+	ErrorCode string         `json:"errorCode,omitempty"`
+	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
 }
 
 // statusError is an error with a fixed answer.
@@ -179,7 +182,20 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(ctx, w, pr.status, errorResponse{Code: pr.status, Message: pr.message, ErrorCode: pr.code})
+
+	var args map[string]any
+
+	if limited, ok := errors.AsType[*sinks.RateLimitedError](err); ok {
+		// The wait is whole seconds, rounded up, and at least 1.
+		wait := max(1, int((limited.RetryAfter+time.Second-1)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(wait))
+
+		args = map[string]any{"retryAfterSeconds": wait}
+	}
+
+	h.writeJSON(ctx, w, pr.status, errorResponse{
+		Code: pr.status, Message: pr.message, ErrorCode: pr.code, ErrorArgs: args,
+	})
 }
 
 // problem is the answer to an error: a status, a stable code and a message
@@ -249,16 +265,23 @@ func classifyNamespace(err error) (problem, bool) {
 func classifySink(err error) problem {
 	switch {
 	case errors.Is(err, notify.ErrNotFound):
-		return problem{status: http.StatusNotFound, code: "sink.not-found", message: "sink not found"}
+		return problem{
+			status: http.StatusNotFound, code: "sink.not-found", message: "notification destination not found",
+		}
 	case errors.Is(err, notify.ErrConflict):
 		return problem{
 			status: http.StatusConflict, code: "sink.conflict",
-			message: "the sink changed since you read it: read it again and send the new version",
+			message: "the notification destination changed since you read it: read it again and send the new version",
 		}
 	case errors.Is(err, sinks.ErrNoSender):
 		return problem{
 			status: http.StatusUnprocessableEntity, code: "sink.no-sender",
-			message: "this server has no sender for the kind of this sink",
+			message: "this server cannot send to this kind of notification destination",
+		}
+	case errors.Is(err, sinks.ErrRateLimited):
+		return problem{
+			status: http.StatusTooManyRequests, code: "sink.test-rate-limited",
+			message: "too many tests of this notification destination or namespace: try again later",
 		}
 	case errors.Is(err, notify.ErrInvalid):
 		return problem{status: http.StatusBadRequest, code: "sink.invalid", message: invalidText(err)}
@@ -271,10 +294,11 @@ func classifySink(err error) problem {
 // that the outbound address rules refuse gets one fixed text.
 func invalidText(err error) string {
 	if errors.Is(err, egress.ErrRefused) {
-		return "the URL is not allowed for an outbound request: use an https URL with a public host name"
+		return "the URL is not allowed for an outbound request: " +
+			"use an https URL with a public host name and the port 443 or a port that the operator allows"
 	}
 
-	return "the sink is not valid: check the kind, the platform, the name and the target"
+	return "the notification destination is not valid: check the kind, the platform, the name and the target"
 }
 
 func classifyAuth(err error) (problem, bool) {

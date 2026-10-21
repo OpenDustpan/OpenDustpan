@@ -29,9 +29,9 @@ hold `namespace:manage-notifications`. The roles `viewer`, `auditor`,
 `secret-viewer`, `writer` and `maintainer` do not hold it. Each role that holds
 `namespace:read` can list and read the destinations of its namespace.
 
-Your receiver needs an `https` URL with a public host name. The server
-refuses a URL that points to your own machine or to a private network. See
-"Which addresses the server accepts".
+Your receiver needs an `https` URL with a public host name on port 443. The
+server refuses a URL that points to your own machine or to a private network,
+and a URL with another port. See "Which addresses the server accepts".
 
 ## Make a signed webhook destination
 
@@ -117,6 +117,17 @@ test failed, look at the log of your receiver.
 The test waits at most 10 seconds for the receiver. It makes one attempt and
 does not retry.
 
+The server limits the tests: one test for each destination in 10 seconds, and
+10 tests for each namespace in one minute. A test over a limit answers 429. It
+sends no message and writes no audit entry. The header `Retry-After` and the
+field `errorArgs.retryAfterSeconds` give the wait in seconds. A new
+`Idempotency-Key` does not change this.
+
+The server also refuses to send a test when the namespace has another home
+region, or when a failover moves the namespace during the request. It writes
+the first audit entry of the test before it sends the message. If that write
+fails, the server sends nothing.
+
 ## Connect a chat webhook
 
 A chat destination holds the incoming webhook URL of a chat platform.
@@ -143,6 +154,10 @@ the `target` of a webhook or the `url` of a chat destination. Send the
 `version` that you read. If another request changed the destination since,
 the answer is 409 and nothing changes.
 
+A change of the `target` of a webhook keeps the signing key. The new receiver
+must use the key of the destination. To give the new receiver a new key,
+delete the destination and make it again.
+
 `DELETE /api/dustpan/v1/namespaces/<namespace>/sinks/<id>` deletes the
 destination and its secrets. The answer is 204.
 
@@ -153,6 +168,8 @@ a test, and again on each connection. It refuses:
 
 - a URL that is not `https`
 - a URL with user information or a fragment
+- a URL with a port other than 443, unless the operator allows the port with
+  `--destination-ports`
 - `localhost`, and a host that is a number
 - an address in a loopback, private, link-local or reserved range, for example
   `127.0.0.1`, `10.0.0.5` and `169.254.169.254`
@@ -161,14 +178,21 @@ a test, and again on each connection. It refuses:
 The server follows no redirect. An answer with a 3xx status is a `permanent`
 result.
 
+The result of a test does not tell a host name that resolves to a refused
+address from a host name that does not resolve. Both give the class
+`temporary`. Only a URL that the server refuses before it looks up the name,
+for example a literal private address or a port that is not allowed, gives the
+class `refused`.
+
 ## Audit entries
 
-Each create, change, delete and test writes one audit entry of the kind
-`change` in the namespace. The actions are `sink:create`, `sink:update`,
-`sink:delete` and `sink:test`. The entry names the destination by its ID. It
-never holds the URL, the name, a signing key or the answer of a receiver. The
-entry of a test holds the class of the result in its reason, for example
-`class: temporary`.
+Each create, change and delete writes one audit entry of the kind `change` in
+the namespace. The actions are `sink:create`, `sink:update` and `sink:delete`.
+A test that sends a message writes two entries with the action `sink:test`:
+one with the reason `started` before the server sends, and one with the class
+of the result in its reason, for example `class: temporary`, after it. Each
+entry names the destination by its ID. It never holds the URL, the name, a
+signing key or the answer of a receiver.
 
 ## The Idempotency-Key header
 

@@ -7,6 +7,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
@@ -47,12 +48,13 @@ func testResult(err error) TestResult {
 }
 
 // Test sends one fixed message through the sender of the kind of the sink id
-// in ns, and appends the audit entry of the test. The message says that it is
-// a test. The result never holds the URL, the network error or the answer of
-// the receiver. It returns ErrNoSender for a kind with no sender,
-// notify.ErrNotFound, namespace.ErrNotFound and namespace.ErrFenced.
+// in ns, and appends the audit entries of the test. The message says that it
+// is a test. The result never holds the URL, the network error or the answer
+// of the receiver. It returns ErrNoSender for a kind with no sender,
+// *RateLimitedError, notify.ErrNotFound, namespace.ErrNotFound,
+// namespace.ErrNotHome and namespace.ErrFenced.
 func (s *Service) Test(ctx context.Context, c *Caller, ns namespace.Name, id string) (TestResult, error) {
-	result, err := s.SendTest(ctx, ns, id)
+	result, err := s.SendTest(ctx, c, ns, id)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -65,9 +67,15 @@ func (s *Service) Test(ctx context.Context, c *Caller, ns namespace.Name, id str
 }
 
 // SendTest sends the test message of the sink id in ns and returns the result.
-// It writes nothing: RecordTest appends the audit entry. An adapter that
-// stores the answer of the request calls RecordTest after it knows the result.
-func (s *Service) SendTest(ctx context.Context, ns namespace.Name, id string) (TestResult, error) {
+// It sends only after these steps, and a step that fails sends nothing: the
+// sink and its sender exist; the namespace is homed in this region; the
+// secrets open and the address passes the outbound rules, which refuses with
+// a result and not an error; the limits take the test; and the audit entry
+// that says the test started is appended under the fence of the namespace.
+// RecordTest appends the second entry, with the class of the result. An
+// adapter that stores the answer of the request calls RecordTest after it
+// knows the result.
+func (s *Service) SendTest(ctx context.Context, c *Caller, ns namespace.Name, id string) (TestResult, error) {
 	sink, err := s.Get(ctx, ns, id)
 	if err != nil {
 		return TestResult{}, err
@@ -78,12 +86,54 @@ func (s *Service) SendTest(ctx context.Context, ns namespace.Name, id string) (T
 		return TestResult{}, fmt.Errorf("test sink %s: %w: %s", id, ErrNoSender, sink.Kind)
 	}
 
-	return s.send(ctx, sender, sink)
+	fence, err := s.fence(ctx, ns)
+	if err != nil {
+		return TestResult{}, err
+	}
+
+	to, values, err := s.open(ctx, sink)
+	if err != nil {
+		return TestResult{}, err
+	}
+
+	defer func() {
+		for _, v := range values {
+			clear(v)
+		}
+	}()
+
+	// Defense in depth: Sink.Validate and Service.Create checked the address
+	// when the sink was made, and the sender checks it again and guards the
+	// dial. This check stays so that a sink that a restore, a changed rule or
+	// a changed port setting left behind never reaches the sender with an
+	// address that the rules refuse now. The check opens no connection, so it
+	// needs neither the limits nor an audit entry before it.
+	if checkErr := s.checkAddress(sink, to); checkErr != nil {
+		return testResult(checkErr), nil
+	}
+
+	// The limits come before the first write, so that a refused request leaves
+	// no entry.
+	if wait := s.limiter.take(ns, id, s.now()); wait > 0 {
+		return TestResult{}, &RateLimitedError{RetryAfter: wait}
+	}
+
+	// The entry is appended without the idempotency completion of the request:
+	// RecordTest stores the answer, when the result is known.
+	started := s.entryWith(c, ns, id, "test", audit.OutcomeSuccess)
+	started.Reason = "started"
+
+	if err = s.store.RecordSinkTest(idempotency.WithCompletion(ctx, nil), id, fence, started); err != nil {
+		return TestResult{}, fmt.Errorf("test sink: %w", err)
+	}
+
+	return s.send(ctx, sender, sink, to, values), nil
 }
 
-// RecordTest appends the audit entry of the test of the sink id in ns. The
-// entry holds the class of the result and no URL, name, secret or answer. It
-// returns notify.ErrNotFound, namespace.ErrNotFound and namespace.ErrFenced.
+// RecordTest appends the audit entry with the result of the test of the sink
+// id in ns. The entry holds the class of the result and no URL, name, secret
+// or answer. It returns notify.ErrNotFound, namespace.ErrNotFound,
+// namespace.ErrNotHome and namespace.ErrFenced.
 func (s *Service) RecordTest(ctx context.Context, c *Caller, ns namespace.Name, id string, r TestResult) error {
 	fence, err := s.fence(ctx, ns)
 	if err != nil {
@@ -113,51 +163,55 @@ func classOf(r TestResult) string {
 	return r.Class
 }
 
-// send opens the secrets of the sink, sends the test message, and clears the
-// plaintext. A failure of the send is a result. A failure to open the secrets
-// is an error: the server cannot say anything about the receiver.
-func (s *Service) send(ctx context.Context, sender notify.Sender, sink notify.Sink) (TestResult, error) {
+// open opens the secrets of the sink and returns the address that the sink
+// sends to and the opened values. The caller clears the values. A failure to
+// open the secrets is an error: the server cannot say anything about the
+// receiver.
+func (s *Service) open(ctx context.Context, sink notify.Sink) (string, [][]byte, error) {
 	sealed, err := s.store.SinkSecrets(ctx, sink.Scope, sink.ID)
 	if err != nil {
-		return TestResult{}, fmt.Errorf("test sink: read secrets: %w", err)
+		return "", nil, fmt.Errorf("test sink: read secrets: %w", err)
 	}
 
 	values, err := s.sealer.Open(ctx, sink, sealed)
 	if err != nil {
-		return TestResult{}, fmt.Errorf("test sink: open secrets: %w", err)
+		return "", nil, fmt.Errorf("test sink: open secrets: %w", err)
 	}
 
-	defer func() {
-		for _, v := range values {
-			clear(v)
-		}
-	}()
-
 	to := sink.Target
+
 	if sink.Kind == notify.SinkChat {
+		// A chat sink has exactly one secret item, the URL. Sink.Validate and
+		// the store keep this, and a restore could bring a row that breaks it.
+		if len(values) != 1 {
+			for _, v := range values {
+				clear(v)
+			}
+
+			return "", nil, fmt.Errorf("test sink: %w: a chat sink needs one secret item", notify.ErrInvalid)
+		}
+
 		to = string(values[0])
 	}
 
-	// Defense in depth: Sink.Validate checked the address when the sink was
-	// made, and the sender checks it again and guards the dial. This check
-	// stays so that a sink that a restore or a changed rule left behind never
-	// reaches the sender with an address that the rules refuse now.
-	if checkErr := checkAddress(sink, to); checkErr != nil {
-		return testResult(checkErr), nil
-	}
+	return to, values, nil
+}
 
+// send sends the test message. A failure of the send is a result: notify.Class
+// sorts it, and a timeout is temporary.
+func (s *Service) send(
+	ctx context.Context, sender notify.Sender, sink notify.Sink, to string, values [][]byte,
+) TestResult {
 	ctx, cancel := context.WithTimeout(ctx, SendTimeout)
 	defer cancel()
 
 	n := notify.SinkTestNotification(sink, ident.NewID(notify.IDPrefix), s.now())
 
-	err = sender.Send(ctx, notify.Message{
+	err := sender.Send(ctx, notify.Message{
 		Notification: n, Sink: sink, Secrets: secretsOf(sink, values), To: to, Actions: nil,
 	})
 
-	// A failure of the send is a result. notify.Class sorts it, and a timeout
-	// is temporary.
-	return testResult(err), nil
+	return testResult(err)
 }
 
 // secretsOf returns the signing keys that the sender gets: the opened values
@@ -171,23 +225,29 @@ func secretsOf(sink notify.Sink, values [][]byte) [][]byte {
 }
 
 // checkAddress returns an error that matches egress.ErrRefused when the
-// outbound rules refuse the address that the sink sends to.
-func checkAddress(sink notify.Sink, to string) error {
-	if sink.Kind == notify.SinkChat {
-		host, err := notify.ChatHost(to)
-		if err != nil {
-			return fmt.Errorf("check the address: %w", err)
-		}
+// outbound rules refuse the address that the sink sends to: the scheme, the
+// address ranges and the port of the URL, for each kind, and for a chat sink
+// also a host that is not the target of the sink.
+func (s *Service) checkAddress(sink notify.Sink, to string) error {
+	if err := egress.CheckURL(to, egress.HTTPSOnly); err != nil {
+		return fmt.Errorf("check the address: %w", err)
+	}
 
-		if host != sink.Target {
-			return fmt.Errorf("%w: the host of the URL is not the target of the sink", egress.ErrRefused)
-		}
+	if err := egress.CheckPort(to, s.ports); err != nil {
+		return fmt.Errorf("check the address: %w", err)
+	}
 
+	if sink.Kind != notify.SinkChat {
 		return nil
 	}
 
-	if err := egress.CheckURL(to, egress.HTTPSOnly); err != nil {
+	host, err := notify.ChatHost(to)
+	if err != nil {
 		return fmt.Errorf("check the address: %w", err)
+	}
+
+	if host != sink.Target {
+		return fmt.Errorf("%w: the host of the URL is not the target of the sink", egress.ErrRefused)
 	}
 
 	return nil

@@ -58,3 +58,26 @@ func (u urlChecked) CloseIdleConnections() {
 		ci.CloseIdleConnections()
 	}
 }
+
+// NewDialGuardedForTest returns a Sender whose connections run the production
+// dial guard, egresshttp.Control, and all go to a loopback address. So every
+// connection stands for a name that resolves to a refused address, and the
+// test needs no DNS. This file is part of the tests.
+func NewDialGuardedForTest(now func() time.Time) *Sender {
+	c := egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly)
+
+	dialer := new(net.Dialer)
+	dialer.Control = egresshttp.Control
+
+	tr := new(http.Transport)
+	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, "127.0.0.1:9")
+	}
+
+	c.Transport = urlChecked{next: tr}
+
+	return newSender(c, now)
+}
+
+// SetPortsForTest sets the ports of s, for a Sender that NewForTest made.
+func (s *Sender) SetPortsForTest(p egress.Ports) { s.ports = p }

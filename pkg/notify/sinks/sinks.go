@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -26,7 +27,7 @@ var ErrMissingDependency = errors.New("missing dependency")
 
 // ErrNoSender reports a test of a sink whose kind has no sender on this
 // server.
-var ErrNoSender = errors.New("this server has no sender for the kind of the sink")
+var ErrNoSender = errors.New("this server cannot send to this kind of notification destination")
 
 // SendTimeout bounds the send of a test message.
 const SendTimeout = 10 * time.Second
@@ -35,10 +36,12 @@ const SendTimeout = 10 * time.Second
 // its hex form.
 const signingKeyBytes = 32
 
-// Namespaces reads the namespace that a write fences. namespace.Store
-// implements it.
+// Namespaces reads the namespace that a write fences. namespace.Service
+// implements it. WritableHere returns namespace.ErrNotHome for a namespace
+// that another region owns.
 type Namespaces interface {
-	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+	Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+	WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
 // Config holds the dependencies of a Service.
@@ -49,6 +52,9 @@ type Config struct {
 	// Senders send the test message, one for each sink kind that this
 	// server can send. A kind with no sender cannot be tested.
 	Senders []notify.Sender
+	// Ports are the ports that a sink may send to. The zero value allows the
+	// port 443 only.
+	Ports egress.Ports
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -59,6 +65,8 @@ type Service struct {
 	sealer     notify.SinkSealer
 	namespaces Namespaces
 	senders    map[notify.SinkKind]notify.Sender
+	ports      egress.Ports
+	limiter    *testLimiter
 	now        func() time.Time
 }
 
@@ -80,7 +88,8 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, sealer: cfg.Sealer, namespaces: cfg.Namespaces, senders: senders, now: now,
+		store: cfg.Store, sealer: cfg.Sealer, namespaces: cfg.Namespaces, senders: senders, ports: cfg.Ports,
+		limiter: newTestLimiter(), now: now,
 	}, nil
 }
 
@@ -122,6 +131,10 @@ func (s *Service) Create(ctx context.Context, c *Caller, ns namespace.Name, in N
 	value, err := s.secretValue(&sink, in.URL)
 	if err != nil {
 		return Created{}, err
+	}
+
+	if portErr := s.checkPort(&sink, in.URL); portErr != nil {
+		return Created{}, portErr
 	}
 
 	var secrets []notify.SinkSecret
@@ -203,38 +216,9 @@ func (s *Service) Replace(
 		return notify.Sink{}, err
 	}
 
-	next := old
-	next.Version, next.Name = ch.Version, ch.Name
-
-	if ch.Target != nil {
-		if old.Kind == notify.SinkChat {
-			return notify.Sink{}, fmt.Errorf(
-				"%w: the target of a chat sink follows its URL: send the url",
-				notify.ErrInvalid,
-			)
-		}
-
-		next.Target = *ch.Target
-	}
-
-	var secrets []notify.SinkSecret
-
-	if ch.URL != nil {
-		if old.Kind != notify.SinkChat {
-			return notify.Sink{}, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
-		}
-
-		var value []byte
-
-		next.Target = ""
-
-		if value, err = s.secretValue(&next, *ch.URL); err != nil {
-			return notify.Sink{}, err
-		}
-
-		ref := ident.NewID("itm-")
-		next.SecretRefs = []string{ref}
-		secrets = []notify.SinkSecret{{Ref: ref, Value: value}}
+	next, secrets, err := s.changed(old, ch)
+	if err != nil {
+		return notify.Sink{}, err
 	}
 
 	// Defense in depth: the store validates the sink again. This check stays so
@@ -279,7 +263,7 @@ func (s *Service) Delete(ctx context.Context, c *Caller, ns namespace.Name, id s
 
 // List returns the sinks of ns, ordered by ID. A sink holds no secret.
 func (s *Service) List(ctx context.Context, ns namespace.Name) ([]notify.Sink, error) {
-	if _, err := s.namespaces.GetNamespace(ctx, ns); err != nil {
+	if _, err := s.namespaces.Get(ctx, ns); err != nil {
 		return nil, fmt.Errorf("read namespace %s: %w", ns, err)
 	}
 
@@ -305,6 +289,58 @@ func (s *Service) Get(ctx context.Context, ns namespace.Name, id string) (notify
 	}
 
 	return notify.Sink{}, fmt.Errorf("get sink %s: %w", id, notify.ErrNotFound)
+}
+
+// changed returns the sink that applies ch to old, and the new secret items
+// that the change makes. It returns notify.ErrInvalid for a field that the
+// kind of the sink does not take, and for an address on a port that the
+// operator did not allow.
+func (s *Service) changed(old notify.Sink, ch Change) (notify.Sink, []notify.SinkSecret, error) {
+	next := old
+	next.Version, next.Name = ch.Version, ch.Name
+
+	if ch.Target != nil {
+		if old.Kind == notify.SinkChat {
+			return notify.Sink{}, nil, fmt.Errorf(
+				"%w: the target of a chat sink follows its URL: send the url",
+				notify.ErrInvalid,
+			)
+		}
+
+		next.Target = *ch.Target
+	}
+
+	var (
+		secrets []notify.SinkSecret
+		url     string
+	)
+
+	if ch.URL != nil {
+		if old.Kind != notify.SinkChat {
+			return notify.Sink{}, nil, fmt.Errorf("%w: only a chat sink takes a url", notify.ErrInvalid)
+		}
+
+		url, next.Target = *ch.URL, ""
+
+		value, err := s.secretValue(&next, url)
+		if err != nil {
+			return notify.Sink{}, nil, err
+		}
+
+		ref := ident.NewID("itm-")
+		next.SecretRefs = []string{ref}
+		secrets = []notify.SinkSecret{{Ref: ref, Value: value}}
+	}
+
+	// A change of the name keeps the address that the owner approved, so only a
+	// new address meets the port rule.
+	if ch.Target != nil || ch.URL != nil {
+		if err := s.checkPort(&next, url); err != nil {
+			return notify.Sink{}, nil, err
+		}
+	}
+
+	return next, secrets, nil
 }
 
 // secretValue returns the plaintext secret of a new sink: a signing key for a
@@ -341,8 +377,38 @@ func (*Service) secretValue(sink *notify.Sink, url string) ([]byte, error) {
 	}
 }
 
+// checkPort returns notify.ErrInvalid when the sink would send to a port that
+// the operator did not allow. url is the incoming webhook URL of a chat sink.
+// A webhook sink sends to its target, and an email sink has no port.
+//
+// Defense in depth: the sender checks the port again before it sends, and
+// Service.Test checks it before the test. This check stays so that a refused
+// port is a refused write and not a sink that fails at the first send. The
+// store cannot hold this check: the ports are a setting of the operator.
+func (s *Service) checkPort(sink *notify.Sink, url string) error {
+	raw := sink.Target
+	if sink.Kind == notify.SinkChat {
+		raw = url
+	}
+
+	// An email sink has no port, and a chat sink with no new URL keeps the
+	// address that the owner approved.
+	if sink.Kind == notify.SinkEmail || raw == "" {
+		return nil
+	}
+
+	if err := egress.CheckPort(raw, s.ports); err != nil {
+		return fmt.Errorf("%w: %w", notify.ErrInvalid, err)
+	}
+
+	return nil
+}
+
+// fence returns the fence of ns. It returns namespace.ErrNotHome when the
+// namespace is homed in another region, so that no write and no test of a
+// sink runs in a region that does not own the namespace.
 func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {
-	n, err := s.namespaces.GetNamespace(ctx, ns)
+	n, err := s.namespaces.WritableHere(ctx, ns)
 	if err != nil {
 		return namespace.Fence{}, fmt.Errorf("read namespace %s: %w", ns, err)
 	}

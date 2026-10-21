@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -222,7 +223,7 @@ func noMiddleware(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware 
 
 // openStore returns a SQLite store with the namespaces acme and other, and the
 // secret service over it.
-func openStore(t *testing.T) (*sqlite.Store, *secret.Service) {
+func openStore(t *testing.T) (*sqlite.Store, *secret.Service, *namespace.Service) {
 	t.Helper()
 
 	store, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -259,7 +260,7 @@ func openStore(t *testing.T) (*sqlite.Store, *secret.Service) {
 		t.Fatalf("secret service: %v", err)
 	}
 
-	return store, secrets
+	return store, secrets, namespaces
 }
 
 func buildFixture(
@@ -268,12 +269,28 @@ func buildFixture(
 ) fixture {
 	t.Helper()
 
-	store, secrets := openStore(t)
+	return buildFixtureWith(t, middleware, nil, deny...)
+}
+
+// buildFixtureWith is buildFixture with wrap, which a test uses to put a
+// double in front of the sink store. A nil wrap keeps the store.
+func buildFixtureWith(
+	t *testing.T, middleware func(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware,
+	wrap func(*sqlite.Store, notify.SinkStore) notify.SinkStore, deny ...identity.Action,
+) fixture {
+	t.Helper()
+
+	store, secrets, namespaces := openStore(t)
 	hook := &recordingSender{kind: notify.SinkWebhook, mu: sync.Mutex{}, err: nil, sent: nil}
 
+	sinkStore := store.NotificationSinks()
+	if wrap != nil {
+		sinkStore = wrap(store, sinkStore)
+	}
+
 	svc, err := sinks.NewService(sinks.Config{
-		Store: store.NotificationSinks(), Sealer: notify.SinkSealer{Namespaces: secrets, Installation: nil},
-		Namespaces: store, Senders: []notify.Sender{hook}, Now: nil,
+		Store: sinkStore, Sealer: notify.SinkSealer{Namespaces: secrets, Installation: nil},
+		Namespaces: namespaces, Senders: []notify.Sender{hook}, Ports: egress.Ports{}, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("sink service: %v", err)

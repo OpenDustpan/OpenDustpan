@@ -7,6 +7,7 @@ import (
 
 	notificationsapi "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
 	"opendustpan.org/opendustpan/pkg/notify/webhook"
@@ -16,6 +17,7 @@ import (
 type sinkSettings struct {
 	store   notify.SinkStore
 	senders []notify.Sender
+	ports   egress.Ports
 }
 
 // WithSinkStore sets the store of notification sinks. With it, and with a
@@ -36,13 +38,21 @@ func WithSinkSenders(senders ...notify.Sender) Option {
 	return func(o *settings) { o.sinks.senders = append(o.sinks.senders, senders...) }
 }
 
+// WithSinkPorts sets the ports that a notification sink may send to, as an
+// egress.Ports value. Without the option, a sink sends to the port 443 only.
+// The server checks the port when a person saves a sink, before each test,
+// and in the built-in webhook sender before each send.
+func WithSinkPorts(p egress.Ports) Option {
+	return func(o *settings) { o.sinks.ports = p }
+}
+
 // sinkSenders returns the senders of the test route: the built-in signed
 // webhook sender, unless a sender of the kind is set, and then the set ones.
 func sinkSenders(cfg *settings) []notify.Sender {
 	out := slices.Clone(cfg.sinks.senders)
 
 	if !slices.ContainsFunc(out, func(s notify.Sender) bool { return s.Kind() == notify.SinkWebhook }) {
-		out = append(out, webhook.New())
+		out = append(out, webhook.New(webhook.WithPorts(cfg.sinks.ports)))
 	}
 
 	return out
@@ -63,8 +73,9 @@ func newSinksHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 	service, err := sinks.NewService(sinks.Config{
 		Store:      cfg.sinks.store,
 		Sealer:     notify.SinkSealer{Namespaces: svc.secrets, Installation: nil},
-		Namespaces: cfg.namespaceStore,
+		Namespaces: svc.namespaces,
 		Senders:    sinkSenders(cfg),
+		Ports:      cfg.sinks.ports,
 		Now:        cfg.now,
 	})
 	if err != nil {
