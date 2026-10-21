@@ -2369,7 +2369,7 @@ WHERE o.id = ended.id;
 -- Claims the oldest operation of the kinds, up to the version limit of its
 -- kind, that can run now: a pending one
 -- whose not_before_ms passed, or a running one whose claim expired without a
--- cancel request. A row that another claim holds is skipped, so of several
+-- cancel request, unless take_canceled is true. A row that another claim holds is skipped, so of several
 -- concurrent claims of one operation at most one gets it. The expiry is the
 -- database clock plus the lease. A claim that takes over an expired claim
 -- counts one more expiry.
@@ -2380,7 +2380,8 @@ WITH c AS MATERIALIZED (
   WHERE o.kind = ANY(sqlc.arg('kinds')::text[])
     AND o.version <= (sqlc.arg('max_versions')::bigint[])[array_position(sqlc.arg('kinds')::text[], o.kind)] AND (
     (o.state = 'pending' AND o.not_before_ms <= c.now_ms)
-    OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms AND NOT o.cancel_requested)
+    OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms
+      AND (NOT o.cancel_requested OR sqlc.arg('take_canceled')::boolean))
   )
   ORDER BY o.created_at_ms, o.id
   LIMIT 1

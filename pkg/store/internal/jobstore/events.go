@@ -122,7 +122,8 @@ func afterChange(ctx context.Context, tx Tx, cur, next *job.Job, ev job.Event) e
 		id := durable.ID(cur.Phases[cur.Current].Operation)
 
 		// A missing operation has nothing to cancel: a restore can leave a
-		// job with no operation, and the reconcile schedule ends it.
+		// job with no operation. A later change adds the reconcile schedule
+		// that ends such a job.
 		err := tx.CancelOperation(ctx, id)
 		if err != nil && !errors.Is(err, durable.ErrFinished) && !errors.Is(err, durable.ErrNotFound) {
 			return fmt.Errorf("cancel %s: %w", id, err)

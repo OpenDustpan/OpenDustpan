@@ -380,6 +380,7 @@ func TestRunnerSkipsRecordedStepAfterTakeover(t *testing.T) {
 	// An older holder recorded step one and stopped.
 	old, err := store.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "old", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: testLease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
@@ -555,6 +556,7 @@ func TestRunnerReleasesDoNotUseUpAttempts(t *testing.T) {
 	for range 5 {
 		held, err := store.Claim(t.Context(), durable.ClaimRequest{
 			Owner: "restarting", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: testLease,
+			TakeCanceled: false,
 		})
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
@@ -691,6 +693,7 @@ func TestRunnerFailsAfterTheExpiryLimit(t *testing.T) {
 		waitFor(t, store, op.ID, "claimable", func(durable.Operation) bool {
 			_, err := store.Claim(t.Context(), durable.ClaimRequest{
 				Owner: "crashing", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: 50 * time.Millisecond,
+				TakeCanceled: false,
 			})
 
 			return err == nil
@@ -778,6 +781,7 @@ func TestRunnerFailsUnknownStep(t *testing.T) {
 
 	old, err := store.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "old", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: testLease,
+		TakeCanceled: false,
 	})
 	if err != nil {
 		t.Fatalf("Claim: %v", err)

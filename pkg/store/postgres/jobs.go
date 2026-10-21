@@ -540,6 +540,31 @@ func (t *jobTx) CancelOperation(ctx context.Context, id durable.ID) error {
 	return cancelDurable(ctx, t.q, id)
 }
 
+// CheckClaim implements jobstore.Tx.
+func (t *jobTx) CheckClaim(ctx context.Context, c durable.Claim) error {
+	_, _, err := lockLive(ctx, t.q, c.Operation, c.Token)
+
+	return err
+}
+
+// EndOperation implements jobstore.Tx.
+func (t *jobTx) EndOperation(ctx context.Context, end *job.OperationEnd) error {
+	var rule endRule
+
+	switch end.Kind {
+	case job.EndComplete:
+		rule = completeEnd
+	case job.EndFail:
+		rule = failEnd(end.Failure)
+	case job.EndRelease:
+		rule = releaseEnd
+	default:
+		return fmt.Errorf("%w: unknown end %q", job.ErrInvalid, end.Kind)
+	}
+
+	return endClaim(ctx, t.q, end.Claim, rule)
+}
+
 // AppendAudit implements jobstore.Tx.
 func (t *jobTx) AppendAudit(ctx context.Context, entries []audit.Entry) error {
 	for i := range entries {

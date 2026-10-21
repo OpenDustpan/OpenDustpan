@@ -104,11 +104,12 @@ func stepNamed(steps []Step, name string) (*Step, bool) {
 // lost.
 const ReasonRestored = "restored"
 
-// AfterOperationEnded returns the event that the reconcile schedule
-// applies to the job of o, a job that is dispatched, running or canceling
-// while the durable operation of its current phase ended with no Finish,
-// or does not exist (o.Missing, after a restore). Store.Orphans returns
-// such jobs. The rule:
+// AfterOperationEnded returns the event that a reconcile schedule applies to
+// the job of o. A later change adds that schedule: no code in the server
+// calls this function yet. o is a job that is dispatched, running or
+// canceling while the durable operation of its current phase ended with no
+// Finish, or does not exist (o.Missing, after a restore). Store.Orphans
+// returns such jobs. The rule:
 //   - Dispatched: EventPhaseFailed. No executor saw the phase.
 //   - Running or canceling: the rule of AfterLostClaim with EventRelease.
 //     A step that changes resources and began under any claim fails the
