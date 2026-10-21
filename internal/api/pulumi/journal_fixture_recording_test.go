@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // journalWriterFor returns the journal writer of the recording build, over the
@@ -19,7 +20,7 @@ import (
 func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore, limit int) *stack.JournalEntries {
 	t.Helper()
 
-	journal, err := stack.NewJournalEntries(blobs, rows, pulumijournal.Verifier{}, limit)
+	journal, err := stack.NewJournalEntries(blobs, rows, pulumijournal.Verifier{}, limit, stacktest.NewRefusals())
 	if err != nil {
 		t.Fatalf("journal writer: %v", err)
 	}

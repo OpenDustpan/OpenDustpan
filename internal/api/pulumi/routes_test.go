@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // packageSources holds every Go file in this package, so TestNoMuxBypass can
@@ -73,6 +74,7 @@ func (homedNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Namesp
 func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	var out namespace.Namespace
 
+	out.ID = namespace.ID("ns-" + name.String())
 	out.Name = name
 	out.HomeRegion = "test-region"
 
@@ -215,6 +217,7 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 
 	out.Ref = ref
 	out.ID = "stk-test"
+	out.NamespaceID = namespace.ID("ns-" + ref.Namespace.String())
 	out.Tags = map[string]string{}
 
 	return out, nil
@@ -1593,6 +1596,7 @@ func newDeleteHandlerWithAudit(
 		Namespaces:         namespaces,
 		Stacks:             unusedStackResolver{},
 		Blobs:              blobs,
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
@@ -1960,6 +1964,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 		Namespaces:         namespaces,
 		Stacks:             unusedStackResolver{},
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
@@ -2033,6 +2038,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 		Namespaces:         namespaces,
 		Stacks:             unusedStackResolver{},
 		Blobs:              newMemBlob(),
+		Refusals:           stacktest.NewRefusals(),
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,

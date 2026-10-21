@@ -1114,12 +1114,13 @@ func TestRenameKeepsTags(t *testing.T) {
 	}
 
 	st := stack.Stack{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Tags:      map[string]string{"team": "platform"},
-		Ref:       ref,
-		ID:        stack.ID(ident.NewID("stk-")),
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Tags:        map[string]string{"team": "platform"},
+		Ref:         ref,
+		ID:          stack.ID(ident.NewID("stk-")),
+		Version:     0,
 	}
 
 	if err := s.CreateStack(ctx, st, ns.Fence()); err != nil {

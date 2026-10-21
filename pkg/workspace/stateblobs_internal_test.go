@@ -14,7 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/scopeaudit"
 )
 
 const (
@@ -108,7 +108,7 @@ type refusalLog struct {
 	err error
 }
 
-func (l *refusalLog) RecordOutOfScope(_ context.Context, ns namespace.ID, op string, _ secret.OutOfScopeWhere) error {
+func (l *refusalLog) RecordOutOfScope(_ context.Context, ns namespace.ID, op string, _ scopeaudit.Where) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -469,24 +469,24 @@ func TestAuditOutOfScope(t *testing.T) {
 	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.FixedZone("x", 3600))
 	entries := &serverEntries{got: nil, err: nil}
 
-	rec, err := secret.NewAuditOutOfScope(entries, audit.ChannelAPI, StateBlobFamily(), func() time.Time { return at })
+	rec, err := scopeaudit.New(entries, StateBlobFamily(), func() time.Time { return at })
 	if err != nil {
 		t.Fatalf("new recorder: %v", err)
 	}
 
 	for _, op := range []string{opPut, opGet, opDelete, opList} {
-		recordErr := rec.RecordOutOfScope(context.Background(), acmeID, op, secret.OutsideNamespace)
+		recordErr := rec.RecordOutOfScope(context.Background(), acmeID, op, scopeaudit.OutsideNamespace)
 		if recordErr != nil {
 			t.Fatalf("record %s: %v", op, recordErr)
 		}
 	}
 
-	recordErr := rec.RecordOutOfScope(context.Background(), acmeID, opGet, secret.OutsideDirectory)
+	recordErr := rec.RecordOutOfScope(context.Background(), acmeID, opGet, scopeaudit.OutsideDirectory)
 	if recordErr != nil {
 		t.Fatalf("record outside the directory: %v", recordErr)
 	}
 
-	unitErr := rec.RecordOutOfScope(context.Background(), acmeID, opGet, secret.OutsideUnitDirectory)
+	unitErr := rec.RecordOutOfScope(context.Background(), acmeID, opGet, scopeaudit.OutsideUnitDirectory)
 	if unitErr != nil {
 		t.Fatalf("record outside the unit directory: %v", unitErr)
 	}
@@ -524,7 +524,7 @@ func checkSecurityEntry(t *testing.T, i int, e audit.Entry, at time.Time) {
 	}
 
 	if e.Kind != audit.KindSecurity || e.Outcome != audit.OutcomeDenied || e.Namespace != audit.ServerScope ||
-		e.Action != secret.ActionBlobOutOfScope || e.Object != acmeID.String() || e.Subject != "server" ||
+		e.Action != scopeaudit.ActionOutOfScope || e.Object != acmeID.String() || e.Subject != "server" ||
 		!e.At.Equal(at) || e.At.Location() != time.UTC {
 		t.Errorf("entry %d = %+v, want a denied security entry in @server for the namespace", i, e)
 	}

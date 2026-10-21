@@ -123,6 +123,11 @@ type Stack struct {
 	Tags      map[string]string
 	Ref       Ref
 	ID        ID
+	// NamespaceID is the ID of the namespace row of Ref. Only GetStack fills
+	// it, from the same query as the stack, so a caller that reads the blobs of
+	// the stack builds their scope without a second read. A list read leaves it
+	// empty.
+	NamespaceID namespace.ID
 	// Version is the version of the stack's last finished update; a new stack
 	// is at version 0.
 	Version int64
@@ -331,12 +336,13 @@ func (s *Service) Create(ctx context.Context, ref Ref, tags map[string]string) (
 
 	now := s.now().UTC()
 	st := Stack{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Tags:      maps.Clone(tags),
-		Ref:       ref,
-		ID:        ID(ident.NewID("stk-")),
-		Version:   0,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Tags:        maps.Clone(tags),
+		Ref:         ref,
+		ID:          ID(ident.NewID("stk-")),
+		Version:     0,
 	}
 
 	if st.Tags == nil {
@@ -508,9 +514,10 @@ func (s *Service) RestoreDeleted(
 
 // PurgeDeleted removes the deleted stack id of ns for good, before its retention
 // period ends (ADR 47). The store appends the audit entry e in the same
-// fenced transaction. The caller removes the checkpoint blobs after it. It
-// returns ErrNotFound if ns has no deleted stack id.
-func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
+// fenced transaction. The caller removes the checkpoint blobs after it, in the
+// scope of the namespace ID that this call returns. It returns ErrNotFound if
+// ns has no deleted stack id.
+func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) (namespace.ID, error) {
 	return s.purge(ctx, ns, id, time.Time{}, e)
 }
 
@@ -519,8 +526,11 @@ func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e 
 // checks the end of the retention in the purge transaction. It returns
 // ErrNotFound if ns has no deleted stack id whose retention period ended by
 // then: a restore and a new delete after the caller read the unit gave it a
-// new retention period.
-func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+// new retention period. It returns the ID of the namespace row that it
+// resolved, for the delete of the blobs.
+func (s *Service) PurgeExpired(
+	ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry,
+) (namespace.ID, error) {
 	return s.purge(ctx, ns, id, dueBy, e)
 }
 
@@ -617,19 +627,21 @@ func (s *Service) deleteGuard(ctx context.Context, ref Ref) (DeleteGuard, error)
 
 // purge removes the deleted stack id of ns with the retention check of
 // dueBy, which zero turns off.
-func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+func (s *Service) purge(
+	ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry,
+) (namespace.ID, error) {
 	n, err := s.namespaces.WritableHere(ctx, ns)
 	if err != nil {
-		return fmt.Errorf("purge stack %s: %w", id, err)
+		return "", fmt.Errorf("purge stack %s: %w", id, err)
 	}
 
 	e.At = s.now().UTC()
 
 	if err := s.store.PurgeStack(ctx, id, n.Fence(), dueBy, e); err != nil {
-		return fmt.Errorf("purge stack %s: %w", id, err)
+		return "", fmt.Errorf("purge stack %s: %w", id, err)
 	}
 
-	return nil
+	return n.ID, nil
 }
 
 // refuseRestoreUnderNamespaceLock returns an error that matches

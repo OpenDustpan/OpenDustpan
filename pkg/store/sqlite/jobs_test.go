@@ -68,7 +68,8 @@ func (d *jobDomain) CreateUnit(
 	case "pulumi":
 		project, stackName, _ := strings.Cut(name, "/")
 		st := stack.Stack{
-			CreatedAt: now, UpdatedAt: now, Tags: map[string]string{},
+			NamespaceID: "",
+			CreatedAt:   now, UpdatedAt: now, Tags: map[string]string{},
 			Ref: stack.Ref{
 				Namespace: fence.Namespace, Project: stack.ProjectName(project), Stack: stack.Name(stackName),
 			},

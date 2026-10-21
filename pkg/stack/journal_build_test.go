@@ -10,6 +10,7 @@ import (
 	"io"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
@@ -17,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/stack/stacktest"
 )
 
 // journalMemStore implements the journal and built-checkpoint ports in
@@ -287,6 +289,11 @@ type buildFixture struct {
 	stackID stack.ID
 	journal *stack.JournalEntries
 	base    []byte
+	nsID    namespace.ID
+	// nsStore counts the namespace reads of the service.
+	nsStore *memNamespaces
+	// refusals holds the refusals of the blob scope that the service wrote.
+	refusals *stacktest.Refusals
 }
 
 // baseResource is the one resource of the base checkpoint.
@@ -368,14 +375,18 @@ func newBuildFixtureWith(
 		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
+	nsStore := &memNamespaces{ns: ns, reads: atomic.Int64{}}
+
 	namespaces, err := namespace.NewService(
-		namespace.Config{Store: &memNamespaces{ns: ns}, Now: clk.Now, Region: "local"},
+		namespace.Config{Store: nsStore, Now: clk.Now, Region: "local"},
 	)
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	journal, err := stack.NewJournalEntries(blobs, store, pulumijournal.Verifier{}, 1<<20)
+	refusals := stacktest.NewRefusals()
+
+	journal, err := stack.NewJournalEntries(blobs, store, pulumijournal.Verifier{}, 1<<20, refusals)
 	if err != nil {
 		t.Fatalf("journal writer: %v", err)
 	}
@@ -394,6 +405,7 @@ func newBuildFixtureWith(
 		MaxCheckpointBytes: 1 << 20,
 		Journal:            journal,
 		Replayer:           replayer,
+		Refusals:           refusals,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
@@ -404,6 +416,7 @@ func newBuildFixtureWith(
 		t.Fatalf("parse ref: %v", err)
 	}
 
+	store.nsID = ns.ID
 	store.addStack(ref, "stk-build")
 
 	ctx := t.Context()
@@ -444,7 +457,8 @@ func newBuildFixtureWith(
 
 	return &buildFixture{
 		svc: svc, store: store, blobs: blobs, clock: clk,
-		ref: ref, stackID: got.ID, journal: journal, base: base,
+		ref: ref, stackID: got.ID, journal: journal, base: base, nsID: ns.ID,
+		nsStore: nsStore, refusals: refusals,
 	}
 }
 
@@ -833,7 +847,7 @@ func TestJournalBuildBatches(t *testing.T) {
 
 	s := f.startJournaled(t)
 
-	bodies, err := f.journal.Batches(t.Context(), f.stackID, s.Update.ID)
+	bodies, err := f.journal.Batches(t.Context(), f.nsID, f.stackID, s.Update.ID)
 	if err != nil {
 		t.Fatalf("batches: %v", err)
 	}

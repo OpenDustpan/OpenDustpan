@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -109,7 +108,7 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 // ErrNotJournaled. A closed journal refuses every batch, so no batch can land
 // after the build.
 func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
-	if err := checkJournalKey(stackID, row); err != nil {
+	if err := checkJournalKey(ctx, q, stackID, row); err != nil {
 		return err
 	}
 
@@ -137,15 +136,19 @@ func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 	return nil
 }
 
-// checkJournalKey refuses a row whose blob key does not belong to the stack and the
+// checkJournalKey refuses a row whose blob key does not belong to the namespace, the stack and the
 // update that the row names. The key is built by the caller, so a mismatch is a bug.
-func checkJournalKey(stackID string, row stack.JournalRow) error {
-	prefix := "pulumi/" + stackID + "/" + row.Update.String() + "/journal/"
-	if !strings.HasPrefix(string(row.BlobKey), prefix) {
-		return fmt.Errorf("%w: %q", stack.ErrJournalKey, row.BlobKey)
+func checkJournalKey(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
+	nsID, err := q.GetNamespaceID(ctx, row.Ref.Namespace.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: the namespace of the row does not exist", stack.ErrJournalKey)
 	}
 
-	return nil
+	if err != nil {
+		return fmt.Errorf("read namespace ID: %w", err)
+	}
+
+	return stack.CheckJournalBlobKey(namespace.ID(nsID), stack.ID(stackID), row.Update, row.BlobKey)
 }
 
 // journalRetry reports whether every sequence ID of the row is stored with the same
