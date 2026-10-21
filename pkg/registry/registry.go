@@ -44,6 +44,11 @@ var (
 	// ErrUntrustedKey reports a signature made by a key that the caller did
 	// not name as trusted.
 	ErrUntrustedKey = errors.New("signature key is not trusted")
+	// ErrBadKey reports a public key that a namespace cannot register: it does
+	// not parse, it holds private key material, it is expired or revoked, it
+	// cannot sign, or it is weak. The text names the rule and holds no byte of
+	// the key.
+	ErrBadKey = errors.New("public key cannot be registered")
 )
 
 // Bounds of a release. The limits of the upload are a setting of the

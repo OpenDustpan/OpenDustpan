@@ -273,3 +273,109 @@ func TestVerifyPolicy(t *testing.T) {
 		})
 	}
 }
+
+// armorOf serializes e with write and wraps the result in ASCII armor of kind.
+func armorOf(t *testing.T, kind string, write func(w *bytes.Buffer) error) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	w, err := armor.Encode(&buf, kind, nil)
+	if err != nil {
+		t.Fatalf("armor: %v", err)
+	}
+
+	var inner bytes.Buffer
+	if err := write(&inner); err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+
+	if _, err := w.Write(inner.Bytes()); err != nil {
+		t.Fatalf("write armor: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close armor: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
+func TestInspect(t *testing.T) {
+	t.Parallel()
+
+	good := newEntity(t, edConfig())
+	goodKey := trusted(t, good)
+
+	privateArmor := armorOf(t, openpgp.PrivateKeyType, func(w *bytes.Buffer) error { return good.SerializePrivate(w, nil) })
+
+	revoked := newEntity(t, edConfig())
+	if err := revoked.RevokeKey(packet.KeyCompromised, "leaked", nil); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	weak := newEntity(t, &packet.Config{Algorithm: packet.PubKeyAlgoRSA, RSABits: 1024})
+	other := newEntity(t, edConfig())
+	two := append(bytes.Clone(goodKey.Armored), trusted(t, other).Armored...)
+
+	tests := []struct {
+		name    string
+		armored []byte
+		now     time.Time
+		ok      bool
+	}{
+		{"public key", goodKey.Armored, time.Time{}, true},
+		{"public key with text around the armor", append([]byte("note\n"), append(bytes.Clone(goodKey.Armored), []byte("\ntrailer")...)...), time.Time{}, true},
+		{"private key", privateArmor, time.Time{}, false},
+		{"revoked key", trusted(t, revoked).Armored, time.Time{}, false},
+		{"weak RSA key", trusted(t, weak).Armored, time.Time{}, false},
+		{"two keys", two, time.Time{}, false},
+		{"garbage", []byte("not a key"), time.Time{}, false},
+		{"empty", nil, time.Time{}, false},
+		{"too large", make([]byte, registry.MaxKeyBytes+1), time.Time{}, false},
+		{"key that is expired at the time of the check", goodKey.Armored, time.Now().AddDate(100, 0, 0), true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			v := pgpverify.Verifier{Now: nil}
+			if !tc.now.IsZero() {
+				v.Now = func() time.Time { return tc.now }
+			}
+
+			got, err := v.Inspect(context.Background(), tc.armored)
+			if !tc.ok {
+				if !errors.Is(err, registry.ErrBadKey) || got.Fingerprint != "" || got.Armored != nil {
+					t.Fatalf("Inspect = %+v, %v; want ErrBadKey and no key", got, err)
+				}
+
+				return
+			}
+
+			if err != nil || got.Fingerprint != goodKey.Fingerprint {
+				t.Fatalf("Inspect = %q, %v; want %q", got.Fingerprint, err, goodKey.Fingerprint)
+			}
+
+			// The stored form is the canonical armor of the parsed key. It parses
+			// again to the same fingerprint, and it holds no text around the armor.
+			again, err := pgpverify.Verifier{Now: nil}.Inspect(context.Background(), got.Armored)
+			if err != nil || again.Fingerprint != got.Fingerprint || !bytes.HasPrefix(got.Armored, []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
+				t.Fatalf("canonical key = %q, %v", got.Armored, err)
+			}
+		})
+	}
+}
+
+func TestInspectExpiredKey(t *testing.T) {
+	t.Parallel()
+
+	e := newEntity(t, &packet.Config{Algorithm: packet.PubKeyAlgoEdDSA, KeyLifetimeSecs: 3600})
+	k := trusted(t, e)
+
+	v := pgpverify.Verifier{Now: func() time.Time { return time.Now().Add(48 * time.Hour) }}
+	if _, err := v.Inspect(context.Background(), k.Armored); !errors.Is(err, registry.ErrBadKey) {
+		t.Fatalf("Inspect of an expired key = %v, want ErrBadKey", err)
+	}
+}

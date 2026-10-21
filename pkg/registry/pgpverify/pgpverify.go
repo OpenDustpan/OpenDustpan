@@ -268,3 +268,83 @@ func strongKey(k *packet.PublicKey) error {
 
 	return nil
 }
+
+var _ registry.KeyInspector = Verifier{Now: nil}
+
+// Inspect implements registry.KeyInspector. It reads one public key, refuses
+// private key material, and applies the policy of the registry to every key of
+// the entity. The result holds the canonical armor of the public key, so the
+// store never keeps a byte that this call did not parse.
+func (v Verifier) Inspect(ctx context.Context, armored []byte) (registry.TrustedKey, error) {
+	if err := ctx.Err(); err != nil {
+		return registry.TrustedKey{}, fmt.Errorf("inspect key: %w", err)
+	}
+
+	bad := func(reason string) (registry.TrustedKey, error) {
+		return registry.TrustedKey{}, fmt.Errorf("%w: %s", registry.ErrBadKey, reason)
+	}
+
+	if len(armored) == 0 || len(armored) > registry.MaxKeyBytes {
+		return bad("the key is empty or larger than the limit")
+	}
+
+	// The library reads the first armor block only. A second block would be
+	// dropped without a word, so the call refuses it.
+	list, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil || len(list) != 1 || bytes.Count(armored, []byte("-----BEGIN PGP")) != 1 {
+		return bad("send one OpenPGP public key in ASCII armor")
+	}
+
+	entity := list[0]
+
+	// A private key in the armor is refused and never stored.
+	if entity.PrivateKey != nil {
+		return bad("the armor holds a private key: send the public key only")
+	}
+
+	for _, sub := range entity.Subkeys {
+		if sub.PrivateKey != nil {
+			return bad("the armor holds a private key: send the public key only")
+		}
+	}
+
+	now := time.Now
+	if v.Now != nil {
+		now = v.Now
+	}
+
+	if entity.Revoked(now()) {
+		return bad("the key is revoked")
+	}
+
+	if _, ok := entity.SigningKey(now()); !ok {
+		return bad("the key is expired, or no key of it can sign")
+	}
+
+	if strongKey(entity.PrimaryKey) != nil {
+		return bad("the key uses a weak algorithm or size")
+	}
+
+	for _, sub := range entity.Subkeys {
+		if strongKey(sub.PublicKey) != nil {
+			return bad("a subkey uses a weak algorithm or size")
+		}
+	}
+
+	var buf bytes.Buffer
+
+	w, err := armor.Encode(&buf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		return bad("the key cannot be written")
+	}
+
+	if err := entity.Serialize(w); err != nil {
+		return bad("the key cannot be written")
+	}
+
+	if err := w.Close(); err != nil {
+		return bad("the key cannot be written")
+	}
+
+	return registry.TrustedKey{Fingerprint: fingerprintOf(entity.PrimaryKey), Armored: buf.Bytes()}, nil
+}

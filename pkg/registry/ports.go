@@ -61,6 +61,20 @@ type TrustedKey struct {
 	Armored []byte
 }
 
+// KeyInspector reads a public key that a namespace wants to trust. The
+// verifier adapter implements it, so the same library and the same policy
+// parse every key.
+type KeyInspector interface {
+	// Inspect parses armored. It returns the key in the canonical armored form
+	// that the registry stores, with the fingerprint of the primary key in
+	// uppercase hex. The server never takes a fingerprint from the caller. It
+	// returns ErrBadKey when armored does not hold exactly one public key, holds
+	// private key material, is expired or revoked now, has no key that can sign,
+	// uses SHA-1, DSA or ElGamal, or uses an RSA key of less than 2048 bits. The
+	// error text holds no byte of the key.
+	Inspect(ctx context.Context, armored []byte) (TrustedKey, error)
+}
+
 // SignatureVerifier checks the detached signature of a checksums file. An
 // adapter wraps an OpenPGP library. The package has no adapter yet, because
 // the library is a new dependency that the owner decides. A later KeyStore

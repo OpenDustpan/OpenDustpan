@@ -30,6 +30,12 @@ var (
 	ErrKeyLimit = fmt.Errorf("a namespace holds at most %d signing keys: remove one first", MaxKeysPerNamespace)
 )
 
+// ValidFingerprint reports whether s is a fingerprint in the form that the
+// registry stores: 40 to 64 uppercase hex digits.
+func ValidFingerprint(s string) bool {
+	return fingerprintRE.MatchString(s)
+}
+
 // KeyRecord is a trusted signing key of one namespace, with who registered it.
 type KeyRecord struct {
 	AddedAt   time.Time
@@ -49,7 +55,7 @@ func (k KeyRecord) Validate() error {
 		return fmt.Errorf("%w: namespace: %w", ErrInvalid, err)
 	}
 
-	if !fingerprintRE.MatchString(k.Key.Fingerprint) {
+	if !ValidFingerprint(k.Key.Fingerprint) {
 		return fmt.Errorf("%w: key fingerprint", ErrInvalid)
 	}
 
