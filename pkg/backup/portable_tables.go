@@ -46,6 +46,7 @@ const (
 	portColScopeKey      = "scope_key"
 	portColSeq           = "seq"
 	portColOwner         = "owner"
+	portColJobID         = "job_id"
 	portColBody          = "body"
 )
 
@@ -460,7 +461,7 @@ func portableSpec() []PortableTable {
 				{Name: "object_id", Kind: KindText},
 				{Name: "fence_version", Kind: KindInteger},
 				{Name: "principal_kind", Kind: KindText},
-				{Name: "job_id", Kind: KindText},
+				{Name: portColJobID, Kind: KindText},
 				{Name: portColReason, Kind: KindText},
 			},
 		},
@@ -707,6 +708,7 @@ func portableSpec() []PortableTable {
 		portableManualLockTables(),
 		portablePreferenceTables(),
 		portableSavedViewTables(),
+		portableDriftTables(),
 		portableGitHostTables(),
 		portableRegistryTables(),
 		portableSinkTables(),

@@ -1,6 +1,7 @@
 package drifttest
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ func storeCases() []suiteCase {
 		{"store: a drifted result is the latest result", testRecordDrifted},
 		{"store: a clean result clears the drift", testRecordClears},
 		{"store: a repeated status is no change", testRecordSameStatus},
+		{"store: the kinds, the order and the truncated mark of a result come back", testRecordRoundTrip},
 		{"store: a result that fails validation changes nothing", testRecordInvalid},
 		{"store: an older or equal result is stale", testRecordStale},
 		{"store: the same job twice is stale", testRecordSameJob},
@@ -63,6 +65,63 @@ func testRecordDrifted(t *testing.T, h Harness) {
 
 	if !slices.Equal(addresses, want) {
 		t.Errorf("addresses = %v, want %v", addresses, want)
+	}
+}
+
+func testRecordRoundTrip(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, "acme")
+	u := unit("acme", "wsp-1")
+
+	// The longest result: the limit of resources, cut by the runner, with both
+	// kinds and an address that holds the characters of a real one.
+	r := drift.Result{CheckedAt: at(1), Unit: u, JobID: h.Jobs.DriftCheck(t, u), Resources: nil, Truncated: true}
+
+	for i := range drift.MaxResources {
+		kind := drift.KindChanged
+		if i%2 == 1 {
+			kind = drift.KindDeleted
+		}
+
+		r.Resources = append(r.Resources, drift.Resource{
+			Address: fmt.Sprintf("module.net[\"eu-%d\"].aws_subnet.private[%d]", i, i), Kind: kind,
+		})
+	}
+
+	_, err := h.Store.Record(t.Context(), r, f)
+	must(t, "record", err)
+
+	got, err := h.Store.GetLatest(t.Context(), u)
+	must(t, "get", err)
+
+	if !got.Truncated || got.Status != drift.StatusDrifted || got.ResourceCount() != drift.MaxResources {
+		t.Fatalf("latest = truncated %t, status %q, %d resources; want the truncated result of %d",
+			got.Truncated, got.Status, got.ResourceCount(), drift.MaxResources)
+	}
+
+	sorted := func(rs []drift.Resource) []drift.Resource {
+		out := slices.Clone(rs)
+		slices.SortFunc(out, func(a, b drift.Resource) int { return strings.Compare(a.Address, b.Address) })
+
+		return out
+	}
+
+	if !slices.Equal(sorted(got.Resources), sorted(r.Resources)) {
+		t.Error("the addresses or the kinds of the latest result differ from the recorded result")
+	}
+
+	// A newer result that is not truncated replaces the whole result.
+	next := result(u, h.Jobs.DriftCheck(t, u), minute2, "only.one")
+
+	_, err = h.Store.Record(t.Context(), next, f)
+	must(t, "second record", err)
+
+	got, err = h.Store.GetLatest(t.Context(), u)
+	must(t, "second get", err)
+
+	if got.Truncated || got.ResourceCount() != 1 || got.Resources[0].Address != "only.one" {
+		t.Errorf("latest = %+v, want the second result alone", got)
 	}
 }
 

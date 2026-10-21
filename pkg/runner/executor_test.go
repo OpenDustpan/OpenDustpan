@@ -42,7 +42,7 @@ func planSpec(t *testing.T) job.Spec {
 	}
 
 	return job.Spec{
-		Unit: unit.WithUnitID("unt-web"), Operation: job.OperationPlan, Executor: job.ExecutorRunner,
+		Unit: unit.WithUnitID("unt-web"), Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
 		Location: job.Location{
 			Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: "",
 		},
@@ -91,7 +91,7 @@ func phaseCases() []phaseCase {
 		return phaseCase{name, mutate, ok, nil, job.ErrInvalid}
 	}
 
-	return []phaseCase{
+	return append([]phaseCase{
 		{"a plan", func(*job.Spec) {}, ok, plan, nil},
 		{"an apply has two phases", func(s *job.Spec) {
 			s.Operation = job.OperationApply
@@ -119,7 +119,7 @@ func phaseCases() []phaseCase {
 		{"the pool store fails", func(*job.Spec) {}, poolReader{pools: nil, err: errPoolDriver}, nil, errPoolDriver},
 		invalid("another executor", func(s *job.Spec) { s.Executor = job.ExecutorWriteBack }),
 		invalid("an unknown operation", func(s *job.Spec) { s.Operation = "reboot" }),
-	}
+	}, driftCases(ok)...)
 }
 
 func TestExecutorPhases(t *testing.T) {
@@ -169,5 +169,44 @@ func TestExecutorBasics(t *testing.T) {
 
 	if err := e.Abandon(t.Context(), zeroJob); err != nil {
 		t.Fatalf("Abandon = %v, want nil", err)
+	}
+}
+
+// driftSpec turns a plan spec into a drift check: the operation refresh with
+// the purpose, and the plan steps of a refresh-only plan.
+func driftSpec(s *job.Spec) {
+	s.Operation, s.Purpose = job.OperationRefresh, job.PurposeDriftCheck
+	s.Steps = []job.Step{toolStep("plan", job.PhasePlan, "plan", false)}
+	s.Steps[0].Env = map[string]string{"TF_IN_AUTOMATION": "1"}
+}
+
+// driftCases returns the cases of a drift check. A drift check has the plan
+// phase alone, and no step may add an argument or change resources.
+func driftCases(ok poolReader) []phaseCase {
+	plan := []job.PhaseKind{job.PhasePlan}
+	invalid := func(name string, mutate func(*job.Spec)) phaseCase {
+		return phaseCase{name, func(s *job.Spec) { driftSpec(s); mutate(s) }, ok, nil, job.ErrInvalid}
+	}
+
+	return []phaseCase{
+		{"a drift check is one plan phase", driftSpec, ok, plan, nil},
+		invalid("a drift check with a step in the apply phase", func(s *job.Spec) {
+			s.Steps = append(s.Steps, toolStep("apply", job.PhaseApply, "apply", true))
+		}),
+		invalid("a drift check with a hook", func(s *job.Spec) { s.Steps[0].Role = job.RoleHook }),
+		invalid("a drift check with TF_CLI_ARGS", func(s *job.Spec) { s.Steps[0].Env["TF_CLI_ARGS"] = "-lock=false" }),
+		invalid("a drift check with a plan for an apply", func(s *job.Spec) {
+			s.Steps[0].Outputs = []job.Output{{Kind: job.OutputPlanApply, Path: "tfplan"}}
+		}),
+		invalid("a drift check of a plan", func(s *job.Spec) { s.Operation = job.OperationPlan }),
+		invalid("a drift check of an apply", func(s *job.Spec) { s.Operation = job.OperationApply }),
+		invalid("a drift check through write-back", func(s *job.Spec) { s.Executor = job.ExecutorWriteBack }),
+		invalid("an unknown purpose", func(s *job.Spec) { s.Purpose = "scan" }),
+		{
+			"a refresh with no purpose keeps its apply phase", func(s *job.Spec) {
+				s.Operation = job.OperationRefresh
+				s.Steps = []job.Step{toolStep("refresh", job.PhaseApply, "apply", true)}
+			}, ok, []job.PhaseKind{job.PhaseApply}, nil,
+		},
 	}
 }

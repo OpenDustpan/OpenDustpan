@@ -3990,3 +3990,30 @@ DELETE FROM notification_sink_secrets
 WHERE notification_sink_secrets.sink_id = sqlc.arg(sink_id)
   AND notification_sink_secrets.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
+
+-- name: GetDriftResult :one
+-- The namespace and the tool are part of the key: a result of another
+-- namespace or another tool reads as no row.
+SELECT d.unit_id, n.name AS namespace, d.tool, d.job_id, d.status, d.checked_at_ms, d.truncated, d.resources_json
+FROM drift_results AS d
+JOIN namespaces AS n ON n.id = d.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND d.unit_id = sqlc.arg(unit_id) AND d.tool = sqlc.arg(tool);
+
+-- name: UpsertDriftResult :execrows
+-- The caller checks the fence, the job and the time in the same transaction.
+-- A row of the same unit ID in another namespace or of another tool is not
+-- replaced: the count is 0.
+INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
+VALUES (
+    sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(tool),
+    sqlc.arg(job_id), sqlc.arg(status), sqlc.arg(checked_at_ms), sqlc.arg(truncated), sqlc.arg(resources_json)
+)
+ON CONFLICT (unit_id) DO UPDATE SET
+    job_id = excluded.job_id, status = excluded.status, checked_at_ms = excluded.checked_at_ms,
+    truncated = excluded.truncated, resources_json = excluded.resources_json
+WHERE drift_results.namespace_id = excluded.namespace_id AND drift_results.tool = excluded.tool;
+
+-- name: DeleteDriftResult :exec
+DELETE FROM drift_results
+WHERE drift_results.unit_id = sqlc.arg(unit_id)
+  AND drift_results.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));

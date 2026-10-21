@@ -409,6 +409,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteManualLockBackupTables(),
 		sqlitePreferenceBackupTables(),
 		sqliteSavedViewBackupTables(),
+		sqliteDriftBackupTables(),
 		sqliteGitHostBackupTables(),
 		sqliteRegistryBackupTables(),
 		sqliteSinkBackupTables(),

@@ -71,6 +71,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -177,6 +178,7 @@ type settings struct {
 	profileStore         profile.Store
 	sinks                sinkSettings
 	jobStore             job.Store
+	driftStore           drift.Store
 	savedViewStore       savedview.Store
 	gitHost              gitHostSettings
 	registry             *registrySettings
@@ -715,6 +717,7 @@ func defaultSettings() *settings {
 		profileStore:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
+		driftStore:              nil,
 		savedViewStore:          nil,
 		gitHost:                 gitHostSettings{store: nil, allow: nil, cas: nil, loopback: false, checkLimits: nil},
 		registry:                nil,
@@ -1184,6 +1187,8 @@ type neutralHandlers struct {
 	sinks http.Handler
 	// jobs is nil when no job store is set.
 	jobs http.Handler
+	// drift is nil when no drift store is set.
+	drift http.Handler
 	// registry is nil when no registry store is set.
 	registry http.Handler
 }
@@ -1224,7 +1229,22 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	jobs, err := newJobsHandler(svc, cfg, onFailure)
+	// One job service starts the jobs of the jobs API and the drift checks.
+	var starter job.Starter
+
+	if cfg.jobStore != nil {
+		starter, err = newJobService(svc, cfg)
+		if err != nil {
+			return neutralHandlers{}, err
+		}
+	}
+
+	jobs, err := newJobsHandler(svc, cfg, onFailure, starter)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	drifts, err := newDriftHandler(svc, cfg, onFailure, starter)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1237,6 +1257,7 @@ func newNeutralHandlers(
 	return neutralHandlers{
 		inventory: units, audit: entries, context: contexts, runners: runners, profiles: profiles, sinks: sinks,
 		jobs:     jobs,
+		drift:    drifts,
 		registry: registries,
 	}, nil
 }
@@ -3787,6 +3808,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	mountV1(mux, a.jobs, func(h http.Handler) http.Handler {
+		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+	})
+	mountV1(mux, a.drift, func(h http.Handler) http.Handler {
 		return withCORS(withMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 	})
 	// The capabilities document and the dev sign-in belong to the

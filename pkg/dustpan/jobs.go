@@ -19,8 +19,8 @@ func WithJobStore(st job.Store) Option {
 }
 
 // newJobsHandler builds the jobs API, or returns nil when no job store is
-// set.
-func newJobsHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+// set. starter is the job service, or nil when the server lacks a port that it needs.
+func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.Starter) (http.Handler, error) {
 	if cfg.jobStore == nil {
 		return nil, nil //nolint:nilnil // No jobs API: no job store is set.
 	}
@@ -30,11 +30,6 @@ func newJobsHandler(svc services, cfg *settings, onFailure func()) (http.Handler
 	var neutralAudit audit.Store
 	if st, ok := cfg.namespaceStore.(audit.Store); ok {
 		neutralAudit = st
-	}
-
-	starter, err := newJobService(svc, cfg)
-	if err != nil {
-		return nil, err
 	}
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{

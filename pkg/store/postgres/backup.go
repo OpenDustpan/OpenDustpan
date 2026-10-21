@@ -112,6 +112,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
+	tables = append(tables, pgCopyDriftTables()...)
 	tables = append(tables, pgCopyGitHostTables()...)
 	tables = append(tables, pgCopyRegistryTables()...)
 	tables = append(tables, pgCopySinkTables()...)
@@ -913,10 +914,6 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, idsErr
 	}
 
-	if viewsErr := checkStagedSavedViews(ctx, s.pool, in.staging); viewsErr != nil {
-		return backup.Summary{}, viewsErr
-	}
-
 	if featureErr := checkStagedFeatureRows(ctx, s.pool, in.staging); featureErr != nil {
 		return backup.Summary{}, featureErr
 	}
@@ -1686,9 +1683,17 @@ func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) 
 }
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
-// of their own: the registry, the Git host connections and the notification
-// sinks.
+// of their own: the saved views, the drift results, the registry, the Git host
+// connections and the notification sinks.
 func checkStagedFeatureRows(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	if err := checkStagedSavedViews(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
+		return err
+	}
+
 	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
 		return err
 	}

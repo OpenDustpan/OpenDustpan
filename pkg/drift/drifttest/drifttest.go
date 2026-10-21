@@ -10,7 +10,6 @@ package drifttest
 
 import (
 	"errors"
-	"slices"
 	"testing"
 	"time"
 
@@ -76,17 +75,35 @@ type suiteCase struct {
 	test func(t *testing.T, h Harness)
 }
 
-// Run runs every case of the suite.
+// Run runs every case of the suite. A case of PolicyStore skips when the
+// harness has no PolicyStore, and a case of Checker skips when it has no
+// Checker, so an adapter of Store alone runs the cases that it can.
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := slices.Concat(storeCases(), policyCases(), checkerCases())
+	groups := []struct {
+		cases   []suiteCase
+		port    string
+		missing func(h Harness) bool
+	}{
+		{storeCases(), "Store", func(h Harness) bool { return h.Store == nil }},
+		{policyCases(), "PolicyStore", func(h Harness) bool { return h.Policies == nil }},
+		{checkerCases(), "Checker", func(h Harness) bool { return h.Checker == nil }},
+	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			tc.test(t, newHarness(t))
-		})
+	for _, g := range groups {
+		for _, tc := range g.cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				h := newHarness(t)
+				if g.missing(h) {
+					t.Skip("the harness has no " + g.port)
+				}
+
+				tc.test(t, h)
+			})
+		}
 	}
 }
 
