@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -142,14 +143,14 @@ func truncateUserAgent(s string) string {
 func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		return badRequest("request.body-invalid", "the request body is not readable or is over 1 MiB")
+		return problem.BadRequest("request.body-invalid", "the request body is not readable or is over 1 MiB")
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 
 	if err = dec.Decode(v); err != nil || dec.More() {
-		return badRequest("request.body-invalid", "the request body must be one JSON object with known fields")
+		return problem.BadRequest("request.body-invalid", "the request body must be one JSON object with known fields")
 	}
 
 	return nil
@@ -343,7 +344,7 @@ func pageSizeOf(r *http.Request) (int, error) {
 
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 || n > maxPageSize {
-		return 0, badRequest(
+		return 0, problem.BadRequest(
 			"request.invalid-query",
 			fmt.Sprintf("pageSize must be a number from 1 to %d", maxPageSize),
 		)
@@ -407,7 +408,10 @@ func decodeToken(raw, fp string) (profile.Name, error) {
 		return "", nil
 	}
 
-	bad := badRequest("request.invalid-query", "pageToken does not belong to this query: start again without it")
+	bad := problem.BadRequest(
+		"request.invalid-query",
+		"pageToken does not belong to this query: start again without it",
+	)
 
 	data, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
@@ -423,14 +427,16 @@ func decodeToken(raw, fp string) (profile.Name, error) {
 }
 
 var (
-	errPrecondition = &statusError{
-		status: http.StatusPreconditionFailed, code: "request.precondition-failed",
-		message: "If-Match does not match the profile: read it again and send the new ETag",
-	}
-	errPreconditionRequired = &statusError{
-		status: http.StatusPreconditionRequired, code: "request.precondition-required",
-		message: "send the ETag that you read in If-Match",
-	}
+	errPrecondition = problem.Fixed(
+		http.StatusPreconditionFailed,
+		"request.precondition-failed",
+		"If-Match does not match the profile: read it again and send the new ETag",
+	)
+	errPreconditionRequired = problem.Fixed(
+		http.StatusPreconditionRequired,
+		"request.precondition-required",
+		"send the ETag that you read in If-Match",
+	)
 )
 
 // ifMatch reads the If-Match header against the profile got. It returns the
@@ -462,11 +468,7 @@ func ifMatch(r *http.Request, got profile.Profile) (int, bool, error) {
 // stale turns a conflict of a write that carries If-Match into 412.
 func stale(err error) error {
 	if errors.Is(err, profile.ErrConflict) {
-		return &statusError{
-			status:  http.StatusPreconditionFailed,
-			code:    "request.precondition-failed",
-			message: err.Error(),
-		}
+		return problem.Fixed(http.StatusPreconditionFailed, "request.precondition-failed", err.Error())
 	}
 
 	return err
@@ -536,7 +538,11 @@ func (h *Handler) listRevisions(w http.ResponseWriter, r *http.Request, p identi
 	if raw := r.URL.Query().Get("pageToken"); raw != "" {
 		n, convErr := strconv.Atoi(raw)
 		if convErr != nil || n < 1 {
-			h.writeError(ctx, w, badRequest("request.invalid-query", "pageToken is not valid: start again without it"))
+			h.writeError(
+				ctx,
+				w,
+				problem.BadRequest("request.invalid-query", "pageToken is not valid: start again without it"),
+			)
 
 			return
 		}
@@ -657,7 +663,7 @@ func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) 
 	if raw := r.URL.Query().Get("showSecrets"); raw != "" {
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
-			return opts, badRequest("request.invalid-query", "showSecrets must be true or false")
+			return opts, problem.BadRequest("request.invalid-query", "showSecrets must be true or false")
 		}
 
 		opts.Reveal = b
@@ -666,7 +672,7 @@ func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) 
 	if revision != "" && revision != "latest" {
 		n, err := strconv.Atoi(revision)
 		if err != nil || n < 1 {
-			return opts, badRequest("request.invalid-path", "revision must be a number of 1 or more, or latest")
+			return opts, problem.BadRequest("request.invalid-path", "revision must be a number of 1 or more, or latest")
 		}
 
 		opts.Revision = n

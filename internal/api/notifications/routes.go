@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -281,7 +282,7 @@ func (h *Handler) serveKeyed(
 }
 
 // errIdempotencyKey is the answer to a key on a route that does not take it.
-var errIdempotencyKey = badRequest(
+var errIdempotencyKey = problem.BadRequest(
 	"request.idempotency-key-unsupported",
 	"this route does not take the Idempotency-Key header: send the request without it",
 )
