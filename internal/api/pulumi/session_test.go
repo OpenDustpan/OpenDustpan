@@ -22,13 +22,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
-// aliceSessions accepts every session as the session of corp:alice.
-type aliceSessions struct{}
+// aliceSessions accepts every session as the session of corp:alice. The
+// sign-in of the session is age old: a negative age is a sign-in after now.
+type aliceSessions struct {
+	age time.Duration
+}
 
-func (aliceSessions) Authenticate(context.Context, session.Secret) (session.Match, error) {
+func (a aliceSessions) Authenticate(context.Context, session.Secret) (session.Match, error) {
 	return session.Match{
 		Session: session.Session{
-			CreatedAt: time.Time{}, LastSeenAt: time.Time{}, AuthTime: time.Time{}, EndedAt: time.Time{},
+			CreatedAt: time.Time{}, LastSeenAt: time.Time{}, AuthTime: time.Now().Add(-a.age), EndedAt: time.Time{},
 			ID: "ses-1", PrincipalID: "prn-1", Provider: "corp", EndReason: "", SourceIP: "", UserAgent: "",
 		},
 		Owner: session.Owner{
@@ -42,11 +45,18 @@ func (aliceSessions) Authenticate(context.Context, session.Secret) (session.Matc
 }
 
 // aliceChecker returns a session cookie check that takes every session as
-// the session of corp:alice.
+// the session of corp:alice, who signed in just now.
 func aliceChecker(t *testing.T) *sessionauth.Checker {
 	t.Helper()
 
-	c, err := sessionauth.New(aliceSessions{}, []string{"https://dustpan.example"})
+	return aliceCheckerSignedIn(t, 0)
+}
+
+// aliceCheckerSignedIn is aliceChecker for a sign-in that is age old.
+func aliceCheckerSignedIn(t *testing.T, age time.Duration) *sessionauth.Checker {
+	t.Helper()
+
+	c, err := sessionauth.New(aliceSessions{age: age}, []string{"https://dustpan.example"})
 	if err != nil {
 		t.Fatalf("session check: %v", err)
 	}

@@ -170,7 +170,7 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 		t.Fatalf("key wrapper: %v", err)
 	}
 
-	srv, err := dustpan.NewServer(
+	srv, err := dustpan.NewServer(append(signInOptions(t, st),
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -187,10 +187,12 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 		dustpan.WithIPAllowlists(true),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithClock(func() time.Time { return time.Unix(0, 0).UTC() }),
-	)
+	)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+
+	registerServer(srv, st, func() time.Time { return time.Unix(0, 0).UTC() })
 
 	return srv
 }
@@ -210,6 +212,12 @@ func serveIPAllowlistAccess(
 	)
 	req.RemoteAddr = "198.51.100.7:1234"
 	req.Header.Set("Authorization", "Bearer "+token)
+
+	// A change of a list needs a console session with a recent sign-in: the
+	// installation administrator signs in as the person of its token.
+	if token == instAdminToken && needsConsole(method, req.URL.Path) {
+		addConsole(t, srv, req, "prn-instadmin")
+	}
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)

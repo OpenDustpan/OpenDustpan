@@ -652,7 +652,7 @@ func (h *Handler) write(w http.ResponseWriter, r *http.Request, p identity.Princ
 
 // readOptions reads the revision path value and the showSecrets query value.
 func readOptions(r *http.Request, revision string) (profile.ReadOptions, error) {
-	opts := profile.ReadOptions{Revision: 0, Reveal: false}
+	opts := profile.ReadOptions{Fresh: nil, Revision: 0, Reveal: false}
 
 	if raw := r.URL.Query().Get("showSecrets"); raw != "" {
 		b, err := strconv.ParseBool(raw)
@@ -695,6 +695,10 @@ func (h *Handler) readView(
 
 		return nil
 	}
+
+	// A reveal needs a console session with a recent sign-in. The service runs
+	// the check after profile:open, so a refused reveal writes its entry.
+	opts.Fresh = func() error { return h.checkFresh(r) }
 
 	view, err := h.profiles.Read(ctx, actorOf(r, p), target, opts)
 	if err != nil {

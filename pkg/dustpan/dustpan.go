@@ -1119,12 +1119,12 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	api, err := newPulumiHandler(svc, cfg, base, observed, gate)
+	api, err := newPulumiHandler(svc, cfg, observed, pulumiDeps{base: base, gate: gate, policies: sessionPolicies})
 	if err != nil {
 		return adapters{}, err
 	}
 
-	neutral, err := newNeutralHandlers(svc, cfg, observed)
+	neutral, err := newNeutralHandlers(svc, cfg, observed, sessionPolicies)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -1134,7 +1134,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base, observed, gate)
+	tfeAPI, err := newTFEHandler(cfg, svc, observed, tfeDeps{base: base, gate: gate, policies: sessionPolicies})
 	if err != nil {
 		return adapters{}, err
 	}
@@ -1190,7 +1190,9 @@ type neutralHandlers struct {
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
 // context API.
-func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMetrics) (neutralHandlers, error) {
+func newNeutralHandlers(
+	svc services, cfg *settings, observed *metrics.ServerMetrics, policies *session.Policies,
+) (neutralHandlers, error) {
 	onFailure := func() { observed.IncAuditAppendFailure() }
 
 	units, err := newInventoryHandler(svc, cfg, onFailure)
@@ -1212,7 +1214,7 @@ func newNeutralHandlers(svc services, cfg *settings, observed *metrics.ServerMet
 	if err != nil {
 		return neutralHandlers{}, err
 	}
-	profiles, err := newProfileHandler(svc, cfg, onFailure)
+	profiles, err := newProfileHandler(svc, cfg, onFailure, policies)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1326,14 +1328,25 @@ func newMaintenance(
 	return maint, watcher, nil
 }
 
+// tfeDeps are the shared parts that the TFE-compatible API takes besides the
+// settings, the services and the metrics: the external base URL, the body gate
+// and the session policy service, nil for a store with no session policy.
+type tfeDeps struct {
+	base     baseurl.Resolver
+	gate     *bodygate.Gate
+	policies *session.Policies
+}
+
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
 // to. base reports the external base URL for absolute URLs. observed counts
 // failed audit appends: the reveal call, the state download and the single
 // output route fail closed with a 500 when the append fails, so the counter
 // is the alert for lost entries.
 func newTFEHandler(
-	cfg *settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+	cfg *settings, svc services, observed *metrics.ServerMetrics, deps tfeDeps,
 ) (*tfe.Handler, error) {
+	base, gate, policies := deps.base, deps.gate, deps.policies
+
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
@@ -1344,10 +1357,18 @@ func newTFEHandler(
 		return nil, err
 	}
 
+	// A nil *session.Policies must not become a non-nil interface.
+	var sessionPolicy tfe.SessionPolicy
+	if policies != nil {
+		sessionPolicy = policies
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Registry:      registryProtocol,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
+		SessionPolicy: sessionPolicy,
 		AddressGate:   allowlistAddressGate(cfg.ipAllowlists),
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
@@ -2242,16 +2263,33 @@ func isLoopbackListenAddr(addr string) bool {
 	return ip.IsLoopback()
 }
 
+// pulumiDeps are the shared parts that the Pulumi CLI API takes besides the
+// domain services: the base URL resolver, the body gate and the session
+// policy service. The policy service is nil for a store with no sessions.
+type pulumiDeps struct {
+	base     baseurl.Resolver
+	gate     *bodygate.Gate
+	policies *session.Policies
+}
+
 // newPulumiHandler builds the Pulumi CLI API from the domain services.
 // observed counts failed audit appends: the decrypt audit routes still
 // answer 204 when the append fails, so the counter is the alert for lost
 // entries.
 func newPulumiHandler(
-	svc services, cfg *settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+	svc services, cfg *settings, observed *metrics.ServerMetrics, deps pulumiDeps,
 ) (http.Handler, error) {
+	base, gate, policies := deps.base, deps.gate, deps.policies
+
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
+	}
+
+	// A nil *session.Policies must not become a non-nil interface.
+	var sessionPolicy pulumi.SessionPolicy
+	if policies != nil {
+		sessionPolicy = policies
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
@@ -2262,6 +2300,7 @@ func newPulumiHandler(
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
 		Sessions:             cfg.sessionCookies,
+		SessionPolicy:        sessionPolicy,
 		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,
@@ -2374,7 +2413,9 @@ func newContextHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 
 // newProfileHandler builds the profile API, or returns nil when no profile
 // store is set.
-func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+func newProfileHandler(
+	svc services, cfg *settings, onFailure func(), policies *session.Policies,
+) (http.Handler, error) {
 	if cfg.profileStore == nil {
 		return nil, nil //nolint:nilnil // No profile API: no profile store is set.
 	}
@@ -2401,8 +2442,15 @@ func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 		return nil, err
 	}
 
+	// A nil *session.Policies must not become a non-nil interface.
+	var sessionPolicy profileapi.SessionPolicy
+	if policies != nil {
+		sessionPolicy = policies
+	}
+
 	handler, err := profileapi.NewHandler(profileapi.Config{
 		Idempotency:   idem,
+		SessionPolicy: sessionPolicy,
 		Profiles:      profiles,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,

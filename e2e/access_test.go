@@ -86,7 +86,7 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -612,6 +612,8 @@ func checkGrantRoutes(ctx context.Context, t *testing.T, env *e2e.Env, k grantKi
 	var list e2eGrantList
 	principalCall(ctx, t, env, principalStep{http.MethodGet, k.path + query, "", http.StatusOK}, &list)
 
+	list = withoutFreshAdmin(list)
+
 	if len(list.Grants) != 1 || list.Grants[0].ID != g.ID || list.Total != 1 || list.NextCursor != "" {
 		t.Fatalf("grants on %s = %+v, want %s alone", k.object, list, g.ID)
 	}
@@ -724,4 +726,24 @@ func checkUnitGrantNeedsTheUnit(ctx context.Context, t *testing.T, env *e2e.Env,
 		http.MethodPost, "/api/server/namespaces/grants/unit-grants?tool=pulumi&unit=api%2Fprod",
 		`{"subject":"` + subject + `","role":"viewer"}`, http.StatusNotFound,
 	}, nil)
+}
+
+// withoutFreshAdmin returns list without the grant of the site administrator
+// that the fresh sessions of the steps use.
+func withoutFreshAdmin(list e2eGrantList) e2eGrantList {
+	kept := list.Grants[:0:0]
+
+	for _, g := range list.Grants {
+		if g.ID == "grt-e2e-fresh-admin" {
+			list.Total--
+
+			continue
+		}
+
+		kept = append(kept, g)
+	}
+
+	list.Grants = kept
+
+	return list
 }

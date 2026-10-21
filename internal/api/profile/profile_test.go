@@ -22,12 +22,15 @@ import (
 	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -228,10 +231,18 @@ func buildFixtureWith(
 	idem := middleware(t, store, clock)
 
 	hcfg := apiprofile.Config{
-		Audit: nil, Namespaces: nil, OnAuditFailure: nil,
-		Profiles: svc, Authenticator: testAuthn{}, Authorizer: authz, Sessions: nil, Idempotency: idem,
-		Logger: slog.New(slog.DiscardHandler), Now: nil,
-		DenialLimiter: nil,
+		Audit:          nil,
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		Profiles:       svc,
+		Authenticator:  testAuthn{},
+		Authorizer:     authz,
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		Idempotency:    idem,
+		Logger:         slog.New(slog.DiscardHandler),
+		Now:            nil,
+		DenialLimiter:  nil,
 	}
 	if tweak != nil {
 		tweak(&hcfg, store, namespaces)
@@ -249,6 +260,9 @@ const base = "/api/dustpan/v1/namespaces/acme/profiles"
 
 // request is one call of a test.
 type request struct {
+	// session sends the request with a console session cookie and no
+	// Authorization header.
+	session bool
 	token   string
 	method  string
 	target  string
@@ -264,11 +278,20 @@ type response struct {
 }
 
 func get(token, target string) request {
-	return request{token: token, method: http.MethodGet, target: target, body: "", headers: nil}
+	return request{session: false, token: token, method: http.MethodGet, target: target, body: "", headers: nil}
 }
 
 func send(token, method, target, body string) request {
-	return request{token: token, method: method, target: target, body: body, headers: nil}
+	return request{session: false, token: token, method: method, target: target, body: body, headers: nil}
+}
+
+// inSession returns r as a request of the console session of the fixture,
+// with no access token.
+func (r request) inSession() request {
+	r.session = true
+	r.token = ""
+
+	return r
 }
 
 // withHeader returns r with one more header.
@@ -293,6 +316,19 @@ func (f fixture) do(t *testing.T, r request) response {
 	req := httptest.NewRequestWithContext(t.Context(), r.method, r.target, reader)
 	if r.token != "" {
 		req.Header.Set("Authorization", "token "+r.token)
+	}
+
+	if r.session {
+		cookieSecret, err := session.NewSecret()
+		if err != nil {
+			t.Fatalf("secret: %v", err)
+		}
+
+		req.AddCookie(&http.Cookie{
+			Name: sessionauth.Cookie, Value: cookieSecret.Reveal(), Path: "/", Secure: true, HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+		req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(cookieSecret))
 	}
 
 	for k, v := range r.headers {
@@ -427,13 +463,14 @@ func TestStoredRevisionHoldsTheSecretSealed(t *testing.T) {
 func TestRevealNeedsOpenAndIsAudited(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newSessionFixture(t, 0)
 	created := f.create(t, "aws-prod", secretDoc)
 	target := base + "/" + created.ID + "/revisions/1?showSecrets=true"
 
 	wantCode(t, "reveal without profile:open", f.do(t, get("reader", target)), http.StatusForbidden)
 
-	got := f.do(t, get("admin", target))
+	// A reveal needs a console session with a recent sign-in.
+	got := f.do(t, get("admin", target).inSession())
 	if got.code != http.StatusOK || !strings.Contains(got.body, "hunter2") ||
 		got.header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("reveal: %d %v %s", got.code, got.header, got.body)
@@ -445,11 +482,11 @@ func TestRevealNeedsOpenAndIsAudited(t *testing.T) {
 	}
 }
 
-// revealCount is the number of granted and denied reveal entries.
-type revealCount struct{ granted, denied int }
+// revealCount is the number of granted, denied and failed reveal entries.
+type revealCount struct{ granted, denied, failed int }
 
-// countReveals counts the granted and the denied reveal entries of the audit
-// log, and fails the test for an entry that holds the secret.
+// countReveals counts the granted, denied and failed reveal entries of the
+// audit log, and fails the test for an entry that holds the secret.
 func (f fixture) countReveals(t *testing.T) revealCount {
 	t.Helper()
 
@@ -458,24 +495,35 @@ func (f fixture) countReveals(t *testing.T) revealCount {
 		t.Fatalf("audit list: %v", err)
 	}
 
-	reveals, denied := 0, 0
+	var count revealCount
 
 	for i := range listing.Entries {
 		e := &listing.Entries[i]
-		if e.Kind == audit.KindReveal && e.Action == "profile:open" && e.Outcome == audit.OutcomeSuccess {
-			reveals++
-		}
-
-		if e.Kind == audit.KindReveal && e.Outcome == audit.OutcomeDenied && e.Subject == "reader" {
-			denied++
-		}
+		count.add(e)
 
 		if strings.Contains(fmt.Sprintf("%+v", *e), "hunter2") {
 			t.Errorf("audit entry holds the secret: %+v", *e)
 		}
 	}
 
-	return revealCount{granted: reveals, denied: denied}
+	return count
+}
+
+// add counts e when it is a reveal entry of the profile routes.
+func (c *revealCount) add(e *audit.Entry) {
+	if e.Kind != audit.KindReveal {
+		return
+	}
+
+	switch {
+	case e.Action == "profile:open" && e.Outcome == audit.OutcomeSuccess:
+		c.granted++
+	case e.Outcome == audit.OutcomeDenied && e.Subject == "reader":
+		c.denied++
+	case e.Action == "profile:open" && e.Outcome == audit.OutcomeFailure:
+		c.failed++
+	default:
+	}
 }
 
 func TestSaveNeedsIfMatch(t *testing.T) {
@@ -874,11 +922,153 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := apiprofile.NewHandler(apiprofile.Config{
-		Audit: nil, Namespaces: nil, OnAuditFailure: nil,
-		Profiles: nil, Authenticator: nil, Authorizer: nil, Sessions: nil, Idempotency: nil, Logger: nil, Now: nil,
-		DenialLimiter: nil,
+		Audit:          nil,
+		Namespaces:     nil,
+		OnAuditFailure: nil,
+		Profiles:       nil,
+		Authenticator:  nil,
+		Authorizer:     nil,
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		Idempotency:    nil,
+		Logger:         nil,
+		Now:            nil,
+		DenialLimiter:  nil,
 	})
 	if err == nil {
 		t.Error("NewHandler accepted an empty config")
+	}
+}
+
+// adminSessions accepts every session as the session of admin. The sign-in of
+// the session is age old: a negative age is a sign-in after now.
+type adminSessions struct {
+	age time.Duration
+}
+
+func (a adminSessions) Authenticate(context.Context, session.Secret) (session.Match, error) {
+	return session.Match{
+		Session: session.Session{
+			CreatedAt: time.Time{}, LastSeenAt: time.Time{}, AuthTime: time.Now().Add(-a.age), EndedAt: time.Time{},
+			ID: "ses-1", PrincipalID: "prn-1", Provider: "corp", EndReason: "", SourceIP: "", UserAgent: "",
+		},
+		Owner: session.Owner{
+			ActiveAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "admin", DisplayName: "Admin",
+			Kind: principal.KindPerson, BreakGlass: false,
+		},
+		Digest:   session.Digest{},
+		Policy:   session.DefaultPolicy(),
+		Accounts: session.AccountPolicy{Inactivity: 0, DisableAccounts: false},
+	}, nil
+}
+
+// newSessionFixture returns a handler that takes the console session cookie.
+// The session of admin signed in age ago.
+func newSessionFixture(t *testing.T, age time.Duration) fixture {
+	t.Helper()
+
+	return buildFixtureWith(t, keyMiddleware,
+		func(cfg *apiprofile.Config, _ *sqlite.Store, _ *namespace.Service) {
+			checker, err := sessionauth.New(adminSessions{age: age}, []string{"https://dustpan.example"})
+			if err != nil {
+				t.Fatalf("session check: %v", err)
+			}
+
+			cfg.Sessions = checker
+		})
+}
+
+// revealFresh is one case of TestRevealNeedsAFreshAuthentication.
+type revealFresh struct {
+	name       string
+	token      bool
+	age        time.Duration
+	wantStatus int
+	wantPath   string
+}
+
+// TestRevealNeedsAFreshAuthentication proves a reveal refuses an access token
+// with 403 and mfa.fresh-step-required, a console session with an old sign-in
+// or a sign-in after now with 401 and the path of a new sign-in, and answers a
+// session with a recent sign-in. Each refusal answers no value and writes one
+// entry of the kind reveal with the outcome failure.
+func TestRevealNeedsAFreshAuthentication(t *testing.T) {
+	t.Parallel()
+
+	const newSignIn = "/api/server/sign-in/corp?fresh=1"
+
+	for _, tc := range []revealFresh{
+		{name: "access token", token: true, age: 0, wantStatus: http.StatusForbidden, wantPath: ""},
+		{name: "old sign-in", token: false, age: time.Hour, wantStatus: http.StatusUnauthorized, wantPath: newSignIn},
+		{
+			name: "sign-in after now", token: false, age: -time.Hour, wantStatus: http.StatusUnauthorized,
+			wantPath: newSignIn,
+		},
+		{name: "recent sign-in", token: false, age: time.Minute, wantStatus: http.StatusOK, wantPath: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkRevealFresh(t, tc)
+		})
+	}
+}
+
+func checkRevealFresh(t *testing.T, tc revealFresh) {
+	t.Helper()
+
+	f := newSessionFixture(t, tc.age)
+	created := f.create(t, "aws-prod", secretDoc)
+	target := base + "/" + created.ID + "/revisions/1?showSecrets=true"
+
+	req := get("admin", target)
+	if !tc.token {
+		req = req.inSession()
+	}
+
+	got := f.do(t, req)
+	wantCode(t, "reveal", got, tc.wantStatus)
+
+	count := f.countReveals(t)
+
+	if tc.wantStatus == http.StatusOK {
+		if count.granted != 1 || count.failed != 0 {
+			t.Errorf("reveal entries = %+v, want 1 granted", count)
+		}
+
+		return
+	}
+
+	checkRevealRefusal(t, tc, got)
+
+	if count.granted != 0 || count.failed != 1 {
+		t.Errorf("reveal entries = %+v, want 1 failed and none granted", count)
+	}
+}
+
+// checkRevealRefusal proves a refused reveal: no-store, the error code, the
+// path of a new sign-in, and no secret.
+func checkRevealRefusal(t *testing.T, tc revealFresh, got response) {
+	t.Helper()
+
+	if got.header.Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got.header.Get("Cache-Control"))
+	}
+
+	var body struct {
+		ErrorCode      string `json:"errorCode"`
+		Reauthenticate string `json:"reauthenticate"`
+		Code           int    `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(got.body), &body); err != nil {
+		t.Fatalf("decode %q: %v", got.body, err)
+	}
+
+	if body.ErrorCode != "mfa.fresh-step-required" || body.Reauthenticate != tc.wantPath || body.Code != tc.wantStatus {
+		t.Errorf("body = %+v, want errorCode mfa.fresh-step-required, reauthenticate %q, code %d", body, tc.wantPath,
+			tc.wantStatus)
+	}
+
+	if strings.Contains(got.body, "hunter2") {
+		t.Errorf("refusal holds the secret: %s", got.body)
 	}
 }

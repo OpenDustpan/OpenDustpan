@@ -593,6 +593,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 updates,
@@ -2817,6 +2818,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	_, err = pulumi.NewHandler(pulumi.Config{
+		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
 		Stacks:                  stacks,
 		Updates:                 updates,

@@ -132,8 +132,9 @@ here.
 A change needs a console session with a recent sign-in. If the sign-in is older
 than the freshness window of the installation, the server answers 401 with the
 path of a new sign-in, and changes nothing. An access token never gives a
-recent sign-in: a change with an access token answers 403, changes nothing, and
-adds a failure entry to the audit log. A read works with an access token.
+recent sign-in: a change with an access token answers 403 with the error code
+`mfa.fresh-step-required`, changes nothing, and adds a failure entry to the
+audit log. A read works with an access token.
 
 ## Errors
 

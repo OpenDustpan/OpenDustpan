@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -191,17 +192,19 @@ func revealDisjointLargeState() string {
 	return revealLargeWrapper(attributes, sensitive)
 }
 
-// newRevealHandler builds a Handler with the reveal state and the audit
+// revealConfig returns the handler config with the reveal state and the audit
 // wiring under test.
-func newRevealHandler(
+func revealConfig(
 	t *testing.T, authz identity.Authorizer, store audit.Store, onFail func(), logger *slog.Logger,
-) *tfe.Handler {
+) tfe.Config {
 	t.Helper()
 
-	handler, err := tfe.NewHandler(tfe.Config{
+	return tfe.Config{
 		Registry:       nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
+		Sessions:       nil,
+		SessionPolicy:  nil,
 		AddressGate:    nil,
 		Logger:         logger,
 		Namespaces:     newTestNamespaces(t),
@@ -213,7 +216,28 @@ func newRevealHandler(
 		OnAuditFailure: onFail,
 		DenialLimiter:  nil,
 		StateGuard:     nil,
-	})
+	}
+}
+
+// newRevealHandler builds a Handler with the reveal state and the audit
+// wiring under test. The console sessions of the handler signed in just now,
+// so a reveal from a session passes the fresh authentication check.
+func newRevealHandler(
+	t *testing.T, authz identity.Authorizer, store audit.Store, onFail func(), logger *slog.Logger,
+) *tfe.Handler {
+	t.Helper()
+
+	cfg := revealConfig(t, authz, store, onFail, logger)
+	cfg.Sessions = aliceChecker(t, 0)
+
+	return newRevealHandlerFrom(t, cfg)
+}
+
+// newRevealHandlerFrom builds a Handler from cfg.
+func newRevealHandlerFrom(t *testing.T, cfg tfe.Config) *tfe.Handler {
+	t.Helper()
+
+	handler, err := tfe.NewHandler(cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -259,18 +283,14 @@ func revealBody(t *testing.T, path string) string {
 	return string(raw)
 }
 
-// sendReveal sends one reveal request and returns the status, headers and
-// body.
+// sendReveal sends one reveal request from a console session that signed in
+// just now, and returns the status, headers and body. A reveal needs a
+// console session with a recent sign-in.
 func sendReveal(t *testing.T, handler *tfe.Handler, target, body string) (int, http.Header, string) {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(
-		requestid.WithContext(t.Context(), "req-reveal"),
-		http.MethodPost,
-		target,
-		strings.NewReader(body),
-	)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req := sessionPost(t, target, body)
+	req = req.WithContext(requestid.WithContext(req.Context(), "req-reveal"))
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -296,8 +316,8 @@ func TestRevealRouteDeclaresBothActions(t *testing.T) {
 			continue
 		}
 
-		if route.Scope != tfe.ScopeAuthorized {
-			t.Fatalf("route scope = %v, want authorized", route.Scope)
+		if route.Scope != tfe.ScopeConsole {
+			t.Fatalf("route scope = %v, want console", route.Scope)
 		}
 
 		if len(route.Actions) != 2 || route.Actions[0] != identity.ActionUnitRead ||
@@ -840,5 +860,128 @@ func TestRevealPathOverLimitAnswers422(t *testing.T) {
 
 	if status != http.StatusNotFound {
 		t.Fatalf("path at the limit answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+}
+
+// revealFresh is one case of TestRevealNeedsAFreshAuthentication.
+type revealFresh struct {
+	name       string
+	token      bool
+	age        time.Duration
+	wantStatus int
+	wantPath   string
+}
+
+// TestRevealNeedsAFreshAuthentication proves the reveal route refuses an
+// access token with 403 and mfa.fresh-step-required, a console session with
+// an old sign-in or a sign-in after now with 401 and the path of a new
+// sign-in, and answers a session with a recent sign-in. Each refusal answers
+// no value and writes one failure entry of the kind reveal.
+func TestRevealNeedsAFreshAuthentication(t *testing.T) {
+	t.Parallel()
+
+	const newSignIn = "/api/server/sign-in/corp?fresh=1"
+
+	for _, tc := range []revealFresh{
+		{name: "access token", token: true, age: 0, wantStatus: http.StatusForbidden, wantPath: ""},
+		{name: "old sign-in", token: false, age: time.Hour, wantStatus: http.StatusUnauthorized, wantPath: newSignIn},
+		{
+			name: "sign-in after now", token: false, age: -time.Hour, wantStatus: http.StatusUnauthorized,
+			wantPath: newSignIn,
+		},
+		{name: "recent sign-in", token: false, age: time.Minute, wantStatus: http.StatusOK, wantPath: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkRevealFresh(t, tc)
+		})
+	}
+}
+
+// revealRefusalError is one error of a refused reveal.
+type revealRefusalError struct {
+	Status string            `json:"status"`
+	Code   string            `json:"code"`
+	Meta   revealRefusalMeta `json:"meta"`
+}
+
+// revealRefusalMeta is the meta member of a refused reveal.
+type revealRefusalMeta struct {
+	Reauthenticate string `json:"reauthenticate"`
+}
+
+// revealRefusalDoc decodes the error of a refused reveal.
+type revealRefusalDoc struct {
+	Errors []revealRefusalError `json:"errors"`
+}
+
+func checkRevealFresh(t *testing.T, tc revealFresh) {
+	t.Helper()
+
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+	cfg := revealConfig(
+		t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, entries, nil, slog.New(slog.DiscardHandler),
+	)
+	cfg.Sessions = aliceChecker(t, tc.age)
+	handler := newRevealHandlerFrom(t, cfg)
+
+	target := "/api/v2/state-versions/sv-test123/actions/reveal"
+	body := revealBody(t, revealResultPath(t))
+
+	req := sessionPost(t, target, body)
+	if tc.token {
+		req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != tc.wantStatus {
+		t.Fatalf("reveal = %d %s, want %d", rec.Code, rec.Body.String(), tc.wantStatus)
+	}
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if tc.wantStatus == http.StatusOK {
+		if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeSuccess {
+			t.Fatalf("entries = %+v, want one success", entries.entries)
+		}
+
+		return
+	}
+
+	checkRevealRefusal(t, tc, rec)
+
+	if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeFailure ||
+		entries.entries[0].Kind != audit.KindReveal || entries.entries[0].ValuePath != "" {
+		t.Fatalf("entries = %+v, want one failure entry of the kind reveal with no path", entries.entries)
+	}
+}
+
+// checkRevealRefusal proves the body of a refused reveal: the error code, the
+// path of a new sign-in, and no secret value.
+func checkRevealRefusal(t *testing.T, tc revealFresh, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	var doc revealRefusalDoc
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil || len(doc.Errors) != 1 {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+
+	got := doc.Errors[0]
+	if got.Code != "mfa.fresh-step-required" || got.Status != strconv.Itoa(tc.wantStatus) ||
+		got.Meta.Reauthenticate != tc.wantPath {
+		t.Errorf("error = %+v, want code mfa.fresh-step-required, status %d, reauthenticate %q", got, tc.wantStatus,
+			tc.wantPath)
+	}
+
+	if strings.Contains(rec.Body.String(), "pw-s3cr3t") {
+		t.Fatalf("refusal holds the secret value: %s", rec.Body.String())
 	}
 }

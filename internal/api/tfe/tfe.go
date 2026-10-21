@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -245,6 +246,14 @@ type Config struct {
 	// Registry holds the settings of the provider registry protocol. A zero
 	// value serves no registry route.
 	Registry *RegistryConfig
+	// Sessions checks the console session cookie of a request with no
+	// Authorization header, on the routes that the console calls. Nil accepts
+	// access tokens only, so a route that needs a fresh authentication refuses
+	// every request.
+	Sessions *sessionauth.Checker
+	// SessionPolicy gives the token freshness window of the session policy.
+	// Nil means session.DefaultTokenFreshness.
+	SessionPolicy SessionPolicy
 	// StateGuard checks each write of state against the access limits and
 	// the gates of state.write. Nil means the server keeps no gates: no
 	// write is checked.
@@ -255,6 +264,8 @@ type Config struct {
 // discovery at /.well-known/terraform.json.
 type Handler struct {
 	authn          identity.Authenticator
+	sessions       *sessionauth.Checker
+	sessionPolicy  SessionPolicy
 	authz          identity.Authorizer
 	addressGate    AddressGate
 	logger         *slog.Logger
@@ -299,6 +310,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		registry:       reg,
 		authn:          cfg.Authenticator,
+		sessions:       cfg.Sessions,
+		sessionPolicy:  cfg.SessionPolicy,
 		authz:          cfg.Authorizer,
 		addressGate:    cfg.AddressGate,
 		logger:         cfg.Logger,
@@ -351,7 +364,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 
 	doc := jsonAPIDocument{
-		Errors: []jsonAPIError{{Status: "404", Code: "", Title: notFoundTitle, Detail: notFoundTitle}},
+		Errors: []jsonAPIError{{Status: "404", Code: "", Title: notFoundTitle, Detail: notFoundTitle, Meta: nil}},
 	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
@@ -468,6 +481,29 @@ func (h *Handler) entitlementSet(
 			Attributes: entitlementAttributes{Operations: false},
 		},
 	})
+}
+
+// authenticateRoute resolves the credential of a request to a principal. A
+// route of ScopeConsole takes the console session cookie when the request has
+// no Authorization header, and the Caller reports
+// it. Any other request uses the access token only, so a cookie never signs in
+// a route that the console does not call. A request with an Authorization
+// header never uses the cookie.
+func (h *Handler) authenticateRoute(
+	r *http.Request, scope Scope,
+) (identity.Principal, *sessionauth.Caller, error) {
+	if scope == ScopeConsole && r.Header.Get("Authorization") == "" {
+		p, caller, err := h.sessions.Authenticate(r)
+		if err != nil {
+			return p, nil, err
+		}
+
+		return p, &caller, nil
+	}
+
+	p, err := h.authenticate(r)
+
+	return p, nil, err
 }
 
 // authenticate resolves the "Authorization: Bearer <token>" header to a
