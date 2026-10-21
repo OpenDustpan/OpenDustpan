@@ -82,6 +82,8 @@ linters:
               desc: Use math/rand/v2 or crypto/rand.
             - pkg: io/ioutil
               desc: Deprecated; use io and os.
+            - pkg: golang.org/x/crypto/openpgp
+              desc: Deprecated and frozen, with its subpackages. Use github.com/ProtonMail/go-crypto/openpgp.
         clientgen:
           # The client generator and the client conformance suite read only
           # the published API description and talk to a server over HTTP.

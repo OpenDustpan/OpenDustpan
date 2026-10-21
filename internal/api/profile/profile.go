@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -290,7 +291,7 @@ func classifyAuth(err error) (problem, bool) {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return problem{status: http.StatusUnauthorized, code: "auth.unauthenticated", message: "unauthenticated"}, true
 	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
-		return problem{status: http.StatusForbidden, code: "auth.forbidden", message: err.Error()}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: err.Error()}, true
 	case errors.Is(err, errFreshStepRequired), errors.Is(err, profile.ErrFreshRequired):
 		// A request with no console session, or a reveal with no fresh
 		// authentication check: fail closed.
@@ -311,7 +312,7 @@ func classifyAuth(err error) (problem, bool) {
 	}
 
 	if errors.Is(err, identity.ErrDenied) {
-		return problem{status: http.StatusForbidden, code: "auth.forbidden", message: "forbidden"}, true
+		return problem{status: http.StatusForbidden, code: errcode.Forbidden(err), message: "forbidden"}, true
 	}
 
 	return problem{status: 0, code: "", message: ""}, false
