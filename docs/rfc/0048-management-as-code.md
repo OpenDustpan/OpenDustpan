@@ -12,13 +12,16 @@ CLI and the OpenTofu and Pulumi providers come now, from the published API
 description, with a version pin before 1.0. Unit settings are not kept in the
 repository. Ownership rules are managed as code through the providers. ADR 270
 also records the answers to questions 1 and 4 to 8, which the product manager
-decided under the owner's delegation of 20 October 2026. Question 2 has an
-answer now: RFC 99 amendment 1 records that OpenDustpan owns its client
-generator, so the generated layer needs no new dependency. Question 3 stays
-open, because it asks for a new repository, which needs the owner. This RFC
-stays `discussing` until the owner answers question 3. This change holds no client code. The section "The client
-port" holds the contract that the client code must meet when it lands in the
-repository that question 3 chooses.
+decided under the owner's delegation of 20 October 2026. Two questions have an
+answer from the owner. Question 2 is an owner decision: RFC 99 amendment 1
+records that OpenDustpan owns its client generator, so the generated layer
+needs no new dependency. Question 3a is an owner decision of 2026-10-20: the Go
+client library lives in its own repository, `client-go`. Question 3b is a
+decision of the product manager of 2026-10-20: each provider lives in its own
+repository, and the CLI stays in this repository for now. This RFC stays
+`discussing` until it is accepted. This change holds no client code. The
+section "The client port" holds the contract that the client code must meet
+when it lands in `client-go`.
 
 ## Problem
 
@@ -108,8 +111,8 @@ part is the order of work, because one pull request cannot hold them.
 | B. OpenTofu provider first | Most teams use OpenTofu or Terraform syntax already. | The port is first tested through a plugin protocol, which is a heavier test. |
 | C. All three at once | One release. | A large first change, and the port can be wrong in three places. |
 
-**Decided in ADR 270 decision 4: A.** The client port and the pin rule are tool-neutral, and
-the CLI exercises them without a plugin protocol. The providers then add only
+**Decided in ADR 270 decision 4: A.** The client port and the pin rule are
+tool-neutral, and the CLI exercises them without a plugin protocol. The providers then add only
 their protocol adapters (ADR 176). Every endpoint lands with its e2e step first
 (`CLAUDE.md`).
 
@@ -136,55 +139,61 @@ before the answer.
 
 **Recommendation: C.** The generated layer is the Go client of RFC 99 amendment
 1. It starts when the generator and `client-go` exist. Until then, the port
-contract in this RFC is the specification, and a hand-written adapter for the
-three first kinds is enough for the CLI and for the e2e tests. The
-hand-written adapter then follows ADR 264 decision 5 only in part. The first
-client waits for `client-go` if the owner does not accept a temporary
-hand-written adapter.
+contract in this RFC is the specification. Nobody writes a client by hand
+before the generator exists (decision of the product manager). The owner
+decided that OpenDustpan generates every client, and a temporary hand-written
+adapter would be a second client to remove. The first client waits for the
+generator and for `client-go`.
 
 Benchmark: Kubernetes `client-go` has generated clientsets and hand-written
 `rest` helpers. The AWS SDKs generate service clients from API models and keep
 a hand-written core for signing and retries. Both split the transport from the
 generated calls, as option C does.
 
-### 3. Where do the CLI and the providers live?
+### 3. Where do the client library, the CLI and the providers live?
 
 Facts. A provider is a client program that a workstation or a runner starts. It
 must not link the SQL drivers or the key code of the server (ADR 170 decision
 3 gives this reason for `providerkit`). `providerkit` is in its own repository
 with its own tags. Release archives for OpenTofu and for the Pulumi CLI come
-from one binary (ADR 177). RFC 99 amendment 1 puts the Go client in its own
-repository, `client-go`, with the module path `opendustpan.org/client`. It
-replaces the earlier proposal of `sdk/` in this repository.
+from one binary (ADR 177). `pkg/` is the server SDK (ADR 35), so client code
+does not go in `pkg/`.
+
+The question has two parts, because the owner has decided the first part.
+
+#### 3a. The Go client library
+
+**Decided by the owner on 2026-10-20 (RFC 99 amendment 1, decision O7).** The
+Go client library lives in its own repository, `opendustpan/client-go`, with
+the module path `opendustpan.org/client`. It is not a Go submodule of this
+repository. The owner's reason: Go submodules make releases messy. A separate
+repository adds a small step to each client change, so that a person thinks
+before they break the client. The client is outside the `go.mod` of the
+server. The CLI and the providers use the client from `client-go` in every
+option of question 3b.
+
+#### 3b. The CLI and the providers
 
 | Option | Gives | Costs |
 | --- | --- | --- |
-| A. In this repository, as separate Go modules | One pull request changes the API, the description, the SDK, the CLI and the provider. | The tags and the release page hold many products. A provider release follows the server release. |
-| B. One new repository for the CLI and both providers | The CLI and the providers share the client and the release. They have a version line of their own. The module does not hold server code. | An API change needs a pull request in two repositories. |
-| C. A repository for each product | Each has its own release page and tag. A registry that expects a repository name by convention can find it. | Three repositories for one client. |
+| A. The CLI in this repository. Each provider in its own repository. | The CLI changes with the API in one pull request, and it needs no new repository. Each provider has the release line that its registry expects. | An API change that touches a provider needs a pull request in another repository. |
+| B. One new repository for the CLI and both providers | The CLI and the providers share a release and a version line of their own. | A registry that expects one release line for each provider cannot use it (see the benchmark). |
+| C. A repository for each product, with the CLI too | Each has its own release page and tag. | Three repositories for thin layers over one client, and the CLI leaves the repository whose API it calls. |
 
-In every option the CLI and the providers use the client from `client-go`,
-so the client is outside the `go.mod` of the server. `pkg/` is the server SDK (ADR 35), so client code does not go in `pkg/` in
-either option.
-
-**Recommendation: B.** One repository, with the CLI and the provider core in
-different modules, and one release that builds the CLI, the OpenTofu archive and
-the Pulumi archive (ADR 177). B gives the client a tag line and a release page
-of its own, and it makes the rule that the client does not import server code
-a rule of the repository, not only of the module. A holds the same client in a
-separate module in this repository. A costs the shared tags and the shared
-release page, and it gains one pull request for an API change and its client.
+**Decided by the product manager on 2026-10-20 (rule 16): A.** The OpenTofu
+provider and the Pulumi provider each live in their own repository. The names
+follow the convention of each tool: `terraform-provider-<name>` for the
+OpenTofu registry, and `pulumi-<name>` for the Pulumi plugin download. The
+exact names are fixed when each repository is created, and the naming rules of
+each registry are checked at that time. The `dustpan` CLI stays in this
+repository for now. It calls the REST API through the client, and it imports no
+server package. To move the CLI to its own repository is a later decision.
 Before 1.0, a client release ships on the day of each server minor release,
 and it pins that minor version (question 8).
 
-**Open. This question needs the owner**, because the owner decides to create a
-repository. One check comes first: the naming rules of the OpenTofu registry
-(the repository name of a provider) and of the Pulumi plugin download (the
-repository and the release asset names). The result of this check is a
-precondition for the choice of the name. If a registry needs a repository for
-each provider, option C replaces B, and the shared client module stays.
-
-Benchmark: HashiCorp keeps `terraform-provider-tfe` and `go-tfe` in separate
+Benchmark: every published OpenTofu and Terraform provider has its own
+repository, and the registry protocol expects one release line for each
+provider. HashiCorp keeps `terraform-provider-tfe` and `go-tfe` in separate
 repositories. Pulumi keeps `pulumi-pulumiservice`, the provider for Pulumi
 Cloud, in a repository of its own, with its own release cadence, apart from the
 Pulumi CLI. The GitHub CLI is one repository apart from the GitHub servers.
@@ -398,10 +407,10 @@ before the RFC is accepted.
 
 ## The client port
 
-This section is the contract for the client code. It lands in the repository
-that question 3 chooses, with a conformance suite. The CLI and the providers
-call the port, and an adapter turns each call into a request to the REST API.
-The port imports no server package.
+This section is the contract for the client code. It lands in `client-go`
+(question 3a), with a conformance suite. The CLI and the providers call the
+port, and an adapter turns each call into a request to the REST API. The port
+imports no server package.
 
 ### Kinds and references
 
@@ -523,13 +532,14 @@ ownership rule routes sets them.
 ## Proposal
 
 1. Take ADR 270 as the decision of the owner and of the product manager.
-2. Build in this order: the server work in "Follow-up work", then the client
-   (a hand-written adapter for the three first kinds when the owner accepts
-   it, or the generated layer when `client-go` exists), the CLI,
-   the OpenTofu provider and the Pulumi provider.
-3. Question 3 waits for the owner. For question 3, present the registry
-   naming check as a precondition, and the rule that a client release ships on
-   the day of each server minor release.
+2. Build in this order: the server work in "Follow-up work", then the
+   generated client in `client-go` (no hand-written client comes first), the
+   CLI, the OpenTofu provider and the Pulumi provider.
+3. Create `client-go` (question 3a), and the repository of each provider when
+   its work starts (question 3b). Check the naming rules of each registry
+   when each repository is created. Keep the CLI in this repository, and keep
+   the rule that a client release ships on the day of each server minor
+   release.
 4. The e2e suite drives the real OpenTofu CLI and the real Pulumi CLI to
    create, update and delete a collection, an approval rule and an ownership
    rule, before any provider endpoint is claimed.
@@ -571,8 +581,8 @@ server work and block the first provider release in issue 967.
 - #1240: writes to gate configuration accept an access token for a change that
   does not weaken security, and answer `mfa.fresh-step-required` for one that
   does.
-- #1231 and #1233: the client and the CLI, and the providers, after the owner
-  answers questions 2 and 3.
+- #1231 and #1233: the client and the CLI, and the providers, after the
+  generator and `client-go` exist.
 - #1232: the e2e steps for the real OpenTofu CLI and the Pulumi CLI.
 - #1234: a later RFC for a step-up sign-in of a person in the CLI (question 6,
   option B). It must keep the rule that an access token never gives fresh

@@ -19,6 +19,9 @@ answer, the design that follows from it, and the answers of the product
 manager to four questions (A1 to A4, 2026-10-20). The first slice of the
 description is in `internal/api/apidesc`. The ports of the generator and of
 the conformance suite are in `internal/clientgen`, with no implementation.
+The version of a client follows rule A4, not a pin to the server version.
+"Consequences" says what this means for ADR 264 decision 4: the amendment
+ADR changes that decision.
 
 ## Problem
 
@@ -269,8 +272,8 @@ client, and they keep that word.
 - **Question 6** has an answer: the owner decisions below. The trial
   criteria of question 6 for third-party generators do not apply.
 - **Option 3 and proposal 8** no longer apply. The project picks no
-  third-party generator, so no generator needs approval. The generator is code of this
-  project under its own license.
+  third-party generator, so no generator needs approval. The generator is
+  code of this project under its own license.
 - **Option 4 and proposal 9** no longer apply. Each client has its own
   repository (decision O7). No client lives in `sdk/` of this repository.
 - **Proposal 7** stays, except for two sentences that this amendment
@@ -360,13 +363,18 @@ no standard HTTP or no standard JSON. Its README says why.
   of the Java plan in issue 1281 stays as the plan for when the work starts.
 - **Zig.** The owner said that Zig comes only if a generator path exists.
   With the generator of this project, a Zig client is one more template set,
-  so the generator meets that condition. Zig still waits until the API is stable.
+  so the generator meets that condition. Zig still waits until the API is
+  stable.
 
 **O7. One repository for each language (owner decision, 2026-10-20).** The
 first repository is `client-go`, with the module path
 `opendustpan.org/client`. Then come `client-python` and `client-node`. The
 npm packages go in the npm organization `opendustpan`. The project claims
-the PyPI name at the first real release.
+the PyPI name at the first real release. The owner's reasons: each language
+has its own release tooling and its own registry, and one repository for
+each language keeps them apart. A client change needs a pull request in a
+separate repository, and that extra step makes a person think before they
+break a client.
 
 ### The design of the generator
 
@@ -395,12 +403,13 @@ guesses its meaning.
 
 | Part | Constructs that the parser reads |
 | --- | --- |
-| Document | `openapi: 3.1.0`, `info` (`title`, `version`, `description`), `servers`, `tags`, `paths`, `components`, top-level `security` |
+| Document | `openapi: 3.1.0`, `info` (`title`, `version`, `description`), `servers` (items with `url`, `description`), `tags` (items with `name`, `description`), `paths`, `components`, top-level `security` (a list of requirements, each a map from a scheme name to a list of scopes) |
+| Components | `schemas`, `parameters`, `headers` and `securitySchemes`, and no other sub-key. A security scheme has `type: http`, `scheme: bearer` and `description`. A component header has `description` and `schema`. |
 | Operation | `operationId`, `tags`, `summary`, `description`, `parameters`, `requestBody`, `responses`, `security` (empty for a public route), `x-dustpan-actions` |
 | Parameter | `name`, `in`, `required`, `description` and `schema`. `in: path`, `in: query`, `in: header`. A `$ref` to `#/components/parameters/IdempotencyKey`, `IfMatch` or `IfMatchRequired`. A scalar schema, or an array of a scalar schema. |
 | Request body | `content` and `required`. `application/json` and `application/merge-patch+json`, each with one schema |
-| Response | `description`, `content` and `headers`. One success answer (a status code or `2XX`), `default` with a `$ref` to the error schema, the `ETag` header as a `$ref` to `#/components/headers/ETag` |
-| Schema | `type` `object`, `string`, `integer`, `number`, `boolean`, `array`. `properties`, `required`, `additionalProperties`, `items`, `enum`, `format`, `description`, `minLength`, `maxLength`. A local `$ref` to `#/components/schemas/...`. |
+| Response | `description`, `content` and `headers`. One success answer (a status code or `2XX`), `default` with a `$ref` to the error schema. A header object has `description` and `schema`, or a `$ref` to `#/components/headers/ETag`. |
+| Schema | `type` `object`, `string`, `integer`, `number`, `boolean`, `array`. `properties`, `required`, `additionalProperties` (`true`, or a schema), `items`, `enum`, `format`, `description`, `minLength`, `maxLength`. A local `$ref` to `#/components/schemas/...`. |
 | Nullable | `type: [X, "null"]`, and `oneOf: [{$ref}, {type: "null"}]` for a reference. No other multi-type schema. |
 | Open enum | `anyOf: [{$ref: <enum>}, {type: string}]`. A client keeps a value that it does not know, and does not fail. A nullable open enum adds a third branch, `{type: "null"}`. |
 | Error | `#/components/schemas/ErrorResponse` with `code`, `message`, `errorCode`, `errorArgs` |
@@ -410,6 +419,9 @@ shape, but the model does not hold them. A client takes its base URL from the
 caller, not from `servers`. A client does not check the length of a string,
 because the server does. The parser refuses a document larger than 8 MiB
 (8388608 bytes).
+A test in `internal/clientgen` holds the key allowlist of this table and
+checks that every key of the published description is in it. It runs before
+the parser exists, so the table cannot drift from the description.
 
 The subset grows only in a pull request that adds the construct to the
 parser, to the golden files and, where the construct changes behavior on the
@@ -441,7 +453,7 @@ matches an allowlist:
 | Field | camelCase: `[a-z][A-Za-z0-9]*` |
 | Path parameter | the name of a path wildcard: `[a-z_][a-z0-9_]*`, for example `unit_id` |
 | Query parameter | camelCase: `[a-z][A-Za-z0-9]*`, for example `pageSize` |
-| Enum value | `[a-z0-9][a-z0-9._:-]*` |
+| Enum value | camelCase with separators: `[a-z][a-zA-Z0-9]*([._:-][a-zA-Z0-9]+)*`. Wire values are camelCase (ADR 210), for example `onCall`, `resourcePolicy` and `externalChecks`. Some values hold a separator, for example `awaiting-approval`. |
 
 A header parameter has one of the fixed names `Idempotency-Key` and
 `If-Match`. A path parameter keeps its snake_case wire name, and the template

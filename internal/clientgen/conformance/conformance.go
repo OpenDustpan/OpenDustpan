@@ -223,6 +223,7 @@ type Fault struct {
 	ContentType string
 	// RetryAfter is the Retry-After header of FaultStatus, for example 1, or
 	// empty for none.
+	RetryAfter string
 	// Field is a JSON pointer into the answer for FaultAddField and
 	// FaultEnumValue.
 	Field string
