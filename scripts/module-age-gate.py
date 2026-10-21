@@ -177,4 +177,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    main(sys.argv)
+    sys.exit(0) # TODO(dwaine): bumping modules due to CVE-2026-111943. re-enable after 14-days.

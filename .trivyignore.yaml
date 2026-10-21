@@ -15,3 +15,16 @@ misconfigurations:
       The default image is ghcr.io/opendustpan/opendustpan, the registry of
       this project. The check trusts a fixed list of registries that does
       not hold it. The operator sets image.repository and image.digest.
+
+vulnerabilities:
+  # TODO: Remove this entry when the Trivy database marks the removal of
+  # golang.org/x/crypto/openpgp as fixed. Until then, check by hand that
+  # go.mod keeps golang.org/x/crypto at a version without the openpgp
+  # package, so that a downgrade does not bring the advisory back unseen.
+  - id: GO-2026-5932
+    paths:
+      - "go.mod"
+    statement: >-
+      The advisory covers golang.org/x/crypto/openpgp. The pinned x/crypto
+      version has no openpgp package, and no code in this repository imports
+      it. The database lists no fixed version for the removal.
