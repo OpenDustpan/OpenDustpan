@@ -4,8 +4,9 @@
 -- system is the empty text for a provider. archives_json holds the archives of
 -- the release in the order of the archive set. The bytes of the archives are
 -- blobs under the prefix of the namespace, not rows. published_by is the ID of
--- the principal that published the release, and it is not a foreign key
--- because a release outlives the principal.
+-- the subject of the principal that published the release. protocols holds the
+-- plugin protocol versions of a provider, joined by commas, and it is the empty
+-- text for a module.
 CREATE TABLE registry_releases (
     namespace_id     text    NOT NULL REFERENCES namespaces (id),
     kind             text    NOT NULL,
@@ -17,6 +18,7 @@ CREATE TABLE registry_releases (
     signature_file   text    NOT NULL,
     signature_sha256 text    NOT NULL,
     key_fingerprint  text    NOT NULL,
+    protocols        text    NOT NULL,
     published_by     text    NOT NULL,
     archives_json    text    NOT NULL,
     published_at_ms  bigint  NOT NULL,

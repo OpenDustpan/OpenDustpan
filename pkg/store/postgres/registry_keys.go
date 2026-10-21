@@ -61,7 +61,6 @@ func (k registryKeys) AddKey(ctx context.Context, rec registry.KeyRecord, fence 
 		return err
 	}
 
-
 	return k.s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		row, err := q.GetRegistryKey(ctx, db.GetRegistryKeyParams{
 			Namespace: rec.Namespace.String(), Fingerprint: rec.Key.Fingerprint,
@@ -116,7 +115,6 @@ func (k registryKeys) RemoveKey(
 		return err
 	}
 
-
 	return k.s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		n, err := q.DeleteRegistryKey(ctx, db.DeleteRegistryKeyParams{Namespace: ns.String(), Fingerprint: fingerprint})
 		if err != nil {
@@ -140,7 +138,6 @@ func (k registryKeys) Keys(ctx context.Context, ns namespace.Name) ([]registry.K
 	if _, err := namespace.ParseName(ns.String()); err != nil {
 		return nil, fmt.Errorf("list registry keys: %w: namespace: %w", registry.ErrInvalid, err)
 	}
-
 
 	rows, err := k.s.queries.ListRegistryKeys(ctx, ns.String())
 	if err != nil {

@@ -9,6 +9,7 @@ package registrytest
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -76,6 +77,7 @@ func provider(name, version string) registry.Release {
 		SignatureFile:   "terraform-provider-" + name + "_" + version + "_SHA256SUMS.sig",
 		SignatureSHA256: sumB,
 		KeyFingerprint:  fingerprint,
+		Protocols:       []string{"5.0"},
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
 		Archives: []registry.Archive{{
@@ -147,6 +149,8 @@ func storeCases() []storeCase {
 		{"an identical repeat writes no audit entry", testAuditOnRepeat},
 		{"get returns a copy", testGetCopy},
 		{"a signature is kept and counts as content", testSignature},
+		{"the plugin protocols are kept and count as content", testProtocols},
+		{"a provider with bad plugin protocols is refused", testBadProtocols},
 		{"an unsigned provider is refused", testUnsignedProvider},
 		{"list orders by semantic version precedence", testListOrder},
 		{"addresses lists each address once", testAddresses},
@@ -475,6 +479,50 @@ func testSignature(t *testing.T, h Harness) {
 
 	if err := h.Store.Publish(t.Context(), other, f, entry(acme)); !errors.Is(err, registry.ErrVersionExists) {
 		t.Fatalf("Publish with another signature = %v, want ErrVersionExists", err)
+	}
+}
+
+func testProtocols(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, acme)
+	r := provider("payments", v100)
+	r.Protocols = []string{"5.0", "6.0"}
+	mustPublish(t, h, r, f)
+
+	got, err := h.Store.Get(t.Context(), r.Address, v100)
+	if err != nil || !slices.Equal(got.Protocols, []string{"5.0", "6.0"}) {
+		t.Fatalf("Get = %+v, %v; want the protocols 5.0 and 6.0", got, err)
+	}
+
+	other := r
+	other.Protocols = []string{"5.0"}
+
+	if err := h.Store.Publish(t.Context(), other, f, entry(acme)); !errors.Is(err, registry.ErrVersionExists) {
+		t.Fatalf("Publish with other protocols = %v, want ErrVersionExists", err)
+	}
+}
+
+func testBadProtocols(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := h.Namespace(t, acme)
+
+	for name, protocols := range map[string][]string{
+		"none":          nil,
+		"empty text":    {""},
+		"not a version": {"five"},
+		"with a comma":  {"5.0,6.0"},
+		"repeated":      {"5.0", "5.0"},
+		"falling":       {"6.0", "5.0"},
+		"too many":      {"1.0", "2.0", "3.0", "4.0", "5.0"},
+	} {
+		r := provider("payments", v100)
+		r.Protocols = protocols
+
+		if err := h.Store.Publish(t.Context(), r, f, entry(acme)); !errors.Is(err, registry.ErrInvalid) {
+			t.Fatalf("%s: Publish = %v, want ErrInvalid", name, err)
+		}
 	}
 }
 

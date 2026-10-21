@@ -17,7 +17,7 @@ func sqliteRegistryBackupTables() []sqliteBackupTable {
 			table: "registry_releases",
 			columns: []string{
 				backupColNamespaceID, "kind", backupColName, "system", "version", "sums_file", "sums_sha256",
-				"signature_file", "signature_sha256", "key_fingerprint", "published_by", "archives_json",
+				"signature_file", "signature_sha256", "key_fingerprint", "protocols", "published_by", "archives_json",
 				"published_at_ms",
 			},
 		},
@@ -37,7 +37,7 @@ func sqliteRegistryBackupTables() []sqliteBackupTable {
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedRegistryReleases(ctx context.Context, conn *sql.DB) error {
 	const query = `SELECT n.name, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
 FROM registry_releases AS r LEFT JOIN namespaces AS n ON n.id = r.namespace_id`
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -56,7 +56,7 @@ FROM registry_releases AS r LEFT JOIN namespaces AS n ON n.id = r.namespace_id`
 		)
 
 		scanErr := rows.Scan(&namespace, &row.Kind, &row.Name, &row.System, &row.Version, &row.SumsFile,
-			&row.SumsSHA256, &row.SignatureFile, &row.SignatureSHA256, &row.KeyFingerprint, &row.PublishedBy,
+			&row.SumsSHA256, &row.SignatureFile, &row.SignatureSHA256, &row.KeyFingerprint, &row.Protocols, &row.PublishedBy,
 			&row.ArchivesJSON, &row.PublishedAtMs)
 		if scanErr != nil {
 			return fmt.Errorf("read staged registry releases: %w", backup.ErrExportRead)

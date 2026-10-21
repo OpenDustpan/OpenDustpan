@@ -5626,7 +5626,7 @@ func (q *Queries) GetRegistryKey(ctx context.Context, arg GetRegistryKeyParams) 
 
 const getRegistryRelease = `-- name: GetRegistryRelease :one
 SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = $1 AND r.kind = $2 AND r.name = $3
@@ -5652,6 +5652,7 @@ type GetRegistryReleaseRow struct {
 	SignatureFile   string
 	SignatureSha256 string
 	KeyFingerprint  string
+	Protocols       string
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64
@@ -5677,6 +5678,7 @@ func (q *Queries) GetRegistryRelease(ctx context.Context, arg GetRegistryRelease
 		&i.SignatureFile,
 		&i.SignatureSha256,
 		&i.KeyFingerprint,
+		&i.Protocols,
 		&i.PublishedBy,
 		&i.ArchivesJson,
 		&i.PublishedAtMs,
@@ -7928,13 +7930,13 @@ func (q *Queries) InsertRegistryKey(ctx context.Context, arg InsertRegistryKeyPa
 const insertRegistryRelease = `-- name: InsertRegistryRelease :execrows
 INSERT INTO registry_releases (
     namespace_id, kind, name, system, version, sums_file, sums_sha256, signature_file, signature_sha256,
-    key_fingerprint, published_by, archives_json, published_at_ms
+    key_fingerprint, protocols, published_by, archives_json, published_at_ms
 )
 VALUES (
     (SELECT n.id FROM namespaces AS n WHERE n.name = $1), $2, $3,
     $4, $5, $6, $7, $8,
-    $9, $10, $11, $12,
-    $13
+    $9, $10, $11, $12, $13,
+    $14
 )
 ON CONFLICT (namespace_id, kind, name, system, version) DO NOTHING
 `
@@ -7950,6 +7952,7 @@ type InsertRegistryReleaseParams struct {
 	SignatureFile   string
 	SignatureSha256 string
 	KeyFingerprint  string
+	Protocols       string
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64
@@ -7969,6 +7972,7 @@ func (q *Queries) InsertRegistryRelease(ctx context.Context, arg InsertRegistryR
 		arg.SignatureFile,
 		arg.SignatureSha256,
 		arg.KeyFingerprint,
+		arg.Protocols,
 		arg.PublishedBy,
 		arg.ArchivesJson,
 		arg.PublishedAtMs,
@@ -10982,7 +10986,7 @@ func (q *Queries) ListRegistryKeys(ctx context.Context, namespace string) ([]Lis
 
 const listRegistryReleases = `-- name: ListRegistryReleases :many
 SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = $1 AND r.kind = $2 AND r.name = $3
@@ -11008,6 +11012,7 @@ type ListRegistryReleasesRow struct {
 	SignatureFile   string
 	SignatureSha256 string
 	KeyFingerprint  string
+	Protocols       string
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64
@@ -11039,6 +11044,7 @@ func (q *Queries) ListRegistryReleases(ctx context.Context, arg ListRegistryRele
 			&i.SignatureFile,
 			&i.SignatureSha256,
 			&i.KeyFingerprint,
+			&i.Protocols,
 			&i.PublishedBy,
 			&i.ArchivesJson,
 			&i.PublishedAtMs,

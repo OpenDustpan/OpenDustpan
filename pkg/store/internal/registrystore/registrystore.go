@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -32,9 +33,12 @@ type Row struct {
 	SignatureFile   string
 	SignatureSHA256 string
 	KeyFingerprint  string
-	PublishedBy     string
-	ArchivesJSON    string
-	PublishedAtMs   int64
+	// Protocols holds the plugin protocol versions joined by commas, or the
+	// empty text for a module.
+	Protocols     string
+	PublishedBy   string
+	ArchivesJSON  string
+	PublishedAtMs int64
 }
 
 type archiveDoc struct {
@@ -85,6 +89,22 @@ func decodeArchives(s string) ([]registry.Archive, error) {
 	return out, nil
 }
 
+// JoinProtocols returns the text form of the plugin protocol versions of a
+// release: the versions joined by commas.
+func JoinProtocols(protocols []string) string {
+	return strings.Join(protocols, ",")
+}
+
+// splitProtocols reads the text that JoinProtocols wrote. The empty text is no
+// protocol.
+func splitProtocols(s string) []string {
+	if s == "" {
+		return nil
+	}
+
+	return strings.Split(s, ",")
+}
+
 // Release returns the release that row holds. It runs the checks of a new
 // release again and returns ErrCorrupt for a row that fails them.
 func Release(row Row) (registry.Release, error) {
@@ -109,6 +129,7 @@ func Release(row Row) (registry.Release, error) {
 		SignatureFile:   row.SignatureFile,
 		SignatureSHA256: row.SignatureSHA256,
 		KeyFingerprint:  row.KeyFingerprint,
+		Protocols:       splitProtocols(row.Protocols),
 		PublishedBy:     row.PublishedBy,
 		Archives:        archives,
 	}

@@ -3685,19 +3685,19 @@ ORDER BY v.id COLLATE "C";
 -- address and version is not written.
 INSERT INTO registry_releases (
     namespace_id, kind, name, system, version, sums_file, sums_sha256, signature_file, signature_sha256,
-    key_fingerprint, published_by, archives_json, published_at_ms
+    key_fingerprint, protocols, published_by, archives_json, published_at_ms
 )
 VALUES (
     (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(kind), sqlc.arg(name),
     sqlc.arg(system), sqlc.arg(version), sqlc.arg(sums_file), sqlc.arg(sums_sha256), sqlc.arg(signature_file),
-    sqlc.arg(signature_sha256), sqlc.arg(key_fingerprint), sqlc.arg(published_by), sqlc.arg(archives_json),
+    sqlc.arg(signature_sha256), sqlc.arg(key_fingerprint), sqlc.arg(protocols), sqlc.arg(published_by), sqlc.arg(archives_json),
     sqlc.arg(published_at_ms)
 )
 ON CONFLICT (namespace_id, kind, name, system, version) DO NOTHING;
 
 -- name: GetRegistryRelease :one
 SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc.arg(name)
@@ -3706,7 +3706,7 @@ WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc
 -- name: ListRegistryReleases :many
 -- The caller orders the rows by version precedence.
 SELECT n.name AS namespace, r.kind, r.name, r.system, r.version, r.sums_file, r.sums_sha256, r.signature_file,
-    r.signature_sha256, r.key_fingerprint, r.published_by, r.archives_json, r.published_at_ms
+    r.signature_sha256, r.key_fingerprint, r.protocols, r.published_by, r.archives_json, r.published_at_ms
 FROM registry_releases AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.kind = sqlc.arg(kind) AND r.name = sqlc.arg(name)

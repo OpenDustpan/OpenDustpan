@@ -18,6 +18,7 @@ func portableRegistryTables() []PortableTable {
 				{Name: "signature_file", Kind: KindText},
 				{Name: "signature_sha256", Kind: KindText},
 				{Name: "key_fingerprint", Kind: KindText},
+				{Name: "protocols", Kind: KindText},
 				{Name: "published_by", Kind: KindText},
 				{Name: "archives_json", Kind: KindText},
 				{Name: "published_at_ms", Kind: KindTime},

@@ -84,6 +84,7 @@ var (
 	// letters and digits there.
 	systemRE      = regexp.MustCompile(`^[a-z0-9]{1,64}$`)
 	fingerprintRE = regexp.MustCompile(`^[0-9A-F]{40,64}$`)
+	protocolRE    = regexp.MustCompile(`^[0-9]{1,2}\.[0-9]{1,2}$`)
 	uploadIDRE    = regexp.MustCompile(`^[a-z0-9]{20,64}$`)
 )
 
@@ -236,9 +237,14 @@ type Release struct {
 	// verified signature, in uppercase hex. It is required on a provider and
 	// empty on a module.
 	KeyFingerprint string
-	// PublishedBy is the ID of the principal that published the release.
+	// PublishedBy is the subject of the principal that published the release.
 	PublishedBy string
-	Archives    []Archive
+	// Protocols lists the plugin protocol versions of the provider, for example
+	// "5.0" and "6.0", from the lowest to the highest. The publisher states
+	// them, and the registry protocol of OpenTofu serves them. It is required
+	// on a provider and empty on a module.
+	Protocols []string
+	Archives  []Archive
 }
 
 // Validate reports whether r is complete and allowed. A provider needs at
@@ -270,13 +276,14 @@ func (r Release) Validate() error {
 }
 
 // SameContent reports whether r and other hold the same address, version,
-// hashes, signature and key fingerprint. The publisher and the time do not count. Publish uses it to tell a
+// hashes, signature, key fingerprint and protocols. The publisher and the time do not count. Publish uses it to tell a
 // repeat from a conflict.
 func (r Release) SameContent(other Release) bool {
 	if r.Address != other.Address || r.Version != other.Version ||
 		r.SumsFile != other.SumsFile || r.SumsSHA256 != other.SumsSHA256 ||
 		r.SignatureFile != other.SignatureFile || r.SignatureSHA256 != other.SignatureSHA256 ||
-		r.KeyFingerprint != other.KeyFingerprint || len(r.Archives) != len(other.Archives) {
+		r.KeyFingerprint != other.KeyFingerprint || !slices.Equal(r.Protocols, other.Protocols) ||
+		len(r.Archives) != len(other.Archives) {
 		return false
 	}
 
@@ -302,7 +309,7 @@ func (r Release) SameContent(other Release) bool {
 
 func (r Release) validateModule() error {
 	if len(r.Archives) != 1 || r.SumsFile != "" || r.SumsSHA256 != "" ||
-		r.SignatureFile != "" || r.SignatureSHA256 != "" || r.KeyFingerprint != "" {
+		r.SignatureFile != "" || r.SignatureSHA256 != "" || r.KeyFingerprint != "" || len(r.Protocols) != 0 {
 		return fmt.Errorf("%w: a module has one archive, no checksums file and no signature", ErrInvalid)
 	}
 
@@ -320,6 +327,10 @@ func (r Release) validateProvider() error {
 	}
 
 	if err := r.validateSignature(); err != nil {
+		return err
+	}
+
+	if err := validateProtocols(r.Protocols); err != nil {
 		return err
 	}
 
@@ -347,6 +358,49 @@ func (r Release) validateProvider() error {
 	}
 
 	return nil
+}
+
+// MaxProtocols is the most plugin protocol versions of one provider release.
+const MaxProtocols = 4
+
+// validateProtocols checks that the protocols are one to MaxProtocols plugin
+// protocol versions in the form "5.0", from the lowest to the highest, with no
+// repeat.
+func validateProtocols(protocols []string) error {
+	if len(protocols) == 0 || len(protocols) > MaxProtocols {
+		return fmt.Errorf("%w: a provider needs 1 to %d plugin protocol versions", ErrInvalid, MaxProtocols)
+	}
+
+	for i, p := range protocols {
+		if !protocolRE.MatchString(p) {
+			return fmt.Errorf("%w: plugin protocol %q: use the form 5.0", ErrInvalid, p)
+		}
+
+		if i > 0 && !protocolLess(protocols[i-1], p) {
+			return fmt.Errorf("%w: plugin protocols must rise and not repeat", ErrInvalid)
+		}
+	}
+
+	return nil
+}
+
+// protocolLess reports whether the protocol version a is lower than b. Both
+// match protocolRE.
+func protocolLess(a, b string) bool {
+	am, an, _ := strings.Cut(a, ".")
+	bm, bn, _ := strings.Cut(b, ".")
+
+	ai, _ := strconv.Atoi(am)
+	bi, _ := strconv.Atoi(bm)
+
+	if ai != bi {
+		return ai < bi
+	}
+
+	ani, _ := strconv.Atoi(an)
+	bni, _ := strconv.Atoi(bn)
+
+	return ani < bni
 }
 
 // validateSignature checks the signature fields of a provider. The file, its

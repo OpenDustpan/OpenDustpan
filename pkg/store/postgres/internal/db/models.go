@@ -550,6 +550,7 @@ type RegistryRelease struct {
 	SignatureFile   string
 	SignatureSha256 string
 	KeyFingerprint  string
+	Protocols       string
 	PublishedBy     string
 	ArchivesJson    string
 	PublishedAtMs   int64

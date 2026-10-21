@@ -51,7 +51,6 @@ func (r registryStore) Publish(ctx context.Context, rel registry.Release, fence 
 		return err
 	}
 
-
 	// The entry is checked first, as the audited transactions of the other
 	// stores do, so that an invalid entry answers the same error whatever the
 	// fence or the content says.
@@ -97,8 +96,8 @@ func publishRegistryRelease(
 		stored, relErr := registrystore.Release(registrystore.Row{
 			Namespace: row.Namespace, Kind: row.Kind, Name: row.Name, System: row.System, Version: row.Version,
 			SumsFile: row.SumsFile, SumsSHA256: row.SumsSha256, SignatureFile: row.SignatureFile,
-			SignatureSHA256: row.SignatureSha256, KeyFingerprint: row.KeyFingerprint, PublishedBy: row.PublishedBy,
-			ArchivesJSON: row.ArchivesJson, PublishedAtMs: row.PublishedAtMs,
+			SignatureSHA256: row.SignatureSha256, KeyFingerprint: row.KeyFingerprint, Protocols: row.Protocols,
+			PublishedBy: row.PublishedBy, ArchivesJSON: row.ArchivesJson, PublishedAtMs: row.PublishedAtMs,
 		})
 		// A stored row that fails its checks is never the same content: the
 		// publish does not claim it.
@@ -115,7 +114,7 @@ func publishRegistryRelease(
 		Namespace: rel.Address.Namespace.String(), Kind: string(rel.Address.Kind), Name: rel.Address.Name,
 		System: rel.Address.System, Version: rel.Version, SumsFile: rel.SumsFile, SumsSha256: rel.SumsSHA256,
 		SignatureFile: rel.SignatureFile, SignatureSha256: rel.SignatureSHA256, KeyFingerprint: rel.KeyFingerprint,
-		PublishedBy: rel.PublishedBy, ArchivesJson: archives, PublishedAtMs: codec.Millis(rel.PublishedAt),
+		Protocols: registrystore.JoinProtocols(rel.Protocols), PublishedBy: rel.PublishedBy, ArchivesJson: archives, PublishedAtMs: codec.Millis(rel.PublishedAt),
 	})
 	if err != nil {
 		return false, fmt.Errorf("insert registry release: %w", err)
@@ -137,7 +136,6 @@ func (r registryStore) Get(ctx context.Context, addr registry.Address, version s
 	if err := registry.ValidateVersion(version); err != nil {
 		return registry.Release{}, fmt.Errorf("get registry release: %w", err)
 	}
-
 
 	row, err := r.s.queries.GetRegistryRelease(ctx, db.GetRegistryReleaseParams{
 		Namespace: addr.Namespace.String(), Kind: string(addr.Kind), Name: addr.Name, System: addr.System,
@@ -165,8 +163,8 @@ func registryRow(row db.GetRegistryReleaseRow) registrystore.Row {
 	return registrystore.Row{
 		Namespace: row.Namespace, Kind: row.Kind, Name: row.Name, System: row.System, Version: row.Version,
 		SumsFile: row.SumsFile, SumsSHA256: row.SumsSha256, SignatureFile: row.SignatureFile,
-		SignatureSHA256: row.SignatureSha256, KeyFingerprint: row.KeyFingerprint, PublishedBy: row.PublishedBy,
-		ArchivesJSON: row.ArchivesJson, PublishedAtMs: row.PublishedAtMs,
+		SignatureSHA256: row.SignatureSha256, KeyFingerprint: row.KeyFingerprint, Protocols: row.Protocols,
+		PublishedBy: row.PublishedBy, ArchivesJSON: row.ArchivesJson, PublishedAtMs: row.PublishedAtMs,
 	}
 }
 
@@ -175,7 +173,6 @@ func (r registryStore) List(ctx context.Context, addr registry.Address) ([]regis
 	if err := addr.Validate(); err != nil {
 		return nil, fmt.Errorf("list registry releases: %w", err)
 	}
-
 
 	rows, err := r.s.queries.ListRegistryReleases(ctx, db.ListRegistryReleasesParams{
 		Namespace: addr.Namespace.String(), Kind: string(addr.Kind), Name: addr.Name, System: addr.System,
@@ -212,7 +209,6 @@ func (r registryStore) Addresses(
 	if err := probe.Validate(); err != nil {
 		return nil, fmt.Errorf("list registry addresses: %w", err)
 	}
-
 
 	rows, err := r.s.queries.ListRegistryAddresses(ctx, db.ListRegistryAddressesParams{
 		Namespace: ns.String(), Kind: string(kind),
