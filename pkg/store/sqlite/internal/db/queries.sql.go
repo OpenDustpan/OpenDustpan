@@ -12463,6 +12463,138 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 	return items, nil
 }
 
+const readWorkspace = `-- name: ReadWorkspace :one
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = ? AND w.name = ? AND w.deleted_at_ms IS NULL
+`
+
+type ReadWorkspaceParams struct {
+	Namespace string
+	Name      string
+}
+
+type ReadWorkspaceRow struct {
+	Workspace   Workspace
+	NamespaceID string
+}
+
+// The read behind the store port: the workspace with the ID of its namespace,
+// from the join with the namespace row, so a caller needs no second read.
+func (q *Queries) ReadWorkspace(ctx context.Context, arg ReadWorkspaceParams) (ReadWorkspaceRow, error) {
+	row := q.db.QueryRowContext(ctx, readWorkspace, arg.Namespace, arg.Name)
+	var i ReadWorkspaceRow
+	err := row.Scan(
+		&i.Workspace.ID,
+		&i.Workspace.Namespace,
+		&i.Workspace.Name,
+		&i.Workspace.Revision,
+		&i.Workspace.LockID,
+		&i.Workspace.LockHolder,
+		&i.Workspace.LockReason,
+		&i.Workspace.LockedAtMs,
+		&i.Workspace.CurrentStateVersionID,
+		&i.Workspace.CreatedAtMs,
+		&i.Workspace.UpdatedAtMs,
+		&i.Workspace.AllowForcedWrites,
+		&i.Workspace.AllowUnlockedWrites,
+		&i.Workspace.DeletedAtMs,
+		&i.Workspace.DeletedName,
+		&i.NamespaceID,
+	)
+	return i, err
+}
+
+const readWorkspaceByID = `-- name: ReadWorkspaceByID :one
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.id = ? AND w.deleted_at_ms IS NULL
+`
+
+type ReadWorkspaceByIDRow struct {
+	Workspace   Workspace
+	NamespaceID string
+}
+
+func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspaceByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, readWorkspaceByID, id)
+	var i ReadWorkspaceByIDRow
+	err := row.Scan(
+		&i.Workspace.ID,
+		&i.Workspace.Namespace,
+		&i.Workspace.Name,
+		&i.Workspace.Revision,
+		&i.Workspace.LockID,
+		&i.Workspace.LockHolder,
+		&i.Workspace.LockReason,
+		&i.Workspace.LockedAtMs,
+		&i.Workspace.CurrentStateVersionID,
+		&i.Workspace.CreatedAtMs,
+		&i.Workspace.UpdatedAtMs,
+		&i.Workspace.AllowForcedWrites,
+		&i.Workspace.AllowUnlockedWrites,
+		&i.Workspace.DeletedAtMs,
+		&i.Workspace.DeletedName,
+		&i.NamespaceID,
+	)
+	return i, err
+}
+
+const readWorkspaces = `-- name: ReadWorkspaces :many
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, n.id AS namespace_id
+FROM workspaces AS w
+JOIN namespaces AS n ON n.name = w.namespace
+WHERE w.namespace = ? AND w.deleted_at_ms IS NULL
+ORDER BY w.name
+`
+
+type ReadWorkspacesRow struct {
+	Workspace   Workspace
+	NamespaceID string
+}
+
+func (q *Queries) ReadWorkspaces(ctx context.Context, namespace string) ([]ReadWorkspacesRow, error) {
+	rows, err := q.db.QueryContext(ctx, readWorkspaces, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadWorkspacesRow
+	for rows.Next() {
+		var i ReadWorkspacesRow
+		if err := rows.Scan(
+			&i.Workspace.ID,
+			&i.Workspace.Namespace,
+			&i.Workspace.Name,
+			&i.Workspace.Revision,
+			&i.Workspace.LockID,
+			&i.Workspace.LockHolder,
+			&i.Workspace.LockReason,
+			&i.Workspace.LockedAtMs,
+			&i.Workspace.CurrentStateVersionID,
+			&i.Workspace.CreatedAtMs,
+			&i.Workspace.UpdatedAtMs,
+			&i.Workspace.AllowForcedWrites,
+			&i.Workspace.AllowUnlockedWrites,
+			&i.Workspace.DeletedAtMs,
+			&i.Workspace.DeletedName,
+			&i.NamespaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec
 INSERT INTO maintenance_revocations (kind, target, end_reason, actor, object, at_ms)
 SELECT ?1, ?2, ?3, ?4, ?5,

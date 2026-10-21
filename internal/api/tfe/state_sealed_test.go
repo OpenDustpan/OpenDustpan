@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // sealedTestWrapper wraps data keys with a fresh key-encryption key for one
@@ -192,11 +193,18 @@ func sealedTestWorkspaces(
 	t.Helper()
 
 	workspaces, err := workspace.NewService(workspace.Config{
-		ManualLocks: nil,
-		Workspaces:  store, States: store, Blobs: blobs, Namespaces: namespaces,
-		Sealer: secrets, Logger: slog.New(slog.DiscardHandler),
-		Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0,
-		Retention: 0,
+		ManualLocks:        nil,
+		Workspaces:         store,
+		States:             store,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
+		Sealer:             secrets,
+		Logger:             slog.New(slog.DiscardHandler),
+		Now:                nil,
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("workspaces: %v", err)

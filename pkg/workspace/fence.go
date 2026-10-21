@@ -55,16 +55,19 @@ func (s *Service) releaseWithFence(
 	}
 
 	size, err := s.store(ctx, storeInput{
-		namespace: w.Ref.Namespace,
-		workspace: w.ID,
-		version:   string(sv.ID),
-		key:       sv.Content,
-		want:      sv.MD5,
-		content:   bytes.NewReader(content),
-		unchecked: false,
+		namespace:   w.Ref.Namespace,
+		namespaceID: w.NamespaceID,
+		workspace:   w.ID,
+		version:     string(sv.ID),
+		key:         sv.Content,
+		want:        sv.MD5,
+		content:     bytes.NewReader(content),
+		unchecked:   false,
 	})
 	if err != nil {
-		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, errors.Join(err, s.dropFence(ctx, sv, fence)))
+		return Workspace{}, fmt.Errorf(
+			"force-unlock %s: %w", w.Ref, errors.Join(err, s.dropFence(ctx, w, sv, fence)),
+		)
 	}
 
 	sv.Status = StatusFinalized
@@ -131,7 +134,7 @@ func (s *Service) buildFence(
 		UnlockedWrite:   false,
 	}
 
-	key, err := attemptKey(sv)
+	key, err := s.blobs.attemptKey(w.NamespaceID, w.ID, sv.ID)
 	if err != nil {
 		return StateVersion{}, nil, err
 	}
@@ -241,14 +244,14 @@ func (s *Service) fenceRefused(
 		return fmt.Errorf("force-unlock %s: %w", w.Ref, err)
 	}
 
-	return fmt.Errorf("force-unlock %s: %w", w.Ref, errors.Join(err, s.dropFence(ctx, sv, fence)))
+	return fmt.Errorf("force-unlock %s: %w", w.Ref, errors.Join(err, s.dropFence(ctx, w, sv, fence)))
 }
 
 // dropFence deletes the content of the pending fence sv, then its row. When
 // the delete fails, the row stays, so the expired-version sweep still finds
 // the blob.
-func (s *Service) dropFence(ctx context.Context, sv StateVersion, fence namespace.Fence) error {
-	if err := s.blobs.Delete(ctx, sv.Content); err != nil {
+func (s *Service) dropFence(ctx context.Context, w Workspace, sv StateVersion, fence namespace.Fence) error {
+	if err := s.blobs.delete(ctx, w.NamespaceID, w.ID, sv.Content); err != nil {
 		return err
 	}
 

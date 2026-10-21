@@ -38,17 +38,60 @@ type OutOfScopeRecorder interface {
 }
 
 // OutOfScopeWhere says where a refused key was: outside the namespace of the
-// call, or inside the namespace and outside its item-keys directory.
+// call, inside the namespace and outside the directory of the blobs of the
+// call, or inside that directory and outside the directory of the unit of the
+// call.
 type OutOfScopeWhere string
 
 // The places of a refused key.
 const (
 	// OutsideNamespace is a key that is not inside the namespace of the call.
 	OutsideNamespace OutOfScopeWhere = "namespace"
-	// OutsideItemKeys is a key inside the namespace of the call and outside
-	// its item-keys directory, for example the key of a checkpoint.
-	OutsideItemKeys OutOfScopeWhere = "item-keys"
+	// OutsideDirectory is a key inside the namespace of the call and outside
+	// the directory of the blobs of the call, for example the key of a
+	// checkpoint in a call for an item key.
+	OutsideDirectory OutOfScopeWhere = "directory"
+	// OutsideUnitDirectory is a key inside the directory of the blobs of the
+	// call and outside the directory of the unit of the call, for example the
+	// key of another workspace in a call for one workspace.
+	OutsideUnitDirectory OutOfScopeWhere = "unit-directory"
 )
+
+// OutOfScopeFamily names the blobs of one recorder in the reason of its
+// entries.
+type OutOfScopeFamily struct {
+	// Blobs names the blobs, for example "item key blob".
+	Blobs string
+	// Dir is the directory of the blobs inside the namespace, for example
+	// "item-keys".
+	Dir string
+}
+
+// ItemKeyFamily is the family of the item key blobs.
+func ItemKeyFamily() OutOfScopeFamily {
+	return OutOfScopeFamily{Blobs: "item key blob", Dir: strings.TrimSuffix(itemKeyDir, "/")}
+}
+
+// maxFamilyNameLen bounds each name of an OutOfScopeFamily.
+const maxFamilyNameLen = 32
+
+// validFamilyName reports whether s is a name of an OutOfScopeFamily:
+// lowercase ASCII letters, spaces and hyphens, at most maxFamilyNameLen bytes,
+// with a letter first. The name goes into the reason of an audit entry, so the
+// allowlist keeps line breaks and other control bytes out.
+func validFamilyName(s string) bool {
+	if s == "" || len(s) > maxFamilyNameLen || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+
+	for _, c := range []byte(s) {
+		if (c < 'a' || c > 'z') && c != ' ' && c != '-' {
+			return false
+		}
+	}
+
+	return true
+}
 
 // ItemKeyBlobs reads and writes the wrapped item key blobs. It builds a
 // *blob.Scoped for each call, from the namespace ID that the caller took from
@@ -327,7 +370,7 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 
 	rest, ok := strings.CutPrefix(key.String(), v.Prefix()+itemKeyDir)
 	if !ok {
-		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, whereOf(v, key))
+		return nil, b.refuse(ctx, ns, op, blob.ErrOutOfScope, OutOfScopePlace(v, key))
 	}
 
 	if !validItemKeyRest(rest) {
@@ -337,13 +380,14 @@ func (b *ItemKeyBlobs) scopedKey(ctx context.Context, ns namespace.ID, key blob.
 	return v, nil
 }
 
-// whereOf says where the refused key is. A key that a valid key of the view
-// would be, in the namespace of the view, is outside the item-keys directory.
-// Every other key is outside the namespace: another namespace, a parent
-// segment, an empty key or a key that is not a valid key at all.
-func whereOf(v *blob.Scoped, key blob.Key) OutOfScopeWhere {
+// OutOfScopePlace says where a refused key is. A key that a valid key of the
+// view would be, in the namespace of the view, is outside the directory of the
+// blobs of the call. Every other key is outside the namespace: another
+// namespace, a parent segment, an empty key or a key that is not a valid key at
+// all.
+func OutOfScopePlace(v *blob.Scoped, key blob.Key) OutOfScopeWhere {
 	if _, err := blob.ParseKey(key.String()); err == nil && strings.HasPrefix(key.String(), v.Prefix()) {
-		return OutsideItemKeys
+		return OutsideDirectory
 	}
 
 	return OutsideNamespace
@@ -402,10 +446,13 @@ const (
 )
 
 // AuditOutOfScope is an OutOfScopeRecorder that writes one audit entry of the
-// kind security in the scope @server.
+// kind security in the scope @server. Each package that reads blobs through a
+// scoped view uses this recorder, with its own OutOfScopeFamily, so all
+// refusals have one shape.
 type AuditOutOfScope struct {
 	entries audit.ServerStore
 	channel audit.Channel
+	family  OutOfScopeFamily
 	now     func() time.Time
 }
 
@@ -414,11 +461,15 @@ var _ OutOfScopeRecorder = (*AuditOutOfScope)(nil)
 // ErrInvalidChannel reports a channel that an out-of-scope record cannot have.
 var ErrInvalidChannel = errors.New("audit channel of a refusal is not api or console")
 
+// ErrInvalidFamily reports an OutOfScopeFamily with a name that is not valid.
+var ErrInvalidFamily = errors.New("family of an out-of-scope recorder is not valid")
+
 // NewAuditOutOfScope returns an OutOfScopeRecorder that appends to entries. The
 // caller gives the channel of its requests: audit.ChannelAPI or
-// audit.ChannelConsole. now may be nil; it then is time.Now.
+// audit.ChannelConsole, and the family of its blobs. now may be nil; it then
+// is time.Now.
 func NewAuditOutOfScope(
-	entries audit.ServerStore, channel audit.Channel, now func() time.Time,
+	entries audit.ServerStore, channel audit.Channel, family OutOfScopeFamily, now func() time.Time,
 ) (*AuditOutOfScope, error) {
 	if entries == nil {
 		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
@@ -428,11 +479,15 @@ func NewAuditOutOfScope(
 		return nil, fmt.Errorf("%w: %q", ErrInvalidChannel, channel)
 	}
 
+	if !validFamilyName(family.Blobs) || !validFamilyName(family.Dir) {
+		return nil, fmt.Errorf("%w: %q, %q", ErrInvalidFamily, family.Blobs, family.Dir)
+	}
+
 	if now == nil {
 		now = time.Now
 	}
 
-	return &AuditOutOfScope{entries: entries, channel: channel, now: now}, nil
+	return &AuditOutOfScope{entries: entries, channel: channel, family: family, now: now}, nil
 }
 
 // RecordOutOfScope appends the entry. The object is the ID of the namespace of
@@ -451,8 +506,10 @@ func (a *AuditOutOfScope) RecordOutOfScope(
 	switch where {
 	case OutsideNamespace:
 		place = "outside the namespace"
-	case OutsideItemKeys:
-		place = "outside the item-keys directory of the namespace"
+	case OutsideDirectory:
+		place = "outside the " + a.family.Dir + " directory of the namespace"
+	case OutsideUnitDirectory:
+		place = "outside the unit directory"
 	default:
 		return fmt.Errorf("%w: place %q", ErrInvalidItemRef, where)
 	}
@@ -486,7 +543,7 @@ func (a *AuditOutOfScope) RecordOutOfScope(
 		FenceVersion:  0,
 		PrincipalKind: "",
 		JobID:         "",
-		Reason:        "item key blob " + op + " refused: key " + place,
+		Reason:        a.family.Blobs + " " + op + " refused: key " + place,
 	}
 
 	if _, err := a.entries.AppendServer(ctx, entry); err != nil {

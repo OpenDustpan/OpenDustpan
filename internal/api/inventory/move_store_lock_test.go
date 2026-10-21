@@ -174,7 +174,8 @@ func (f storeMoveFixture) createWorkspace(t *testing.T) {
 	}
 
 	w := workspace.Workspace{
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		NamespaceID: "",
+		CreatedAt:   time.Now(), UpdatedAt: time.Now(),
 		Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		ID:   workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: f.ns.Name, Name: name},
 		Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},

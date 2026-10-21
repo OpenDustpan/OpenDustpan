@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
+	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
 
 // TestDefaultMaxStateBytes proves the policy default of ADR 45.
@@ -59,12 +60,14 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 	}
 
 	secrets := newMemSealer(t, namespaces)
+	refusals := workspacetest.NewRefusals()
 	svc, err := workspace.NewService(workspace.Config{
 		ManualLocks:        nil,
 		Workspaces:         store,
 		States:             store,
 		Blobs:              rec,
 		Namespaces:         namespaces,
+		OutOfScope:         refusals,
 		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
@@ -86,7 +89,10 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: rec, now: &now, ws: ws}, rec
+	return fixture{
+		svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: rec, refusals: refusals,
+		now: &now, ws: ws,
+	}, rec
 }
 
 // checkLimitError proves err wraps ErrTooLarge and names the flag, the

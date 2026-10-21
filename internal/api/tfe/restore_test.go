@@ -191,8 +191,9 @@ func (foreignRestoreWorkspaces) GetByID(
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "",
@@ -267,8 +268,9 @@ func (lockedRestoreWorkspaces) GetByID(
 	}
 
 	return workspace.Workspace{
-		CreatedAt: stubWorkspaceTime(),
-		UpdatedAt: stubWorkspaceTime(),
+		NamespaceID: "",
+		CreatedAt:   stubWorkspaceTime(),
+		UpdatedAt:   stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: stubWorkspaceTime(),
 			ID:       "lock-alice",

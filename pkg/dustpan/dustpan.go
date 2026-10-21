@@ -40,6 +40,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1403,11 +1404,19 @@ func newWorkspaceService(
 		blobs = cfg.blobStore
 	}
 
+	refusals, err := secret.NewAuditOutOfScope(
+		serverAuditOf(cfg.namespaceStore), audit.ChannelAPI, workspace.StateBlobFamily(), cfg.now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("workspace service: %w", err)
+	}
+
 	workspaces, err := workspace.NewService(workspace.Config{
 		Workspaces:         cfg.workspaceStore,
 		States:             cfg.stateStore,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		OutOfScope:         refusals,
 		Sealer:             secrets,
 		Logger:             cfg.logger,
 		Now:                cfg.now,
@@ -2360,13 +2369,36 @@ func newProfileHandler(svc services, cfg *settings, onFailure func()) (http.Hand
 	return handler, nil
 }
 
-// writeOnceFamilies are the blob key families that the cache keeps: a key in
-// them never holds other bytes, also after a delete. OpenTofu state versions
-// have such keys. Pulumi checkpoints and journal batches do not: a retry or a
-// restore can write a deleted key again.
+// writeOnceFamilies are the directories, inside the scope of one namespace
+// ("namespaces/<namespace ID>/"), of the blob key families that the cache
+// keeps: a key in them never holds other bytes, also after a delete. OpenTofu
+// state versions have such keys. Pulumi checkpoints and journal batches do
+// not: a retry or a restore can write a deleted key again. The list never
+// holds the namespace directory itself, which would cache them too.
 //
 //nolint:gochecknoglobals // A fixed list; Go has no constant slices.
-var writeOnceFamilies = []string{"tofu/"}
+var writeOnceFamilies = []string{"tofu"}
+
+// writeOnceKey reports whether key is in a write-once family of a namespace:
+// "namespaces/<namespace ID>/<family>/...", with a valid namespace ID. The
+// match is on whole segments, so a family name that only starts the same
+// ("tofu-x") or a key of no namespace does not match.
+func writeOnceKey(key blob.Key) bool {
+	parts := strings.SplitN(key.String(), "/", writeOnceKeyParts)
+	if len(parts) != writeOnceKeyParts || parts[0] != "namespaces" || parts[3] == "" {
+		return false
+	}
+
+	if _, err := namespace.ParseID(parts[1]); err != nil {
+		return false
+	}
+
+	return slices.Contains(writeOnceFamilies, parts[2])
+}
+
+// writeOnceKeyParts is the number of parts that writeOnceKey reads: "namespaces",
+// the namespace ID, the family, and the rest of the key.
+const writeOnceKeyParts = 4
 
 // wrapBlobCache sets the blob store of the workspace service: the in-process
 // cache over the blob store when WithBlobCache sets a size, else the blob
@@ -2386,7 +2418,7 @@ func wrapBlobCache(cfg *settings) error {
 	cached, err := blobcache.New(cfg.blobStore, blobcache.Config{
 		MaxBytes:       cfg.blobCacheBytes,
 		MaxObjectBytes: 0,
-		Cacheable:      blobcache.WriteOncePrefixes(writeOnceFamilies...),
+		Cacheable:      writeOnceKey,
 	})
 	if err != nil {
 		return fmt.Errorf("blob cache: %w", err)
