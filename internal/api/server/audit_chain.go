@@ -85,7 +85,7 @@ func (h *Handler) auditChainRoutes() []Route {
 			},
 			Resolve:    resolveServer,
 			ActionsFor: h.auditChainApproveActions,
-			Serve:      h.approveAuditChain,
+			Serve:      h.fresh(identity.ActionServerSetAuditChain, h.approveAuditChain),
 		},
 	}
 }

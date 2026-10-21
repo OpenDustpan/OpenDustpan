@@ -345,3 +345,37 @@ func TestOnDevRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestFresh proves the freshness rule of a sign-in: the age is at most the
+// window, a sign-in after now has a negative age and is never fresh, and a
+// window of 0 turns the check off.
+func TestFresh(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, time.UTC)
+	window := 15 * time.Minute
+
+	for _, tc := range []struct {
+		name     string
+		authTime time.Time
+		window   time.Duration
+		want     bool
+	}{
+		{name: "signed in now", authTime: now, window: window, want: true},
+		{name: "inside the window", authTime: now.Add(-10 * time.Minute), window: window, want: true},
+		{name: "at the end of the window", authTime: now.Add(-window), window: window, want: true},
+		{name: "after the window", authTime: now.Add(-window - time.Millisecond), window: window, want: false},
+		{name: "one millisecond after now", authTime: now.Add(time.Millisecond), window: window, want: false},
+		{name: "an hour after now", authTime: now.Add(time.Hour), window: window, want: false},
+		{name: "a zero sign-in time", authTime: time.Time{}, window: window, want: false},
+		{name: "window of 0 passes an old sign-in", authTime: now.Add(-24 * time.Hour), window: 0, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := sessionauth.Fresh(now, tc.authTime, tc.window); got != tc.want {
+				t.Fatalf("Fresh(now, %v, %v) = %v, want %v", tc.authTime, tc.window, got, tc.want)
+			}
+		})
+	}
+}

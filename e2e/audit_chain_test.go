@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,8 +28,10 @@ type auditChainState struct {
 // TestAuditChain proves the change of the audit chain on the real server
 // binary and each store: a restart with the setting off waits in
 // maintenance mode, the approval migrates the log and leaves maintenance
-// mode, and a restart with the setting on does the same back. The chain of
-// @server checks valid after each change.
+// mode, and a restart with the setting on does the same back. The approval
+// needs a console session with a recent sign-in, so the test signs in before
+// each restart: maintenance mode refuses a new sign-in. An access token never
+// approves. The chain of @server checks valid after each change.
 func TestAuditChain(t *testing.T) {
 	t.Parallel()
 
@@ -65,7 +68,7 @@ func TestAuditChain(t *testing.T) {
 			}
 
 			ctx := t.Context()
-			env := e2e.NewEnv(ctx, t, cli, db)
+			env := e2e.NewEnvWithSignIn(ctx, t, cli, db)
 
 			if got := readAuditChain(ctx, t, env); got.State != "on" || got.Setting != "on" || got.Pending {
 				t.Fatalf("audit chain of a new installation = %+v, want on with no waiting change", got)
@@ -78,10 +81,14 @@ func TestAuditChain(t *testing.T) {
 }
 
 // changeAuditChain restarts the server of env with setting, proves that the
-// change waits in maintenance mode, approves it, and waits until the
-// migration ends.
+// change waits in maintenance mode, approves it with the console session that
+// signed in before the restart, and waits until the migration ends.
 func changeAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, setting string) {
 	t.Helper()
+
+	// Sign in before the restart: the server starts in maintenance mode, which
+	// refuses a new sign-in.
+	console := env.FreshAdminSession(ctx, t)
 
 	env.StopServer(ctx, t)
 	env.SetAuditChain(setting)
@@ -95,11 +102,9 @@ func changeAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, setting s
 		t.Fatalf("installation state while a change waits = %q, want maintenance", got)
 	}
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/audit/chain", "")
-	if err != nil {
-		t.Fatalf("approve the audit chain change: %v", err)
-	}
+	checkAuditChainTokenRefused(ctx, t, env)
 
+	status, body := console(e2e.SessionRequest{Method: http.MethodPost, Path: "/api/server/audit/chain", Body: ""})
 	if status != http.StatusAccepted {
 		t.Fatalf("POST /api/server/audit/chain answers %d, want %d (%s)", status, http.StatusAccepted, body)
 	}
@@ -121,6 +126,22 @@ func changeAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, setting s
 	}
 
 	checkServerAuditChain(ctx, t, env)
+}
+
+// checkAuditChainTokenRefused proves an access token never approves a change
+// of the audit chain: the route answers 403 with mfa.fresh-step-required.
+func checkAuditChainTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/audit/chain", "")
+	if err != nil {
+		t.Fatalf("approve the audit chain change with an access token: %v", err)
+	}
+
+	if status != http.StatusForbidden || !strings.Contains(body, "mfa.fresh-step-required") {
+		t.Fatalf("POST /api/server/audit/chain with an access token answers %d %s, want 403 with "+
+			"mfa.fresh-step-required", status, body)
+	}
 }
 
 // readAuditChain answers the state of the audit chain of env.

@@ -128,12 +128,7 @@ func approvalCall(ctx context.Context, t *testing.T, env approvalEnv, s approval
 			ctx, t, env.person, e2e.SessionRequest{Method: s.method, Path: s.path, Body: s.body},
 		)
 	} else {
-		var err error
-
-		status, resp, err = env.env.ServerAPIStatus(ctx, s.method, s.path, s.body)
-		if err != nil {
-			t.Fatalf("%s: %s %s: %v", s.step, s.method, s.path, err)
-		}
+		status, resp = freshServerCall(ctx, t, env.env, principalStep{s.method, s.path, s.body, s.want})
 	}
 
 	if status != s.want {

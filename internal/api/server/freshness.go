@@ -1,12 +1,16 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -36,16 +40,28 @@ func (reauthenticateError) Unwrap() error { return errReauthenticate }
 // each token change with serveTokenChange. It fails the request closed.
 var errNoFreshnessCheck = errors.New("a token change from a console session has no freshness check")
 
+// errFreshStepRequired is the refusal of a change that needs a fresh
+// authentication when the request has no console session. An access token
+// never gives a fresh authentication.
+var errFreshStepRequired = &codedError{
+	status: http.StatusForbidden, code: freshStepRequiredCode, args: nil,
+	message: sessionauth.FreshStepRequiredMessage,
+}
+
+// freshStepRequiredCode is the errorCode of a change that has no fresh
+// authentication.
+const freshStepRequiredCode = sessionauth.FreshStepRequiredCode
+
 // freshnessKey carries the freshness check of a token change.
 type freshnessKey struct{}
 
-// requireFresh runs the freshness check of a token change on a request
-// with a console session. A request with an access token passes. A
-// request with a session and no check in its context returns
-// errNoFreshnessCheck.
+// requireFresh runs the freshness check of a change on a request with a
+// console session. A request with no session, for example one with an
+// access token, returns errFreshStepRequired. A request with a session and
+// no check in its context returns errNoFreshnessCheck.
 func requireFresh(r *http.Request) error {
 	if _, ok := sessionFromRequest(r); !ok {
-		return nil
+		return errFreshStepRequired
 	}
 
 	check, ok := r.Context().Value(freshnessKey{}).(func(*http.Request) error)
@@ -65,6 +81,7 @@ type reauthenticateResponse struct {
 	Message        string `json:"message"`
 	Reauthenticate string `json:"reauthenticate"`
 	Code           int    `json:"code"`
+	ErrorCode      string `json:"errorCode"`
 }
 
 // freshParam reports whether the start of a sign-in asks for a new
@@ -83,13 +100,14 @@ func freshParam(r *http.Request) (bool, error) {
 
 // checkTokenFreshness refuses a token change, or a change of the session
 // policy, from a console session whose sign-in is older than the token
-// freshness window of the session policy. A request with an access token,
-// and a window of 0, pass. With no session policy service, the window is
-// session.DefaultTokenFreshness.
+// freshness window of the session policy. A request with no console
+// session, for example one with an access token, returns
+// errFreshStepRequired. A sign-in after now is too old. A window of 0 passes. With no session policy
+// service, the window is session.DefaultTokenFreshness.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	caller, ok := sessionFromRequest(r)
 	if !ok {
-		return nil
+		return errFreshStepRequired
 	}
 
 	if h.signIn == nil {
@@ -107,12 +125,41 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 		window = policy.TokenFreshness
 	}
 
-	if window == 0 || h.signIn.sessions.Now().Sub(caller.Match.Session.AuthTime) <= window {
+	// A sign-in after now has a negative age and is refused like a stale one.
+	if sessionauth.Fresh(h.signIn.sessions.Now(), caller.Match.Session.AuthTime, window) {
 		return nil
 	}
 
 	return reauthenticateError{
-		url:    signInStartPrefix + url.PathEscape(caller.Match.Session.Provider) + "?fresh=1",
+		url:    sessionauth.SignInStartPrefix + url.PathEscape(caller.Match.Session.Provider) + "?fresh=1",
 		window: window,
+	}
+}
+
+// fresh wraps a write that needs a fresh authentication: a console session
+// must have signed in recently enough. A request with an access token gets
+// 403 with the error code mfa.fresh-step-required, and a session with an old
+// sign-in gets 401. Each refusal writes one failure entry for action on the
+// object, best effort.
+func (h *Handler) fresh(action identity.Action, serve RouteHandler) RouteHandler {
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		ctx := context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness)
+
+		r = r.WithContext(ctx)
+
+		// Defense in depth: the handlers behind this wrapper do not check the
+		// session themselves, and the route table and the policy check do not
+		// know the sign-in time. This check runs for each write, so a new
+		// route cannot answer a token by default.
+		if err := requireFresh(r); err != nil {
+			h.appendObjectChange(r, p, obj, serverChange{
+				at: h.now(), action: action, object: obj.String(), outcome: audit.OutcomeFailure,
+			})
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		serve(w, r, p, obj)
 	}
 }

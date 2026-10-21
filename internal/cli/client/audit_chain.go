@@ -1,14 +1,16 @@
 package client
 
-// Audit chain subcommands: clients of GET and POST /api/server/audit/chain.
+// Audit chain subcommands: a client of GET /api/server/audit/chain, and the
+// approve command that points to the console.
 //
 //	opendustpan audit-chain status --server https://dustpan.example [--ca-file ca.pem]
 //	opendustpan audit-chain approve --server https://dustpan.example [--ca-file ca.pem]
 //
 // Status prints the stored state of the audit chain, the setting of the
-// server that answers, and whether a change waits. Approve approves the
-// change to the setting of the server that answers, and the server
-// migrates the audit log in the background.
+// server that answers, and whether a change waits. Approve sends no request:
+// the server approves a change of the audit chain only for a console session
+// with a recent sign-in, and the CLI cannot give one, so the command prints
+// where to approve and fails.
 //
 // This file is client code: it must not import a store adapter, a blob
 // adapter, backup-target code or key-encryption key code.
@@ -32,7 +34,14 @@ var (
 	ErrAuditChainNeedsServer = errors.New("audit-chain needs --server")
 	// ErrAuditChainRequest reports a failed audit chain request.
 	ErrAuditChainRequest = errors.New("audit chain request failed")
+	// ErrAuditChainApproveInConsole reports the approve command: the CLI has
+	// no fresh authentication, so it sends no request.
+	ErrAuditChainApproveInConsole = errors.New("audit chain approval needs the console")
 )
+
+// auditChainApproveInConsole is the text that the approve command prints.
+const auditChainApproveInConsole = "Approve the audit chain change in the console. " +
+	"The CLI cannot give a fresh authentication."
 
 // auditChainPath is the route of the audit chain commands.
 const auditChainPath = "/api/server/audit/chain"
@@ -57,7 +66,7 @@ type auditChainFlags struct {
 // AuditChainStatus runs `opendustpan audit-chain status --server <url>`: it
 // prints the state of the audit chain.
 func AuditChainStatus(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	answer, err := callAuditChain(ctx, args, stderr, http.MethodGet, "status")
+	answer, err := callAuditChain(ctx, args, stderr)
 	if err != nil {
 		return err
 	}
@@ -65,33 +74,27 @@ func AuditChainStatus(ctx context.Context, args []string, stdout, stderr io.Writ
 	return writeAuditChain(stdout, answer)
 }
 
-// AuditChainApprove runs `opendustpan audit-chain approve --server <url>`:
-// it approves the change to the setting of the server, and prints the state.
-func AuditChainApprove(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	answer, err := callAuditChain(ctx, args, stderr, http.MethodPost, "approve")
-	if err != nil {
-		return err
-	}
-
-	const approved = "approved the change of the audit chain to %s; the migration runs\n"
-	if _, err := fmt.Fprintf(stdout, approved, answer.Setting); err != nil {
+// AuditChainApprove runs `opendustpan audit-chain approve`. It sends no
+// request. The server approves a change of the audit chain only for a console
+// session with a recent sign-in, and an access token never gives one, so the
+// command prints the console path and fails.
+func AuditChainApprove(_ context.Context, _ []string, _, stderr io.Writer) error {
+	if _, err := fmt.Fprintln(stderr, auditChainApproveInConsole); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 
-	return writeAuditChain(stdout, answer)
+	return ErrAuditChainApproveInConsole
 }
 
-// callAuditChain parses args, sends one request with method to the audit
-// chain route and answers the state that the server answers.
-func callAuditChain(
-	ctx context.Context, args []string, stderr io.Writer, method, sub string,
-) (AuditChainAnswer, error) {
+// callAuditChain parses args, reads the audit chain route and answers the
+// state that the server answers.
+func callAuditChain(ctx context.Context, args []string, stderr io.Writer) (AuditChainAnswer, error) {
 	var (
 		f    auditChainFlags
 		none AuditChainAnswer
 	)
 
-	fs := flag.NewFlagSet("audit-chain "+sub, flag.ContinueOnError)
+	fs := flag.NewFlagSet("audit-chain status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cli.ByFlag("server").String(fs, &f.server)
 	cli.ByFlag("ca-file").String(fs, &f.caFile)
@@ -104,7 +107,7 @@ func callAuditChain(
 		return none, ErrUsage
 	}
 
-	rerun := "run opendustpan audit-chain " + sub + " again"
+	rerun := "run opendustpan audit-chain status again"
 
 	server := strings.TrimSpace(f.server)
 	if server == "" {
@@ -126,14 +129,13 @@ func callAuditChain(
 		return none, err
 	}
 
-	return sendAuditChain(ctx, client, auditChainCall{server: server, token: token, method: method, rerun: rerun})
+	return sendAuditChain(ctx, client, auditChainCall{server: server, token: token, rerun: rerun})
 }
 
-// auditChainCall is one request of an audit chain command.
+// auditChainCall is the request of the audit chain status command.
 type auditChainCall struct {
 	server string
 	token  string
-	method string
 	rerun  string
 }
 
@@ -142,7 +144,12 @@ type auditChainCall struct {
 func sendAuditChain(ctx context.Context, client *http.Client, call auditChainCall) (AuditChainAnswer, error) {
 	var none AuditChainAnswer
 
-	req, err := http.NewRequestWithContext(ctx, call.method, backupEndpoint(call.server, auditChainPath), http.NoBody)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		backupEndpoint(call.server, auditChainPath),
+		http.NoBody,
+	)
 	if err != nil {
 		return none, fmt.Errorf("%w: %w: check --server and %s", ErrAuditChainRequest, err, call.rerun)
 	}
@@ -158,7 +165,7 @@ func sendAuditChain(ctx context.Context, client *http.Client, call auditChainCal
 		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below.
 	}()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+	if resp.StatusCode != http.StatusOK {
 		return none, fmt.Errorf("%w: %s", ErrAuditChainRequest, decodeBackupError(resp))
 	}
 

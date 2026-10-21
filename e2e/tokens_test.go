@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -103,6 +104,7 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		t.Fatalf("created token = %+v, want an active service token with an odp_ secret and no use", created)
 	}
 
+	checkTokenNeedsFreshAuth(ctx, t, env, deploy)
 	checkTokenRefusals(ctx, t, env, deploy, robot)
 	checkPersonalTokens(ctx, t, env)
 	checkDelegatedTokens(ctx, t, env)
@@ -119,6 +121,36 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	status, _, err := env.ServerAPIStatusBare(ctx, http.MethodGet, "/api/server/tokens")
 	if err != nil || status != http.StatusUnauthorized {
 		t.Fatalf("list without a token = %d, %v; want 401", status, err)
+	}
+}
+
+// checkTokenNeedsFreshAuth proves that an access token never makes a token:
+// the bootstrap admin token creates a service token and a personal token, and
+// both answer 403 with mfa.fresh-step-required. The token list does not change.
+func checkTokenNeedsFreshAuth(ctx context.Context, t *testing.T, env *e2e.Env, deploy e2ePrincipal) {
+	t.Helper()
+
+	_, before, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/tokens", "")
+	if err != nil {
+		t.Fatalf("list the tokens: %v", err)
+	}
+
+	for _, step := range []principalStep{
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + deploy.ID + `","name":"refused"}`, 0},
+		{http.MethodPost, "/api/server/principals/" + deploy.ID + "/tokens", `{"name":"refused"}`, 0},
+		{http.MethodPost, "/api/server/caller/tokens", `{"name":"refused"}`, 0},
+	} {
+		status, body, callErr := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
+		if callErr != nil || status != http.StatusForbidden ||
+			!strings.Contains(body, `"errorCode":"mfa.fresh-step-required"`) {
+			t.Fatalf("%s %s with the bootstrap admin token = %d, %v (%s); want 403 with mfa.fresh-step-required",
+				step.method, step.path, status, callErr, body)
+		}
+	}
+
+	_, after, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/tokens", "")
+	if err != nil || after != before {
+		t.Fatalf("token list after the refused changes = %s, %v; want the list from before: %s", after, err, before)
 	}
 }
 
@@ -232,17 +264,26 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 		http.MethodPost, "/api/server/service-tokens/" + created.ID + "/rotate", `{}`, http.StatusConflict,
 	}, nil)
 
-	// An end time of now ends the old token of a second rotation at once.
+	// An end time of now ends the old token of a second rotation at once. The
+	// sign-in of the session can wait for a penalty, so it runs first.
+	send := env.FreshAdminSession(ctx, t)
 	now := time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
 
 	var second struct {
 		Token e2eToken `json:"token"`
 	}
 
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/service-tokens/" + rot.Token.ID + "/rotate", `{"oldTokenEndsAt":"` + now + `"}`,
-		http.StatusCreated,
-	}, &second)
+	status, body := send(e2e.SessionRequest{
+		Method: http.MethodPost, Path: "/api/server/service-tokens/" + rot.Token.ID + "/rotate",
+		Body: `{"oldTokenEndsAt":"` + now + `"}`,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("second rotation answers %d, want 201 (%s)", status, body)
+	}
+
+	if err := json.Unmarshal([]byte(body), &second); err != nil {
+		t.Fatalf("decode the second rotation %q: %v", body, err)
+	}
 
 	waitTokenRefused(ctx, t, env, rot.Token.Secret)
 	checkTokenSignIn(ctx, t, env, second.Token.Secret, http.StatusForbidden)
@@ -356,7 +397,7 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		{http.MethodGet, own, "", http.StatusForbidden},
 		{http.MethodPost, own, `{"name":"mine"}`, http.StatusForbidden},
 	} {
-		principalCall(ctx, t, env, step, nil)
+		principalCallWithToken(ctx, t, env, step, nil)
 	}
 
 	for _, step := range []struct {

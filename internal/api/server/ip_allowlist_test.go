@@ -94,6 +94,8 @@ func newIPAllowHandler(
 		t.Fatalf("ip allowlist service: %v", err)
 	}
 
+	signIn, sessions := signInOf(t, st)
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Preferences:      nil,
 		GitHost:          nil,
@@ -113,7 +115,7 @@ func newIPAllowHandler(
 		Version:          "test",
 		Schema:           st,
 		Journal:          nil,
-		Principals:       nil,
+		Principals:       sessions.principals,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
@@ -124,13 +126,15 @@ func newIPAllowHandler(
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
-		SignIn:           nil,
+		SignIn:           signIn,
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
+	rememberSessions(handler, sessions)
 
 	return handler
 }
@@ -152,21 +156,50 @@ type ipCall struct {
 	ns     string
 	token  string
 	body   string
+	// signInAge is the age of the sign-in of a console session. Fresh sets it.
+	signInAge time.Duration
+	// session sends the call with a console session in place of the token.
+	session bool
+}
+
+// fresh returns call as a console session that signed in just now. A change
+// of an allowlist to off or to a new list needs a fresh authentication, and
+// an access token never gives one.
+func (call ipCall) fresh() ipCall {
+	call.token, call.session, call.signInAge = "", true, 0
+
+	return call
 }
 
 // ipGet returns the GET call of ns with the test token.
 func ipGet(ns string) ipCall {
-	return ipCall{method: http.MethodGet, ns: ns, token: "test-token", body: ""}
+	return ipCall{method: http.MethodGet, ns: ns, token: "test-token", body: "", signInAge: 0, session: false}
 }
 
-// ipPut returns the PUT call of body on ns with the test token.
+// ipPut returns the PUT call of body on ns from a console session that
+// signed in just now: a change of a list needs a fresh authentication.
 func ipPut(ns, body string) ipCall {
-	return ipCall{method: http.MethodPut, ns: ns, token: "test-token", body: body}
+	return ipCall{method: http.MethodPut, ns: ns, token: "test-token", body: body, signInAge: 0, session: false}.fresh()
 }
 
-// ipDelete returns the DELETE call of ns with the test token.
+// ipDelete returns the DELETE call of ns from a console session that signed
+// in just now.
 func ipDelete(ns string) ipCall {
-	return ipCall{method: http.MethodDelete, ns: ns, token: "test-token", body: ""}
+	return ipCall{
+		method:    http.MethodDelete,
+		ns:        ns,
+		token:     "test-token",
+		body:      "",
+		signInAge: 0,
+		session:   false,
+	}.fresh()
+}
+
+// withToken returns call with the given access token in place of a session.
+func (call ipCall) withToken(token string) ipCall {
+	call.token, call.session = token, false
+
+	return call
 }
 
 // serveIPAllowlist serves call and answers it.
@@ -185,6 +218,10 @@ func serveIPAllowlist(t *testing.T, h *apiserver.Handler, call ipCall) *httptest
 
 	if call.token != "" {
 		req.Header.Set("Authorization", "Bearer "+call.token)
+	}
+
+	if call.session {
+		startSession(t, h, req, call.signInAge)
 	}
 
 	rec := httptest.NewRecorder()
@@ -507,7 +544,9 @@ func TestIPAllowlistDeniedWithoutAction(t *testing.T) {
 // adminAuthenticator signs in "admin-token" as an administrator.
 
 // TestIPAllowlistBootstrapAdmin proves the bootstrap admin passes the route
-// authorization on every method.
+// authorization on every method. A PUT and a DELETE with its access token
+// then reach the freshness check, which refuses them: an access token never
+// gives a fresh authentication.
 func TestIPAllowlistBootstrapAdmin(t *testing.T) {
 	t.Parallel()
 
@@ -518,11 +557,11 @@ func TestIPAllowlistBootstrapAdmin(t *testing.T) {
 	cfg.authz = identity.AdminOnly{}
 	admin := newIPAllowHandler(t, st, nss, cfg)
 
-	put := ipPut("acme", `{"cidrs":["10.0.0.0/8"]}`)
-	put.token = "admin-token"
+	put := ipPut("acme", `{"cidrs":["10.0.0.0/8"]}`).withToken("admin-token")
 
-	if rec := serveIPAllowlist(t, admin, put); rec.Code != http.StatusOK {
-		t.Fatalf("admin PUT answers %d, want 200: %s", rec.Code, rec.Body.String())
+	if rec := serveIPAllowlist(t, admin, put); rec.Code != http.StatusForbidden ||
+		decodeErrorBody(t, rec).ErrorCode != freshErrorCode {
+		t.Fatalf("admin PUT answers %d %s, want 403 with %s", rec.Code, rec.Body.String(), freshErrorCode)
 	}
 
 	get := ipGet("acme")
@@ -532,11 +571,11 @@ func TestIPAllowlistBootstrapAdmin(t *testing.T) {
 		t.Fatalf("admin GET answers %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 
-	remove := ipDelete("acme")
-	remove.token = "admin-token"
+	remove := ipDelete("acme").withToken("admin-token")
 
-	if rec := serveIPAllowlist(t, admin, remove); rec.Code != http.StatusNoContent {
-		t.Fatalf("admin DELETE answers %d, want 204: %s", rec.Code, rec.Body.String())
+	if rec := serveIPAllowlist(t, admin, remove); rec.Code != http.StatusForbidden ||
+		decodeErrorBody(t, rec).ErrorCode != freshErrorCode {
+		t.Fatalf("admin DELETE answers %d %s, want 403 with %s", rec.Code, rec.Body.String(), freshErrorCode)
 	}
 }
 

@@ -73,7 +73,7 @@ func runBothOnStore(
 
 	t.Logf("pulumi %s with tofu %s on %s", pulumiCLI.Version, tofuCLI.Version, store)
 
-	env := e2e.NewEnv(t.Context(), t, tofuCLI, store)
+	env := e2e.NewEnvWithRealTimeSignIn(t.Context(), t, tofuCLI, store)
 
 	tofuScenario(t, env)
 

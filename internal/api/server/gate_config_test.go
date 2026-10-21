@@ -907,8 +907,10 @@ func TestGateConfigRefusesAccessTokenWrites(t *testing.T) {
 		rec := serveGate(t, raw, c)
 		wantStatus(t, rec, http.StatusForbidden)
 
-		if !strings.Contains(rec.Body.String(), "recent sign-in") {
-			t.Fatalf("%s %s body = %s, want a message about a recent sign-in", c.method, c.target, rec.Body.String())
+		if !strings.Contains(rec.Body.String(), "recent sign-in") ||
+			!strings.Contains(rec.Body.String(), `"errorCode":"mfa.fresh-step-required"`) {
+			t.Fatalf("%s %s body = %s, want a message about a recent sign-in and the code mfa.fresh-step-required",
+				c.method, c.target, rec.Body.String())
 		}
 	}
 

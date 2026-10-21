@@ -62,7 +62,7 @@ func (h *Handler) revealRoute() Route {
 		Scope:   ScopeAuthorized,
 		Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 		Resolve: resolveGetStack,
-		Serve:   h.revealStateValue,
+		Serve:   h.freshReveal(h.revealStateValue),
 	}
 }
 

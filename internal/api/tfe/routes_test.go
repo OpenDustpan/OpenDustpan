@@ -272,7 +272,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -896,7 +896,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -922,7 +922,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -950,7 +950,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1152,6 +1152,12 @@ func validateRoute(route tfe.Route, public map[string]bool) error {
 	case tfe.ScopePublic:
 		return validatePublicRoute(route, public)
 	case tfe.ScopeAuthorized:
+		return validateAuthorizedRoute(route, public)
+	case tfe.ScopeConsole:
+		if route.Method+" "+route.Path != revealPattern() {
+			return fmt.Errorf("%w: %q uses the console scope", errInvalidRoute, route.Path)
+		}
+
 		return validateAuthorizedRoute(route, public)
 	case tfe.ScopeRegistry, tfe.ScopeSigned:
 		// The registry routes are not in this table. registry_test.go checks them.
@@ -1854,7 +1860,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		StateGuard:     nil,
+		Sessions:       nil, SessionPolicy: nil, StateGuard: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1952,7 +1958,7 @@ func checkRouteObject(t *testing.T, route tfe.Route) {
 		checkUploadRouteObject(t, route)
 
 		return
-	case tfe.ScopeAuthorized:
+	case tfe.ScopeAuthorized, tfe.ScopeConsole:
 		checkAuthorizedRouteObject(t, route)
 
 		return

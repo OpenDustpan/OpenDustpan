@@ -200,6 +200,13 @@ func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHa
 	}
 }
 
+// serveFreshAccessChange is serveAccessChange for a change that gives rights:
+// it needs a console session with a recent sign-in, and refuses an access
+// token.
+func (h *Handler) serveFreshAccessChange(action identity.Action, op accessOp) RouteHandler {
+	return h.fresh(action, h.serveAccessChange(action, op))
+}
+
 // call is the caller, the object and the audit entry of one operation.
 type call struct {
 	p   identity.Principal
@@ -286,7 +293,7 @@ func (h *Handler) roleRoutes() []Route {
 			Actions:    manage,
 			Resolve:    resolveServer,
 			ActionsFor: nil,
-			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, createRole),
+			Serve:      h.serveFreshAccessChange(identity.ActionServerManageRoles, createRole),
 		},
 		{
 			Method:     http.MethodPatch,
@@ -295,7 +302,7 @@ func (h *Handler) roleRoutes() []Route {
 			Actions:    manage,
 			Resolve:    resolveServer,
 			ActionsFor: nil,
-			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, changeRole),
+			Serve:      h.serveFreshAccessChange(identity.ActionServerManageRoles, changeRole),
 		},
 		{
 			Method:     http.MethodDelete,
@@ -319,12 +326,14 @@ func (h *Handler) grantRoutes() []Route {
 		resolve ObjectResolver
 		path    string
 		action  identity.Action
+		// fresh makes the grant need a fresh authentication.
+		fresh bool
 	}{
-		{resolveServer, serverGrantsPath, identity.ActionServerManageAccess},
-		{resolveNamespacePath, namespaceGrantsPath, identity.ActionNamespaceManageAccess},
-		{resolveCollectionPath, collectionGrantsPath, identity.ActionCollectionManageAccess},
-		{resolveUnitQuery, unitGrantsPath, identity.ActionUnitManageAccess},
-		{resolvePrincipalPath, principalGrantsPath, identity.ActionServerManageAccess},
+		{resolveServer, serverGrantsPath, identity.ActionServerManageAccess, true},
+		{resolveNamespacePath, namespaceGrantsPath, identity.ActionNamespaceManageAccess, true},
+		{resolveCollectionPath, collectionGrantsPath, identity.ActionCollectionManageAccess, true},
+		{resolveUnitQuery, unitGrantsPath, identity.ActionUnitManageAccess, false},
+		{resolvePrincipalPath, principalGrantsPath, identity.ActionServerManageAccess, true},
 	}
 
 	const routesPerKind = 3 // a list, a grant and a revoke
@@ -333,6 +342,11 @@ func (h *Handler) grantRoutes() []Route {
 
 	for _, k := range kinds {
 		actions := []identity.Action{k.action}
+
+		grant := h.serveAccessChange(k.action, createGrant)
+		if k.fresh {
+			grant = h.serveFreshAccessChange(k.action, createGrant)
+		}
 
 		out = append(out,
 			Route{
@@ -346,7 +360,7 @@ func (h *Handler) grantRoutes() []Route {
 				Actions:    actions,
 				Resolve:    k.resolve,
 				ActionsFor: nil,
-				Serve:      h.serveAccessChange(k.action, createGrant),
+				Serve:      grant,
 			},
 		)
 

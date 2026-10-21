@@ -34,6 +34,9 @@ var (
 	ErrSchemaVersion = errors.New("profile document schema version is too high")
 	// ErrLimit reports a write above a limit. The message names the limit.
 	ErrLimit = errors.New("profile limit reached")
+	// ErrFreshRequired reports a reveal with no check of a fresh
+	// authentication. The read fails closed: no value leaves.
+	ErrFreshRequired = errors.New("a reveal needs a fresh authentication")
 )
 
 // RoutingError reports a change that moves where secrets go and that the

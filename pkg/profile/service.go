@@ -91,10 +91,16 @@ type RevisionPage struct {
 }
 
 // ReadOptions selects what a read answers. Revision 0 is the newest. Reveal
-// also answers the plain text of each secret: it needs profile:open and
-// writes an audit entry of the kind reveal before it answers. If the entry
-// fails, no value leaves.
+// also answers the plain text of each secret: it needs profile:open and a
+// fresh authentication, and writes an audit entry of the kind reveal before
+// it answers. If the entry fails, no value leaves.
+//
+// Fresh checks the fresh authentication of the caller, and returns the error
+// that refuses the reveal. A reveal with no Fresh fails with ErrFreshRequired.
+// A refused reveal writes an entry of the kind reveal with the outcome
+// failure.
 type ReadOptions struct {
+	Fresh    func() error
 	Revision int
 	Reveal   bool
 }
@@ -249,11 +255,7 @@ func (s *Service) Read(ctx context.Context, a *Actor, t Target, o ReadOptions) (
 	}
 
 	if o.Reveal {
-		if err := s.require(ctx, a, t.Namespace, identity.ActionProfileOpen); err != nil {
-			if errors.Is(err, identity.ErrDenied) {
-				err = errors.Join(err, s.recordDenied(ctx, a, t))
-			}
-
+		if err := s.authorizeReveal(ctx, a, t, o); err != nil {
 			return View{}, err
 		}
 	}
@@ -473,10 +475,46 @@ func (s *Service) checkSealed(ctx context.Context, sc secret.Scope, doc *Documen
 	return nil
 }
 
+// authorizeReveal checks that the caller may reveal: it needs profile:open,
+// and then a fresh authentication. A refusal of profile:open writes the denied
+// entry, and a refusal of the fresh authentication writes the failure entry.
+func (s *Service) authorizeReveal(ctx context.Context, a *Actor, t Target, o ReadOptions) error {
+	if err := s.require(ctx, a, t.Namespace, identity.ActionProfileOpen); err != nil {
+		if errors.Is(err, identity.ErrDenied) {
+			err = errors.Join(err, s.recordDenied(ctx, a, t))
+		}
+
+		return err
+	}
+
+	// Defense in depth: the adapter checks the session too, and the
+	// authorizer does not know the time of the sign-in.
+	return s.requireFresh(ctx, a, t, o)
+}
+
+// requireFresh runs the check of a fresh authentication of a reveal. A refusal
+// writes the audit entry of a failed reveal, and fails closed with the error
+// of the check.
+func (s *Service) requireFresh(ctx context.Context, a *Actor, t Target, o ReadOptions) error {
+	err := ErrFreshRequired
+	if o.Fresh != nil {
+		if err = o.Fresh(); err == nil {
+			return nil
+		}
+	}
+
+	return errors.Join(err, s.recordRefused(ctx, a, t, audit.OutcomeFailure))
+}
+
 // recordDenied writes the audit entry of a reveal that profile:open refused.
-// A profile or a namespace that is not found writes no entry: the caller
-// then gets the denial only.
 func (s *Service) recordDenied(ctx context.Context, a *Actor, t Target) error {
+	return s.recordRefused(ctx, a, t, audit.OutcomeDenied)
+}
+
+// recordRefused writes the audit entry of a reveal that profile:open or the
+// fresh authentication refused, with outcome. A profile or a namespace that is
+// not found writes no entry: the caller then gets the refusal only.
+func (s *Service) recordRefused(ctx context.Context, a *Actor, t Target, outcome audit.Outcome) error {
 	fence, err := s.fence(ctx, t.Namespace)
 	if err != nil {
 		return nil //nolint:nilerr // The denial is the answer; a missing namespace has no audit log to write.
@@ -491,10 +529,10 @@ func (s *Service) recordDenied(ctx context.Context, a *Actor, t Target) error {
 		ns: t.Namespace, action: identity.ActionProfileOpen, id: p.ID, name: p.Name, rev: 0,
 		kind: audit.KindReveal, reason: "",
 	})
-	e.Outcome = audit.OutcomeDenied
+	e.Outcome = outcome
 
 	if _, err = s.audit.Append(ctx, fence, e); err != nil {
-		return fmt.Errorf("record denied reveal of %s: %w", p.Name, err)
+		return fmt.Errorf("record refused reveal of %s: %w", p.Name, err)
 	}
 
 	return nil
